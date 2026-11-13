@@ -143,3 +143,37 @@ export function toggleToolKey(tools: string[], key: string, on: boolean): string
   const rest = tools.filter(t => t !== key);
   return on ? [...rest, key] : rest;
 }
+
+// ── Тексты диалогов перехода (F27) ───────────────────────────────────────────────────
+
+const TOOL_NAMES: Record<string, string> = { tasks: 'задачи', notes: 'заметки', web: 'веб-поиск' };
+const ACCESS_NAMES: Record<PersonaAccess, string> = { full: 'полный', readOnly: 'только чтение', custom: 'свой' };
+
+const toolName = (key: string) => TOOL_NAMES[key] ?? key;
+
+// Перечисление отличий своих прав от специальности для диалога возврата: каждое место —
+// отдельная короткая фраза («выключен веб-поиск», «запрещён Bash»). own нужен, чтобы
+// отличить выключенную возможность от включённой поверх шаблона.
+export function describeAccessDiff(diff: AccessDiff, own: AccessGroup): string[] {
+  const mine = new Set(materialize(own).tools ?? ALL_TOOLS);
+  return [
+    ...(diff.access ? [`профиль доступа: ${ACCESS_NAMES[materialize(own).access]}`] : []),
+    ...diff.tools.map(k => `${mine.has(k) ? 'включён' : 'выключен'} ${toolName(k)}`),
+    ...diff.extraDisallowed.map(t => `запрещён ${t}`),
+    ...diff.missingDisallowed.map(t => `снят запрет ${t}`),
+  ];
+}
+
+// Какими станут права по шаблону специальности: «профиль …; выключены …; запрещены …».
+// Профиль «Полный» без ограничений — просто «полные права».
+export function describeAccessGroup(group: AccessGroup | null | undefined): string {
+  const g = materialize(group ?? {});
+  const off = ALL_TOOLS.filter(k => !(g.tools ?? ALL_TOOLS).includes(k)).map(toolName);
+  const dis = g.access === 'custom' ? g.disallowedTools ?? [] : [];
+  const parts = [
+    g.access === 'full' ? 'полные права' : `профиль «${ACCESS_NAMES[g.access]}»`,
+    ...(off.length ? [`выключено: ${off.join(', ')}`] : []),
+    ...(dis.length ? [`запрещены ${dis.join(' и ')}`] : []),
+  ];
+  return parts.join(', ');
+}

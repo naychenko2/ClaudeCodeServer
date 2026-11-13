@@ -5,8 +5,9 @@ import type { Persona, PersonaAccess, PersonaContract, PersonaGender, PersonaMem
 import { api } from '../../lib/api';
 import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { PersonaVoicePicker } from './PersonaVoicePicker';
+import { ReturnInheritDialog, SwitchSpecialtyInheritDialog, SwitchSpecialtyOwnDialog } from './PersonaInheritDialogs';
 import { PersonaAccessGroup } from './PersonaAccessGroup';
-import { accessDiff, accessMode as readAccessMode, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
+import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
 import { createVoicePayload } from './voicePayload';
 import { PersonaPromptTab, SECTIONS_RESET_TEXT, SECTIONS_RESET_TITLE, sectionsResetNeedsConfirm } from './PersonaPromptTab';
 import { applySections, emptyState, toOverrides, type PromptSectionsState } from './promptSectionsModel';
@@ -175,6 +176,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const specialtyCatalog = useSpecialtyCatalog();
   // Отложенная смена специальности: ждёт подтверждения перезаписи прав шаблоном
   const [pendingSpecialty, setPendingSpecialty] = useState<PersonaSpecialty | null>(null);
+  const [pendingSpecialtyInherit, setPendingSpecialtyInherit] = useState<PersonaSpecialty | null>(null);
   // Вкладки формы: «Основное» / «Промпт» (P2b)
   const [tab, setTab] = useState<'main' | 'prompt'>('main');
   // Секции промпта «от специальности»: состояние привязано к personaId (смена персоны сбрасывает
@@ -235,8 +237,26 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // Переключатель группы прав. «Своё» забирает текущие эффективные значения как override
   // (toOwn), «Как у специальности» шлёт только флаг (toInherited) — значения не копируются
+  // Отличия своих прав от шаблона выбранной специальности — текст диалога возврата
+  const currentGroup: AccessGroup = { access, tools, disallowedTools: parseDisallowed(disallowedText) };
+  const currentDiffs = !inheritsAccess && specialtyTemplate
+    ? describeAccessDiff(accessDiff(currentGroup, specialtyTemplate), currentGroup)
+    : [];
+  const [pendingReturn, setPendingReturn] = useState(false);
+  const confirmReturn = () => {
+    // Повторный клик «Вернуть» (диалог ещё не размонтирован) ничего не делает
+    if (!pendingReturn) return;
+    setPendingReturn(false);
+    setInheritsAccess(toInherited().inheritsAccess);
+  };
+
   const switchAccessMode = (own: boolean) => {
     if (own === !inheritsAccess) return;
+    // Возврат к наследованию теряет свои значения — спрашиваем, если они отличаются
+    if (!own && currentDiffs.length > 0) {
+      setPendingReturn(true);
+      return;
+    }
     if (own) {
       const o = toOwn({ access, tools, disallowedTools: parseDisallowed(disallowedText) }, effectiveGroup);
       setAccess(o.access);
@@ -279,8 +299,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const proceedSpecialtyChange = (next: PersonaSpecialty) => {
     // Права «как у специальности» не копируются: смена роли меняет только саму роль
     if (inheritsAccess) {
-      setSpecialty(next);
-      setTemplateNote(null);
+      // Права и модели наследуются — человеку показываем, какими они станут
+      setPendingSpecialtyInherit(next);
       return;
     }
     const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
@@ -1518,13 +1538,30 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         />
       )}
 
+      {pendingReturn && (
+        <ReturnInheritDialog
+          specialtyTitle={specialtyLabel(specialtyCatalog, specialty)}
+          diffs={currentDiffs}
+          onKeep={() => setPendingReturn(false)}
+          onReturn={confirmReturn}
+        />
+      )}
+
+      {pendingSpecialtyInherit && (
+        <SwitchSpecialtyInheritDialog
+          specialtyTitle={specialtyLabel(specialtyCatalog, pendingSpecialtyInherit)}
+          rights={describeAccessGroup(specialtyCatalog?.find(e => e.key === pendingSpecialtyInherit)?.template)}
+          onApply={() => { const next = pendingSpecialtyInherit; setPendingSpecialtyInherit(null); setSpecialty(next); setTemplateNote(null); }}
+          onCancel={() => setPendingSpecialtyInherit(null)}
+        />
+      )}
+
       {pendingSpecialty && (
-        <ConfirmDialog
-          title="Заменить права и инструменты?"
-          subtitle="Текущие профиль доступа и инструменты отличаются от шаблона новой специальности. Заменить их шаблоном? Ручные правки будут перезаписаны."
-          confirmLabel="Заменить"
-          cancelLabel="Оставить как есть"
-          onConfirm={() => { applySpecialtyTemplate(pendingSpecialty); setPendingSpecialty(null); }}
+        <SwitchSpecialtyOwnDialog
+          specialtyTitle={specialtyLabel(specialtyCatalog, pendingSpecialty)}
+          rights={describeAccessGroup(specialtyCatalog?.find(e => e.key === pendingSpecialty)?.template)}
+          onKeep={() => { const next = pendingSpecialty; setPendingSpecialty(null); setSpecialty(next); setTemplateNote(null); }}
+          onTemplate={() => { const next = pendingSpecialty; setPendingSpecialty(null); applySpecialtyTemplate(next); }}
           onCancel={() => setPendingSpecialty(null)}
         />
       )}

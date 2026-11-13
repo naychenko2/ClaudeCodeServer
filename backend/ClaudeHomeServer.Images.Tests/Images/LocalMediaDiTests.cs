@@ -50,6 +50,8 @@ public class LocalMediaDiTests
     {
         var (services, config) = NewHost(null);
         services.AddSubsystems(config, new ImagesSubsystem());
+        // Видео-адаптер берёт IVideoDsp (склейка звука у «Увеличить»); запуск процессов в проде регистрирует Main
+        services.AddSingleton(new Moq.Mock<ClaudeHomeServer.Services.Execution.ILauncherFactory>().Object);
         using var provider = services.BuildServiceProvider();
 
         // Монитор — singleton, видимый по типу (а не только как IHostedService)

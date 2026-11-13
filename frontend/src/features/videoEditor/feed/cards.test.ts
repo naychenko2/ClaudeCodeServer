@@ -139,3 +139,38 @@ describe('карточки «Видео»: агент — та же размет
     expect(a.html.replace(BY, '')).toBe(h.html);
   });
 });
+
+describe('«Увеличить ×2/×4» (RelayVSR, локально): отдельное действие над готовой версией', () => {
+  const view = (s: VideoScene, o: { personal?: boolean; running?: boolean } = {}) => sceneCardView({
+    scene: s, personal: o.personal ?? false, focused: false, pos: null, catalog: CATALOG,
+    jobs: o.running ? [{ jobId: 'job-9', sessionId: 'c1', sceneId: s.sceneId, stage: 'upscaling', queuePosition: null, etaSeconds: 37, variant: 1, count: 1 }] : [],
+  });
+  const withEnhanceRun = (): VideoScene => scene('s1', {
+    versions: [version(1)], currentVersionId: 'ver-1',
+    launches: [{ jobId: 'job-9', at: '2026-11-13T10:00:00Z', status: 'running', interrupted: false, initiator: 'human', provider: 'local', model: 'relayvsr-x2', count: 1 }],
+  });
+
+  it('у готовой версии проекта кнопка «Увеличить» есть, у личного чата и у идущего запуска — нет', () => {
+    const s = shot('human');
+    expect(view(s).canEnhance).toBe(true);
+    expect(view(s, { personal: true }).canEnhance).toBe(false);
+    expect(view(s, { running: true }).canEnhance).toBe(false);
+    const html = renderToStaticMarkup(createElement(SceneCardView, { v: view(s), src: null, busy: false, a: { ...A, onEnhance: noop, onEnhanceQuote: async () => null } }));
+    expect(html).toContain('data-video-enhance=""');
+    expect(html).toContain('Увеличить');
+  });
+
+  it('версия, полученная увеличением, помечена ×2 с размером и не увеличивается повторно', () => {
+    const s = scene('s1', { versions: [version(1, { enhanceScale: 2, width: 1728, height: 960 })], currentVersionId: 'ver-1', launches: [] });
+    const v = view(s);
+    expect(v.canEnhance).toBe(false);
+    expect(v.enhancedCaption).toBe('Увеличено ×2 · 1728×960');
+  });
+
+  it('идущее увеличение: у него своя «Отменить увеличение» (вне двухстадийной полосы «Макс»)', () => {
+    const v = view(withEnhanceRun(), { running: true });
+    expect(v.enhanceRun).toBe(true);
+    const html = renderToStaticMarkup(createElement(SceneCardView, { v, src: null, busy: false, a: { ...A, onCancelUpscale: noop } }));
+    expect(html).toContain('Отменить увеличение');
+  });
+});

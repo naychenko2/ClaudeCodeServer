@@ -26,7 +26,8 @@ public abstract class AudioEditorEndpoints(
     AudioEditWorkspace workspace,
     Engines.DspAudioEngine dsp,
     AudioConcatService concat,
-    ChatContext.AudioContextLaunch? context = null) : ControllerBase
+    ChatContext.AudioContextLaunch? context = null,
+    IVideoSceneSound? videoScenes = null) : ControllerBase
 {
     // Владелец — claim sub сервисного JWT. Константой, а не JwtRegisteredClaimNames: своих пакетов у
     // модуля нет (DynamicModulePackagesGuardTests)
@@ -190,6 +191,36 @@ public abstract class AudioEditorEndpoints(
             clips.Add(new AudioBytes(bytes!, AudioVersionFiles.ContentTypeOf(path!)));
         }
 
+        AudioBytes? video = null;
+        AudioVideoLink? videoLink = null;
+        if (quote.Op == AudioOp.VideoToAudio)
+        {
+            if (!string.IsNullOrWhiteSpace(form.VideoSceneId))
+            {
+                if (videoScenes is null)
+                    return Error(StatusCodes.Status503ServiceUnavailable, AudioEditErrorCodes.Unavailable,
+                        "Модуль «Видео» на этом сервере не подключён: сцену озвучить нельзя");
+                if (string.IsNullOrWhiteSpace(form.SessionId))
+                    return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Для сцены нужен чат (sessionId)");
+                var clip = await videoScenes.GetClipAsync(new VideoSceneRef(Owner(scope), scope.Key, form.SessionId.Trim(),
+                    form.VideoSceneId.Trim(), string.IsNullOrWhiteSpace(form.VideoVersionId) ? null : form.VideoVersionId.Trim()), ct);
+                if (clip is null)
+                    return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
+                        "Клип версии сцены не найден (сцена удалена или файл убрала чистка)");
+                video = new AudioBytes(clip.Bytes, "video/mp4");
+                videoLink = new AudioVideoLink(form.VideoSceneId.Trim(), clip.VersionId, form.PasteIntoScene == true);
+            }
+            else if (!string.IsNullOrWhiteSpace(form.VideoPath))
+            {
+                var (bytes, path, denied) = await ProjectFileAsync(scope, form.VideoPath, ct);
+                if (denied is not null) return denied;
+                video = new AudioBytes(bytes!, AudioVersionFiles.ContentTypeOf(path!));
+            }
+            else
+                return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
+                    "Для этой операции нужно видео: версия сцены или файл проекта");
+        }
+
         byte[]? voiceModel = null, voiceIndex = null;
         if (!string.IsNullOrWhiteSpace(form.VoiceModelPath))
         {
@@ -225,7 +256,9 @@ public abstract class AudioEditorEndpoints(
             VoiceIndex: voiceIndex,
             Seed: form.Seed,
             Voice: form.Voice,
-            ContextRevision: form.ContextRevision);
+            ContextRevision: form.ContextRevision,
+            Video: video,
+            VideoLink: videoLink);
         return Map(await jobs.StartAsync(Owner(scope), scope, input, ct, UserId), created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 

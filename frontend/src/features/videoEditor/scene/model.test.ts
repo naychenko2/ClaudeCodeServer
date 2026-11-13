@@ -53,6 +53,26 @@ describe('причины «Снять» (тексты макета v7)', () => {
   });
 });
 
+describe('Kandinsky: экспериментальная модель без кадра B', () => {
+  const base = { sessionId: 's1', personal: false, providerOk: true, running: false };
+  const k = { provider: 'local', model: 'kandinsky-6-lite' };
+  it('хватает текста: кадры не нужны', () => {
+    const r = resolveScene(null, k, PREFS, CATALOG);
+    expect(runReason({ ...base, r })).toBe('Напишите текст сцены — что происходит от кадра A к кадру B');
+    expect(runReason({ ...base, r: { ...r, text: 'Лиса идёт по снегу' } })).toBeNull();
+  });
+  it('кадр B с такой моделью — отказ с причиной', () => {
+    const r = resolveScene(scene('s1'), k, PREFS, CATALOG);
+    expect(runReason({ ...base, r: { ...r, frameB: r.frameA, text: 'x' } })).toMatch(/не берёт кадр B/);
+  });
+  it('в «Чем» не серая, с бейджем и подсказкой', () => {
+    const row = executorRows(CATALOG, false, '').find(x => x.id === 'local|kandinsky-6-lite')!;
+    expect(row.disabled).toBeUndefined();
+    expect(row.badges?.[0].label).toBe('экспериментальная');
+    expect(row.sub).toMatch(/вдвое медленнее/i);
+  });
+});
+
 describe('исполнитель и цена', () => {
   it('личный чат: local под замком, недоступный поставщик и модель без кадра B — серые с причиной', () => {
     const rows = executorRows(CATALOG, true, '');

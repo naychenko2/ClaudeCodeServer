@@ -19,7 +19,7 @@ public static partial class AudioCatalog
     private static readonly string[] LocalReserved =
     [
         "text", "prompt", "lyrics", "language", "duration_seconds", "start_seconds", "end_seconds", "seed",
-        "audio", "reference", "audios", "voice_model", "voice_index",
+        "audio", "reference", "audios", "voice_model", "voice_index", "video",
     ];
 
     private sealed record LocalParam(AudioParamField Field, IReadOnlyList<AudioOp>? Ops = null);

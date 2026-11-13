@@ -108,6 +108,17 @@ public abstract class VideoEditorEndpoints(
         Map(await jobs.RetryUpscaleAsync(Tenant(scope), scope, sessionId, sceneId, versionId, VideoInitiators.Human, ct),
             result => StatusCode(StatusCodes.Status202Accepted, result));
 
+    // «Увеличить ×2/×4»: GET — варианты и время до запуска, POST — новая задача (стадия upscaling), итог — новая версия
+    protected IActionResult EnhanceQuoteIn(VideoEditScope scope, string sessionId, string sceneId, string versionId) =>
+        Map(jobs.EnhanceQuote(Tenant(scope), scope, sessionId, sceneId, versionId), Ok);
+
+    protected async Task<IActionResult> EnhanceIn(VideoEditScope scope, string sessionId, string sceneId, string versionId,
+        VideoEnhanceRequest? req, CancellationToken ct) =>
+        req is null
+            ? Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, VideoEnhanceTexts.BadScale)
+            : Map(await jobs.EnhanceAsync(Tenant(scope), scope, sessionId, sceneId, versionId, req.Scale, VideoInitiators.Human, ct),
+                result => StatusCode(StatusCodes.Status202Accepted, result));
+
     // dryRun подрезки кадров под пропорции сцены: ничего не пишет и не тратит
     protected async Task<IActionResult> FramesPreviewIn(VideoEditScope scope, VideoFramesPreviewRequest? req, CancellationToken ct)
     {

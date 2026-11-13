@@ -27,6 +27,7 @@ public sealed class LocalAudioMediaAdapter(
     // Ссылки на входы в аргументах сборки — они же подписи входов в отказах
     private const string AudioSlot = "исходный звук";
     private const string ReferenceSlot = "образец";
+    private const string VideoSlot = "исходное видео";
     private const string VoiceModelSlot = "модель голоса";
     private const string VoiceIndexSlot = "индекс голоса";
     private static string ClipSlot(int k) => $"запись {k + 1}";
@@ -45,6 +46,9 @@ public sealed class LocalAudioMediaAdapter(
     {
         var options = LocalMediaOptions.Read(config);
         if (OpName(request.Op) is not { } op) return null;
+        // Котировка звука по видео идёт до загрузки клипа: длина — из duration_seconds запроса (длина версии сцены)
+        if (request.Op == LocalAudioOp.VideoToAudio && request.Video is null)
+            return LocalMediaService.VideoToAudioEta(Args(request), request.Args?["duration_seconds"] is JsonValue d && d.TryGetValue<double>(out var sec) ? sec : null);
         var build = LocalMediaService.BuildAudioGraphAsync(op, Args(request), new LocalMediaService.AudioBuildInfo(NewId()),
             new BytesInputs(request, null), (request.Prompt ?? "").Trim(), 1, "eta", options.MaxAudioInputSeconds,
             CancellationToken.None);
@@ -229,6 +233,8 @@ public sealed class LocalAudioMediaAdapter(
         LocalAudioOp.ToMidi => LocalMediaOps.AudioToMidi,
         LocalAudioOp.Enhance => LocalMediaOps.AudioEnhance,
         LocalAudioOp.Transcribe => LocalMediaOps.Transcribe,
+        LocalAudioOp.Sfx => LocalMediaOps.AudioSfx,
+        LocalAudioOp.VideoToAudio => LocalMediaOps.VideoToAudio,
         _ => null,
     };
 
@@ -237,7 +243,8 @@ public sealed class LocalAudioMediaAdapter(
     private static JsonObject Args(LocalAudioRequest request)
     {
         var a = request.Args?.DeepClone().AsObject() ?? new JsonObject();
-        foreach (var key in new[] { "audio", "reference", "audios", "voice_model", "voice_index" }) a.Remove(key);
+        foreach (var key in new[] { "audio", "reference", "audios", "voice_model", "voice_index", "video" }) a.Remove(key);
+        if (request.Video is not null) a["video"] = VideoSlot;
         if (request.Audio is not null) a["audio"] = AudioSlot;
         if (request.Reference is not null) a["reference"] = ReferenceSlot;
         if (request.Clips is { Count: > 0 } clips)
@@ -255,6 +262,7 @@ public sealed class LocalAudioMediaAdapter(
             var (bytes, name) = reference switch
             {
                 AudioSlot => (request.Audio, reference),
+                VideoSlot => (request.Video, reference),
                 ReferenceSlot => (request.Reference, reference),
                 VoiceModelSlot => (request.VoiceModel, "voice.pth"),
                 VoiceIndexSlot => (request.VoiceIndex, "voice.index"),

@@ -126,7 +126,14 @@ public sealed record AudioJobInput(
     string? Voice = null,
     // Ревизия контекста чата (ADR-023 §Д2.1): с ней ThreadId, BaseVersionId, Voice и входы-пути тела
     // игнорируются; не совпала со стором или с ревизией котировки — 409 context_changed
-    long? ContextRevision = null);
+    long? ContextRevision = null,
+    // Звук по видео: исходный клип (mp4) и, если он взят из версии сцены, ссылка на неё. Paste — по готовности
+    // добавить в сцену новую версию со вклеенным звуком
+    AudioBytes? Video = null,
+    AudioVideoLink? VideoLink = null);
+
+// Версия сцены видео, от которой озвучка: Paste — вклеить результат в новую версию сцены (шов IVideoSceneSound)
+public sealed record AudioVideoLink(string SceneId, string? VersionId, bool Paste);
 
 public sealed record AudioJobCreatedDto(string JobId);
 

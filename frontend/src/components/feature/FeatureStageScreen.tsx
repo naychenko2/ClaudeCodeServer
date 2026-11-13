@@ -26,6 +26,7 @@ import { FeatureStageInput } from './FeatureStageInput';
 import { FeatureStageReview } from './FeatureStageReview';
 import { FeatureStageMetrics } from './FeatureStageMetrics';
 import { formatDuration, minutesSince } from './FeatureStatsBits';
+import { useNow } from '../../lib/useNow';
 import type { StageScreen } from '../../types/featureStage';
 import type { StageMetrics } from '../../types/featureStats';
 
@@ -58,10 +59,11 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-stage-screen
 }
 
 // Сводка задачи: название, состояние и ключевые цифры — время / ходы / «ждёт вас».
-// Числа из `metrics` как есть, фронт ничего не досчитывает; «ждёт сейчас» — тикающая
-// длительность от waitingNow.since (тот же приём, что у блока «Метрики»).
+// Числа из `metrics` как есть, фронт ничего не досчитывает; «ждёт вас» — живая
+// длительность от waitingNow.since: `now` приходит из StageBody (useNow) — то же значение,
+// что у блока «Метрики» (R-D1e: две цифры об одном не должны расходиться).
 // metrics = null — цифр нет: сводка остаётся названием и состоянием.
-function StageSummary({ s }: { s: StageScreen }) {
+function StageSummary({ s, now }: { s: StageScreen; now: number }) {
   return (
     <div data-testid="stage-screen-summary" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.sm, flexWrap: 'wrap' }}>
@@ -72,14 +74,14 @@ function StageSummary({ s }: { s: StageScreen }) {
           {TASK_STATUS[s.status] ?? 'не начата'}
         </span>
       </div>
-      {s.metrics && <SummaryKpis metrics={s.metrics} />}
+      {s.metrics && <SummaryKpis metrics={s.metrics} now={now} />}
     </div>
   );
 }
 
-function SummaryKpis({ metrics: m }: { metrics: StageMetrics }) {
+function SummaryKpis({ metrics: m, now }: { metrics: StageMetrics; now: number }) {
   const waiting = m.human.waitingNow;
-  const waitMin = waiting ? minutesSince(waiting.since, Date.now()) : null;
+  const waitMin = waiting ? minutesSince(waiting.since, now) : null;
   const waitText = waiting
     ? (waitMin != null ? `ждёт ${formatDuration(waitMin)}` : 'ждёт')
     : m.human.minutes != null ? formatDuration(m.human.minutes) : NO_DATA;
@@ -132,6 +134,10 @@ function StageBody({ taskId, isMobile }: { taskId: string; isMobile: boolean }) 
 
   const state: LoadState = loaded.taskId === taskId ? loaded : { taskId, status: 'loading' };
   const tab: StageTab = tabSel.taskId === taskId ? tabSel.tab : FIRST_TAB;
+  // Живое «сейчас» для всего экрана — одно значение у сводки и блока «Метрики» (R-D1e):
+  // через useNow, и интервал живёт только когда есть от чего считать (waitingNow).
+  const waitingActive = state.status === 'ok' && state.screen.metrics?.human.waitingNow != null;
+  const now = useNow(60_000, waitingActive);
   if (state.status === 'loading') {
     return <div data-testid="stage-screen-loading" style={{ fontSize: FS.sm, color: C.textMuted }}>Загружаю экран этапа…</div>;
   }
@@ -153,7 +159,7 @@ function StageBody({ taskId, isMobile }: { taskId: string; isMobile: boolean }) 
   ];
   return (
     <div ref={bodyRef} data-testid="stage-screen-body" data-task-id={s.taskId} style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minWidth: 0 }}>
-      <StageSummary s={s} />
+      <StageSummary s={s} now={now} />
       <Tabs
         transparent
         size="md"
@@ -167,7 +173,7 @@ function StageBody({ taskId, isMobile }: { taskId: string; isMobile: boolean }) 
       {tab === 'artifacts' && <FeatureStageArtifacts key={s.taskId} taskId={s.taskId} artifacts={s.artifacts} isMobile={isMobile} />}
       {tab === 'input' && <FeatureStageInput input={s.input} isMobile={isMobile} />}
       {tab === 'review' && <FeatureStageReview review={s.review} />}
-      {tab === 'metrics' && s.metrics && <FeatureStageMetrics metrics={s.metrics} />}
+      {tab === 'metrics' && s.metrics && <FeatureStageMetrics metrics={s.metrics} nowMs={now} />}
     </div>
   );
 }

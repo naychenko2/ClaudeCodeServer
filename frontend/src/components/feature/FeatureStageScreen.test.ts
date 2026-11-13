@@ -8,7 +8,11 @@
 // (3) убрать пометку taskId у состояния → тест гонки красный;
 // (4) убрать пометку taskId у выбора вкладки → тест «первая вкладка» красный;
 // (5) убрать сводку из StageBody → тест «сводка над полосой» красный;
-// (6) показывать четыре вкладки независимо от metrics → тест «Метрики при metrics = null» красный.
+// (6) показывать четыре вкладки независимо от metrics → тест «Метрики при metrics = null» красный;
+// (7) вернуть Date.now() в SummaryKpis вместо useNow → тест «живое ждёт вас» красный: после
+//     клика по вкладке сводка считает по часам рендера («3 ч 02 мин») вместо последнего тика;
+// (8) не передать nowMs в FeatureStageMetrics → тест «живое ждёт вас» красный: метрики считают
+//     по Date.now() момента клика («3 ч 02 мин») и расходятся со сводкой («3 ч 01 мин»).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -90,6 +94,21 @@ function clickTab(c: FNode, label: string) {
 }
 
 const text = (c: FNode) => textNodes(c).join('|');
+
+// Текст ряда ReviewKv по подписи (FeatureReviewParts: каждый ряд — отдельный узел).
+// null — блока или ряда нет.
+function kvRow(c: FNode, blockTestid: string, label: string): string | null {
+  const block = findNodeByAttr(c, 'data-testid', blockTestid);
+  if (!block) return null;
+  let hit: FNode | null = null;
+  const walk = (x: FNode) => {
+    if (hit) return;
+    if (x.nodeType === 1 && x.getAttribute?.('data-testid') === 'review-kv-row' && textNodes(x).join('').includes(label)) { hit = x; return; }
+    for (const ch of x.childNodes) walk(ch);
+  };
+  walk(block);
+  return hit ? textNodes(hit).join('') : null;
+}
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -252,5 +271,63 @@ describe('FeatureStageScreen', () => {
     const { container } = render([{ id: 'A', title: 'A' }]);
     await act(async () => { await flush(); });
     expect(text(findNodeByAttr(container, 'data-testid', 'stage-screen-error')!)).toContain('Задача не найдена');
+  });
+
+  // === Живое «ждёт вас» (R-D1e) ===
+  // Фейковые часы: старт T0, ожидание началось за час до T0. Сценарий вердикта: человек
+  // открыл экран и ушёл — сводка обязана идти за временем, а блок «Метрики» давать то же
+  // число, что сводка (не своё, по Date.now() момента перерисовки).
+  // Сдвиг 121,5 мин — НЕ кратный интервалу 60 с: последний тик useNow = T0+121 мин, а
+  // виртуальное время клика по вкладке (следующий рендер без тика) = T0+121,5 мин.
+  // Кто считает по Date.now() в рендере, а не по useNow, — покажет «3 ч 02 мин» против
+  // «3 ч 01 мин» у живого: расхождение ровно то, что ловит этот тест.
+  const T0 = Date.parse('2026-11-13T12:00:00Z');
+  const MIN = 60_000;
+  const waitingMetrics = (sinceAgoMin: number): StageMetrics => ({
+    ...METRICS,
+    human: { ...METRICS.human, waitingNow: { taskId: 'A', since: new Date(T0 - sinceAgoMin * MIN).toISOString(), reason: null } },
+  });
+  // Флуш ответа под фейковыми таймерами (тот же приём, что settle в FeaturePage.test).
+  const settleFake = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
+
+  it('живое «ждёт вас»: тик useNow двигает сводку, «Метрики» дают то же число (R-D1e)', async () => {
+    stageMock.mockResolvedValue(screen('A', { metrics: waitingMetrics(60) }));
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    try {
+      const { container } = render([{ id: 'A', title: 'A' }]);
+      await settleFake();
+      const kpis = findNodeByAttr(container, 'data-testid', 'stage-screen-kpis')!;
+      expect(text(kpis)).toContain('ждёт 1 ч');
+      expect(vi.getTimerCount(), 'с waitingNow интервал должен жить').toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(121.5 * MIN); });
+      // Рендер без тика (клик по вкладке) — на нём и видно, кто считает по часам рендера.
+      clickTab(container, 'Метрики');
+      const kt = text(kpis);
+      // сводка: ровно значение последнего тика useNow (T0+121 мин + час ожидания = 181 мин)
+      expect(kt, 'сводка обязана идти за временем (181 мин = «3 ч 01 мин»)').toContain('ждёт 3 ч 01 мин');
+      const row = kvRow(container, 'stage-metrics-human', 'Ждёт сейчас');
+      expect(row, 'ряда «Ждёт сейчас» в метриках нет').not.toBeNull();
+      // метрики — то же число, что сводка, а не Date.now() момента клика (182 мин = «3 ч 02 мин»)
+      expect(row!, 'метрики должны совпадать со сводкой, а не считать своё').toContain('3 ч 01 мин');
+      expect(row!, 'метрики не должны опережать последний тик').not.toContain('02 мин');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('без waitingNow интервал не ставится: нечего ждать — нечего и считать', async () => {
+    stageMock.mockResolvedValue(screen('A', { metrics: METRICS })); // waitingNow = null
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    try {
+      const { container } = render([{ id: 'A', title: 'A' }]);
+      await settleFake();
+      // цифра без ожидания — статическая сумма human.minutes, не живая длительность
+      expect(text(findNodeByAttr(container, 'data-testid', 'stage-screen-kpis')!)).toContain('35 мин');
+      expect(vi.getTimerCount(), 'waitingNow нет — интервал не должен ставиться').toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

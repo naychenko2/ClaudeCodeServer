@@ -70,6 +70,12 @@
 //     краснеет;
 // (16) не склонять через plural (всегда «попытка») → тест склонения краснеет;
 // (17) оставить общую подсказку и при непустом списке → «подсказки нет» краснеет.
+//
+// М3 (узкие сетки, принцип П1): сетки полей и итога ночи берут «узкость» из useWikiNarrow
+// (ширина контейнера), а не из ширины окна; сами чистые функции nightlyFieldCols/lastNightCols
+// проверяются без DOM (решение «узко» — у теста useWikiNarrow, M0).
+// (18) lastNightCols всегда возвращает широкую ветку → «сетка итога» краснеет
+//     (проверено мутацией, вывод — в отчёте задачи).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -77,7 +83,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
-import { WikiNightlyBlock } from '../WikiNightlyBlock';
+import { WikiNightlyBlock, lastNightCols, nightlyFieldCols } from '../WikiNightlyBlock';
 
 vi.mock('../../../../lib/signalr', async (orig) => ({
   ...await orig<typeof import('../../../../lib/signalr')>(),
@@ -840,5 +846,24 @@ describe('исполнители ночи и разбивка итога (W8b)',
     await settle();
     expect(has(c3, 'попытк')).toBe(false);
     expect(has(c3, '7 чатов отобрано')).toBe(true);
+  });
+});
+
+// ─── М3: сетки полей и итога ночи от узкости контейнера (П1) ───
+// Чистые функции, без DOM: решение «узко» проверяет тест useWikiNarrow (M0), здесь —
+// только отображение narrow → сетка. Узко: поля в одну колонку (в панели 340 px две
+// колонки по ~145 px), итог 2×N (пять клеток по ~60 px ломают подписи по слогам).
+describe('узкие сетки полей и итога (М3)', () => {
+  it('сетка полей: узко — 1fr, широко — 1fr 1fr', () => {
+    expect(nightlyFieldCols(true)).toBe('1fr');
+    expect(nightlyFieldCols(false)).toBe('1fr 1fr');
+  });
+
+  it('сетка итога: узко — 1fr 1fr при любом числе клеток, широко — repeat(N, 1fr)', () => {
+    // 5 клеток — с «отказано», 4 — без него: число передаёт вызывающий, функция его не придумывает
+    expect(lastNightCols(true, 5)).toBe('1fr 1fr');
+    expect(lastNightCols(true, 4)).toBe('1fr 1fr');
+    expect(lastNightCols(false, 5)).toBe('repeat(5, 1fr)');
+    expect(lastNightCols(false, 4)).toBe('repeat(4, 1fr)');
   });
 });

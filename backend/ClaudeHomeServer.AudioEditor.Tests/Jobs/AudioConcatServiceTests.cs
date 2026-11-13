@@ -187,6 +187,84 @@ public sealed class AudioConcatServiceTests : IDisposable
         _dsp.Calls.Should().Be(0);
     }
 
+    // ADR-040, Ф2-3: у личной области с папкой «Личного» куски-файлы читаются тем же путём, что у проекта
+    private AudioEditScope PersonalWithFolder()
+    {
+        var root = Path.Combine(_root, "personal");
+        Directory.CreateDirectory(Path.Combine(root, "audio"));
+        File.WriteAllBytes(Path.Combine(root, "audio", "jingle.wav"), "PJINGLE"u8.ToArray());
+        File.WriteAllBytes(Path.Combine(_root, "secret.wav"), "SECRET"u8.ToArray());
+        var project = new Project { Id = "personal-id", OwnerId = Owner, RootPath = root, Kind = ProjectKind.Personal };
+        return new AudioEditScope(AudioEditScope.Personal, project) { TenantOwnerId = Owner };
+    }
+
+    [Fact]
+    public async Task Файл_Личного_в_личной_области_с_папкой_склеивается_ключ_остаётся_personal()
+    {
+        var scope = PersonalWithFolder();
+        var (threadId, _) = ThreadWithVersion("VOICE");
+
+        var result = await Service().ConcatAsync(Owner, Owner, scope, new AudioConcatInput(Session,
+            [new AudioConcatPiece(threadId), new AudioConcatPiece(ProjectFile: "audio/jingle.wav")], Folder: "audio"),
+            CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        _dsp.Pieces.Select(System.Text.Encoding.UTF8.GetString).Should().Equal("VOICE", "PJINGLE");
+        scope.Key.Should().Be(AudioEditScope.Personal);
+        scope.IsPersonal.Should().BeTrue();
+        AudioEditScope.ProjectIdOf(scope.Key).Should().BeNull("трата и события личной области без id «Личного»");
+        _store.Get(Owner, Session).Threads.Single(t => t.Id == result.Value!.ThreadId).DraftFolder.Should().Be("audio");
+    }
+
+    [Theory]
+    [InlineData("../secret.wav")]
+    [InlineData("/etc/passwd")]
+    [InlineData("audio/нет-такого.wav")]
+    public async Task Путь_вне_Личного_или_несуществующий_в_личной_области_отказ(string file)
+    {
+        var scope = PersonalWithFolder();
+        var (threadId, _) = ThreadWithVersion("A");
+
+        var result = await Service().ConcatAsync(Owner, Owner, scope, new AudioConcatInput(Session,
+            [new AudioConcatPiece(threadId), new AudioConcatPiece(ProjectFile: file)]), CancellationToken.None);
+
+        result.Error.Should().StartWith("Кусок 2:");
+        _dsp.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Кусок_Личного_через_символическую_ссылку_наружу_отказ()
+    {
+        var scope = PersonalWithFolder();
+        var link = Path.Combine(scope.Project!.RootPath, "audio", "out");
+        try { Directory.CreateSymbolicLink(link, _root); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
+        var (threadId, _) = ThreadWithVersion("A");
+
+        var result = await Service().ConcatAsync(Owner, Owner, scope, new AudioConcatInput(Session,
+            [new AudioConcatPiece(threadId), new AudioConcatPiece(ProjectFile: "audio/out/secret.wav")]), CancellationToken.None);
+
+        result.Error.Should().Be("Кусок 2: путь вне проекта");
+        _dsp.Calls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("images")]
+    [InlineData("audio/../images")]
+    [InlineData("..")]
+    public async Task Папка_склейки_личной_области_только_внутри_audio(string folder)
+    {
+        var scope = PersonalWithFolder();
+        Directory.CreateDirectory(Path.Combine(scope.Project!.RootPath, "images"));
+        var (threadId, _) = ThreadWithVersion("A");
+
+        var result = await Service().ConcatAsync(Owner, Owner, scope, new AudioConcatInput(Session,
+            [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)], Folder: folder), CancellationToken.None);
+
+        result.Error.Should().Contain("Папка для сохранения");
+        _dsp.Calls.Should().Be(0);
+    }
+
     [Theory]
     [InlineData("../secret.wav")]
     [InlineData("/etc/passwd")]

@@ -11,6 +11,9 @@ public static class PersonalMediaFolders
     public const string Audio = "audio";
     public const string Video = "video";
 
+    // Запрещённые символы по Windows: папка может переехать туда, и путь должен открыться
+    private static readonly char[] WindowsForbidden = ['<', '>', ':', '"', '|', '?', '*'];
+
     /// <summary>
     /// Папка сохранения: пусто — сама подпапка вида; иначе путь обязан лежать внутри неё. null — путь годится
     /// (<paramref name="folder"/> нормализован), иначе текст отказа.
@@ -20,7 +23,8 @@ public static class PersonalMediaFolders
         folder = kind;
         var value = (requested ?? "").Trim().Replace('\\', '/').Trim('/');
         if (value.Length == 0 || value == ".") return null;
-        if (value.Split('/').Any(s => s is "" or "." or ".." || s.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0))
+        if (value.Split('/').Any(s => s is "" or "." or ".." || s.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+                                      || s.IndexOfAny(WindowsForbidden) >= 0))
             return $"Путь вне папки «{kind}» в «Личном»";
         if (value != kind && !value.StartsWith(kind + "/", StringComparison.Ordinal))
             return $"В «Личное» сохраняют только в папку «{kind}»";

@@ -392,7 +392,6 @@ public sealed class VideoEditorToolsetTests
     }
 
     [Theory]
-    [InlineData(ToolSaveScene)]
     [InlineData(ToolFilmEdit)]
     [InlineData(ToolFilmBuild)]
     public async Task В_личном_чате_фильмовые_инструменты_есть_но_отвечают_что_фильмы_только_в_проекте(string tool)

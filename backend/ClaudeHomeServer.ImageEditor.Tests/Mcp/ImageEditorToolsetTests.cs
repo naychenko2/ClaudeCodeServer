@@ -324,7 +324,7 @@ public class ImageEditorToolsetTests : IDisposable
         var thread = _store.Get(Owner, PersonalChat).Threads.Should().ContainSingle().Subject;
         thread.File.Should().BeNull();
         _store.Get(Owner, PersonalChat).Focus.Should().Be(thread.Id);
-        Parse(result)["thread"]!["draft"]!["note"]!.GetValue<string>().Should().Contain("скачает")
+        Parse(result)["thread"]!["draft"]!["note"]!.GetValue<string>().Should().Contain("«Личное»")
             .And.NotContain("проект");
         _feed.Records.Where(r => r.SessionId == PersonalChat && r.Record.RecordType == ImageThreadService.RecordTypes.Focus)
             .Should().ContainSingle().Which.Record.Fallback.Should().Be("Claude взял в работу: новая картинка");

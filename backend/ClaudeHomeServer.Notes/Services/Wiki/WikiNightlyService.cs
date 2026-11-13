@@ -911,8 +911,10 @@ public sealed class WikiNightlyService : BackgroundService
     // проверяются перед каждой выдачей; при упоре выдача останавливается, чаты в полёте
     // доигрываются и их результаты обрабатываются как обычно. Исключение слота — отказ чата
     // (тот же смысл, что прежний catch): координатор и соседние слоты живы; отмена хоста —
-    // конец прохода. Готовность движка (IsLocalEngineReady) здесь не проверяется: выбывание и
-    // повтор — W5.
+    // конец прохода. Исключение prepare/apply — отказ прохода (его ловит общий catch RunPassAsync),
+    // но и на этом выходе ни один слот не остаётся в полёте: их ожидание — в finally координатора,
+    // иначе их _analyze шёл бы рядом с точкой (а) судьи или со следующим проходом. Готовность
+    // движка (IsLocalEngineReady) здесь не проверяется: выбывание и повтор — W5.
     private async Task<string> RunCoordinatedAsync(
         string ownerId, List<Candidate> queue,
         IReadOnlyList<LocalEngineExecutor> executors,
@@ -926,56 +928,71 @@ public sealed class WikiNightlyService : BackgroundService
         var inflight = new List<Task<SlotOutcome>>();
         string? stop = null;
 
-        while (true)
+        try
         {
-            // Выдача, пока есть свободный слот, нет упора и есть чат со свободным разделом.
-            while (stop is null && remaining.Count > 0)
+            while (true)
             {
-                string? engine = null;
-                foreach (var e in executors)
-                    if (engineBusy.GetValueOrDefault(e.Engine) < e.Parallel) { engine = e.Engine; break; }
-                if (engine is null) break; // все слоты заняты — ждать завершения
+                // Выдача, пока есть свободный слот, нет упора и есть чат со свободным разделом.
+                while (stop is null && remaining.Count > 0)
+                {
+                    string? engine = null;
+                    foreach (var e in executors)
+                        if (engineBusy.GetValueOrDefault(e.Engine) < e.Parallel) { engine = e.Engine; break; }
+                    if (engine is null) break; // все слоты заняты — ждать завершения
 
-                var idx = -1;
-                for (var i = 0; i < remaining.Count; i++)
-                    if (!busy.ContainsKey(remaining[i].Home)) { idx = i; break; }
-                if (idx < 0) break; // все оставшиеся чаты — занятых разделов: ждать завершения
+                    var idx = -1;
+                    for (var i = 0; i < remaining.Count; i++)
+                        if (!busy.ContainsKey(remaining[i].Home)) { idx = i; break; }
+                    if (idx < 0) break; // все оставшиеся чаты — занятых разделов: ждать завершения
 
-                var c = remaining[idx];
-                remaining.RemoveAt(idx); // чат выдаётся не более одного раза за проход
-                var prep = await prepare(c);
-                if (prep.Stop is not null) { stop = prep.Stop; break; }
-                if (!prep.Ready) continue; // чат пропущен — слот свободен, к следующему
+                    var c = remaining[idx];
+                    remaining.RemoveAt(idx); // чат выдаётся не более одного раза за проход
+                    var prep = await prepare(c);
+                    if (prep.Stop is not null) { stop = prep.Stop; break; }
+                    if (!prep.Ready) continue; // чат пропущен — слот свободен, к следующему
 
-                busy[c.Home] = 1;
-                engineBusy[engine] = engineBusy.GetValueOrDefault(engine) + 1;
-                inflight.Add(RunSlotAsync(c, engine, prep.Cfg!));
+                    busy[c.Home] = 1;
+                    engineBusy[engine] = engineBusy.GetValueOrDefault(engine) + 1;
+                    inflight.Add(RunSlotAsync(c, engine, prep.Cfg!));
+                }
+
+                if (inflight.Count == 0) break;
+                var done = await Task.WhenAny(inflight);
+                inflight.Remove(done);
+                SlotOutcome o;
+                try { o = await done; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // Отмена хоста: их ожидание — в finally ниже (тот же инвариант на любом выходе).
+                    throw;
+                }
+                // Ключ снимают при нуле: ContainsKey по оставшемуся ключу с нулём читался бы как
+                // «раздел в работе», и второй его чат не вышел бы никогда.
+                if (--busy[o.Chat.Home] == 0) busy.Remove(o.Chat.Home);
+                engineBusy[o.Engine]--;
+                if (o.Error is not null)
+                {
+                    // Сбой одного разбора курсор не двигает (его пишет только AnalyzeAsync) — к следующему;
+                    // координатор и соседние слоты живы.
+                    LogSafe(o.Error, "Ночной разбор {Owner}: чат {Chat} не разобран", ownerId, o.Chat.Session.Id);
+                    continue;
+                }
+                var stopAfter = apply(o.Chat, o.Cfg, o.Result);
+                if (stopAfter is not null) stop ??= stopAfter; // первый названный упор держит итог
             }
-
-            if (inflight.Count == 0) break;
-            var done = await Task.WhenAny(inflight);
-            inflight.Remove(done);
-            SlotOutcome o;
-            try { o = await done; }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        }
+        finally
+        {
+            // Инвариант координатора: после его возврата ни одной задачи слота в полёте. Исключение
+            // prepare/apply уходит в общий catch прохода (это отказ прохода), и без этого ожидания
+            // чаты в полёте доигрывали бы ПОСЛЕ возврата: их _analyze шёл бы рядом с точкой (а) судьи
+            // или со следующим проходом того же владельца. Исходы дожданных слотов проходу уже не
+            // нужны (он назван отказом), но их полёт — нет; исключения дожданных здесь не поднимаются.
+            if (inflight.Count > 0)
             {
-                // Отмена хоста: в полёте остаются только гасимые той же ct — не оставляем их за собой.
-                try { await Task.WhenAll(inflight); } catch { /* их исходы проходу уже не нужны */ }
-                throw;
+                try { await Task.WhenAll(inflight).ConfigureAwait(false); }
+                catch { /* их исходы проходу уже не нужны */ }
             }
-            // Ключ снимают при нуле: ContainsKey по оставшемуся ключу с нулём читался бы как
-            // «раздел в работе», и второй его чат не вышел бы никогда.
-            if (--busy[o.Chat.Home] == 0) busy.Remove(o.Chat.Home);
-            engineBusy[o.Engine]--;
-            if (o.Error is not null)
-            {
-                // Сбой одного разбора курсор не двигает (его пишет только AnalyzeAsync) — к следующему;
-                // координатор и соседние слоты живы.
-                LogSafe(o.Error, "Ночной разбор {Owner}: чат {Chat} не разобран", ownerId, o.Chat.Session.Id);
-                continue;
-            }
-            var stopAfter = apply(o.Chat, o.Cfg, o.Result);
-            if (stopAfter is not null) stop ??= stopAfter; // первый названный упор держит итог
         }
         return stop ?? OutcomeCompleted;
 

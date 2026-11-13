@@ -570,6 +570,44 @@ public class WikiIngestTests : IDisposable
         roots.Should().BeEmpty("для ночи точка (б) судью не пускает: её полный проход — в конце ночи");
     }
 
+    [Fact]
+    public async Task JudgeB_NotCalledFromNightSlots()
+    {
+        // W4b: две одновременные заявки ночи (разные разделы — разные очереди раздела, разные
+        // названные движки) обе дают «awaiting_human» — и ни одна не зовёт точку (б). У ночи
+        // один проход судьи: точка (а) в конце RunPassAsync; её числа и идут в итог.
+        // Мутация «убрать && actionKey != LocalActionCatalog.WikiNightly» (WikiIngestService.cs:273)
+        // → красный этот тест и J4r_… выше (оба держат тот же инвариант, этот — на параллели).
+        const string section2 = "projects/p2";
+        const string card2 = "Проекты/p2/Источники/Карточка-чата-2.md";
+        const string page2 = "Проекты/p2/Сущность.md";
+        // Свой источник и своя страница второго раздела: та же форма, свои ref и своя сноска —
+        // иначе обе заявки были бы одним окном (in-flight ключ различает их по ref и пути).
+        Write(User, section2, card2, CardFileTitled("Карточка чата 2").Replace("ref: session:s1#m1-9", "ref: session:s2#m1-9"));
+        Write(User, section2, page2, PageBase.Replace("[[" + CardTitle + "]]", "[[Карточка чата 2]]"));
+        LogLine(DaysAgo(1), "revert", "user", PagePath);
+        LogLine(DaysAgo(1), "revert", "user", page2);
+
+        var roots = new List<string>();
+        var llm = new FakeLlm(synth: SynthJson, nightly: true);
+        llm.PushAnswer("S", SynthJson); // второй заявке — свой ответ синтеза
+        var sut = Sut(llm, CountingJudge(roots));
+
+        var t1 = sut.IngestAsync(User, Req(), CancellationToken.None, LocalActionCatalog.WikiNightly, "gemma");
+        var t2 = sut.IngestAsync(User, Req(home: section2, card: card2, ref_: "session:s2#m1-9"),
+            CancellationToken.None, LocalActionCatalog.WikiNightly, "gpt");
+        var res1 = await t1;
+        var res2 = await t2;
+
+        res1.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res1.Reason);
+        res2.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res2.Reason);
+        res1.PackageId.Should().NotBeNullOrEmpty();
+        res2.PackageId.Should().NotBeNullOrEmpty();
+        // Оба окна действительно шли на своих движках: это два прохода, а не один прогон.
+        llm.EngineCalls.Select(c => c.Engine).Distinct().Should().BeEquivalentTo(new[] { "gemma", "gpt" });
+        roots.Should().BeEmpty("ни одна заявка ночи не зовёт точку (б): судья ночи — одна, в конце прохода");
+    }
+
     // ── B4a: правка человека (ADR-038) — отдельный читатель, не откат ───────────────
 
     [Fact]
@@ -973,6 +1011,10 @@ public class WikiIngestTests : IDisposable
 
         public string PromptOf(string pass) =>
             Calls.First(c => c.Pass == pass).Prompt;
+
+        // Ещё один ответ того же прохода: двум одновременным заявкам одного прохода нужен свой
+        // ответ — иначе вторая читает пустую очередь и отказывается как нечитаемый ответ.
+        public void PushAnswer(string pass, string json) => _answers[pass].Enqueue(json);
 
         // Ночное место идёт локальным маршрутом (иначе разбор отказывает окно до вызова).
         public bool UsesLocal(string actionKey) => _nightly;

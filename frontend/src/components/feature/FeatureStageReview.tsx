@@ -40,15 +40,9 @@ function Item({ item }: { item: StageReviewItem }) {
 
 export function FeatureStageReview({ review }: { review: StageReview }) {
   const items = [...(review.own ? [review.own] : []), ...review.reviews];
-  const aw = review.awaitingHuman;
   return (
     <section data-testid="stage-review" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
       <div style={SEC_LABEL}>Ревью</div>
-      {aw && (
-        <div data-testid="stage-awaiting-human" style={{ fontSize: FS.sm, color: C.warningText }}>
-          Ждёт ответа человека с {formatDateTime(aw.since)}{aw.reason ? `: ${aw.reason}` : ''}
-        </div>
-      )}
       {items.length === 0 ? (
         <div data-testid="stage-review-empty" style={{ fontSize: FS.sm, color: C.textSecondary }}>Ревью по этапу пока нет.</div>
       ) : (

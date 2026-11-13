@@ -8,7 +8,7 @@
 // что есть в run (без KPI и подписи). Раскрытая задача показывает «Приёмку» и «Итог» (FeatureStepDetails).
 // Что ждёт человека, область берёт из данных сводки, а не из примера макета (противоречие №3).
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Workflow } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { C, R, FS, SP, FONT } from '../../lib/design';
@@ -26,8 +26,9 @@ import { stageNodeId, defaultSelected } from './FeatureProcessGraphModel';
 import { allFeatureTasks } from './FeatureTasksTab';
 import { FeatureStepDetails } from './FeatureStepDetails';
 import { FeatureStageKpi } from './FeatureStageKpi';
+import { FeatureStageQuestions } from './FeatureStageQuestions';
 import type { FeatureRun, FeatureStage, FeatureTask } from '../../types/featureRun';
-import type { StageSummary, StageSummaryTask } from '../../types/featureStage';
+import type { StageQuestion, StageSummary, StageSummaryTask } from '../../types/featureStage';
 
 // Выбор стадии на странице: ключ — featureId + id стадии.
 export interface StageSelection { featureId: string; id: string }
@@ -143,19 +144,22 @@ export function stageTasksOf(run: FeatureRun, stage: FeatureStage): FeatureTask[
 
 // Сводка этапа по первой его задаче. Состояние помечено taskId, ответ отменённого запроса не
 // применяется; отказ — null (область живёт без KPI, ошибок наружу не бросает).
-function useStageSummary(taskId: string | null): StageSummary | null {
-  const [loaded, setLoaded] = useState<{ taskId: string; summary: StageSummary | null } | null>(null);
+function useStageSummary(taskId: string | null): { summary: StageSummary | null; questions: StageQuestion[]; reload: () => void } {
+  const [loaded, setLoaded] = useState<{ taskId: string; summary: StageSummary | null; questions: StageQuestion[] } | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!taskId) return;
     const controller = new AbortController();
     const { signal } = controller;
     Promise.resolve()
       .then(() => api.tasks.stage(taskId, signal))
-      .then(screen => { if (!signal.aborted) setLoaded({ taskId, summary: screen?.stageSummary ?? null }); })
-      .catch(() => { if (!signal.aborted) setLoaded({ taskId, summary: null }); });
+      .then(screen => { if (!signal.aborted) setLoaded({ taskId, summary: screen?.stageSummary ?? null, questions: screen?.questions ?? [] }); })
+      .catch(() => { if (!signal.aborted) setLoaded({ taskId, summary: null, questions: [] }); });
     return () => controller.abort();
-  }, [taskId]);
-  return loaded && loaded.taskId === taskId ? loaded.summary : null;
+  }, [taskId, attempt]);
+  const reload = useCallback(() => setAttempt(n => n + 1), []);
+  const cur = loaded && loaded.taskId === taskId ? loaded : null;
+  return { summary: cur?.summary ?? null, questions: cur?.questions ?? [], reload };
 }
 
 const SILENCE_ACTION: Record<string, string> = {
@@ -200,10 +204,13 @@ interface ViewProps extends Omit<FeatureStageAreaProps, 'run' | 'selectedId'> {
   stage: FeatureStage;
   tasks: FeatureTask[];
   summary: StageSummary | null;
+  // Вопросы человеку (из экрана этапа); блок рисуется, только если они есть
+  questions?: StageQuestion[];
+  onAnswered?: () => void;
 }
 
 // Тело области без загрузки: сводка приходит пропсом (в тестах подставляется напрямую).
-export function FeatureStageAreaView({ stage, tasks, summary, isMobile, onOpenTask, onOpenStage, onSelectStage, slot }: ViewProps) {
+export function FeatureStageAreaView({ stage, tasks, summary, questions, onAnswered, isMobile, onOpenTask, onOpenStage, onSelectStage, slot }: ViewProps) {
   const tag = stateTag(stage);
   const lane = laneWord(stage.line ?? stage.lane ?? null);
   const returns = summary?.returns ?? stage.returns ?? 0;
@@ -265,6 +272,9 @@ export function FeatureStageAreaView({ stage, tasks, summary, isMobile, onOpenTa
           rows.map(r => <TaskRow key={r.id} row={r} isMobile={isMobile} onOpenTask={onOpenTask} />)
         )}
       </div>
+      {questions && questions.length > 0 && stage.taskIds?.[0] && (
+        <FeatureStageQuestions taskId={stage.taskIds[0]} questions={questions} isMobile={isMobile} onAnswered={onAnswered ?? (() => {})} />
+      )}
       {note && (
         <div data-testid="feature-stage-area-parallel"
           style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', fontSize: FS.sm, color: C.textSecondary }}>
@@ -289,7 +299,7 @@ export function FeatureStageArea({ run, selectedId, ...rest }: FeatureStageAreaP
   const stage: FeatureStage | undefined = selectedId
     ? (run.stages ?? []).find(s => stageNodeId(s) === selectedId)
     : undefined;
-  const summary = useStageSummary(stage?.taskIds?.[0] ?? null);
+  const { summary, questions, reload } = useStageSummary(stage?.taskIds?.[0] ?? null);
   if (!stage) {
     return (
       <div data-testid="feature-stage-area">
@@ -298,5 +308,5 @@ export function FeatureStageArea({ run, selectedId, ...rest }: FeatureStageAreaP
       </div>
     );
   }
-  return <FeatureStageAreaView stage={stage} tasks={stageTasksOf(run, stage)} summary={summary} {...rest} />;
+  return <FeatureStageAreaView stage={stage} tasks={stageTasksOf(run, stage)} summary={summary} questions={questions} onAnswered={reload} {...rest} />;
 }

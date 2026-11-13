@@ -207,6 +207,9 @@ export function NightExecutorsEditor({ engines, value, mainLocalEnabled, onSave 
                 min={1}
                 max={capOf(e)}
                 ariaLabel={`Параллельность «${e.title}»`}
+                // Упор «+» объясняет причину (конвенция Stepper): погасшая кнопка
+                // без объяснения выглядит поломкой
+                maxHint="этот движок не может вести больше задач сразу"
                 touch={isMobile}
                 onChange={(v) => patch((d) => ({ ...d, parallel: { ...d.parallel, [e.name]: v } }))}
               />
@@ -236,6 +239,9 @@ export function NightExecutorsEditor({ engines, value, mainLocalEnabled, onSave 
           min={1}
           max={MAX_TOTAL}
           ariaLabel="Общий потолок одновременных ночных задач"
+          // Причина упора — с числом: это потолок стора (тот же лимит, что держит
+          // бэковый валидатор), а не придел отдельного движка
+          maxHint={`одновременно может идти не больше ${MAX_TOTAL} задач`}
           touch={isMobile}
           onChange={(v) => patch((d) => ({ ...d, maxTotal: v }))}
         />

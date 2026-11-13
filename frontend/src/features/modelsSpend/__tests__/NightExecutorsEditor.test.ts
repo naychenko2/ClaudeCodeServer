@@ -14,8 +14,11 @@
 // — смена основной локали без смены value перестраивает черновик по новому составу
 //   видимых движков (ревью W7b, minor 1): локаль возвращается ОТМЕЧЕННОЙ, а не
 //   неотмеченной. Мутация: ключ синхронизации только value → тест красный;
+// — упор потолка объясняет причину (доработка QA W7b): у «+» на потолке движка или
+//   общем — причина в имени кнопки (aria) и подсказка на обёртке (title); ниже
+//   потолка — ни того, ни другой;
 // — пустой выбор = сброс к одному маршруту: тело { maxTotal: 0, executors: [] };
-//   потолок общего Stepper — 4.
+//   потолок общего Stepper — 4; «черновик 1» проверяет общий потолок = 1 (ревью п.3).
 //
 // Мутации этого прогона (вывод — в отчёт задачи):
 // (1) снять блокровку кнопки сохранения на время onSave → doubleSave краснеет
@@ -33,6 +36,8 @@
 // (8) снять заморозку черновика на время сохранения (страж в patch) → doubleSave
 //     краснеет («+» посреди сохранения сдвинул бы параллельность уже отправленного
 //     тела).
+// (9) снять maxHint у обоих Stepper → «упор потолка» краснеет (на потолке не
+//     остаётся ни причины в имени кнопки, ни подсказки на обёртке).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -115,12 +120,16 @@ function setChecked(c: AnyNode, name: string): void {
   const p = reactProps(cb) as { onClick?: (e: unknown) => void };
   act(() => { p.onClick!(undefined); });
 }
+// Кнопка «+» Stepper: второй button группы. Ищем по позиции, а не по точной
+// aria-label «Больше»: на потолке с maxHint она становится «Больше: причина»
+function plusBtn(scope: AnyNode): AnyNode {
+  const group = findNodeByAttr(scope, 'role', 'group')!;
+  return group.querySelectorAll('button')[1];
+}
 // «+» внутри конкретного Stepper (по группе с её aria-label — иначе схватится «+»
 // первой строки движка)
 function plusIn(scope: AnyNode): void {
-  const group = findNodeByAttr(scope, 'role', 'group')!;
-  const b = findNodeByAttr(group, 'aria-label', 'Больше')!;
-  const p = reactProps(b) as { onClick?: (e: unknown) => void };
+  const p = reactProps(plusBtn(scope)) as { onClick?: (e: unknown) => void };
   act(() => { p.onClick!(undefined); });
 }
 const plusRow = (c: AnyNode, name: string): void => plusIn(row(c, name)!);
@@ -178,6 +187,9 @@ describe('«Исполнители ночи» (W7b)', () => {
     expect(checked(c, 'local')).toBe(false);
     expect(checked(c, 'gemma')).toBe(false);
     expect(has(c, 'Ничего не отмечено — ночной разбор пойдёт по своему одному маршруту, как сейчас.')).toBe(true);
+    // «черновик 1» из названия — проверяется: общий потолок пустого выбора — 1,
+    // т. е. «одна работа за один проход», как место шло до фичи (ревью W7b, п.3)
+    expect(texts(totalGroup(c)).join('')).toBe('1');
   });
 
   it('отметка двух движков: ровно один onSave, items в порядке engines (не в порядке отметки)', async () => {
@@ -217,6 +229,29 @@ describe('«Исполнители ночи» (W7b)', () => {
     clickSave(c);
     await settle();
     expect(calls[0].maxTotal).toBe(4);
+  });
+
+  it('упор потолка объясняет причину: «+» на потолке — с причиной, ниже — без неё', () => {
+    const REASON_ENGINE = 'этот движок не может вести больше задач сразу';
+    const REASON_TOTAL = 'не больше 4 задач';
+    // Строка движка: параллельность 1 при потолке 2 — ниже потолка у «+» нет
+    // причины: имя ровно «Больше»
+    const { c } = render({ value: { maxTotal: 1, items: [{ engine: 'gemma', parallel: 1 }] } });
+    const rowG = row(c, 'gemma')!;
+    expect(plusBtn(rowG).getAttribute('aria-label')).toBe('Больше');
+    // Упор: «+» ставит 2 = потолок движка. Теперь у кнопки — имя с причиной (aria)
+    // и подсказка на обёртке (title): disabled-кнопка событий мыши не получает,
+    // поэтому висит она на обёртке (конвенция Stepper)
+    plusRow(c, 'gemma');
+    const atMax = plusBtn(rowG);
+    expect(atMax.getAttribute('aria-label')).toBe(`Больше: ${REASON_ENGINE}`);
+    expect(atMax.parentElement!.getAttribute('title')).toBe(REASON_ENGINE);
+    // Общий потолок: 1 из 4 — ниже потолка, причины нет; после упора в 4 — причина
+    // с числом (это потолок стора, а не придел движка)
+    const tg = totalGroup(c);
+    expect(plusBtn(tg).getAttribute('aria-label')).toBe('Больше');
+    for (let i = 0; i < 3; i++) plusIn(tg);
+    expect(plusBtn(tg).getAttribute('aria-label')).toContain(REASON_TOTAL);
   });
 
   it('пустой выбор = сброс к одному маршруту: тело { maxTotal: 0, executors: [] }', async () => {

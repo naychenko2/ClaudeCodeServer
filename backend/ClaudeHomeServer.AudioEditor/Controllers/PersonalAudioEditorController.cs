@@ -9,9 +9,8 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Services.AudioEditor.Controllers;
 
 // Модуль «Звук» в личном чате вне проекта. Тело ручек — общее с проектом (AudioEditorEndpoints), здесь
-// только личный гейт. save здесь нет намеренно: записи в проект у личного чата нет по построению, путь —
-// 404 маршрутизации, а не 500; версию можно только скачать (files/{role}?download=true). Префы — одни на
-// владельца, как и сама личная область.
+// только личный гейт. save пишет в «Личное» (Personal/audio/, ADR-040 §5); версию по-прежнему можно скачать
+// (files/{role}?download=true). Префы — одни на владельца, как и сама личная область.
 [ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
@@ -60,8 +59,16 @@ public class PersonalAudioEditorController(
     [HttpPost("jobs")]
     [RequestSizeLimit(MaxJobBodyBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxJobBodyBytes)]
-    public async Task<IActionResult> Start(string sessionId, [FromForm] AudioStartJobForm form, CancellationToken ct) =>
-        Gate(sessionId, out var scope, out var denied) ? await StartIn(scope, form, ct) : denied;
+    public async Task<IActionResult> Start(string sessionId, [FromForm] AudioStartJobForm form, CancellationToken ct)
+    {
+        if (!Gate(sessionId, out var scope, out var denied)) return denied;
+        // Входы из файлов «Личного» — вход, которому нужен диск: папку создаём здесь, а не на GET
+        if (!string.IsNullOrWhiteSpace(form.ReferencePath) || form.ClipPaths is { Count: > 0 }
+            || !string.IsNullOrWhiteSpace(form.VoiceModelPath) || !string.IsNullOrWhiteSpace(form.VoiceIndexPath)
+            || !string.IsNullOrWhiteSpace(form.VideoPath))
+            scope = await gate.WithFolderAsync(scope, ct);
+        return await StartIn(scope, form, ct);
+    }
 
     [HttpGet("jobs/{jobId}")]
     public IActionResult GetJob(string sessionId, string jobId) =>
@@ -116,10 +123,25 @@ public class PersonalAudioEditorController(
         [FromQuery] int points = 800, [FromQuery] string? role = null, CancellationToken ct = default) =>
         Gate(sessionId, out var scope, out var denied) ? await PeaksIn(scope, sessionId, threadId, versionId, role, points, ct) : denied;
 
-    // Куски — только версии нитей этого чата: файлов проекта у личного чата нет
+    // Куски — версии нитей этого чата и файлы «Личного»
     [HttpPost("concat")]
-    public async Task<IActionResult> Concat(string sessionId, [FromBody] AudioConcatRequest? req, CancellationToken ct) =>
-        Gate(sessionId, out var scope, out var denied) ? await ConcatIn(scope, sessionId, req, ct) : denied;
+    public async Task<IActionResult> Concat(string sessionId, [FromBody] AudioConcatRequest? req, CancellationToken ct)
+    {
+        if (!Gate(sessionId, out var scope, out var denied)) return denied;
+        if (req?.Pieces?.Any(p => !string.IsNullOrWhiteSpace(p.ProjectFile)) == true)
+            scope = await gate.WithFolderAsync(scope, ct);
+        return await ConcatIn(scope, sessionId, req, ct);
+    }
+
+    // Сохранить версию в «Личное»: Personal/audio/, только новыми файлами. Работает и для старых личных версий:
+    // файлы версии копируются из рабочей папки
+    [HttpPost("threads/{threadId}/save")]
+    public async Task<IActionResult> Save(string sessionId, string threadId, [FromBody] AudioSaveRequest req, CancellationToken ct)
+    {
+        if (!Gate(sessionId, out var scope, out var denied)) return denied;
+        scope = await gate.WithFolderAsync(scope, ct);
+        return await SaveIn(scope, sessionId, threadId, req);
+    }
 
     private bool Gate(string sessionId, [NotNullWhen(true)] out AudioEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>

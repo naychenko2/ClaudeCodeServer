@@ -373,7 +373,7 @@ public class WikiSettingsController : ControllerBase
     }
 
     // Подпись движка для строки итога (W6b): Title из текущего списка исполнителя — тот же
-    // приём, что EngineTitle в журнале службы (WikiNightlyService.cs:1270): настройки могли
+    // приём, что EngineTitle в журнале службы (WikiNightlyService): настройки могли
     // измениться посреди ночи, и строка называет то, что владелец видит сейчас. Движка в
     // списке нет — техническое имя (назвать надо чем-то).
     private static string TitleOf(IReadOnlyList<LocalEngineExecutor> executors, string engine)

@@ -1796,12 +1796,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             loadError={sectionsError}
             disabled={readOnlyForm}
             isMobile={isMobile}
+            specialtyTitle={specialtyLabel(specialtyCatalog, specialty)}
+            changedByAdminSince={persona?.changedByAdminSince}
           >
             {characterSection}
           </PersonaPromptTab>
         )}
-            specialtyTitle={specialtyLabel(specialtyCatalog, specialty)}
-            changedByAdminSince={persona?.changedByAdminSince}
         {error && (
           <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
         )}

@@ -347,14 +347,16 @@ public class LocalActionExecutorsStoreTests
                 new PlainEngineClient("strata"), null),
             new LocalEngine(Spec("bare"), new PlainEngineClient("bare"), null),
         ]);
+        // maxTotal = сумма parallel списка: урезания нет, и тест остаётся ровно про список,
+        // порядок и подписи. Числа слотов и урезание по maxTotal — LocalExecutorsForTests.
         var (runner, store) = Stand(dir, engines, mainLocal: new PlainEngineClient("main"));
-        Assert.True(store.Save(Key, Cfg(3, Ex("gemma", 2), Ex("strata"), Ex("bare"), Ex("local"))));
+        Assert.True(store.Save(Key, Cfg(4, Ex("gemma"), Ex("strata"), Ex("bare"), Ex("local"))));
 
         var list = runner.LocalExecutorsFor(Key);
         Assert.Equal(["gemma", "strata", "bare", "local"], list.Select(e => e.Engine));
-        // Parallel в записи шва — признак «несколько работ на этом движке можно» (W1a):
-        // parallel 2 → true, parallel 1 → false. Сам счётчик остаётся в сторе.
-        Assert.Equal([true, false, false, false], list.Select(e => e.Parallel));
+        // Parallel в записи шва — число слотов этого исполнителя (был признак bool):
+        // ровно то, что дал стор, когда урезания не потребовалось.
+        Assert.Equal([1, 1, 1, 1], list.Select(e => e.Parallel));
         Assert.Equal("Gemma 4 на Video", list[0].Title);
         Assert.Equal("strata-модель", list[1].Title);
         Assert.Equal("bare", list[2].Title);

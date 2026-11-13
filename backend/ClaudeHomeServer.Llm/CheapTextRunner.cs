@@ -601,7 +601,9 @@ public sealed class CheapTextRunner(
 
     // Исполнители-движки места (ICheapTextRunner.LocalExecutorsFor, разрез §2): список
     // берётся из стора админа, порядок списка — приоритет (свободный слот первого получает
-    // чат раньше). Пусто — исполнителей нет: вызывающий идёт по своему маршруту
+    // чат раньше). Parallel — слоты движка после урезания по maxTotal места (раунд-робин,
+    // см. ниже): сумма по списку не больше потолка места. Пусто — исполнителей нет:
+    // вызывающий идёт по своему маршруту
     // (RunLocalOrChosen*), а не «куда-нибудь» — конфиг, который назначает месту один
     // движок, здесь подмены не даёт. Title — подпись движка для владельца, та же сборка,
     // что у LocalActionRouter.EngineLabel (Title → модель → имя): человеку нужно видеть,
@@ -611,18 +613,48 @@ public sealed class CheapTextRunner(
     public IReadOnlyList<LocalEngineExecutor> LocalExecutorsFor(string actionKey)
     {
         if (executorsStore?.TryGet(actionKey) is not { } cfg) return [];
-        var list = new List<LocalEngineExecutor>(cfg.Executors.Count);
+
+        // Сначала — живые движки, потом урезание по maxTotal: слоты выпавшего исполнителя
+        // не должны доставаться живым меньше (порядок этих двух шагов и есть смысл правки).
+        var candidates = new List<(string Engine, int Parallel)>(cfg.Executors.Count);
         foreach (var e in cfg.Executors)
         {
             var engine = e.Engine.Trim();
             // Стор живые имена уже пропустил; здесь — защита от расхождения двух снимков
             // (стор перечитан, реестр движков ещё нет): несуществующий движок в список не идёт.
             if (!IsMainLocalEngine(engine) && namedEngines?.Get(engine) is null) continue;
-            // Parallel в записи шва (W1a) — признак «на этом движке можно вести несколько
-            // работ», а не число слотов: счётчик через неё не проходит. Число остаётся в
-            // сторе; координатору ночи (W4) оно нужно — разряд в записи шва поднимался
-            // отдельно, здесь контракт W1a не меняем.
-            list.Add(new LocalEngineExecutor(engine, EngineTitle(engine), e.Parallel > 1));
+            candidates.Add((engine, e.Parallel));
+        }
+
+        // Потолок слотов места (maxTotal стора) применяет сам шов: координатор ночи (W4)
+        // заводит ровно столько окон, сколько ему отдали, и не знает, что их больше.
+        // Урезание — раунд-робином, а не жадно: по одному слоту каждому исполнителю по кругу,
+        // пока бюджет или потолок своего движка не кончился. Жадный проход (первому по списку
+        // — всё, что можно) оставлял бы последнего исполнителя без слота при живом бюджете
+        // очереди: порядок списка — приоритет выдачи чата, а не право занять все слоты.
+        var slots = new int[candidates.Count];
+        for (var budget = cfg.MaxTotal; budget > 0;)
+        {
+            var progressed = false;
+            for (var i = 0; i < candidates.Count && budget > 0; i++)
+            {
+                if (slots[i] >= candidates[i].Parallel) continue; // потолок своего движка
+                slots[i]++;
+                budget--;
+                progressed = true;
+            }
+            // Все упёрлись в свой потолок: остаток бюджета никому не достался.
+            if (!progressed) break;
+        }
+
+        var list = new List<LocalEngineExecutor>(candidates.Count);
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            // Нулевой остаток — исполнитель выпадает: строка без слота читалась бы
+            // вызывающим как «есть куда положить чат».
+            if (slots[i] == 0) continue;
+            list.Add(new LocalEngineExecutor(candidates[i].Engine, EngineTitle(candidates[i].Engine),
+                slots[i]));
         }
         return list;
     }

@@ -14,7 +14,7 @@ public class PromptSectionsContributorTests
     private static IPromptSectionProvider Provider(string text)
     {
         var mock = new Mock<IPromptSectionProvider>();
-        mock.Setup(p => p.EffectivePromptSections(It.IsAny<string>(), It.IsAny<PersonaSpecialty>()))
+        mock.Setup(p => p.EffectivePromptSectionStates(It.IsAny<string>(), It.IsAny<PersonaSpecialty>()))
             .Returns([new EffectivePromptSection("history", true, text, default, default)]);
         return mock.Object;
     }
@@ -49,13 +49,21 @@ public class PromptSectionsContributorTests
         new PromptSectionsContributor(null)
             .IsEnabled(Ctx(new Persona { Id = "p1", Specialty = PersonaSpecialty.Planner })).Should().BeFalse();
 
+    // Тот же случай на чтении состояния (ручка P1d): отсутствующая опция — пустой список,
+    // а не NRE в 500 (находка R-P1c)
+    [Fact]
+    public void НетПровайдераСекций_ЭффективноеСостояниеПустоеАНеИсключение() =>
+        new PromptSectionsContributor(null)
+            .EffectiveSectionsFor("owner-1", new Persona { Id = "p1", Specialty = PersonaSpecialty.Planner })
+            .Should().NotBeNull().And.BeEmpty();
+
     // --- P1c: слой секций персоны (Г6) ---
 
     // Провайдер с несколькими секциями специальности: roleRules + history + processes.
     private static IPromptSectionProvider MultiProvider()
     {
         var mock = new Mock<IPromptSectionProvider>();
-        mock.Setup(p => p.EffectivePromptSections(It.IsAny<string>(), It.IsAny<PersonaSpecialty>()))
+        mock.Setup(p => p.EffectivePromptSectionStates(It.IsAny<string>(), It.IsAny<PersonaSpecialty>()))
             .Returns([
                 new EffectivePromptSection("roleRules", true, "текст роли по умолчанию", default, default),
                 new EffectivePromptSection("history", true, "как работать с историей", default, default),
@@ -127,5 +135,36 @@ public class PromptSectionsContributorTests
         var t2 = r2!.Sections.Single(s => s.Key == "prompt-sections").Text;
         t1.Should().Contain("первый текст").And.NotContain("второй текст");
         t2.Should().Contain("второй текст").And.NotContain("первый текст");
+    }
+
+    // Слой персоны — по тому же правилу, что слой адмена: параметр задан — перекрывает.
+    // Секцию, выключенную базой, персона может включить себе и своим текстом: базовое
+    // состояние доходит до наложения целиком (срез по Enabled — в BuildAsync), иначе
+    // персона была бы слабее админа, а редактор не видел бы «выключено специальностью»
+    [Fact]
+    public async Task ПерсонаВключилаВыключенноеБазой_СекцияИдётВХодСвоимТекстом()
+    {
+        var mock = new Mock<IPromptSectionProvider>();
+        mock.Setup(p => p.EffectivePromptSectionStates(It.IsAny<string>(), It.IsAny<PersonaSpecialty>()))
+            .Returns([
+                new EffectivePromptSection("roleRules", true, "база роли", SectionSource.Code, SectionSource.Code),
+                new EffectivePromptSection("codeGraph", false, "база графа", SectionSource.Code, SectionSource.Code),
+            ]);
+        var sut = new PromptSectionsContributor(mock.Object);
+        var persona = new Persona
+        {
+            Id = "p1",
+            Specialty = PersonaSpecialty.Planner,
+            PromptSections = [new PromptSectionOverride("codeGraph", true, "свой текст графа")],
+        };
+
+        var text = (await sut.BuildAsync(Ctx(persona), null))!
+            .Sections.Single(s => s.Key == "prompt-sections").Text;
+        text.Should().Contain("свой текст графа").And.NotContain("база графа");
+
+        var state = sut.EffectiveSectionsFor("owner-1", persona).Single(s => s.Id == "codeGraph");
+        state.Enabled.Should().BeTrue();
+        state.EnabledSource.Should().Be(SectionSource.Persona);
+        state.TextSource.Should().Be(SectionSource.Persona);
     }
 }

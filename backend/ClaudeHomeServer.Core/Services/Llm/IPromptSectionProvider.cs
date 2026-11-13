@@ -28,20 +28,29 @@ public sealed record EffectivePromptSection(
 // которого нет в базе, Apply игнорирует.
 public sealed record PromptSectionOverride(string Id, bool? Enabled, string? Text);
 
-// Узкий шов под единственный метод `EffectivePromptSections(ownerId, specialty)`
-// SpecialtySettingsStore, который контрибьютор секций промпта хода дёргает сейчас через
-// прямую ссылку на Llm-сервис.
+// Узкий шов под единственный метод `EffectivePromptSectionStates(ownerId, specialty)`
+// SpecialtySettingsStore, который контрибьютор секций промпта дёргает вместо прямой ссылки
+// на Llm-сервис (этап 5, шаг 4: разрыв цикла Turn → Llm).
 //
-// Контракт повторяет сигнатуру SpecialtySettingsStore.EffectivePromptSections дословно
-// (см. Llm/SpecialtySettingsStore.cs:298), чтобы адаптер был форвардом и резолв
-// не разъехался. Больше методов в контракт НЕ кладём: цикл разделывается ровно на
-// эту сигнатуру, расширять шов «на всякий случай» — снова множить зависимость.
+// Контракт повторяет сигнатуру SpecialtySettingsStore.EffectivePromptSectionStates дословно
+// (см. Llm/SpecialtySettingsStore.cs:261), чтобы адаптер был форвардом и резолв не
+// разъехался. Больше методов в контракт НЕ кладём: цикл разделывается ровно на эту
+// сигнатуру, расширять шов «на всякий случай» — снова множить зависимость.
+//
+// ШОВ ОТДАЁТ ПОЛНОЕ эффективное состояние — с флагом Enabled и источниками, а не только
+// включённые секции (прежняя версия шва). Причина не в удобстве: стор применяет наложение
+// слоя админа ко ВСЕМ состояниям каталога и лишь потом сечёт включённые
+// (SpecialtySettingsStore.cs:261-286), поэтому слой персоны поверх «уже отсечённой» базы был
+// бы слабее слоя админа — персона не могла бы включить то, что выключила специальность, а
+// редактор (P2a/P2b) не видел бы «выключено специальностью» и его текст. Срез по Enabled —
+// обязанность того, кто пишет текст хода (PromptSectionsContributor.BuildAsync), а не шва:
+// одному читателю нужно состояние, другому — только включённые.
 //
 // Опциональность (`?`) на стороне потребителя сохранена: `PromptSectionsContributor`
-// комментирует, что без DI секция не собирается, — это осознанное поведение, а не
-// недосмотр (см. `Services/Turn/PromptSectionContributors/PromptSectionsContributor.cs`).
+// без DI не собирает секцию хода и отдаёт пустой список на чтении — это осознанное
+// поведение, а не недосмотр (см. `Services/Turn/PromptSectionsContributor.cs`).
 public interface IPromptSectionProvider
 {
-    IReadOnlyList<EffectivePromptSection> EffectivePromptSections(
+    IReadOnlyList<EffectivePromptSection> EffectivePromptSectionStates(
         string ownerId, PersonaSpecialty specialty);
 }

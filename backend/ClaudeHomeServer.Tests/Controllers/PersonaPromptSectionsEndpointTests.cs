@@ -128,6 +128,32 @@ public class PersonaPromptSectionsEndpointTests : IClassFixture<PersonaPromptSec
         // В ход выключенная не идёт — это фильтр BuildAsync (P1c), здесь состояние, а не выдача
     }
 
+    // Выдача — полное состояние, а не только включённые (находка R-P1c): редактор обязан видеть
+    // и «выключено специальностью» с её базовым текстом, чтобы предложить «включить себе».
+    // Тот же порядок, что у слоя адмена: наложение идёт по всем состояниям каталога
+    [Fact]
+    public async Task Get_ВыключеннойСпециальностьюСекцииВидна_ИПерсонаМожетВключитьЕёСебе()
+    {
+        var id = NewPersona().Id;
+        // codeGraph у аналитика выключен дефолтом кода — текст у него есть (его и показывают
+        // черновиком при переходе в «своё»)
+        var off = SectionOf(await SectionsAsync(id), "codeGraph");
+        off.GetProperty("enabled").GetBoolean().Should().BeFalse();
+        off.GetProperty("enabledSource").GetString().Should().Be("code");
+        off.GetProperty("text").GetString().Should().NotBeNullOrEmpty();
+
+        var own = "свой текст графа " + Guid.NewGuid().ToString("N")[..6];
+        (await PutAsync(id, new
+        {
+            promptSections = new object[] { new { id = "codeGraph", enabled = true, text = own } },
+        })).Code.Should().Be(HttpStatusCode.OK);
+
+        var on = SectionOf(await SectionsAsync(id), "codeGraph");
+        on.GetProperty("enabled").GetBoolean().Should().BeTrue("параметр задан — перекрывает базу");
+        on.GetProperty("enabledSource").GetString().Should().Be("persona");
+        on.GetProperty("text").GetString().Should().Be(own);
+    }
+
     [Fact]
     public async Task Put_НеизвестногоIdИТекстаСверхЛимита_400СТекстомМенеджера_ПерсонаНеТронута()
     {

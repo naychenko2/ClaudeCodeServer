@@ -2,6 +2,7 @@
 // «Картинки»: правка в панели сразу видна в полосе, без второго запроса.
 
 import { useEffect, useSyncExternalStore } from 'react';
+import { onLogoutReset } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditCharacter } from '../api';
 
 interface Entry { list: ImageEditCharacter[] | null; loading: Promise<void> | null; error: boolean }
@@ -14,6 +15,14 @@ function emit() {
   _version++;
   _listeners.forEach(fn => fn());
 }
+
+// Ключи кэша ('personal' и id проектов) принадлежат владельцу: при выходе из аккаунта список не должен
+// дожить до следующего входа без перезагрузки страницы
+export function resetCharactersCache() {
+  _entries.clear();
+  emit();
+}
+onLogoutReset(resetCharactersCache);
 
 function load(projectId: string, force = false): Promise<void> {
   const e = _entries.get(projectId);

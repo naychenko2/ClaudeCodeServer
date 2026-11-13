@@ -28,7 +28,8 @@ vi.mock('aihome_shell/kit', async (importOriginal) => {
   return { ...actual, request: h.request, onMessage: h.onMessage };
 });
 
-const { useCharacters, reloadCharacters } = await import('./useCharacters');
+const { useCharacters, reloadCharacters, resetCharactersCache } = await import('./useCharacters');
+const { runLogoutResets } = await import('../../../lib/logoutReset');
 const { enterScope, __resetScope } = await import('../scope');
 
 const marina = { slug: 'marina', name: 'Марина', path: 'characters/marina', photos: [], createdAt: '2026-09-29T00:00:00Z' };
@@ -72,5 +73,30 @@ describe('useCharacters: личный чат вне проекта', () => {
 describe('load(): страховка от синхронного отказа', () => {
   it('reloadCharacters(personal) без чата резолвится, а не бросает', async () => {
     await expect(reloadCharacters('personal')).resolves.toBeUndefined();
+  });
+});
+
+describe('useCharacters: выход из аккаунта', () => {
+  it("кэш 'personal' и проектов сбрасывается при runLogoutResets", async () => {
+    enterScope(null, 's1');
+    h.request.mockReturnValue(Promise.resolve([marina]));
+    useCharacters('personal');
+    await settle();
+    expect(useCharacters('personal').list).toEqual([marina]);
+
+    runLogoutResets();
+
+    expect(useCharacters('personal').list).toBeNull();
+  });
+
+  it('resetCharactersCache чистит кэш и напрямую', async () => {
+    enterScope(null, 's1');
+    h.request.mockReturnValue(Promise.resolve([marina]));
+    useCharacters('personal');
+    await settle();
+
+    resetCharactersCache();
+
+    expect(useCharacters('personal').list).toBeNull();
   });
 });

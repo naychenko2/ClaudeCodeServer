@@ -130,6 +130,9 @@ export { useMe } from '../defaultPersona';
 export { useSphereOf } from '../useSphereOf';
 export { useAllProjects } from '../../features/projects/useAllProjects';
 
+// ─── сброс при выходе из аккаунта ───────────────────────────────────────────
+export { onLogoutReset } from '../logoutReset';
+
 // ─── toast ───────────────────────────────────────────────────────────────────
 export { showToast } from '../toast';
 

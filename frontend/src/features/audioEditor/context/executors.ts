@@ -3,10 +3,11 @@
 // у них одна строка. Выбор исполнителя помним на чат и операцию: настройки нити описывают операцию
 // панели, и подставлять их чужому действию нельзя.
 
-import type { ExecutorListModel, ExecutorRow } from 'aihome_shell/kit';
-import type { AudioCatalog, AudioOp, AudioStemSet } from '../api';
+import type { ChatExecutorSection, ExecutorListModel, ExecutorRow } from 'aihome_shell/kit';
+import { audioApi, type AudioCatalog, type AudioMode, type AudioModePrefs, type AudioOp, type AudioStemSet, type AudioThread } from '../api';
 import { isStemSet } from '../panel/stems';
-import { isNoAi } from '../ops';
+import { defaultOp, isNoAi, MODE_LABEL } from '../ops';
+import { getThreadsState, mutate } from '../thread/threadStore';
 import { AUTO_EXECUTOR, executorPatch, executorRows, executorValue } from '../panel/executorRows';
 
 export const NO_AI_ROW: ExecutorRow = {
@@ -57,4 +58,37 @@ export function executorModel(o: {
   return model;
 }
 
-export const __resetExecutorState = () => { _cache.clear(); _choices.clear(); };
+// «Чем» в «Чате»: audio_generate без provider/model берёт настройки нити (её режим), затем выбор режима
+// области, затем «Авто» (AudioPrefsResolver на сервере). Чип показывает эту цепочку и пишет в настройки нити.
+// Режим — тот же, что у агента: режим настроек нити, без них «Голос»
+const _chat = new Map<string, { key: string; catalog: AudioCatalog; sections: readonly ChatExecutorSection[] }>();
+
+export function chatModeSections(o: {
+  scope: string; sessionId: string; thread: AudioThread; catalog: AudioCatalog | null; prefs: AudioModePrefs | null;
+}): readonly ChatExecutorSection[] {
+  if (!o.catalog) return [];
+  const catalog = o.catalog;
+  const own = o.thread.settings;
+  const mode: AudioMode = own?.mode ?? 'voice';
+  const op = (own?.operation ?? o.prefs?.operation ?? defaultOp(mode)) as AudioOp;
+  const value = executorValue(catalog, {
+    providerKey: own?.provider ?? o.prefs?.provider ?? null, modelId: own?.model ?? o.prefs?.model ?? catalog.autoModelId, provider: null, model: null,
+  });
+  const key = [o.thread.id, mode, op, value].join('|');
+  const hit = _chat.get(o.sessionId);
+  if (hit && hit.key === key && hit.catalog === catalog) return hit.sections;
+  const threadId = o.thread.id;
+  const onChange = (id: string) => {
+    const patch = executorPatch(id);
+    // Свежие настройки нити: модель держится в кэше, а входы и поля операции могли смениться после неё
+    const cur = getThreadsState(o.sessionId).threads.find(t => t.id === threadId)?.settings ?? own;
+    // «Авто» пишется явно: иначе нить унаследует модель из выбора режима области
+    const settings = { ...(cur ?? { mode, operation: null, fields: null }), provider: patch.provider ?? null, model: patch.model ?? catalog.autoModelId };
+    void mutate(o.scope, o.sessionId, rev => audioApi.settings(o.scope, o.sessionId, threadId, settings, rev));
+  };
+  const sections = [{ rows: executorRows(catalog, op), value, onChange, head: `${MODE_LABEL[mode]} для этого звука`, chip: MODE_LABEL[mode] }];
+  _chat.set(o.sessionId, { key, catalog, sections });
+  return sections;
+}
+
+export const __resetExecutorState = () => { _cache.clear(); _choices.clear(); _chat.clear(); };

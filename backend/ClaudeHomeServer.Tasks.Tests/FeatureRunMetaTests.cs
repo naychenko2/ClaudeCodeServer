@@ -96,4 +96,18 @@ public class FeatureRunMetaTests
         run.ApplyEta(null);
         run.Meta.EtaMinutes.Should().BeNull();
     }
+
+    // Снятые маршрутом этапы в Stages уже нет (id лежат в Workflow.Skipped): в знаменатель не входят.
+    [Fact]
+    public void Meta_СнятыйЭтап_ВЗнаменательНеВходит()
+    {
+        var wf = TenStageRoute();
+        wf.Stages.RemoveAll(s => s.Id == "design" || s.Id == "qa-plan");
+        wf.Stages.First(s => s.Id == "plan").After = ["cut"];
+        wf.Skipped = ["design", "qa-plan"];
+        var epic = new TaskItem { Id = "skip-epic-0001", Role = TaskRoles.Feature, CreatedAt = T.AddHours(-2), Workflow = wf };
+        var run = FeatureProjector.Build(epic, [epic], T);
+        run.Meta.StagesTotal.Should().Be(8);
+        run.Meta.ParallelBranches.Should().Be(2);
+    }
 }

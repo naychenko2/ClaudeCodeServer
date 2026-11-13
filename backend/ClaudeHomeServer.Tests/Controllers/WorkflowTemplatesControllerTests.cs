@@ -1,9 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -96,6 +99,67 @@ public class WorkflowTemplatesControllerTests : IClassFixture<TestWebApplication
         var entry = FindTemplate(list, $"builtin-{key}");
         entry.GetProperty("scope").GetString().Should().Be("global");
         entry.GetProperty("template").GetProperty("name").GetString().Should().Be(name);
+    }
+
+    // ─── B08: мета списка ──────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Список_ПроектнаяКопия_BasedOnLatestVersion_ЭтоТекущаяВерсияГлобального()
+    {
+        var gid = await CreateGlobalAsync(Admin(), "Исходный");
+        // три правки поднимают глобальный с v1 до v4
+        for (var v = 1; v <= 3; v++)
+        {
+            var put = await Admin().PutAsJsonAsync($"/api/workflow-templates/{gid}", new
+            {
+                name = "Исходный", stages = Stage("plan"), expectedVersion = v,
+            });
+            put.StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+        var projectId = await SharedProjectAsync("");
+        var copyId = NewId();
+        var created = await Admin().PostAsJsonAsync($"/api/workflow-templates?projectId={projectId}", new
+        {
+            id = copyId, name = "Копия", stages = Stage("plan"), basedOn = new { templateId = gid, version = 1 },
+        });
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var entry = FindTemplate(await GetJsonAsync(Admin(), $"/api/workflow-templates?projectId={projectId}"), copyId);
+        entry.GetProperty("basedOnLatestVersion").GetInt32().Should().Be(4);
+        var basedOn = entry.GetProperty("basedOn");
+        basedOn.GetProperty("templateId").GetString().Should().Be(gid);
+        basedOn.GetProperty("name").GetString().Should().Be("Исходный");
+        basedOn.GetProperty("version").GetInt32().Should().Be(1);
+        entry.GetProperty("stageCount").GetInt32().Should().Be(1);
+        entry.GetProperty("diffFromPreset").ValueKind.Should().Be(JsonValueKind.Null);
+
+        // удалили оригинал — basedOnLatestVersion null
+        (await Admin().DeleteAsync($"/api/workflow-templates/{gid}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        var after = FindTemplate(await GetJsonAsync(Admin(), $"/api/workflow-templates?projectId={projectId}"), copyId);
+        after.GetProperty("basedOnLatestVersion").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task Список_UsageCount_СчитаетФичиСПодтверждённымМаршрутомЭтогоШаблона()
+    {
+        var gid = await CreateGlobalAsync(Admin(), "Для фич");
+        var otherId = await CreateGlobalAsync(Admin(), "Другой");
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+        var ownerId = _factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        foreach (var template in new[] { gid, gid, otherId })
+        {
+            var epic = tasks.Create(null, ownerId, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
+            tasks.ConfirmWorkflow(epic.Id, new FeatureWorkflow { TemplateId = template, Scope = "global", ConfirmedVersion = 1 });
+        }
+
+        var list = await GetJsonAsync(Admin(), "/api/workflow-templates");
+        FindTemplate(list, gid).GetProperty("usageCount").GetInt32().Should().Be(2);
+        FindTemplate(list, otherId).GetProperty("usageCount").GetInt32().Should().Be(1);
+        FindTemplate(list, "builtin-fast-track").GetProperty("usageCount").GetInt32().Should().Be(0);
+        // чужой пользователь эпиков админа не видит
+        FindTemplate(await GetJsonAsync(User(), "/api/workflow-templates"), gid)
+            .GetProperty("usageCount").GetInt32().Should().Be(0);
     }
 
     // ─── Запись глобальных: только admin ───────────────────────────────────────

@@ -33,6 +33,8 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/workflow-templates")]
 public class WorkflowTemplatesController(
     WorkflowTemplateStore templates,
+    // Для usageCount; null — счётчик нулевой
+    TaskManager? tasks = null,
     // Явный резолв доступа к проекту — та же точка, что у ProjectTasksController (сверяем не
     // OwnerId инлайном); null — fail-closed (проект недоступен)
     IProjectAccess? access = null) : ControllerBase
@@ -53,8 +55,44 @@ public class WorkflowTemplatesController(
     {
         var (scope, pid) = ScopeOf(projectId);
         if (DenyProjectRead(pid) is { } denied) return denied;
-        return Ok(templates.List(pid));
+        var entries = templates.List(pid);
+
+        // Эпики, доступные вызывающему: свои плюс (при доступном проекте) проектные. Считаем
+        // фичи с подтверждённым маршрутом по ключу (область, шаблон).
+        var epics = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
+        if (tasks is not null)
+        {
+            foreach (var t in tasks.GetByOwner(UserId)) epics[t.Id] = t;
+            if (pid is not null) foreach (var t in tasks.GetByProject(pid)) epics[t.Id] = t;
+        }
+        var used = epics.Values
+            .Where(t => t.Role == TaskRoles.Feature && t.Workflow is not null)
+            .GroupBy(t => (t.Workflow!.TemplateId, Project: string.Equals(t.Workflow.Scope, "project", StringComparison.Ordinal)))
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var items = entries.Select(e =>
+        {
+            var t = e.Template;
+            var original = t.BasedOn is { } b ? templates.Get(b.TemplateId, WorkflowTemplateScope.Global) : null;
+            return new WorkflowTemplateListItem(
+                e.Scope, e.ProjectId, t,
+                WorkflowTemplateMeta.StageCount(t),
+                WorkflowTemplateMeta.ParallelColumns(t),
+                used.GetValueOrDefault((t.Id, e.Scope == WorkflowTemplateScope.Project)),
+                t.BasedOn is { } r ? new WorkflowTemplateBasedOn(r.TemplateId, original?.Name ?? r.TemplateId, r.Version) : null,
+                original?.Version,
+                WorkflowTemplateMeta.DiffFromPreset(t));
+        }).ToList();
+        return Ok(items);
     }
+
+    // Элемент списка: прежние поля (scope/projectId/template) плюс мета для списка и тулбара.
+    public sealed record WorkflowTemplateBasedOn(string TemplateId, string Name, int Version);
+
+    public sealed record WorkflowTemplateListItem(
+        WorkflowTemplateScope Scope, string? ProjectId, WorkflowTemplate Template,
+        int StageCount, int ParallelColumns, int UsageCount,
+        WorkflowTemplateBasedOn? BasedOn, int? BasedOnLatestVersion, int? DiffFromPreset);
 
     // Карточка одного шаблона: без projectId — глобальный, с ним — проектный.
     [HttpGet("{id}")]

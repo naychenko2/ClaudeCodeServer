@@ -443,7 +443,7 @@ public sealed class VideoEditJobService : IDisposable
         var request = new VideoRequest(quote.Model.Id, scope, prompt, frameA.Bytes, frameB.Bytes, quote.DurationSec,
             quote.Aspect, quote.Sound, parameters, input.Seed, quote.Format,
             OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: IsLocalHeavy(job.Quote),
-            ProjectId: job.Scope.Project?.Id, SourceJobId: job.Id);
+            ProjectId: VideoEditScope.ProjectIdOf(job.Scope.Key), SourceJobId: job.Id);
         job.Completion = Task.Run(() => RunAsync(job, engine, (variant, progress, token) =>
             engine.RunAsync(request.Seed is { } seed ? request with { Seed = seed + variant - 1 } : request, progress, token)));
 

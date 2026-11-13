@@ -40,7 +40,7 @@ public sealed class FilmService(
 
     // Корень проекта области; у личной области — отказ до диска
     public static FilmCallResult<Project> ProjectOf(VideoEditScope scope) =>
-        scope.Project is { } project
+        scope.Project is { } project && !scope.IsPersonal
             ? FilmCallResult<Project>.Ok(project)
             : FilmCallResult<Project>.Fail(VideoEditorErrors.PersonalScopeNoFilms, "Фильмы — только в чате проекта");
 

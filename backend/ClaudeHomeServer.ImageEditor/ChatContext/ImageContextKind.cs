@@ -119,7 +119,7 @@ public sealed class ImageContextKind(
         var hasImage = thread is not null && (thread.File is { Length: > 0 } || thread.CurrentVersion is { Steps.Count: > 0 });
         var settings = prefs is null
             ? thread?.Settings
-            : prefs.Get(scope.OwnerId, scope.Project?.Id ?? ImageEditScope.Personal)
+            : prefs.Get(scope.OwnerId, scope.Session.ProjectId ?? ImageEditScope.Personal)
                 .LaunchSettings(hasImage ? ImageEditOp.Edit : ImageEditOp.Generate, thread?.Settings);
         var provider = string.IsNullOrWhiteSpace(settings?.Provider) ? null : settings.Provider;
         var modelId = string.IsNullOrWhiteSpace(settings?.Model) || settings.Model == ImageEditCatalog.AutoModelId ? null : settings.Model;
@@ -140,7 +140,7 @@ public sealed class ImageContextKind(
     public string? DescribeFormat(ContextScope scope, ContextItem primary)
     {
         if (primary.Kind != Kind || prefs is null) return null;
-        var saved = prefs.Get(scope.OwnerId, scope.Project?.Id ?? ImageEditScope.Personal);
+        var saved = prefs.Get(scope.OwnerId, scope.Session.ProjectId ?? ImageEditScope.Personal);
         var settings = saved.CreateSettings();
         var (caps, modelChosen) = FormatCapsOf(settings.Provider, settings.Model);
         var line = MediaFormatText.Line(saved.Format, MediaFormatResolver.Resolve(caps, saved.Format), modelChosen);

@@ -52,6 +52,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
     private readonly IMcpSessionAccessor _sessions;
     private readonly IProjectManager _projects;
+    private readonly ClaudeHomeServer.Services.Composition.PersonalFolderResolver? _personalFolder;
     private readonly IEnumerable<IVideoEngine> _engines;
     private readonly VideoJobThreads _threads;
     private readonly VideoEditJobService _jobs;
@@ -77,9 +78,11 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         FilmAssembler assembler,
         IDelegatedTurnGate? turnGate = null,
         IConfiguration? config = null,
-        ITurnActorRegistry? turnActors = null)
+        ITurnActorRegistry? turnActors = null,
+        ClaudeHomeServer.Services.Composition.PersonalFolderResolver? personalFolder = null)
     {
         _turnActors = turnActors;
+        _personalFolder = personalFolder;
         _sessions = sessions;
         _projects = projects;
         _engines = engines;
@@ -173,7 +176,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         CancellationToken ct)
     {
         var folder = Str(args, "folder");
-        if (folder is not null && scope.Project is null)
+        if (folder is not null && (scope.IsPersonal || scope.Project is null))
             return Deny("В чате вне проекта папок нет: вызови video_new без folder.");
         if (ApplySettings(args, _prefs.ForNewScene(owner, scope), out var settings) is { } bad) return Deny(bad);
 
@@ -629,7 +632,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
     private object DescribeState(string owner, Session session, VideoEditScope scope)
     {
         var state = _threads.View(owner, session.Id);
-        var filmsOk = scope.Project is { } project && ClaudeHomeServer.Models.ProjectCapabilities.FilesOnServer(project);
+        var filmsOk = !scope.IsPersonal && scope.Project is { } project && ClaudeHomeServer.Models.ProjectCapabilities.FilesOnServer(project);
         object? films = null;
         object? openFilm = null;
         if (filmsOk)
@@ -735,7 +738,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
     // устройстве — отказ до обращения к диску
     private static McpToolCallResult? FilmsRefusal(VideoEditScope scope)
     {
-        if (scope.Project is not { } project)
+        // Фильмы «Личного» — Ф2-6: до неё отказ и при наличии папки
+        if (scope.IsPersonal || scope.Project is not { } project)
             return Fail(VideoEditorErrors.PersonalScopeNoFilms, "Фильмы — только в чате проекта");
         return ClaudeHomeServer.Models.ProjectCapabilities.FilesOnServer(project)
             ? null
@@ -759,7 +763,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             scope = VideoEditScope.Of(found);
         }
         else
-            scope = VideoEditScope.Of(owned);
+            // Личная область: «Личное» — только если папка уже есть (инструменты её не создают), ключ остаётся personal
+            scope = VideoEditScope.Of(owned) with { Project = _personalFolder?.Find(context.OwnerId) };
         session = owned;
         return true;
     }

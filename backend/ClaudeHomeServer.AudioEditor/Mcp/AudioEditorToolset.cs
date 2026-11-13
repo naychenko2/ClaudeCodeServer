@@ -68,6 +68,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
 
     private readonly IMcpSessionAccessor _sessions;
     private readonly IProjectManager _projects;
+    private readonly ClaudeHomeServer.Services.Composition.PersonalFolderResolver? _personalFolder;
     private readonly IEnumerable<IAudioEngine> _engines;
     private readonly AudioJobThreads _threads;
     private readonly AudioEditJobService _jobs;
@@ -100,9 +101,11 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         ITurnEventBus? events = null,
         IConfiguration? config = null,
         ChatContext.AudioContextLaunch? context = null,
-        ITurnActorRegistry? turnActors = null)
+        ITurnActorRegistry? turnActors = null,
+        ClaudeHomeServer.Services.Composition.PersonalFolderResolver? personalFolder = null)
     {
         _turnActors = turnActors;
+        _personalFolder = personalFolder;
         _context = context;
         _sessions = sessions;
         _projects = projects;
@@ -722,7 +725,8 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             scope = AudioEditScope.Of(found);
         }
         else
-            scope = AudioEditScope.Of(owned);
+            // Личная область: «Личное» — только если папка уже есть (инструменты её не создают), ключ остаётся personal
+            scope = AudioEditScope.Of(owned) with { Project = _personalFolder?.Find(context.OwnerId) };
         session = owned;
         return true;
     }

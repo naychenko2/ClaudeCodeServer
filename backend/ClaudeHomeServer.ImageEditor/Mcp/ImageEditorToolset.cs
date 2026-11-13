@@ -55,6 +55,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
     private readonly IMcpSessionAccessor _sessions;
     private readonly IProjectManager _projects;
+    private readonly ClaudeHomeServer.Services.Composition.PersonalFolderResolver? _personalFolder;
     private readonly IEnumerable<IImageEditor> _editors;
     private readonly ImageThreadService _threads;
     private readonly ImageEditLaunchAssembler _launcher;
@@ -94,9 +95,11 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         Faces.FaceDetectionCache? faces = null,
         ILocalImageMedia? localMedia = null,
         ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate? gpuGate = null,
-        ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null)
+        ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null,
+        ClaudeHomeServer.Services.Composition.PersonalFolderResolver? personalFolder = null)
     {
         _turnActors = turnActors;
+        _personalFolder = personalFolder;
         _sessions = sessions;
         _projects = projects;
         _editors = editors;
@@ -920,7 +923,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             scope = ImageEditScope.Of(found);
         }
         else
-            scope = ImageEditScope.Of(owned);
+            // Личная область: «Личное» — только если папка уже есть (инструменты её не создают), ключ остаётся personal
+            scope = ImageEditScope.Of(owned) with { Project = _personalFolder?.Find(context.OwnerId) };
         session = owned;
         return true;
     }

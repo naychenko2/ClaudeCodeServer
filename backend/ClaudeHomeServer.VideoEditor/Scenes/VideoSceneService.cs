@@ -102,7 +102,8 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
         folder = "";
         var value = (raw ?? "").Trim().Replace('\\', '/').Trim('/');
         if (value.Length == 0) return null;
-        if (scope.Project is not { } project)
+        // Папки в «Личном» — Ф2-6: пока у личной области отказ, как без папки
+        if (scope.IsPersonal || scope.Project is not { } project)
             return Call.Refuse(VideoEditorErrors.InvalidRequest,
                 "У чата вне проекта нет папок проекта: сцену можно завести только без папки");
         if (!InsideAllowed(value))
@@ -141,7 +142,7 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
                 case FrameRef.KindImage when string.IsNullOrWhiteSpace(frame.ThreadId) || string.IsNullOrWhiteSpace(frame.VersionId):
                     return Call.Refuse(VideoEditorErrors.InvalidRequest, "У кадра из «Картинок» нужны нить и версия");
                 case FrameRef.KindFile:
-                    if (scope.Project is not { } project)
+                    if (scope.IsPersonal || scope.Project is not { } project)
                     {
                         // Личный чат: только загруженный «С компьютера» кадр рабочей папки; наличие файла проверит съёмка
                         if (!VideoEditWorkspace.IsFrameRef(frame.Path))

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Media;
@@ -57,7 +58,8 @@ public sealed class VideoContextKind(
             return Find(scope, sceneId) is null ? "Сцена не найдена в этом чате" : null;
         }
         if (kind != FilmKind) return $"Вид «{kind}» не принадлежит редактору видео";
-        if (scope.Project is not { } project) return "В личном чате нет фильмов";
+        // Фильмы «Личного» — Ф2-6: до неё проект с Kind = Personal отказывает как отсутствующий
+        if (scope.Project is not { Kind: ProjectKind.Regular } project) return "В личном чате нет фильмов";
         if (ProjectCapabilityGuard.Refusal(project, ProjectCapabilityArea.FileBound) is { } refusal) return refusal;
         if (Text(reference, FilmKey) is not { } path) return "Не указан фильм";
         if (!FilmPaths.IsFilmPath(FilmPaths.Normalize(path) ?? ""))
@@ -73,7 +75,7 @@ public sealed class VideoContextKind(
         {
             var path = Text(item.Ref, FilmKey);
             if (path is null) return new ContextItemSummary("фильм недоступен", null, null, true);
-            var exists = scope.Project is { } project
+            var exists = scope.Project is { Kind: ProjectKind.Regular } project
                 && FilmPaths.IsFilmPath(FilmPaths.Normalize(path) ?? "")
                 && ProjectCapabilityGuard.Allows(project, ProjectCapabilityArea.FileBound)
                 && ProjectLinkGuard.ResolveInsideAs(project.RootPath, path, scope.OwnerId) is { } full && File.Exists(full);
@@ -151,7 +153,7 @@ public sealed class VideoContextKind(
         if (focus.SceneId is { } sceneId && Find(scope, sceneId) is not null)
             return new ContextItem("seed_video_scene", SceneKind, new JsonObject { [SceneKey] = sceneId }, null,
                 ContextActor.Human, scope.Session.CreatedAt);
-        if (focus.FilmPath is { } path && scope.Project is not null && FilmPaths.IsFilmPath(FilmPaths.Normalize(path) ?? ""))
+        if (focus.FilmPath is { } path && scope.Project is { Kind: ProjectKind.Regular } && FilmPaths.IsFilmPath(FilmPaths.Normalize(path) ?? ""))
             return new ContextItem("seed_video_film", FilmKind, new JsonObject { [FilmKey] = path }, null,
                 ContextActor.Human, scope.Session.CreatedAt);
         return null;

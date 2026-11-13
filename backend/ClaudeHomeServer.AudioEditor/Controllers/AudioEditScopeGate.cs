@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.Services.AudioEditor.Controllers;
 //
 // Чужой проект и чужой чат одинаково 404: ручки не выдают чужие id.
 // Чужой, несуществующий, чат другого проекта и (для личной ручки) чат проекта неотличимы.
-public sealed class AudioEditScopeGate(IProjectManager projects, ISessionDirectory directory, IProjectAccess access)
+public sealed class AudioEditScopeGate(
+    IProjectManager projects, ISessionDirectory directory, IProjectAccess access, PersonalFolderResolver? personal = null)
 {
     // Ручки проекта без чата: нужно право записи (ручки редактора запускают платные задачи)
     public bool TryProject(string userId, string projectId,
@@ -76,7 +77,9 @@ public sealed class AudioEditScopeGate(IProjectManager projects, ISessionDirecto
             denied = ChatNotFound();
             return false;
         }
-        scope = AudioEditScope.Of(session) with { TenantOwnerId = session.OwnerId };
+        // «Личное» кладём, только если папка уже есть: GET-путь папку не создаёт (ADR-040 §1.2).
+        // Ключ области остаётся personal, Session.ProjectId остаётся null
+        scope = AudioEditScope.Of(session) with { TenantOwnerId = session.OwnerId, Project = personal?.Find(session.OwnerId) };
         denied = null;
         return true;
     }

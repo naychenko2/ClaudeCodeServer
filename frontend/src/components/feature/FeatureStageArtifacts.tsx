@@ -3,7 +3,8 @@
 //
 // Дифф: один запрос на коммит — пока он идёт, повторный клик ничего не шлёт (inFlight);
 // готовый дифф кэшируется в состоянии, повторное раскрытие запроса не делает. Отказ
-// (404/сеть) показывается под своим коммитом, остальные коммиты и блоки живут.
+// (404/сеть) показывается под своим коммитом, остальные коммиты и блоки живут; упавший
+// дифф перезапрашивается без смены ключа — кнопкой «Повторить».
 // Устаревший ответ: при уходе с задачи (размонтирование, родитель ключует по taskId)
 // запросы отменяются, а ответ отменённого запроса не применяется.
 
@@ -203,6 +204,8 @@ function FilesArtifacts({ taskId, artifacts, files, isMobile }: {
   const [modeId, setModeId] = useState('all');
   const [expanded, setExpanded] = useState(false);
   const [diffs, setDiffs] = useState<Record<string, FileDiffState>>({});
+  // Счётчик повтора: упавший ключ перезапрашивается без смены ключа (кнопка «Повторить»)
+  const [reloadNonce, setReloadNonce] = useState(0);
   const inFlight = useRef(new Set<string>());
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => { controller.current?.abort(); }, []);
@@ -226,9 +229,10 @@ function FilesArtifacts({ taskId, artifacts, files, isMobile }: {
       .then(diff => { if (!signal.aborted) setDiffs(p => ({ ...p, [key]: { status: 'ok', diff } })); })
       .catch((e: unknown) => { if (!signal.aborted) setDiffs(p => ({ ...p, [key]: { status: 'error', message: errorText(e) } })); })
       .finally(() => { inFlight.current.delete(key); });
-    // diffs читаем только как кэш; повторный запуск эффекта по нему не нужен
+    // diffs читаем только как кэш; повторный запуск эффекта по нему не нужен.
+    // reloadNonce — повтор по кнопке «Повторить» на том же ключе (упавший дифф).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, taskId]);
+  }, [key, taskId, reloadNonce]);
 
   const visible = expanded ? files : files.slice(0, FILES_COLLAPSED);
   const hidden = files.length - visible.length;
@@ -288,7 +292,12 @@ function FilesArtifacts({ taskId, artifacts, files, isMobile }: {
             <div data-testid="stage-file-caption" style={{ fontSize: FS.xs, color: C.textMuted }}>{caption}</div>
             {state?.status === 'loading' && <div style={{ fontSize: FS.sm, color: C.textSecondary }}>Загружаю дифф…</div>}
             {state?.status === 'error' && (
-              <Notice tone="danger" icon={AlertTriangle} data-testid="stage-file-diff-error">{state.message}</Notice>
+              <Notice tone="danger" icon={AlertTriangle} data-testid="stage-file-diff-error"
+                action={
+                  <Button size="xs" variant="ghost" dataTestId="stage-file-diff-retry"
+                    style={isMobile ? { minHeight: 40 } : undefined}
+                    onClick={() => setReloadNonce(n => n + 1)}>Повторить</Button>
+                }>{state.message}</Notice>
             )}
             {state?.status === 'ok' && (
               <div data-testid="stage-file-diff" style={{ overflowX: 'auto', minWidth: 0 }}>

@@ -130,6 +130,27 @@ describe('FeatureStageArtifacts · файлы', () => {
     expect(text(container)).toContain('итог');
   });
 
+  it('отказ → повтор на том же ключе: «Повторить» перезапрашивает дифф', async () => {
+    let n = 0;
+    diffMock.mockImplementation(() => {
+      n += 1;
+      return n === 1
+        ? Promise.reject(new Error('Файл или версия не найдены'))
+        : Promise.resolve(fdiff('A.cs', 'AAA'));
+    });
+    const { container } = render(arts([file('A.cs', 1)]));
+    await act(async () => { await flush(); });
+    expect(text(container)).toContain('Файл или версия не найдены');
+    expect(diffMock).toHaveBeenCalledTimes(1);
+    const retry = findNodeByAttr(container, 'data-testid', 'stage-file-diff-retry');
+    expect(retry).not.toBeNull();
+    act(() => { (reactProps(retry!)!.onClick as (e: unknown) => void)({ stopPropagation() {}, preventDefault() {} }); });
+    await act(async () => { await flush(); });
+    expect(diffMock).toHaveBeenCalledTimes(2);
+    expect(diffMock.mock.calls[1].slice(0, 4)).toEqual(['t1', 'A.cs', 'all', 'all']);
+    expect(text(findNodeByAttr(container, 'data-testid', 'stage-file-diff')!)).toContain('AAA');
+  });
+
   it('сворачивает длинный список: «ещё N файлов», по клику раскрывает', () => {
     diffMock.mockReturnValue(new Promise(() => {}));
     const files = Array.from({ length: 13 }, (_, i) => file(`f${i}.cs`, 1));

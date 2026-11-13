@@ -54,10 +54,18 @@ public sealed class WorkflowTemplateStore
     private readonly bool _futureFormat;
 
     public WorkflowTemplateStore(IConfiguration config, ILogger<WorkflowTemplateStore>? log = null)
-        : this(ResolvePath(config), log) { }
+        : this(ResolvePath(config), log, withBuiltIns: true) { }
 
     // Прямой конструктор для тестов: произвольный путь файла.
     public WorkflowTemplateStore(string path, ILogger<WorkflowTemplateStore>? log = null)
+        : this(path, log, withBuiltIns: true) { }
+
+    // Шов для тестов (минор ревью R-M1+M2): стор с ПУСТЫМ каталогом — пресеты кода сюда не
+    // добавляются. В работе пустого каталога не бывает (EnsureBuiltIns всегда), состояние нужно
+    // только чтобы проверить guard маркера M1: при пустом каталоге фичу не запираем.
+    internal static WorkflowTemplateStore EmptyCatalogForTests(string path) => new(path, null, withBuiltIns: false);
+
+    private WorkflowTemplateStore(string path, ILogger<WorkflowTemplateStore>? log, bool withBuiltIns)
     {
         _path = path;
         _log = log;
@@ -80,7 +88,7 @@ public sealed class WorkflowTemplateStore
         {
             _log?.LogError(ex, "{Path}: шаблоны не прочитаны, стартуем на пресетах кода", _path);
         }
-        EnsureBuiltIns(_file);
+        if (withBuiltIns) EnsureBuiltIns(_file);
     }
 
     private static string ResolvePath(IConfiguration config)

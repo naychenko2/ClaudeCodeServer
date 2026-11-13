@@ -1,4 +1,3 @@
-using System.Reflection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Tasks;
@@ -177,10 +176,8 @@ public class TaskManagerRouteLaunchGateTests : IDisposable
     public void Маркер_ПустойКаталогШаблонов_МаркераНетИГейтНеСтоит()
     {
         // Пустого каталога в работе не бывает (пресеты кода добавляются всегда) — состояние
-        // достраиваем напрямую в файле стора, чтобы проверить сам guard.
-        var store = new WorkflowTemplateStore(Path.Combine(_dir, "empty-templates.json"));
-        typeof(WorkflowTemplateStore).GetField("_file", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(store, new WorkflowTemplateFile());
+        // берём из шва стора (EmptyCatalogForTests), а не правкой его приватного поля.
+        var store = WorkflowTemplateStore.EmptyCatalogForTests(Path.Combine(_dir, "empty-templates.json"));
         using var tasks = new TaskManager(Config("empty-catalog"), workflows: store);
 
         var epic = tasks.Create(null, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
@@ -188,6 +185,21 @@ public class TaskManagerRouteLaunchGateTests : IDisposable
         epic.RouteRequired.Should().NotBeTrue("каталог пуст — подтвердить нечем, фичу не запираем");
         tasks.FeatureRouteLaunchRefusal(new TaskItem { OwnerId = Owner, FeatureId = epic.Id, Role = TaskRoles.Step })
             .Should().BeNull();
+    }
+
+    [Fact]
+    public void Маркер_UpdateУжеФичиБезСменыРоли_МаркерНеТрогает()
+    {
+        // Маркер ставится только при ПЕРЕХОДЕ роли в feature (TaskManager.cs:1463). Легаси-фичу
+        // (маркер снят) любой Update, который роль не меняет, на гейт вернуть не вправе —
+        // в том числе Update, явно приславший ту же роль (roleBefore == feature).
+        var epic = AsLegacy(Epic(confirmed: false));
+
+        _tasks.Update(epic.Id, new UpdateTaskRequest(Title: "переименовали", Role: TaskRoles.Feature));
+
+        _tasks.GetById(epic.Id)!.RouteRequired.Should().BeNull("роль не менялась — маркера не было и не стало");
+        _tasks.FeatureRouteLaunchRefusal(new TaskItem { OwnerId = Owner, FeatureId = epic.Id, Role = TaskRoles.Step })
+            .Should().BeNull("легаси-фича остаётся вне режима маршрута");
     }
 
     // --- Гейт слияния -------------------------------------------------------

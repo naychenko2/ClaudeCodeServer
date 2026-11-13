@@ -15,6 +15,8 @@
 // отсутствие любого (старые задачи без разметки не несут feature-полей).
 import type { StepProgress } from '../lib/featureProgress';
 import type { AcceptanceCriterion, AcceptanceEvidence } from './index';
+import type { WorkflowProposal } from '../features/workflowTemplates/types';
+import type { ConfirmedRoute } from '../components/feature/FeatureWorkflowConfirmModel';
 
 export interface FeatureTask {
   id: string;
@@ -69,6 +71,11 @@ export interface FeatureTask {
   // «обещали ≈ N»); бэк отдаёт его в run.epic — полном TaskItem. Аддитивное: старые
   // задачи его не несут.
   initialEtaMinutes?: number | null;
+  // Предложение маршрута и подтверждённый маршрут (бэк: `TaskItem.WorkflowProposal` /
+  // `TaskItem.Workflow`, только у эпика). Аддитивные: легаси-эпик не несёт ни того, ни
+  // другого — блока подтверждения у него нет.
+  workflowProposal?: WorkflowProposal | null;
+  workflow?: ConfirmedRoute | null;
 }
 
 // Голос фичи на wire (зеркало бэкового `FeatureNote`, camelCase; bySessionId наружу

@@ -20,6 +20,7 @@ import type { FeatureRun, FeatureState, FeatureAttention, FeatureNow, FeatureQue
 import { api } from '../../lib/api';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 import { NavTargetButton } from './NavTargetButton';
+import { FeatureWorkflowConfirm } from './FeatureWorkflowConfirm';
 import { StatusTag, shortRunTagLabel, type FeatureRunTag } from './FeatureStatusTag';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { minutesSince } from './FeatureStatsBits';
@@ -1124,6 +1125,36 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: SP.sm }}>{acts}</div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Подтверждение маршрута в шапке страницы (C3b): у эпика с предложением или подтверждённым
+// маршрутом — блок C2 в тихом режиме (рисуется, только когда нужен ответ человека или
+// «шаблон изменился»). Легаси-эпик (ни предложения, ни маршрута) — блока нет вовсе, каталог
+// шаблонов для него не запрашивается.
+export function hasWorkflowRoute(run: FeatureRun | null | undefined): boolean {
+  const epic = run?.epic;
+  return !!(epic && (epic.workflowProposal || epic.workflow));
+}
+
+export function FeaturePageWorkflowConfirm({ run, featureId, projectId, isMobile }: {
+  run: FeatureRun | null;
+  featureId: string;
+  projectId?: string;
+  isMobile: boolean;
+}) {
+  if (!run || !hasWorkflowRoute(run)) return null;
+  return (
+    <div data-testid="feature-page-workflow-confirm">
+      <FeatureWorkflowConfirm
+        quiet
+        featureId={featureId}
+        projectId={projectId}
+        proposal={run.epic?.workflowProposal ?? null}
+        confirmed={run.epic?.workflow ?? null}
+        isMobile={isMobile}
+      />
     </div>
   );
 }

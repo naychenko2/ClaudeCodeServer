@@ -27,11 +27,13 @@ import { FeatureReviewTab } from './FeatureReviewTab';
 import { stageLabel } from './FeatureStatsBits';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import {
-  FeaturePageToolbar, FeaturePageAlert,
+  FeaturePageToolbar, FeaturePageAlert, FeaturePageWorkflowConfirm,
   featurePageStatusTag, toRunTag, type FeatureRunTag,
 } from './FeaturePageHeader';
 import { FeaturePageTabs } from './FeaturePageTabs';
 import { FeatureFirstScreen } from './FeatureFirstScreen';
+import { FeatureProcessGraph } from './FeatureProcessGraph';
+import { FeatureStageArea, resolveSelectedStage, hasProcessGraph, type StageSelection } from './FeatureStageArea';
 import { analysisLineState } from './FeatureAnalysisModel';
 import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
 
@@ -145,6 +147,11 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
 
   // Вкладка: из стора страницы (сохраняется при скрытии/возврате).
   const mainTab = useFeatureMainTab();
+
+  // Выбранный этап графа (C3b): ключ — featureId + id стадии. Состояние хранит выбор вместе
+  // с фичей, а читается через resolveSelectedStage: чужой фиче выбор не принадлежит, при
+  // смене фичи страница сама возвращается к defaultSelected — без эффекта сброса.
+  const [stageSel, setStageSel] = useState<StageSelection | null>(null);
 
   // Регистрация страницы в канале окна возврата (GC-F11R4): окно снимка живёт ради этого
   // открытия страницы — закрытие гасит его (отложенная проверка в featureBackNav), а
@@ -324,8 +331,11 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     // только когда attention нет — иначе то же говорит плашка «от тебя») и «ещё не начата».
     const lineKey = okRun.attention ? null : analysisLineState(okRun, Date.now()).key;
     const watchdogOrIdle = okRun.state === 'not_started' || lineKey === 'stuck' || lineKey === 'nudged' || lineKey === 'quiet';
+    const graphShown = hasProcessGraph(okRun);
+    const selectedStageId = resolveSelectedStage(stageSel, featureId, okRun);
     body = (
       <>
+        <FeaturePageWorkflowConfirm run={okRun} featureId={featureId} projectId={okRun.epic?.projectId ?? projectId ?? undefined} isMobile={isMobile} />
         <FeatureFirstScreen
           status="ok"
           brief={page.page.brief ?? null}
@@ -341,6 +351,16 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           // тебя» не покрыты: во всех этих случаях блок состояния остаётся на её месте.
           stateBlock={holdLike || !page.page.brief || watchdogOrIdle ? <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} marks={marks} /> : undefined}
         />
+        {graphShown && (
+          <div data-testid="feature-page-process" style={{ display: 'flex', flexDirection: 'column', gap: SP.md, marginTop: SP.md }}>
+            <FeatureProcessGraph
+              run={okRun}
+              selectedId={selectedStageId}
+              onSelect={(id) => setStageSel({ featureId, id })}
+            />
+            <FeatureStageArea run={okRun} selectedId={selectedStageId} isMobile={isMobile} onOpenTask={openActiveTask} />
+          </div>
+        )}
         <FeaturePageTabs
           value={mainTab}
           onChange={setFeatureMainTab}

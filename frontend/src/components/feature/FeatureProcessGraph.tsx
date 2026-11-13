@@ -143,7 +143,7 @@ function edgePath(a: NodePos, b: NodePos, mobile: boolean): string {
 // без имени, как и раньше): общий STAGE_NAME через stageName (своей таблицы имён нет)
 // плюс линия для параллельных этапов одной роли (step-back/step-front дают одинаковое
 // имя «Производство»; различаются они только линией — без неё две одинаковые карточки).
-function nodeTitle(stage: FeatureStage): string {
+export function nodeTitle(stage: FeatureStage): string {
   if (stage.title) return stage.title;
   const lane = laneWord(stage.lane ?? null);
   const name = stageName(stage.key);

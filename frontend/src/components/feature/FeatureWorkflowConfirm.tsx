@@ -41,6 +41,10 @@ export interface FeatureWorkflowConfirmProps {
   // epic.workflow как есть (null/нет — маршрут не подтверждён).
   confirmed?: ConfirmedRoute | null;
   isMobile: boolean;
+  // Тихий режим (шапка страницы фичи, C3b): блок рисуется, только когда от человека что-то
+  // нужно — есть предложение без подтверждения или «шаблон изменился». Подтверждённый маршрут
+  // без перемен не занимает места. Каталог шаблонов тот же один запрос, что и без флага.
+  quiet?: boolean;
 }
 
 interface SelectedKey { id: string; scope: WorkflowTemplateScope }
@@ -49,7 +53,7 @@ const errText = (e: unknown): string =>
   e instanceof Error && e.message ? e.message : 'Не получилось, попробуйте ещё раз';
 
 export function FeatureWorkflowConfirm({
-  featureId, projectId, proposal, confirmed, isMobile,
+  featureId, projectId, proposal, confirmed, isMobile, quiet,
 }: FeatureWorkflowConfirmProps): React.ReactElement {
   const [entries, setEntries] = useState<WorkflowTemplateEntry[] | null>(null);
   const [selKey, setSelKey] = useState<SelectedKey | null>(null);
@@ -180,6 +184,11 @@ export function FeatureWorkflowConfirm({
   }, [entries, confirmed]);
   const updateText = templateUpdateText(confirmed ?? null, confirmedTemplate);
   const canConfirm = !!selectedEntry && !busyConfirm;
+  // Тихий режим: нужен ответ человека (предложение ждёт подтверждения, подобрали новое) или
+  // шаблон подтверждённого маршрута изменился; ошибка и идущий запрос блок не прячут.
+  const actionable = (!!shownProposal && !confirmed) || !!localProposal || !!updateText
+    || !!errorText || busyConfirm || busyRecommend;
+  if (quiet && !actionable) return <></>;
 
   const templateOptions = (entries ?? []).map(e => ({
     value: `${e.scope}:${e.template.id}`,
@@ -194,6 +203,8 @@ export function FeatureWorkflowConfirm({
         padding: SP.md, borderRadius: R.lg,
         background: C.bgSelected, border: `1px solid ${C.borderLight}`,
         fontFamily: FONT.sans, fontSize: FS.base, color: C.textPrimary,
+        // В шапке страницы отступ вниз несёт сам блок: когда он молчит, зазора нет.
+        ...(quiet ? { marginBottom: SP.md } : {}),
       }}
     >
       <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted }}>Маршрут фичи</div>

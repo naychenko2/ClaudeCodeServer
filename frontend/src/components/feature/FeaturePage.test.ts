@@ -14,6 +14,7 @@
 import { act, useSyncExternalStore } from 'react';
 import { createElement, StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { resolveSelectedStage } from './FeatureStageArea';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 import { featureRunStatusTag } from './FeaturePageHeader';
 import { __test as pageTest, setFeaturePageTab, setFeatureMainTab, refetchFeaturePage, getFeatureMainTab, type FeatureBrief } from '../../lib/featurePage';
@@ -186,6 +187,16 @@ vi.mock('../../lib/models', async (importOriginal) => {
   return { ...orig, useModels: () => [], modelLabel: (v: string | null | undefined) => v ?? '' };
 });
 
+// Каталог шаблонов для блока подтверждения маршрута (C3b): журнал вызовов, пустой каталог.
+const mockTemplates = vi.hoisted(() => ({ calls: 0 }));
+vi.mock('../../features/workflowTemplates/api', () => ({
+  workflowTemplatesApi: {
+    listTemplates: async () => { mockTemplates.calls += 1; return []; },
+    confirmWorkflow: async () => {},
+    recommendWorkflow: async () => ({}),
+  },
+}));
+
 // Фиксированное «сейчас» для стабильных подписей возраста/тревоги.
 const NOW = new Date('2026-10-19T12:00:00Z').getTime();
 
@@ -287,14 +298,23 @@ function render(props: { featureId?: string; projectId?: string | null; projectO
   // ToolbarOverflowMenu при открынении слушает прокручиваемых предков через
   // getComputedStyle — в fakeDom его нет; все зоны «visible» (прокрутки нет).
   if (!(globalThis as any).getComputedStyle) (globalThis as any).getComputedStyle = () => ({ overflowY: 'visible' });
-  const { container } = mount(createElement(FeaturePage, {
+  const pageProps = {
     featureId: props.featureId ?? 'f1',
     projectId: props.projectId ?? 'p1',
     projectOwnerId: props.projectOwnerId ?? null,
     isMobile: props.isMobile ?? false,
     onBack: props.onBack ?? (() => {}),
-  }));
+  };
+  const { container, root } = mount(createElement(FeaturePage, pageProps));
+  lastRender = { root, pageProps: pageProps as Record<string, unknown> };
   return container;
+}
+
+// Корень последнего render: тесты смены фичи перерисовывают тот же компонент с другим featureId
+// (состояние страницы остаётся, как при переходе без перемонтирования).
+let lastRender: { root: { render: (n: unknown) => void }; pageProps: Record<string, unknown> } | null = null;
+function rerenderWithFeature(featureId: string) {
+  act(() => { lastRender!.root.render(createElement(FeaturePage, { ...lastRender!.pageProps, featureId } as never)); });
 }
 
 // Первый <button> в поддереве узла (главное действие — Button ВНУТРИ div[data-testid]).
@@ -2541,5 +2561,104 @@ describe('FeaturePage: первый экран (FS-FS)', () => {
       onClick(); onClick();
     });
     expect(mockGetFeature.calls.length - before).toBe(1);
+  });
+});
+
+// C3b: граф процесса сверху, выбранный этап ниже, подтверждение маршрута в шапке.
+describe('FeaturePage: граф процесса, этап и подтверждение маршрута (C3b)', () => {
+  const stage = (id: string, state: 'done' | 'active' | 'pending', after: string[], column: number, taskIds: string[] = []) =>
+    ({ key: 'prod', id, role: 'step', title: `Этап ${id}`, after, column, state, passes: 1, taskIds, rounds: [] });
+  const routed = (over: Record<string, unknown> = {}) => {
+    const run = {
+      featureId: 'f1',
+      epic: { id: 'f1', title: 'Моя фича', projectId: 'p1', workflow: { templateId: 't', scope: 'global', stages: [], skipped: [], confirmedVersion: 1 }, ...over },
+      steps: [
+        { id: 't-b', title: 'Задача B', status: 'inProgress', role: 'step' },
+        { id: 't-c', title: 'Задача C', status: 'todo', role: 'step' },
+      ],
+      reviews: [], qa: [], final: null, merge: null,
+      stages: [stage('a', 'done', [], 0), stage('b', 'active', ['a'], 1, ['t-b']), stage('c', 'pending', ['b'], 2, ['t-c'])],
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      progress: 0, ready: false,
+    };
+    mockGetFeature.result = pageData({ run: run as never });
+  };
+  const areaId = (c: ReturnType<typeof render>) => findNodeByAttr(c, 'data-testid', 'feature-stage-area')?.getAttribute('data-stage-id');
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    mockTemplates.calls = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => { vi.useRealTimers(); uninstallFakeDom(); vi.restoreAllMocks(); });
+
+  it('resolveSelectedStage: чужая фича и пропавшая стадия — defaultSelected', () => {
+    routed();
+    const run = (mockGetFeature.result as FeaturePageData).run;
+    expect(resolveSelectedStage(null, 'f1', run)).toBe('b');
+    expect(resolveSelectedStage({ featureId: 'f1', id: 'c' }, 'f1', run)).toBe('c');
+    expect(resolveSelectedStage({ featureId: 'f1', id: 'c' }, 'f2', run)).toBe('b');
+    expect(resolveSelectedStage({ featureId: 'f1', id: 'нет' }, 'f1', run)).toBe('b');
+  });
+
+  it('граф сверху, этап по умолчанию — активный; клик по узлу меняет область этапа', async () => {
+    routed();
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-process-graph')).not.toBeNull();
+    expect(areaId(c)).toBe('b');
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stage-task-t-b')!).join('')).toContain('Задача B');
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stage-task-status-t-b')!).join('')).toBe('в работе');
+    await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', 'pgraph-node-c')!)!.onClick as () => void)(); });
+    expect(areaId(c)).toBe('c');
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stage-task-status-t-c')!).join('')).toBe('не начата');
+  });
+
+  it('смена фичи сбрасывает выбор этапа на defaultSelected', async () => {
+    routed();
+    const c = render({});
+    await settle();
+    await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', 'pgraph-node-c')!)!.onClick as () => void)(); });
+    expect(areaId(c)).toBe('c');
+    rerenderWithFeature('f2');
+    await settle();
+    expect(areaId(c)).toBe('b');
+  });
+
+  it('легаси-эпик (ни предложения, ни маршрута): графа и блока подтверждения нет, каталог не грузится', async () => {
+    mockGetFeature.result = pageData();
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-process-graph')).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-workflow-confirm')).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')).toBeNull();
+    expect(mockTemplates.calls).toBe(0);
+  });
+
+  it('предложение без подтверждения — блок подтверждения в шапке', async () => {
+    routed({ workflow: null, workflowProposal: { templateId: 't', scope: 'global', skipped: [], rationale: 'потому что' } });
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')).not.toBeNull();
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')!).join('')).toContain('потому что');
+  });
+
+  it('подтверждённый маршрут без перемен: блок молчит (тихий режим)', async () => {
+    routed();
+    const c = render({});
+    await settle();
+    expect(mockTemplates.calls).toBeGreaterThan(0);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')).toBeNull();
   });
 });

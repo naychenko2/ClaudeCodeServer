@@ -8,7 +8,7 @@ import { PersonaVoicePicker } from './PersonaVoicePicker';
 import { ReturnInheritDialog, SwitchSpecialtyInheritDialog, SwitchSpecialtyOwnDialog } from './PersonaInheritDialogs';
 import { PersonaAccessGroup } from './PersonaAccessGroup';
 import { PersonaModelsGroup } from './PersonaModelsGroup';
-import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, ownTierCount, takeReturn, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
+import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, claimTierReset, clearedTiers, ownTierCount, takeReturn, tiersModeAction, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
 import { createVoicePayload } from './voicePayload';
 import { PersonaPromptTab, SECTIONS_RESET_TEXT, SECTIONS_RESET_TITLE, sectionsResetNeedsConfirm } from './PersonaPromptTab';
 import { applySections, emptyState, toOverrides, type PromptSectionsState } from './promptSectionsModel';
@@ -798,9 +798,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const currentPersonaIdRef = useRef(persona?.id);
   currentPersonaIdRef.current = persona?.id;
   const resetPersonaTiers = async () => {
-    if (tiersBusyRef.current) return;
     if (!persona) { setTierStrong(''); setTierMedium(''); setTierWeak(''); setTiersOwn(false); return; }
-    tiersBusyRef.current = true;
+    if (!claimTierReset(tiersBusyRef)) return;
     setTiersResetBusy(true);
     setError(null);
     const personaId = persona.id;
@@ -808,7 +807,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       // tierStrong/… не входят в типаж CreatePersonaDto/UpdatePersonaDto (только в Persona
       // и SpecialtyTemplateSettings), хотя бэкенд их принимает — тот же неполный тип уже
       // обходит save() ниже, посылая их в общем dto среди полей, которые в типе есть
-      const dto = { tierStrong: '', tierMedium: '', tierWeak: '' } as unknown as UpdatePersonaDto;
+      const dto = clearedTiers() as unknown as UpdatePersonaDto;
       const saved = await api.personas.update(personaId, dto);
       if (currentPersonaIdRef.current !== personaId) return;
       setTierStrong('');
@@ -831,10 +830,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Переключатель группы «Модели»: «Своё» только открывает ячейки; возврат к специальности
   // стирает заданные ячейки — сначала подтверждение
   const switchTiersMode = (own: boolean) => {
-    if (tiersBusyRef.current || own === tiersOwn) return;
-    if (own) { setTiersOwn(true); return; }
-    if (ownTierCount({ tierStrong, tierMedium, tierWeak }) > 0) { setPendingTiersInherit(true); return; }
-    setTiersOwn(false);
+    const act = tiersModeAction(own ? 'own' : 'inherited', tiersOwn, ownTierCount({ tierStrong, tierMedium, tierWeak }), tiersBusyRef.current);
+    if (act === 'open') setTiersOwn(true);
+    else if (act === 'confirm') setPendingTiersInherit(true);
+    else if (act === 'close') setTiersOwn(false);
   };
 
   // Отдаём тулбару-родителю императивные действия. save — через ref-зеркало: он

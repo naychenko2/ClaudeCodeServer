@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PersonaForm } from '../PersonaForm';
 import { PersonaModelsGroup } from '../PersonaModelsGroup';
-import { ownTierCount } from '../personaInheritModel';
+import { claimTierReset, clearedTiers, ownTierCount, tiersModeAction } from '../personaInheritModel';
 import { setAllFlags } from '../../../lib/featureFlags';
 import type { Persona } from '../../../types';
 
@@ -92,5 +92,29 @@ describe('PersonaForm: группа «Модели» (F28)', () => {
     const html = renderForm({ tierStrong: 'preset:1', tierWeak: 'preset:2' });
     expect(html).toContain('своё · 2 из 3');
     expect(html).not.toContain('models-inherited-');
+  });
+});
+
+describe('логика переключения группы «Модели» (F28)', () => {
+  it('два быстрых захвата сброса — отправка ровно одна, после отпускания — снова можно', () => {
+    const flag = { current: false };
+    let puts = 0;
+    for (let i = 0; i < 2; i++) if (claimTierReset(flag)) puts++;
+    expect(puts).toBe(1);
+    flag.current = false;
+    expect(claimTierReset(flag)).toBe(true);
+  });
+
+  it('возврат к специальности при своей ячейке — подтверждение; без неё — сразу; при запросе — игнор', () => {
+    expect(tiersModeAction('inherited', true, 1, false)).toBe('confirm');
+    expect(tiersModeAction('inherited', true, 0, false)).toBe('close');
+    expect(tiersModeAction('own', false, 0, false)).toBe('open');
+    expect(tiersModeAction('inherited', true, 1, true)).toBe('ignore');
+    expect(tiersModeAction('own', true, 1, false)).toBe('ignore');
+  });
+
+  it('«Сбросить» очищает ячейку — данные для PUT и формы пустые', () => {
+    expect(clearedTiers()).toEqual({ tierStrong: '', tierMedium: '', tierWeak: '' });
+    expect(ownTierCount(clearedTiers())).toBe(0);
   });
 });

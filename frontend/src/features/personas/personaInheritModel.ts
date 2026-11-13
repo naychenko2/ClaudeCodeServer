@@ -188,3 +188,24 @@ export function takeReturn(pending: boolean): { pending: false; apply: boolean }
 export function ownTierCount(cells: TierCell): number {
   return TIER_KEYS.filter(k => !!cells[k]).length;
 }
+
+// Захват права на отправку сброса уровней: пока флаг поднят, вторая отправка не уходит.
+export function claimTierReset(flag: { current: boolean }): boolean {
+  if (flag.current) return false;
+  flag.current = true;
+  return true;
+}
+
+// Что делать с переключением группы «Модели»: ignore — идёт запрос или режим тот же;
+// open — «Своё» открывает ячейки; confirm — возврат стирает заданные ячейки, нужен диалог;
+// close — возврат без своих ячеек, стирать нечего.
+export function tiersModeAction(target: 'own' | 'inherited', ownNow: boolean, ownCount: number, busy: boolean): 'ignore' | 'open' | 'confirm' | 'close' {
+  if (busy || (target === 'own') === ownNow) return 'ignore';
+  if (target === 'own') return 'open';
+  return ownCount > 0 ? 'confirm' : 'close';
+}
+
+// Ячейки после сброса: все три пусты (данные для PUT и для формы).
+export function clearedTiers(): Required<TierCell> {
+  return { tierStrong: '', tierMedium: '', tierWeak: '' };
+}

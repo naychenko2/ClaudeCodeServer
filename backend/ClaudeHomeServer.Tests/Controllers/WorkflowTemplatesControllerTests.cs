@@ -120,7 +120,7 @@ public class WorkflowTemplatesControllerTests : IClassFixture<TestWebApplication
         var copyId = NewId();
         var created = await Admin().PostAsJsonAsync($"/api/workflow-templates?projectId={projectId}", new
         {
-            id = copyId, name = "Копия", stages = Stage("plan"), basedOn = new { templateId = gid, version = 1 },
+            id = copyId, name = "Копия", stages = Stage("plan"), basedOn = new { templateId = gid, version = 3 },
         });
         created.StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -129,7 +129,7 @@ public class WorkflowTemplatesControllerTests : IClassFixture<TestWebApplication
         var basedOn = entry.GetProperty("basedOn");
         basedOn.GetProperty("templateId").GetString().Should().Be(gid);
         basedOn.GetProperty("name").GetString().Should().Be("Исходный");
-        basedOn.GetProperty("version").GetInt32().Should().Be(1);
+        basedOn.GetProperty("version").GetInt32().Should().Be(3);
         entry.GetProperty("stageCount").GetInt32().Should().Be(1);
         entry.GetProperty("diffFromPreset").ValueKind.Should().Be(JsonValueKind.Null);
 

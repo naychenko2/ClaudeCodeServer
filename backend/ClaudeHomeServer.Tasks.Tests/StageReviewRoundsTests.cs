@@ -54,23 +54,27 @@ public class StageReviewRoundsTests : IDisposable
     {
         var step = Step(legacy: false);
         Review(step, TaskVerdicts.Returned,
-            "- блокер: TaskExecutionService.cs:412 — порог берётся из конфига\n- [blocker] Нет сторожа без файла\n- замечание: переименовать поле",
+            "- блокер: TaskExecutionService.cs:412 — порог берётся из конфига\n- [blocker] Services/Guard.cs:7 нет сторожа\n- замечание: переименовать поле",
             reason: "contract");
 
         var rr = _sut.Build(step.Id, Owner).Value!.Review.ReviewRounds;
 
         rr.Structured.Should().BeTrue();
         rr.Hint.Should().BeNull();
-        var round = rr.Rounds.Should().ContainSingle().Subject;
+        rr.Rounds.Should().HaveCount(2);
+        var round = rr.Rounds[0];
         round.Round.Should().Be(1);
         round.Verdict.Should().Be("returned");
         round.ReturnReason.Should().Be("contract");
-        round.Pending.Should().BeTrue();
+        round.Pending.Should().BeFalse();
+        var next = rr.Rounds[1];
+        next.Round.Should().Be(2);
+        next.Pending.Should().BeTrue();
+        next.Verdict.Should().BeNull();
+        next.Reviewer.Should().BeNull();
         round.Blockers.Should().HaveCount(2);
         round.Blockers[0].Should().Be(new StageReviewBlocker("блокер", "TaskExecutionService.cs", 412, "порог берётся из конфига"));
-        round.Blockers[1].File.Should().BeNull();
-        round.Blockers[1].Line.Should().BeNull();
-        round.Blockers[1].Text.Should().Be("Нет сторожа без файла");
+        round.Blockers[1].Should().Be(new StageReviewBlocker("blocker", "Services/Guard.cs", 7, "нет сторожа"));
         round.Remarks.Should().Equal("переименовать поле");
     }
 
@@ -83,6 +87,7 @@ public class StageReviewRoundsTests : IDisposable
         var rr = _sut.Build(step.Id, Owner).Value!.Review.ReviewRounds;
 
         var round = rr.Rounds.Should().ContainSingle().Subject;
+        round.Round.Should().Be(1);
         round.Verdict.Should().Be("accepted");
         round.Blockers.Should().BeEmpty();
         round.Remarks.Should().BeEmpty();
@@ -114,9 +119,27 @@ public class StageReviewRoundsTests : IDisposable
 
         rr.Structured.Should().BeFalse();
         rr.Hint.Should().Be("legacy");
-        var round = rr.Rounds.Single();
+        var round = rr.Rounds[0];
         round.Blockers.Should().BeEmpty();
         round.Remarks.Should().Equal("блокер: A.cs:1 — что-то");
+        _sut.Build(step.Id, Owner).Value!.Review.Reviews.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Номера_раундов_растут_по_порядку_создания()
+    {
+        var step = Step(legacy: false);
+        Review(step, TaskVerdicts.Returned, "блокер: A.cs:1 — первый");
+        Review(step, TaskVerdicts.Returned, "блокер: B.cs:2 — второй");
+        Review(step, TaskVerdicts.Accepted, null);
+
+        var rounds = _sut.Build(step.Id, Owner).Value!.Review.ReviewRounds.Rounds;
+
+        rounds.Select(r => r.Round).Should().Equal(1, 2, 3);
+        rounds.Select(r => r.Verdict).Should().Equal("returned", "returned", "accepted");
+        rounds[0].Blockers[0].File.Should().Be("A.cs");
+        rounds[1].Blockers[0].File.Should().Be("B.cs");
+        rounds.Any(r => r.Pending).Should().BeFalse();
     }
 
     [Fact]

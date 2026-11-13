@@ -428,8 +428,8 @@ public sealed class StageScreenService(
 
     // Раунды ревью (B05): по одной записи на ревью-задачу с вердиктом, по времени создания. Эпик без
     // маршрута и без предложения — легаси: разбор блокеров не делаем, структурность не обещаем.
-    // pending — последний раунд вернул шаг, а шаг ещё не закрыт: следующий раунд запустится сам
-    // после доработки исполнителя.
+    // pending — отдельная запись-ожидание следующего раунда (verdict/at = null), если последний
+    // раунд вернул шаг, а шаг ещё не закрыт.
     private StageReviewRounds BuildReviewRounds(TaskItem task)
     {
         var epic = task.FeatureId is { } fid ? tasks.GetById(fid) : null;
@@ -450,12 +450,15 @@ public sealed class StageScreenService(
             var pid = v.PersonaId ?? t.PersonaId;
             StageQuestionAuthor? reviewer = pid is null ? null
                 : new StageQuestionAuthor(pid, personas?.GetByIdInternal(pid)?.Name ?? t.Title);
-            var pending = i == verified.Count - 1 && v.Verdict == TaskVerdicts.Returned
-                && task.Status != TaskItemStatus.Done;
-            rounds.Add(new StageReviewRound(i + 1, reviewer, v.Verdict!, v.ReturnReason, v.VerifiedAt,
-                blockers, remarks, structured, pending));
+            rounds.Add(new StageReviewRound(i + 1, reviewer, v.Verdict, v.ReturnReason, v.VerifiedAt,
+                blockers, remarks, structured, false));
         }
-        return new StageReviewRounds(rounds, rounds.Count > 0 && rounds.All(r => r.Structured), legacy ? "legacy" : null);
+        // Последний раунд вернул шаг, а шаг не закрыт — следующий раунд ждёт доработку исполнителя
+        // и запустится сам: отдельная запись без ревьюера, вердикта и времени.
+        if (verified.Count > 0 && verified[^1].Verification!.Verdict == TaskVerdicts.Returned
+            && task.Status != TaskItemStatus.Done)
+            rounds.Add(new StageReviewRound(verified.Count + 1, null, null, null, null, [], [], false, true));
+        return new StageReviewRounds(rounds, rounds.Any(r => !r.Pending) && rounds.Where(r => !r.Pending).All(r => r.Structured), legacy ? "legacy" : null);
     }
 
     private static StageReviewItem ToReview(TaskItem t, TaskVerification? v) => new(
@@ -519,7 +522,7 @@ public sealed record StageReview(
 public sealed record StageReviewRounds(IReadOnlyList<StageReviewRound> Rounds, bool Structured, string? Hint);
 
 public sealed record StageReviewRound(
-    int Round, StageQuestionAuthor? Reviewer, string Verdict, string? ReturnReason, DateTime At,
+    int Round, StageQuestionAuthor? Reviewer, string? Verdict, string? ReturnReason, DateTime? At,
     IReadOnlyList<StageReviewBlocker> Blockers, IReadOnlyList<string> Remarks, bool Structured, bool Pending);
 
 public sealed record StageReviewBlocker(string Tag, string? File, int? Line, string Text);

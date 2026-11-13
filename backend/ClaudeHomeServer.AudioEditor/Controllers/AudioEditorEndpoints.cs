@@ -521,7 +521,9 @@ public abstract class AudioEditorEndpoints(
         if (scope.IsPersonal && PersonalMediaFolders.EnsureDirectory(project.RootPath, defaultFolder!) is null)
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Путь вне папки проекта");
 
-        var saved = AudioProjectSaver.Save(project.RootPath, thread, items, mode, folder, req.FileName, defaultFolder);
+        // Нить по файлу сохраняется рядом с файлом, а черновик «Личного» — в audio/
+        var saved = AudioProjectSaver.Save(project.RootPath, thread, items, mode, folder, req.FileName,
+            thread.File is null ? defaultFolder : null);
         if (saved.ErrorCode == AudioEditErrorCodes.NameTaken)
             return StatusCode(StatusCodes.Status409Conflict, new { error = saved.Error, code = saved.ErrorCode, suggestion = saved.Suggestion });
         if (saved.Value is not { } result)

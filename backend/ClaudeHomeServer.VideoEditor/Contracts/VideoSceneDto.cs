@@ -191,7 +191,9 @@ public sealed record VideoProviderDto(
     IReadOnlyList<VideoModelDto> Models);
 
 // Durations и Aspects — что модель принимает; LastFrame — умеет ли «кадр A → кадр B»;
-// Format — возможности по формату (null — «Как у модели», размеров модель не сообщает)
+// Format — возможности по формату (null — «Как у модели», размеров модель не сообщает).
+// Experimental — экспериментальная модель, берётся только ручным выбором; FirstFrameOptional — снимает и без кадра;
+// Hint — подсказка человеку (что даёт и чем хуже соседей)
 public sealed record VideoModelDto(
     string Id,
     string Label,
@@ -200,4 +202,7 @@ public sealed record VideoModelDto(
     bool Sound,
     bool LastFrame,
     string? License,
-    MediaFormatCaps? Format = null);
+    MediaFormatCaps? Format = null,
+    bool Experimental = false,
+    bool FirstFrameOptional = false,
+    string? Hint = null);

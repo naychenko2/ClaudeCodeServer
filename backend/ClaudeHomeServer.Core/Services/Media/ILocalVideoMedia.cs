@@ -45,7 +45,9 @@ public interface ILocalVideoMedia
 }
 
 // FirstFrame — обязательный первый кадр (байты картинки), LastFrame — последний (узел last_frame).
-// Seconds — длительность (потолок — LocalMediaService.MaxVideoSeconds), Size — "full" | "half", Fast — ускоренный режим
+// Seconds — длительность (потолок — LocalMediaService.MaxVideoSeconds), Size — "full" | "half", Fast — ускоренный режим.
+// Model — модель шва (LocalVideoModels); null — MiniMax H3. У Kandinsky 6 Lite FirstFrame необязателен (пустой — съёмка
+// по тексту), LastFrame не берётся, Seconds — только 5, Size и Fast не действуют; звук, как у H3, есть всегда
 public sealed record LocalVideoRequest(
     string Prompt,
     byte[] FirstFrame,
@@ -56,7 +58,18 @@ public sealed record LocalVideoRequest(
     long? Seed = null,
     // Метка происхождения прогона (шаг 23): кто, из какой сессии, вид, операция, тяжёлая ли.
     // null — вызывающая сторона ещё не передаёт (шаги 28–30); реестр пишет неопределённое происхождение.
-    LocalJobOrigin? Origin = null);
+    LocalJobOrigin? Origin = null,
+    string? Model = null);
+
+// Идентификаторы локальных видеомоделей — общие для модуля «Видео» и адаптера local-media
+public static class LocalVideoModels
+{
+    public const string MiniMaxH3 = "minimax-h3";
+    public const string Kandinsky6Lite = "kandinsky-6-lite";
+
+    public static bool IsKandinsky(string? model) =>
+        string.Equals(model?.Trim(), Kandinsky6Lite, StringComparison.OrdinalIgnoreCase);
+}
 
 // Busy — очередь GPU занята или ComfyUI не ответил: «попробуй позже», а не ошибка запроса
 public sealed record LocalVideoSubmitted(string? Ticket, int? QueuePosition, int? EtaSeconds, string? Error, bool Busy = false)

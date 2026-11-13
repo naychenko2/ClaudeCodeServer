@@ -123,7 +123,9 @@ public static class VideoPriceUnits
 // звук в ролике; LastFrame — берёт и последний кадр («кадр A → кадр B»); FirstFrame — берёт ли первый
 // (false — только текст); MaxFrameBytes — потолок входного кадра; LastFrameRequired — без последнего
 // кадра модель не работает (подбор «Авто» не берёт её для сцены с одним кадром).
-// Format — возможности по формату (ADR-025): пропорции и ступени модели; null — «Как у модели», размеров не сообщает
+// Format — возможности по формату (ADR-025): пропорции и ступени модели; null — «Как у модели», размеров не сообщает.
+// FirstFrameOptional — первый кадр можно не давать (съёмка по тексту) или дать (по кадру): модель сцены без кадров
+// «Авто» не берёт, но по ручному выбору Fits её пропускает
 public sealed record VideoCaps(
     IReadOnlyList<int> Durations,
     IReadOnlyList<string> Aspects,
@@ -135,14 +137,17 @@ public sealed record VideoCaps(
     long? MaxFrameBytes = null,
     bool Heavy = false,
     bool LastFrameRequired = false,
-    MediaFormatCaps? Format = null);
+    MediaFormatCaps? Format = null,
+    bool FirstFrameOptional = false);
 
 // Ориентир цены для каталога; точная сумма — только в котировке. Per — "sec" | "run"
 public sealed record VideoPriceHint(double Amount, string Unit, string Per);
 
-// DisabledReason — модель видна в каталоге серой с этой причиной, но не подбирается и не запускается
+// DisabledReason — модель видна в каталоге серой с этой причиной, но не подбирается и не запускается.
+// ManualOnly — «Авто» и умолчания модель не подставляют, только явный выбор человека или агента (экспериментальные модели).
+// Hint — подсказка человеку: что модель даёт и чем хуже соседей
 public sealed record VideoModelInfo(string Id, string Label, VideoCaps Caps, VideoPriceHint? PriceHint = null,
-    string? DisabledReason = null);
+    string? DisabledReason = null, bool ManualOnly = false, string? Hint = null);
 
 public sealed record VideoFrameBytes(byte[] Bytes, string ContentType);
 

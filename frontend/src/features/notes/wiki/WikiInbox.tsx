@@ -448,8 +448,7 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
             title="Спорного нет"
             subtitle={
               <span style={{ maxWidth: 360 }}>
-                Всё, что Хранитель сделал, применилось само. Смотреть в «Журнале» —
-                он придёт следующим шагом.
+                Всё, что Хранитель сделал, применилось само. Что именно — в «Журнале».
               </span>
             }
           />

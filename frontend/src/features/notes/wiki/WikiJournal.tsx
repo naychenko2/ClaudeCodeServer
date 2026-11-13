@@ -85,7 +85,7 @@ function entryBadge(e: WikiJournalEntryOverrideDto): { tone: 'success' | 'warnin
   if (e.op !== 'apply') return null;
   if (e.status === 'applied') {
     return e.policy === 'inbox'
-      ? { tone: 'warning', text: 'через Входящие' }
+      ? { tone: 'warning', text: 'через Решения' }
       : { tone: 'success', text: 'применилось само' };
   }
   if (e.status === 'rejected_by_checks') return { tone: 'danger', text: 'отбит проверками' };
@@ -299,7 +299,7 @@ function JournalEntry({
       {entry.status === 'rejected_by_checks' && (
         <div style={{ marginTop: SP.md }}>
           <Notice tone="danger" icon={AlertTriangle} title="Отбит проверками кода — в вики ничего не записано">
-            Такие правки не применяются и во «Входящие» не идут: показывать нечего.
+            Такие правки не применяются и в «Решения» не идут: показывать нечего.
           </Notice>
         </div>
       )}

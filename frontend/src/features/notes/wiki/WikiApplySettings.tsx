@@ -273,7 +273,7 @@ export function WikiApplySettings() {
       </h2>
       <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
         Неспорное — хроника, «дописать», связь и новая страница без дубля — применяется само после
-        проверок кода. Спорное идёт во «Входящие».
+        проверок кода. Спорное идёт в «Решения».
       </div>
 
       <div
@@ -287,7 +287,7 @@ export function WikiApplySettings() {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: FS.base, fontWeight: 500, color: C.textHeading }}>Применять неспорное само</div>
           <div style={{ fontSize: FS.sm, color: C.textMuted, marginTop: 2 }}>
-            Выключите — всё, включая хроники, пойдёт во «Входящие» на ваше решение.
+            Выключите — всё, включая хроники, пойдёт в «Решения» на ваше решение.
           </div>
         </div>
         <Toggle

@@ -328,14 +328,14 @@ describe('«Журнал» (S7c-2)', () => {
     expect(String(third[2][0])).toBe('/wiki/journal?section=projects%2Fp1&origin=note');
   });
 
-  it('политика по записи: applied+auto — «применилось само», applied+inbox — «через Входящие»; системный relink показан событием без источника', async () => {
+  it('политика по записи: applied+auto — «применилось само», applied+inbox — «через Решения»; системный relink показан событием без источника', async () => {
     seedJournal(RESP);
     const c = render();
     await settle();
     // журнал — все события окна, ничего не отфильтровывается локально
     expect(rows(c)).toHaveLength(5);
     expect(has(c, 'применилось само')).toBe(true);
-    expect(has(c, 'через Входящие')).toBe(true);
+    expect(has(c, 'через Решения')).toBe(true);
     expect(has(c, 'отбит проверками')).toBe(true);
     expect(has(c, 'откат по источнику')).toBe(true);
     expect(has(c, 'перелинкованы связи')).toBe(true);

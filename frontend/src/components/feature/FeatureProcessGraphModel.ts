@@ -76,3 +76,33 @@ export function defaultSelected(run: FeatureRun): string | null {
   }
   return null;
 }
+
+// Подпись «⇉ параллельно» — одна на рамку десктопа, скобку мобилы и легенду (макет P23/P30).
+export const PARALLEL_LABEL = '⇉ параллельно';
+
+// Порядковый номер колонки (0..n-1) каждой стадии: значения `column` с бэка не меняются,
+// это только ранг в списке колонок — чтобы отличить «соседнюю» колонку от «через колонку».
+export function columnRanks(cols: GraphColumn[]): Map<string, number> {
+  const ranks = new Map<string, number>();
+  cols.forEach((col, rank) => {
+    for (const s of col.stages) ranks.set(stageNodeId(s), rank);
+  });
+  return ranks;
+}
+
+// Дальнее ребро идёт через ≥1 колонку (макет P25): рисуется обходом под графом пунктиром.
+// Колонки не пересчитываются — ранги берутся из graphColumns (поле `column` с бэка).
+export function isFarEdge(ranks: Map<string, number>, edge: GraphEdge): boolean {
+  return (ranks.get(edge.to) ?? 0) - (ranks.get(edge.from) ?? 0) > 1;
+}
+
+// Подпись справа от заголовка «Процесс» (макет P14): подтверждённый маршрут — «Имя vN»
+// (имя шаблона, если известно, иначе его id), предложение — «предложение · ещё не
+// подтверждено», остальное (легаси, state=none) — «фиксированный список».
+export function graphCaption(run: FeatureRun, templateName?: string | null): string {
+  const route = run.epic?.workflow;
+  if (route) return `${templateName || route.templateId} v${route.confirmedVersion}`;
+  const proposal = run.epic?.workflowProposal;
+  if (proposal && proposal.state !== 'none' && proposal.templateId) return 'предложение · ещё не подтверждено';
+  return 'фиксированный список';
+}

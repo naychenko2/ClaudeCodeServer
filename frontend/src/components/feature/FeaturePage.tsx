@@ -32,7 +32,7 @@ import {
 } from './FeaturePageHeader';
 import { FeaturePageTabs } from './FeaturePageTabs';
 import { FeatureFirstScreen } from './FeatureFirstScreen';
-import { FeatureProcessGraph } from './FeatureProcessGraph';
+import { FeatureProcessGraphSection } from './FeatureProcessGraphSection';
 import { FeatureStageArea, resolveSelectedStage, type StageSelection } from './FeatureStageArea';
 import { analysisLineState } from './FeatureAnalysisModel';
 import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
@@ -365,7 +365,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           {mainTab === 'progress' ? (
             graphShown ? (
               <div data-testid="feature-page-process" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
-                <FeatureProcessGraph
+                <FeatureProcessGraphSection
                   run={okRun}
                   selectedId={selectedStageId}
                   onSelect={(id) => setStageSel({ featureId, id })}

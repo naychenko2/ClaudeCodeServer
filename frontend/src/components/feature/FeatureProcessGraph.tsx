@@ -7,10 +7,12 @@
 // слое ЗА карточками (пересекающие чужие колонки линии видны только в межколоночных
 // зазорах — карточки их перекрывают).
 //
-// Десктоп: колонки слева направо, внутри колонки — вертикально, в порядке run.stages;
-// контейнер прокручивается по горизонтали сам (16 узлов × 144 px шире экрана) — документ
-// не переполняется. Мобила (≤600, useIsMobile): вертикальный список колонок; параллельные
-// стадии колонки объединены сколкой «∥ параллельно» слева от группы (разрез §1.9).
+// Раскладка (F07, макет feature-page.html P14, P23–P25, P27, P29–P31): колонки слева направо,
+// внутри колонки — вертикально, порядок run.stages. Десктоп — колонки растянуты на ширину
+// страницы (не уже 116), параллельная колонка в пунктирной рамке «⇉ параллельно»; мобила —
+// горизонтальная лента узлов 104 px, группа — скобкой, выбранный узел прокручивается в центр.
+// Дальнее ребро (через колонку) — обходом под графом пунктиром. Над графом — «Процесс» и
+// подпись шаблона, под ним — легенда.
 //
 // Выбор — по id стадии (контракт C3a): onSelect(id), подсветка выбранной — по selectedId.
 // Своего состояния нет (тот же контракт, что у FeatureStageLane): изначальный выбор —
@@ -22,8 +24,8 @@
 // Слово о состоянии для aria-label — из единого источника stageStatusLabel; «готово» для
 // done — подпись легенды макета (у done слова нет).
 //
-// Мобильные тач-цели: карточка 120×56 (≥40, контракт C3a); ширина графа ≤140 — документ
-// на 360 не переполняется.
+// Тач-цель узла — вся карточка 88 px высотой (≥40, контракт C3a); лента прокручивается внутри
+// блока — документ на 360 не переполняется.
 //
 // Узел (F06, макет feature-page.html P16–P22, materials-review-placement.html M14–M19):
 // имя переносится целиком, без обрезки (узел 152×88 вмещает до трёх строк имени вместе со
@@ -32,13 +34,16 @@
 // «2/3»; бейдж «↺N» над узлом при возвратах. Всё рисуется по данным бэка (B01): состояние
 // «ждёт» берётся из stage.waiting, а не из примера макета. Полное имя — ещё и в title/aria-label.
 
-import type { CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { laneWord } from '../../lib/roleLabel';
 import { formatDuration } from '../../lib/chatGroups';
 import { stageName, stageStatusLabel } from './FeatureTimelineBits';
-import { graphColumns, graphEdges, stageNodeId, type GraphColumn } from './FeatureProcessGraphModel';
+import {
+  graphColumns, graphEdges, stageNodeId, columnRanks, isFarEdge, graphCaption, PARALLEL_LABEL,
+  type GraphColumn,
+} from './FeatureProcessGraphModel';
 import type { FeatureRun, FeatureStage, StageTone } from '../../types/featureRun';
 
 export interface FeatureProcessGraphProps {
@@ -47,19 +52,29 @@ export interface FeatureProcessGraphProps {
   selectedId?: string | null;
   // Клик/Enter по карточке: id стадии (не индекс).
   onSelect?: (id: string) => void;
+  // Имя шаблона подтверждённого маршрута для подписи секции (F07); нет — в подписи id.
+  templateName?: string | null;
 }
 
-// Фиксированная геометрия карточек (макет feature-page.html .node; 88 ≥ 40 — тач-цель контракта C3a). Позиции и рёбра выводятся из этих констант — замера DOM нет.
-const NODE_W = 152;
+// Геометрия карточек (макет feature-page.html .node; 88 ≥ 40 — тач-цель контракта C3a).
+// Высота фиксирована, ширина: десктоп — колонки растянуты на ширину страницы (flex:1 макета,
+// не уже NODE_MIN_W), мобила — лента узлов NODE_W_MOBILE. Позиции и рёбра выводятся из этих
+// чисел; ширина контейнера — единственное, что замеряется (ResizeObserver).
 const NODE_H = 88;
+const NODE_MIN_W = 116;
+const NODE_W_MOBILE = 104;
+// Ширина узла без замера (первый кадр, тесты без раскладки): прежний размер карточки.
+const NODE_W_DEFAULT = 152;
 // Зазор между колонками — пространство для рёбер (макет .link 20 + запас на кривую).
 const GAP_X = 24;
 // Зазор между стадиями внутри колонки.
 const GAP_Y = SP.sm;
-// Сколка «параллельно» (мобила): ширина линии-скобки и подпись над группой.
-const BRACKET_W = 10;
-const BRACKET_INDENT = 20;
-const PAR_LABEL_H = 16;
+// Рамка/скобка «параллельно»: вылет за узлы и высота подписи на верхней границе.
+const FRAME_PAD = 6;
+const PAR_LABEL_H = 14;
+// Дуга far-ребра под графом: отступ первой полосы и шаг между полосами.
+const ARC_GAP = 12;
+const ARC_STEP = 8;
 
 // Тон активной стадии → цвет графа (см. шапку). null — тон не задан (active без tone —
 // бэк отдаёт tone только у active, но старый ответ может не несть): акцент, как run.
@@ -69,76 +84,69 @@ const toneColor = (tone?: StageTone | null): string =>
       : tone === 'loop' ? C.warning
         : C.accent;
 
-// Позиции карточ по id: десктоп — колонки по X, мобила — колонки по Y. Одна функция для
-// обоих: раскладка — геометрия, не семантика (колонки и порядок даёт модель).
+// Позиции карточек по id. Десктоп и мобила — одна раскладка (колонки слева направо, внутри
+// колонки — вертикально, порядок даёт модель); различаются шириной узла и видом группы
+// «параллельно» (рамка / скобка).
 interface NodePos { x: number; y: number }
 interface GraphLayout {
   pos: Map<string, NodePos>;
+  nodeW: number;
   width: number;
+  // Низ карточек (и рамок) — от него идут полосы дуг far-рёбер.
+  bottom: number;
   height: number;
-  // Мобильные скобки: для колонок с >1 стадии — координаты группы.
-  brackets: { x: number; top: number; height: number }[];
+  // Параллельные группы (колонки с >1 стадии): прямоугольник рамки.
+  groups: { x: number; y: number; w: number; h: number }[];
 }
 
-function layout(cols: GraphColumn[], mobile: boolean): GraphLayout {
+// avail — доступная ширина контейнера (null — не замерена).
+function layout(cols: GraphColumn[], mobile: boolean, avail: number | null, farCount: number): GraphLayout {
   const pos = new Map<string, NodePos>();
-  const brackets: GraphLayout['brackets'] = [];
-  if (mobile) {
-    let y = 0;
-    let hasParallel = false;
-    for (const col of cols) {
-      const parallel = col.stages.length > 1;
-      if (parallel) {
-        hasParallel = true;
-        y += PAR_LABEL_H; // строка «∥ параллельно» над группой
-      }
-      const x = parallel ? BRACKET_INDENT : 0;
-      col.stages.forEach((stage, k) => {
-        pos.set(stageNodeId(stage), { x, y: y + k * (NODE_H + GAP_Y) });
-      });
-      if (parallel) {
-        brackets.push({ x: 0, top: y, height: col.stages.length * (NODE_H + GAP_Y) - GAP_Y });
-      }
-      y += col.stages.length * (NODE_H + GAP_Y) - GAP_Y + GAP_X;
-    }
-    return {
-      pos,
-      width: (hasParallel ? BRACKET_INDENT : 0) + NODE_W,
-      height: Math.max(0, y - GAP_X),
-      brackets,
-    };
-  }
+  const groups: GraphLayout['groups'] = [];
+  const hasParallel = cols.some(c => c.stages.length > 1);
+  const padX = hasParallel ? FRAME_PAD : 0;
+  const top = hasParallel ? PAR_LABEL_H : 0;
+  const n = cols.length;
+  const nodeW = mobile
+    ? NODE_W_MOBILE
+    : avail != null
+      ? Math.max(NODE_MIN_W, Math.floor((avail - 2 * padX + GAP_X) / n) - GAP_X)
+      : NODE_W_DEFAULT;
   let maxRows = 0;
   cols.forEach((col, ci) => {
+    const x = padX + ci * (nodeW + GAP_X);
     maxRows = Math.max(maxRows, col.stages.length);
     col.stages.forEach((stage, k) => {
-      pos.set(stageNodeId(stage), { x: ci * (NODE_W + GAP_X), y: k * (NODE_H + GAP_Y) });
+      pos.set(stageNodeId(stage), { x, y: top + k * (NODE_H + GAP_Y) });
     });
+    if (col.stages.length > 1) {
+      const h = col.stages.length * (NODE_H + GAP_Y) - GAP_Y;
+      groups.push({ x: x - FRAME_PAD, y: top - FRAME_PAD, w: nodeW + 2 * FRAME_PAD, h: h + 2 * FRAME_PAD });
+    }
   });
+  const bottom = top + maxRows * (NODE_H + GAP_Y) - GAP_Y + (hasParallel ? FRAME_PAD : 0);
   return {
     pos,
-    width: cols.length * (NODE_W + GAP_X) - GAP_X,
-    height: maxRows * (NODE_H + GAP_Y) - GAP_Y,
-    brackets,
+    nodeW,
+    width: 2 * padX + n * (nodeW + GAP_X) - GAP_X,
+    bottom,
+    height: bottom + (farCount > 0 ? ARC_GAP + ARC_STEP * (farCount - 1) + SP.xs : 0),
+    groups,
   };
 }
 
-// Кривая ребра: десктоп — горизонтальная (выход с середины правой грани входа, вход в
-// середину левой), мобила — вертикальная (низ источника → верх цели). Разные колонки —
-// разные координаты, поэтому кривая есть всегда; прямая была бы только вырожденным случаем.
-function edgePath(a: NodePos, b: NodePos, mobile: boolean): string {
-  if (mobile) {
-    const x1 = a.x + NODE_W / 2;
-    const y1 = a.y + NODE_H;
-    const x2 = b.x + NODE_W / 2;
-    const y2 = b.y;
-    const my = (y1 + y2) / 2;
-    return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`;
-  }
-  const x1 = a.x + NODE_W;
+// Кривая ребра: выход с середины правой грани источника, вход в середину левой грани цели.
+// Дальнее ребро (через колонку, макет P25) идёт обходом под графом — по полосе `lane` ниже
+// карточек: чужие колонки его не перекрывают.
+function edgePath(a: NodePos, b: NodePos, nodeW: number, far: { bottom: number; lane: number } | null): string {
+  const x1 = a.x + nodeW;
   const y1 = a.y + NODE_H / 2;
   const x2 = b.x;
   const y2 = b.y + NODE_H / 2;
+  if (far) {
+    const yb = far.bottom + ARC_GAP + far.lane * ARC_STEP;
+    return `M ${x1} ${y1} C ${x1 + 10} ${y1}, ${x1 + 10} ${yb}, ${x1 + 20} ${yb} L ${x2 - 20} ${yb} C ${x2 - 10} ${yb}, ${x2 - 10} ${y2}, ${x2} ${y2}`;
+  }
   const mx = (x1 + x2) / 2;
   return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
 }
@@ -229,25 +237,71 @@ function MarkerIcon({ stage }: { stage: FeatureStage }) {
   );
 }
 
-export function FeatureProcessGraph({ run, selectedId = null, onSelect }: FeatureProcessGraphProps) {
+// Легенда графа (макет P30): значки — те же, что рисует узел.
+const LEGEND: { mark: string; text: string }[] = [
+  { mark: '✓', text: 'готово' },
+  { mark: '●', text: 'в работе' },
+  { mark: '◐', text: 'ждёт человека' },
+  { mark: '┄', text: 'ещё не начато' },
+  { mark: '↺', text: 'возвраты на доработку' },
+  { mark: '⇉', text: 'рамка — параллельно' },
+];
+
+export function FeatureProcessGraph({ run, selectedId = null, onSelect, templateName = null }: FeatureProcessGraphProps) {
   const isMobile = useIsMobile();
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const nodeRefs = useRef(new Map<string, HTMLElement>());
+  const [avail, setAvail] = useState<number | null>(null);
+
+  // Ширина контейнера для растяжения колонок (десктоп). Нет замера (тест без раскладки) — прежняя ширина карточки.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || isMobile) return undefined;
+    const measure = () => { if (el.clientWidth > 0) setAvail(el.clientWidth); };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [isMobile]);
+
+  // Мобила: выбранный узел — в центр ленты.
+  useEffect(() => {
+    if (!isMobile || selectedId == null) return;
+    nodeRefs.current.get(selectedId)?.scrollIntoView?.({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  }, [isMobile, selectedId]);
+
   const cols = graphColumns(run);
   if (cols.length === 0) return null; // стадий нет — графа нет (empty-state страницы — решение C3b)
 
   const edges = graphEdges(run);
-  const lay = layout(cols, isMobile);
+  const ranks = columnRanks(cols);
+  const farCount = edges.filter(e => isFarEdge(ranks, e)).length;
+  const lay = layout(cols, isMobile, avail, farCount);
+  const nodeW = lay.nodeW;
   const stagesById = new Map<string, FeatureStage>();
   for (const col of cols) {
     for (const s of col.stages) stagesById.set(stageNodeId(s), s);
   }
+  let farLane = 0;
 
   return (
+    <div data-testid="feature-process-section" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: SP.sm, flexWrap: 'wrap' }}>
+        <span style={{ fontFamily: FONT.mono, fontSize: FS.xxs, letterSpacing: 0.6, textTransform: 'uppercase', color: C.textMuted }}>
+          Процесс
+        </span>
+        <span data-testid="pgraph-caption" style={{ fontSize: FS.xs, color: C.textSecondary }}>
+          {graphCaption(run, templateName)}
+        </span>
+      </div>
     <div
+      ref={wrapRef}
       data-testid="feature-process-graph"
       style={{
-        // Десктоп: широкий граф прокручивается внутри себя (16 узлов × 144 px шире экрана);
-        // документ не переполняется. Мобила — вертикальный список шириной ≤140, прокрутки нет.
-        ...(isMobile ? {} : { overflowX: 'auto' as const, paddingBottom: SP.xxs }),
+        // Колонки растянуты на ширину страницы; не влезают (min 116) или мобильная лента —
+        // прокрутка внутри блока, документ не переполняется.
+        overflowX: 'auto', paddingBottom: SP.xxs,
       }}
     >
       <div style={{ position: 'relative', width: lay.width, height: lay.height }}>
@@ -265,37 +319,41 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect }: Featur
             const from = stagesById.get(e.from);
             // Пройденное ребро — зелёное (макет .link.done): источник done — поток прошёл.
             const done = from?.state === 'done';
+            const far = isFarEdge(ranks, e);
             return (
               <path
                 key={`${e.from}->${e.to}`}
                 data-testid={`pgraph-edge-${e.from}-${e.to}`}
-                d={edgePath(a, b, isMobile)}
+                data-far={far ? 'true' : undefined}
+                d={edgePath(a, b, nodeW, far ? { bottom: lay.bottom, lane: farLane++ } : null)}
                 fill="none"
                 stroke={done ? C.success : C.progressTrack}
                 strokeWidth={2}
+                strokeDasharray={far ? '5 4' : undefined}
               />
             );
           })}
         </svg>
 
-        {lay.brackets.map((b, i) => (
-          // Сколка группы параллельных стадий (мобила, разрез §1.9): линия с отворотами,
-          // открытыми в сторону карточек, и подпись над группой.
-          <span key={`br-${i}`} aria-hidden="true">
+        {lay.groups.map((g, i) => (
+          // Группа параллельных стадий колонки (макет P23): на десктопе — пунктирная рамка,
+          // на мобиле — скобка (левая грань с отворотами); подпись «⇉ параллельно» везде.
+          <span key={`grp-${i}`} aria-hidden="true" data-testid={`pgraph-group-${i}`} data-kind={isMobile ? 'bracket' : 'frame'}>
             <span
               style={{
-                position: 'absolute', left: b.x, top: b.top, width: BRACKET_W, height: b.height,
-                border: `2px solid ${C.textMuted}`, borderRight: 'none', boxSizing: 'border-box',
+                position: 'absolute', left: g.x, top: g.y, width: g.w, height: g.h, boxSizing: 'border-box',
+                borderRadius: R.lg, border: `1px dashed ${C.textMuted}`,
+                ...(isMobile ? { borderStyle: 'solid', borderRightStyle: 'none', borderRadius: `${R.sm}px 0 0 ${R.sm}px` } : {}),
               }}
             />
             <span
               style={{
-                position: 'absolute', left: b.x, top: b.top - PAR_LABEL_H, height: PAR_LABEL_H,
-                display: 'inline-flex', alignItems: 'center', fontFamily: FONT.mono,
-                fontSize: FS.xxs, color: C.textMuted, whiteSpace: 'nowrap',
+                position: 'absolute', left: g.x + SP.sm, top: g.y - PAR_LABEL_H / 2, height: PAR_LABEL_H,
+                padding: `0 ${SP.xs}px`, display: 'inline-flex', alignItems: 'center', fontFamily: FONT.mono,
+                fontSize: FS.xxs, color: C.textMuted, whiteSpace: 'nowrap', background: C.bgMain,
               }}
             >
-              ∥ параллельно
+              {PARALLEL_LABEL}
             </span>
           </span>
         ))}
@@ -313,6 +371,7 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect }: Featur
             <button
               key={id}
               type="button"
+              ref={(el) => { if (el) nodeRefs.current.set(id, el); else nodeRefs.current.delete(id); }}
               data-testid={`pgraph-node-${id}`}
               data-state={stage.state}
               data-tone={active ? stage.tone ?? 'run' : undefined}
@@ -320,16 +379,17 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect }: Featur
               aria-label={nodeAria(stage)}
               onClick={() => onSelect?.(id)}
               style={{
-                position: 'absolute', left: p.x, top: p.y, width: NODE_W, height: NODE_H,
+                position: 'absolute', left: p.x, top: p.y, width: nodeW, height: NODE_H,
                 boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center',
                 gap: SP.xs, padding: `${SP.xs}px ${SP.sm}px`, textAlign: 'left', cursor: 'pointer', zIndex: 1,
                 borderRadius: R.lg, font: 'inherit',
                 background: quiet ? 'transparent' : C.bgWhite,
-                border: `1px ${quiet ? 'dashed' : 'solid'} ${
-                  active ? toneColor(stage.tone)
-                    : quiet ? C.dashed
-                      : C.borderLight}`,
-                ...(selected ? { boxShadow: SHADOW.selected } : {}),
+                border: `1px ${quiet && !selected ? 'dashed' : 'solid'} ${
+                  selected ? C.accent
+                    : active ? toneColor(stage.tone)
+                      : quiet ? C.dashed
+                        : C.borderLight}`,
+                ...(selected ? { boxShadow: SHADOW.focus } : {}),
               }}
             >
               {returns > 0 && (
@@ -397,6 +457,18 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect }: Featur
             </button>
           );
         })}
+      </div>
+    </div>
+      <div
+        data-testid="pgraph-legend"
+        style={{ display: 'flex', flexWrap: 'wrap', gap: `${SP.xs}px ${SP.md}px`, fontSize: FS.xxs, color: C.textMuted }}
+      >
+        {LEGEND.map(l => (
+          <span key={l.mark} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
+            <span aria-hidden="true" style={{ fontFamily: FONT.mono }}>{l.mark}</span>
+            {l.text}
+          </span>
+        ))}
       </div>
     </div>
   );

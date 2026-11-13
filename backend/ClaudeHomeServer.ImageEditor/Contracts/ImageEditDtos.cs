@@ -268,7 +268,14 @@ public record ImageEditJobDto(
     ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null,
     // JSON-описания Fibo 2.0 по номеру варианта (Ш8): только нитям — версия хранит своё; клиенту не уходят
     [property: JsonIgnore]
-    IReadOnlyDictionary<int, ImageVglScene>? Scenes = null);
+    IReadOnlyDictionary<int, ImageVglScene>? Scenes = null,
+    // Модель, на которой задача идёт на самом деле (local: запасная Qwen вместо модели котировки);
+    // null — драйвер ещё не сообщил или не подменяет модель, тогда верна Model
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ActualModel = null,
+    // Почему «Авто» выбрало модель котировки («Авто → MOSS: …»); null — модель названа явно
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? RouteReason = null);
 
 public static class ImageEditSizeNotes
 {

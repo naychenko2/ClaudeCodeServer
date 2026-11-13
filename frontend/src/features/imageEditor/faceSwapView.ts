@@ -102,17 +102,48 @@ export function faceQuoteChip(q: { facePasses?: number | null; expectedSeconds?:
 // Подпись карточки запуска/версии: «{Имя} → лицо {n}»
 export const faceCaption = (name: string, n: number) => `${name} → лицо ${n}`;
 
-// Подпись модели в строке запуска: как её называют в выборе модели (label из каталога).
-// Локальные модели — «локальные модели» (словарь v2), не id qwen-image-2.1.
+// Подпись модели в строке запуска и карточке версии: имя из выбора модели (label каталога) без
+// пояснения после « — »: «Krea 2 Turbo — эстетика, 8 шагов» → «Krea 2 Turbo». Локальные — тоже
+// конкретная модель, а не общее «локальные модели» (жалоба 13.11: не видно, какая отработала).
 // Каталог не пришёл или модель не найдена — id как есть (fallback).
 export function modelLabel(catalog: { providers: { key: string; models: { id: string; label: string }[] }[] } | null, modelId: string | null): string | null {
   if (!modelId) return null;
   if (!catalog) return modelId;
   for (const p of catalog.providers) {
     const m = p.models.find(x => x.id === modelId);
-    if (m) return p.key === 'local' ? 'локальные модели' : m.label;
+    if (m) return m.label.split(' — ')[0].trim() || m.label;
   }
   return modelId;
+}
+
+// Причина «Авто» без повтора модели: «Авто → MOSS: фото людей» → «авто: фото людей»
+export function routeReasonText(reason: string | null | undefined): string | null {
+  const r = reason?.trim();
+  if (!r) return null;
+  const tail = /^Авто\s*→\s*[^:]+:\s*(.+)$/.exec(r)?.[1]?.trim();
+  return tail ? `авто: ${tail}` : r;
+}
+
+// Подпись модели запуска: «MOSS-Image · авто: фото людей». actual — модель, что отработала
+// (запись запуска или живой статус задачи), quoted — модель котировки из записи ленты: разошлись —
+// драйвер ушёл на запасную, пишем «вместо …». Ни той, ни другой — null
+export function launchModelText(
+  catalog: Parameters<typeof modelLabel>[0], actual: string | null | undefined, quoted: string | null | undefined,
+  reason: string | null | undefined,
+): string | null {
+  const label = modelLabel(catalog, actual || quoted || null);
+  if (!label) return null;
+  const parts = [label];
+  if (actual && quoted && actual !== quoted) parts.push(`вместо ${modelLabel(catalog, quoted)}`);
+  const why = routeReasonText(reason);
+  if (why) parts.push(why);
+  return parts.join(' · ');
+}
+
+// «вариант 1 из 2» по прогонам задачи: прогон на вариант (local). Один прогон или поставщик их не знает — null
+export function variantProgressText(run: number | null | undefined, runs: number | null | undefined): string | null {
+  if (!runs || runs < 2 || !run) return null;
+  return `вариант ${Math.min(run, runs)} из ${runs}`;
 }
 
 // Выбор подписи на карточке запуска (этап 2 · шаг 10c): faceTarget null — подписи нет

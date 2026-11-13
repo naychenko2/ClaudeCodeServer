@@ -384,7 +384,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 }
                 current = ticket;
                 tickets.Add(ticket);
-                var at = new EditProgress(EditStage.Queued, submitted.QueuePosition, i + 1, runs, submitted.EtaSeconds);
+                var at = new EditProgress(EditStage.Queued, submitted.QueuePosition, i + 1, runs, submitted.EtaSeconds,
+                    Model: LocalImageModels.Effective(run) ?? req.Model);
                 progress.Report(at);
 
                 var done = await WaitAsync(ticket, at, progress, token);

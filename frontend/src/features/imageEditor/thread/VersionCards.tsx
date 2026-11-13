@@ -18,7 +18,7 @@ import {
   faceResultRows, facePairsCaption, launchFaces, partialNotice, passStage, versionSimilarityShown,
   type FaceResultRow, type PassSegment,
 } from './faceSwap';
-import { modelLabel } from '../faceSwapView';
+import { launchModelText, modelLabel, variantProgressText } from '../faceSwapView';
 import type { ImageThreadFaceTarget } from './threadsApi';
 import { useCharacters } from '../characters/useCharacters';
 import { useCatalog } from './catalog';
@@ -40,7 +40,7 @@ import type { ImageThread, ImageThreadVersion } from './threadsApi';
 import { launchThread, versionSrc } from './useThreadLaunch';
 import { CardContextActions, primaryVersion, useCardFill, useFocusedThreadId } from '../context/CardFill';
 import { queueText, useJobStatus, useProgress } from './useJobStatus';
-import { GpuQueueBlock } from './gpuCard';
+import { GpuQueueBlock, showQueueLine } from './gpuCard';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -295,8 +295,10 @@ function estimateText(e: unknown): string | null {
   return `${x.approx ? '≈ ' : ''}${money(x.amount, x.unit)}`;
 }
 
-function RunningLine({ projectId, sessionId, thread, jobId, model, faces, count }: {
-  projectId: string; sessionId: string; thread: ImageThread; jobId: string; model: string | null;
+function RunningLine({ projectId, sessionId, thread, jobId, liveModel, faces, count }: {
+  projectId: string; sessionId: string; thread: ImageThread; jobId: string;
+  // «идёт на …»: живая модель задачи разошлась с записью запуска; совпала — null
+  liveModel: (live: string | null) => string | null;
   faces: ImageThreadFaceTarget[]; count: number;
 }) {
   const { status, cancel } = useJobStatus(projectId, jobId);
@@ -305,18 +307,22 @@ function RunningLine({ projectId, sessionId, thread, jobId, model, faces, count 
   const progress = useProgress(status, running);
   // Несколько лиц (ADR-028): «Проход k из N · лицо n» по run/runs из событий задачи; их нет — «Рисуем…»
   const stage = passStage(faces, status?.run, status?.runs);
+  // Несколько вариантов — один общий прогресс: номер варианта текстом, а не полосой на вариант
+  const head = ['Рисуем…', variantProgressText(status?.run, status?.runs), liveModel(status?.model ?? null)]
+    .filter(Boolean).join(' · ');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textSecondary, flexWrap: 'wrap' }}>
-        <Dot color={C.accent} />{stage ? stage.text : `Рисуем…${model ? ` · ${model}` : ''}`}{queueText(progress.queuePosition)}
+        <Dot color={C.accent} />{stage ? stage.text : head}{queueText(progress.queuePosition)}
         {/* Мобила: зона касания 44 — невидимым слоем, рамка кнопки xs остаётся 24 и не наезжает на полосу проходов (n1) */}
         <TouchHit on={mobile} onTap={() => { void cancel(); }}>
           <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
         </TouchHit>
       </div>
+      {/* Одна полоса на запуск: у локальной задачи полосу несёт строка очереди GPU ниже — своя была бы второй */}
       {stage
         ? <PassBar segments={stage.segments} run={status?.run ?? 0} />
-        : <ProgressBar value={progress.percent} transition="width .5s linear" />}
+        : !showQueueLine(status?.gpu ?? null) && <ProgressBar value={progress.percent} transition="width .5s linear" />}
       {stage?.hint && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{stage.hint}</div>}
       <GpuQueueBlock projectId={projectId} sessionId={sessionId} thread={thread} status={status}
         count={count} />
@@ -348,8 +354,13 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const launch = launchOf(thread, jobId);
   const versions = launchVersions(thread, jobId);
   const focused = focusId === thread.id;
-  // Подпись модели: человекочитаемая из каталога (локальные — «локальные модели»), не id (v2)
-  const model = modelLabel(catalog, str(data.model));
+  // Подпись модели: та, что отработала (запись запуска; запасная — «вместо …»), имя из каталога и причина «Авто»
+  const quoted = str(data.model);
+  const model = launchModelText(catalog, launch?.model, quoted, launch?.routeReason);
+  // Драйвер ушёл на запасную раньше первого варианта: запись запуска ещё о модели котировки, статус — уже о фактической
+  const recorded = launch?.model ?? quoted;
+  const liveModel = (live: string | null) =>
+    live && recorded && live !== recorded ? `идёт на ${modelLabel(catalog, live)}` : null;
   const count = typeof data.count === 'number' && data.count > 0 ? data.count : 1;
   const prompt = str(data.prompt) ?? launch?.prompt ?? null;
   const base = findVersion(thread, str(data.baseVersionId) ?? launch?.baseVersionId);
@@ -364,7 +375,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const status = launch?.status ?? (versions.length ? 'done' : 'running');
   const endNote = launchEndNote(status, versions.length, count, faces.length);
   // Обрезка без ИИ (ADR-025): та же карточка версии, над ней строка «Вы обрезали…» / «✦ Claude обрезал…» из записи
-  const crop = model === 'crop' ? data.crop as { aspect?: string; width?: number; height?: number } | undefined : undefined;
+  const crop = quoted === 'crop' ? data.crop as { aspect?: string; width?: number; height?: number } | undefined : undefined;
   const cropNote = crop ? `${crop.width}×${crop.height} · ${crop.aspect} · обрезано без ИИ${agent ? ' · ✦ Claude' : ''}` : null;
 
   const workingId = thread.id === focusId && primary ? primaryVersion(primary, thread) : null;
@@ -397,7 +408,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
             <span>{threadName(thread)}{faceCap ? ` · ${faceCap}` : ''} · {info}</span>
             {prompt && <span style={{ color: C.textMuted, fontStyle: 'italic', overflowWrap: 'anywhere' }}>«{prompt}»</span>}
           </div>
-          <RunningLine projectId={projectId} sessionId={sessionId} thread={thread} jobId={jobId} model={model} faces={faces}
+          <RunningLine projectId={projectId} sessionId={sessionId} thread={thread} jobId={jobId} liveModel={liveModel} faces={faces}
             count={count} />
           <div className="cc-skel" style={{ aspectRatio: PREVIEW_RATIO, maxHeight: PREVIEW_MAX_HEIGHT, borderRadius: R.md }} />
         </Shell>

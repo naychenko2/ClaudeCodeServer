@@ -279,14 +279,14 @@ public sealed class VideoEditJobServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Local_в_личном_чате_закрыт_кодом_local_unavailable_personal()
+    public async Task Отказ_области_отдаётся_кодом_project_local_unsupported()
     {
-        var svc = Service([new Fake("local", "free", Ok, refusal: "Локальные модели — только в чате проекта")]);
+        var svc = Service([new Fake("local", "free", Ok, refusal: "Файлы проекта на устройстве")]);
         var scene = AddScene();
 
         var result = await svc.QuoteAsync(Owner, Personal, QuoteOf(scene, "local"), default);
 
-        result.ErrorCode.Should().Be(VideoEditorErrors.LocalUnavailablePersonal);
+        result.ErrorCode.Should().Be(VideoEditorErrors.ProjectLocalUnsupported);
     }
 
     [Fact]

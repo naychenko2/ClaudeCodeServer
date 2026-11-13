@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Services.VideoEditor.Controllers;
 // Модуль «Видео» в личном чате вне проекта. Тело ручек — общее с проектом (VideoEditorEndpoints), здесь
 // только личный гейт. Фильмов и сохранения в проект здесь нет намеренно: записи в проект у личного чата
 // нет по построению, такие пути — 404 маршрутизации, а не 500 (в проектах они отвечают
-// personal_scope_no_films только у агента). Local закрыт в v1: отказ области — local_unavailable_personal.
+// personal_scope_no_films только у агента). Local в личном чате работает как в проекте: результат — байты в версию нити.
 // Префы — одни на владельца, как и сама личная область.
 [ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]

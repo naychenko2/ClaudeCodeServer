@@ -12,9 +12,9 @@ namespace ClaudeHomeServer.Services.VideoEditor.Engines;
 // замеров и длина общей очереди ComfyUI. Нет шва (Images выключена) или тумблеров — поставщик не заведён
 // и Enabled=false, а не исключение.
 //
-// Только серверный проект: в личной области проекта нет, у локального проекта (ADR-016) файлы живут на
-// устройстве. Отказ — ScopeRefusal до чтения входов и до обращения к шву; локальность — только через
-// ProjectCapabilities.
+// Личная область пускается (ADR-022): результат уходит байтами в версию нити, как у облака, проект не нужен.
+// Закрыт только локальный проект (ADR-016): его файлы живут на устройстве. Отказ — ScopeRefusal до чтения
+// входов и до обращения к шву; локальность — только через ProjectCapabilities.
 public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IVideoQuoter
 {
     public const string ProviderKey = "local";
@@ -28,10 +28,6 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
     public const string Kandinsky6Hint =
         "Экспериментальная. Понимает русские промпты и снимает по своей картинке (кадр A) или по одному тексту; "
         + "ролик 5 с, 480p, со звуком. Вдвое медленнее H3 (≈ 3 мин), искажает текст в кадре, кадра B нет";
-
-    public const string PersonalScopeReason =
-        "Локальные модели работают только в чате проекта: в личном чате им некуда положить ролик. " +
-        "Откройте чат проекта или выберите облачного поставщика";
 
     public const string DeviceProjectReason =
         "Локальные модели работают только с проектом на сервере, а файлы этого проекта лежат на его устройстве. " +
@@ -89,7 +85,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
 
     public string? ScopeRefusal(VideoEditScope scope)
     {
-        if (scope.IsPersonal || scope.Project is not { } project) return PersonalScopeReason;
+        if (scope.IsPersonal || scope.Project is not { } project) return null;
         return ProjectCapabilities.FilesOnServer(project) ? null : DeviceProjectReason;
     }
 

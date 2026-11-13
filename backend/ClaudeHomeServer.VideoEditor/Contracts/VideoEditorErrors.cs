@@ -12,8 +12,6 @@ public static class VideoEditorErrors
     public const string DspUnavailable = "dsp_unavailable";
     // 400: фильмы — только в чате проекта
     public const string PersonalScopeNoFilms = "personal_scope_no_films";
-    // 400: локальная съёмка в личном чате закрыта (в v1)
-    public const string LocalUnavailablePersonal = "local_unavailable_personal";
     // 400: локальный проект (ADR-016): файлы на устройстве, сервер файлы и сборку не трогает
     public const string ProjectLocalUnsupported = "project_local_unsupported";
     // 400: путь вне video/** и music/**

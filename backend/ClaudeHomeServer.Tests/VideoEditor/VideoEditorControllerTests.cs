@@ -17,7 +17,7 @@ namespace ClaudeHomeServer.Tests.VideoEditor;
 
 // Ручки модуля «Видео» на собранном приложении (ADR-022 §2, §6): флаг и изоляция владельцев (чужое
 // неотличимо от несуществующего), ревизия сцен — 409, отдача клипа версии с Range, папки только внутри
-// video/, личный чат без local и без проектных путей, локальный проект отказывает до диска.
+// video/, личный чат с local, но без проектных путей и фильмов, локальный проект отказывает до диска.
 // Поставщик — фейк в памяти поверх настоящего исполнителя съёмки.
 [Trait("Category", "Host")]
 public class VideoEditorControllerTests : IClassFixture<VideoEditorControllerTests.Host>
@@ -31,7 +31,7 @@ public class VideoEditorControllerTests : IClassFixture<VideoEditorControllerTes
             ExtraServices = services =>
             {
                 services.AddSingleton<IVideoEngine>(new FakeEngine());
-                // Настоящий local-драйвер модуля с «живым» швом: в личном чате он обязан отказать
+                // Настоящий local-драйвер модуля с «живым» швом: личный чат его пускает (ADR-022)
                 services.AddSingleton<ILocalVideoMedia>(new FakeLocalMedia());
             };
         }
@@ -275,15 +275,15 @@ public class VideoEditorControllerTests : IClassFixture<VideoEditorControllerTes
     // ── Личный чат ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Личный_чат_снимает_но_local_закрыт_и_проектных_путей_нет()
+    public async Task Личный_чат_снимает_local_доступен_а_проектных_путей_и_фильмов_нет()
     {
         var chat = await Sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный");
         var personal = $"/api/video-editor/chats/{chat.Id}";
 
         var catalog = await Json(await _client.GetAsync($"{personal}/catalog"));
         var local = catalog.GetProperty("providers").EnumerateArray().Single(p => p.GetProperty("key").GetString() == "local");
-        local.GetProperty("available").GetBoolean().Should().BeFalse();
-        local.GetProperty("reason").GetString().Should().NotBeNullOrEmpty();
+        local.GetProperty("available").GetBoolean().Should().BeTrue("личная область пускает локальные модели");
+        (!local.TryGetProperty("reason", out var reason) || reason.ValueKind == JsonValueKind.Null).Should().BeTrue();
 
         (await _client.PostAsJsonAsync($"{personal}/scenes", new { folder = "video", revision = 0 })).StatusCode
             .Should().Be(HttpStatusCode.BadRequest, "папок проекта у личного чата нет");
@@ -292,8 +292,9 @@ public class VideoEditorControllerTests : IClassFixture<VideoEditorControllerTes
         var sceneId = (await Json(opened)).GetProperty("focus").GetProperty("sceneId").GetString()!;
 
         var asLocal = await _client.PostAsJsonAsync($"{personal}/quote", new { sessionId = chat.Id, sceneId, provider = "local" });
-        asLocal.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await Json(asLocal)).GetProperty("code").GetString().Should().Be(VideoEditorErrors.LocalUnavailablePersonal);
+        // Отказа области нет: если котировка не сложилась, то по сцене (нет первого кадра), а не из-за личного чата
+        if (!asLocal.IsSuccessStatusCode)
+            (await Json(asLocal)).GetProperty("code").GetString().Should().NotBe(VideoEditorErrors.ProjectLocalUnsupported);
 
         var versionId = await Shoot(personal, chat.Id, sceneId);
         var download = await _client.GetAsync($"{personal}/scenes/{sceneId}/versions/{versionId}/file?download=true");

@@ -106,6 +106,9 @@ public static class CoreRegistration
         // Форвардер, а не вторая регистрация: иначе второй экземпляр `UserHomeResolver` со своим
         // кешем домашних папок (см. DuplicateSingletonRegistrationTests).
         services.AddSingleton<IHomePathResolver>(sp => sp.GetRequiredService<UserHomeResolver>());
+        // Стор «Личного» (ADR-040): отдельный personal-projects.json; ProjectManager берёт его
+        // только в EnsureRootFree, сам стор достаёт IProjectManager лениво (цикл).
+        services.AddSingleton<IPersonalProjects, PersonalProjectStore>();
         services.AddSingleton<ProjectManager>();
         // Этап 5, волна E: узкий Core-шов IProjectManager для выноса Notes (см.
         // Core/Services/IProjectManager.cs). Полный ProjectManager в Main, Notes видит

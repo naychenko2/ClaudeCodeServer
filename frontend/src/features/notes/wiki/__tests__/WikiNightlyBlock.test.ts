@@ -58,6 +58,18 @@
 // (13) вернуть codeRejected в строку судья (старая форма) → «судья работал…» и
 //     «codeRejected=3…» краснеют (точная строка судья не совпадёт, «отклонено кодом» вернётся);
 // (14) убрать в fmtUsd ветку «<$0.01» (всегда toFixed) → «цена…» краснеет (0.0065 → $0.01).
+//
+// W8b (список исполнителей только для чтения и разбивка последней ночи): при непустом
+// nightly.executors строка «Исполнители: … (назначает администратор)» заменяет общую
+// подсказку «Назначает…» (та же мысль, дважды — нет); при пустом списке и отсутствии
+// поля — прежняя подсказка. В карточке итога по строке на исполнителя: «Qwen 27B: 7
+// попыток» (analyzed — попытки, не чаты: доработка бэка W5 №2, повтор на другом
+// исполнителе считается у обоих), у выбывшего — «…, выбыл в 00:41» (локальное время);
+// null («не измерено», старый файл), [] и отсутствие поля — блока нет.
+// (15) убрать суффикс «, выбыл в …» в executorLine → «Qwen 27B: 7 попыток, выбыл в 00:41»
+//     краснеет;
+// (16) не склонять через plural (всегда «попытка») → тест склонения краснеет;
+// (17) оставить общую подсказку и при непустом списке → «подсказки нет» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -96,7 +108,9 @@ const NIGHTLY = {
   inputTokenBudget: 700000,
 };
 
-function settings(over: { nightly?: Partial<typeof NIGHTLY>; lastNight?: unknown; nightlyRunning?: boolean } = {}): Record<string, unknown> {
+// nightly — произвольные поля: тесты добавляют и те, что не входят в умолчания
+// (список исполнителей W8b), как их отдаёт GET
+function settings(over: { nightly?: Record<string, unknown>; lastNight?: unknown; nightlyRunning?: boolean } = {}): Record<string, unknown> {
   const s: Record<string, unknown> = {
     autoApplyEnabled: false,
     classes: [],
@@ -720,5 +734,111 @@ describe('итог судья и цена ночи (J-F3)', () => {
     const cN = render();
     await settle();
     expect(has(cN, 'Судья недоступен')).toBe(false);
+  });
+});
+
+// ─── W8b: список исполнителей только для чтения и разбивка последней ночи ───
+// Те же снимки стора, новых запросов нет: nightly.executors (список места) и
+// lastNight.executors (разбивка итога). Только текст, без контролов. Порядок — порядок
+// списка, не сортировать. analyzed — попытки, не чаты (доработка бэка W5 №2).
+describe('исполнители ночи и разбивка итога (W8b)', () => {
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  // ISO со смещением машины теста: бэк отдаёт DateTimeOffset со смещением, карточка
+  // обязана показать локальное время — «00:41» на любой машине прогона
+  const localIso = (h: number, m: number): string => {
+    const off = -new Date(2026, 10, 12, h, m).getTimezoneOffset();
+    const sign = off >= 0 ? '+' : '-';
+    const a = Math.abs(off);
+    return `2026-11-12T${pad2(h)}:${pad2(m)}:00${sign}${pad2(Math.floor(a / 60))}:${pad2(a % 60)}`;
+  };
+
+  it('непустой список: точная строка «Исполнители: Strata, Qwen 27B (назначает администратор)», в порядке списка', async () => {
+    server = settings({ nightly: { executors: [{ engine: 'local', title: 'Strata' }, { engine: 'gml', title: 'Qwen 27B' }] } });
+    const c = render();
+    await settle();
+    expect(has(c, 'Исполнители: Strata, Qwen 27B (назначает администратор)')).toBe(true);
+    // общая подсказка при названных исполнителях не показывается: скобка строки говорит
+    // то же самое (мутация 17: с живой подсказкой эта проверка краснеет)
+    expect(has(c, 'Назначает администратор в «Поставщиках моделей».')).toBe(false);
+    // только текст, без контролов
+    const note = findNodeByAttr(c, 'data-testid', 'wiki-nightly-executors-note')!;
+    expect(note.querySelectorAll('select,button,input').length).toBe(0);
+
+    // порядок — списка стора: обратный список даёт обратную строку
+    server = settings({ nightly: { executors: [{ engine: 'gml', title: 'Qwen 27B' }, { engine: 'local', title: 'Strata' }] } });
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'Исполнители: Qwen 27B, Strata (назначает администратор)')).toBe(true);
+    expect(has(c2, 'Исполнители: Strata, Qwen 27B')).toBe(false);
+  });
+
+  it('пустой список или поля нет (старый бэк): строки «Исполнители:» нет, подсказка прежняя', async () => {
+    server = settings({ nightly: { executors: [] } });
+    const c = render();
+    await settle();
+    expect(has(c, 'Исполнители:')).toBe(false);
+    expect(has(c, 'Назначает администратор в «Поставщиках моделей».')).toBe(true);
+
+    server = settings(); // старый бэк без поля — то же «списка нет»
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'Исполнители:')).toBe(false);
+    expect(has(c2, 'Назначает администратор в «Поставщиках моделей».')).toBe(true);
+  });
+
+  it('разбивка: «Qwen 27B: 7 попыток» и «…, выбыл в 00:41» у выбывшего; доживший — без суффикса', async () => {
+    server = settings({ lastNight: LAST({ executors: [
+      { engine: 'local', title: 'Strata', analyzed: 9, rejected: 0, inputTokens: 123000, withdrawnAt: null },
+      { engine: 'gml', title: 'Qwen 27B', analyzed: 7, rejected: 1, inputTokens: 80000, withdrawnAt: localIso(0, 41) },
+    ] }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'Strata: 9 попыток')).toBe(true);
+    // мутация (15): без суффикса «, выбыл в …» эта строка краснеет
+    expect(has(c, 'Qwen 27B: 7 попыток, выбыл в 00:41')).toBe(true);
+    expect(has(c, 'Strata: 9 попыток, выбыл')).toBe(false);
+    // порядок строк — порядок списка
+    const t = texts(c).join(' ');
+    expect(t.indexOf('Strata: 9 попыток')).toBeGreaterThanOrEqual(0);
+    expect(t.indexOf('Strata: 9 попыток') < t.indexOf('Qwen 27B: 7 попыток')).toBe(true);
+    // только текст, без контролов
+    const block = findNodeByAttr(c, 'data-testid', 'wiki-nightly-executors')!;
+    expect(block.querySelectorAll('select,button,input').length).toBe(0);
+  });
+
+  it('склонение через plural: 1 попытка / 2 попытки / 5 попыток / 11 попыток', async () => {
+    // мутация (16): без plural (всегда «попытка») эти проверки краснеют
+    server = settings({ lastNight: LAST({ executors: [
+      { engine: 'e1', title: 'M1', analyzed: 1, rejected: 0, inputTokens: 1 },
+      { engine: 'e2', title: 'M2', analyzed: 2, rejected: 0, inputTokens: 1 },
+      { engine: 'e3', title: 'M3', analyzed: 5, rejected: 0, inputTokens: 1 },
+      { engine: 'e4', title: 'M4', analyzed: 11, rejected: 0, inputTokens: 1 },
+    ] }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'M1: 1 попытка')).toBe(true);
+    expect(has(c, 'M2: 2 попытки')).toBe(true);
+    expect(has(c, 'M3: 5 попыток')).toBe(true);
+    expect(has(c, 'M4: 11 попыток')).toBe(true);
+  });
+
+  it('null «не измерено», пустой список, поля нет: блока нет, ошибки нет, итог читается как обычно', async () => {
+    server = settings({ lastNight: LAST({ executors: null }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'попытк')).toBe(false);
+    expect(has(c, '7 чатов отобрано')).toBe(true);
+
+    server = settings({ lastNight: LAST({ executors: [] }) }); // путь без названных исполнителей
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'попытк')).toBe(false);
+    expect(has(c2, '7 чатов отобрано')).toBe(true);
+
+    server = settings({ lastNight: LAST({}) }); // старый файл итога без поля
+    const c3 = render();
+    await settle();
+    expect(has(c3, 'попытк')).toBe(false);
+    expect(has(c3, '7 чатов отобрано')).toBe(true);
   });
 });

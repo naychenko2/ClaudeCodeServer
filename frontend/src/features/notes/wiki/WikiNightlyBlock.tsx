@@ -10,10 +10,12 @@
 // lastNight есть — карточка итога и предупреждение по исходу (тексты — wikiLabels).
 //
 // Чего в блоке нет намеренно:
-// — имени модели: контракту настроек его поля нет (снимок WikiSettingsSnapshot), блок
-//   называет только места и кто их назначает («Qwen3.8-27B» в макете — пример макета);
-//   вторая фраза подсказки записки («локальная модель…») — только когда модель локальная,
-//   фронт этого не знает;
+// — имени модели и движка при пустом списке исполнителей: контракту настроек имени поля нет
+//   (снимок WikiSettingsSnapshot), блок называет только места и кто их назначает («Qwen3.8-27B»
+//   в макете — пример макета); вторая фраза подсказки записки («локальная модель…») — только
+//   когда модель локальная, фронт этого не знает. При непустом списке исполнителей (W8b)
+//   имена — подписи из админского списка: «Чем разбирать» показывает их строкой только для
+//   чтения, карточка итога — разбивку попыток;
 // — времён остановки («Закончилась в 05:12»): date в контракте — DateOnly без времени
 //   (WikiNightlyService.FormatDate), поля времени остановки нет — придумывать нечем.
 //
@@ -50,6 +52,7 @@ import {
   NIGHTLY_RUN_OFF_HINT, nightlyRejectedLine, nightlyRunAskText, nightlyRunRefusalText,
   nightOutcomeNotice, nightlyNoneText,
 } from './wikiLabels';
+import { plural } from '../../../lib/plural';
 
 // ─── Формат и разбор чисел ───
 
@@ -159,6 +162,24 @@ const codeRejectedLine = (c: number): string => `Отклонено кодом: 
 // фразы; здесь — та же строка с заглавной, как отдельная строка карточки.
 const judgeDeferredLine = (m: number): string => `Судья недоступен — ждут решения: ${m}`;
 
+// «00:41» из DateTimeOffset-строки бэка (ISO со смещением): локальное время машины, ЧЧ:ММ.
+// Пустая или нечитаемая строка — суффикса нет (тот же приём, что у nightRangeText: нечем)
+const localClockText = (iso: string | null | undefined): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};
+
+// Строка одного исполнителя в разбивке итога (W8b): «Qwen 27B: 7 попыток»; у выбывшего —
+// «…, выбыл в 00:41». analyzed — число ПОПЫТОК, не чатов (доработка бэка W5 №2): чат,
+// отказанный мёртвым движком, добирает другой — его разбор посчитан на обоих. Склонение —
+// через общий plural (в wikiLabels своего хелпера склонений нет).
+const executorLine = (e: { title: string; analyzed: number; withdrawnAt?: string | null }): string => {
+  const clock = localClockText(e.withdrawnAt);
+  return `${e.title}: ${e.analyzed} ${plural(e.analyzed, 'попытка', 'попытки', 'попыток')}${clock ? `, выбыл в ${clock}` : ''}`;
+};
+
 // «отказано N» — пятая метрика итога (WN-6b): отказанные разборы среди analyzed
 // (WikiNightlyService.cs:117-119). Не голое число, как остальные: слово с числом одной строкой,
 // подпись называет связь с соседней метрикой («из разобранного» — ровно то, что считает бэк)
@@ -225,6 +246,21 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
             ≈ {fmtNum(last.estTokens)} из {fmtNum(snapshot.nightly.inputTokenBudget)}
           </span>
         </div>
+        {/* Разбивка по названным исполнителям (W8b): по строке на исполнителя, в порядке
+            списка стора (не сортировать). По ходу ночи — раньше судья: это о том, кто делал
+            разбор. null («не измерено», старый файл итога), [] (путь без названных
+            исполнителей) и отсутствие поля — блока нет (тот же приём, что с judge-строками:
+            нечего сказать — строки нет). Длинный список на мобиле переносится: ни фиксированных
+            ширин, ни nowrap здесь нет. */}
+        {last.executors && last.executors.length > 0 ? (
+          <div data-testid="wiki-nightly-executors" style={{ marginTop: SP.md }}>
+            {last.executors.map((e, i) => (
+              <div key={e.engine} style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: i === 0 ? 0 : SP.xs }}>
+                {executorLine(e)}
+              </div>
+            ))}
+          </div>
+        ) : null}
         {/* J-F3: предупреждение об отложенных операциях — над сводкой: оно о том, чего
             судья не сделал; цвет — warning-токен дизайн-системы */}
         {last.judgeDeferred > 0 && (
@@ -377,6 +413,9 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
 
   const nightly = snapshot.nightly;
   const gridCols = isMobile ? '1fr' : '1fr 1fr';
+  // Подписи исполнителей ночи (W8b): порядок списка стора, не сортировать; пустой список
+  // и отсутствие поля (старый бэк) — одинаково «списка нет», остаётся общая подсказка
+  const execTitles = (nightly.executors ?? []).map((e) => e.title);
 
   const numInput = (k: NumKey, unit: string) => (
     <span
@@ -516,9 +555,12 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
       </div>
 
       <h3 style={SECTION_H3}>Чем разбирать</h3>
-      {/* Только текст, без контролов: имени модели в контракте настроек нет — плашки
-          называют места, кто их назначает — строкой ниже (решение среза: смена модели
-          — в «Поставщиках моделей») */}
+      {/* Только текст, без контролов (решение среза: смена модели — в «Поставщиках
+          моделей»). Строка под плашками — про то, кто это делает: при непустом списке
+          исполнителей (W8b) она называет их — подписи из админского списка, в порядке
+          списка стора, и то, кто его назначает; общая подсказка о «Поставщиках моделей»
+          в этом случае говорит то же самое и её нет. Пустой список или отсутствие поля
+          (старый бэк) — прежняя общая подсказка. */}
       <div data-testid="wiki-nightly-engine" style={{ display: 'grid', gridTemplateColumns: gridCols, gap: SP.sm }}>
         {['Разбор', 'Отбор спорных чатов'].map((t) => (
           <div key={t} style={{ display: 'flex', gap: SP.sm, alignItems: 'center', padding: `${SP.sm}px ${SP.md}px`, background: C.bgInset, borderRadius: R.md, border: `1px solid ${C.borderLight}` }}>
@@ -527,9 +569,9 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
           </div>
         ))}
       </div>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs }}>
+      <div data-testid={execTitles.length > 0 ? 'wiki-nightly-executors-note' : undefined} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs }}>
         <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
-        <span>Назначает администратор в «Поставщиках моделей».</span>
+        <span>{execTitles.length > 0 ? `Исполнители: ${execTitles.join(', ')} (назначает администратор)` : 'Назначает администратор в «Поставщиках моделей».'}</span>
       </div>
 
       {/* «Запустить сейчас» (WN-6b) — рядом с заголовком итога. flexWrap: на 360 px заголовок и

@@ -169,13 +169,38 @@ public class PersonaInheritanceInfoTests : IDisposable
     }
 
     [Fact]
-    public void AccessDiffCount_НеCustomШаблонСЗапретами_ЛишнейЕдиницыНет()
+    public void AccessDiffCount_НеCustomЗаписьСЗапретамиНаДиске_ЛишнейЕдиницыНет()
     {
-        SetTemplate(PersonaAccess.ReadOnly, ["tasks"], ["Bash"]);
-        var p = Create(inherits: true);
-        Update(p.Id, inheritsAccess: false, access: PersonaAccess.ReadOnly, tools: ["tasks"]);
+        // Запись мимо SetGlobal: NormalizeTemplate обнулил бы запреты не-Custom шаблона,
+        // а Load читает v5 как есть — так выглядит файл после миграции v1
+        var dir = Path.Combine(_tempDir, "raw");
+        Directory.CreateDirectory(dir);
+        var file = new SpecialtySettingsFile { Version = 5 };
+        file.Global.Specialties[Key] = new SpecialtyTemplateSettings
+        {
+            Access = PersonaAccess.ReadOnly, Tools = ["tasks"], DisallowedTools = ["Bash"],
+        };
+        File.WriteAllText(Path.Combine(dir, "specialty-settings.json"), System.Text.Json.JsonSerializer.Serialize(file,
+            new System.Text.Json.JsonSerializerOptions
+            {
+                Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase) },
+            }));
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(dir, "projects.json"),
+            ["PersonasPath"] = Path.Combine(dir, "personas.json"),
+            ["Ollama:Model"] = "",
+        });
+        var store = TestSpecialtyStore.Create(config);
+        store.EffectiveTemplate(Owner, PersonaSpecialty.Reviewer)!.DisallowedTools
+            .Should().Equal(["Bash"], "предусловие: запреты не-Custom записи дожили до чтения");
+        var sut = new PersonaManager(config, NullLogger<PersonaManager>.Instance, specialty: store);
+        var p = sut.Create(Owner, "Тест", null, null, null, null, null, PersonaScope.Global, null, null, null, true,
+            specialty: PersonaSpecialty.Reviewer, inheritsAccess: true);
+        sut.Update(p.Id, Owner, null, null, null, null, null, null, null, null, null, null, null,
+            ["tasks"], null, PersonaAccess.ReadOnly, null, inheritsAccess: false);
 
-        _sut.Get(p.Id, Owner)!.AccessDiffCount.Should().Be(0, "запреты не-Custom шаблона не считаются");
+        sut.Get(p.Id, Owner)!.AccessDiffCount.Should().Be(0, "запреты не-Custom шаблона не считаются");
     }
 
     [Fact]

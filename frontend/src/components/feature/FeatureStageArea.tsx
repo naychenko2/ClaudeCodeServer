@@ -12,6 +12,7 @@ import { C, R, FS, SP, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
 import { stageStatusLabel } from './FeatureTimelineBits';
+import { taskStatusLabel } from './FeatureLabels';
 import { nodeTitle } from './FeatureProcessGraph';
 import { stageNodeId, defaultSelected } from './FeatureProcessGraphModel';
 import { allFeatureTasks } from './FeatureTasksTab';
@@ -36,12 +37,6 @@ export function resolveSelectedStage(
 // Признак маршрута (показывать ли граф) живёт одним предикатом в lib/featurePage
 // (hasRouteOfRun) — там же, где имя вкладки «Процесс»; здесь его копии нет (минор 8910d5b6).
 
-const TASK_STATUS: Record<string, string> = { todo: 'не начата', inProgress: 'в работе', done: 'готово' };
-
-function taskStatusText(t: FeatureTask): string {
-  return TASK_STATUS[t.status ?? 'todo'] ?? 'не начата';
-}
-
 function TaskRow({ task, isMobile, onOpenTask }: { task: FeatureTask; isMobile: boolean; onOpenTask?: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const touch = isMobile ? { minHeight: 40 } : undefined;
@@ -52,7 +47,7 @@ function TaskRow({ task, isMobile, onOpenTask }: { task: FeatureTask; isMobile: 
           {task.stepRef ? `${task.stepRef} · ` : ''}{task.title}
         </span>
         <span data-testid={`stage-task-status-${task.id}`} style={{ fontSize: FS.xs, color: C.textMuted }}>
-          {taskStatusText(task)}
+          {taskStatusLabel(task.status)}
         </span>
         <Button size="xs" variant="ghost" style={touch} dataTestId={`stage-task-toggle-${task.id}`}
           ariaLabel={`${open ? 'Скрыть' : 'Показать'} приёмку и итог задачи «${task.title}»`}

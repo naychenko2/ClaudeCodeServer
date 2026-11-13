@@ -10,6 +10,7 @@
 import { type CSSProperties } from 'react';
 import { C, FS, SP, R, FONT } from '../../lib/design';
 import { ReviewKv, type ReviewKvRow } from './FeatureReviewParts';
+import { NO_DATA } from './FeatureLabels';
 import { formatDuration, formatDateTime, minutesSince } from './FeatureStatsBits';
 import { formatTokens, formatUsd, modelGroupLabel } from './FeatureStatsFormat';
 import type { StageMetrics, StageMetricsShare, StageMetricsHuman } from '../../types/featureStats';
@@ -19,8 +20,6 @@ export interface FeatureStageMetricsProps {
   // «Сейчас» для «ждёт сейчас»; по умолчанию Date.now() (в тестах задаётся).
   nowMs?: number;
 }
-
-const NO_DATA = 'нет данных';
 
 const CARD: CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: SP.xs, minWidth: 0,

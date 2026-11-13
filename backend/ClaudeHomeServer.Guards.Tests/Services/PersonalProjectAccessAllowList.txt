@@ -1,0 +1,6 @@
+# Allow-list сторожа PersonalProjectAccessGuardTests (ADR-040 §2.3): файлы, где зовутся
+# IPersonalProjects.GetByIdIncludingPersonal / GetAllPersonal. Формат строки: «путь|число» — по ФАЙЛУ со счётчиком.
+# «Личное» не должно достигаться пользовательским id: новый вызов — осознанное решение в дифе,
+# id берётся из серверного состояния (задача обучения, событие фильма, область личного чата).
+# Бэкап: корни «Личного» для ValidateBackupPath (архив внутри {home}/Personal недопустим)
+backend/ClaudeHomeServer/Services/Backup/BackupService.cs|1

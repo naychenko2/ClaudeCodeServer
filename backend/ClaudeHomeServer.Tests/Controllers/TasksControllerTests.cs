@@ -3287,6 +3287,18 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
     }
 
+    // B04: на вопрос этапа отвечает только человек — сервисный токен (агент) → 403.
+    // Мутация: убрать проверку IsServiceToken в AnswerStageQuestion — тест падает (ручка дошла бы до 503/404).
+    [Fact]
+    public async Task AnswerStageQuestion_ServiceToken_Returns403()
+    {
+        var controller = BuildController(git: null, serviceToken: true);
+
+        var result = await controller.AnswerStageQuestion("any", "any:1", new TasksController.StageAnswerRequest("ответ"));
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
+    }
+
     // Сервисный токен → 403 и на снятии (та же причина: удержание снимает только человек).
     [Fact]
     public async Task ClearHold_ServiceToken_Returns403()

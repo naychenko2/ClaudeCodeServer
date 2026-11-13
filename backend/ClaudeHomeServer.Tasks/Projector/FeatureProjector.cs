@@ -601,6 +601,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Returns = stageReturns,
                 TaskSegments = taskSegments,
                 Line = routed && lane is "back" or "front" ? lane : null,
+                Proposed = epic.WorkflowProposal is not null && epic.Workflow is null,
                 Key = key,
                 // G3 (разрез 2 §1.7): id/роль/линия/предшественники/колонка — из графа маршрута;
                 // у легаси-стадии id = ключ, роль — роль её задач, After/Column пустые (графа нет).

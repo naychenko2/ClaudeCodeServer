@@ -52,12 +52,14 @@ public class StageQuestionsTests : IDisposable
     {
         var step = Step();
         _tasks.SetAwaitingHuman(step.Id, "Какой порог взять?");
+        _tasks.GetById(step.Id)!.AwaitingHumanSince = DateTime.UtcNow.AddMinutes(-7);
 
         var q = _sut.Build(step.Id, Owner).Value!.Questions.Should().ContainSingle().Subject;
         q.Status.Should().Be("open");
+        q.WaitedMinutes.Should().BeInRange(6, 8);
         q.Text.Should().Be("Какой порог взять?");
         q.Answer.Should().BeNull();
-        q.WaitedMinutes.Should().BeGreaterThanOrEqualTo(0);
+        q.AskedAt.Should().BeCloseTo(DateTime.UtcNow.AddMinutes(-7), TimeSpan.FromMinutes(1));
         q.AskedBy.Name.Should().Be("шаг");
     }
 
@@ -110,6 +112,6 @@ public class StageQuestionsTests : IDisposable
         _tasks.GetById(step.Id)!.AwaitingHumanSince.Should().NotBeNull("отказы ожидание не снимают");
 
         _sut.AnswerQuestion(step.Id, id, "ответ", Owner).Outcome.Should().Be(StageOutcome.Ok);
-        _sut.AnswerQuestion(step.Id, id, "ещё раз", Owner).Outcome.Should().Be(StageOutcome.NotFound);
+        _sut.AnswerQuestion(step.Id, id, "ещё раз", Owner).Outcome.Should().Be(StageOutcome.Conflict, "повторный ответ — 409");
     }
 }

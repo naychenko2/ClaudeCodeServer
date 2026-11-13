@@ -564,8 +564,9 @@ public class TasksController(
         switch (result.Outcome)
         {
             case StageOutcome.BadRequest: return BadRequest(new { error = result.Error });
+            case StageOutcome.Conflict: return Conflict(new { error = result.Error });
             case StageOutcome.Ok: break;
-            default: return NotFound(new { error = "Вопрос не найден или уже отвечен" });
+            default: return NotFound(new { error = "Вопрос не найден" });
         }
         var answered = result.Value!;
         // Доставка и рассылка — после записи: их сбой ответ не отменяет

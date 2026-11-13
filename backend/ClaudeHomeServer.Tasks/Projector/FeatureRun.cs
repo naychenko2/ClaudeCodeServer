@@ -384,6 +384,9 @@ public sealed class FeatureStage
     public FeatureStageSegments? TaskSegments { get; init; }
     // Линия этапа для узла графа: back | front; иначе null.
     public string? Line { get; init; }
+    // Маршрут предложен, но не подтверждён (epic.WorkflowProposal != null && epic.Workflow == null):
+    // признак один на весь маршрут, одинаков у всех узлов; у подтверждённого и у легаси — false.
+    public bool Proposed { get; init; }
 }
 
 // Полоска задач этапа (B01): закрытые / идущие / всего.

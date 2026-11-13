@@ -134,8 +134,10 @@ public sealed class StageScreenService(
             return StageResult<StageAnsweredQuestion>.BadRequest($"text: не длиннее {MaxAnswerChars} символов");
 
         var chain = Chain(task);
-        var question = BuildQuestions(task, chain).FirstOrDefault(q => q.Id == questionId && q.Status == "open");
-        if (question is null) return StageResult<StageAnsweredQuestion>.NotFound();
+        var known = BuildQuestions(task, chain).FirstOrDefault(q => q.Id == questionId);
+        if (known is null) return StageResult<StageAnsweredQuestion>.NotFound();
+        if (known.Status != "open") return StageResult<StageAnsweredQuestion>.Conflict("Вопрос уже отвечен");
+        var question = known;
         var targetId = questionId[..questionId.LastIndexOf(':')];
         var cleared = tasks.AnswerAwaitingHuman(targetId, trimmed, actorId);
         if (cleared is null) return StageResult<StageAnsweredQuestion>.NotFound();
@@ -354,13 +356,14 @@ public sealed class StageScreenService(
         v?.Verdict == TaskVerdicts.Returned, v?.VerifiedAt);
 }
 
-public enum StageOutcome { Ok, NotFound, BadRequest }
+public enum StageOutcome { Ok, NotFound, BadRequest, Conflict }
 
 public sealed record StageResult<T>(StageOutcome Outcome, T? Value, string? Error) where T : class
 {
     public static StageResult<T> Ok(T value) => new(StageOutcome.Ok, value, null);
     public static StageResult<T> NotFound() => new(StageOutcome.NotFound, null, null);
     public static StageResult<T> BadRequest(string error) => new(StageOutcome.BadRequest, null, error);
+    public static StageResult<T> Conflict(string error) => new(StageOutcome.Conflict, null, error);
 }
 
 // Ответ GET /api/tasks/{id}/stage. Metrics — блок метрик этапа (D1b); null — у задачи нет фичи с эпиком

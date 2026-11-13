@@ -2686,6 +2686,47 @@ public class FeatureProjectorTests
             && s.Returns == 0 && s.TaskSegments == null && s.Line == null);
     }
 
+    // B10: предложенный маршрут (предложение есть, подтверждения нет) — proposed=true у всех узлов;
+    // подтверждённый — false; легаси без предложения — false.
+    [Fact]
+    public void Build_Proposed_ПредложенныйМаршрут_TrueУВсехУзлов()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        var s1 = new TaskItem { Id = "s1", FeatureId = "e-b10-p", Role = TaskRoles.Step, StepRef = "G1", Status = TaskItemStatus.Todo };
+        var epic = new TaskItem
+        {
+            Id = "e-b10-p", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-1) },
+        };
+        var run = FeatureProjector.BuildCore(epic, [epic, s1], t);
+        run.Stages.Should().NotBeEmpty();
+        run.Stages.Should().OnlyContain(s => s.Proposed);
+    }
+
+    [Fact]
+    public void Build_Proposed_ПодтверждённыйМаршрут_ФолсУВсехУзлов()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem
+        {
+            Id = "e-b10-c", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8), Workflow = ParallelBranchesRoute(t),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-9) },
+        };
+        var run = FeatureProjector.BuildCore(epic, [epic], t);
+        run.Stages.Should().NotBeEmpty();
+        run.Stages.Should().OnlyContain(s => !s.Proposed);
+    }
+
+    [Fact]
+    public void Build_Proposed_ЛегасиБезПредложения_ФолсУВсехУзлов()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem { Id = "e-b10-l", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var run = FeatureProjector.BuildCore(epic, [epic], t);
+        run.Stages.Should().NotBeEmpty();
+        run.Stages.Should().OnlyContain(s => !s.Proposed);
+    }
+
     // G7 (решение контракта a5d0c76e по возврату R-C3a): две стадии роли qa в «Параллельном
     // цикле» различаются именами. Маршрут построен Resolve'ом из пресета кода — проверяется
     // вся цепочка контракта: Title пресета → валидация → заморозка в RouteStage → проекция.

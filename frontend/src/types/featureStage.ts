@@ -42,6 +42,39 @@ export interface StageArtifacts {
   commitsAvailable: boolean;
   linkedFiles: string[];
   resultMarkdown: string | null;
+  // Файлы этапа с версиями (B06); нет поля — сервер старый, рисуем прежний список коммитов
+  files?: StageFile[];
+  totals?: StageArtifactTotals;
+}
+
+// Версия файла = коммит этапа, тронувший файл (n с 1, от раннего к позднему)
+export interface StageFileVersion {
+  n: number;
+  commitSha: string;
+  subject: string;
+  at: string | null;
+  // Коммит позже первого возврата ревью по цепочке цели
+  afterReturn: boolean;
+}
+
+export interface StageFile {
+  path: string;
+  versions: StageFileVersion[];
+}
+
+export interface StageArtifactTotals {
+  files: number;
+  commits: number;
+}
+
+// Дифф файла между версиями: from/to — номера версий или 'all'
+export interface StageFileDiff {
+  path: string;
+  from: string;
+  to: string;
+  diff: string;
+  truncated: boolean;
+  maxChars: number;
 }
 
 export interface StageToolCall {
@@ -165,6 +198,8 @@ export interface StageSummary {
 }
 
 export interface StageAnswer {
+  // Пустой text не значит «нет ответа»: человек ответил сообщением в чате, текста в событии нет
+  // (тогда и by = null). UI показывает «Ответили в чате», а не пустые кавычки.
   text: string;
   by: string | null;
   at: string;

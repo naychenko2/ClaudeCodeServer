@@ -12,11 +12,13 @@ import { C, R, FS, SP, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Notice } from '../ui/Notice';
-import { AlertTriangle } from 'lucide-react';
+import { EmptyState } from '../ui/EmptyState';
+import { InlineSegmented } from '../ui/InlineSegmented';
+import { AlertTriangle, FileText } from 'lucide-react';
 import { DiffView } from '../DiffView';
 import { api } from '../../lib/api';
 import { formatDateTime } from './FeatureStatsBits';
-import type { StageArtifacts, StageCommit, StageCommitDiff } from '../../types/featureStage';
+import type { StageArtifacts, StageCommit, StageCommitDiff, StageFile, StageFileDiff } from '../../types/featureStage';
 
 export const SEC_LABEL: CSSProperties = {
   fontSize: FS.xxs, textTransform: 'uppercase', letterSpacing: 0.6, color: C.textMuted, fontFamily: FONT.sans,
@@ -76,7 +78,8 @@ function CommitRow({ commit, state, open, isMobile, onToggle }: {
   );
 }
 
-export function FeatureStageArtifacts({ taskId, artifacts, isMobile }: {
+// Прежний вид (сервер без artifacts.files): коммиты с диффом на каждый
+function LegacyArtifacts({ taskId, artifacts, isMobile }: {
   taskId: string; artifacts: StageArtifacts; isMobile: boolean;
 }) {
   const [diffs, setDiffs] = useState<Record<string, DiffState>>({});
@@ -141,6 +144,177 @@ export function FeatureStageArtifacts({ taskId, artifacts, isMobile }: {
             {resultMarkdown}
           </div>
         </div>
+      )}
+    </section>
+  );
+}
+
+// ── Новый вид: файлы с версиями слева, дифф выбранного файла справа ─────────────────────────────
+
+const FILES_COLLAPSED = 6;
+
+type FileDiffState =
+  | { status: 'loading' }
+  | { status: 'ok'; diff: StageFileDiff }
+  | { status: 'error'; message: string };
+
+interface DiffMode { id: string; label: string; from: string; to: string }
+
+// Режимы разницы по числу версий: «v1» = изменение первой версии, «v2 → vN» = между v1 и vN, «всё»
+export function diffModes(file: StageFile): DiffMode[] {
+  const n = file.versions.length;
+  const modes: DiffMode[] = [];
+  if (n >= 2) modes.push({ id: 'first', label: 'v1', from: 'all', to: '1' });
+  if (n === 2) modes.push({ id: 'last', label: 'v2', from: '1', to: '2' });
+  if (n >= 3) modes.push({ id: 'last', label: `v2 → v${n}`, from: '1', to: String(n) });
+  modes.push({ id: 'all', label: 'всё', from: 'all', to: 'all' });
+  return modes;
+}
+
+const diffKey = (path: string, from: string, to: string) => `${path}\u0000${from}\u0000${to}`;
+
+function ResultCard({ markdown }: { markdown: string }) {
+  return (
+    <div data-testid="stage-result" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+      <div style={SEC_LABEL}>Итог исполнителя</div>
+      <div style={{
+        fontSize: FS.sm, color: C.textPrimary, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+        padding: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.md,
+      }}>
+        {markdown}
+      </div>
+    </div>
+  );
+}
+
+function FilesArtifacts({ taskId, artifacts, files, isMobile }: {
+  taskId: string; artifacts: StageArtifacts; files: StageFile[]; isMobile: boolean;
+}) {
+  const [selPath, setSelPath] = useState<string | null>(null);
+  const [modeId, setModeId] = useState('all');
+  const [expanded, setExpanded] = useState(false);
+  const [diffs, setDiffs] = useState<Record<string, FileDiffState>>({});
+  const inFlight = useRef(new Set<string>());
+  const controller = useRef<AbortController | null>(null);
+  useEffect(() => () => { controller.current?.abort(); }, []);
+
+  const file = files.find(f => f.path === selPath) ?? files[0] ?? null;
+  const modes = file ? diffModes(file) : [];
+  const mode = modes.find(m => m.id === modeId) ?? modes[modes.length - 1];
+  const key = file && mode ? diffKey(file.path, mode.from, mode.to) : null;
+  const state = key ? diffs[key] : undefined;
+
+  // Ответ кладётся под СВОИМ ключом (path+from+to): быстрый переход на другой файл или режим
+  // не даёт запоздавшему ответу попасть в чужой дифф — читаем всегда по текущему ключу.
+  useEffect(() => {
+    if (!file || !mode || !key) return;
+    if (inFlight.current.has(key) || diffs[key]?.status === 'ok') return;
+    inFlight.current.add(key);
+    controller.current ??= new AbortController();
+    const { signal } = controller.current;
+    setDiffs(p => ({ ...p, [key]: { status: 'loading' } }));
+    api.tasks.stageFileDiff(taskId, file.path, mode.from, mode.to, signal)
+      .then(diff => { if (!signal.aborted) setDiffs(p => ({ ...p, [key]: { status: 'ok', diff } })); })
+      .catch((e: unknown) => { if (!signal.aborted) setDiffs(p => ({ ...p, [key]: { status: 'error', message: errorText(e) } })); })
+      .finally(() => { inFlight.current.delete(key); });
+    // diffs читаем только как кэш; повторный запуск эффекта по нему не нужен
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, taskId]);
+
+  const visible = expanded ? files : files.slice(0, FILES_COLLAPSED);
+  const hidden = files.length - visible.length;
+  const lastVersion = file?.versions[file.versions.length - 1];
+  const caption = lastVersion?.afterReturn
+    ? `v${lastVersion.n} — после возврата Глеба. Версия файла = коммит этапа, который его тронул`
+    : 'Версия файла = коммит этапа, который его тронул';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minWidth: 0 }}>
+      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: SP.md, alignItems: 'stretch', minWidth: 0 }}>
+        <div style={{ flex: isMobile ? undefined : '0 0 280px', display: 'flex', flexDirection: 'column', gap: SP.xs, minWidth: 0 }}>
+          <div style={SEC_LABEL}>Файлы</div>
+          {visible.map(f => {
+            const active = f.path === file?.path;
+            return (
+              <button key={f.path} type="button" data-testid={`stage-file-${f.path}`} aria-pressed={active}
+                onClick={() => { setSelPath(f.path); setModeId('all'); }}
+                style={{
+                  display: 'flex', flexDirection: 'column', gap: SP.xxs, textAlign: 'left', cursor: 'pointer',
+                  padding: SP.sm, minHeight: isMobile ? 40 : undefined, minWidth: 0,
+                  background: active ? C.accentLight : C.bgCard, borderRadius: R.md,
+                  border: `1px solid ${active ? C.accent : C.borderLight}`, fontFamily: FONT.sans,
+                }}>
+                <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textHeading, overflowWrap: 'anywhere' }}>{f.path}</span>
+                <span style={{ display: 'flex', gap: SP.xxs, flexWrap: 'wrap' }}>
+                  {[...f.versions].reverse().map(v => (
+                    <Badge key={v.n} tone={v.afterReturn ? 'warning' : 'neutral'} size="xs">v{v.n}</Badge>
+                  ))}
+                </span>
+              </button>
+            );
+          })}
+          {hidden > 0 && (
+            <Button size="xs" variant="ghost" dataTestId="stage-files-more" style={isMobile ? { minHeight: 40 } : undefined}
+              onClick={() => setExpanded(true)}>ещё {hidden} {hidden === 1 ? 'файл' : 'файлов'}</Button>
+          )}
+          {artifacts.commits.length > 0 && (
+            <div data-testid="stage-commits" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, marginTop: SP.sm }}>
+              <div style={SEC_LABEL}>Коммиты</div>
+              {artifacts.commits.map(c => (
+                <div key={c.sha} style={{ display: 'flex', gap: SP.xs, alignItems: 'baseline', minWidth: 0 }}>
+                  <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{c.shortSha}</span>
+                  <span style={{ fontSize: FS.xs, color: C.textSecondary, overflowWrap: 'anywhere', minWidth: 0 }}>{c.subject}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        {file && (
+          <div data-testid="stage-file-diff-pane" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading, overflowWrap: 'anywhere', minWidth: 0 }}>{file.path}</span>
+              <InlineSegmented value={mode?.id ?? null} isMobile={isMobile}
+                options={modes.map(m => ({ value: m.id, label: m.label }))} onChange={setModeId} />
+            </div>
+            <div data-testid="stage-file-caption" style={{ fontSize: FS.xs, color: C.textMuted }}>{caption}</div>
+            {state?.status === 'loading' && <div style={{ fontSize: FS.sm, color: C.textSecondary }}>Загружаю дифф…</div>}
+            {state?.status === 'error' && (
+              <Notice tone="danger" icon={AlertTriangle} data-testid="stage-file-diff-error">{state.message}</Notice>
+            )}
+            {state?.status === 'ok' && (
+              <div data-testid="stage-file-diff" style={{ overflowX: 'auto', minWidth: 0 }}>
+                {state.diff.truncated && (
+                  <div style={{ fontSize: FS.xs, color: C.warningText }}>Дифф обрезан на {state.diff.maxChars} знаках.</div>
+                )}
+                <DiffView diff={state.diff.diff} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      {artifacts.resultMarkdown && <ResultCard markdown={artifacts.resultMarkdown} />}
+    </div>
+  );
+}
+
+export function FeatureStageArtifacts({ taskId, artifacts, isMobile }: {
+  taskId: string; artifacts: StageArtifacts; isMobile: boolean;
+}) {
+  if (!artifacts.files) return <LegacyArtifacts taskId={taskId} artifacts={artifacts} isMobile={isMobile} />;
+  const { files, resultMarkdown } = artifacts;
+  return (
+    <section data-testid="stage-artifacts" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
+      <div style={SEC_LABEL}>Артефакты</div>
+      {files.length === 0 ? (
+        <>
+          <div data-testid="stage-artifacts-empty">
+            <EmptyState compact inline icon={<FileText size={20} />} title="Артефактов пока нет"
+              subtitle="Появятся с первым коммитом (CCS-Task) или итогом задачи" />
+          </div>
+          {resultMarkdown && <ResultCard markdown={resultMarkdown} />}
+        </>
+      ) : (
+        <FilesArtifacts taskId={taskId} artifacts={artifacts} files={files} isMobile={isMobile} />
       )}
     </section>
   );

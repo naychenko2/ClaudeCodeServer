@@ -7,6 +7,8 @@ import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { PersonaVoicePicker } from './PersonaVoicePicker';
 import { accessMode as readAccessMode, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
 import { createVoicePayload } from './voicePayload';
+import { PersonaPromptTab, SECTIONS_RESET_TEXT, SECTIONS_RESET_TITLE, sectionsResetNeedsConfirm } from './PersonaPromptTab';
+import { applySections, emptyState, toOverrides, type PromptSectionsState } from './promptSectionsModel';
  import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Select, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
@@ -172,6 +174,16 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const specialtyCatalog = useSpecialtyCatalog();
   // Отложенная смена специальности: ждёт подтверждения перезаписи прав шаблоном
   const [pendingSpecialty, setPendingSpecialty] = useState<PersonaSpecialty | null>(null);
+  // Вкладки формы: «Основное» / «Промпт» (P2b)
+  const [tab, setTab] = useState<'main' | 'prompt'>('main');
+  // Секции промпта «от специальности»: состояние привязано к personaId (смена персоны сбрасывает
+  // черновики), ответ GET prompt-sections принимает только applySections
+  const [sectionsState, setSectionsState] = useState<PromptSectionsState>(() => emptyState(persona?.id ?? ''));
+  const [sectionsError, setSectionsError] = useState<string | null>(null);
+  // Счётчик перечитывания: растёт после успешного сохранения
+  const [sectionsReload, setSectionsReload] = useState(0);
+  // Смена специальности со своими секциями ждёт подтверждения
+  const [pendingSectionsReset, setPendingSectionsReset] = useState<PersonaSpecialty | null>(null);
   // Плашка «права подставлены из шаблона» после подстановки
   const [templateNote, setTemplateNote] = useState<string | null>(null);
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
@@ -249,8 +261,21 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     setSpecialty(next);
   };
 
+  // Специальность в форме уже отличается от сохранённой: свои секции сервер сбросит при сохранении
+  const specialtyChanged = !!persona && specialty !== (persona.specialty ?? 'none');
+
   const changeSpecialty = (next: PersonaSpecialty) => {
     if (next === specialty) return;
+    // Свои секции промпта пропадут при смене роли — сначала подтверждение (временное решение
+    // разреза: слой сбрасывается целиком)
+    if (sectionsResetNeedsConfirm(sectionsState, specialtyChanged)) {
+      setPendingSectionsReset(next);
+      return;
+    }
+    proceedSpecialtyChange(next);
+  };
+
+  const proceedSpecialtyChange = (next: PersonaSpecialty) => {
     // Права «как у специальности» не копируются: смена роли меняет только саму роль
     if (inheritsAccess) {
       setSpecialty(next);
@@ -395,6 +420,23 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // Живой цвет — в родителя (перекраска полосы/тулбара)
   useEffect(() => { onColorChange?.(color); }, [color, onColorChange]);
+
+  // Секции промпта персоны: читаем при открытии и после сохранения; запрос отменяется при уходе,
+  // запоздавший ответ прежней персоны отбрасывает applySections
+  const personaId = persona?.id;
+  useEffect(() => {
+    if (!personaId) return;
+    const ctrl = new AbortController();
+    setSectionsState(prev => (prev.personaId === personaId ? prev : emptyState(personaId)));
+    setSectionsError(null);
+    api.personas.getPromptSections(personaId, ctrl.signal)
+      .then(list => setSectionsState(prev => applySections(prev, personaId, list)))
+      .catch(e => {
+        if (ctrl.signal.aborted) return;
+        setSectionsError(e instanceof Error ? e.message : 'Не удалось загрузить секции промпта');
+      });
+    return () => ctrl.abort();
+  }, [personaId, sectionsReload]);
 
   // Персона для превью аватара: актуальные имя/аватар из формы. Цвет для инициалов
   // берём из выбранного color; при наличии картинки — kind='image' показывает её.
@@ -611,7 +653,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         ? (persona.disallowedTools ?? []) : [],
     });
   }, [persona, defaultScope, defaultProjectId, initial?.access, initial?.specialty]);
-  const dirty = snapshot !== initialSnapshot;
+  // Секции промпта в dirty — по тому, что реально уйдёт в запись (явное «как у специальности»
+  // у унаследованной секции правкой не считается)
+  const promptKey = JSON.stringify(toOverrides(sectionsState));
+  const promptBaseKey = JSON.stringify(toOverrides({ ...sectionsState, overrides: {} }));
+  const dirty = snapshot !== initialSnapshot || promptKey !== promptBaseKey;
 
   // Сравнение «менялся ли голос»: поля простые, порядок фиксирован — JSON достаточно
   const voiceKey = (v: Persona['voice']) =>
@@ -683,6 +729,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       access: ownerOnlyFields || inheritsAccess ? undefined : access,
       // Специальность шлём всегда (включая 'none' — сброс); update на бэке None ставит явно
       specialty,
+      // Секции промпта — только правка и только загруженные (иначе пустой список снёс бы слой).
+      // При смене специальности — явный сброс: сервер и так сбрасывает слой, секции старой роли
+      // не переносим
+      promptSections: isEdit && !readOnlyForm && sectionsState.effective.length > 0
+        ? (specialtyChanged ? [] : toOverrides(sectionsState))
+        : undefined,
       disallowedTools: ownerOnlyFields || inheritsAccess ? undefined : (access === 'custom' ? parseDisallowed(disallowedText) : []),
     };
     try {
@@ -696,6 +748,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
       bumpPersonas();
       invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
+      if (isEdit) setSectionsReload(n => n + 1); // перечитать секции с сервера
       onSaved(savedVoice);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить персону');
@@ -1489,6 +1542,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         </div>
       </div>
 
+      {pendingSectionsReset && (
+        <ConfirmDialog
+          title={SECTIONS_RESET_TITLE}
+          subtitle={SECTIONS_RESET_TEXT}
+          confirmLabel="Сменить специальность"
+          cancelLabel="Оставить как есть"
+          onConfirm={() => { const next = pendingSectionsReset; setPendingSectionsReset(null); proceedSpecialtyChange(next); }}
+          onCancel={() => setPendingSectionsReset(null)}
+        />
+      )}
+
       {pendingSpecialty && (
         <ConfirmDialog
           title="Заменить права и инструменты?"
@@ -1606,11 +1670,33 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         padding: isMobile ? '18px 16px 32px' : '22px 32px 40px',
         display: 'flex', flexDirection: 'column', gap: 28,
       }}>
-        {heroSection}
-        {characterSection}
-        {behaviorSection}
-        {memorySection}
-        {dangerSection}
+        <SegmentedControl<'main' | 'prompt'>
+          value={tab}
+          onChange={setTab}
+          touch={isMobile}
+          options={[{ value: 'main', label: 'Основное' }, { value: 'prompt', label: 'Промпт' }]}
+        />
+        {tab === 'main' ? (
+          <>
+            {heroSection}
+            {behaviorSection}
+            {memorySection}
+            {dangerSection}
+          </>
+        ) : (
+          <PersonaPromptTab
+            state={sectionsState}
+            onChange={setSectionsState}
+            hasSpecialty={specialty !== 'none'}
+            specialtyChanged={specialtyChanged}
+            isNew={!isEdit}
+            loadError={sectionsError}
+            disabled={readOnlyForm}
+            isMobile={isMobile}
+          >
+            {characterSection}
+          </PersonaPromptTab>
+        )}
         {error && (
           <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
         )}

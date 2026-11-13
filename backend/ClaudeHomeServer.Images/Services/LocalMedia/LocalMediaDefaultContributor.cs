@@ -163,11 +163,11 @@ public sealed class LocalMediaDefaultContributor(IConfiguration config) : IPromp
     private const string PersonalImagesAndVideo = PersonalImages + PersonalNoVideoRule + "\n";
 
     // Модуль «Видео» в личной области снимает и локально: video_shoot с provider local. Первый кадр — картинка
-    // из «Картинок» этого чата или файл «Личного» (файлов проектов нет), фильмов тоже; сцену сохраняют в «Личное»
+    // из «Картинок» этого чата или файл «Личного» (файлов проектов нет); сцену сохраняют в «Личное», фильмы тоже живут там
     public const string PersonalVideoEditorRule =
         "Видео: video_new → video_scene_set → video_shoot (см. блок «Видео в этом чате»); если в «Чем» контекста хода "
         + "указан поставщик — используй его (не подменяй), если стоит «по умолчанию» — video_shoot передавай с provider "
-        + "local (это исключение из правила «не передавай provider»). Фильмов в этом чате нет, сцену можно сохранить в «Личное» (video_save_scene).\n";
+        + "local (это исключение из правила «не передавай provider»). Сцену можно сохранить в «Личное» (video_save_scene), фильм правят и собирают video_film_edit и video_film_build.\n";
 
     public const string PersonalRule = PersonalImagesAndVideo
         + "Звук и музыка: локальных моделей в этом чате нет — скажи прямо и предложи облако.\n"

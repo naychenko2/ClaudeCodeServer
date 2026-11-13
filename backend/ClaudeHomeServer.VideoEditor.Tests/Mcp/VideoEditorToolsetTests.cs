@@ -394,7 +394,7 @@ public sealed class VideoEditorToolsetTests
     [Theory]
     [InlineData(ToolFilmEdit)]
     [InlineData(ToolFilmBuild)]
-    public async Task В_личном_чате_фильмовые_инструменты_есть_но_отвечают_что_фильмы_только_в_проекте(string tool)
+    public async Task В_личном_чате_без_папки_фильмовые_инструменты_есть_но_отвечают_что_фильмов_ещё_нет(string tool)
     {
         using var w = new AgentWorld();
 
@@ -403,7 +403,7 @@ public sealed class VideoEditorToolsetTests
             ["ops"] = new JsonArray(new JsonObject { ["op"] = "remove", ["index"] = 0 }) }, AgentWorld.PersonalChat);
 
         result.IsError.Should().BeTrue();
-        result.Text.Should().Contain("Фильмы — только в чате проекта");
+        result.Text.Should().Contain("В «Личном» ещё нет фильмов").And.Contain("video_save_scene");
     }
 
     [Fact]

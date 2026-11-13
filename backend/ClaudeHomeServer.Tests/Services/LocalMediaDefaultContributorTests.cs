@@ -267,7 +267,7 @@ public class LocalMediaDefaultContributorTests
 
         text.Should().Contain(LocalMediaDefaultContributor.PersonalVideoEditorRule)
             .And.Contain("video_shoot передавай с provider local")
-            .And.Contain("Фильмов в этом чате нет, сцену можно сохранить в «Личное»")
+            .And.Contain("Сцену можно сохранить в «Личное»").And.Contain("video_film_build")
             .And.NotContain(LocalMediaDefaultContributor.PersonalNoVideoRule)
             .And.NotContain("local_text_to_video");
     }

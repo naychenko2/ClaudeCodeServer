@@ -13,6 +13,9 @@
 // Узко = ширина КОНТЕЙНЕРА, а не окна (П1): `useContainerWidth` мерит саму полосу, при
 // ширине < 300 подпись скрывается и остаётся одна кнопка на всю ширину (purgeStripCompact).
 // Тач-высота кнопки (minHeight 40) — на `useIsMobile`: узкая панель на десктопе — это мышь.
+// На телефоне полоса резервирует место под круглешок AI (max(base, FAB_CLEAR_PAD), тот же
+// приём, что у списков): FAB прибит к нижнему правому углу, полоса — туда же, без резерва он
+// накрывает кнопку (дефект 64bf0dbd). На десктопе резерва нет — полоса не растёт в высоту (R-M2).
 //
 // Состояния: кнопка активна всегда (нулевой состав — не отказ: предпросмотр отдаёт 200 с
 // нулями, и «Удалять нечего» человек должен увидеть сам); отказ предпросмотра — Notice danger
@@ -33,7 +36,7 @@
 import { useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import {
-  C, FONT, FS, MODAL_W, SP, useContainerWidth, useIsMobile,
+  C, FAB_CLEAR_PAD, FONT, FS, MODAL_W, SP, useContainerWidth, useIsMobile,
   WikiError,
   previewWikiPurge, runWikiPurge,
   type WikiPurgeDto,
@@ -197,12 +200,19 @@ export function WikiPurgeBlock() {
   return (
     <div
       ref={stripRef}
+      data-testid="wiki-purge-strip"
       style={{
         position: 'sticky',
         bottom: 0,
         background: C.bgWhite,
         borderTop: `1px solid ${C.border}`,
         padding: `${SP.sm}px ${SP.md}px`,
+        // Резерв под круглешок AI на телефоне (дефект 64bf0dbd): FAB прибит к нижнему правому
+        // углу окна, а полоса прижата ровно туда — без резерва он лёг на четверть ширины
+        // «Начать заново…». Тот же приём, что у списков (max(base, FAB_CLEAR_PAD), PersonasPage):
+        // --cc-fab-clear ставит AiLauncher только на телефоне — на десктопе и при выключенном
+        // AI-хабе max() оставляет базовый отступ, полоса не растёт в высоту (R-M2).
+        ...(isMobile ? { paddingBottom: `max(${SP.sm}px, ${FAB_CLEAR_PAD})` } : {}),
       }}
     >
       {/* Итог/ход чистки — над рядом с кнопкой (А2): виден и при открытом окне, и после

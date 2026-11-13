@@ -30,7 +30,9 @@
 //     новых тестах;
 // (7) в purgeStripCompact поднять порог 300→301 → «300→false» краснеет;
 // (8) не снимать итог по «Скрыть» (setLastResult(null) → noop) → «Скрыть снимает» краснеет;
-// (9) вернуть «Скрыть» фиксированный size="sm" → «тач-цель» краснеет (доработка по ревью М2).
+// (9) вернуть «Скрыть» фиксированный size="sm" → «тач-цель» краснеет (доработка по ревью М2);
+// (10) снять резерв под FAB (delete строки isMobile ? paddingBottom…) → «резерв под AI-кнопку»
+//      краснеет (доработка по QA 64bf0dbd).
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -49,7 +51,17 @@ vi.mock('../../../../lib/wiki', async (orig) => ({
   runWikiPurge: run,
 }));
 
+// useIsMobile мокан: поведение полосы различается на телефоне и на десктопе (резерв под
+// круглешок AI, дефект 64bf0dbd). Мок по относительному пути ловит и цепочку через кит
+// (компонент зовёт useIsMobile из aihome_shell/kit → ../breakpoints).
+const { mobileFlag } = vi.hoisted(() => ({ mobileFlag: { v: false } }));
+vi.mock('../../../../lib/breakpoints', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/breakpoints')>(),
+  useIsMobile: () => mobileFlag.v,
+}));
+
 import { WikiError } from '../../../../lib/wiki';
+import { FAB_CLEAR_PAD } from '../../../../lib/design';
 
 type Cont = ReturnType<typeof mount>['container'];
 type AnyNode = Cont;
@@ -127,6 +139,8 @@ beforeEach(() => {
   preview.mockReset();
   run.mockReset();
   preview.mockResolvedValue(PREVIEW());
+  // все прежние тесты — десктопные (полоса без резерва под FAB)
+  mobileFlag.v = false;
 });
 
 afterEach(() => {
@@ -359,5 +373,25 @@ describe('блок «Начать вики заново» (J-F4)', () => {
     const src = readFileSync(fileURLToPath(new URL('../WikiPurgeBlock.tsx', import.meta.url)), 'utf8');
     // мутация (9): вернуть size="sm" — эта строка краснеет
     expect(src).toContain("size={isMobile ? 'lg' : 'sm'}");
+  });
+
+  it('резерв под круглешок AI на мобиле (дефект 64bf0dbd): из общей константы; на десктопе — нет', () => {
+    // FAB прибит к нижнему правому углу окна, а полоса прижата sticky ровно туда: без резерва
+    // круглешок накрывает ~четверть ширины «Начать заново…» (elementFromPoint отдаёт SPAN FAB).
+    const stripStyle = (c: Cont): Record<string, string> =>
+      ((reactProps(findNodeByAttr(c, 'data-testid', 'wiki-purge-strip')!) as { style?: Record<string, string> }).style ?? {});
+
+    mobileFlag.v = true;
+    const styleM = stripStyle(render());
+    // резерв — только значение общей константы (FAB_CLEAR_PAD), не число; и через max с базой:
+    // при выключенном AI-хабе (--cc-fab-clear не поставлен) остаётся базовый отступ
+    // мутация (10): снять строку резерва — эта проверка краснеет
+    expect(String(styleM.paddingBottom)).toContain(FAB_CLEAR_PAD);
+    expect(String(styleM.paddingBottom)).toContain('max(');
+
+    // десктоп: резерва нет вовсе — стиль полосы такой же, что и до правки (R-M2: высота не растёт)
+    mobileFlag.v = false;
+    const styleD = stripStyle(render());
+    expect(styleD.paddingBottom ?? '').not.toContain('cc-fab-clear');
   });
 });

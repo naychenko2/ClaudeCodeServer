@@ -27,6 +27,7 @@ public class WikiNightlyParallelTests : IDisposable
     private const string SectionB = "projects/p2";
     private const string SectionC = "projects/p3";
     private const string SectionD = "projects/p4";
+    private const string SectionE = "projects/p5";
 
     private readonly string _dir;
     private readonly IConfiguration _config;
@@ -835,6 +836,133 @@ public class WikiNightlyParallelTests : IDisposable
         last.Outcome.Should().Be(WikiNightlyService.OutcomeBudget, "первый названный упор держит итог: limit пакетов назван раньше");
     }
 
+    // ─── ряд отказов «подряд» (доработка W5 по ревью R-W5, п.1) ──────────────
+
+    /// <summary>Образец для обоих тестов ряда: один исполнитель, пять чатов. Порядок, в котором
+    /// координатор отдаёт им чаты, детерминирован в этой конфигурации и зафиксирован прогоном
+    /// (одинаков в исправленном и мутантном коде: он зависит только от ротации очереди и
+    /// возвратов отказанных чатов — тот же исполнитель их не берёт): c1, c5, c2, c3, c4 —
+    /// после каждого отказа обход продолжается с первым из оставшихся, сдвинутые в конце
+    /// обхода не оказываются. Таблица ответов в тестах построена под этот порядок: на
+    /// «local» идут [down, план-отказ, down, down], щуп c4 (состоявшийся) — пятым:
+    /// «local» берёт его только пока жив; при мутации «не обнулять ряд» три down
+    /// складываются до щупа, единственный исполнитель выбывает — щуп не разобран вовсе
+    /// (анализ 4, не 5), итог error, не completed.</summary>
+    private async Task RunStreakSampleAsync(Func<string, WikiChatIngestService.ChatResult> localAnswer)
+    {
+        var sut = Sut((owner, chat, engine, ct) =>
+        {
+            lock (_calls) _calls.Add((chat, engine));
+            return Task.FromResult(localAnswer(chat));
+        });
+        await Tick(sut);
+    }
+
+    private static WikiChatIngestService.ChatResult DownReject() => new(
+        WikiChatIngestService.OutcomeRejected,
+        "разбор окна m1-m8 не удался: синтез: " + WikiIngestService.ReasonLocalUnavailable, [], InputTokens: 0);
+
+    private static WikiChatIngestService.ChatResult PlanReject() => new(
+        WikiChatIngestService.OutcomeRejected, "разбор окна m1-m8 не удался: план не разобран", [],
+        InputTokens: 500); // модель отвечала: это не отказ «модели нет»
+
+    private static WikiChatIngestService.ChatResult SlotBusyReject() => new(
+        WikiChatIngestService.OutcomeRejected,
+        "разбор окна m1-m8 не удался: " + new LocalEngineSlotRefusalException("local", LocalTurnRefusal.QueueFull, 4, 4).Message,
+        [], InputTokens: 0); // движок занят, а не мёртв: в ряд выбывания не входит (IsLocalDownRejection — false)
+
+    [Fact]
+    public async Task DownStreak_PlanRejectResets_NotWithdrawn()
+    {
+        // Порядок координатора c1, c5, c2, c3, c4 (см. RunStreakSampleAsync): на «local»
+        // идут [down, план-отказ, down, down] и затем щуп c4 (состоявшийся). Ряд «модель
+        // недоступна» считает только подряд идущие отказы этого вида: отказ состоявшегося
+        // плана (модель отвечала, InputTokens > 0) обнуляет его, как в master — три down
+        // суммарно, но не подряд, исполнитель жив и добирает щуп. Три down ПОДРЯД на том же
+        // исполнителе — выбыл: это ThreeRejections_ExecutorWithdraws_PassFinishesOnLive.
+        // Мутация «не обнулять ряд при не-down отказе» (NoteLive только в ветке не-Rejected):
+        // ряд растёт через план-отказ (c1=1, c2=2, c3=3) и исполнитель выбывает до щупа →
+        // первый assert красный: c4 не зван вовсе, анализ 4, итог error.
+        Configure();
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1)];
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+        AddChat("c3", SectionC, ageMinutes: 30);
+        AddChat("c4", SectionD, ageMinutes: 40);
+        AddChat("c5", SectionE, ageMinutes: 50);
+
+        await RunStreakSampleAsync(chat => chat switch
+        {
+            "c1" or "c2" or "c3" => DownReject(),
+            "c5" => PlanReject(),
+            _ => new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []),
+        });
+
+        _calls.Select(c => c.Chat).Should().Equal(new[] { "c1", "c5", "c2", "c3", "c4" },
+            "после план-отказа ряд начался заново: три down не подряд — исполнитель жив и сам берёт щуп");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "ряд не дошёл до лимита: исполнитель не выбыл");
+        last.Analyzed.Should().Be(5);
+        last.Rejected.Should().Be(4);
+        last.InputTokens.Should().Be(500, "понесённый вход план-отказа не отменяет");
+    }
+
+    [Fact]
+    public async Task DownStreak_SlotBusyRejectResets_NotWithdrawn()
+    {
+        // Тот же порядок и тот же инвариант, средний отказ — «слот движка занят»: движок
+        // занят, а не мёртв, его отказ с нулевым входом в ряд не входит (IsLocalDownRejection
+        // — false по формулировке причины) и обнуляет его. Щуп c4 принят «local» —
+        // исполнитель жив.
+        // Мутация та же, что у предыдущего теста: ряд растёт через отказ слота и исполнитель
+        // выбывает до щупа → первый assert красный: c4 не зван вовсе, анализ 4, итог error.
+        Configure();
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1)];
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+        AddChat("c3", SectionC, ageMinutes: 30);
+        AddChat("c4", SectionD, ageMinutes: 40);
+        AddChat("c5", SectionE, ageMinutes: 50);
+
+        await RunStreakSampleAsync(chat => chat switch
+        {
+            "c1" or "c2" or "c3" => DownReject(),
+            "c5" => SlotBusyReject(),
+            _ => new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []),
+        });
+
+        _calls.Select(c => c.Chat).Should().Equal(new[] { "c1", "c5", "c2", "c3", "c4" },
+            "отказ занятого слота ряд обнуляет: три down не подряд — исполнитель жив и сам берёт щуп");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "ряд не дошёл до лимита: исполнитель не выбыл");
+        last.Analyzed.Should().Be(5);
+        last.Rejected.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task ReadyProbeThrows_EngineNotReady_PassNotBroken()
+    {
+        // Исключение пробы готовности (R-W5, п.2): «local» считается не готовым — ровно как
+        // негативная проба (NotReady_SkippedNotWithdrawn): его не спрашивают повторно, чаты
+        // берёт готовый «gemma», итог completed; проход не прерван исключением (без try/catch
+        // RunPassAsync ловил бы его в общий catch → error). Мутация «убрать try/catch пробы» →
+        // последний assert красный: outcome=error.
+        Configure();
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1), new LocalEngineExecutor("gemma", "Gemma", 1)];
+        _llm.ReadyThrows = new HashSet<string>(StringComparer.Ordinal) { "local" };
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+
+        await Tick(Sut(DownFor()));
+
+        _llm.ReadyChecks.Should().Contain("local", "сбой пробы не снимает исполнителя из обхода: его спрашивают, как любого");
+        _calls.Should().NotContain(c => c.Engine == "local", "сбой пробы = не готов: его слоты чатов не получают");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "исключение пробы наружу не летит: живой доиграл проход");
+        last.Analyzed.Should().Be(2);
+        last.Rejected.Should().Be(0, "неготовый не сжёг ни одного чата");
+    }
+
     // ─── подмены ─────────────────────────────────────────────────────────────
 
     private sealed class Llm : ICheapTextRunner
@@ -913,10 +1041,14 @@ public class WikiNightlyParallelTests : IDisposable
         // «неготового пропускают» проверяется тем, что его спросили и чата ему не дали.
         public HashSet<string>? ReadyEngines;
         public List<string> ReadyChecks { get; } = [];
+        // Проба по названным движкам бросает вместо ответа (R-W5, п.2): «проба не удалась».
+        public HashSet<string>? ReadyThrows;
 
         public Task<bool> IsLocalEngineReadyAsync(string engine, CancellationToken ct = default)
         {
             lock (ReadyChecks) ReadyChecks.Add(engine);
+            if (ReadyThrows?.Contains(engine) == true)
+                throw new InvalidOperationException($"проба готовности движка «{engine}» не удалась");
             return Task.FromResult(ReadyEngines is null || ReadyEngines.Contains(engine));
         }
     }

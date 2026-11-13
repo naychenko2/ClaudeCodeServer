@@ -182,8 +182,10 @@ public sealed class WikiNightlyService : BackgroundService
             return true;
         }
 
-        /// <summary>Состоявшийся (не этим отказом) исход исполнителя обнуляет его ряд — ряд
-        /// считается подряд идущими, а не всей ночью (тот же смысл, что у 2e13d45c).</summary>
+        /// <summary>Любой исход исполнителя, не отказ «модель недоступна», обнуляет его ряд —
+        /// состоявшийся разбор, отказ плана (модель отвечала) или отказ занятого слота (движок
+        /// жив): ряд считается подряд идущими отказами одного вида, а не всей ночью (тот же
+        /// смысл, что у 2e13d45c).</summary>
         public void NoteLive(string? engine) => _streak[Key(engine)] = 0;
 
         public bool AnyLive(IReadOnlyList<LocalEngineExecutor> executors)
@@ -848,9 +850,20 @@ public sealed class WikiNightlyService : BackgroundService
                     // следующий тик окна пробует снова), при живом другом — очередь доиграет на
                     // нём. Причина первого отказа (firstRejectReason) названа выше — она и есть
                     // то, чем объяснится итог.
-                    if (IsLocalDownRejection(r) && down.NoteRejection(engine, _clock()))
-                        LogInfoSafe("Ночной разбор {Owner}: {Engine}: {Reason} — {Streak} отказов подряд, исполнитель выбыл до конца прохода",
-                            ownerId, EngineName(engine), WikiIngestService.ReasonLocalUnavailable, LocalDownBreakAfter);
+                    if (IsLocalDownRejection(r))
+                    {
+                        if (down.NoteRejection(engine, _clock()))
+                            LogInfoSafe("Ночной разбор {Owner}: {Engine}: {Reason} — {Streak} отказов подряд, исполнитель выбыл до конца прохода",
+                                ownerId, EngineName(engine), WikiIngestService.ReasonLocalUnavailable, LocalDownBreakAfter);
+                    }
+                    else
+                    {
+                        // Отказ не «модель недоступна» (отказ плана с InputTokens > 0, отказ занятого
+                        // слота): модель отвечала или движок жив, но занят — это не повтор того же
+                        // отказа, ряд обнуляется, как при состоявшемся разборе (тот же смысл, что
+                        // у 2e13d45c в master: в ряд входят только подряд идущие отказы «модели нет»).
+                        down.NoteLive(engine);
+                    }
                 }
                 else
                 {
@@ -1034,7 +1047,19 @@ public sealed class WikiNightlyService : BackgroundService
                     {
                         if (engineBusy.GetValueOrDefault(e.Engine) >= e.Parallel) continue;
                         if (down.IsWithdrawn(e.Engine)) continue;
-                        if (!await _llm.IsLocalEngineReadyAsync(e.Engine, ct).ConfigureAwait(false)) continue;
+                        bool ready;
+                        try { ready = await _llm.IsLocalEngineReadyAsync(e.Engine, ct).ConfigureAwait(false); }
+                        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                        catch (Exception ex)
+                        {
+                            // Исключение пробы готовности (R-W5, п.2): движок считается не готовым —
+                            // ровно как негативная проба: пропустить, чата не сжигать, не выбывать.
+                            // Координатор не падает: причина названа в журнале, выдача идёт на
+                            // других исполнителях; отмена хоста — конец прохода (как везде).
+                            LogSafe(ex, "Ночной разбор {Owner}: проба готовности {Engine} не удалась", ownerId, EngineName(e.Engine));
+                            continue;
+                        }
+                        if (!ready) continue;
                         anyReadyFree = true;
                         if (retried.TryGetValue(c.Session.Id, out var failedBy) && failedBy == e.Engine) continue;
                         engine = e.Engine;

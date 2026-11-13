@@ -57,7 +57,8 @@ describe('PersonaForm: Notice участника вместо полевых hin
     const html = renderToStaticMarkup(createElement(PersonaForm, {
       persona: MEMBER, projects: MEMBER_PROJECTS, onSaved: () => {}, onDelete: () => {},
     }));
-    expect(html).toContain('Права, модели и специальность меняет владелец проекта');
+    // ровно одна плашка на весь рендер
+    expect((html.match(/Права, модели и специальность меняет владелец проекта/g) ?? []).length).toBe(1);
     expect(html).not.toContain('Меняет только владелец проекта');
   });
 
@@ -141,6 +142,21 @@ describe('PersonaForm: футер «Отменить / Сохранить» (F29
     const body = update.mock.calls[0][1] as Record<string, unknown>;
     expect(body.name).toBe('Светлана');
     expect(body.specialty).toBe('frontend');
+  });
+
+  it('мобила (useIsMobile=true на весь файл): кнопки футера ≥40 px и переносятся', () => {
+    const html = renderToStaticMarkup(createElement(PersonaForm, {
+      persona: BASE, projects: [], onSaved: () => {}, onCancelEdit: () => {},
+    }));
+    const at = html.indexOf('data-testid="persona-form-footer"');
+    expect(at, 'футера нет').toBeGreaterThan(-1);
+    const foot = html.slice(at, html.indexOf('</div>', at));
+    // перенос кнопок на узком экране
+    expect(foot).toContain('flex-wrap:wrap');
+    const btns = foot.match(/<button[^>]*>/g) ?? [];
+    expect(btns.length).toBe(2);
+    // на мобиле обе кнопки размера md (minHeight 40, ui/Button.tsx)
+    for (const b of btns) expect(b, 'кнопка футера ниже 40 px').toContain('min-height:40px');
   });
 
   it('«Отменить» футера вызывает тот же обработчик, что кнопка тулбара', async () => {

@@ -1,9 +1,9 @@
-// Состояние строки ленты при перестановке стрелкой (F20a): `open` и фокус ручки.
+// Состояние строки ленты при перестановке стрелкой (F20a): выбор и фокус ручки.
 // Реальный рендер лент и строк через react-dom/client поверх linkedom (jsdom в проекте нет).
 // Ограничение окружения: linkedom не моделирует сброс фокуса при insertBefore и не ведёт
 // activeElement, поэтому «браузер сбросил фокус» тут не воспроизвести. Проверяем то, что
 // зависит от нашего кода: узел строки/ручки тот же (React его двигает, а не пересоздаёт),
-// `open` жив, и после перестановки ручке вызван focus() — именно он спасает фокус в браузере.
+// выбор жив, и после перестановки ручке вызван focus() — именно он спасает фокус в браузере.
 import { describe, expect, it, vi } from 'vitest';
 import { act, createElement, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -30,7 +30,6 @@ vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {}, remove
 
 const { WorkflowStageStrip } = await import('./WorkflowStageStrip');
 
-const noop = () => {};
 const initial = (): WorkflowStage[] => [
   { role: 'cut', presence: 'on' },
   { role: 'plan', presence: 'on', after: ['cut'] },
@@ -39,15 +38,16 @@ const initial = (): WorkflowStage[] => [
 
 function Host() {
   const [stages, setStages] = useState(initial());
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   return createElement(WorkflowStageStrip, {
-    stages, readOnly: false, specialties: [], personas: [], mcpChoices: [], errorsFor: () => [],
-    onStagesChange: setStages, onStageChange: noop, onRenameStage: noop, onRemoveStage: noop,
+    stages, readOnly: false, specialties: [], personas: [], errorsFor: () => [],
+    onStagesChange: setStages, selectedKey, onSelectStage: setSelectedKey,
   });
 }
 
 const rowOf = (i: number) => doc.querySelector(`[data-stage-index="${i}"]`) as HTMLElement;
 const gripOf = (i: number) => rowOf(i).querySelector('[data-stage-grip]') as HTMLElement;
-const headOf = (i: number) => rowOf(i).querySelector('[aria-expanded]') as HTMLElement;
+const headOf = (i: number) => rowOf(i).querySelector('[aria-pressed]') as HTMLElement;
 const labelOf = (i: number) => headOf(i).getAttribute('aria-label');
 
 async function setup() {
@@ -63,24 +63,24 @@ async function arrow(el: HTMLElement, key: 'ArrowDown' | 'ArrowUp') {
 }
 
 describe('лента этапов — состояние строки при перестановке стрелкой', () => {
-  it('ArrowDown: открытая строка остаётся открытой, узлы те же, ручке возвращается фокус', async () => {
+  it('ArrowDown: выбранная строка остаётся выбранной, узлы те же, ручке возвращается фокус', async () => {
     const root = await setup();
     const cutRow = rowOf(0);
     const cutGrip = gripOf(0);
     await act(async () => { headOf(0).dispatchEvent(new win.Event('click', { bubbles: true })); });
-    expect(headOf(0).getAttribute('aria-expanded')).toBe('true');
+    expect(headOf(0).getAttribute('aria-pressed')).toBe('true');
 
     let focused = 0;
     cutGrip.addEventListener('focus', () => { focused++; });
     await arrow(cutGrip, 'ArrowDown');
 
-    // «Разрез» теперь вторым; тот же узел строки и ручки, `open` не потерян.
+    // «Разрез» теперь вторым; тот же узел строки и ручки, выбор не потерян.
     expect(labelOf(1)).toContain('Разрез');
     expect(rowOf(1)).toBe(cutRow);
     expect(gripOf(1)).toBe(cutGrip);
-    expect(headOf(1).getAttribute('aria-expanded')).toBe('true');
-    // Соседняя строка не открылась по наследству позиции.
-    expect(headOf(0).getAttribute('aria-expanded')).toBe('false');
+    expect(headOf(1).getAttribute('aria-pressed')).toBe('true');
+    // Соседняя строка не выбрана по наследству позиции.
+    expect(headOf(0).getAttribute('aria-pressed')).toBe('false');
     // Браузер сбросит фокус при insertBefore — код обязан вернуть его на ту же ручку.
     expect(focused).toBe(1);
     await act(async () => { root.unmount(); });
@@ -96,7 +96,7 @@ describe('лента этапов — состояние строки при п�
     await arrow(grip, 'ArrowUp');
     expect(rowOf(1)).toBe(row);
     expect(gripOf(1)).toBe(grip);
-    expect(headOf(1).getAttribute('aria-expanded')).toBe('true');
+    expect(headOf(1).getAttribute('aria-pressed')).toBe('true');
     expect(focused).toBe(1);
     expect(moveStage(initial(), 2, 1)[1].id ?? moveStage(initial(), 2, 1)[1].role).toBe('step-back');
     await act(async () => { root.unmount(); });

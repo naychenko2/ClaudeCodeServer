@@ -1,6 +1,7 @@
 // Лента этапов редактора шаблона (F20, вариант A): заголовок, строки с ручкой ⠿, рамки
 // «параллельно», подсказки, «+ Добавить этап», пустое состояние. Состояний шаблона не держит:
-// список этапов приходит и уходит через onStagesChange, правку этапа — через onStageChange.
+// список этапов приходит и уходит через onStagesChange; выбор этапа (F23) — selectedKey/onSelectStage,
+// сами поля этапа правятся в WorkflowStageSettings.
 
 import { useEffect, useRef, useState } from 'react';
 import { Plus, Workflow } from 'lucide-react';
@@ -21,22 +22,21 @@ const LONG_PRESS_MS = 350;
 interface Props {
   stages: WorkflowStage[];
   readOnly: boolean;
+  // Нужны только для строки «кто» (подписи специальности и персоны).
   specialties: SpecialtyCatalogEntry[];
   personas: Persona[];
-  mcpChoices: string[];
   // Ошибки по id этапа (роль — запасной ключ, как у прежнего списка).
   errorsFor: (stage: WorkflowStage, index: number) => string[];
   onStagesChange: (next: WorkflowStage[]) => void;
-  onStageChange: (index: number, next: WorkflowStage) => void;
-  onRenameStage: (index: number, newId: string) => void;
-  onRemoveStage: (index: number) => void;
+  // Выбранный этап (ключ из stageKeys; null — не выбран) и выбор по клику на строку.
+  selectedKey: string | null;
+  onSelectStage: (key: string) => void;
   // Состав «Полного цикла» для пустого шаблона (нет — кнопки «Взять состав» нет).
   fullCycleStages?: WorkflowStage[] | null;
 }
 
 export function WorkflowStageStrip({
-  stages, readOnly, specialties, personas, mcpChoices, errorsFor,
-  onStagesChange, onStageChange, onRenameStage, onRemoveStage, fullCycleStages,
+  stages, readOnly, specialties, personas, errorsFor, onStagesChange, selectedKey, onSelectStage, fullCycleStages,
 }: Props): React.ReactElement {
   const [picking, setPicking] = useState(false);
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
@@ -49,6 +49,8 @@ export function WorkflowStageStrip({
   // (insertBefore), а браузер при этом сбрасывает фокус на body — возвращаем его ручке.
   const refocusKey = useRef<string | null>(null);
 
+  const specLabels = Object.fromEntries(specialties.map(s => [s.key, s.label]));
+  const persons = personas.map(p => ({ id: p.id, name: p.name, role: p.role }));
   const norm = normalizeStages(stages);
   const columns = stripColumns(stages);
   const groups = stripGroups(stages);
@@ -61,8 +63,6 @@ export function WorkflowStageStrip({
     const grip = row?.querySelector<HTMLElement>('[data-stage-grip]');
     if (grip && document.activeElement !== grip) grip.focus();
   });
-  const specLabels = Object.fromEntries(specialties.map(s => [s.key, s.label]));
-  const persons = personas.map(p => ({ id: p.id, name: p.name, role: p.role }));
   const usedSingles = new Set(norm.map(s => s.role).filter(r => SINGLE_ROLES.includes(r as never)));
 
   const add = (role: string) => {
@@ -205,19 +205,14 @@ export function WorkflowStageStrip({
             )}
             <WorkflowStageRow
               stage={s}
-              stages={stages}
               index={i}
               errors={errorsFor(s, i)}
               readOnly={readOnly}
-              specialties={specialties}
-              personas={personas}
-              mcpChoices={mcpChoices}
-              onChange={next => onStageChange(i, next)}
-              onRenameId={newId => onRenameStage(i, newId)}
-              onRemove={() => onRemoveStage(i)}
               column={columns[i]}
               afterText={afterNames(stages, i, STAGE_ROLE_LABEL)}
               who={whoLabel(s, persons, specLabels)}
+              selected={selectedKey === keys[i]}
+              onSelect={() => onSelectStage(keys[i])}
               grip={{ onPointerDown: e => startDrag(i, e), onKeyDown: e => onGripKey(i, e) }}
               dragging={drag?.from === i}
               dropHere={!!drag && drag.over === i && drag.from !== i}

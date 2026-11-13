@@ -25,8 +25,8 @@ const stages = (): WorkflowStage[] => [
 // Ключи строк этапов в порядке отрисовки, с индексом этапа из пропа.
 function rowKeys(list: WorkflowStage[]): Record<string, number> {
   const tree = WorkflowStageStrip({
-    stages: list, readOnly: false, specialties: [], personas: [], mcpChoices: [], errorsFor: () => [],
-    onStagesChange: noop, onStageChange: noop, onRenameStage: noop, onRemoveStage: noop,
+    stages: list, readOnly: false, specialties: [], personas: [], errorsFor: () => [],
+    onStagesChange: noop, selectedKey: null, onSelectStage: noop,
   });
   const out: Record<string, number> = {};
   // Ключ строки — ключ ближайшей ключеванной обёртки (сама строка лежит в ней без ключа).
@@ -44,8 +44,8 @@ function rowKeys(list: WorkflowStage[]): Record<string, number> {
 // Путь предков каждой строки (тип/ключ каждого узла от корня до строки, включая обёртку строки).
 function rowParents(list: WorkflowStage[]): Record<string, string> {
   const tree = WorkflowStageStrip({
-    stages: list, readOnly: false, specialties: [], personas: [], mcpChoices: [], errorsFor: () => [],
-    onStagesChange: noop, onStageChange: noop, onRenameStage: noop, onRemoveStage: noop,
+    stages: list, readOnly: false, specialties: [], personas: [], errorsFor: () => [],
+    onStagesChange: noop, selectedKey: null, onSelectStage: noop,
   });
   const out: Record<string, string> = {};
   const walk = (n: ReactNode, path: string[]) => {

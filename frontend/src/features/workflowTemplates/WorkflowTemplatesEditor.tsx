@@ -11,7 +11,9 @@
 //     встроенные помечены, у встроенного — «Сбросить к исходному», удалить можно
 //     только свой; в проекте глобальные видны только на чтение и копируются в проектные
 //     (копия с basedOn);
-//   • редактор: этапы в порядке маршрута (WorkflowStageRow), общая кнопка «Сохранить».
+//   • редактор: этапы в порядке маршрута (WorkflowStageStrip); клик по строке выбирает этап и
+//     открывает «Настройку этапа» (WorkflowStageSettings: шторка 540px, на мобиле — экран, F23);
+//     общая кнопка «Сохранить».
 // Конкурентность: кнопка в состоянии busy (двойной клик — один запрос), ответ старого
 // шаблона не перезаписывает форму нового (счётчик формы), 409 — «перечитать», 400 — ошибки
 // у полей этапов.
@@ -37,9 +39,11 @@ import {
   type SaveFailure,
 } from './workflowEditorLogic';
 import { WorkflowStageStrip } from './WorkflowStageStrip';
+import { WorkflowStageSettings } from './WorkflowStageSettings';
 import { EditorFooter, EditorNotices } from './WorkflowEditorParts';
 import { WorkflowGraphPreview } from './WorkflowGraphPreview';
 import { normalizeStages, removeStageReconnect, renameStageId } from './workflowGraphModel';
+import { stageKeys } from './workflowStripModel';
 import type { WorkflowEntryMeta, WorkflowStage, WorkflowTemplate } from './types';
 
 export interface WorkflowTemplatesEditorProps {
@@ -84,6 +88,9 @@ export function WorkflowTemplatesEditor({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<SaveFailure | null>(null);
   const [confirm, setConfirm] = useState<'delete' | 'reset' | null>(null);
+  // Выбранный этап (ключ из stageKeys): открывает «Настройку этапа»; у сохранённого шаблона и у
+  // нового — свой, поэтому сбрасывается при каждой смене показанного шаблона.
+  const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
 
   // Счётчик формы: растёт при каждой смене показанного шаблона; ответ на сохранение,
   // отправленное для другого значения, форму не трогает. busyRef — синхронная защита от
@@ -116,13 +123,14 @@ export function WorkflowTemplatesEditor({
   const open = (tpl: WorkflowTemplate, scope: Scope, isNew = false) => {
     formSeq.current += 1;
     setDraft(structuredClone(tpl));
+    setSelectedStageId(null);
     setSel({ scope, isNew });
     setBaseSnap(isNew ? '' : templateSnapshot(tpl));
     setSavedTpl(isNew ? null : structuredClone(tpl));
     setFailure(null);
     setConflictVersion(null);
   };
-  const close = () => { formSeq.current += 1; setDraft(null); setSel(null); setFailure(null); setConflictVersion(null); };
+  const close = () => { formSeq.current += 1; setDraft(null); setSelectedStageId(null); setSel(null); setFailure(null); setConflictVersion(null); };
 
   // В проекте глобальные — только чтение; в глобальной области писать может только canWrite.
   const readOnly = !canWrite || (projectMode && sel?.scope === 'global');
@@ -256,10 +264,15 @@ export function WorkflowTemplatesEditor({
     setFailure(failureAfterEdit);
   };
 
-  const renameStage = (oldId: string, newId: string) =>
+  const renameStage = (oldId: string, newId: string) => {
     editDraft(d => (d ? { ...d, stages: renameStageId(d.stages, oldId, newId) } : d));
-  const dropStage = (id: string) =>
+    // Ключ выбранного — его id: при переименовании выбор едет за этапом.
+    setSelectedStageId(cur => (cur === oldId ? newId : cur));
+  };
+  const dropStage = (id: string) => {
     editDraft(d => (d ? { ...d, stages: removeStageReconnect(d.stages, id) } : d));
+    setSelectedStageId(cur => (cur === id ? null : cur));
+  };
 
   const setStage = (idx: number, next: WorkflowStage) =>
     editDraft(d => (d ? { ...d, stages: d.stages.map((s, i) => (i === idx ? next : s)) } : d));
@@ -377,6 +390,12 @@ export function WorkflowTemplatesEditor({
     const el = document.querySelector(`[data-stage-index="${index}"]`);
     if (el instanceof HTMLElement) { el.scrollIntoView({ block: 'center' }); el.focus?.(); }
   };
+  // Индекс выбранного этапа (-1 — не выбран или уже убран). Настройка открыта при выборе; у пустого
+  // шаблона на десктопе показывает «Этап не выбран» (макет T50), на мобиле пустую шторку не открываем.
+  const settingsIndex = draft && selectedStageId !== null ? stageKeys(draft.stages).indexOf(selectedStageId) : -1;
+  const settingsStage = draft && settingsIndex >= 0 ? draft.stages[settingsIndex] : null;
+  const settingsOpen = settingsStage !== null || (!!draft && !isMobile && draft.stages.length === 0);
+  const closeSettings = useCallback(() => setSelectedStageId(null), []);
   const editor = draft && sel && (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, minWidth: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, minWidth: 0 }}>
@@ -452,15 +471,29 @@ export function WorkflowTemplatesEditor({
           readOnly={readOnly}
           specialties={catalog ?? []}
           personas={personas}
-          mcpChoices={mcpChoices}
           errorsFor={(s, i) => errorsByRole[normalizeStages(draft.stages)[i].id ?? s.role] ?? errorsByRole[s.role] ?? []}
           onStagesChange={stages => editDraft(d => (d ? { ...d, stages } : d))}
-          onStageChange={setStage}
-          onRenameStage={(i, newId) => renameStage(normalizeStages(draft.stages)[i].id ?? draft.stages[i].role, newId)}
-          onRemoveStage={i => dropStage(normalizeStages(draft.stages)[i].id ?? draft.stages[i].role)}
+          selectedKey={settingsIndex >= 0 ? selectedStageId : null}
+          onSelectStage={setSelectedStageId}
           fullCycleStages={globals.find(t => t.builtInKey === 'full-cycle')?.stages ?? null}
         />
       </div>
+
+      {settingsOpen && (
+        <WorkflowStageSettings
+          stage={settingsStage}
+          stages={draft.stages}
+          index={Math.max(settingsIndex, 0)}
+          readOnly={readOnly}
+          specialties={catalog ?? []}
+          personas={personas}
+          mcpChoices={mcpChoices}
+          onChange={next => setStage(settingsIndex, next)}
+          onRenameId={newId => renameStage(selectedStageId ?? '', newId)}
+          onRemove={() => dropStage(selectedStageId ?? '')}
+          onClose={closeSettings}
+        />
+      )}
 
       <EditorFooter
         isNew={sel.isNew} isBuiltIn={isBuiltIn} isMobile={isMobile} canWrite={canWrite} readOnly={readOnly}

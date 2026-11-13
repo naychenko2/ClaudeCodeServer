@@ -13,8 +13,8 @@ const { WorkflowStageStrip } = await import('./WorkflowStageStrip');
 const noop = () => {};
 // React ставит <!-- --> между соседними текстовыми узлами — для сравнения подписей убираем.
 const render = (stages: WorkflowStage[], extra: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(WorkflowStageStrip, {
-  stages, readOnly: false, specialties: [], personas: [], mcpChoices: [], errorsFor: () => [],
-  onStagesChange: noop, onStageChange: noop, onRenameStage: noop, onRemoveStage: noop, ...extra,
+  stages, readOnly: false, specialties: [], personas: [], errorsFor: () => [],
+  onStagesChange: noop, selectedKey: null, onSelectStage: noop, ...extra,
 })).replace(/<!-- -->/g, '');
 
 const full = (): WorkflowStage[] => [

@@ -130,6 +130,63 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
         return await UpscaleAsync(request.Format, request.ShotTicket, null, request.UpscaleEtaSeconds, progress, ct);
     }
 
+    // ── «Увеличить» версию ×2 / ×4 (RelayVSR) ─────────────────────────────────────
+
+    public string? EnhanceRefusal(VideoEditScope scope) =>
+        ScopeRefusal(scope) ?? (media?.Available == true ? null : "Локальные модели сейчас недоступны");
+
+    public int? EnhanceEtaSeconds(int scale, int? width, int? height, double seconds) =>
+        media is not null && width is { } w && height is { } h ? media.EnhanceEtaSeconds(scale, w, h, seconds) : null;
+
+    // Отдельная тяжёлая задача над готовым клипом, стадия — upscaling: так «Отменить увеличение» работает как у «Макс».
+    // Отмена человеком — Cancelled без версии (съёмка-источник цела), сбой — Failed с причиной
+    public async Task<VideoResult> EnhanceAsync(EnhanceRequest request, IProgress<VideoProgress> progress, CancellationToken ct)
+    {
+        if (media is null) return VideoResult.Fail(VideoOutcome.Unavailable, "Локальные модели недоступны на этом сервере");
+        var origin = request.OwnerId is { } owner
+            ? new LocalJobOrigin(owner, request.SessionId, "video", $"видео ×{request.Scale}", true,
+                ProjectId: request.ProjectId, Source: LocalJobOrigin.SourceVideoEditor, SourceJobId: request.SourceJobId)
+            : null;
+        string? ticket = null;
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(Ceiling);
+            var submitted = await media.SubmitEnhanceAsync(new LocalVideoEnhanceRequest(request.Video, request.Scale, origin), timeout.Token);
+            if (submitted.Ticket is null)
+                return VideoResult.Fail(submitted.Busy ? VideoOutcome.Unavailable : VideoOutcome.Rejected,
+                    submitted.Error ?? "Локальная видеокарта не приняла увеличение");
+            ticket = submitted.Ticket;
+            _upscaleTickets[ticket] = false;
+            progress.Report(new VideoProgress(VideoStage.Upscaling, submitted.QueuePosition, submitted.EtaSeconds, RemoteId: ticket));
+
+            var done = await WaitAsync(ticket, submitted.EtaSeconds, VideoStage.Upscaling, null, progress, timeout.Token);
+            var cancelledByUser = _upscaleTickets.TryGetValue(ticket, out var flag) && flag;
+            var finished = ticket;
+            ticket = null;
+            _upscaleTickets.TryRemove(finished, out _);
+            if (done.State == LocalVideoState.Failed || done.File is null)
+                return cancelledByUser
+                    ? VideoResult.Fail(VideoOutcome.Cancelled, "Увеличение отменено")
+                    : VideoResult.Fail(VideoOutcome.Failed, "Увеличение не удалось: " + (done.Error ?? "локальная модель не вернула ролика"));
+            progress.Report(new VideoProgress(VideoStage.Downloading, RemoteId: finished));
+            return new VideoResult(VideoOutcome.Ok,
+                new VideoFile(done.File.Bytes, done.File.ContentType, done.File.Extension, HasSound: done.File.HasSound,
+                    Width: done.File.Width, Height: done.File.Height),
+                Free, false, finished, null);
+        }
+        catch (OperationCanceledException)
+        {
+            if (ticket is not null) await media.CancelAsync(ticket, CancellationToken.None);
+            if (ct.IsCancellationRequested) throw;
+            return VideoResult.Fail(VideoOutcome.Failed, $"Увеличение не уложилось в {Ceiling.TotalMinutes:0} минут");
+        }
+        finally
+        {
+            if (ticket is not null) _upscaleTickets.TryRemove(ticket, out _);
+        }
+    }
+
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
     public async Task<VideoResult> RunAsync(VideoRequest req, IProgress<VideoProgress> progress, CancellationToken ct)

@@ -96,6 +96,15 @@ public class PersonalVideoEditorController(
     public async Task<IActionResult> RetryUpscale(string sessionId, string sceneId, string versionId, CancellationToken ct) =>
         Gate(sessionId, out var scope, out var denied) ? await RetryUpscaleIn(scope, sessionId, sceneId, versionId, ct) : denied;
 
+    [HttpGet(VideoEditorRoutes.SceneVersionEnhance)]
+    public IActionResult EnhanceQuote(string sessionId, string sceneId, string versionId) =>
+        Gate(sessionId, out var scope, out var denied) ? EnhanceQuoteIn(scope, sessionId, sceneId, versionId) : denied;
+
+    [HttpPost(VideoEditorRoutes.SceneVersionEnhance)]
+    public async Task<IActionResult> Enhance(string sessionId, string sceneId, string versionId, [FromBody] VideoEnhanceRequest? req,
+        CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await EnhanceIn(scope, sessionId, sceneId, versionId, req, ct) : denied;
+
     [HttpPut(VideoEditorRoutes.SceneCurrent)]
     public async Task<IActionResult> Current(string sessionId, string sceneId, [FromBody] VideoSceneCurrentRequest? req) =>
         Gate(sessionId, out var scope, out var denied) ? await CurrentIn(scope, sessionId, sceneId, req) : denied;

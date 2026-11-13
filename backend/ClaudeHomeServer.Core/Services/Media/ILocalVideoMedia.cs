@@ -40,6 +40,16 @@ public interface ILocalVideoMedia
     // Можно ли сейчас увеличить съёмку по её тикету (контекст жив, латент сохранён). Нет — Fail у SubmitUpscaleAsync
     bool CanUpscale(string ticket) => false;
 
+    // «Увеличить» готовый ролик ×2 / ×4 (RelayVSR в ядре ComfyUI, отдельное действие над версией, не часть «Макс»):
+    // время по таблице замеров для ролика width×height и seconds секунд; null — размер или длина не замерены
+    int? EnhanceEtaSeconds(int scale, int width, int height, double seconds) => null;
+
+    // Тяжёлая задача GPU: ролик целиком в ComfyUI, звук исходника адаптер возвращает на место сам (RelayVSR звук не
+    // переносит). Тикет опрашивают PollAsync и снимают CancelAsync, как у съёмки. Нет ffmpeg, размер вне замеренных
+    // пределов или очередь занята — Fail с причиной. Реализация по умолчанию — «не умею»
+    Task<LocalVideoSubmitted> SubmitEnhanceAsync(LocalVideoEnhanceRequest request, CancellationToken ct) =>
+        Task.FromResult(LocalVideoSubmitted.Fail("Увеличение ролика недоступно: адаптер локальной съёмки его не поддерживает."));
+
     // Снять задачу: ждущую — из очереди, идущую — прервать адресно по её prompt_id. Задачи в очереди нет — false
     Task<bool> CancelAsync(string ticket, CancellationToken ct);
 }
@@ -57,6 +67,9 @@ public sealed record LocalVideoRequest(
     // Метка происхождения прогона (шаг 23): кто, из какой сессии, вид, операция, тяжёлая ли.
     // null — вызывающая сторона ещё не передаёт (шаги 28–30); реестр пишет неопределённое происхождение.
     LocalJobOrigin? Origin = null);
+
+// Video — mp4 исходной версии; Scale — 2 или 4; Origin — метка происхождения прогона (владелец, чат, «видео ×2», тяжёлый)
+public sealed record LocalVideoEnhanceRequest(byte[] Video, int Scale, LocalJobOrigin? Origin = null);
 
 // Busy — очередь GPU занята или ComfyUI не ответил: «попробуй позже», а не ошибка запроса
 public sealed record LocalVideoSubmitted(string? Ticket, int? QueuePosition, int? EtaSeconds, string? Error, bool Busy = false)
@@ -78,4 +91,5 @@ public sealed record LocalVideoPoll(
     LocalGpuQueueInfo? Gpu = null);
 
 // Extension — с точкой («.mp4»); HasSound — в ролике есть звуковая дорожка
-public sealed record LocalVideoFile(byte[] Bytes, string ContentType, string Extension, bool HasSound);
+// Width и Height — размер ролика, если адаптер его знает (у увеличения — всегда)
+public sealed record LocalVideoFile(byte[] Bytes, string ContentType, string Extension, bool HasSound, int? Width = null, int? Height = null);

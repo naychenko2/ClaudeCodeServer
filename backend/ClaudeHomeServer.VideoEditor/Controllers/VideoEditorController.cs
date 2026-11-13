@@ -101,6 +101,15 @@ public class VideoEditorController(
         CancellationToken ct) =>
         ChatGate(projectId, sessionId, out var scope, out var denied) ? await RetryUpscaleIn(scope, sessionId, sceneId, versionId, ct) : denied;
 
+    [HttpGet("sessions/{sessionId}/" + VideoEditorRoutes.SceneVersionEnhance)]
+    public IActionResult EnhanceQuote(string projectId, string sessionId, string sceneId, string versionId) =>
+        ChatGate(projectId, sessionId, out var scope, out var denied) ? EnhanceQuoteIn(scope, sessionId, sceneId, versionId) : denied;
+
+    [HttpPost("sessions/{sessionId}/" + VideoEditorRoutes.SceneVersionEnhance)]
+    public async Task<IActionResult> Enhance(string projectId, string sessionId, string sceneId, string versionId,
+        [FromBody] VideoEnhanceRequest? req, CancellationToken ct) =>
+        ChatGate(projectId, sessionId, out var scope, out var denied) ? await EnhanceIn(scope, sessionId, sceneId, versionId, req, ct) : denied;
+
     [HttpPut("sessions/{sessionId}/" + VideoEditorRoutes.SceneCurrent)]
     public async Task<IActionResult> Current(string projectId, string sessionId, string sceneId,
         [FromBody] VideoSceneCurrentRequest? req) =>

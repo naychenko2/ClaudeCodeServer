@@ -49,6 +49,15 @@ public interface IVideoEngine
 
     // «Повторить увеличение» (только «Макс» local H3): причина, по которой повтор по тикету съёмки невозможен, или null.
     // По умолчанию — у поставщика увеличения нет
+    // «Увеличить» версию ×2 / ×4: по умолчанию поставщик не умеет. Отказ области или недоступность — текст для человека
+    string? EnhanceRefusal(VideoEditScope scope) => VideoEnhanceTexts.NotSupported;
+
+    // Время по таблице замеров; null — размер или длина не замерены (размер версии не известен — тоже null)
+    int? EnhanceEtaSeconds(int scale, int? width, int? height, double seconds) => null;
+
+    Task<VideoResult> EnhanceAsync(EnhanceRequest request, IProgress<VideoProgress> progress, CancellationToken ct) =>
+        Task.FromResult(VideoResult.Fail(VideoOutcome.Rejected, VideoEnhanceTexts.NotSupported));
+
     string? UpscaleRetryRefusal(string shotTicket) => VideoUpscaleRetryTexts.NoUpscale;
 
     // Повторный апскейл по живому тикету съёмки, без пересъёмки. Удача — клип увеличенного размера без UpscaleError;
@@ -59,6 +68,11 @@ public interface IVideoEngine
 
 // ShotTicket — тикет съёмки у драйвера (только в памяти сервера); Format — формат запуска, из которого взята съёмка:
 // по нему результат получает размер ступени
+// «Увеличить» готовую версию ×2 / ×4 (RelayVSR, local): отдельное действие над mp4 версии, не часть «Макс». Video — байты
+// клипа версии; Width/Height версии, если известны; OwnerId, SessionId, ProjectId, SourceJobId — метка происхождения прогона
+public sealed record EnhanceRequest(byte[] Video, int Scale, string? OwnerId = null, string? SessionId = null,
+    string? ProjectId = null, string? SourceJobId = null);
+
 public sealed record UpscaleRetryRequest(string ShotTicket, ResolvedFormat? Format, int? UpscaleEtaSeconds = null);
 
 // Котировка драйвера: сумма в единицах поставщика, время и очередь. Драйвер без этого шва котируется

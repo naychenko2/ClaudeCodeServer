@@ -48,12 +48,12 @@ internal sealed class AgentWorld : IDisposable
     public string Chat => FilmWorld.Session;
 
     public AgentWorld(bool blocking = false, bool agentLaunch = true, bool delegatedDenied = false, bool withGate = true,
-        bool withContext = false)
+        bool withContext = false, IVideoEngine? extraEngine = null)
     {
         F = new FilmWorld(new ToolDsp(), withContext);
         Engine = new FakeEngine("fal", blocking);
         Prefs = new VideoPrefsService(new VideoPrefsStore(Path.Combine(F.Dir, "prefs")), F.Broadcaster);
-        Jobs = new VideoEditJobService([Engine], F.Workspace, F.JobThreads, NullLogger<VideoEditJobService>.Instance,
+        Jobs = new VideoEditJobService(extraEngine is null ? [Engine] : [Engine, extraEngine], F.Workspace, F.JobThreads, NullLogger<VideoEditJobService>.Instance,
             Prefs, Spend, F.Broadcaster);
         Scenes = new VideoSceneService(F.JobThreads, Prefs);
         Saver = new FilmSceneSaver(F.Service, F.Workspace, NullLogger<FilmSceneSaver>.Instance);

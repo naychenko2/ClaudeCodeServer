@@ -91,7 +91,9 @@ public sealed record VideoClipVersionDto(
     int? Width = null,
     int? Height = null,
     string? UpscaleError = null,
-    bool? UpscaleCancelled = null);
+    bool? UpscaleCancelled = null,
+    // Версия получена действием «Увеличить» (RelayVSR): 2 или 4; поля нет — обычная съёмка. Размер Width×Height — уже увеличенный
+    int? EnhanceScale = null);
 
 // Запуск в нить: якорь в ленте — по JobId. Status — VideoLaunchStatus.*. Interrupted дублирует
 // Status == "interrupted" ради простого условия на фронте: запуск оборвал перезапуск сервера,

@@ -219,7 +219,10 @@ public sealed class LocalActionExecutorsStore
     // MaxConcurrency (дефолт — DefaultLimit того же TrackedLocalLlmClient), у основной
     // локали — MaxConcurrentTurns провайдера по LocalLlm:EngineKey (тот же расчёт, что у
     // фабрики ILocalLlmClient в LlmSubsystem). Без реестра (юнит-тесты) — дефолт.
-    private int MaxConcurrencyOf(string engine) =>
+    // public — единый источник потолка не только для валидации: список движков в
+    // GET /api/usage (W2c) отдаёт UI это же число, иначе админ видел бы потолок,
+    // отличающийся от того, что он же и прошёл бы через Validate.
+    public int MaxConcurrencyOf(string engine) =>
         IsMainLocal(engine)
             ? _providers?.GetByKey(TrackedLocalLlmClient.ReadEngineKey(_config))?.MaxConcurrentTurns
               ?? TrackedLocalLlmClient.DefaultLimit

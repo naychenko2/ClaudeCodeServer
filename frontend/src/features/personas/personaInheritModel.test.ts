@@ -7,6 +7,7 @@ import {
   accessDiff,
   accessMode,
   toInherited,
+  toggleToolKey,
   toOwn,
   tierCellView,
 } from './personaInheritModel';
@@ -135,5 +136,13 @@ describe('accessDiff — отличия своих прав от специал�
   it('запреты вне профиля «Свой» не сравниваются; null у tools = все', () => {
     const d = accessDiff({ access: 'readOnly', tools: null, disallowedTools: ['Bash'] }, { access: 'readOnly' });
     expect(d).toMatchObject({ access: false, tools: [], extraDisallowed: [], count: 0 });
+  });
+});
+
+describe('toggleToolKey — чекбокс возможности меняет tools', () => {
+  it('включение добавляет ключ без дублей, выключение убирает', () => {
+    expect(toggleToolKey(['tasks'], 'web', true)).toEqual(['tasks', 'web']);
+    expect(toggleToolKey(['tasks', 'web'], 'web', true)).toEqual(['tasks', 'web']);
+    expect(toggleToolKey(['tasks', 'web'], 'web', false)).toEqual(['tasks']);
   });
 });

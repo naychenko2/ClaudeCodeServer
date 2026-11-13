@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { PersonaAccess } from '../../types';
 import { Badge, Checkbox, Chip, SegmentedControl, TextField } from '../../components/ui';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import type { AccessDiff } from './personaInheritModel';
+import { toggleToolKey, type AccessDiff } from './personaInheritModel';
 
 // Группа «Права» формы персоны (макет persona-inheritance.html, группа «Права»):
 // карточка с переключателем «Как у специальности / Своё». При наследовании контролы
@@ -51,8 +51,7 @@ export function PersonaAccessGroup(p: PersonaAccessGroupProps) {
     setAdding(false);
   };
 
-  const toggleTool = (key: string, on: boolean) =>
-    p.onTools(on ? [...p.tools, key] : p.tools.filter(t => t !== key));
+  const toggleTool = (key: string, on: boolean) => p.onTools(toggleToolKey(p.tools, key, on));
 
   return (
     <div data-testid="access-group">

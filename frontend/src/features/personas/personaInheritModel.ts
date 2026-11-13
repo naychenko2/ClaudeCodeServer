@@ -137,3 +137,9 @@ export function accessDiff(own: AccessGroup, template: AccessGroup | null | unde
     count: (access ? 1 : 0) + tools.length + extraDisallowed.length + missingDisallowed.length,
   };
 }
+
+// Переключение возможности чекбоксом: порядок и дубли не копятся.
+export function toggleToolKey(tools: string[], key: string, on: boolean): string[] {
+  const rest = tools.filter(t => t !== key);
+  return on ? [...rest, key] : rest;
+}

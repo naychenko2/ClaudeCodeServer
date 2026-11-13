@@ -173,14 +173,20 @@ function nodeAria(stage: FeatureStage): string {
 
 // Вторая строка узла (B01): ждёт человека — warning («ждёт ответа вас»), ждёт ветки —
 // приглушённо; иначе «Персона · время» (части без данных пропускаются); пусто — строки нет.
-export function nodeMeta(stage: FeatureStage): { text: string; color: string } | null {
-  if (stage.waiting === 'human') return { text: 'ждёт ответа вас', color: C.warning };
-  if (stage.waiting === 'branches') return { text: 'ждёт обе ветки', color: C.textMuted };
+// F33a (макет .nm): у proposed-узла пометка «предложено» живёт здесь же: при пустой мете —
+// на её месте, при занятой — рядом через « · »; в нижней строке с ролью её нет.
+export function nodeMeta(
+  stage: FeatureStage,
+): { text: string; color: string; proposed?: boolean } | null {
+  if (stage.waiting === 'human') return { text: 'ждёт ответа вас', color: C.warning, proposed: stage.proposed };
+  if (stage.waiting === 'branches') return { text: 'ждёт обе ветки', color: C.textMuted, proposed: stage.proposed };
   const parts: string[] = [];
   const names = (stage.personaNames ?? []).filter(Boolean);
   if (names.length > 0) parts.push(names.join(', '));
   if (stage.elapsedMinutes != null) parts.push(formatDuration(stage.elapsedMinutes));
-  return parts.length > 0 ? { text: parts.join(' · '), color: C.textSecondary } : null;
+  if (parts.length > 0) return { text: parts.join(' · '), color: C.textSecondary, proposed: stage.proposed };
+  // Мета пуста, но есть пометка — строка нужна ради неё (цвет .nm макета — text-muted).
+  return stage.proposed === true ? { text: '', color: C.textMuted, proposed: true } : null;
 }
 
 // Сегменты полоски задач ветки: готово (success) → в работе (accent) → остальное (трек).
@@ -237,12 +243,14 @@ function MarkerIcon({ stage }: { stage: FeatureStage }) {
   );
 }
 
-// Легенда графа (макет P30): значки — те же, что рисует узел.
-const LEGEND: { mark: string; text: string }[] = [
+// Легенда графа (макет P30): значки — те же, что рисует узел. Строка про proposed (макет
+// :463) — onlyWithProposed: показывается только когда на графе есть proposed-узел (F33a).
+const LEGEND: { mark: string; text: string; color?: string; onlyWithProposed?: boolean }[] = [
   { mark: '✓', text: 'готово' },
   { mark: '●', text: 'в работе' },
   { mark: '◐', text: 'ждёт человека' },
   { mark: '┄', text: 'ещё не начато' },
+  { mark: '┄', text: 'фиолетовый пунктир — предложено, не подтверждено', color: C.plan, onlyWithProposed: true },
   { mark: '↺', text: 'возвраты на доработку' },
   { mark: '⇉', text: 'рамка — параллельно' },
 ];
@@ -283,6 +291,8 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
   for (const col of cols) {
     for (const s of col.stages) stagesById.set(stageNodeId(s), s);
   }
+  // Строка легенды «предложено» — только при proposed-узле на графе (F33a, макет :463).
+  const hasProposed = [...stagesById.values()].some(s => s.proposed === true);
   let farLane = 0;
 
   return (
@@ -389,12 +399,14 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                 gap: SP.xs, padding: `${SP.xs}px ${SP.sm}px`, textAlign: 'left', cursor: 'pointer', zIndex: 1,
                 borderRadius: R.lg, font: 'inherit',
                 background: proposed ? C.planLight : quiet ? 'transparent' : C.bgWhite,
-                border: `1px ${(quiet || proposed) && !selected ? 'dashed' : 'solid'} ${
-                  selected ? C.accent
-                    : proposed ? C.planBorder
-                    : active ? toneColor(stage.tone)
-                      : quiet ? C.dashed
-                        : C.borderLight}`,
+                // Рамка proposed — «1px dashed c-plan» целиком (макет .node.prop, F33a).
+                border: proposed && !selected
+                  ? `1px dashed ${C.plan}`
+                  : `1px ${(quiet || proposed) && !selected ? 'dashed' : 'solid'} ${
+                    selected ? C.accent
+                      : active ? toneColor(stage.tone)
+                        : quiet ? C.dashed
+                          : C.borderLight}`,
                 ...(selected ? { boxShadow: SHADOW.focus } : {}),
               }}
             >
@@ -420,7 +432,9 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                   title={nodeTitle(stage)}
                   style={{
                     flex: '1 1 auto', minWidth: 0, lineHeight: 1.25, overflowWrap: 'anywhere',
-                    fontSize: FS.sm, fontWeight: 600, color: quiet ? C.textSecondary : C.textHeading,
+                    // Заголовок proposed-узла — plan-text (макет .node.prop .nn, F33a).
+                    fontSize: FS.sm, fontWeight: 600,
+                    color: proposed ? C.planText : quiet ? C.textSecondary : C.textHeading,
                   }}
                 >
                   {nodeTitle(stage)}
@@ -432,14 +446,13 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                   style={{ fontSize: FS.xs, color: meta.color, lineHeight: 1.2, overflowWrap: 'anywhere' }}
                 >
                   {meta.text}
+                  {meta.text && meta.proposed ? ' · ' : ''}
+                  {meta.proposed === true && (
+                    <span data-testid={`pgraph-proposed-${id}`} style={{ color: C.textMuted }}>предложено</span>
+                  )}
                 </span>
               )}
               <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
-                {stage.proposed === true && (
-                  <span data-testid={`pgraph-proposed-${id}`} style={{ fontSize: FS.xxs, fontStyle: 'italic', color: C.textMuted }}>
-                    предложено
-                  </span>
-                )}
                 {stage.role && (
                   <span data-testid={`pgraph-role-${id}`} style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>
                     {stage.role}
@@ -474,9 +487,9 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
         data-testid="pgraph-legend"
         style={{ display: 'flex', flexWrap: 'wrap', gap: `${SP.xs}px ${SP.md}px`, fontSize: FS.xxs, color: C.textMuted }}
       >
-        {LEGEND.map(l => (
-          <span key={l.mark} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
-            <span aria-hidden="true" style={{ fontFamily: FONT.mono }}>{l.mark}</span>
+        {LEGEND.filter(l => !l.onlyWithProposed || hasProposed).map(l => (
+          <span key={l.text} data-testid={l.onlyWithProposed ? 'pgraph-legend-proposed' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
+            <span aria-hidden="true" style={{ fontFamily: FONT.mono, ...(l.color ? { color: l.color } : {}) }}>{l.mark}</span>
             {l.text}
           </span>
         ))}

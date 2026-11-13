@@ -8,12 +8,17 @@
 // - без title (легаси и этап без имени) — как раньше: имя роли (stageName) + линия (laneWord)
 //   для параллельных этапов одной роли; без линии — просто имя роли;
 // - длинное имя этапа (как в шагах воспроизведения дефекта) ограничено рамкой узла:
-//   multiline-clamp на 2 строки; полное имя остаётся в title и aria-label.
+//   multiline-clamp на 2 строки; полное имя остаётся в title и aria-label;
+// - узел «предложено» по макету (F33a): рамка dashed c-plan и заголовок plan-text;
+//   пометка «предложено» в строке меты (при пустой мете — на её месте, при занятой —
+//   рядом через « · »), один раз и не в нижней строке; proposed=false (бэк шлёт false
+//   у подтверждённого маршрута) — стиль прежний; строка легенды только при proposed-узле.
 // Колонки, рёбра и состояния компонент не пересчитывает — это покрыто в FeatureProcessGraphModel.test.ts.
 //
 // Мутации (проверяются прогоном): (1) убрать `if (stage.title)` в nodeTitle — краснеет
 // «данные пресета…»; (2) убрать линию в фолбэке — краснеет «без title…»; (3) убрать clamp
-// подписи (WebkitLineClamp/overflow) — краснеет «подпись узла ограничена рамкой».
+// подписи (WebkitLineClamp/overflow) — краснеет «подпись узла ограничена рамкой»;
+// (4) игнорировать признак proposed (nodeMeta и рендер узла) — краснеют блоки F33a.
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -210,5 +215,68 @@ describe('FeatureProcessGraph: данные узла B01 (F06)', () => {
     expect(txt(get(c, 'pgraph-proposed-rv'))).toBe('предложено');
     expect(get(c, 'pgraph-proposed-fn')).toBeNull();
     expect(txt(get(c, 'pgraph-role-rv'))).toBe('review');
+  });
+});
+
+describe('FeatureProcessGraph: узел «предложено» по макету (F33a)', () => {
+  const get = (c: unknown, tid: string) => findNodeByAttr(c as never, 'data-testid', tid);
+  const txt = (n: unknown) => textNodes(n as never).join('');
+  // Значение style из пропсов элемента (border/color — строки токенов C.*).
+  const css = (n: unknown, key: string): string =>
+    String((reactProps(n as never) as { style: Record<string, unknown> }).style[key]);
+
+  it('proposed=true: рамка dashed c-plan, заголовок plan-text', () => {
+    const c = render([{ ...mkStage('design', 'dz', 'design', 0, 'pending'), proposed: true }]);
+    const node = get(c, 'pgraph-node-dz')!;
+    expect(node.getAttribute('data-proposed')).toBe('true');
+    expect(css(node, 'border')).toBe('1px dashed var(--c-plan)');
+    expect(css(get(c, 'pgraph-title-dz'), 'color')).toBe('var(--c-plan-text)');
+  });
+
+  it('proposed=false (бэк шлёт false у подтверждённого маршрута): стиль и мета прежние', () => {
+    const c = render([
+      { ...mkStage('review', 'rv', 'review', 0, 'pending'), proposed: false },
+      mkStage('final', 'fn', 'final', 1, 'pending', ['rv']),
+    ]);
+    // Тот же узел, что без поля: рамка и цвет заголовка совпадают, пометки и меты нет.
+    expect(css(get(c, 'pgraph-node-rv'), 'border')).toBe(css(get(c, 'pgraph-node-fn'), 'border'));
+    expect(css(get(c, 'pgraph-node-rv'), 'border')).not.toContain('var(--c-plan)');
+    expect(css(get(c, 'pgraph-title-rv'), 'color')).toBe('var(--c-text-secondary)');
+    expect(get(c, 'pgraph-proposed-rv')).toBeNull();
+    expect(get(c, 'pgraph-meta-rv')).toBeNull();
+    expect(get(c, 'pgraph-legend-proposed')).toBeNull();
+  });
+
+  it('пометка в строке меты: при пустой мете — на её месте, при занятой — рядом через « · »', () => {
+    const c = render([
+      { ...mkStage('review', 'rv', 'review', 0, 'pending'), proposed: true },
+      { ...mkStage('final', 'fn', 'final', 1, 'pending', ['rv']), proposed: true, personaNames: ['Полина'], elapsedMinutes: 70 },
+    ]);
+    expect(txt(get(c, 'pgraph-meta-rv'))).toBe('предложено');
+    expect(txt(get(c, 'pgraph-meta-fn'))).toBe('Полина · 1 ч 10 мин · предложено');
+    expect(css(get(c, 'pgraph-proposed-rv'), 'color')).toBe('var(--c-text-muted)');
+  });
+
+  it('в нижней строке с ролью пометки нет: во всем узле она встречается ровно один раз', () => {
+    const c = render([{ ...mkStage('review', 'rv', 'review', 0, 'pending'), proposed: true, line: 'front' }]);
+    const whole = txt(get(c, 'pgraph-node-rv'));
+    expect((whole.match(/предложено/g) ?? []).length).toBe(1);
+    // Роль и линия на своих местах — пометка их не вытеснила.
+    expect(txt(get(c, 'pgraph-role-rv'))).toBe('review');
+    expect(txt(get(c, 'pgraph-line-rv'))).toBe('фронт');
+  });
+
+  it('строка легенды про «предложено» — только когда на графе есть proposed-узел', () => {
+    const withProposed = render([
+      { ...mkStage('review', 'rv', 'review', 0, 'pending'), proposed: true },
+      mkStage('final', 'fn', 'final', 1, 'pending', ['rv']),
+    ]);
+    const legend = get(withProposed, 'pgraph-legend-proposed');
+    expect(legend).not.toBeNull();
+    expect(txt(legend!)).toContain('фиолетовый пунктир — предложено, не подтверждено');
+    const without = render([mkStage('review', 'rv', 'review', 0, 'pending')]);
+    expect(get(without, 'pgraph-legend-proposed')).toBeNull();
+    // Остальная легенда — без изменений.
+    expect(get(without, 'pgraph-legend')).not.toBeNull();
   });
 });

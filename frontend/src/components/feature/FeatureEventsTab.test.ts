@@ -65,9 +65,16 @@ const mockState = vi.hoisted(() => {
     reset: () => { expanded = false; expandError = false; },
   };
 });
-vi.mock('../../lib/featurePage', async () => {
+// Полный мок через importOriginal (тот же приём, что FeatureLanePopover.test.ts:67):
+// реальный модуль даёт все экспорты — recordFeatureReturn при переходе «задача»/«чат»
+// читает featureMainTabLabel/featureHasRoute (дефект 762b7c03); неполный мок ронял
+// клик «задача». Подменены только функции стора; следующие новые экспорты
+// featurePage этот мок не сломают.
+vi.mock('../../lib/featurePage', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/featurePage')>();
   const React = await vi.importActual<typeof import('react')>('react');
   return {
+    ...orig,
     getFeaturePageTab: () => 'events' as const,
     // Чип возврата (featureBackNav.ts:157) при recordFeatureReturn без tab читает
     // мейн-вкладку из стора: здесь — 'review', как toMainTab('events') в реальном сторе.

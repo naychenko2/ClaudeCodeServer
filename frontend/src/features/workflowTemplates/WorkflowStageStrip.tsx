@@ -45,11 +45,22 @@ export function WorkflowStageStrip({
   stagesRef.current = stages;
   const cleanup = useRef<(() => void) | null>(null);
   useEffect(() => () => cleanup.current?.(), []);
+  // Ключ этапа, чья ручка держала фокус при перестановке стрелкой. React двигает DOM-узел
+  // (insertBefore), а браузер при этом сбрасывает фокус на body — возвращаем его ручке.
+  const refocusKey = useRef<string | null>(null);
 
   const norm = normalizeStages(stages);
   const columns = stripColumns(stages);
   const groups = stripGroups(stages);
   const keys = stageKeys(stages);
+  useEffect(() => {
+    const key = refocusKey.current;
+    if (key === null) return;
+    refocusKey.current = null;
+    const row = document.querySelector(`[data-stage-index="${keys.indexOf(key)}"]`);
+    const grip = row?.querySelector<HTMLElement>('[data-stage-grip]');
+    if (grip && document.activeElement !== grip) grip.focus();
+  });
   const specLabels = Object.fromEntries(specialties.map(s => [s.key, s.label]));
   const persons = personas.map(p => ({ id: p.id, name: p.name, role: p.role }));
   const usedSingles = new Set(norm.map(s => s.role).filter(r => SINGLE_ROLES.includes(r as never)));
@@ -107,7 +118,9 @@ export function WorkflowStageStrip({
     if (delta === 0) return;
     e.preventDefault();
     const to = keyboardTarget(index, delta, stages.length);
-    if (to !== null) onStagesChange(moveStage(stages, index, to));
+    if (to === null) return;
+    refocusKey.current = keys[index];
+    onStagesChange(moveStage(stages, index, to));
   };
 
   const addButton = (

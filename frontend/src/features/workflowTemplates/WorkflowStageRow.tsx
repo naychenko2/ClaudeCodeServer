@@ -133,6 +133,7 @@ export function WorkflowStageRow({
         {!readOnly && (
           <button
             type="button"
+            data-stage-grip=""
             aria-label={`Переставить этап «${nameShown}»: стрелки вверх и вниз или перетащите`}
             title="Перетащите (на сенсорном — долгое нажатие) или стрелками вверх/вниз"
             onPointerDown={grip?.onPointerDown}

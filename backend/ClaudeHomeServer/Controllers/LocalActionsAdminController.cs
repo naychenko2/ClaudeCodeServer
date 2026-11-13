@@ -18,7 +18,8 @@ namespace ClaudeHomeServer.Controllers;
 public class LocalActionsAdminController(
     LocalActionOverridesStore store, LocalActionRouter router,
     LlmProviderRegistry providers, ModelCatalogService models,
-    LocalActionPresetService presets, SpecialtySettingsStore specialty) : ControllerBase
+    LocalActionPresetService presets, SpecialtySettingsStore specialty,
+    LocalActionExecutorsStore executors) : ControllerBase
 {
     // route: "local" | "tier:strong|medium|weak" (слоты тиров) | id модели провайдера;
     // легаси "claude"/"default" принимаются и трактуются как tier:medium (LocalActionRouter.Parse)
@@ -26,6 +27,14 @@ public class LocalActionsAdminController(
 
     // preset: "recommended" | "free" | "local" | "balanced" | "tiers" | "tiers-local"
     public record PresetRequest(string Preset);
+
+    // Тело PUT {key}/executors — та же форма, что запись стора (data/local-action-executors.
+    // json), но тип свой и поля nullable: MVC молча отвергает null в non-nullable свойстве
+    // ещё до тела метода (implicit required) и отвечал бы своим ValidationProblemDetails
+    // вместо этого контракта; здесь null доходит до явной проверки ниже и 400 одинаковой
+    // формы. parallel/двигатель по умолчанию — как инициализаторы стора (1, "").
+    public sealed record ExecutorRequest(string? Engine, int? Parallel);
+    public sealed record ExecutorsRequest(int? MaxTotal, List<ExecutorRequest?>? Executors);
 
     // Массово подобрать исполнителя всем действиям по пресету. Возвращает применённый пресет и
     // число затронутых действий; актуальный список маршрутов фронт перечитывает из GET /api/usage.
@@ -103,6 +112,60 @@ public class LocalActionsAdminController(
                 new { error = "Не удалось сохранить настройку на диск — проверьте путь и права data" });
 
         return Ok(Describe(key));
+    }
+
+    // Исполнители-движки места с ParallelExecutors (разрез «ночь вики на нескольких
+    // локальных исполнителях» §2): список локальных движков, их параллельность и потолок
+    // слотов одного владельца. Форма тела — ровно запись стора (data/local-action-executors.
+    // json): инициализатор LocalActionExecutorConfig даёт parallel=1, когда поле не прислано.
+    // Пустой executors — снять ключ: место идёт по своему маршруту, как до фичи. Массовые
+    // пресеты (ApplyPreset) этот список не трогают: маршрут и исполнители — разные слои
+    // одной настройки (И3, путь 7).
+    [HttpPut("{key}/executors")]
+    public IActionResult SetExecutors(string key, [FromBody] ExecutorsRequest req)
+    {
+        // Тело правят и руками: «"executors": null» или «[…, null]» доходят до тела метода
+        // (поля запроса nullable — см. ExecutorsRequest). Без этой проверки Validate/Save
+        // стора прочитали бы .Count и дали бы 500 вместо 400 с текстом (дельта-ревью W2a).
+        if (req is null || req.Executors is null)
+            return BadRequest(new { errors = new[] {
+                "Список исполнителей не прислан: чтобы сбросить к нынешнему поведению, пришлите пустой список" } });
+
+        // Конфиг для стора — из запроса, с дефолтами инициализаторов стора (parallel=1,
+        // engine="": пустое имя отвергается его валидатором как «Исполнитель без имени»).
+        // Пустая запись в списке — 400 здесь, до стора: его Validate/Save читают .Count и на
+        // null-элементе дали бы 500 (дельта-ревью W2a).
+        var items = new List<LocalActionExecutorConfig>(req.Executors.Count);
+        foreach (var e in req.Executors)
+        {
+            if (e is null)
+                return BadRequest(new { errors = new[] { "В списке исполнителей пустая запись" } });
+            items.Add(new LocalActionExecutorConfig { Engine = e.Engine ?? "", Parallel = e.Parallel ?? 1 });
+        }
+        var cfg = new LocalActionExecutorsConfig { MaxTotal = req.MaxTotal ?? 0, Executors = items };
+
+        // Валидатор — сам стор (W2a): все его ошибки, включая «места нет в каталоге» и
+        // «место не ведёт нескольких исполнителей», уходят 400 списком: админ обязан видеть,
+        // ЧТО именно не принято (И3, путь 5: через HTTP в список не попадает ничего, кроме
+        // локального движка).
+        var errors = executors.Validate(key, cfg);
+        if (errors.Count > 0)
+            return BadRequest(new { errors });
+
+        if (!executors.Save(key, cfg))
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                new { error = "Не удалось сохранить настройку на диск — проверьте путь и права data" });
+
+        // 200 — сохранённое состояние так, как его видит стор после записи: только живые
+        // движки (после принятого Validate все живые), порядок — приоритет. Пустой список:
+        // ключ снят, maxTotal при нём не значится (0).
+        var saved = executors.TryGet(key);
+        return Ok(new
+        {
+            key,
+            maxTotal = saved?.MaxTotal ?? 0,
+            executors = (IReadOnlyList<LocalActionExecutorConfig>?)saved?.Executors ?? [],
+        });
     }
 
     // Сброс к значению из конфига/каталога

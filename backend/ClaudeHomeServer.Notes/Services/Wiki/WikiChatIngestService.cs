@@ -63,9 +63,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // Конкурентность (хвосты ревью S6b-3):
 // - две заявки одного чата — один разбор: ключ in-flight включает дом (owner|chat|home),
 //   вторая присоединяется к незавершённой задаче и получает её результат;
-// - ключ не включает место разбора (actionKey, N7a): кнопка и ночь по одному чату дают
-//   один прогон, движок — того, кто пришёл первым; присоединившаяся заявка получает его
-//   результат и своей моделью не оборачивается;
+// - ключ не включает ни места разбора (actionKey, N7a), ни названного исполнителя (engine,
+//   W3): кнопка и ночь по одному чату дают один прогон, движок — того, кто пришёл первым;
+//   присоединившаяся заявка получает его результат и своей моделью не оборачивается;
 // - ct заявителя не передаётся общему прогону: разбор — задача очереди, отмена одной
 //   заявки не гасит чужую;
 // - сбой внутри прогона — исход с причиной, исключения наружу нет;
@@ -185,10 +185,13 @@ public sealed class WikiChatIngestService
     /// заявки одного чата — один разбор. ct участвует в сигнатуре заявителя, но не
     /// передаётся общему прогону (см. шапку). Исключения наружу нет.
     /// actionKey (N7a) — место разбора для вызова модели: null — прежний wiki-ingest
-    /// (кнопка и путь MCP), ночь подаёт wiki-nightly. In-flight-ключ места не содержит:
-    /// присоединившаяся заявка получает движок того, кто пришёл первым (см. шапку).</summary>
+    /// (кнопка и путь MCP), ночь подаёт wiki-nightly. engine (W3) — названный локальный
+    /// исполнитель этого места («local» или имя из LocalEngines:*): его даёт только ночь,
+    /// дальше он доходит до CallModelAsync; в Request и в in-flight-ключ не входит (см.
+    /// шапки обоих сервисов): присоединившаяся заявка получает движок того, кто пришёл
+    /// первым.</summary>
     public Task<ChatResult> AnalyzeAsync(string ownerId, string sessionId, CancellationToken ct = default,
-        string? actionKey = null)
+        string? actionKey = null, string? engine = null)
     {
         // F3 (хвосты ревью): отказ заявки — тоже последний исход, он записывается в тот же
         // last, что и исход прогона: «анализировать» и «last» описывают одно состояние.
@@ -261,7 +264,7 @@ public sealed class WikiChatIngestService
             ChatResult result;
             try
             {
-                result = await RunProtectedAsync(ownerId, sessionId, home, session, actionKey);
+                result = await RunProtectedAsync(ownerId, sessionId, home, session, actionKey, engine);
             }
             catch (Exception)
             {
@@ -524,11 +527,11 @@ public sealed class WikiChatIngestService
     }
 
     private async Task<ChatResult> RunProtectedAsync(string ownerId, string sessionId, string home, Session session,
-        string? actionKey)
+        string? actionKey, string? engine)
     {
         try
         {
-            return await RunAsync(ownerId, sessionId, home, session, actionKey);
+            return await RunAsync(ownerId, sessionId, home, session, actionKey, engine);
         }
         catch (Exception e)
         {
@@ -539,7 +542,7 @@ public sealed class WikiChatIngestService
     }
 
     private async Task<ChatResult> RunAsync(string ownerId, string sessionId, string home, Session session,
-        string? actionKey)
+        string? actionKey, string? engine)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
         if (!WikiPaths.IsInitialized(_dataDir, ownerId))
@@ -624,9 +627,11 @@ public sealed class WikiChatIngestService
                 break;
             }
 
+            // Исполнитель (engine) доходит до CallModelAsync тем же путём, что и место:
+            // в Request его нет — он параметр маршрута вызова, не данные заявки.
             var ing = await _ingest.IngestAsync(ownerId, new WikiIngestService.Request(
                 WikiGate.OriginSession, $"session:{sessionId}#m{from}-{to}",
-                cap.CardRelPath!, WindowText(window), home, null), actionKey: actionKey);
+                cap.CardRelPath!, WindowText(window), home, null), actionKey: actionKey, engine: engine);
             // Расход окна прибавляется до разбора его исхода: он не зависит от того, чем
             // окно закончилось (applied, nothing_new, отказ после модели) (WC-4a).
             inputTokens += ing.InputTokens;

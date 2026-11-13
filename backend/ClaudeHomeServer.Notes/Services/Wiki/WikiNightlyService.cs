@@ -107,16 +107,18 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   цепочка, что RunLocalOrChosenAsync), без финального claude-шага. Падение или недоступность
 //   локали — отказ вызова: окно разбора уходит в Rejected и курсор не двигается, ступень 2
 //   оставляет чат серым; целая ночь таких отказов (каждый разобранный чат отказан и вход нулевой)
-//   — итог error, не completed (WN-2, конец RunPassAsync); три отказа локального маршрута подряд
-//   обрывают проход сразу (выключатель 2e13d45c, LocalDownBreakAfter) — ночь при мёртвом движке
-//   не сжигает очередь на повтор одного и того же отказа. Фактический вход этих вызовов (usage
+//   — итог error, не completed (WN-2, конец RunPassAsync); три отказа «модель недоступна» подряд у
+//   ОДНОГО исполнителя выводят его из прохода (W5: LocalDownBreakAfter, ExecutorDownState) — его
+//   слоты чатов больше не получают, а его чат без применённого окна один раз возвращается в
+//   голову очереди, чтобы его добрал другой исполнитель. Ночь стоит, пока жив хоть один; выбыли
+//   все — итог error, дату он не закрывает (2e13d45c). Фактический вход этих вызовов (usage
 //   того же ответа движка) суммируется в NightResult.InputTokens — меры нагрузки, не денег.
 //   Кнопка «Разобрать» и агент wiki_ingest не затронуты — облако там допустимо. Проход судьи
 //   (J-J4) — другое место (wiki-judge, маршрут которого выбирает админ): он не зависит от того,
 //   жива ли локальная модель ночи, и выключатель мёртвого локального маршрута к нему не
 //   относится. Ничего в проходе ночи не предполагает единственного локального исполнителя
 //   (J-W2): ни имени движка, ни его порта.
-public sealed class WikiNightlyService : BackgroundService
+public sealed partial class WikiNightlyService : BackgroundService
 {
     public const string OutcomeCompleted = "completed";
     public const string OutcomeBudget = "budget";
@@ -131,16 +133,6 @@ public sealed class WikiNightlyService : BackgroundService
     public const int MinHumanDelta = 3;
     // Доля InputTokenBudget, отданная разбору чатов (остальное — запас).
     private const double ChatBudgetShare = 0.7;
-
-    /// <summary>Выключатель мёртвого локального маршрута (дефект 2e13d45c, J-O1): три окна
-    /// разбора подряд, отказанных потому, что локальной модели нет (причина
-    /// WikiIngestService.ReasonLocalUnavailable, InputTokens 0 — модель не звалась), — это не
-    /// три несчастливых чата, а один и тот же отказ трижды: дальше по очереди будет то же
-    /// самое, и ночь 12.11 сожгла так 41 отказ на проход. Проход обрывается сразу, итог error
-    /// (дату не закрывает, следующий тик окна пробует снова — как любой error). Считаются подряд
-    /// идущие отказы маршрута места, а не конкретного движка: к ночи может добавиться второй
-    /// локальный исполнитель (J-W2).</summary>
-    private const int LocalDownBreakAfter = 3;
 
     /// <summary>Итог прохода — то, что лежит в keeper/nightly-last.json. Date — дата начала окна
     /// (yyyy-MM-dd); Selected — чатов, прошедших отбор и дельту; Analyzed — разборов, вернувших
@@ -168,8 +160,11 @@ public sealed class WikiNightlyService : BackgroundService
     /// операции судьи; судья применяет пакет целиком, поэтому в Applied он не переходит.
     /// Stage2Refused / FirstStage2Refusal (хвост ревью R-J-W0) — сколько раз ступень 2 отказала
     /// серому чату и причина первой из них: без неё нелокальный маршрут места молча оставлял
-    /// чаты серыми весь проход. В файле итога поля аддитивны: старый итог (без поля)
-    /// читается нулями, старый Manual — false.</summary>
+    /// чаты серыми весь проход. Executors (W6a) — счётчики по названным исполнителям прохода в
+    /// порядке их списка стора; пустой список — путь без названных исполнителей (имени движка
+    /// там нет, J-W2). В файле итога поля аддитивны: старый итог (без поля)
+    /// читается нулями, старый Manual — false, Executors — null: «не измерено», а не «ни одного
+    /// исполнителя не было» (читать его пустым нельзя — это разные вещи).</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
         int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0,
@@ -177,7 +172,17 @@ public sealed class WikiNightlyService : BackgroundService
         int Dropped = 0, string? FirstDropReason = null,
         int JudgeCalls = 0, decimal JudgeCostUsd = 0m, int JudgeApplied = 0, int JudgeRejected = 0,
         int JudgeDeferred = 0, int CodeRejected = 0,
-        int Stage2Refused = 0, string? FirstStage2Refusal = null);
+        int Stage2Refused = 0, string? FirstStage2Refusal = null,
+        IReadOnlyList<NightExecutorStat>? Executors = null);
+
+    /// <summary>Счётчики одного названного исполнителя прохода (W6a): что он сделал в этой ночи.
+    /// Engine — имя движка из списка стора (тот же ключ, что в состоянии отказов W5);
+    /// Analyzed/Rejected — его разборы и из них отказанные; InputTokens — его понесённый вход
+    /// (часть той же суммы NightResult.InputTokens: вход ступени 2 к движку не относится — он
+    /// не на названном движке шёл). WithdrawnAt — время, на котором исполнитель выбыл до конца
+    /// прохода (три отказа «модели нет» подряд, W5); null — дожил до конца.</summary>
+    public sealed record NightExecutorStat(
+        string Engine, int Analyzed, int Rejected, long InputTokens, DateTimeOffset? WithdrawnAt);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -201,9 +206,13 @@ public sealed class WikiNightlyService : BackgroundService
     private readonly Composition.INotificationSender? _notifications;
     private readonly WikiKeeper? _keeper;
     private readonly ILogger<WikiNightlyService> _log;
-    private readonly Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> _analyze;
-    // Проход судьи (J-J4, точка «а»): та же форма шва, что у _analyze — точка запуска проверяется
-    // без настоящей облачной модели. null (тест без судьи) — прохода судьи нет, поля итога нулевые.
+    // Шов разбора (W4a1): владелец, чат, engine, ct. engine (W3) — названный локальный исполнитель
+    // («local» или имя из LocalEngines:*); null — прежний маршрут места. Ночь называет engine в
+    // координаторе (W4a2): слоту — исполнитель из списка места, последовательному проходу — null.
+    private readonly Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> _analyze;
+    // Проход судьи (J-J4, точка «а»): тот же приём шва Func-делегатом, что у _analyze — точка
+    // запуска проверяется без настоящей облачной модели. null (тест без судьи) — прохода судьи нет,
+    // поля итога нулевые.
     private readonly Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? _judge;
     private readonly Func<DateTimeOffset> _clock;
     private readonly string _dataDir;
@@ -213,8 +222,10 @@ public sealed class WikiNightlyService : BackgroundService
         IConfiguration config, ILogger<WikiNightlyService> log, Composition.IFeatureFlagGate? flags = null,
         Composition.INotificationSender? notifications = null)
         : this(sessions, recalc, stage2,
-            // actionKey — только константа места: внешнего ввода у ночи нет.
-            (owner, chat, ct) => ingest.AnalyzeAsync(owner, chat, ct, LocalActionCatalog.WikiNightly),
+            // actionKey — только константа места: внешнего ввода у ночи нет. engine (W4a1) —
+            // проброс аргумента шва в тот же вызов: его называет координатор ночи (W4a2) или null
+            // для последовательного прохода без исполнителей.
+            (owner, chat, engine, ct) => ingest.AnalyzeAsync(owner, chat, ct, LocalActionCatalog.WikiNightly, engine),
             llm, config, log, flags, clock: null, notifications: notifications, keeper: keeper,
             judge: (owner, root, ct) => judge.RunAsync(owner, root, ct))
     {
@@ -224,9 +235,10 @@ public sealed class WikiNightlyService : BackgroundService
     // окно — без ожидания ночи). В приложении сюда попадает только цепочка из публичного
     // конструктора. notifications и keeper — после clock: существующие вызовы шва (позиционные)
     // не сдвигаются. keeper == null (тест без шва заведения) — ночь не заводит вики и берёт только
-    // заведённых.
+    // заведённых. analyze — шов разбора (владелец, чат, engine, ct): test-фабрики engine не
+    // смотрят, они считают вызовы и возвращают заданный исход.
     internal WikiNightlyService(ISessionDirectory sessions, WikiChatRecalc recalc, WikiChatStage2 stage2,
-        Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze,
+        Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze,
         ICheapTextRunner llm, IConfiguration config, ILogger<WikiNightlyService> log,
         Composition.IFeatureFlagGate? flags, Func<DateTimeOffset>? clock,
         Composition.INotificationSender? notifications = null, WikiKeeper? keeper = null,
@@ -355,7 +367,16 @@ public sealed class WikiNightlyService : BackgroundService
     {
         // Часть о причине — только при отказах (хвост ревью R-J-O1, minor 4): «отказов 0 (первый: )»
         // читалось как недописанное поле.
-        var template = new StringBuilder("Ночь вики {OwnerId} {Date}: {Outcome}; чатов {Selected}/{Analyzed}, отказов {Rejected}");
+        // Хвост R-W6a (доработка W5 №2, п.5): при названных исполнителях analyzed — число ПОПЫТОК:
+        // чат, отказанный мёртвым движком, добирает другой — его разбор посчитан на обоих. Пара
+        // «чатов 4/7» читалась бы как семь чатов; здесь слово названо честно: «чатов {Selected},
+        // попыток {Analyzed}». Итог по чатам (Selected) от повтора не удваивается. Пути без
+        // названных исполнителей повтор не бывает — прежняя пара остаётся.
+        var hasExecutors = r.Executors is { Count: > 0 };
+        var template = new StringBuilder("Ночь вики {OwnerId} {Date}: {Outcome}; ");
+        template.Append(hasExecutors
+            ? "чатов {Selected}, попыток {Analyzed}, отказов {Rejected}"
+            : "чатов {Selected}/{Analyzed}, отказов {Rejected}");
         var args = new List<object?> { ownerId, r.Date, r.Outcome, r.Selected, r.Analyzed, r.Rejected };
         if (r.Rejected > 0)
         {
@@ -383,6 +404,15 @@ public sealed class WikiNightlyService : BackgroundService
         args.Add(r.JudgeCalls);
         args.Add(CostText(r.JudgeCostUsd));
         args.Add(r.Manual);
+        // Исполнители (W6a): по движку «анализировано/отказано», при выбывании — время. Части нет
+        // вовсе при пути без названных исполнителей. Причин по исполнителю здесь нет: причина
+        // отказа — только ReasonMarker выше (полная — в файле итога и построчных записях).
+        var execs = ExecutorsText(r.Executors);
+        if (execs is not null)
+        {
+            template.Append("; исполнители {Executors}");
+            args.Add(execs);
+        }
 
         var line = template.ToString();
         object?[] values = [.. args];
@@ -416,6 +446,23 @@ public sealed class WikiNightlyService : BackgroundService
         text = text.TrimEnd(' ', ':', '«', '»', '"', '\'', '(', ')');
         if (text.Length > MaxReasonMarkerChars) text = text[..MaxReasonMarkerChars];
         return text.Length == 0 ? "полная причина — в файле итога" : text;
+    }
+
+    /// <summary>Часть «исполнители …» строки итога (W6a): по движку «{имя} {анализировано}/
+    /// {отказано}», при выбывании — «выбыл HH:mm» (время прохода, wall-clock того же журнала).
+    /// Только имена из списка исполнителей и числа: текста знаний и причин по исполнителю здесь
+    /// нет. Пустой список (путь без названных исполнителей) — части нет вовсе.</summary>
+    private static string? ExecutorsText(IReadOnlyList<NightExecutorStat>? executors)
+    {
+        if (executors is not { Count: > 0 }) return null;
+        var parts = new List<string>(executors.Count);
+        foreach (var e in executors)
+        {
+            var s = $"{e.Engine} {e.Analyzed}/{e.Rejected}";
+            if (e.WithdrawnAt is not null) s += $" выбыл {e.WithdrawnAt.Value:HH:mm}";
+            parts.Add(s);
+        }
+        return string.Join("; ", parts);
     }
 
     /// <summary>Стоимость судьи для строки журнала: инвариантный формат, разделитель —
@@ -615,280 +662,16 @@ public sealed class WikiNightlyService : BackgroundService
 
     private static string FormatDate(DateOnly d) => d.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
 
-    private sealed record Candidate(Session Session, WikiChatTriageEntry? Entry, bool Important, string Home);
-
-    private async Task<NightResult> RunPassAsync(string ownerId, string root, DateOnly date, bool manual, CancellationToken ct)
+    /// <summary>Подпись движка для текста владельцу (W6a): Title из списка исполнителей места
+    /// (LocalEngineExecutor.Title — то же имя, что в «Поставщиках моделей»); списка или такого
+    /// движка в нём нет — техническое имя (назвать надо чем-то). Список читается в момент
+    /// доставки: настройки могли измениться посреди ночи, и текст говорит то, что владелец видит
+    /// сейчас, а не то, что было в начале прохода.</summary>
+    private string EngineTitle(string engine)
     {
-        int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0, rejected = 0;
-        string? firstRejectReason = null;
-        // Ряд отказов локального маршрута подряд (выключатель 2e13d45c, см. LocalDownBreakAfter):
-        // любой иной исход разбора ряд обнуляет.
-        var localDownStreak = 0;
-        var dropped = 0;
-        string? firstDropReason = null;
-        // Отказы ступени 2 (хвост ревью R-J-W0): раньше их не было ни в журнале, ни в итоге.
-        var stage2Refused = 0;
-        string? firstStage2Refusal = null;
-        // Судья (J-J4): нули до её прохода — и для ранних выходов, где прохода судья не было.
-        int judgeCalls = 0, judgeApplied = 0, judgeRejected = 0, judgeDeferred = 0, codeRejected = 0;
-        decimal judgeCost = 0m;
-        var disputedPages = new HashSet<string>(StringComparer.Ordinal);
-        long est = 0, inputTokens = 0;
-        var outcome = OutcomeCompleted;
-        try
-        {
-            var recalc = await _recalc.RecalculateAsync(ownerId);
-            if (!recalc.Ok)
-            {
-                LogInfoSafe("Ночной разбор {Owner}: пересчёт отбора не удался ({Code}), ночь не начата", ownerId, recalc.Code);
-                return Result(OutcomeError);
-            }
-            var read = WikiChatTriageStore.Get(root);
-            if (read.State == WikiTriageFileState.Invalid) return Result(OutcomeError);
-            var entries = read.Entries.ToDictionary(e => e.SessionId, StringComparer.Ordinal);
-
-            var queue = BuildQueue(ownerId, entries);
-            var cfg = WikiSettingsStore.Read(root).Settings.NightlyOrDefaults();
-            var chatCap = (long)(cfg.InputTokenBudget * ChatBudgetShare);
-            var chatsBySection = new Dictionary<string, int>(StringComparer.Ordinal);
-            var packagesBySection = new Dictionary<string, int>(StringComparer.Ordinal);
-
-            foreach (var c in queue)
-            {
-                ct.ThrowIfCancellationRequested();
-                // Лимит пакетов за ночь: при остатке 0 чат не начинается.
-                var (stop, cfgNow) = CheckStop(ownerId, root, date, manual);
-                if (stop is not null) { outcome = stop; break; }
-                if (packagesNight >= cfgNow!.MaxPackagesPerNight) { outcome = OutcomeBudget; break; }
-
-                if (chatsBySection.GetValueOrDefault(c.Home) >= cfgNow.MaxChatsPerSection) continue;
-                if (packagesBySection.GetValueOrDefault(c.Home) >= cfgNow.MaxPackagesPerSection) continue;
-
-                var history = await _sessions.GetHistoryAsync(c.Session.Id);
-                var lines = WikiChatSlicer.Lines(history, 1, history.Count);
-                var cursor = c.Entry?.Cursor ?? 0;
-                if (cursor > history.Count) cursor = 0; // история переписана — курсор в 0, как у разбора
-                var delta = lines.Where(l => l.Index > cursor).ToList();
-                if (delta.Count(l => l.IsHuman) < MinHumanDelta) continue;
-
-                // Серый чат — только с «да» ступени 2. Спрашиваем лениво: очередь дошла до чата.
-                if (!c.Important && c.Entry?.Stage1Zone == WikiChatScorer.ZoneGray)
-                {
-                    var verdict = c.Entry.Stage2Zone;
-                    var humanTotal = lines.Count(l => l.IsHuman);
-                    var stale = humanTotal - (c.Entry.Stage2HistoryCount ?? 0) >= MinHumanDelta;
-                    // Свежий отказ — чат отложен до следующей ночи без переспроса. Неопрешённый
-                    // вердикт и устаревший (≥3 новых реплик человека) переспрашиваются одинаково —
-                    // «да» так же, как «нет»: чат берётся только по новому решению.
-                    if (verdict == WikiChatScorer.ZoneSkipped && !stale) continue;
-                    if (verdict != WikiChatScorer.ZoneTriage || stale)
-                    {
-                        var judged = await _stage2.JudgeAsync(ownerId, c.Session.Id, ct);
-                        if (judged.Outcome != WikiChatStage2.Outcome.NotApplicable)
-                        {
-                            est += (WikiChatStage2.MaxInputChars + WikiChatStage2.PromptHeader.Length) / 4;
-                            // Фактический вход ступени 2 (WC-4c): метрики того же ответа модели,
-                            // по которому вынесен вердикт. Считается по факту вызова: отказ
-                            // ступени 2 понесённого расхода не отменяет (тот же смысл, что у
-                            // ChatResult). NotApplicable — модель не звалась, расхода нет.
-                            inputTokens += judged.InputTokens;
-                        }
-                        // Отказ ступени 2 → серая зона: чат отложен до следующей ночи. Он назван
-                        // построчно и держится в итоге (хвост ревью R-J-W0): без этого админ,
-                        // поставивший место на облачную модель, видел только «чаты серые».
-                        // NotApplicable (чата нет в серой зоне, пометка человека) — не отказ: его
-                        // в счётчик не берём.
-                        if (judged.Outcome == WikiChatStage2.Outcome.Refused)
-                        {
-                            stage2Refused++;
-                            firstStage2Refusal ??= judged.Detail;
-                            LogInfoSafe("Ночной разбор {Owner}: чат {Chat} ступень 2 отказана: {Reason}",
-                                ownerId, c.Session.Id, judged.Detail ?? "причина не названа");
-                        }
-                        if (judged.Outcome != WikiChatStage2.Outcome.Judged
-                            || judged.Zone != WikiChatScorer.ZoneTriage) continue;
-                    }
-                }
-
-                selected++;
-                var chatEst = (delta.Sum(l => (long)l.Text.Length) + 3) / 4;
-                if (chatEst > chatCap)
-                {
-                    LogInfoSafe("Ночной разбор {Owner}: дельта чата {Chat} (~{Tokens} ток.) не помещается в бюджет, чат пропущен",
-                        ownerId, c.Session.Id, chatEst);
-                    continue;
-                }
-                if (est + chatEst > chatCap) { outcome = OutcomeBudget; break; }
-
-                chatsBySection[c.Home] = chatsBySection.GetValueOrDefault(c.Home) + 1;
-                est += chatEst;
-                WikiChatIngestService.ChatResult r;
-                try { r = await _analyze(ownerId, c.Session.Id, ct); }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch (Exception ex)
-                {
-                    // Сбой одного разбора курсор не двигает (его пишет только AnalyzeAsync) — к следующему.
-                    LogSafe(ex, "Ночной разбор {Owner}: чат {Chat} не разобран", ownerId, c.Session.Id);
-                    continue;
-                }
-                analyzed++;
-                // Фактический вход (WC-4b): сумма по всем разобранным чатам независимо от исхода —
-                // отказанный план понесённый расход не отменяет (тот же смысл, что у ChatResult).
-                // Чат, упавший исключением выше, до analyzed++ не доходит: его токенов нет.
-                inputTokens += r.InputTokens;
-                dropped += r.Dropped;
-                firstDropReason ??= r.FirstDropReason;
-                // Отказанные разборы (WN-2): считаются и называются в журнале — без них ночь из
-                // 100 отказов выглядела completed и не оставила ни строки (отчёт 79e98305, Ш2).
-                if (r.Outcome == WikiChatIngestService.OutcomeRejected)
-                {
-                    rejected++;
-                    firstRejectReason ??= r.Reason;
-                    LogInfoSafe("Ночной разбор {Owner}: чат {Chat} отказан: {Reason}", ownerId, c.Session.Id, r.Reason);
-                    // Выключатель мёртвого локального маршрута (2e13d45c, см. LocalDownBreakAfter):
-                    // продолжать не за чем — каждый следующий чат дал бы тот же отказ с тем же
-                    // нулевым входом. Итог — error с причиной первого из ряда (firstRejectReason
-                    // уже назван); error дату не закрывает, следующий тик окна пробует снова.
-                    localDownStreak = IsLocalDownRejection(r) ? localDownStreak + 1 : 0;
-                    if (localDownStreak >= LocalDownBreakAfter)
-                    {
-                        LogInfoSafe("Ночной разбор {Owner}: {Reason} — {Streak} отказов подряд, проход остановлен",
-                            ownerId, WikiIngestService.ReasonLocalUnavailable, localDownStreak);
-                        outcome = OutcomeError;
-                        break;
-                    }
-                }
-                else
-                {
-                    // Любой несостоявшийся этим отказом разбор ряд обнуляет: выключатель считает
-                    // подряд идущие, а не всего ночи.
-                    localDownStreak = 0;
-                }
-                var made = r.Outcome switch
-                {
-                    // Частичный исход (Partial, WC-3) — тоже applied: его применённые пакеты
-                    // считаются здесь же, отказ позднего окна их не перечёркивает.
-                    WikiChatIngestService.OutcomeApplied => r.PackageIds.Count,
-                    WikiChatIngestService.OutcomeAwaitingHuman => 1, // число неизвестно: нижняя граница
-                    _ => 0,
-                };
-                if (r.Outcome == WikiChatIngestService.OutcomeApplied)
-                {
-                    applied += made;
-                    overrodeHuman += r.OverrodeHuman;
-                    // Страница, оспоренная в двух чатах за ночь, — одна страница: счёт по множеству путей.
-                    foreach (var p in r.DisputedPages ?? []) disputedPages.Add(p);
-                }
-                else if (r.Outcome == WikiChatIngestService.OutcomeAwaitingHuman) toInbox++;
-                packagesNight += made;
-                packagesBySection[c.Home] = packagesBySection.GetValueOrDefault(c.Home) + made;
-                // Пакеты чата прибавляются пачкой и уже лежат в Хранителе — их не откатывать.
-                // Превышение остатка этим чатом допустимо. Лимит ночи — конец ночи: outcome=budget,
-                // дальше не идти. Лимит раздела закрывает только его раздел: счётчик раздела уже
-                // выше лимита, его последующие чаты отсекает предпроверка (как раздел с нулевым
-                // остатком), ночь продолжает по другим разделам, итог остаётся completed.
-                if (packagesNight > cfgNow.MaxPackagesPerNight) { outcome = OutcomeBudget; break; }
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex)
-        {
-            LogSafe(ex, "Ночной разбор {Owner}: проход прерван", ownerId);
-            outcome = OutcomeError;
-        }
-        // Инвариант «нулевой вход при всех отказах ≠ completed» (WN-2): когда каждый состоявшийся
-        // разбор отказан и ни один токен не дошёл до модели, ночь не «завершена» — она не удалась:
-        // error дату не закрывает, следующий тик окна пробует снова (повтор и уведомление — выше,
-        // их не меняем). Ветки budget/open_limit/window_closed/disabled_midway сюда не доходят:
-        // их итог назван своей причиной. Сбой разбора исключением в rejected не идёт (catch выше
-        // analyzed++) и инварианту не мешает: без отказа он не был бы и разобранным.
-        if (outcome == OutcomeCompleted && analyzed > 0 && rejected == analyzed && inputTokens == 0)
-        {
-            LogInfoSafe("Ночной разбор {Owner}: локальная модель не ответила — отказаны все {Analyzed} чатов с нулевым входом",
-                ownerId, analyzed);
-            outcome = OutcomeError;
-        }
-
-        // Точка запуска (а) (J-J4): проход судьи после разбора чатов — под тем же замком владельца
-        // (его держит RunOwnerAsync/StartManual вокруг RunOwnerPassAsync) и до записи
-        // keeper/nightly-last.json: его счётчики попадают в тот же файл, ту же строку журнала и то
-        // же утреннее уведомление. Ранние выходы прохода (пересчёт отбора, нечитаемый стор) идут
-        // изнутри try и сюда не доходят: там вики не начала проход. Вызов сериализуется замком
-        // самого прохода судьи (J-J3a) с его точкой (б) в очереди заявок разбора: двойного вызова
-        // модели на пакет нет — судья берёт только нерешённые спорные операции. Мёртвый локальный
-        // маршрут ночи к нему не относится: это другое место (wiki-judge), его выбирает админ.
-        if (_judge is not null)
-        {
-            var sweep = await _judge(ownerId, root, ct).ConfigureAwait(false);
-            judgeCalls = sweep.Calls;
-            judgeCost = sweep.CostUsd;
-            judgeApplied = sweep.Applied;
-            judgeRejected = sweep.Rejected;
-            judgeDeferred = sweep.Deferred;
-            codeRejected = sweep.CodeRejected;
-            // Сам проход судьи исключений не бросает; его FirstFailure — единственный способ
-            // узнать о несделанном, и он в журнале.
-            if (sweep.FirstFailure is not null)
-                LogWarnSafe("Ночной разбор {Owner}: проход судьи не доведён: {Reason}", ownerId, sweep.FirstFailure);
-        }
-        return Result(outcome);
-
-        NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
-            overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual, dropped, firstDropReason,
-            judgeCalls, judgeCost, judgeApplied, judgeRejected, judgeDeferred, codeRejected,
-            stage2Refused, firstStage2Refusal);
-    }
-
-    /// <summary>Отказ окна по мёртвому локальному маршруту (2e13d45c): причина отказа несёт
-    /// формулировку WikiIngestService.ReasonLocalUnavailable, а нулевой вход подтверждает, что
-    /// модель не звалась ни разу. Проверка по подстроке: до ночи причина проходит через обёртки
-    /// («разбор окна m1-m8 не удался: синтез: …»). Имени движка нет: их может быть несколько
-    /// (J-W2), выключатель относится к маршруту места.</summary>
-    private static bool IsLocalDownRejection(WikiChatIngestService.ChatResult r) =>
-        r.InputTokens == 0 && r.Reason?.Contains(WikiIngestService.ReasonLocalUnavailable, StringComparison.Ordinal) == true;
-
-    // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось
-    // (window_closed), модель недоступна (error — облако молча не подставляется), упор в лимит
-    // открытых пакетов (open_limit). Настройки перечитываются каждый раз: PUT посреди ночи виден
-    // следующему чату. При ручном проходе (WN-5) окно не проверяется вовсе: человек запустил
-    // разбор вне окна — оно ему не преграда; флаг, тумблер, маршрут и open_limit — как у тика.
-    private (string? Stop, WikiSettingsStore.NightlyConfig? Cfg) CheckStop(string ownerId, string root, DateOnly date, bool manual)
-    {
-        if (_flags?.IsEnabled(ownerId, FeatureFlagKeys.LlmWiki) != true) return (OutcomeDisabledMidway, null);
-        var cfg = WikiSettingsStore.Read(root).Settings.NightlyOrDefaults();
-        if (!cfg.Enabled) return (OutcomeDisabledMidway, null);
-        if (!manual)
-        {
-            var now = _clock();
-            if (!InWindow(now.Hour, cfg.WindowStartHour, cfg.WindowEndHour)
-                || WindowDate(now, cfg.WindowStartHour, cfg.WindowEndHour) != date) return (OutcomeWindowClosed, null);
-        }
-        if (!_llm.HasRoute(LocalActionCatalog.WikiNightly)) return (OutcomeError, null);
-        if (WikiPackageStore.CountOpen(root) >= WikiPackage.MaxOpenPackages) return (OutcomeOpenLimit, null);
-        return (null, cfg);
-    }
-
-    // Очередь прохода: чаты владельца, которые ночь вообще может взять. Чат исполнения задач,
-    // чат с пометкой «не разбирать», приватный чат и личный раздел отсекаются здесь
-    // (skip побеждает балл); берутся «важные» (минуя ступени 1–2), зона triage и серые
-    // (их судит ступень 2 на подходе очереди). Порядок: «важные», затем по UpdatedAt убыв.
-    private List<Candidate> BuildQueue(string ownerId, IReadOnlyDictionary<string, WikiChatTriageEntry> entries)
-    {
-        var result = new List<Candidate>();
-        foreach (var s in _sessions.GetAll().Where(x => _sessions.ResolveOwnerId(x) == ownerId))
-        {
-            // Приватный чат (FIN3-3, инвариант в шапке): PrivateToUserId != null — виден только
-            // автору; чат участника общего проекта резолвится на владельца, но в его очередь
-            // не входит ни под каким баллом (тот же фильтр, что у автообучения памяти).
-            if (s.TaskExecution || s.WikiMark == WikiMarks.Skip || s.PrivateToUserId is not null) continue;
-            var home = WikiChatIngestService.HomeOf(s);
-            if (home == WikiSections.Personal) continue;
-            entries.TryGetValue(s.Id, out var e);
-            var important = s.WikiMark == WikiMarks.Important;
-            if (!important && e?.Stage1Zone is not (WikiChatScorer.ZoneTriage or WikiChatScorer.ZoneGray)) continue;
-            result.Add(new Candidate(s, e, important, home));
-        }
-        return [.. result.OrderByDescending(c => c.Important).ThenByDescending(c => c.Session.UpdatedAt)];
+        foreach (var e in _llm.LocalExecutorsFor(LocalActionCatalog.WikiNightly))
+            if (e.Engine == engine) return e.Title;
+        return engine;
     }
 
     // ─── Итог ночи: keeper/nightly-last.json ──────────────────────────────────
@@ -952,9 +735,11 @@ public sealed class WikiNightlyService : BackgroundService
     /// причина необычного исхода, затем по одной сводной строке за ночь («ИИ заменил N ваших
     /// формулировок», «ИИ отметил противоречие на N страницах», «Во «Входящих» N пакетов…»,
     /// «судья недоступен — ждут решения: N», «отклонено кодом: N»; нулевая строка не пишется,
-    /// строки на каждую замену нет) и путь к «Журналу». Второго уведомления нет.</summary>
+    /// строки на каждую замену нет), по одному предложению о каждом выбывшем исполнителе (W6a)
+    /// и путь к «Журналу». Второго уведомления нет.</summary>
     internal static string NotificationBody(string? reason, int overrodeHuman, int disputedPages,
-        int toInbox, int judgeDeferred, int codeRejected)
+        int toInbox, int judgeDeferred, int codeRejected,
+        IReadOnlyList<NightExecutorStat>? executors = null, Func<string, string>? engineTitle = null)
     {
         var parts = new List<string>();
         if (reason is not null) parts.Add(reason);
@@ -975,8 +760,43 @@ public sealed class WikiNightlyService : BackgroundService
         // закрыта не судьёй.
         if (codeRejected > 0)
             parts.Add($"отклонено кодом: {codeRejected}.");
+        // W6a: часть ночи могла делаться не одной моделью — владельцу видно, какая выбыла и на
+        // какой разбор дошёл до конца. Одно предложение на каждого выбывшего.
+        foreach (var s in ExecutorSentences(executors, engineTitle)) parts.Add(s);
         parts.Add("Подробности — во вкладке «Вики» → «Журнал».");
         return string.Join(' ', parts);
+    }
+
+    /// <summary>По одному предложению о каждом выбывшем исполнителе (W6a, хвост R-W6a — с числом
+    /// попыток): «Модель {Title} сделала N попыток, выбыла в HH:mm, разбор продолжила {Title}.»
+    /// analyzed по движку — попытки, а не чаты: отказанный им чат может быть добран другим, и
+    /// «выбыла» без числа читалось бы как «ничего не делала». Имена — подписи движков из настроек
+    /// места (engineTitle даёт LocalEngineExecutor.Title, то же, что владелец видит в «Поставщиках
+    /// моделей»); технический ключ в тексте владельцу не звучит. Продолживших больше одного —
+    /// «разбор продолжили …, …»; живых не осталось — «разбор не продолжен». Выбывших нет —
+    /// предложений нет.</summary>
+    private static List<string> ExecutorSentences(IReadOnlyList<NightExecutorStat>? executors,
+        Func<string, string>? engineTitle)
+    {
+        var result = new List<string>();
+        if (executors is not { Count: > 0 }) return result;
+        string Name(string engine) => engineTitle is null ? engine : engineTitle(engine);
+        foreach (var e in executors)
+        {
+            if (e.WithdrawnAt is null) continue;
+            var others = new List<string>();
+            foreach (var o in executors)
+                if (o.WithdrawnAt is null) others.Add(Name(o.Engine));
+            var cont = others.Count switch
+            {
+                0 => "разбор не продолжен",
+                1 => $"разбор продолжила {others[0]}",
+                _ => $"разбор продолжили {string.Join(", ", others)}",
+            };
+            result.Add($"Модель {Name(e.Engine)} сделала {e.Analyzed} {Plural(e.Analyzed, "попытку", "попытки", "попыток")}, "
+                + $"выбыла в {e.WithdrawnAt.Value:HH:mm}, {cont}.");
+        }
+        return result;
     }
 
     // Русское число: 1 — one, 2–4 — few, остальное (5–20, 0) — many; 11–14 всегда many.
@@ -1017,7 +837,7 @@ public sealed class WikiNightlyService : BackgroundService
                 Title = $"Ночной разбор: применено {result.Applied}; судья принял {result.JudgeApplied}, "
                     + $"отклонил {result.JudgeRejected}; ждут {result.JudgeDeferred}; {NoticeCostText(result.JudgeCostUsd)}",
                 Body = NotificationBody(reason, result.OverrodeHuman, result.DisputedPages,
-                    result.ToInbox, result.JudgeDeferred, result.CodeRejected),
+                    result.ToInbox, result.JudgeDeferred, result.CodeRejected, result.Executors, EngineTitle),
                 // Url открывает вкладку «Вики» на её подкладке по умолчанию («Страницы»): deep-link на
                 // подвкладку «Журнал» во фронте не предусмотрен (WikiTab держит подвкладку локально),
                 // поэтому текст называет путь, а не обещает переход.

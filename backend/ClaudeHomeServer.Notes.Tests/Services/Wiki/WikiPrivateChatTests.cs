@@ -106,7 +106,7 @@ public class WikiPrivateChatTests : IDisposable
 
     private WikiNightlyService NightSut() =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            (_, chat, _) =>
+            (_, chat, _, _) =>
             {
                 lock (_analyzed) _analyzed.Add(chat);
                 return Task.FromResult(new WikiChatIngestService.ChatResult(

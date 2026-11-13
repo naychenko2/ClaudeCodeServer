@@ -66,6 +66,13 @@ public sealed record LocalEngineSpec(
 
     // Имя модели для панели (как Stats:Model основной локали); null — не задано.
     public string? ModelLabel { get; init; }
+
+    // Потолок параллельности движка — то же число, что держит его счётчик слотов
+    // (LocalEngines:<имя>:MaxConcurrency, дефолт — TrackedLocalLlmClient.DefaultLimit).
+    // Нужен не транспорту (тот берёт ленивую Func в TrackedLocalLlmClient), а валидатору
+    // списка исполнителей: «parallel N у движка M» проверяется по потолку этого же движка,
+    // а не по своему правилу (разрез «ночь вики на нескольких локальных исполнителях» §2).
+    public int MaxConcurrency { get; init; } = TrackedLocalLlmClient.DefaultLimit;
 }
 
 public sealed class LocalEngine(LocalEngineSpec spec, ILocalLlmClient client,
@@ -182,7 +189,10 @@ public sealed class NamedLocalEngines
                     }
                 };
             }
-            spec = spec with { Model = options.TextModel, Title = section["Title"]?.Trim() };
+            // Потолок spec — то же число, что отдаётся ленивой Func в TrackedLocalLlmClient
+            // ниже: у движка не может быть двух разных потолков.
+            spec = spec with { Model = options.TextModel, Title = section["Title"]?.Trim(),
+                MaxConcurrency = maxConcurrency };
             Add(new LocalEngine(spec, client, probe));
             log.LogInformation("LocalEngines:{Name} — {Url}, модель {Model}, мест {Count}, страховка {Fallback}",
                 name, options.BaseUrl, options.TextModel, actions.Count, fallback ?? "нет");

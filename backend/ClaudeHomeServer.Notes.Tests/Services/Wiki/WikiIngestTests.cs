@@ -570,6 +570,44 @@ public class WikiIngestTests : IDisposable
         roots.Should().BeEmpty("для ночи точка (б) судью не пускает: её полный проход — в конце ночи");
     }
 
+    [Fact]
+    public async Task JudgeB_NotCalledFromNightSlots()
+    {
+        // W4b: две одновременные заявки ночи (разные разделы — разные очереди раздела, разные
+        // названные движки) обе дают «awaiting_human» — и ни одна не зовёт точку (б). У ночи
+        // один проход судьи: точка (а) в конце RunPassAsync; её числа и идут в итог.
+        // Мутация «убрать && actionKey != LocalActionCatalog.WikiNightly» (WikiIngestService.cs:273)
+        // → красный этот тест и J4r_… выше (оба держат тот же инвариант, этот — на параллели).
+        const string section2 = "projects/p2";
+        const string card2 = "Проекты/p2/Источники/Карточка-чата-2.md";
+        const string page2 = "Проекты/p2/Сущность.md";
+        // Свой источник и своя страница второго раздела: та же форма, свои ref и своя сноска —
+        // иначе обе заявки были бы одним окном (in-flight ключ различает их по ref и пути).
+        Write(User, section2, card2, CardFileTitled("Карточка чата 2").Replace("ref: session:s1#m1-9", "ref: session:s2#m1-9"));
+        Write(User, section2, page2, PageBase.Replace("[[" + CardTitle + "]]", "[[Карточка чата 2]]"));
+        LogLine(DaysAgo(1), "revert", "user", PagePath);
+        LogLine(DaysAgo(1), "revert", "user", page2);
+
+        var roots = new List<string>();
+        var llm = new FakeLlm(synth: SynthJson, nightly: true);
+        llm.PushAnswer("S", SynthJson); // второй заявке — свой ответ синтеза
+        var sut = Sut(llm, CountingJudge(roots));
+
+        var t1 = sut.IngestAsync(User, Req(), CancellationToken.None, LocalActionCatalog.WikiNightly, "gemma");
+        var t2 = sut.IngestAsync(User, Req(home: section2, card: card2, ref_: "session:s2#m1-9"),
+            CancellationToken.None, LocalActionCatalog.WikiNightly, "gpt");
+        var res1 = await t1;
+        var res2 = await t2;
+
+        res1.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res1.Reason);
+        res2.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res2.Reason);
+        res1.PackageId.Should().NotBeNullOrEmpty();
+        res2.PackageId.Should().NotBeNullOrEmpty();
+        // Оба окна действительно шли на своих движках: это два прохода, а не один прогон.
+        llm.EngineCalls.Select(c => c.Engine).Distinct().Should().BeEquivalentTo(new[] { "gemma", "gpt" });
+        roots.Should().BeEmpty("ни одна заявка ночи не зовёт точку (б): судья ночи — одна, в конце прохода");
+    }
+
     // ── B4a: правка человека (ADR-038) — отдельный читатель, не откат ───────────────
 
     [Fact]
@@ -877,6 +915,116 @@ public class WikiIngestTests : IDisposable
             "отказ не повторяет вызов и не зовёт облако");
     }
 
+    // ── W3 (И3 путь 2): названный исполнитель — единственный путь к модели ──────────────
+
+    [Fact]
+    public async Task W3_ИсполнительНазван_ТриПроходаТолькоНаНём_НиОдногоВходаМаршрута()
+    {
+        // Путь 2: CallModelAsync с engine зовёт только RunOnLocalEngineDetailedAsync — ни
+        // выбора исполнителя маршрутом (RunLocalOrChosenDetailedAsync), ни облачной цепочки
+        // (RunDetailedAsync). Все три прохода собраны в одном разборе: синтез (пустой план в
+        // пустом разделе) → повтор WN-3 (план с нарушением) → ремонт.
+        // Мутация «в CallModelAsync игнорировать engine» (не брать ветку): путь 1 даёт три
+        // LocalOrChosen и ноль EngineCalls → краснеют и EngineCalls, и LocalOrChosenCalls.
+        Write(User, EmptySection, EmptyCardPath, CardFile);
+        var llm = new FakeLlm(synth: EmptyPlanJson, emptySection: BadSynthJson, repair: CreateSynthJson,
+            nightly: true);
+
+        var res = await Sut(llm).IngestAsync(User, Req(home: EmptySection, card: EmptyCardPath),
+            actionKey: LocalActionCatalog.WikiNightly, engine: "gemma");
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        // Equal(params string[]) не принимает because: пояснение стало бы элементом
+        // ожидаемого списка (первый прогон это и показал).
+        llm.EngineCalls.Select(c => c.Pass).Should().Equal(new[] { "S", "E", "R" });
+        llm.EngineCalls.Should().OnlyContain(c => c.Engine == "gemma",
+            "исполнитель — названный аргументом, а не выбранный маршрутом места");
+        llm.EngineCalls.Should().OnlyContain(c => c.ActionKey == LocalActionCatalog.WikiNightly,
+            "место вызова — место заявки");
+        llm.LocalOrChosenCalls.Should().Be(0, "пути с выбором исполнителя маршрутом здесь нет");
+        llm.CloudCalls.Should().Be(0, "И3: окно с исполнителем не уходит в облако");
+        res.InputTokens.Should().Be(3_000, "расход того же ответа движка, что и его текст (WC-4c)");
+    }
+
+    [Fact]
+    public async Task W3_ИсполнительНеОтветил_ОтказСПричинойМаршрута_ANePustoyOtvetModeli()
+    {
+        // null от RunOnLocalEngineDetailedAsync — движок неизвестен/выключен/не готов/не ответил,
+        // и всё это без исключения. Причина — та же формулировка маршрута, что у мёртвой локали
+        // (дефект 2e13d45c): по ней и по InputTokens == 0 ночь отличает отказ движка от отказа
+        // плана (IsLocalDownRejection) и выключает исполнителя (W5). Имени движка в причине нет.
+        var llm = new FakeLlm(synth: SynthJson, nightly: true) { EngineDown = true };
+
+        var res = await Sut(llm).IngestAsync(User, Req(),
+            actionKey: LocalActionCatalog.WikiNightly, engine: "gemma");
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
+        res.Reason.Should().Contain("синтез").And.Contain(WikiIngestService.ReasonLocalUnavailable,
+            "отказ называет проход и причину маршрута");
+        res.Reason.Should().NotContain("пустой ответ", "модель не зввалась — «пустой ответ» лжёт")
+            .And.NotContain("gemma", "имени движка в причине нет: их несколько (J-W2)");
+        res.InputTokens.Should().Be(0, "ответа не было — понесённого расхода нет");
+        llm.EngineCalls.Should().ContainSingle();
+        llm.LocalOrChosenCalls.Should().Be(0, "подмены другим исполнителем нет");
+        llm.CloudCalls.Should().Be(0, "и в облако отказ не уходит");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    // ── W5b: пустой engine — отказ окна без вызова модели; порядок «engine до стража noCloud» ──
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task W5b_ПустойEngine_ОтказБезВызоваМодели(string engine)
+    {
+        // Пустая или пробельная строка — не «исполнитель не назван», а названный пустым:
+        // прежний признак (Length > 0) отдавал пустую строку маршруту места — модель звалась
+        // на другой там, где просили этот движок; пробельная уходила в шов с пустым именем.
+        // Ни в какой движок такое имя не резолвится: отказ окна той же причиной маршрута, что
+        // мёртвый движок, InputTokens 0, ни одного вызова. Мутация «вернуть
+        // engine is { Length: > 0 }» → пустой engine уходит в ночную ветку маршрута →
+        // LocalOrChosenCalls 1 → краснеет этот тест.
+        var llm = new FakeLlm(synth: SynthJson, nightly: true);
+
+        var res = await Sut(llm).IngestAsync(User, Req(),
+            actionKey: LocalActionCatalog.WikiNightly, engine: engine);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
+        res.Reason.Should().Contain("синтез").And.Contain(WikiIngestService.ReasonLocalUnavailable,
+            "отказ называет проход и причину маршрута — по ней ночь гасит исполнителя");
+        res.Reason.Should().NotContain("пустой ответ", "модель не зввалась — «пустой ответ» лжёт");
+        res.InputTokens.Should().Be(0, "модель не звалась — понесённого расхода нет");
+        llm.EngineCalls.Should().BeEmpty("пустое имя не резолвится в движок");
+        llm.LocalOrChosenCalls.Should().Be(0, "прежний путь с выбором маршрутом — не этот случай");
+        llm.CloudCalls.Should().Be(0, "И3: окно с исполнителем не уходит в облако");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task W5b_ИсполнительДоСтражаNoCloud()
+    {
+        // Порядок веток (И3): страж noCloud (решение 6 ADR-039) гасит ночь без локального
+        // маршрута места, но названный исполнитель важнее его — при UsesLocal(WikiNightly)
+        // == false и заданном engine вызов идёт в RunOnLocalEngineDetailedAsync, облачных
+        // вызовов ноль. Движок взят мёртвым (EngineDown): изолирует решение о ветке от
+        // остальной цепочки — важен сам факт вызова на названном движке.
+        // Мутация «страж noCloud впереди ветки engine»: окно отказано до вызова →
+        // EngineCalls пусто → краснеет этот тест.
+        var llm = new FakeLlm(synth: SynthJson, nightly: false) { EngineDown = true };
+
+        var res = await Sut(llm).IngestAsync(User, Req(),
+            actionKey: LocalActionCatalog.WikiNightly, engine: "gemma");
+
+        llm.EngineCalls.Should().ContainSingle(c => c.Engine == "gemma",
+            "исполнитель назван аргументом — до стража маршрута места");
+        llm.EngineCalls.Should().OnlyContain(c => c.ActionKey == LocalActionCatalog.WikiNightly,
+            "место вызова — место заявки");
+        llm.LocalOrChosenCalls.Should().Be(0, "пути с выбором исполнителя маршрутом здесь нет");
+        llm.CloudCalls.Should().Be(0, "И3: ни одного облачного вызова");
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
+        res.InputTokens.Should().Be(0);
+    }
+
     // ── подменённый ICheapTextRunner: классифицирует вызов по промпту, помечает всё ──
 
     private sealed class FakeLlm : ICheapTextRunner
@@ -896,6 +1044,16 @@ public class WikiIngestTests : IDisposable
         // без исключения — движок не настроен/не готов/не ответил. Вызов при этом состоялся.
         public bool LocalDown;
 
+        // W3 (И3 путь 2): исполнитель назван аргументом. EngineCalls — что реально ушло на
+        // движок (движок, место, промпт, проход); LocalOrChosenCalls/CloudCalls — входы,
+        // которых этот путь не знает: на них держится тест пути 2 (их должно быть 0).
+        public List<(string Engine, string ActionKey, string Prompt, string Pass)> EngineCalls { get; } = [];
+        public int LocalOrChosenCalls;
+        public int CloudCalls;
+        // Движок не ответил: null без исключения (неизвестный/выключенный/не готовый/пустой
+        // ответ) — тот же контракт, что у LocalDown; вызов при этом зарегистрирован.
+        public bool EngineDown;
+
         public FakeLlm(string synth, string? repair = null, string? emptySection = null, bool nightly = false)
         {
             _nightly = nightly;
@@ -908,6 +1066,10 @@ public class WikiIngestTests : IDisposable
 
         public string PromptOf(string pass) =>
             Calls.First(c => c.Pass == pass).Prompt;
+
+        // Ещё один ответ того же прохода: двум одновременным заявкам одного прохода нужен свой
+        // ответ — иначе вторая читает пустую очередь и отказывается как нечитаемый ответ.
+        public void PushAnswer(string pass, string json) => _answers[pass].Enqueue(json);
 
         // Ночное место идёт локальным маршрутом (иначе разбор отказывает окно до вызова).
         public bool UsesLocal(string actionKey) => _nightly;
@@ -925,9 +1087,26 @@ public class WikiIngestTests : IDisposable
 
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
-            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult(new OneShotResult(
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            CloudCalls++;
+            return Task.FromResult(new OneShotResult(
                 Answer(actionKey, prompt), new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1));
+        }
+
+        // Путь названного исполнителя (W3): без выбора маршрута, без страховки, без облака.
+        // Ответ и usage — те же, что у локального шага цепочки (полный вход 1 000, CostUsd 0):
+        // расход новой ветки обязан считаться так же (WC-4c). EngineDown — null без ответа.
+        public Task<OneShotResult?> RunOnLocalEngineDetailedAsync(string engine, string actionKey,
+            string prompt, string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            EngineCalls.Add((engine, actionKey, prompt, PassOf(prompt)));
+            var text = Answer(actionKey, prompt);
+            return EngineDown
+                ? Task.FromResult<OneShotResult?>(null)
+                : Task.FromResult<OneShotResult?>(new OneShotResult(
+                    text, new OneShotUsage(1_000, 0, 0, 50, 0.0, engine), 1));
+        }
 
         // Ночная ветка CallModelAsync зовёт detailed-вариант (тот же путь без облака): тот же
         // ответ плюс usage движка — полный вход 1 000, вывод 50, CostUsd 0 (локаль бесплатна).
@@ -935,6 +1114,7 @@ public class WikiIngestTests : IDisposable
         public Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
         {
+            LocalOrChosenCalls++;
             var text = Answer(actionKey, prompt);
             return LocalDown
                 ? Task.FromResult<OneShotResult?>(null)
@@ -942,16 +1122,19 @@ public class WikiIngestTests : IDisposable
                     text, new OneShotUsage(1_000, 0, 0, 50, 0.0, "qwen-local"), 1));
         }
 
+        // Проход определяется по директиве своего промпта (WikiKeeperPrompts.Synth), ремонт —
+        // по префиксу ремонта, повтор пустого раздела (WN-3) — по своему префиксу: он вложен
+        // перед промптом синтеза и иначе сочтётся обычным вызовом. Порядок вызовов в тесте не
+        // угадывается. Та же разметка нужна пути исполнителя (EngineCalls) — поэтому она одна.
+        private static string PassOf(string prompt) =>
+            prompt.Contains("YOUR PREVIOUS PLAN WAS REJECTED") ? "R"
+            : prompt.Contains("THE TARGET SECTION HAS NO KNOWLEDGE PAGES") ? "E"
+            : prompt.Contains("single pass") ? "S"
+            : "?";
+
         private string Answer(string actionKey, string prompt)
         {
-            // Вызов определяется по директиве своего промпта (WikiKeeperPrompts.Synth),
-            // ремонт — по префиксу ремонта, повтор пустого раздела (WN-3) — по своему
-            // префиксу: он вложен перед промптом синтеза и иначе сочтётся обычным вызовом.
-            // Порядок вызовов в тесте не угадывается.
-            var pass = prompt.Contains("YOUR PREVIOUS PLAN WAS REJECTED") ? "R"
-                : prompt.Contains("THE TARGET SECTION HAS NO KNOWLEDGE PAGES") ? "E"
-                : prompt.Contains("single pass") ? "S"
-                : "?";
+            var pass = PassOf(prompt);
             Calls.Add((actionKey, prompt, pass));
             actionKey.Should().Be(_nightly ? LocalActionCatalog.WikiNightly : LocalActionCatalog.WikiIngest,
                 "место разбора — то, что назвал вызывающий");

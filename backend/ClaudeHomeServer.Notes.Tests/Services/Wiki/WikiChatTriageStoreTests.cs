@@ -541,6 +541,9 @@ public class WikiChatTriageStoreTests : IDisposable
         // (событие), и ResetCursors обязан его ждать: без замка у ResetCursors его запись
         // из устаревшего прочтения легла бы поверх только что записанного курсора —
         // утверждение ожидания краснеет (мутация «снять замок у ResetCursors»).
+        // Сброс стартует только после входа Update в build (go.SetResult после inside):
+        // запущенный сразу, под нагрузкой пула он успевал взять замок и пройти до входа
+        // Update — краснея на порядке старта, а не на замке.
         for (var iter = 0; iter < 50; iter++)
         {
             var hold = iter % 10 == 0;
@@ -572,8 +575,9 @@ public class WikiChatTriageStoreTests : IDisposable
 
             var reset = Task.Run(async () =>
             {
-                if (!hold)
-                    await go.Task.ConfigureAwait(false);
+                // Тот же go-гейт, что в неудерживаемых итерациях: сброс стартует только
+                // после того, как Update подтверждён внутри замка (go.SetResult ниже).
+                await go.Task.ConfigureAwait(false);
                 return WikiChatTriageStore.ResetCursors(_root);
             });
 
@@ -582,6 +586,7 @@ public class WikiChatTriageStoreTests : IDisposable
                 inside.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue($"вход в build, итерация {iter}");
                 // Update держит замок корня (он внутри него, ждёт gate): сброс под тем же
                 // замком не может завершиться, пока его держат.
+                go.SetResult();
                 var winner = await Task.WhenAny(reset, Task.Delay(200));
                 ReferenceEquals(winner, reset).Should().BeFalse(
                     $"итерация {iter}: ResetCursors ждёт замок корня, который держит Update");

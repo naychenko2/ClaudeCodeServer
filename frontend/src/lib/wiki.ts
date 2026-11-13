@@ -1005,6 +1005,12 @@ export interface WikiNightlySettings {
   maxPackagesPerSection: number;
   maxChatsPerSection: number;
   inputTokenBudget: number;
+  // Список исполнителей места (W6b): имена движков и подписи из текущего конфига — только
+  // чтение: PUT его не принимает (WikiSettingsController.cs:455-457), поэтому в WikiNightlyPatch
+  // поля нет. Пустой массив — «исполнителей нет» (состояние, не отсутствие блока); старый бэк
+  // без поля — отсутствие, читается как есть (тот же приём, что rejected/manual ниже).
+  // Порядок — порядок списка стора, не сортировать (WikiSettingsController.cs:330).
+  executors?: { engine: string; title: string }[];
 }
 
 // Исходы прохода ночи (план N7b, поле outcome файла). Неизвестный исход — будущее значение
@@ -1036,6 +1042,13 @@ export interface WikiLastNight {
   judgeRejected: number;
   judgeDeferred: number;
   codeRejected: number;
+  // Разбивка итога по названным исполнителям (W6a→W6b): счётчики по движкам в порядке
+  // списка стора, не сортировать (WikiSettingsController.cs:358-370). null — «не измерено»
+  // (старый файл итога без поля, :437), пустой массив — путь без названных исполнителей:
+  // разные состояния (W6a). Старый бэк без поля — то же «не измерено», отсутствие читается
+  // как есть (тот же приём, что rejected/manual выше). withdrawnAt — время, на котором
+  // исполнитель выбыл до конца прохода (W5); null — дожил до конца.
+  executors?: { engine: string; title: string; analyzed: number; rejected: number; inputTokens: number; withdrawnAt?: string | null }[] | null;
 }
 
 // Класс правок «origin×op» (ключ — форма бэкового WikiPackage.ClassKey, без пробелов) с
@@ -1184,7 +1197,9 @@ async function fetchWikiSettings(gen: number, owner: string | null): Promise<Wik
   return snap;
 }
 
-export type WikiNightlyPatch = Partial<WikiNightlySettings>;
+// Тело PUT — из типа чтения, поэтому executors (W6b, только чтение) надо исключить явно:
+// PUT его не принимает и не меняет (запись — W2b, только админ; WikiSettingsController.cs:455-457).
+export type WikiNightlyPatch = Partial<Omit<WikiNightlySettings, 'executors'>>;
 
 export type WikiPutNightlyResult =
   | { ok: true; snapshot: WikiSettingsSnapshot }

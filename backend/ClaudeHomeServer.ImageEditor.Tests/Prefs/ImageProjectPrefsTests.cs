@@ -380,7 +380,7 @@ public class ImageProjectPrefsTests : IDisposable
 
         var text = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
 
-        text.Should().Contain($"- {draft.Thread!.Id}: новая картинка, ещё не сохранена (человек скачает её)");
+        text.Should().Contain($"- {draft.Thread!.Id}: новая картинка, ещё не сохранена (человек сохранит её в «Личное»)");
         text.Should().Contain(ImageEditorStateContributor.PriorityRuleFor(personal: true));
         text.Should().NotContain("корень проекта");
     }

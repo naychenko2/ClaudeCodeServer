@@ -118,6 +118,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         events?.OnNotification<TurnCompleted>(OnTurnCompleted, "ImageEditorToolset.ResetLaunches");
     }
 
+    private static bool NeedsDisk(string tool, JsonObject args) =>
+        (tool == ToolFocus && Str(args, "file") is not null)
+        || (tool == ToolGenerate && args["references"] is JsonArray { Count: > 0 });
+
     // Актор приватности — тот, кто запустил ход, а не арендатор (ownerId). Неизвестен (реестра нет, рестарт) —
     // null: чужим считается любое private, как в WorkspaceToolset (fail-closed)
     private string? Actor(string ownerId, Session session) => _turnActors?.Actor(session.Id, ownerId);
@@ -141,6 +145,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             return Deny(error);
         if (ToolsOfInstance.All(t => t.Name != tool))
             return Deny($"Инструмент {tool} недоступен на этом сервере.");
+
+        // Вход из файлов требует диска: «Личное» создаём здесь, лениво (ADR-040 §1.2); состав и поиск лиц папки не просят
+        if (scope.IsPersonal && scope.Project is null && _personalFolder is not null && NeedsDisk(tool, arguments))
+            scope = scope with { Project = await _personalFolder.EnsureAsync(context.OwnerId, ct) };
 
         return tool switch
         {
@@ -203,9 +211,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var folder = ImageThreadPathTracker.Normalize(Str(args, "folder") ?? "");
         if (folder.Length > 0)
         {
-            // Папка — место сохранения в проект; у личной области проекта нет, черновик человек скачает
-            if (scope.Project is not { } project)
-                return Deny("В чате вне проекта папок нет: вызови image_new без folder — человек скачает картинку сам.");
+            // Папка — место сохранения в проект; у личной области папок нет, человек сохранит картинку в «Личное» сам
+            if (scope.IsPersonal || scope.Project is not { } project)
+                return Deny("В чате вне проекта папок нет: вызови image_new без folder — человек сохранит картинку в «Личное» сам.");
             if (ProjectLinkGuard.ResolveInside(project.RootPath, folder) is not { } full || !Directory.Exists(full))
                 return Deny($"Папка не найдена в проекте: {folder}");
         }
@@ -614,7 +622,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             quote = new { q.Provider, q.Model, q.Estimate, q.ExpectedSeconds, format = q.Format },
             note = "Генерация идёт отдельно от хода: остановка разговора её не отменяет, отмена — image_cancel. "
                 + "Каждый вариант станет новой версией картинки внизу ленты; "
-                + (scope.IsPersonal ? "скачать её может только человек." : "сохранить в проект может только человек.")
+                + (scope.IsPersonal ? "сохранить её в «Личное» может только человек." : "сохранить в проект может только человек.")
                 + DeferredNote(q.Provider),
         });
     }
@@ -802,7 +810,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
                 (0, true) => "В этом чате ещё нет картинок. Заведи новую (image_new): это чат вне проекта, файлов проекта тут нет.",
                 (0, false) => "В этом чате ещё нет картинок. Возьми картинку проекта в работу (image_focus с file) или заведи новую (image_new).",
                 (_, true) => "Каждый вариант запуска — версия картинки. Править другую версию — versionId в image_generate. "
-                    + "Скачать картинку может только человек.",
+                    + "Сохранить картинку в «Личное» может только человек.",
                 _ => "Каждый вариант запуска — версия картинки. Править другую версию — versionId в image_generate. "
                     + "Сохранить в проект может только человек.",
             },

@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Services.ChatContext;
 using System.Globalization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 using ClaudeHomeServer.Services.Media;
 
@@ -54,7 +55,7 @@ public sealed class AudioConcatService(
 
     public const string DspUnavailableText = "На сервере нет ffmpeg — склейка недоступна. Поставить его может администратор";
     public const string PersonalProjectFileText =
-        "В личном чате куски — только звук этого чата: файлы проекта здесь недоступны";
+        "В личном чате куски — только звук этого чата: папки «Личного» пока нет, файлов в ней нет";
 
     private sealed record Piece(byte[] Audio, string Label, string? License);
 
@@ -165,12 +166,13 @@ public sealed class AudioConcatService(
         return await ReadAsync(full, label, version.License, ct);
     }
 
-    // Отказ личной области — до диска: Project у неё нет, RootPath не читаем. Чужое private
+    // Отказ области без папки — до диска: RootPath не читаем. Личная область читает файлы «Личного»
+    // тем же путём, что проект. Чужое private
     // (.cc-attachments/private/{X}) отдаёт тот же отказ, что «путь вне проекта»: наличие не раскрываем
     private static async Task<(Piece? Piece, string? Error)> ReadProjectAsync(
         string? actorId, AudioEditScope scope, string relative, string label, string? license, CancellationToken ct)
     {
-        if (scope.IsPersonal || scope.Project is not { } project) return (null, PersonalProjectFileText);
+        if (!scope.HasFolder || scope.Project is not { } project) return (null, PersonalProjectFileText);
         return await ReadAsync(ProjectLinkGuard.ResolveInsideAs(project.RootPath, relative, actorId), label, license, ct);
     }
 
@@ -219,12 +221,13 @@ public sealed class AudioConcatService(
         return stem + AudioFormats.Extension(format);
     }
 
-    // Папка сохранения: у личной области её нет, у проекта — только внутри проекта. null — отказ
+    // Папка сохранения: у проекта — внутри проекта, у личной области — внутри audio/ «Личного». null — отказ
     private static string? Folder(AudioEditScope scope, string? folder)
     {
         var f = folder?.Trim().Trim('/') ?? "";
         if (f.Length == 0) return "";
-        if (scope.IsPersonal || scope.Project is not { } project) return null;
+        if (!scope.HasFolder || scope.Project is not { } project) return null;
+        if (scope.IsPersonal && !PersonalMediaFolders.Allows(PersonalMediaFolders.Audio, f)) return null;
         return ProjectLinkGuard.ResolveInside(project.RootPath, f) is null ? null : f;
     }
 

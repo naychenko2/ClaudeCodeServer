@@ -10,9 +10,8 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Services.VideoEditor.Controllers;
 
 // Модуль «Видео» в личном чате вне проекта. Тело ручек — общее с проектом (VideoEditorEndpoints), здесь
-// только личный гейт. Фильмов и сохранения в проект здесь нет намеренно: записи в проект у личного чата
-// нет по построению, такие пути — 404 маршрутизации, а не 500 (в проектах они отвечают
-// personal_scope_no_films только у агента). Local в личном чате работает как в проекте: результат — байты в версию нити.
+// только личный гейт. Фильмов здесь нет (Ф2-6: PersonalFilmController отвечает personal_scope_no_films); «Сохранить
+// сцену» пишет клип в «Личное» (Personal/video/, ADR-040 §5). Local в личном чате работает как в проекте: результат — байты в версию нити.
 // Префы — одни на владельца, как и сама личная область.
 [ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
@@ -25,7 +24,8 @@ public class PersonalVideoEditorController(
     VideoJobThreads threads,
     VideoPrefsService prefs,
     VideoEditWorkspace workspace,
-    VideoSceneService scenes)
+    VideoSceneService scenes,
+    Films.PersonalSceneSaver? saver = null)
     : VideoEditorEndpoints(engines, jobs, threads, prefs, workspace, scenes)
 {
     // Копия в поле: параметр, переданный и в базу, и использованный в методах, даёт CS9107 (двойной захват)
@@ -112,6 +112,17 @@ public class PersonalVideoEditorController(
     [HttpGet(VideoEditorRoutes.SceneVersionFile)]
     public IActionResult VersionFile(string sessionId, string sceneId, string versionId, [FromQuery] bool download) =>
         Gate(sessionId, out var scope, out var denied) ? VersionFileIn(scope, sessionId, sceneId, versionId, download) : denied;
+
+    // Сохранить сцену в «Личное»: Personal/video/scene-NN.mp4, перезаписи нет; фильма и кадров нет (Ф2-6)
+    [HttpPost(VideoEditorRoutes.SceneSave)]
+    public async Task<IActionResult> SaveScene(string sessionId, string sceneId, [FromBody] SaveSceneRequest? req, CancellationToken ct)
+    {
+        if (!Gate(sessionId, out var scope, out var denied)) return denied;
+        if (saver is null) return Error(StatusCodes.Status503ServiceUnavailable, VideoEditorErrors.InvalidRequest, "Сохранение недоступно на этом сервере");
+        // Чат и сцена — из маршрута: тело не может подсунуть чужие
+        var request = req is null ? null : req with { SessionId = sessionId, SceneId = sceneId };
+        return FilmHttp.Map(await saver.SaveAsync(Tenant(scope), scope, request, VideoInitiators.Human, ct), saved => Ok(saved));
+    }
 
     // «С компьютера»: в личном чате проекта нет, кадр ложится в рабочую папку владельца; FrameRef — готов для
     // настроек сцены. В проектном чате ручки нет: фронт кладёт файл через files/upload в video/<фильм>/кадры/

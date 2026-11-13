@@ -81,6 +81,12 @@ export function canSave(draft: WorkflowTemplate, failure?: SaveFailure | null): 
   return stageErrors(draft).length === 0;
 }
 
+// Отказ после правки черновика: 400 (invalid) снимается — человек исправляет шаблон и
+// должен снова мочь сохранить; 409 (conflict) остаётся до перечитывания шаблона.
+export function failureAfterEdit(failure: SaveFailure | null): SaveFailure | null {
+  return failure?.kind === 'invalid' ? null : failure;
+}
+
 // Проектная копия глобального: новый ключ (id пустой — генерирует сервер), version 0,
 // basedOn на версию оригинала, встроенность не наследуется (проектный — всегда «свой»).
 export function forkToProject(global: WorkflowTemplate): WorkflowTemplate {

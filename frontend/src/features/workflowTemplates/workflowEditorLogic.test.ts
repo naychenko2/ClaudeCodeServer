@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   CONFLICT_MESSAGE, blankTemplate, classifySaveError, forkToProject, listOrNull, parseList,
   saveGuarded, templateSnapshot, normalizeForSave, presenceEditable, showWriteButton,
-  canWriteProjectTemplates, splitEntries, toolbarSubtitle, conflictTitle, errorsHeading, errorSummaryItems, entryMetaMap, pluralRu, newTemplateDraft, takeComposition, saveAsNew, discardChanges, canSave,
+  canWriteProjectTemplates, splitEntries, toolbarSubtitle, conflictTitle, errorsHeading, errorSummaryItems, entryMetaMap, pluralRu, newTemplateDraft, takeComposition, saveAsNew, discardChanges, canSave, failureAfterEdit,
 } from './workflowEditorLogic';
 import { STAGE_ROLES } from './workflowTemplateModel';
 import type { WorkflowTemplate } from './types';
@@ -233,6 +233,22 @@ describe('canSave', () => {
     expect(canSave(ok, fail('conflict'))).toBe(false);
     expect(canSave(ok, fail('invalid'))).toBe(false);
     expect(canSave(ok, fail('failed'))).toBe(true);
+  });
+});
+
+describe('failureAfterEdit', () => {
+  const fail = (kind: 'conflict' | 'invalid' | 'failed') =>
+    ({ kind, message: '', stageErrors: {}, generalErrors: [] });
+  const ok = tpl({ stages: [{ role: 'step', presence: 'on' }] });
+  it('после 400 правка снова включает Сохранить', () => {
+    expect(canSave(ok, failureAfterEdit(fail('invalid')))).toBe(true);
+  });
+  it('409 блокирует и после правки — до перечитывания', () => {
+    expect(canSave(ok, failureAfterEdit(fail('conflict')))).toBe(false);
+  });
+  it('без отказа и при сетевом отказе ничего не меняется', () => {
+    expect(failureAfterEdit(null)).toBeNull();
+    expect(failureAfterEdit(fail('failed'))?.kind).toBe('failed');
   });
 });
 

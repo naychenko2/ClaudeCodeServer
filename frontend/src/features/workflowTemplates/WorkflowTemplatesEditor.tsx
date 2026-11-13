@@ -26,7 +26,7 @@ import { stageErrors } from './workflowTemplateModel';
 import {
   blankTemplate, normalizeForSave, forkToProject, saveGuarded,
   templateSnapshot, splitEntries, entryMetaMap, toolbarSubtitle, errorSummaryItems,
-  discardChanges, saveAsNew, canSave as canSaveDraft,
+  discardChanges, saveAsNew, canSave as canSaveDraft, failureAfterEdit,
   type SaveFailure,
 } from './workflowEditorLogic';
 import { WorkflowStageStrip } from './WorkflowStageStrip';
@@ -241,13 +241,19 @@ export function WorkflowTemplatesEditor({
     }
   };
 
+  // Любая правка полей и этапов снимает отказ 400, чтобы «Сохранить» не оставалась серой.
+  const editDraft = (fn: (d: WorkflowTemplate | null) => WorkflowTemplate | null) => {
+    setDraft(fn);
+    setFailure(failureAfterEdit);
+  };
+
   const renameStage = (oldId: string, newId: string) =>
-    setDraft(d => (d ? { ...d, stages: renameStageId(d.stages, oldId, newId) } : d));
+    editDraft(d => (d ? { ...d, stages: renameStageId(d.stages, oldId, newId) } : d));
   const dropStage = (id: string) =>
-    setDraft(d => (d ? { ...d, stages: removeStageReconnect(d.stages, id) } : d));
+    editDraft(d => (d ? { ...d, stages: removeStageReconnect(d.stages, id) } : d));
 
   const setStage = (idx: number, next: WorkflowStage) =>
-    setDraft(d => (d ? { ...d, stages: d.stages.map((s, i) => (i === idx ? next : s)) } : d));
+    editDraft(d => (d ? { ...d, stages: d.stages.map((s, i) => (i === idx ? next : s)) } : d));
 
   // === Список ===
   const renderItem = (t: WorkflowTemplate, scope: Scope) => {
@@ -364,12 +370,12 @@ export function WorkflowTemplatesEditor({
       />
 
       <Field label="Название">
-        <TextField value={draft.name} onChange={v => setDraft(d => (d ? { ...d, name: v } : d))} disabled={readOnly} />
+        <TextField value={draft.name} onChange={v => editDraft(d => (d ? { ...d, name: v } : d))} disabled={readOnly} />
       </Field>
       <Field label="Описание" hint="Читает рекомендатель маршрута, когда выбирает шаблон под фичу.">
         <TextArea
           value={draft.description ?? ''}
-          onChange={v => setDraft(d => (d ? { ...d, description: v } : d))}
+          onChange={v => editDraft(d => (d ? { ...d, description: v } : d))}
           readOnly={readOnly} autoGrow minHeight={60} maxHeight={200}
         />
       </Field>
@@ -384,7 +390,7 @@ export function WorkflowTemplatesEditor({
           personas={personas}
           mcpChoices={mcpChoices}
           errorsFor={(s, i) => errorsByRole[normalizeStages(draft.stages)[i].id ?? s.role] ?? errorsByRole[s.role] ?? []}
-          onStagesChange={stages => setDraft(d => (d ? { ...d, stages } : d))}
+          onStagesChange={stages => editDraft(d => (d ? { ...d, stages } : d))}
           onStageChange={setStage}
           onRenameStage={(i, newId) => renameStage(normalizeStages(draft.stages)[i].id ?? draft.stages[i].role, newId)}
           onRemoveStage={i => dropStage(normalizeStages(draft.stages)[i].id ?? draft.stages[i].role)}

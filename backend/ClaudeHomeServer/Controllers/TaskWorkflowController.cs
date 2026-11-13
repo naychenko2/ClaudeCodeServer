@@ -130,10 +130,7 @@ public class TaskWorkflowController(
     {
         var epic = tasks.GetById(taskId);
         if (epic is null || epic.Role != TaskRoles.Feature) return null;
-        if (epic.OwnerId == UserId) return epic;
-        return epic.ProjectId is { } pid && access?.Resolve(UserId, pid, ProjectRight.Write) is not null
-            ? epic
-            : null;
+        return FeatureOwnerGate.IsOwnerOf(access, UserId, epic) ? epic : null;
     }
 
     // Изменение эпика доезжает до экрана штатным событием доски (тот же формат, что у hold/note);

@@ -302,7 +302,18 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|8
 # ToTaskBoard ×2, journal.Append, LocateManyAsync) легли поверх миграции волны; ещё две — та же
 # строка в новой форме master (tasks.Create с CreatedByHuman = !IsServiceToken, MaskRunChats с
 # materials) — счёт не изменили. Миграции волны (89) мерж не тронул.
-backend/ClaudeHomeServer/Controllers/TasksController.cs|94
+# D1a (21db63a38, ручка экрана этапа): TasksController 94→96 — «stage.Build(taskId, UserId)» и
+# «stage.BuildDiff(taskId, sha, UserId)». id вызывающего идёт в StageScreenService.Visible только как
+# АКТОР проверки видимости: задача берётся по id и пропускается, если актор — владелец записи или у него
+# право Read на проект (IProjectAccess.Resolve). Ключом хранилищ он не служит, ничего не пишется —
+# тот же класс мест, что «access.Resolve(UserId, …)» в GET /api/tasks/{id} (S2c-9).
+backend/ClaudeHomeServer/Controllers/TasksController.cs|96
+# Задача b078fa12 (блокер мержа, шаги P1e/P2b): TaskWorkflowController 0→1 — «FeatureOwnerGate.IsOwnerOf(access, UserId, epic)»
+# в EpicOfCaller (recommend/confirm маршрута эпика). id вызывающего — актор права «только владелец»
+# (владелец записи либо ProjectRight.Write через IProjectAccess), тот же предикат, что у двери правки
+# FeatureOwnerGate.Denied. Ключом хранилищ не стал: запись адресуется id эпика, подбор идёт под
+# epic.OwnerId (ключ записи), а не под UserId.
+backend/ClaudeHomeServer/Controllers/TaskWorkflowController.cs|1
 # QA-P1: TurnRightExtensions 6→7 — DenyContentWrite (право записи контента чата: переименование и
 # архив, редактор и выше) идёт тем же уровнем Deny, что RunTurn и Configure: id вызывающего входит
 # только в IProjectAccess.ResolveSession (запрошенное право WriteContent) и GetAccessible (развилка

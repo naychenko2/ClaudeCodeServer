@@ -206,10 +206,8 @@ export function launchEndNote(status: AudioThreadLaunch['status'], got: number, 
 
 // ── Действия ──
 
-// Главная кнопка сохранения: в проекте — «Сохранить в проект» и «Сохранить как…», в личном чате
-// проекта нет — только «Скачать»
-export type SaveKind = 'project' | 'download';
-export const saveKind = (personal: boolean): SaveKind => (personal ? 'download' : 'project');
+// Куда сохраняем: проект или «Личное» владельца (личный чат вне проекта)
+export const saveLabel = (personal: boolean) => (personal ? 'Сохранить в Личное' : 'Сохранить в проект');
 
 // Сводим то, что звучит в микшере: стемы плана с громкостью, без заглушённых
 export function mixRequest(plan: MixPlan, baseVersionId: string, revision: number): AudioMixRequest {

@@ -7,7 +7,7 @@
 
 import { onMessage, readStoredToken, request } from 'aihome_shell/kit';
 import type { LocalGpuQueueInfo } from '../../types/localGpuQueue';
-import { audioBase, chatBase, isPersonalScope } from './scope';
+import { audioBase, chatBase } from './scope';
 
 export type AudioMode = 'voice' | 'music' | 'process';
 
@@ -496,11 +496,9 @@ export const audioApi = {
     json<AudioDspVersion>(`${threadUrl(scope, sessionId, threadId)}/edit`, req, 'POST', 120_000),
   concat: (scope: string, sessionId: string, req: AudioConcatRequest) =>
     json<AudioConcatResult>(`${chatBase(scope, sessionId)}/concat`, req, 'POST', 300_000),
-  // Сохранить в проект — только у проекта: у личного чата ручки нет, отказ до запроса
-  save: (scope: string, sessionId: string, threadId: string, req: AudioSaveRequest) => {
-    if (isPersonalScope(scope)) throw new Error('У личного чата нет проекта — версию можно только скачать');
-    return json<AudioSaveResult>(`${threadUrl(scope, sessionId, threadId)}/save`, req);
-  },
+  // Сохранить в проект; у личного чата — в audio/ «Личного» (ADR-040 Ф2-3), тот же маршрут нити
+  save: (scope: string, sessionId: string, threadId: string, req: AudioSaveRequest) =>
+    json<AudioSaveResult>(`${threadUrl(scope, sessionId, threadId)}/save`, req),
   // URL файла версии для <audio src>: токен через ?access_token=, тег заголовков не шлёт
   versionFileUrl: (scope: string, sessionId: string, threadId: string, versionId: string, role = 'main', download = false) => {
     const url = `/api${threadUrl(scope, sessionId, threadId)}/versions/${encodeURIComponent(versionId)}/files/${encodeURIComponent(role)}`;

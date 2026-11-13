@@ -1,18 +1,18 @@
 // Библиотека «Голоса» (ADR-021 §5, записка v2 «Вкладка «Голоса»»): voices/ проекта — список, «Где работает»,
 // прослушивание образцов, новый голос из записей, переименование, удаление, правка образцов и «В контекст».
-// Голоса живут только в проектах: в личном чате — честный пустой экран.
+// В личном чате — «Личное» владельца (ADR-040): те же ручки на чате, образцы только загрузкой.
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronUp, Lock, Mic, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, Mic, Pencil, Plus, Trash2, X } from 'lucide-react';
 import {
   Badge, Button, ConfirmDialog, ContextAddButton, EmptyState, Field, IconButton, TextArea, TextField, refOf, showToast, useChatContext,
   C, FS, R, SP, ICON_SIZE, ICON_STROKE,
 } from 'aihome_shell/kit';
 import { AudioPlayer } from '../player';
-import { isPersonalScope } from '../scope';
+import { enterVoicesScope, isPersonalScope } from '../scope';
 import { voicesApi, MAX_VOICE_SAMPLE_MB, MAX_VOICE_SAMPLES, type AudioVoice, type VoicesList } from './api';
 import {
-  EMPTY_TEXT, EMPTY_TITLE, MINIMAX_TTL_TEXT, PERSONAL_TEXT, PERSONAL_TITLE,
+  EMPTY_TEXT, EMPTY_TITLE, MINIMAX_TTL_TEXT,
   canAddSamples, isStale, newVoiceProblem, sampleRemoval, samplesProblem,
   voicesView, voiceSubtitle, whereWorks, type WhereStatus,
 } from './model';
@@ -40,7 +40,7 @@ const STATUS: Record<WhereStatus, { label: string; tone: 'success' | 'warning' |
 };
 
 export function VoicesTab({ scope, sessionId, contextSessionId = null }: VoicesTabProps) {
-  const personal = isPersonalScope(scope);
+  enterVoicesScope(scope, sessionId ?? contextSessionId);
   const [list, setList] = useState<VoicesList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -51,12 +51,11 @@ export function VoicesTab({ scope, sessionId, contextSessionId = null }: VoicesT
   const isPicked = (slug: string) => (contextSessionId ? !!refOf(chat, candidate(slug)) : false);
 
   const load = useCallback(() => {
-    if (personal) return;
     setError(null);
     voicesApi.list(scope, sessionId)
       .then(setList)
       .catch(e => setError(errText(e)));
-  }, [personal, scope, sessionId]);
+  }, [scope, sessionId]);
 
   useEffect(() => { setList(null); load(); }, [load]);
 
@@ -66,11 +65,8 @@ export function VoicesTab({ scope, sessionId, contextSessionId = null }: VoicesT
   });
   const drop = (slug: string) => setList(l => (l ? { ...l, voices: l.voices.filter(x => x.slug !== slug) } : l));
 
-  const view = voicesView(personal, list, error);
+  const view = voicesView(list, error);
 
-  if (view.kind === 'personal') {
-    return <EmptyState compact icon={ic(Lock, ICON_SIZE.sm)} title={PERSONAL_TITLE} subtitle={PERSONAL_TEXT} />;
-  }
   if (view.kind === 'loading') {
     return <div style={{ fontSize: FS.sm, color: C.textMuted, padding: SP.sm }}>Загружаем голоса…</div>;
   }
@@ -162,7 +158,7 @@ function VoiceCard({ scope, voice: v, expanded, picked, contextSessionId, onTogg
         )}
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(expanded ? ChevronUp : ChevronDown, ICON_SIZE.sm)}</span>
       </button>
-      {contextSessionId && (
+      {contextSessionId && !isPersonalScope(scope) && (
         <ContextAddButton sessionId={contextSessionId} projectId={scope} candidate={{ kind: 'audio-voice', ref: { slug: v.slug } }} size="xs" toggle />
       )}
       </div>
@@ -249,7 +245,8 @@ function VoiceDetails({ scope, voice: v, onChanged, onDeleted }: {
           {!removal.allowed && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{removal.reason}</div>}
           {adding ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, paddingTop: SP.xs }}>
-              <SamplesPicker value={adding} onChange={setAdding} room={MAX_VOICE_SAMPLES - v.samples.length} disabled={busy} />
+              <SamplesPicker value={adding} onChange={setAdding} room={MAX_VOICE_SAMPLES - v.samples.length} disabled={busy}
+                uploadOnly={isPersonalScope(scope)} />
               {addProblem && draftHasAny(adding) && <div style={{ fontSize: FS.xs, color: C.warningText }}>{addProblem}</div>}
               <div style={{ display: 'flex', gap: SP.xs, justifyContent: 'flex-end' }}>
                 <Button size="sm" variant="ghost" disabled={busy} onClick={() => setAdding(null)}>Отмена</Button>
@@ -385,7 +382,7 @@ function NewVoiceForm({ scope, onSaved, onClose }: { scope: string; onSaved: (v:
       </div>
       <Field label="Имя"><TextField value={name} onChange={setName} placeholder="Например, Аня" autoFocus disabled={busy} /></Field>
       <Field label={`Записи · от 1 до ${MAX_VOICE_SAMPLES}`} hint={`5–15 секунд чистой речи без музыки, до ${MAX_VOICE_SAMPLE_MB} МБ каждая`}>
-        <SamplesPicker value={samples} onChange={setSamples} disabled={busy} />
+        <SamplesPicker value={samples} onChange={setSamples} disabled={busy} uploadOnly={isPersonalScope(scope)} />
       </Field>
       <Field label="Расшифровка" hint="Точный текст записей. Пусто — поставщики распознают запись сами">
         <TextArea value={transcript} onChange={setTranscript} autoGrow minHeight={56} maxHeight={160} disabled={busy}

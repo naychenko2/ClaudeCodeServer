@@ -9,7 +9,7 @@ import { imageEditorApi, nameTakenSuggestion, type ImageEncodeFormat } from '../
 import { nameStem } from '../saveAs';
 import { isPersonalScope } from '../scope';
 import {
-  chainOf, currentStack, currentVersion, isLegacyThread, ORIGIN, originFile, saveFolder, versionStep,
+  chainOf, currentStack, currentVersion, isLegacyThread, ORIGIN, originFile, PERSONAL_SAVE_FOLDER, saveFolder, savedToastLabel, versionStep,
 } from './model';
 import {
   getThreadsState, imageDraftKey, mutate,
@@ -113,26 +113,27 @@ export async function createDraft(projectId: string, sessionId: string, folder: 
 }
 
 // «Сохранить в проект»: файл — следующей версией рядом, черновик — под свободным именем
-// в своей папке. Карточка переходит на новый файл (это делает сервер по threadId)
+// в своей папке. Карточка переходит на новый файл (это делает сервер по threadId).
+// Личный чат: всегда новый файл в images/ «Личного» (нити за файлом там нет)
 export async function saveToProject(
   projectId: string, sessionId: string, t: ImageThread, stepId: string | null = activeStepOf(t),
 ): Promise<string | null> {
-  // Личному чату сохранять некуда: кнопки там нет, а это — страховка от будущих вызовов
-  if (isPersonalScope(projectId) || !stepId) return null;
+  if (!stepId) return null;
+  const personal = isPersonalScope(projectId);
   const api = imageEditorApi();
   try {
     let res: { path: string };
-    if (t.file) {
+    if (t.file && !personal) {
       res = await api.save(projectId, { variant: 0, stepId, sourcePath: t.file, mode: 'next-version', sessionId, threadId: t.id });
     } else {
-      const folder = saveFolder(t);
+      const folder = personal ? PERSONAL_SAVE_FOLDER : saveFolder(t);
       // Формат нужен проверке имени только для расширения подсказки; итоговое ставит сервер по байтам
       const check = await api.saveCheck(projectId, { folder, name: 'kartinka', format: 'png' });
       const stem = nameStem(check.suggestion ?? check.path.split('/').pop() ?? 'kartinka');
       res = await api.save(projectId, { variant: 0, stepId, folder, fileName: stem, mode: 'as', sessionId, threadId: t.id });
     }
     markSaved(t.id, stepId);
-    showToast(`Сохранено в проект: ${res.path}`, '', 'info');
+    showToast(`${savedToastLabel(personal)}: ${res.path}`, '', 'info');
     return res.path;
   } catch (e) {
     showToast(`Не сохранилось: ${(e as Error).message}`, '', 'error');
@@ -145,14 +146,14 @@ export async function saveAsInThread(
   projectId: string, sessionId: string, t: ImageThread, v: { folder: string; fileName: string }, format?: ImageEncodeFormat,
   stepId: string | null = activeStepOf(t),
 ): Promise<void> {
-  if (isPersonalScope(projectId) || !stepId) return;
+  if (!stepId) return;
   try {
     const res = await imageEditorApi().save(projectId, {
       variant: 0, stepId, folder: v.folder, fileName: v.fileName, mode: 'as', sessionId, threadId: t.id,
       encode: format ? { format } : null,
     });
     markSaved(t.id, stepId);
-    showToast(`Сохранено в проект: ${res.path}`, '', 'info');
+    showToast(`${savedToastLabel(isPersonalScope(projectId))}: ${res.path}`, '', 'info');
   } catch (e) {
     const suggestion = nameTakenSuggestion(e);
     throw new Error(suggestion ? `Такой файл уже есть — свободное имя: ${suggestion}` : (e as Error).message, { cause: e });

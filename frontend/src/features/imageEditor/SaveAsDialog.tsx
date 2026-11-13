@@ -1,5 +1,6 @@
 // Диалог «Сохранить как…» (ADR-018 §5, макет image-editor-v2): имя, папка проекта,
-// расширение справа по формату результата. Имя проверяется на лету через save/check;
+// расширение справа по формату результата. У личной области папка одна — images/ «Личного»
+// (дерева файлов у неё нет, бэкенд принимает только images/**). Имя проверяется на лету через save/check;
 // перезаписи нет — занятое имя блокирует кнопку и предлагает свободное рядом.
 // Тяжёлый файл (больше HeavyFileMb) — подсказка с кнопкой «Сжать в WebP» (ADR-018 §9).
 
@@ -8,6 +9,7 @@ import { AlertTriangle, Folder } from 'lucide-react';
 import { Button, Field, Modal, ModalActions, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP, api as appApi } from 'aihome_shell/kit';
 import { nameTakenSuggestion, type ImageEncodeFormat, type SaveCheckResponse } from './api';
 import { plural } from './format';
+import { isPersonalScope } from './scope';
 import { checkKey, FORMAT_EXT, nameStem, projectFolders, saveBlocked, suggestionStem, type SaveCheckState, type SaveFolder } from './saveAs';
 import { formatBytes } from './transforms';
 
@@ -45,19 +47,22 @@ export function SaveAsDialog({ projectId, sourcePath, defaultName, folder, forma
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const personal = isPersonalScope(projectId);
+
   useEffect(() => {
+    if (personal) return;
     let alive = true;
     appApi.files.tree(projectId, '')
       .then(entries => { if (alive) setFolders(projectFolders(entries)); })
       .catch(() => { if (alive) setFolders([]); });
     return () => { alive = false; };
-  }, [projectId]);
+  }, [projectId, personal]);
 
   // Текущая папка есть в списке, даже если дерево ещё не пришло или не отдало её
   const shown = useMemo(() => {
-    const list = folders ?? [];
+    const list = personal ? [] : (folders ?? []);
     return list.some(f => f.path === folder) ? list : [{ path: folder, files: 0 }, ...list];
-  }, [folders, folder]);
+  }, [folders, folder, personal]);
 
   const stem = nameStem(name);
   const key = checkKey(dir, stem, format);
@@ -139,7 +144,7 @@ export function SaveAsDialog({ projectId, sourcePath, defaultName, folder, forma
             }}>.{ext}</span>
           </div>
         </Field>
-        <Field label="Папка проекта">
+        <Field label={personal ? 'Папка «Личного»' : 'Папка проекта'}>
           <div style={{
             display: 'flex', flexDirection: 'column', gap: 2, padding: SP.xxs, maxHeight: 220, overflow: 'auto',
             border: `1px solid ${C.border}`, borderRadius: R.lg, background: C.bgWhite,
@@ -151,11 +156,11 @@ export function SaveAsDialog({ projectId, sourcePath, defaultName, folder, forma
                 style={{ justifyContent: 'flex-start', fontWeight: f.path === dir ? 600 : 400, flexShrink: 0 }}>
                 <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folderLabel(f.path)}</span>
                 <span style={{ marginLeft: 'auto', paddingLeft: SP.sm, fontSize: FS.xs, fontWeight: 400, color: C.textMuted, whiteSpace: 'nowrap' }}>
-                  {f.path === folder ? 'здесь сейчас · ' : ''}{f.files} {plural(f.files, 'файл', 'файла', 'файлов')}
+                  {personal ? '' : `${f.path === folder ? 'здесь сейчас · ' : ''}${f.files} ${plural(f.files, 'файл', 'файла', 'файлов')}`}
                 </span>
               </Button>
             ))}
-            {!folders && <Hint>Загружаем папки проекта…</Hint>}
+            {!personal && !folders && <Hint>Загружаем папки проекта…</Hint>}
           </div>
         </Field>
         {status}

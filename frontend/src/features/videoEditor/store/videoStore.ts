@@ -9,7 +9,6 @@ import {
   type FilmBuildStatus, type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent,
   type VideoPrefs, type VideoScene, type VideoSceneSettings, type VideoThreadsState,
 } from '../api';
-import { isPersonalScope } from '../scope';
 import type { LocalGpuQueueInfo } from '../../../types/localGpuQueue';
 
 export const VIDEO_PANEL = 'videoEditor';
@@ -409,7 +408,6 @@ const isPermanentFailure = (e: unknown) => {
 };
 
 export async function loadFilm(scope: string, sessionId: string, path: string, force = false) {
-  if (isPersonalScope(scope)) return;
   const k = filmKey(sessionId, path);
   const cur = _films.get(k);
   if (cur && (cur.loading || (cur.state && !force))) return;
@@ -446,7 +444,7 @@ export function useFilm(scope: string, sessionId: string | null, path: string | 
 export const getFilmList = (sessionId: string | null): FilmSummary[] => (sessionId && _filmLists.get(sessionId)) || [];
 
 export async function loadFilmList(scope: string, sessionId: string, force = false) {
-  if (isPersonalScope(scope) || (!force && _filmLists.has(sessionId))) return;
+  if (!force && _filmLists.has(sessionId)) return;
   try {
     _filmLists.set(sessionId, await videoApi.films(scope, sessionId));
     emit();

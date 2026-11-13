@@ -173,15 +173,14 @@ export function faceRect(f: { bbox: [number, number, number, number] }, w: numbe
 }
 
 // ── Видимость входа «Подставить персонажа» ─────────────────────────────────────
-// Пункт/режим есть, когда: не личная область, флаг включён, в проекте есть персонажи
+// Пункт/режим есть, когда: флаг включён, в проекте или «Личном» есть персонажи
 // и локальные модели доступны. Нет персонажей (11) — пункта нет вовсе.
 export function faceSwapEntryVisible(opts: {
-  personal: boolean;
   flag: boolean;
   hasCharacters: boolean;
   localAvailable: boolean;
 }): boolean {
-  return !opts.personal && opts.flag && opts.hasCharacters && opts.localAvailable;
+  return opts.flag && opts.hasCharacters && opts.localAvailable;
 }
 
 // ── Состояние экрана ───────────────────────────────────────────────────────────

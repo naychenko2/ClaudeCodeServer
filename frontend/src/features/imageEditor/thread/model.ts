@@ -48,10 +48,10 @@ export function versionLabel(t: ImageThread, pos: ThreadPos | undefined, savedSt
 }
 
 // Чип выбранной картинки: «Работаем с: hero.png · версия 2» (short — «hero.png · в2»);
-// у нити со стопками — «hero.png · шаг 2». personal — личный чат: сохранять некуда
+// у нити со стопками — «hero.png · шаг 2». personal — личный чат: сохраняем в «Личное»
 export function focusLabel(t: ImageThread, short = false, personal = false): string {
   if (!t.file && isEmptyThread(t)) {
-    if (personal) return 'Новая картинка';
+    if (personal) return 'Новая картинка · сохранять в Личное';
     const folder = t.draftFolder ? `${t.draftFolder.replace(/\/$/, '')}/` : 'корень проекта';
     return `Новая картинка · сохранять в ${folder}`;
   }
@@ -190,27 +190,33 @@ export function versionDone(t: ImageThread, v: ImageThreadVersion): string | nul
 // Главная кнопка карточки версии (прототип полос): у версии в работе — «Сохранить в проект»,
 // пока она черновик (в личном чате вне проекта сохранять некуда — «Скачать»); у остальных
 // версий выбранной картинки — «Продолжить от неё»; у картинки, которая не в работе, —
-// «Работать с этой». null — кнопки нет
-export type VersionPrimary = 'save' | 'download' | 'continue' | 'work' | null;
+// «Работать с этой». null — кнопки нет. У личного чата «Сохранить» кладёт в «Личное» (ADR-040)
+export type VersionPrimary = 'save' | 'continue' | 'work' | null;
 
 export function versionPrimary(
-  t: ImageThread, v: ImageThreadVersion, focused: boolean, saved: boolean, personal = false,
+  t: ImageThread, v: ImageThreadVersion, focused: boolean, saved: boolean,
 ): VersionPrimary {
   if (!focused) return 'work';
   if (t.currentVersionId !== v.id) return 'continue';
   if (!versionStep(t, v)) return null;
-  if (personal) return 'download';
   return saved ? null : 'save';
 }
 
+// Куда сохраняем: проект или «Личное» владельца (личный чат вне проекта)
+export const saveLabel = (personal: boolean) => (personal ? 'Сохранить в Личное' : 'Сохранить в проект');
+export const savedLabel = (personal: boolean) => (personal ? 'В «Личном»' : 'В проекте');
+export const savedToastLabel = (personal: boolean) => (personal ? 'Сохранено в Личное' : 'Сохранено в проект');
+// Папка сохранения личной области: бэкенд принимает только images/** (пусто — сама images/)
+export const PERSONAL_SAVE_FOLDER = 'images';
+
 // Правый край действий карточки-стопки: «Сохранить в проект», метка «В проекте» или ничего.
-// Личному чату сохранять некуда — у него остаётся только «Скачать»
+// У личной области нити за сохранённым файлом нет (t.file пуст): метка — по сохранённому шагу
 export function stackSaveState(
   t: ImageThread, isCurrent: boolean, unsaved: boolean, personal: boolean,
 ): 'save' | 'in-project' | null {
-  if (!isCurrent || personal) return null;
+  if (!isCurrent) return null;
   if (unsaved) return 'save';
-  return t.file ? 'in-project' : null;
+  return t.file || (personal && t.currentStepId) ? 'in-project' : null;
 }
 
 // Имя скачанного файла: у картинки проекта — имя файла, у черновика — «image-v3.png»

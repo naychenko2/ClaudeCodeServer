@@ -17,12 +17,14 @@ export const toDraft = (v: SamplesValue): SampleDraft => ({
 
 const icon = (I: typeof X) => <I size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 
-export function SamplesPicker({ value, onChange, room = MAX_VOICE_SAMPLES, disabled }: {
+export function SamplesPicker({ value, onChange, room = MAX_VOICE_SAMPLES, disabled, uploadOnly }: {
   value: SamplesValue;
   onChange: (v: SamplesValue) => void;
   // Сколько записей ещё можно добавить
   room?: number;
   disabled?: boolean;
+  // Личный чат: файлов проекта нет, только загрузка с устройства
+  uploadOnly?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [path, setPath] = useState('');
@@ -59,13 +61,15 @@ export function SamplesPicker({ value, onChange, room = MAX_VOICE_SAMPLES, disab
           e.target.value = '';
           if (picked.length) onChange({ ...value, files: [...value.files, ...picked] });
         }} />
-      <div style={{ display: 'flex', gap: SP.xs, alignItems: 'center' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <TextField value={path} onChange={setPath} placeholder="Или путь в проекте: audio/anya.wav" mono
-            disabled={disabled || full} onEnter={addPath} />
+      {!uploadOnly && (
+        <div style={{ display: 'flex', gap: SP.xs, alignItems: 'center' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <TextField value={path} onChange={setPath} placeholder="Или путь в проекте: audio/anya.wav" mono
+              disabled={disabled || full} onEnter={addPath} />
+          </div>
+          <Button size="sm" variant="secondary" disabled={disabled || full || !path.trim()} onClick={addPath}>Добавить</Button>
         </div>
-        <Button size="sm" variant="secondary" disabled={disabled || full || !path.trim()} onClick={addPath}>Добавить</Button>
-      </div>
+      )}
     </div>
   );
 }

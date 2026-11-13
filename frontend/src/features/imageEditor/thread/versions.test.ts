@@ -67,15 +67,13 @@ describe('главная кнопка карточки версии', () => {
   it('картинка не в работе — «Работать с этой» на любой версии', () => {
     expect(versionPrimary(t, t.versions![2], false, false)).toBe('work');
   });
-  it('личный чат вне проекта: у версии в работе — «Скачать» вместо «Сохранить в проект»', () => {
+  it('черновик (в том числе личного чата): у версии в работе — «Сохранить»; у пустой версии кнопки нет', () => {
     const draft = withVersions({ file: null, draftFolder: '' });
-    expect(versionPrimary(draft, draft.versions![2], true, false, true)).toBe('download');
-    expect(versionPrimary(draft, draft.versions![2], true, false, false)).toBe('save');
-    // Прочие кнопки — как у проекта; у пустой версии скачивать нечего
-    expect(versionPrimary(draft, draft.versions![1], true, false, true)).toBe('continue');
-    expect(versionPrimary(draft, draft.versions![2], false, false, true)).toBe('work');
+    expect(versionPrimary(draft, draft.versions![2], true, false)).toBe('save');
+    expect(versionPrimary(draft, draft.versions![1], true, false)).toBe('continue');
+    expect(versionPrimary(draft, draft.versions![2], false, false)).toBe('work');
     const empty = withVersions({ file: null, draftFolder: '', versions: [ver('origin')], currentVersionId: 'origin' });
-    expect(versionPrimary(empty, empty.versions![0], true, false, true)).toBeNull();
+    expect(versionPrimary(empty, empty.versions![0], true, false)).toBeNull();
   });
   it('имя скачанного черновика — image-v{N} с расширением по типу, у файла проекта — его имя', () => {
     const draft = withVersions({ file: null, draftFolder: '' });
@@ -131,12 +129,12 @@ describe('правка без ИИ и «Продолжить от неё»', () 
   });
 });
 
-// Личный чат вне проекта (ревью ИЛ-3): «Сохранить в проект» нет ни в карточке-стопке, ни в
-// действиях — иначе клик уходит в проектную ручку и падает тостом «У личного чата нет проекта»
+// Личный чат вне проекта (ADR-040 Ф2-3): «Сохранить» кладёт в images/ «Личного» новым файлом
 describe('сохранение в личном чате', () => {
-  it('карточка-стопка личного чата не предлагает «Сохранить в проект» даже у несохранённого шага', () => {
-    expect(stackSaveState(legacy(), true, true, true)).toBeNull();
-    expect(stackSaveState(legacy(), true, false, true)).toBeNull();
+  it('карточка-стопка личного чата сохраняет несохранённый шаг, сохранённый помечает', () => {
+    expect(stackSaveState(legacy(), true, true, true)).toBe('save');
+    expect(stackSaveState(legacy(), true, false, true)).toBe('in-project');
+    expect(stackSaveState(legacy(), true, false, true)).toBe('in-project');
   });
 
   it('у чата проекта карточка-стопка сохраняет несохранённый шаг и помечает сохранённый', () => {
@@ -145,11 +143,22 @@ describe('сохранение в личном чате', () => {
     expect(stackSaveState(legacy(), false, true, false)).toBeNull();
   });
 
-  it('saveToProject и saveAsInThread в личной области не зовут проектную ручку', async () => {
-    const save = vi.spyOn(imageEditorApi(), 'save').mockResolvedValue({ path: 'img/hero-2.png' });
-    expect(await saveToProject('personal', 's1', withVersions(), 's2r')).toBeNull();
-    await saveAsInThread('personal', 's1', withVersions(), { folder: '', fileName: 'x' }, undefined, 's2r');
-    expect(save).not.toHaveBeenCalled();
+  it('saveToProject в личной области: новый файл в images/, не «следующая версия»', async () => {
+    vi.stubGlobal('window', { dispatchEvent: () => true });
+    const save = vi.spyOn(imageEditorApi(), 'save').mockResolvedValue({ path: 'images/kartinka.png' });
+    vi.spyOn(imageEditorApi(), 'saveCheck').mockResolvedValue({ path: 'images/kartinka.png', taken: false, suggestion: null });
+    const t = withVersions({ file: null, draftFolder: '' });
+    expect(await saveToProject('personal', 's1', t, 's2r')).toBe('images/kartinka.png');
+    expect(save).toHaveBeenCalledWith('personal', expect.objectContaining({ stepId: 's2r', mode: 'as', folder: 'images' }));
+    vi.unstubAllGlobals();
+  });
+
+  it('saveAsInThread в личной области зовёт личную ручку с выбранным именем', async () => {
+    vi.stubGlobal('window', { dispatchEvent: () => true });
+    const save = vi.spyOn(imageEditorApi(), 'save').mockResolvedValue({ path: 'images/x.png' });
+    await saveAsInThread('personal', 's1', withVersions({ file: null }), { folder: 'images', fileName: 'x' }, undefined, 's2r');
+    expect(save).toHaveBeenCalledWith('personal', expect.objectContaining({ stepId: 's2r', folder: 'images', fileName: 'x', mode: 'as' }));
+    vi.unstubAllGlobals();
   });
 
   it('в проекте saveToProject сохраняет следующей версией', async () => {

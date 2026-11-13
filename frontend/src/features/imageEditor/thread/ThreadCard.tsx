@@ -18,7 +18,7 @@ import { download } from './download';
 import { GpuQueueBlock, showQueueLine } from './gpuCard';
 import {
   chainOf, currentIndex, currentStack, findStack, findVersion, interruptedOf, isEmptyThread, isHiddenDraft, isLegacyThread, ORIGIN, saveFolder,
-  stackSaveState, stepOf, threadName, versionLabel,
+  saveLabel, savedLabel, stackSaveState, stepOf, threadName, versionLabel,
 } from './model';
 import { recordOf } from './records';
 import { openEditor, useThreads } from './threadStore';
@@ -241,9 +241,9 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm }}>
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ImageIcon, ICON_SIZE.sm)}</span>
         <span style={{ fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{threadName(thread)}</span>
-        {!(draft && personal) && (
-          <span style={{ color: C.textSecondary }}>· {draft ? `сохранять в ${folder ? `${folder}/` : 'корень проекта'}` : versionLabel(thread, pos, saved)}</span>
-        )}
+        <span style={{ color: C.textSecondary }}>· {draft
+          ? (personal ? 'сохранять в Личное' : `сохранять в ${folder ? `${folder}/` : 'корень проекта'}`)
+          : versionLabel(thread, pos, saved)}</span>
         {stack?.old && <Badge size="xs" tone="neutral">старая стопка</Badge>}
         {focused && isCurrent && <Badge size="xs" tone="accent">{fill.byAgent ? 'В работе ✦' : 'В работе'}</Badge>}
         {chain.length > 1 && (
@@ -280,8 +280,8 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
               {mobile ? '' : 'Скачать'}
             </Button>
           )}
-          {saveState === 'save' && <Button size="sm" variant="primary" loading={saving} onClick={() => { void save(); }}>Сохранить в проект</Button>}
-          {saveState === 'in-project' && <span style={{ fontSize: FS.xs, color: C.textMuted }}>В проекте</span>}
+          {saveState === 'save' && <Button size="sm" variant="primary" loading={saving} onClick={() => { void save(); }}>{saveLabel(personal)}</Button>}
+          {saveState === 'in-project' && <span style={{ fontSize: FS.xs, color: C.textMuted }}>{savedLabel(personal)}</span>}
         </Acts>
       )}
     </Frame>

@@ -32,7 +32,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Gavel, Inbox } from 'lucide-react';
 import {
-  C, FONT, FS, R, SP, useIsMobile,
+  C, FONT, FS, R, SP,
   WikiError, listWikiPackages, useWikiTree,
   loadWikiSettings, requestOpenWikiPage, useWikiSettings,
   type WikiPackageDto, type WikiPackageOperationDto,
@@ -49,6 +49,34 @@ import {
 } from './wikiLabels';
 import { WikiPackageView } from './WikiPackageView';
 import { refreshWikiRailCounts } from './useWikiRailCounts';
+import { useWikiNarrow } from './useWikiNarrow';
+
+// ─── Свёртка info-плашки над списком (M5, П3) ───
+// Ключи обычного режима и режима судьи независимы: свёртка одного режима не трогает другой.
+// Значение — '1' (свёрнуто) / '0' (развернуто); всё остальное в ключе читается как «нет».
+const NOTICE_KEY = 'wiki.inbox.noticeCollapsed';
+const NOTICE_KEY_JUDGE = 'wiki.inbox.noticeCollapsed.judge';
+
+function noticeKey(judge: boolean): string {
+  return judge ? NOTICE_KEY_JUDGE : NOTICE_KEY;
+}
+
+// Чистые читалка/писалка свёртки (M5): localStorage может быть недоступен или бросать
+// (приватный режим, квота) — read тогда false (плашка развернута), write молча ничего
+// не делает: свёртка живёт до конца сессии, исключение наружу не выходит.
+export function readNoticeCollapsed(judge: boolean, storage?: Storage): boolean {
+  try {
+    return (storage ?? window.localStorage).getItem(noticeKey(judge)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function writeNoticeCollapsed(judge: boolean, v: boolean, storage?: Storage): void {
+  try {
+    (storage ?? window.localStorage).setItem(noticeKey(judge), v ? '1' : '0');
+  } catch { /* квота/приватный режим: свёртка не записана — молча */ }
+}
 
 // Отказы «Входящих» — русским текстом по коду бэка (тот же порядок, что wikiErrorText для
 // страниц; здесь свои коды, их в словаре страниц нет). Формулировки — черновые, тексты
@@ -127,8 +155,10 @@ function LoadingSkeleton() {
 
 // ─── Строка списка ───
 
-function PackageRow({ pkg, onOpen }: { pkg: WikiPackageDto; onOpen: () => void }) {
-  const isMobile = useIsMobile();
+// Узко/широко — от useWikiNarrow (М0, П1), не от ширины окна: та же строка живёт и в
+// боковой зоне воркспейса. Узко — возраст в строке меты (отдельная колонка справа
+// съедает ~40 px у источника); широко — прежняя колонка.
+function PackageRow({ pkg, onOpen, narrow }: { pkg: WikiPackageDto; onOpen: () => void; narrow: boolean }) {
   const tree = useWikiTree();
   const src = pkg.sources[0];
   const meta = src ? ORIGIN_META[src.origin] : undefined;
@@ -161,6 +191,7 @@ function PackageRow({ pkg, onOpen }: { pkg: WikiPackageDto; onOpen: () => void }
       <span style={{ minWidth: 0, flex: 1 }}>
         <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
           {section ? sectionPrefix(section) : pkg.section} · {meta?.label ?? src?.origin ?? 'источник'}
+          {narrow && ageText(pkg.createdAt) ? <> · {ageText(pkg.createdAt)}</> : null}
         </span>
         <span style={{ display: 'block', fontSize: FS.base, fontWeight: 500, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {src?.ref ?? 'Без источника'}
@@ -175,7 +206,7 @@ function PackageRow({ pkg, onOpen }: { pkg: WikiPackageDto; onOpen: () => void }
           {pendingContested(pkg).length} на решение
         </span>
       </span>
-      {!isMobile && (
+      {!narrow && (
         <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{ageText(pkg.createdAt)}</span>
       )}
     </button>
@@ -216,8 +247,7 @@ function judgeVerdict(o: WikiPackageOperationDto) {
 // Кнопки отката здесь нет (дефект 24c61d60): очередь несёт непринятые пакеты, откатывают
 // применённый (WikiPackageRevert) — кнопка всегда получала 409; откат — в «Журнале» →
 // «Решения за ночь». Мета строки — та же, что у ручной строки: те же данные, тот же вид.
-function JudgeRow({ pkg }: { pkg: WikiPackageDto }) {
-  const isMobile = useIsMobile();
+function JudgeRow({ pkg, narrow }: { pkg: WikiPackageDto; narrow: boolean }) {
   const tree = useWikiTree();
   const src = pkg.sources[0];
   const meta = src ? ORIGIN_META[src.origin] : undefined;
@@ -231,12 +261,13 @@ function JudgeRow({ pkg }: { pkg: WikiPackageDto }) {
         <span style={{ minWidth: 0, flex: 1 }}>
           <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
             {section ? sectionPrefix(section) : pkg.section} · {meta?.label ?? src?.origin ?? 'источник'}
+            {narrow && ageText(pkg.createdAt) ? <> · {ageText(pkg.createdAt)}</> : null}
           </span>
           <span style={{ display: 'block', fontSize: FS.base, fontWeight: 500, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {src?.ref ?? 'Без источника'}
           </span>
         </span>
-        {!isMobile && (
+        {!narrow && (
           <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{ageText(pkg.createdAt)}</span>
         )}
       </div>
@@ -297,6 +328,25 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
   // отказ чтения настроек не отказ списка и здесь не показывается.
   const settings = useWikiSettings();
   const judgeMode = settings?.autoApplyEnabled === true;
+  // Узкость панели (М5, П1): ref на контейнер списка, признак — у строк и у плашки
+  const [panelRef, narrow] = useWikiNarrow<HTMLDivElement>();
+  // Свёртка info-плашки (M5): читается при монтировании и при смене режима — у каждого
+  // режима свой ключ. Когда storage недоступен или бросает (квота/приватный режим),
+  // свёртка живёт только до конца сессии в состоянии компонента — исключение наружу
+  // не выходит (тот же договор, что у read/writeNoticeCollapsed).
+  const [noticeCollapsed, setNoticeCollapsed] = useState(() => readNoticeCollapsed(judgeMode));
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- смена режима перечитывает свёртку своего ключа: режим приходит асинхронно, другого места у этого перехода нет
+    setNoticeCollapsed(readNoticeCollapsed(judgeMode));
+  }, [judgeMode]);
+  const collapseNotice = () => {
+    writeNoticeCollapsed(judgeMode, true);
+    setNoticeCollapsed(true);
+  };
+  const expandNotice = () => {
+    writeNoticeCollapsed(judgeMode, false);
+    setNoticeCollapsed(false);
+  };
 
   const load = useCallback(() => {
     const mine = ++loadSeq.current;
@@ -347,15 +397,28 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
   const scopeSection = scope ? tree?.sections.find(s => s.key === scope) ?? null : null;
   const empty = packages.length === 0;
   return (
-    <div style={{ padding: `0 0 ${SP.md}px` }}>
+    <div ref={panelRef} style={{ padding: `0 0 ${SP.md}px` }}>
       <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
+        {/* Свёртка (M5): развёрнутая плашка — описание с кнопкой «Понятно»; свёрнутая —
+            одна строка заголовка с кнопкой «Подробнее». Текст описания — не этот шаг
+            (T1/T2), здесь только состояние */}
         {judgeMode ? (
-          <Notice tone="info" icon={Gavel} title={JUDGE_TEXT.title}>
-            {JUDGE_TEXT.caption}
+          <Notice
+            tone="info" icon={Gavel} title={JUDGE_TEXT.title} data-testid="wiki-inbox-notice"
+            action={noticeCollapsed
+              ? <Button variant="ghost" size="sm" dataTestId="wiki-inbox-notice-expand" onClick={expandNotice}>Подробнее</Button>
+              : <Button variant="ghost" size="sm" dataTestId="wiki-inbox-notice-collapse" onClick={collapseNotice}>Понятно</Button>}
+          >
+            {noticeCollapsed ? null : JUDGE_TEXT.caption}
           </Notice>
         ) : (
-          <Notice tone="info" icon={Inbox} title="Здесь только то, где нужен человек">
-            {INBOX_TEXT.caption}
+          <Notice
+            tone="info" icon={Inbox} title="Здесь только то, где нужен человек" data-testid="wiki-inbox-notice"
+            action={noticeCollapsed
+              ? <Button variant="ghost" size="sm" dataTestId="wiki-inbox-notice-expand" onClick={expandNotice}>Подробнее</Button>
+              : <Button variant="ghost" size="sm" dataTestId="wiki-inbox-notice-collapse" onClick={collapseNotice}>Понятно</Button>}
+          >
+            {noticeCollapsed ? null : INBOX_TEXT.caption}
           </Notice>
         )}
       </div>
@@ -398,9 +461,9 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
             // открывается — но только пока в пакете есть что решать судье. Пакет с нерешёнными
             // операциями вне его допуска (autoapply_off, пакет без кода) — ручная строка:
             // судья их не тронет, а висеть им в очереди без срока — open_limit (J-F1)
-            <div key={p.id}><JudgeRow pkg={p} /></div>
+            <div key={p.id}><JudgeRow pkg={p} narrow={narrow} /></div>
           ) : (
-            <div key={p.id}><PackageRow pkg={p} onOpen={() => setOpened(p)} /></div>
+            <div key={p.id}><PackageRow pkg={p} onOpen={() => setOpened(p)} narrow={narrow} /></div>
           ))}
           <div style={{ padding: `${SP.md}px ${SP.md}px 0`, fontSize: FS.xs, color: C.textMuted }}>
             При 20 открытых пакетов ночной разбор останавливается, а не копит очередь.

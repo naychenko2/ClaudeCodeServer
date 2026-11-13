@@ -33,7 +33,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { AlertTriangle, Clock, Inbox, Lock } from 'lucide-react';
 import {
-  C, FONT, FS, R, SHADOW, SP, useIsMobile,
+  C, FONT, FS, R, SHADOW, SP,
   WikiError,
   loadWikiSettings, loadWikiTree, putWikiNightly, runWikiNightlyNow, useWikiSettings, useWikiTree,
   type WikiLastNight, type WikiNightlyOutcome, type WikiNightlyPatch, type WikiSettingsSnapshot,
@@ -53,6 +53,7 @@ import {
   nightOutcomeNotice, nightlyNoneText,
 } from './wikiLabels';
 import { plural } from '../../../lib/plural';
+import { useWikiNarrow } from './useWikiNarrow';
 
 // ─── Формат и разбор чисел ───
 
@@ -77,6 +78,21 @@ function nightRangeText(date: string): string {
   if (Number.isNaN(d.getTime())) return '';
   const prev = new Date(d.getTime() - 86_400_000);
   return ` · ${prev.getUTCDate()} → ${d.getUTCDate()}.${pad2(d.getUTCMonth() + 1)}`;
+}
+
+// ─── Сетки (М3, принцип П1): узко = ширина контейнера, не окна ───
+
+// Сетка полей: узко — одна колонка (в панели 340 px две колонки по ~145 px: единицы
+// прилипают к полю, тексты ошибок переносятся в 3–4 строки); широко — как было.
+// Та же сетка держит блок «Чем разбирать».
+export function nightlyFieldCols(narrow: boolean): string {
+  return narrow ? '1fr' : '1fr 1fr';
+}
+
+// Сетка итога ночи: узко — две колонки (в панели 340 px пять клеток по ~60 px, подписи
+// «ждут вас во «Входящих»» ломаются по слогам); широко — как было, все клетки в ряд.
+export function lastNightCols(narrow: boolean, cells: number): string {
+  return narrow ? '1fr 1fr' : `repeat(${cells}, 1fr)`;
 }
 
 // ─── Валидация числовых полей (зеркало бэкового IsValidNightly) ───
@@ -194,10 +210,11 @@ function rejectedCell(n: number) {
 
 // Итог прошлой ночи: предупреждение по исходу (тексты — wikiLabels), карточка четырёх
 // чисел и оценочный расход («≈»: оценка, не факт — ProgressBar estimate: пунктир).
-function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }: {
+function LastNightBlock({ last, snapshot, narrow, onOpenInbox, onOpenJournal }: {
   last: WikiLastNight;
   snapshot: WikiSettingsSnapshot;
-  isMobile: boolean;
+  /** Узкость контейнера блока (М3, П1): из useWikiNarrow, не из ширины окна */
+  narrow: boolean;
   onOpenInbox?: () => void;
   onOpenJournal?: () => void;
 }) {
@@ -234,7 +251,7 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
         </div>
       )}
       <div data-testid="wiki-nightly-card" style={{ ...CARD, marginTop: SP.md }}>
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : `repeat(${cells.length}, 1fr)`, gap: SP.md }}>
+        <div style={{ display: 'grid', gridTemplateColumns: lastNightCols(narrow, cells.length), gap: SP.md }}>
           {cells}
         </div>
         <div
@@ -307,7 +324,10 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
   // настроек нет, и второго источника здесь быть не должно; null — дерево ещё не читали,
   // состояния не знаем, подписи нет
   const tree = useWikiTree();
-  const isMobile = useIsMobile();
+  // М3 (П1): раскладка — по ширине контейнера блока, а не окна: блок живёт и в боковой
+  // зоне воркспейса (340–420 px), и на окне 1280 она остаётся той же. Тач-размеры и size
+  // кнопок здесь от ширины не зависят (всегда «sm») — менять нечем.
+  const [panelRef, narrow] = useWikiNarrow<HTMLDivElement>();
   const [loadError, setLoadError] = useState<unknown>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   // Одна идущая правка (тумблер, окно или поле): слот стора один, вторая правка до
@@ -414,7 +434,7 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
   if (!snapshot) return <LoadingSkeleton />;
 
   const nightly = snapshot.nightly;
-  const gridCols = isMobile ? '1fr' : '1fr 1fr';
+  const gridCols = nightlyFieldCols(narrow);
   // Подписи исполнителей ночи (W8b): порядок списка стора, не сортировать; пустой список
   // и отсутствие поля (старый бэк) — одинаково «списка нет», остаётся общая подсказка
   const execTitles = (nightly.executors ?? []).map((e) => e.title);
@@ -452,7 +472,7 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
   );
 
   return (
-    <div style={{ padding: `${SP.sm}px ${SP.md}px ${SP.md}px` }}>
+    <div ref={panelRef} style={{ padding: `${SP.sm}px ${SP.md}px ${SP.md}px` }}>
       <h2 style={{ margin: `${SP.xs}px 0 0`, fontFamily: FONT.serif, fontSize: FS.lg, color: C.textHeading }}>
         Ночной разбор
       </h2>
@@ -599,7 +619,7 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
         )}
       </div>
       {snapshot.lastNight ? (
-        <LastNightBlock last={snapshot.lastNight} snapshot={snapshot} isMobile={isMobile} onOpenInbox={onOpenInbox} onOpenJournal={onOpenJournal} />
+        <LastNightBlock last={snapshot.lastNight} snapshot={snapshot} narrow={narrow} onOpenInbox={onOpenInbox} onOpenJournal={onOpenJournal} />
       ) : (
         <div data-testid="wiki-nightly-none" style={{ ...CARD, marginTop: SP.md }}>
           <div style={{ fontSize: FS.base, fontWeight: 500, color: C.textHeading }}>{NIGHTLY_NONE_TITLE}</div>

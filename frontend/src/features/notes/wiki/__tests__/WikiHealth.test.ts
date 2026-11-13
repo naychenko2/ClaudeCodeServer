@@ -28,6 +28,7 @@
 //  (10) счёт без пояснения вида («счёт: N») → «счёт подписан по виду» краснеет.
 //
 // Блок W11 («Проверить сейчас» в шапку панели): его мутации перечислены в шапке своего describe.
+// Блок M7 (карточка находки, предел группы, узкие счётчики): его мутации — в шапке своего describe.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -35,7 +36,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
-import { WikiHealth, parseHealth } from '../WikiHealth';
+import { WikiHealth, parseHealth, visibleFindings } from '../WikiHealth';
 import { PanelHeaderSlotContext } from '../../../../components/ui/panelHeaderSlotContext';
 
 // Мок с сохранением остальных экспортов: цепочка мокованного доходит до кита хоста
@@ -68,6 +69,15 @@ vi.mock('../../../../lib/featureFlags', async (orig) => {
     useFeature: (k: string) => { useState(0); return flags.on.has(k); },
   };
 });
+
+// Узкость панели (М0/М7): флаг под управлением теста. Настоящий useWikiNarrow в fakeDom
+// всегда «широко» (у фейк-DOM нет clientWidth), поэтому «узко — 2 колонки» проверяется только
+// управляемым флагом; по умолчанию false — то же поведение, что в этой среде без мока.
+const narrowFlag = vi.hoisted(() => ({ narrow: false }));
+vi.mock('../useWikiNarrow', async (orig) => ({
+  ...await orig<typeof import('../useWikiNarrow')>(),
+  useWikiNarrow: () => [() => () => {}, narrowFlag.narrow],
+}));
 
 import { request } from '../../../../lib/offline';
 
@@ -265,6 +275,7 @@ function runBtnNodes(...roots: AnyNode[]): AnyNode[] {
 
 beforeEach(() => {
   flags.on.clear();
+  narrowFlag.narrow = false;
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
 });
@@ -954,5 +965,116 @@ describe('«Проверить сейчас» в шапку панели (W11)',
     await settle();
     expect(nodeByTestId(c, 'wiki-health-run'), 'кнопка в теле').not.toBeNull();
     expect(has(c, 'Проверяет всю вики, займёт около минуты'), 'подпись есть').toBe(true);
+  });
+});
+
+// ─── M7: карточка находки, предел группы, узкие счётчики (записка wiki-panels-v1, П3 и П5) ───
+// Правило: группа показывает первые 5 находок, остальные — по кнопке «Показать ещё N»
+// (локальный useState группы: живёт, пока открыта панель, и не переходит в новый раздел);
+// находка — вертикальная карточка на всех ширинах: путь → сообщение → мета одной строкой
+// через « · » → действие своим рядом; путь — одна строка с многоточием, полный — в title.
+// Сетка счётчиков — от narrow из useWikiNarrow (М0): узко 2 колонки, широко 4; тач-размеры
+// кнопок остаются на isMobile (их эти тесты не трогают).
+//
+// Мутации этого блока (вывод — в отчёте задачи):
+//  (M7-1) FINDINGS_PREVIEW 5→6 → «visibleFindings» и «группа показывает первые 5» краснеют;
+//  (M7-2) сетку снова от isMobile, а не от narrow (прежняя строка) → «сетка — от narrow»
+//      краснеет (при mocked narrow=true и isMobile=false выходит repeat(4);
+//      обратная мутация narrow?4:2 краснеет на первой же проверке);
+//  (M7-3) снять whiteSpace/textOverflow у пути → «путь одной строкой» краснеет;
+//  (M7-4) мету снова каждой частью своей строкой (прежний разброс span'ов без общей
+//      строки) → «мета одной строкой» краснеет (нет узла wiki-health-row-meta, и точной
+//      строки « · » нет).
+describe('M7: карточка находки, предел группы, узкие счётчики (П3, П5)', () => {
+  // Отчёт с семью находками одного вида — на нём виден предел группы
+  const HEALTH7 = ['## Находки (7)'].concat(
+    Array.from({ length: 7 }, (_, i) =>
+      `- сирота · страница \`Проекты/p1/С${i + 1}.md\` · на страницу никто не ссылается №${i + 1}`),
+  ).join('\n');
+
+  it('visibleFindings: закрытая — первые 5 и остаток; раскрытая — все; короткая группа — целиком (c1)', () => {
+    const big = Array.from({ length: 40 }, (_, i) => i);
+    expect(visibleFindings(big, false)).toEqual({ shown: big.slice(0, 5), rest: 35 });
+    expect(visibleFindings(big, true)).toEqual({ shown: big, rest: 0 });
+    const small = [1, 2, 3];
+    expect(visibleFindings(small, false)).toEqual({ shown: small, rest: 0 });
+    expect(visibleFindings([], false)).toEqual({ shown: [], rest: 0 });
+  });
+
+  it('группа показывает первые 5; «Показать ещё 2» раскрывает её и исчезает (П5)', async () => {
+    mockHealth(HEALTH7);
+    const c = render();
+    await settle();
+    expect(rows(c)).toHaveLength(5);
+    expect(has(c, '№6')).toBe(false);
+    const btn = buttonByText(c, 'Показать ещё 2');
+    expect(btn, 'кнопка с числом остатка').not.toBeNull();
+    click(btn, 'Показать ещё');
+    await settle();
+    expect(rows(c)).toHaveLength(7);
+    expect(has(c, '№6')).toBe(true);
+    expect(buttonByText(c, 'Показать ещё 2'), 'после раскрытия кнопки нет').toBeNull();
+  });
+
+  it('раскрытие не переходит в новый раздел: группа B снова закрыта (состояние локальное)', async () => {
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/health/')) return Promise.resolve({ section: 'projects/p1', content: HEALTH7 });
+      return Promise.resolve(null);
+    });
+    const { root, container: c } = mountAt('projects/p1');
+    await settle();
+    click(buttonByText(c, 'Показать ещё 2'), 'Показать ещё');
+    await settle();
+    expect(rows(c)).toHaveLength(7);
+    selectSection(root, 'projects/p2');
+    await settle();
+    expect(rows(c), 'предел B не унаследовал раскрытие A').toHaveLength(5);
+    expect(buttonByText(c, 'Показать ещё 2'), 'в B — снова закрыта').not.toBeNull();
+  });
+
+  it('карточка находки вертикальная: путь одной строкой с многоточием и полным title (П3)', async () => {
+    mockHealth(HEALTH);
+    const c = render();
+    await settle();
+    const row = rows(c).find(r => textNodes(r).join(' ').includes('ссылка ведёт в пустоту'));
+    expect(row, 'строка призрака').not.toBeNull();
+    const rowStyle = ((row as { style?: Record<string, unknown> } | null)?.style ?? {});
+    expect(rowStyle.flexDirection, 'вертикальная карточка').toBe('column');
+    const path = findNodeByAttr(row!, 'data-testid', 'wiki-health-row-path');
+    expect(path, 'строка пути').not.toBeNull();
+    expect(attrs(path).title, 'полный путь — в title').toBe('Проекты/p1/Тема.md');
+    const pathStyle = ((path as { style?: Record<string, unknown> } | null)?.style ?? {});
+    expect(pathStyle.whiteSpace, 'одна строка').toBe('nowrap');
+    expect(pathStyle.textOverflow, 'многоточие').toBe('ellipsis');
+  });
+
+  it('мета — одна строка через « · »: связанные, ключ, счёт (П3)', async () => {
+    mockHealth([
+      '## Находки (1)',
+      '- один owns у нескольких · страница `К.md` · owns встречается дважды · связанные: `A.md`, `B.md` · ключ: `owns/альфа` · счёт: 3',
+    ].join('\n'));
+    const c = render();
+    await settle();
+    const meta = findNodeByAttr(c, 'data-testid', 'wiki-health-row-meta');
+    expect(meta, 'одна мета-строка').not.toBeNull();
+    expect(textNodes(meta!).join('')).toBe('связанные: A.md, B.md · ключ: owns/альфа · страниц: 3');
+  });
+
+  it('сетка счётчиков — от narrow (М0): узко 2 колонки, широко 4 (c3)', async () => {
+    mockHealth(HEALTH);
+    const c = render();
+    await settle();
+    const grid = nodeByTestId(c, 'wiki-health-counters');
+    expect(grid).not.toBeNull();
+    const style = ((grid as { style?: Record<string, unknown> }).style ?? {});
+    expect(String(style.gridTemplateColumns), 'широкая панель — 4 колонки').toContain('repeat(4,');
+    // узкая панель — тот же признак, что у всех панелей вики (useWikiNarrow), не ширина окна
+    narrowFlag.narrow = true;
+    const c2 = render();
+    await settle();
+    const grid2 = nodeByTestId(c2, 'wiki-health-counters');
+    expect(grid2).not.toBeNull();
+    const style2 = ((grid2 as { style?: Record<string, unknown> }).style ?? {});
+    expect(String(style2.gridTemplateColumns), 'узкая панель — 2 колонки').toContain('repeat(2,');
   });
 });

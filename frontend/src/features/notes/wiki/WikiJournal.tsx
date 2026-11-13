@@ -31,11 +31,19 @@
 // а ночное окно сервера переходит через полночь — [вчера, завтра) наименьшее окно,
 // накрывающее её целиком. «Откатить пакет» (мера 4) наконец имеет место: строка ночи
 // несёт id пакета — дефект ead65823 закрыт этой ручкой.
+//
+// М6 (макет wiki-panels-v1, «Журнал» A6, П1/П2/П3): раскладка строки — по ширине
+// КОНТЕЙНЕРА панели (useWikiNarrow, М0), а не по устройству: в узкой колонке колонка
+// времени справа сжимает текст, поэтому время становится частью первой строки меты,
+// а действия («Вернуть мою» / «Открыть страницу») — под текстом, с отступом на ширину
+// иконки. Ряды переключателя вида и фильтров — один закреплённый блок. Строка окна
+// вердиктов — короткая (полный текст — в title): на узкой колонке она не должна
+// занимать три-четыре строки.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, History, Moon } from 'lucide-react';
 import {
-  C, FONT, FS, R, SHADOW, SP, useIsMobile, openChatById, requestOpenWikiPage, showToast,
+  C, FONT, FS, R, SHADOW, SP, openChatById, requestOpenWikiPage, showToast,
   WikiError, loadWikiJournal, retractWikiSource, useWikiTree,
   loadWikiNightDecisions, revertWikiPackage,
   type WikiJournalDto, type WikiJournalEntryOverrideDto,
@@ -51,6 +59,7 @@ import { SegmentedControl } from '../../../components/ui/Segmented';
 import { Select } from '../../../components/ui/Select';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { OVERRIDE_TEXT, ORIGIN_META, countWord, isOne, retractResultText, sectionPrefix, wikiErrorText } from './wikiLabels';
+import { useWikiNarrow } from './useWikiNarrow';
 
 // ─── Словари подписей ───
 
@@ -180,8 +189,17 @@ function rowOpenPage(e: WikiJournalEntryOverrideDto): (() => void) | null {
   return () => requestOpenWikiPage({ section: e.section, path: e.overridePageKey ?? e.pages[0] });
 }
 
-function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryOverrideDto; onOpen: () => void }) {
-  const isMobile = useIsMobile();
+// М6 (А6, П1): раскладка — от ширины контейнера панели (narrow из useWikiNarrow, М0),
+// а не от устройства: та же панель живёт и в боковой зоне воркспейса, и на весь экран.
+// Узко: колонка времени справа сжимает текст, поэтому время — часть первой строки меты
+// («раздел · источник · 14:32»); широко — как было. Действия — под текстом строки, с
+// отступом на ширину иконки (поле действия не относится к строке меты).
+function JournalRow({ entry, narrow, onOpen }: {
+  entry: WikiJournalEntryOverrideDto;
+  /** Узкость контейнера панели (М6, П1): из useWikiNarrow, не из ширины окна */
+  narrow: boolean;
+  onOpen: () => void;
+}) {
   const tree = useWikiTree();
   const meta = originMeta(entry);
   const Icon = meta?.icon ?? History;
@@ -190,7 +208,7 @@ function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryOverrideDto; onO
   const kind = kindBadge(entry);
   const openPage = rowOpenPage(entry);
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       <button
         type="button"
         data-testid="wiki-journal-row"
@@ -198,13 +216,13 @@ function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryOverrideDto; onO
         style={{
           display: 'flex', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md,
           border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
-          flex: '1 1 0', minWidth: 0, fontFamily: FONT.sans, color: C.textPrimary,
+          minWidth: 0, fontFamily: FONT.sans, color: C.textPrimary,
         }}
       >
         <span style={{ flexShrink: 0, color: C.textMuted, paddingTop: 2 }}><Icon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></span>
         <span style={{ minWidth: 0, flex: 1 }}>
           <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
-            {section ? sectionPrefix(section) : entry.section}{meta ? ` · ${meta.label}` : ''}
+            {section ? sectionPrefix(section) : entry.section}{meta ? ` · ${meta.label}` : ''}{narrow ? ` · ${timeText(entry.ts)}` : ''}
           </span>
           <span style={{ display: 'block', fontSize: FS.base, fontWeight: 500, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {entryTitle(entry)}
@@ -219,14 +237,18 @@ function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryOverrideDto; onO
             </span>
           )}
         </span>
-        {!isMobile && (
+        {!narrow && (
           <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{timeText(entry.ts)}</span>
         )}
       </button>
       {entry.overrodeHuman && entry.overrideReverted !== true && openPage && (entry.overrodeKind === 'replaced' ? (
-        <Button variant="secondary" size="sm" dataTestId="wiki-journal-restore" onClick={openPage}>{OVERRIDE_TEXT.restore}</Button>
+        <div style={{ paddingLeft: SP.md + ICON_SIZE.sm + SP.sm }}>
+          <Button variant="secondary" size="sm" dataTestId="wiki-journal-restore" onClick={openPage}>{OVERRIDE_TEXT.restore}</Button>
+        </div>
       ) : entry.overrodeKind === 'disputed' ? (
-        <Button variant="ghost" size="sm" dataTestId="wiki-journal-open-page" onClick={openPage}>{OVERRIDE_TEXT.openPage}</Button>
+        <div style={{ paddingLeft: SP.md + ICON_SIZE.sm + SP.sm }}>
+          <Button variant="ghost" size="sm" dataTestId="wiki-journal-open-page" onClick={openPage}>{OVERRIDE_TEXT.openPage}</Button>
+        </div>
       ) : null)}
     </div>
   );
@@ -345,6 +367,15 @@ const dayNum = (key: string) => {
   const [, m, d] = key.split('-');
   return `${d}.${m}`;
 };
+
+// М6 (П3): короткая строка окна вердиктов: «Окно: 12.11–13.11 · очередь — сейчас».
+// Даты — dd.MM из date part локальных дат окна (from/to — localDay: Date здесь не нужен,
+// он сдвину бы дату часовым поясом; date part строки — она же, локальная). Полный
+// прежний текст — в title строки: короткая версия не скрёт границ окна («включая /
+// не включая»), они остаются человеку по наведению.
+export function shortVerdictWindow(from: string, to: string, queueText: string): string {
+  return `Окно: ${dayNum(from.slice(0, 10))}–${dayNum(to.slice(0, 10))} · очередь — ${queueText}`;
+}
 
 type NightGroupKey = keyof WikiNightDecisionsDto;
 
@@ -489,6 +520,9 @@ export function WikiJournal(
   { sectionScope }: { selectedKey?: string | null; sectionScope?: string | null | 'all' },
 ) {
   const tree = useWikiTree();
+  // М6 (П1): узкость — ширина контейнера списка (тот же приём, что у блока ночи, М3):
+  // раскладка строк выбирается по нему, а не по устройству
+  const [panelRef, narrow] = useWikiNarrow<HTMLDivElement>();
   const [data, setData] = useState<WikiJournalDto | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   // '' — все разделы / все источники (пункт-заглушка Select); с sectionScope фильтр раздела здесь не живёт
@@ -638,17 +672,6 @@ export function WikiJournal(
     </div>
   );
 
-  if (loadError) {
-    const text = loadError instanceof WikiError
-      ? wikiErrorText(loadError)
-      : (view === 'night' ? 'Не удалось прочитать «Решения за ночь»' : 'Не удалось прочитать «Журнал»');
-    return (
-      <div data-testid="wiki-journal-error" style={{ padding: SP.sm }}>
-        {viewRow}
-        <Notice tone="danger" icon={AlertTriangle} title={text} action={<Button variant="ghost" size="sm" onClick={load}>Повторить</Button>} />
-      </div>
-    );
-  }
   const sectionOptions = (tree?.sections ?? []).map(s => ({ value: s.key, label: sectionPrefix(s) }));
   const originOptions = Object.entries(ORIGIN_META).map(([value, m]) => ({ value, label: m.label }));
   // Число на чипе — записи «ИИ поменял моё» в текущем окне: окно читается то же с фильтром и
@@ -668,15 +691,49 @@ export function WikiJournal(
     </div>
   );
 
+  // М6 (П2): ряды переключателя вида и фильтров — ОДИН закреплённый блок: при прокрутке
+  // списка элементы управления не уезжают (тот же приём, что ChatGroupHeader/ListDateDivider:
+  // sticky + непрозрачный фон + нижняя граница + zIndex, иначе прокрученный контент
+  // ляжет поверх). В состоянии ошибки и в виде ночи — только ряд вида: фильтров там нет
+  // по той же причине, что и раньше (бэк игнорирует их для ночи).
+  const bar = (withFilters: boolean) => (
+    <div
+      data-testid="wiki-journal-bar"
+      style={{ position: 'sticky', top: 0, zIndex: 2, background: C.bgWhite, borderBottom: `1px solid ${C.borderLight}` }}
+    >
+      {viewRow}
+      {withFilters ? filterRow : null}
+    </div>
+  );
+
+  if (loadError) {
+    const text = loadError instanceof WikiError
+      ? wikiErrorText(loadError)
+      : (view === 'night' ? 'Не удалось прочитать «Решения за ночь»' : 'Не удалось прочитать «Журнал»');
+    return (
+      <div data-testid="wiki-journal-error" style={{ padding: SP.sm }}>
+        {bar(false)}
+        <Notice tone="danger" icon={AlertTriangle} title={text} action={<Button variant="ghost" size="sm" onClick={load}>Повторить</Button>} />
+      </div>
+    );
+  }
+
   if (view === 'night') {
-    if (!night) return <>{viewRow}<LoadingSkeleton /></>;
+    if (!night) return <>{bar(false)}<LoadingSkeleton /></>;
     // Пустая группа не показывается вовсе: «Отклонено кодом: 0» — это не сводка, а шум.
     const groups = NIGHT_GROUPS.map(g => ({ ...g, rows: night.data[g.key] })).filter(g => g.rows.length > 0);
     return (
       <div style={{ padding: `0 0 ${SP.md}px` }}>
-        {viewRow}
-        <div data-testid="wiki-night-window" style={{ padding: `${SP.sm}px ${SP.md}px 0`, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
-          {`Окно вердиктов: с ${dayNum(night.from)} (включая) по ${dayNum(night.to)} (не включая); очередь — вне окна: она про «сейчас»`}
+        {bar(false)}
+        {/* М6 (П3): короткая строка окна; полный прежний текст — в title (границы окна
+        «включая / не включая» человек читает по наведению, на узкой колонке они не
+        должны занимать три-четыре строки). Без mono: это подпись, не данные */}
+        <div
+          data-testid="wiki-night-window"
+          title={`Окно вердиктов: с ${dayNum(night.from)} (включая) по ${dayNum(night.to)} (не включая); очередь — вне окна: она про «сейчас»`}
+          style={{ padding: `${SP.sm}px ${SP.md}px 0`, fontSize: FS.xs, color: C.textMuted }}
+        >
+          {shortVerdictWindow(night.from, night.to, 'сейчас')}
         </div>
         {nightError && (
           <div style={{ marginTop: SP.sm }}>
@@ -710,7 +767,7 @@ export function WikiJournal(
     );
   }
 
-  if (!data) return <>{viewRow}{filterRow}<LoadingSkeleton /></>;
+  if (!data) return <>{bar(true)}<LoadingSkeleton /></>;
 
   if (opened) {
     return (
@@ -729,9 +786,8 @@ export function WikiJournal(
 
   let lastDay: string | null = null;
   return (
-    <div style={{ padding: `0 0 ${SP.md}px` }}>
-      {viewRow}
-      {filterRow}
+    <div ref={panelRef} style={{ padding: `0 0 ${SP.md}px` }}>
+      {bar(true)}
       {data.invalidLines > 0 && (
         <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
           <Notice tone="warning" icon={AlertTriangle} title={`Нечитаемых строк журнала: ${data.invalidLines}`}>
@@ -763,7 +819,7 @@ export function WikiJournal(
                     {header}
                   </div>
                 )}
-                <JournalRow entry={e} onOpen={() => open(e)} />
+                <JournalRow entry={e} narrow={narrow} onOpen={() => open(e)} />
               </div>
             );
           })}

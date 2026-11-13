@@ -1,16 +1,20 @@
-// Рендер-тест блока «Начать вики заново» (J-F4): разрушающая чистка — только через
-// предпросмотр и подтверждение человека.
-// — клик кнопки: ровно один previewWikiPurge, runWikiPurge 0; модалка с числами по
-//   разделам и классам («Будет удалено 7 страниц: …») и строкой-гарантией;
+// Рендер-тест полосы «Начать вики заново» (J-F4; М2 — полоса, А2/П4): разрушающая чистка —
+// только через предпросмотр и подтверждение человека; блок — закреплённая полоса у нижнего
+// края тела панели.
+// — клик кнопки: ровно один previewWikiPurge, runWikiPurge 0; модалка начинается длинным
+//   пояснением («Удалятся все страницы, написанные ИИ: …»), дальше — числа по разделам и
+//   классам («Будет удалено 7 страниц: …») и строкой-гарантией;
 // — «Отмена»: run 0 раз, модалка закрыта;
 // — «Удалить 7 страниц»: run ровно 1 раз; итог — число удалённых и путь архива;
 //   warning бэка показан рядом с числом, warning null — предупреждения нет;
 // — N=0: «Удалять нечего», кнопка подтверждения выключена;
-// — отказ предпросмотра: плашка у кнопки, модалки нет; отказ чистки: плашка в модалке,
+// — отказ предпросмотра: Notice danger в полосе, модалки нет; отказ чистки: плашка в модалке,
 //   она остаётся в состоянии предпросмотра;
-// — итог принадлежит блоку, не модалке (QA J-F4): закрыть окно во время чистки — запрос
-//   доходит, «Удалено N… Архив: …» выходит строкой под кнопкой; пока запрос не ответил —
-//   подтверждение выключено и под кнопкой «Чистка выполняется…».
+// — итог принадлежит полосе, не модалке (QA J-F4): закрыть окно во время чистки — запрос
+//   доходит, «Удалено N… Архив: …» выходит строкой над рядом; пока запрос не ответил —
+//   подтверждение выключено и над рядом «Чистка выполняется…»; «Скрыть» (×) снимает итог;
+// — полоса закреплена у нижнего края (М2/П4): в источнике позиции sticky/bottom;
+// — узкая раскладка полосы решается чистой функцией purgeStripCompact по ширине контейнера.
 // Стор мокан на уровне операций (тот же приём, что WikiEmpty.test): настоящая чистка в
 // тестах не запускается — ни одного запроса на провод.
 //
@@ -21,17 +25,24 @@
 // (3) не показывать warning в итоге → «warning» краснеет;
 // (4) показывать строку архива и при archivePath null → «архива нет» краснеет;
 // (5) держать итог только в модалке (не писать lastResult) → «закрыть окно во время
-//     чистки» краснеет (под кнопкой пусто);
+//     чистки» и «Скрыть» краснеют (в полосе пусто);
 // (6) не строить строку статуса при runBusy → «Чистка выполняется…» краснеет в обоих
-//     новых тестах.
+//     новых тестах;
+// (7) в purgeStripCompact поднять порог 300→301 → «300→false» краснеет;
+// (8) не снимать итог по «Скрыть» (setLastResult(null) → noop) → «Скрыть снимает» краснеет;
+// (9) вернуть «Скрыть» фиксированный size="sm" → «тач-цель» краснеет (доработка по ревью М2);
+// (10) снять резерв под FAB (delete строки isMobile ? paddingBottom…) → «резерв под AI-кнопку»
+//      краснеет (доработка по QA 64bf0dbd).
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
-import { WikiPurgeBlock } from '../WikiPurgeBlock';
+import { WikiPurgeBlock, purgeStripCompact } from '../WikiPurgeBlock';
 
 const { preview, run } = vi.hoisted(() => ({ preview: vi.fn(), run: vi.fn() }));
 vi.mock('../../../../lib/wiki', async (orig) => ({
@@ -40,7 +51,17 @@ vi.mock('../../../../lib/wiki', async (orig) => ({
   runWikiPurge: run,
 }));
 
+// useIsMobile мокан: поведение полосы различается на телефоне и на десктопе (резерв под
+// круглешок AI, дефект 64bf0dbd). Мок по относительному пути ловит и цепочку через кит
+// (компонент зовёт useIsMobile из aihome_shell/kit → ../breakpoints).
+const { mobileFlag } = vi.hoisted(() => ({ mobileFlag: { v: false } }));
+vi.mock('../../../../lib/breakpoints', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/breakpoints')>(),
+  useIsMobile: () => mobileFlag.v,
+}));
+
 import { WikiError } from '../../../../lib/wiki';
+import { FAB_CLEAR_PAD } from '../../../../lib/design';
 
 type Cont = ReturnType<typeof mount>['container'];
 type AnyNode = Cont;
@@ -118,6 +139,8 @@ beforeEach(() => {
   preview.mockReset();
   run.mockReset();
   preview.mockResolvedValue(PREVIEW());
+  // все прежние тесты — десктопные (полоса без резерва под FAB)
+  mobileFlag.v = false;
 });
 
 afterEach(() => {
@@ -139,6 +162,8 @@ describe('блок «Начать вики заново» (J-F4)', () => {
     expect(run.mock.calls.length).toBe(0);
 
     expect(has(docBody(), 'Начать вики заново?')).toBe(true);
+    // А2: длинное пояснение переехало в модалку первой строкой (его в полосе больше нет)
+    expect(has(docBody(), 'Удалятся все страницы, написанные ИИ: хроники, карточки источников и страницы, написанные вместе с вами.')).toBe(true);
     expect(has(docBody(), 'Будет удалено 7 страниц:')).toBe(true);
     expect(has(docBody(), 'Решения — 6')).toBe(true);
     expect(has(docBody(), 'написанные ИИ — 4, написанные вместе с вами — 2')).toBe(true);
@@ -302,5 +327,71 @@ describe('блок «Начать вики заново» (J-F4)', () => {
     // мутация (5): держать итог только в модалке — эти две строки краснеют
     expect(has(c, 'Удалено 7 страниц.')).toBe(true);
     expect(has(c, 'Архив: keeper/purge-2026-11-12.zip')).toBe(true);
+  });
+
+  it('«Скрыть» (×) снимает итог из полосы: строки «Удалено…/Архив:» больше нет', async () => {
+    run.mockResolvedValue(RESULT());
+    const c = render();
+    await settle();
+    click(openBtn(c), 'Начать заново…');
+    await settle();
+    click(buttonByExactText(docBody(), 'Удалить 7 страниц')!, 'удалить');
+    await settle();
+    // закрыть окно «Закрыть» — итог остаётся записанным в полосе
+    click(buttonByExactText(docBody(), 'Закрыть')!, 'закрыть');
+    expect(has(c, 'Удалено 7 страниц.')).toBe(true);
+    expect(has(c, 'Архив: keeper/purge-2026-11-12.zip')).toBe(true);
+    // «Скрыть» (×) — полоса возвращается к одному ряду
+    const hide = findNodeByAttr(c, 'aria-label', 'Скрыть');
+    expect(hide).not.toBeNull();
+    // мутация (8): не снимать lastResult — эти две строки краснеют
+    click(hide!, 'скрыть');
+    await settle();
+    expect(has(c, 'Удалено 7 страниц.')).toBe(false);
+    expect(has(c, 'Архив:')).toBe(false);
+  });
+
+  it('узкая раскладка полосы — по ширине контейнера (А2/П1): порог 300, без замера — широкая', () => {
+    // мутация (7): поднять порог 300→301 — «(300)→false» краснеет
+    expect(purgeStripCompact(299)).toBe(true);
+    expect(purgeStripCompact(300)).toBe(false);
+    expect(purgeStripCompact(301)).toBe(false);
+    expect(purgeStripCompact(1000)).toBe(false);
+    // до первого замера (null) — широкая раскладка: она же и на широком экране
+    expect(purgeStripCompact(null)).toBe(false);
+  });
+
+  it('полоса закреплена у нижнего края тела панели (М2/П4): sticky/bottom в источнике', () => {
+    const src = readFileSync(fileURLToPath(new URL('../WikiPurgeBlock.tsx', import.meta.url)), 'utf8');
+    expect(src).toContain("position: 'sticky'");
+    expect(src).toContain('bottom: 0');
+  });
+
+  it('тач-цель «Скрыть» (×): lg (40) на мобиле, sm (28) на десктопе — размер по isMobile', () => {
+    // Ревью М2 (Глеб): фиксированный size="sm" давал тач-цель 28 < 40. Инвариант:
+    // на десктопе полоса не растёт в высоту (× остаётся 28), на мобиле — 40, как «Начать заново»
+    const src = readFileSync(fileURLToPath(new URL('../WikiPurgeBlock.tsx', import.meta.url)), 'utf8');
+    // мутация (9): вернуть size="sm" — эта строка краснеет
+    expect(src).toContain("size={isMobile ? 'lg' : 'sm'}");
+  });
+
+  it('резерв под круглешок AI на мобиле (дефект 64bf0dbd): из общей константы; на десктопе — нет', () => {
+    // FAB прибит к нижнему правому углу окна, а полоса прижата sticky ровно туда: без резерва
+    // круглешок накрывает ~четверть ширины «Начать заново…» (elementFromPoint отдаёт SPAN FAB).
+    const stripStyle = (c: Cont): Record<string, string> =>
+      ((reactProps(findNodeByAttr(c, 'data-testid', 'wiki-purge-strip')!) as { style?: Record<string, string> }).style ?? {});
+
+    mobileFlag.v = true;
+    const styleM = stripStyle(render());
+    // резерв — только значение общей константы (FAB_CLEAR_PAD), не число; и через max с базой:
+    // при выключенном AI-хабе (--cc-fab-clear не поставлен) остаётся базовый отступ
+    // мутация (10): снять строку резерва — эта проверка краснеет
+    expect(String(styleM.paddingBottom)).toContain(FAB_CLEAR_PAD);
+    expect(String(styleM.paddingBottom)).toContain('max(');
+
+    // десктоп: резерва нет вовсе — стиль полосы такой же, что и до правки (R-M2: высота не растёт)
+    mobileFlag.v = false;
+    const styleD = stripStyle(render());
+    expect(styleD.paddingBottom ?? '').not.toContain('cc-fab-clear');
   });
 });

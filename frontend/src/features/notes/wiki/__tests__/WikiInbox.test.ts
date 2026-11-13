@@ -35,7 +35,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
-import { WikiInbox } from '../WikiInbox';
+import { WikiInbox, readNoticeCollapsed, writeNoticeCollapsed } from '../WikiInbox';
 
 // Мок с сохранением остальных экспортов: цепочка мокованного доходит до кита хоста
 // (WikiInbox → kit) — full-replacement мок рвётся на первом недостающем
@@ -194,6 +194,12 @@ afterEach(() => {
   uninstallFakeDom();
   // снимок дерева, засеянный тестом области, не должен течь в следующие тесты файла
   wikiStore.reset();
+  // M5: fakeDom-«localStorage» и подвешенный clientWidth — только внутри теста,
+  // чем они засветились — гаснем здесь же
+  const w = (globalThis as { window?: { localStorage?: unknown } }).window;
+  if (w) delete w.localStorage;
+  const d = (globalThis as { document?: { createElement(t: string): unknown } }).document;
+  if (d) delete (Object.getPrototypeOf(d.createElement('div')) as Record<string, unknown>).clientWidth;
 });
 
 describe('«Входящие» (S7a)', () => {
@@ -778,5 +784,164 @@ describe('режим судьи: пакет с операциями вне до�
     expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
     expect(buttonByTestId(c, 'wiki-op-accept-1')).not.toBeNull();
     expect(buttonByTestId(c, 'wiki-op-accept-2')).toBeNull();
+  });
+});
+
+// ─── M5 · свёртка info-плашки и возраст в строку меты ───
+// Чистые read/writeNoticeCollapsed (конкурентность): localStorage недоступен или бросает —
+// read false, write молча; ключи обычного режима и режима судьи независимы; мусор в ключе
+// читается как false. Свёртка в компоненте: «Понятно» сворачивает до одной строки заголовка,
+// «Подробнее» разворачивает; состояние переживает перемонтирование через storage.
+// Узко (useWikiNarrow, М0): возраст — в строке меты, отдельной колонки справа нет.
+
+const KEY = 'wiki.inbox.noticeCollapsed';
+const KEY_JUDGE = 'wiki.inbox.noticeCollapsed.judge';
+
+function fakeStorage(init: Record<string, string> = {}): Storage {
+  const map = new Map(Object.entries(init));
+  return {
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => { map.set(k, v); },
+    removeItem: (k: string) => { map.delete(k); },
+    clear: () => { map.clear(); },
+    key: (i: number) => [...map.keys()][i] ?? null,
+    length: map.size,
+  } as unknown as Storage;
+}
+
+// fakeDom-«localStorage» для пути компонента (default — window.localStorage): тот же
+// Storage-контракт; гасится в afterEach
+function attachStorage(st: Storage) {
+  (globalThis as { window?: { localStorage?: Storage } }).window!.localStorage = st;
+}
+
+describe('M5: читалка/писалка свёртки — конкурентность', () => {
+  it('write и read по обоим ключам; ключи обычного режима и режима судьи независимы', () => {
+    const st = fakeStorage();
+    writeNoticeCollapsed(false, true, st);
+    expect(readNoticeCollapsed(false, st)).toBe(true);
+    expect(readNoticeCollapsed(true, st)).toBe(false); // чужой ключ не затронут
+    writeNoticeCollapsed(true, true, st);
+    expect(readNoticeCollapsed(true, st)).toBe(true);
+    expect(readNoticeCollapsed(false, st)).toBe(true);
+    writeNoticeCollapsed(false, false, st);
+    expect(readNoticeCollapsed(false, st)).toBe(false);
+    expect(readNoticeCollapsed(true, st)).toBe(true);
+  });
+
+  it('storage, чей getItem/setItem бросает: read — false, write — не бросает', () => {
+    const boom = {
+      getItem: () => { throw new Error('приватный режим'); },
+      setItem: () => { throw new Error('квота'); },
+    } as unknown as Storage;
+    expect(readNoticeCollapsed(false, boom)).toBe(false);
+    expect(readNoticeCollapsed(true, boom)).toBe(false);
+    expect(() => writeNoticeCollapsed(false, true, boom)).not.toThrow();
+    expect(() => writeNoticeCollapsed(true, false, boom)).not.toThrow();
+  });
+
+  it('мусор в ключе (не "1"/"0") читается как false', () => {
+    expect(readNoticeCollapsed(false, fakeStorage({ [KEY]: 'может быть' }))).toBe(false);
+    expect(readNoticeCollapsed(false, fakeStorage({ [KEY]: '0' }))).toBe(false);
+    expect(readNoticeCollapsed(true, fakeStorage({ [KEY_JUDGE]: '1' }))).toBe(true);
+  });
+
+  it('localStorage недоступен (в тестовой среде его нет): read — false, write — не бросает', () => {
+    expect(readNoticeCollapsed(false)).toBe(false);
+    expect(() => writeNoticeCollapsed(false, true)).not.toThrow();
+  });
+});
+
+describe('M5: свёртка плашки в компоненте', () => {
+  it('«Понятно» сворачивает до одной строки заголовка, «Подробнее» разворачивает', async () => {
+    seedList(LIST);
+    const c = render();
+    await settle();
+    expect(has(c, 'Остальное, включая замену ваших формулировок')).toBe(true);
+    click(buttonByTestId(c, 'wiki-inbox-notice-collapse'), 'Понятно');
+    await settle();
+    // свёрнуто: заголовок остался, описания нет, есть «Подробнее»
+    expect(has(c, 'Здесь только то, где нужен человек')).toBe(true);
+    expect(has(c, 'Остальное, включая замену ваших формулировок')).toBe(false);
+    click(buttonByTestId(c, 'wiki-inbox-notice-expand'), 'Подробнее');
+    await settle();
+    expect(has(c, 'Остальное, включая замену ваших формулировок')).toBe(true);
+  });
+
+  it('свёртка переживает перемонтирование (storage)', async () => {
+    seedList(LIST);
+    const c1 = render();
+    // storage цепляется ПОСЛЕ render: installFakeDom создаёт новый объект window,
+    // повешенный до него localStorage он не несёт
+    attachStorage(fakeStorage());
+    await settle();
+    click(buttonByTestId(c1, 'wiki-inbox-notice-collapse'), 'Понятно');
+    await settle();
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'Остальное, включая замену ваших формулировок')).toBe(false);
+    expect(has(c2, 'Здесь только то, где нужен человек')).toBe(true);
+  });
+
+  it('режим судьи: свой ключ и своя плашка; свёртка судьи не трогает обычный режим', async () => {
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c1 = render();
+    attachStorage(fakeStorage());
+    await settle();
+    click(buttonByTestId(c1, 'wiki-inbox-notice-collapse'), 'Понятно');
+    await settle();
+    // свёрнуто: заголовок режима судьи остался, описания нет
+    expect(has(c1, 'Решения судьи')).toBe(true);
+    expect(has(c1, 'Спорные правки решает облачный судья')).toBe(false);
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'Спорные правки решает облачный судья')).toBe(false);
+    // обычный режим при этом не свёрнут: ключи независимы. Снимок настроек в общем
+    // сторе переживает render внутри теста — перед сменой режима его гасим (__test.reset)
+    wikiStore.reset();
+    seedBoth(LIST, SETTINGS_OFF);
+    const c3 = render();
+    await settle();
+    expect(has(c3, 'Остальное, включая замену ваших формулировок')).toBe(true);
+  });
+
+  it('component: ключи независимы — запись одного режима не меняет другой', async () => {
+    const st = fakeStorage();
+    seedList(LIST);
+    const c1 = render();
+    attachStorage(st);
+    await settle();
+    click(buttonByTestId(c1, 'wiki-inbox-notice-collapse'), 'Понятно');
+    await settle();
+    expect(st.getItem(KEY)).toBe('1');
+    expect(st.getItem(KEY_JUDGE)).toBeNull();
+  });
+});
+
+describe('M5: узкая раскладка — возраст в строке меты', () => {
+  // «узко» задаём замером контейнера: подвешиваем clientWidth (< MOBILE_MAX) на прототип
+  // фейк-DOM-узлов (тот же путь, что у observeWidth); решение «узко/широко» — у М0
+  function forceNarrow(width: number) {
+    const proto = Object.getPrototypeOf((globalThis as { document: { createElement(t: string): unknown } }).document.createElement('div'));
+    Object.defineProperty(proto, 'clientWidth', { get: () => width, configurable: true });
+  }
+
+  it('узко: возраст в мете строки, отдельной колонки возраста нет', async () => {
+    installFakeDom();
+    forceNarrow(300);
+    seedList(LIST);
+    const c = render();
+    await settle();
+    // ageText(PKG.createdAt): старше суток — дата '30.10'; ORIGIN_META.session.label — «чат»
+    expect(has(c, '· чат · 30.10')).toBe(true);
+  });
+
+  it('широко (без замера контейнера): возраст — отдельной колонкой, в мету не входит', async () => {
+    seedList(LIST);
+    const c = render();
+    await settle();
+    // возраст на месте (колонка), но не в мете: между «чат» и возрастом стоит заголовок
+    expect(texts(c)).toContain('30.10');
+    expect(has(c, '· чат · 30.10')).toBe(false);
   });
 });

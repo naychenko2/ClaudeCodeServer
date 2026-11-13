@@ -153,7 +153,7 @@ describe('FeatureStageScreen', () => {
     await act(async () => { await flush(); });
     clickTab(container, 'Вход');
     expect(findNodeByAttr(container, 'data-testid', 'stage-input')).not.toBeNull();
-    expect(text(container)).toContain('/x/A.cs');
+    expect(text(container)).toContain('A.cs');
     expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts')).toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'stage-review')).toBeNull();
     clickTab(container, 'Артефакты');
@@ -316,7 +316,7 @@ describe('FeatureStageScreen', () => {
     clickTab(container, 'Ревью и вопросы');
     expect(text(container)).toContain('замечание'); // ревью живо
     clickTab(container, 'Вход');
-    expect(text(container)).toContain('/x/A.cs'); // вход живой
+    expect(text(container)).toContain('A.cs'); // вход живой
   });
 
   it('ошибка загрузки экрана показывается текстом с «Повторить»', async () => {

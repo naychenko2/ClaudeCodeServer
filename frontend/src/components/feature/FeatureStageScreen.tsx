@@ -26,6 +26,7 @@ import { api } from '../../lib/api';
 import { FeatureStageArtifacts } from './FeatureStageArtifacts';
 import { FeatureStageInput } from './FeatureStageInput';
 import { FeatureStageReview } from './FeatureStageReview';
+import { FeatureStageQuestions } from './FeatureStageQuestions';
 import { FeatureStageMetrics } from './FeatureStageMetrics';
 import { NO_DATA, taskStatusLabel } from './FeatureLabels';
 import { formatDuration, minutesSince } from './FeatureStatsBits';
@@ -112,18 +113,20 @@ function SummaryKpis({ metrics: m, now }: { metrics: StageMetrics; now: number }
   );
 }
 
-function StageBody({ taskId, isMobile, stageTitle, onChat }: { taskId: string; isMobile: boolean; stageTitle?: string; onChat?: (taskId: string, sessionId: string | null, marks: StageSummaryTask[] | null) => void }) {
+function StageBody({ taskId, isMobile, stageTitle, onChat, onOpenChat }: { taskId: string; isMobile: boolean; stageTitle?: string; onOpenChat?: (sessionId: string) => void; onChat?: (taskId: string, sessionId: string | null, marks: StageSummaryTask[] | null) => void }) {
   const [loaded, setState] = useState<LoadState>({ taskId, status: 'loading' });
   const [attempt, setAttempt] = useState(0);
   // Выбор вкладки помечен taskId: при выборе другой задачи открыта первая вкладка,
   // а не та, что была у прошлой задачи (тот же приём, что у состояния загрузки).
   const [tabSel, setTabSel] = useState<{ taskId: string; tab: StageTab }>({ taskId, tab: FIRST_TAB });
   const bodyRef = useRef<HTMLDivElement>(null);
+  // Тихая перезагрузка после ответа на вопрос: без экрана «Загружаю…», чтобы не терять вкладку и прокрутку.
+  const quietRef = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
     const { signal } = controller;
-    setState({ taskId, status: 'loading' });
+    if (quietRef.current) quietRef.current = false; else setState({ taskId, status: 'loading' });
     api.tasks.stage(taskId, signal)
       .then(screen => {
         if (signal.aborted) return;
@@ -136,6 +139,7 @@ function StageBody({ taskId, isMobile, stageTitle, onChat }: { taskId: string; i
     return () => controller.abort();
   }, [taskId, attempt]);
 
+  const reloadQuiet = useCallback(() => { quietRef.current = true; setAttempt(n => n + 1); }, []);
   const state: LoadState = loaded.taskId === taskId ? loaded : { taskId, status: 'loading' };
   // Чат исполнителя нужен тулбару экрана (он вне StageBody): сообщаем по готовности ответа.
   const sessionId = state.status === 'ok' ? (state.screen.stageSummary?.executorSessionId ?? null) : null;
@@ -190,8 +194,13 @@ function StageBody({ taskId, isMobile, stageTitle, onChat }: { taskId: string; i
         />
       </div>
       {tab === 'artifacts' && <FeatureStageArtifacts key={s.taskId} taskId={s.taskId} artifacts={s.artifacts} isMobile={isMobile} />}
-      {tab === 'input' && <FeatureStageInput input={s.input} isMobile={isMobile} />}
-      {tab === 'review' && <FeatureStageReview review={s.review} />}
+      {tab === 'input' && <FeatureStageInput input={s.input} isMobile={isMobile} templateName={s.stageSummary?.templateName} executorSessionId={s.stageSummary?.executorSessionId ?? null} onOpenChat={onOpenChat} />}
+      {tab === 'review' && (
+        <>
+          <FeatureStageQuestions key={s.taskId} taskId={s.taskId} questions={s.questions ?? []} isMobile={isMobile} onAnswered={reloadQuiet} />
+          <FeatureStageReview review={s.review} />
+        </>
+      )}
       {tab === 'metrics' && s.metrics && <FeatureStageMetrics metrics={s.metrics} nowMs={now} />}
     </div>
   );
@@ -235,7 +244,7 @@ export function FeatureStageScreen({ tasks, isMobile, chrome }: { tasks: StageSc
         </div>
       )}
       {tasks.length > 1 && <StageTaskPicker tasks={tasks} activeId={taskId} marks={chat?.marks ?? null} isMobile={isMobile} onPick={setPicked} />}
-      {taskId ? <StageBody taskId={taskId} isMobile={isMobile} stageTitle={chrome?.stageTitle} onChat={onChat} /> : (
+      {taskId ? <StageBody taskId={taskId} isMobile={isMobile} stageTitle={chrome?.stageTitle} onChat={onChat} onOpenChat={chrome?.onOpenChat} /> : (
         <div data-testid="stage-screen-empty" style={{ fontSize: FS.sm, color: C.textSecondary }}>У этапа пока нет задач.</div>
       )}
     </div>

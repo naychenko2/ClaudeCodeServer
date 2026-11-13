@@ -12,7 +12,6 @@ import {
 import { audioApi, type AudioThread, type AudioThreadVersion } from '../api';
 import { AudioPlayer, StemMixer, type AudioSource, type Stem } from '../player';
 import { normalizeJoint } from '../player/peaks';
-import { isPersonalScope } from '../scope';
 import { downloadFile, mixStems } from './actions';
 import { abSides, extraFiles, hasMain, type ExtraFile, midiFileOf, stemsFolder, versionLabel, versionStems } from './model';
 import { useServerPeaks } from './serverPeaks';
@@ -146,7 +145,7 @@ function StemsBlock({ scope, sessionId, thread, version }: Props) {
         stems={list}
         duration={duration}
         mixing={mixing}
-        folderName={isPersonalScope(scope) ? undefined : stemsFolder(thread)}
+        folderName={stemsFolder(thread)}
         onDownload={role => downloadFile(scope, sessionId, thread, version.id, role)}
         onMix={plan => {
           setMixing(true);

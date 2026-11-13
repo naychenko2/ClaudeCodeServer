@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Button, Field, Modal, ModalActions, TextField, C, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { AudioThread, AudioThreadVersion } from '../api';
+import { isPersonalScope } from '../scope';
 import { saveVersion } from './actions';
 import { defaultSaveFolder, defaultSaveName, splitSuggestion, versionLabel } from './model';
 
@@ -33,13 +34,15 @@ export function SaveAsDialog({ scope, sessionId, thread, version, onClose }: {
     setTaken(null);
   };
 
+  const personal = isPersonalScope(scope);
+
   return (
     <Modal title="Сохранить как…" subtitle={versionLabel(version)} width={480} onClose={onClose}
       footer={<ModalActions confirmLabel="Сохранить" onConfirm={() => { void submit(); }} loading={busy}
         confirmDisabled={!name.trim()} onCancel={onClose} />}>
       <div data-audio-save-as="" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
-        <Field label="Папка" hint="Путь от корня проекта; пусто — корень">
-          <TextField value={folder} onChange={v => { setFolder(v); setTaken(null); }} placeholder="корень проекта" mono />
+        <Field label="Папка" hint={personal ? 'Только внутри audio/ в «Личном»; пусто — audio/' : 'Путь от корня проекта; пусто — корень'}>
+          <TextField value={folder} onChange={v => { setFolder(v); setTaken(null); }} placeholder={personal ? 'audio' : 'корень проекта'} mono />
         </Field>
         <Field label="Имя файла" hint="Расширение — по формату версии; стемы лягут папкой рядом с тем же именем">
           <TextField value={name} onChange={v => { setName(v); setTaken(null); }} autoFocus onEnter={() => { void submit(); }} />

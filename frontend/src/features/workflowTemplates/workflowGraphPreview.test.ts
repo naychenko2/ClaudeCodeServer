@@ -34,7 +34,8 @@ describe('layoutGraph', () => {
     expect(n['step-front'].y).toBeGreaterThan(n['step-back'].y);
     expect(n['step-back'].x).toBeLessThan(n.review.x);
     expect(g.edges).toHaveLength(4);
-    expect(g.groups).toHaveLength(0);
+    expect(g.groups).toHaveLength(1);
+    expect(g.groups[0].x).toBeLessThan(n['step-back'].x);
   });
 
   it('узкая раскладка: колонки сверху вниз, у параллельной — рамка', () => {
@@ -106,5 +107,70 @@ describe('подпись роли в превью', () => {
     const src = await import('node:fs').then(f => f.readFileSync(new URL('./WorkflowGraphPreview.tsx', import.meta.url), 'utf8'));
     expect(src).toContain('STAGE_ROLE_LABEL[n.role]');
     expect(src).not.toContain('Нарезка');
+  });
+});
+
+describe('граф: узлы, замок, дуга, снятые', () => {
+  it('этап presence=off не рисуется, потомок наследует его родителя', () => {
+    const g = layoutGraph([
+      { role: 'plan', presence: 'on' },
+      { role: 'design', presence: 'off', after: ['plan'] },
+      { role: 'review', presence: 'on', after: ['design'] },
+    ], false);
+    expect(g.nodes.map(n => n.id)).toEqual(['plan', 'review']);
+    expect(g.edges.map(e => `${e.from}>${e.to}`)).toEqual(['plan>review']);
+  });
+
+  it('ребро через уровень — far, путь уходит под граф', () => {
+    const g = layoutGraph([
+      { role: 'plan', presence: 'on' },
+      { role: 'step', presence: 'on', lane: 'back', after: ['plan'] },
+      { role: 'review', presence: 'on', after: ['step', 'plan'] },
+    ], false);
+    // plan→review транзитивно лишнее; настоящая дуга — через колонку без промежуточного предка:
+    const far = layoutGraph([
+      { role: 'plan', presence: 'on' },
+      { role: 'step', presence: 'on', lane: 'back', after: ['plan'] },
+      { role: 'qa', presence: 'on', id: 'qa-x', after: ['plan'] },
+      { role: 'final', presence: 'on', after: ['step'] },
+      { role: 'merge', presence: 'on', after: ['final', 'qa-x'] },
+    ], false);
+    expect(g.edges.some(e => e.far)).toBe(false);
+    const e = far.edges.find(x => x.from === 'qa-x');
+    expect(e?.far).toBe(true);
+    const maxY = Math.max(...far.nodes.map(n => n.y + far.nodeH));
+    expect(far.height).toBeGreaterThanOrEqual(maxY + 18);
+    expect(far.height - layoutGraph(far.nodes.length ? [
+      { role: 'plan', presence: 'on' },
+      { role: 'step', presence: 'on', lane: 'back', after: ['plan'] },
+      { role: 'qa', presence: 'on', id: 'qa-x', after: ['plan'] },
+      { role: 'final', presence: 'on', after: ['step', 'qa-x'] },
+      { role: 'merge', presence: 'on', after: ['final'] },
+    ] : [], false).height).toBeGreaterThanOrEqual(18);
+  });
+
+  it('узел несёт замок для несъёмной роли и ключ строки ленты', () => {
+    const g = layoutGraph([
+      { role: 'plan', presence: 'on' },
+      { role: 'qa', presence: 'optional' },
+    ], false);
+    const n = Object.fromEntries(g.nodes.map(x => [x.id, x]));
+    expect(n.plan.locked).toBe(true);
+    expect(n.qa.locked).toBe(false);
+    expect(n.qa.key).toBe('qa');
+  });
+});
+
+describe('WorkflowGraphPreview — разметка', () => {
+  const src = () => import('node:fs').then(f => f.readFileSync(new URL('./WorkflowGraphPreview.tsx', import.meta.url), 'utf8'));
+  it('узел — кнопка, клик зовёт onSelectStage, подпись «Маршрут, который увидит фича»', async () => {
+    const t = await src();
+    expect(t).toContain("onClick={() => onSelectStage?.(n.key)}");
+    expect(t).toContain('Маршрут, который увидит фича');
+    expect(t).not.toContain('Схема маршрута');
+  });
+  it('редактор передаёт графу тот же selectedStageId и setSelectedStageId', async () => {
+    const t = await import('node:fs').then(f => f.readFileSync(new URL('./WorkflowTemplatesEditor.tsx', import.meta.url), 'utf8'));
+    expect(t).toMatch(/<WorkflowGraphPreview[\s\S]*?onSelectStage=\{setSelectedStageId\}/);
   });
 });

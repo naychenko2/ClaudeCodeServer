@@ -464,8 +464,12 @@ export function WorkflowTemplatesEditor({
       </Field>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-        <ListLabel>Схема маршрута</ListLabel>
-        <WorkflowGraphPreview stages={draft.stages} />
+        <ListLabel>Маршрут, который увидит фича</ListLabel>
+        <WorkflowGraphPreview
+          stages={draft.stages}
+          selectedKey={settingsIndex >= 0 ? selectedStageId : null}
+          onSelectStage={setSelectedStageId}
+        />
         <WorkflowStageStrip
           stages={draft.stages}
           readOnly={readOnly}

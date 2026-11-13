@@ -108,7 +108,7 @@ public class WikiNightlyNotifyTests : IDisposable
     }
 
     private WikiNightlyService Sut(
-        Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>>? analyze = null,
+        Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>>? analyze = null,
         INotificationSender? notifier = null,
         ILogger<WikiNightlyService>? log = null,
         Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
@@ -122,8 +122,8 @@ public class WikiNightlyNotifyTests : IDisposable
         (owner, root, ct) => Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(
             calls, cost, applied, rejected, deferred, codeRejected, null));
 
-    private static Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done() =>
-        (owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+    private static Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done() =>
+        (owner, chat, _, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
             WikiChatIngestService.OutcomeNothingNew, null, []));
 
     private Task Tick(WikiNightlyService sut) => sut.RunNightTickAsync(_now);
@@ -165,7 +165,7 @@ public class WikiNightlyNotifyTests : IDisposable
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
         var notifier = new Notifier();
-        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, CancellationToken ct) => chat switch
+        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, string? engine, CancellationToken ct) => chat switch
         {
             "c1" => Task.FromResult(new WikiChatIngestService.ChatResult(
                 WikiChatIngestService.OutcomeApplied, null, ["pkg-1", "pkg-2", "pkg-3"])),
@@ -207,7 +207,7 @@ public class WikiNightlyNotifyTests : IDisposable
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
         var notifier = new Notifier();
-        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, CancellationToken ct) => chat switch
+        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, string? engine, CancellationToken ct) => chat switch
         {
             "c1" => Task.FromResult(new WikiChatIngestService.ChatResult(
                 WikiChatIngestService.OutcomeApplied, null, ["pkg-1", "pkg-2"])),
@@ -239,7 +239,7 @@ public class WikiNightlyNotifyTests : IDisposable
         Configure();
         AddChat("c1", ageMinutes: 0);
         var notifier = new Notifier();
-        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, CancellationToken ct) =>
+        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, string? engine, CancellationToken ct) =>
             Task.FromResult(new WikiChatIngestService.ChatResult(
                 WikiChatIngestService.OutcomeApplied, null, ["pkg-1"]));
 
@@ -297,7 +297,7 @@ public class WikiNightlyNotifyTests : IDisposable
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
         var notifier = new Notifier();
-        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, CancellationToken ct) => chat switch
+        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, string? engine, CancellationToken ct) => chat switch
         {
             "c1" => Task.FromResult(new WikiChatIngestService.ChatResult(
                 WikiChatIngestService.OutcomeApplied, null, ["pkg-1"], OverrodeHuman: 2, DisputedPages: ["a.md", "b.md"])),
@@ -324,7 +324,7 @@ public class WikiNightlyNotifyTests : IDisposable
         Configure();
         AddChat("c1");
         var notifier = new Notifier();
-        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, CancellationToken ct) =>
+        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, string? engine, CancellationToken ct) =>
             Task.FromResult(new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeApplied, null, ["pkg-1"]));
 
         await Tick(Sut(Analyze, notifier));

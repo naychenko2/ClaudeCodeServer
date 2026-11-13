@@ -201,9 +201,13 @@ public sealed class WikiNightlyService : BackgroundService
     private readonly Composition.INotificationSender? _notifications;
     private readonly WikiKeeper? _keeper;
     private readonly ILogger<WikiNightlyService> _log;
-    private readonly Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> _analyze;
-    // Проход судьи (J-J4, точка «а»): та же форма шва, что у _analyze — точка запуска проверяется
-    // без настоящей облачной модели. null (тест без судьи) — прохода судьи нет, поля итога нулевые.
+    // Шов разбора (W4a1): владелец, чат, engine, ct. engine (W3) — названный локальный исполнитель
+    // («local» или имя из LocalEngines:*); null — прежний маршрут места. Сама ночь engine пока не
+    // называет (её выбор — W4a2), но шов обязан его донести: его задаёт публичный конструктор.
+    private readonly Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> _analyze;
+    // Проход судьи (J-J4, точка «а»): тот же приём шва Func-делегатом, что у _analyze — точка
+    // запуска проверяется без настоящей облачной модели. null (тест без судьи) — прохода судьи нет,
+    // поля итога нулевые.
     private readonly Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? _judge;
     private readonly Func<DateTimeOffset> _clock;
     private readonly string _dataDir;
@@ -213,8 +217,10 @@ public sealed class WikiNightlyService : BackgroundService
         IConfiguration config, ILogger<WikiNightlyService> log, Composition.IFeatureFlagGate? flags = null,
         Composition.INotificationSender? notifications = null)
         : this(sessions, recalc, stage2,
-            // actionKey — только константа места: внешнего ввода у ночи нет.
-            (owner, chat, ct) => ingest.AnalyzeAsync(owner, chat, ct, LocalActionCatalog.WikiNightly),
+            // actionKey — только константа места: внешнего ввода у ночи нет. engine (W4a1) —
+            // проброс аргумента шва в тот же вызов: названного исполнительа у ночи ещё нет (W4a2),
+            // поэтому на практике сюда приходит null — прежний маршрут места.
+            (owner, chat, engine, ct) => ingest.AnalyzeAsync(owner, chat, ct, LocalActionCatalog.WikiNightly, engine),
             llm, config, log, flags, clock: null, notifications: notifications, keeper: keeper,
             judge: (owner, root, ct) => judge.RunAsync(owner, root, ct))
     {
@@ -224,9 +230,10 @@ public sealed class WikiNightlyService : BackgroundService
     // окно — без ожидания ночи). В приложении сюда попадает только цепочка из публичного
     // конструктора. notifications и keeper — после clock: существующие вызовы шва (позиционные)
     // не сдвигаются. keeper == null (тест без шва заведения) — ночь не заводит вики и берёт только
-    // заведённых.
+    // заведённых. analyze — шов разбора (владелец, чат, engine, ct): test-фабрики engine не
+    // смотрят, они считают вызовы и возвращают заданный исход.
     internal WikiNightlyService(ISessionDirectory sessions, WikiChatRecalc recalc, WikiChatStage2 stage2,
-        Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze,
+        Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze,
         ICheapTextRunner llm, IConfiguration config, ILogger<WikiNightlyService> log,
         Composition.IFeatureFlagGate? flags, Func<DateTimeOffset>? clock,
         Composition.INotificationSender? notifications = null, WikiKeeper? keeper = null,
@@ -723,7 +730,8 @@ public sealed class WikiNightlyService : BackgroundService
                 chatsBySection[c.Home] = chatsBySection.GetValueOrDefault(c.Home) + 1;
                 est += chatEst;
                 WikiChatIngestService.ChatResult r;
-                try { r = await _analyze(ownerId, c.Session.Id, ct); }
+                // Исполнителя ночи ещё нет (W4a2): engine = null — прежний маршрут места.
+                try { r = await _analyze(ownerId, c.Session.Id, null, ct); }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {

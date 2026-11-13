@@ -1,3 +1,4 @@
+using System.Reflection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -127,7 +128,7 @@ public class WikiNightlyServiceTests : IDisposable
 
     // log — захват журнала для тестов строки итога (J-O1); без него — тихий SUT, как раньше.
     // judge — фейк прохода судьи (J-J4): без него судья не зовётся, её поля остаются нулями.
-    private WikiNightlyService Sut(Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>>? analyze = null,
+    private WikiNightlyService Sut(Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>>? analyze = null,
         ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null,
         ClaudeHomeServer.Services.Composition.INotificationSender? notifier = null,
         ILogger<WikiNightlyService>? log = null,
@@ -144,9 +145,9 @@ public class WikiNightlyServiceTests : IDisposable
         (owner, root, ct) => Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(
             calls, cost, applied, rejected, deferred, codeRejected, firstFailure));
 
-    private Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done(
+    private Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done(
         string outcome = WikiChatIngestService.OutcomeNothingNew, int packages = 0) =>
-        (owner, chat, ct) =>
+        (owner, chat, _, ct) =>
         {
             lock (_analyzed) _analyzed.Add(chat);
             return Task.FromResult(new WikiChatIngestService.ChatResult(
@@ -171,7 +172,7 @@ public class WikiNightlyServiceTests : IDisposable
         Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null,
         Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? midJudge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            (o, c, ct) => RealIngest(midJudge).AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly),
+            (o, c, _, ct) => RealIngest(midJudge).AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly),
             _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now,
             keeper: _keeper, judge: judge);
 
@@ -555,7 +556,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c2", ageMinutes: 1);
         AddChat("c3", ageMinutes: 2);
         var calls = 0;
-        Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, CancellationToken ct)
+        Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, string? engine, CancellationToken ct)
         {
             _analyzed.Add(c);
             if (++calls == 1) AddOpenPackages(WikiPackage.MaxOpenPackages);
@@ -719,7 +720,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c2", ageMinutes: 1);
         WikiChatTriageStore.Upsert(Root(), new WikiChatTriageEntry("c1", 0, null, null, null, 0, default)).Ok.Should().BeTrue();
         var before = WikiChatTriageStore.Get(Root()).Entries.Single(e => e.SessionId == "c1");
-        Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, CancellationToken ct)
+        Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, string? engine, CancellationToken ct)
         {
             _analyzed.Add(c);
             if (c == "c1") throw new InvalidOperationException("разбор упал");
@@ -781,7 +782,7 @@ public class WikiNightlyServiceTests : IDisposable
         _llm.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var tickCalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sut = new WikiNightlyService(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            (o, c, ct) =>
+            (o, c, _, ct) =>
             {
                 var run = ingest.AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly);
                 tickCalled.TrySetResult(); // после вызова: заявка тика уже села на чужой прогон (или начала свой)
@@ -817,6 +818,36 @@ public class WikiNightlyServiceTests : IDisposable
         Last().Outcome.Should().Be(WikiNightlyService.OutcomeError);
     }
 
+    [Fact]
+    public async Task ПубличныйКонструкторПробрасываетИсполнителя_РазборЗовётНазванный_МестомНочи()
+    {
+        // W4a1: шов _analyze принимает engine и отдаёт его AnalyzeAsync рядом с константой места.
+        // Проверяется сам шов в той точке, где он собирается по-настоящему (публичный конструктор),
+        // на настоящей цепочке разбора: названного движка под тестом нет — вызов зарегистрирован
+        // и ответил null, то есть отказ окна по причине маршрута.
+        // Мутация «публичный конструктор теряет engine» (AnalyzeAsync без него): заявка ушла бы
+        // через RunLocalOrChosenDetailedAsync — EngineCalls пуст и отказа по причине маршрута нет,
+        // оба утверждения краснеют.
+        Configure();
+        AddChat("c-engine");
+        var sut = new WikiNightlyService(_sessions, new WikiChatRecalc(_sessions, _config),
+            new WikiChatStage2(_llm, _sessions, _config), RealIngest(), _keeper,
+            new WikiJudgeSweep(_llm, _apply, _config), _llm, _config,
+            NullLogger<WikiNightlyService>.Instance, _flag);
+        var analyze = (Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>>)
+            typeof(WikiNightlyService).GetField("_analyze", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(sut)!;
+
+        var res = await analyze(User, "c-engine", "gemma", CancellationToken.None);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain(WikiIngestService.ReasonLocalUnavailable);
+        _llm.EngineCalls.Should().ContainSingle("путь был только на названном исполнителе")
+            .Which.Engine.Should().Be("gemma", "имя дошло до вызова модели как есть");
+        _llm.EngineCalls[0].ActionKey.Should().Be(LocalActionCatalog.WikiNightly,
+            "место заявки — константа ночи, её не берут из вызова");
+    }
+
     // ─── PUT enabled=false и закрытие окна посреди ночи ────────────────────
 
     [Fact]
@@ -825,7 +856,7 @@ public class WikiNightlyServiceTests : IDisposable
         Configure();
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
-        Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, CancellationToken ct)
+        Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, string? engine, CancellationToken ct)
         {
             _analyzed.Add(c);
             Configure(enabled: false); // PUT enabled=false посреди ночи
@@ -844,7 +875,7 @@ public class WikiNightlyServiceTests : IDisposable
         Configure(start: 3, end: 6);
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
-        Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, CancellationToken ct)
+        Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, string? engine, CancellationToken ct)
         {
             _analyzed.Add(c);
             _now = At(6); // конец окна не входит
@@ -932,7 +963,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
         using var cts = new CancellationTokenSource();
-        Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, CancellationToken ct)
+        Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, string? engine, CancellationToken ct)
         {
             _analyzed.Add(c);
             cts.Cancel(); // остановка хоста посреди прохода
@@ -976,7 +1007,7 @@ public class WikiNightlyServiceTests : IDisposable
         Configure();
         AddChat("c1");
         AddChat("c2");
-        await Tick(Sut((owner, chat, ct) =>
+        await Tick(Sut((owner, chat, _, ct) =>
         {
             lock (_analyzed) _analyzed.Add(chat);
             return Task.FromResult(new WikiChatIngestService.ChatResult(
@@ -1004,7 +1035,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1");
         AddChat("c2");
         AddChat("c3");
-        await Tick(Sut((owner, chat, ct) =>
+        await Tick(Sut((owner, chat, _, ct) =>
         {
             lock (_analyzed) _analyzed.Add(chat);
             if (chat == "c3") throw new InvalidOperationException("разбор не вернулся");
@@ -1034,7 +1065,7 @@ public class WikiNightlyServiceTests : IDisposable
             ? """{"hasKnowledge":true,"about":"a","reason":"r"}"""
             : NothingJson;
 
-        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+        await Tick(Sut((owner, chat, _, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
             WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 1_000))));
 
         var last = Last();
@@ -1053,7 +1084,7 @@ public class WikiNightlyServiceTests : IDisposable
         _llm.LocalInputTokens = 300;
         _llm.Reply = _ => "это не json";
 
-        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+        await Tick(Sut((owner, chat, _, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
             WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 1_000))));
 
         _analyzed.Should().BeEmpty("отказ ступени 2 — серая зона, чат не берётся");
@@ -1075,7 +1106,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
         AddChat("c3", ageMinutes: 2);
-        var sut = Sut((owner, chat, ct) =>
+        var sut = Sut((owner, chat, _, ct) =>
         {
             lock (_analyzed) _analyzed.Add(chat);
             return Task.FromResult(new WikiChatIngestService.ChatResult(
@@ -1110,7 +1141,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
         AddChat("c3", ageMinutes: 2);
-        await Tick(Sut((owner, chat, ct) =>
+        await Tick(Sut((owner, chat, _, ct) =>
         {
             lock (_analyzed) _analyzed.Add(chat);
             if (chat == "c3")
@@ -1134,7 +1165,7 @@ public class WikiNightlyServiceTests : IDisposable
         Configure();
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
-        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+        await Tick(Sut((owner, chat, _, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
             WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 10,
             Dropped: chat == "c1" ? 1 : 2, FirstDropReason: "причина " + chat))));
 
@@ -1170,7 +1201,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
         AddChat("c3", ageMinutes: 2);
-        var sut = Sut((owner, chat, ct) =>
+        var sut = Sut((owner, chat, _, ct) =>
         {
             lock (_analyzed) _analyzed.Add(chat);
             if (chat == "c3")
@@ -1266,7 +1297,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c4", ageMinutes: 3);
         var localDown = "разбор окна m1-m8 не удался: синтез: " + WikiIngestService.ReasonLocalUnavailable;
 
-        await Tick(Sut((owner, chat, ct) =>
+        await Tick(Sut((owner, chat, _, ct) =>
         {
             lock (_analyzed) _analyzed.Add(chat);
             return chat == "c2"
@@ -1381,7 +1412,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1", ageMinutes: 0);
         var log = new RecordingLog();
 
-        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+        await Tick(Sut((owner, chat, _, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
                 WikiChatIngestService.OutcomeAwaitingHuman, "в пакете есть спорные операции", [])),
             log: log, judge: Judge(applied: 1, calls: 1, cost: 0.02m)));
 
@@ -1479,7 +1510,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1", ageMinutes: 0);
         var log = new RecordingLog();
 
-        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+        await Tick(Sut((owner, chat, _, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
             WikiChatIngestService.OutcomeRejected, reason, [], InputTokens: 5)), log: log));
 
         var last = Last();
@@ -1530,7 +1561,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1");
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        async Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, CancellationToken ct)
+        async Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, string? engine, CancellationToken ct)
         {
             lock (_analyzed) _analyzed.Add(c);
             entered.TrySetResult();
@@ -1565,7 +1596,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1");
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        async Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, CancellationToken ct)
+        async Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, string? engine, CancellationToken ct)
         {
             lock (_analyzed) _analyzed.Add(c);
             entered.TrySetResult();
@@ -1632,7 +1663,7 @@ public class WikiNightlyServiceTests : IDisposable
     {
         Configure();
         AddChat("c1");
-        var sut = Sut((o, c, ct) => throw new InvalidOperationException("разбор упал"));
+        var sut = Sut((o, c, _, ct) => throw new InvalidOperationException("разбор упал"));
 
         var start = sut.TryStartManual(User, out var pass);
         start.Should().Be(WikiNightlyService.ManualStart.Started);
@@ -1668,7 +1699,7 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c1");
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        async Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, CancellationToken ct)
+        async Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, string? engine, CancellationToken ct)
         {
             lock (_analyzed) _analyzed.Add(c);
             entered.TrySetResult();
@@ -1801,6 +1832,11 @@ public class WikiNightlyServiceTests : IDisposable
         // истории и до вызова — так админ поставил её на облачную модель.
         public string? NotLocalKey;
 
+        // Названный исполнитель заявки (W3, путь «engine аргументом»): под тестом такого движка нет —
+        // вызов регистрируется (имя и место заявки — то, что проверяют тесты проброса) и отвечает
+        // null, как неготовый движок: подмены другим исполнителем нет.
+        public List<(string Engine, string ActionKey)> EngineCalls { get; } = [];
+
         public bool UsesLocal(string actionKey) => actionKey != NotLocalKey;
         public bool HasFreeRoute(string actionKey) => true;
         public bool HasRoute(string actionKey) => Route;
@@ -1842,6 +1878,13 @@ public class WikiNightlyServiceTests : IDisposable
                 LocalInputTokens == 0
                     ? null
                     : new OneShotUsage(LocalInputTokens, 0, 0, 5, 0.0, "qwen-local"), 1));
+        }
+
+        public Task<OneShotResult?> RunOnLocalEngineDetailedAsync(string engine, string actionKey,
+            string prompt, string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            lock (EngineCalls) EngineCalls.Add((engine, actionKey));
+            return Task.FromResult<OneShotResult?>(null);
         }
 
         private string Answer(string actionKey, string prompt)

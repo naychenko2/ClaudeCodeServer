@@ -379,7 +379,7 @@ public class WikiSettingsControllerTests : IDisposable
         AddNightlyChat();
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var sut = NightlyService(async (o, c, ct) =>
+        var sut = NightlyService(async (o, c, _, ct) =>
         {
             entered.TrySetResult();
             await gate.Task.ConfigureAwait(false);
@@ -488,12 +488,12 @@ public class WikiSettingsControllerTests : IDisposable
     private readonly DateTimeOffset _now = new(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
 
     private WikiNightlyService NightlyService(
-        Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze) =>
+        Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             analyze, _llm, _config, NullLogger<WikiNightlyService>.Instance, _flags, clock: () => _now, keeper: _keeper);
 
-    private static Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Immediate() =>
-        (o, c, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []));
+    private static Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> Immediate() =>
+        (o, c, _, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []));
 
     private void EnableNightly() => WikiSettingsStore.Mutate(_dir, User, s => s with
     {

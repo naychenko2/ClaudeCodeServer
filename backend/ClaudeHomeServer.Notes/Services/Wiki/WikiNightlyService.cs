@@ -107,9 +107,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   цепочка, что RunLocalOrChosenAsync), без финального claude-шага. Падение или недоступность
 //   локали — отказ вызова: окно разбора уходит в Rejected и курсор не двигается, ступень 2
 //   оставляет чат серым; целая ночь таких отказов (каждый разобранный чат отказан и вход нулевой)
-//   — итог error, не completed (WN-2, конец RunPassAsync); три отказа локального маршрута подряд
-//   обрывают проход сразу (выключатель 2e13d45c, LocalDownBreakAfter) — ночь при мёртвом движке
-//   не сжигает очередь на повтор одного и того же отказа. Фактический вход этих вызовов (usage
+//   — итог error, не completed (WN-2, конец RunPassAsync); три отказа «модель недоступна» подряд у
+//   ОДНОГО исполнителя выводят его из прохода (W5: LocalDownBreakAfter, ExecutorDownState) — его
+//   слоты чатов больше не получают, а его чат без применённого окна один раз возвращается в
+//   голову очереди, чтобы его добрал другой исполнитель. Ночь стоит, пока жив хоть один; выбыли
+//   все — итог error, дату он не закрывает (2e13d45c). Фактический вход этих вызовов (usage
 //   того же ответа движка) суммируется в NightResult.InputTokens — меры нагрузки, не денег.
 //   Кнопка «Разобрать» и агент wiki_ingest не затронуты — облако там допустимо. Проход судьи
 //   (J-J4) — другое место (wiki-judge, маршрут которого выбирает админ): он не зависит от того,
@@ -132,15 +134,68 @@ public sealed class WikiNightlyService : BackgroundService
     // Доля InputTokenBudget, отданная разбору чатов (остальное — запас).
     private const double ChatBudgetShare = 0.7;
 
-    /// <summary>Выключатель мёртвого локального маршрута (дефект 2e13d45c, J-O1): три окна
-    /// разбора подряд, отказанных потому, что локальной модели нет (причина
-    /// WikiIngestService.ReasonLocalUnavailable, InputTokens 0 — модель не звалась), — это не
-    /// три несчастливых чата, а один и тот же отказ трижды: дальше по очереди будет то же
-    /// самое, и ночь 12.11 сожгла так 41 отказ на проход. Проход обрывается сразу, итог error
-    /// (дату не закрывает, следующий тик окна пробует снова — как любой error). Считаются подряд
-    /// идущие отказы маршрута места, а не конкретного движка: к ночи может добавиться второй
-    /// локальный исполнитель (J-W2).</summary>
+    /// <summary>Выключатель мёртвого исполнителя (дефект 2e13d45c, J-O1; по исполнителю — с W5):
+    /// три окна разбора подряд, отказанных этим исполнителем потому, что локальной модели нет
+    /// (причина WikiIngestService.ReasonLocalUnavailable, InputTokens 0 — модель не звалась), —
+    /// это не три несчастливых чата, а один и тот же отказ трижды: дальше по очереди у него
+    /// будет то же самое, и ночь 12.11 сожгла так 41 отказ на проход. Исполнитель выбывает до
+    /// конца прохода (ExecutorDownState): его слоты чатов больше не получают; если жив другой,
+    /// проход доигрывает очередь на нём и остаётся completed. Выбыли все — проход стоит, итог
+    /// error (дату не закрывает, следующий тик окна пробует снова — как любой error). Ряд
+    /// считается по исполнителю, а не по месту: к ночи может быть назначено несколько движков
+    /// (J-W2). Отказ «слот движка занят» в ряд не входит: движок занят, а не мёртв, —
+    /// см. IsLocalDownRejection.</summary>
     private const int LocalDownBreakAfter = 3;
+
+    /// <summary>Путь без названного исполнителя (пустой список стора — прежний маршрут места):
+    /// в состоянии отказов (W5) он занимает этот ключ (пустая строка). «Исполнителей» там ровно
+    /// один, поэтому счёт по нему совпадает с прежним общим рядом прохода (2e13d45c), а его
+    /// выбывание даёт тот же итог error.</summary>
+    private const string RouteKey = "";
+
+    /// <summary>Состояние отказов «модель недоступна» по исполнителям прохода (W5): ряд
+    /// подряд идущих отказов ОДНОГО исполнителя и его выбывание до конца прохода. Ключ — имя
+    /// движка из списка стора, RouteKey — путь без названного исполнителя. Живёт на
+    /// проходе и меняется только его координатором/драйвером: исходы слотов обрабатываются
+    /// одним потоком координатора, слоты к состоянию не приписываются. Счётчик ряда — по
+    /// исполнителю, как прежний выключатель прохода: другой исход того же исполнителя обнуляет
+    /// его ряд; отказ чужого исполнителя его не трогает вовсе.</summary>
+    private sealed class ExecutorDownState
+    {
+        private static string Key(string? engine) => engine ?? RouteKey;
+
+        private readonly Dictionary<string, int> _streak = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, DateTimeOffset> _withdrawn = new(StringComparer.Ordinal);
+
+        public bool IsWithdrawn(string? engine) => _withdrawn.ContainsKey(Key(engine));
+
+        /// <summary>Зарегистрировать отказ «модель недоступна» этого исполнителя. true — ряд
+        /// дошёл до LocalDownBreakAfter и исполнитель выбыл до конца прохода (время запомнено
+        /// для журнала и для разбивки итога, W6a).</summary>
+        public bool NoteRejection(string? engine, DateTimeOffset at)
+        {
+            var k = Key(engine);
+            var n = (_streak.TryGetValue(k, out var cur) ? cur : 0) + 1;
+            _streak[k] = n;
+            if (n < LocalDownBreakAfter) return false;
+            _withdrawn[k] = at;
+            return true;
+        }
+
+        /// <summary>Состоявшийся (не этим отказом) исход исполнителя обнуляет его ряд — ряд
+        /// считается подряд идущими, а не всей ночью (тот же смысл, что у 2e13d45c).</summary>
+        public void NoteLive(string? engine) => _streak[Key(engine)] = 0;
+
+        public bool AnyLive(IReadOnlyList<LocalEngineExecutor> executors)
+        {
+            if (executors.Count == 0) return !IsWithdrawn(null);
+            foreach (var e in executors)
+                if (!IsWithdrawn(e.Engine)) return true;
+            return false;
+        }
+
+        public IReadOnlyDictionary<string, DateTimeOffset> Withdrawn => _withdrawn;
+    }
 
     /// <summary>Итог прохода — то, что лежит в keeper/nightly-last.json. Date — дата начала окна
     /// (yyyy-MM-dd); Selected — чатов, прошедших отбор и дельту; Analyzed — разборов, вернувших
@@ -645,9 +700,9 @@ public sealed class WikiNightlyService : BackgroundService
     {
         int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0, rejected = 0;
         string? firstRejectReason = null;
-        // Ряд отказов локального маршрута подряд (выключатель 2e13d45c, см. LocalDownBreakAfter):
-        // любой иной исход разбора ряд обнуляет.
-        var localDownStreak = 0;
+        // Ряд отказов «модель недоступна» по исполнителям (W5, см. ExecutorDownState): ряд свой
+        // у каждого исполнителя; другой исход того же исполнителя обнуляет его ряд.
+        var down = new ExecutorDownState();
         var dropped = 0;
         string? firstDropReason = null;
         // Отказы ступени 2 (хвост ревью R-J-W0): раньше их не было ни в журнале, ни в итоге.
@@ -682,11 +737,16 @@ public sealed class WikiNightlyService : BackgroundService
             // ночи — перед каждой выдачей; лимиты раздела, дельта, ступень 2 и бюджет чата —
             // как были. «Ready»: чат выбран, его оценка зарезервирована в бюджете и счётчик
             // раздела поднят — до выдачи, оценка чата в полёте учитывается против следующей.
-            async Task<Prep> PrepareAsync(Candidate c)
+            // Repeat — чат уже был выбран и его оценка уже зарезерирована его первой выдачей
+            // (повтор мёртвого исполнителя, W5 п.3): проверка перед выдачей остаётся полной,
+            // но selected, счётчик раздела и reserve бюджета пропускаются — иначе один чат
+            // резерировал бы свою оценку несколько раз за проход. Дельта проверяется и для
+            // повтора: её отсутствие означало бы вызов с пустой дельтой.
+            async Task<Prep> PrepareAsync(Candidate c, bool repeat = false)
             {
                 ct.ThrowIfCancellationRequested();
                 // Лимит пакетов за ночь: при остатке 0 чат не начинается.
-                var (stop, cfgNow) = CheckStop(ownerId, root, date, manual);
+                var (stop, cfgNow) = CheckStop(ownerId, root, date, manual, down);
                 if (stop is not null) return new Prep(false, stop, null, 0);
                 if (packagesNight >= cfgNow!.MaxPackagesPerNight) return new Prep(false, OutcomeBudget, null, 0);
 
@@ -740,7 +800,7 @@ public sealed class WikiNightlyService : BackgroundService
                     }
                 }
 
-                selected++;
+                if (!repeat) selected++;
                 var chatEst = (delta.Sum(l => (long)l.Text.Length) + 3) / 4;
                 if (chatEst > chatCap)
                 {
@@ -748,18 +808,23 @@ public sealed class WikiNightlyService : BackgroundService
                         ownerId, c.Session.Id, chatEst);
                     return Prep.Skip;
                 }
-                if (est + chatEst > chatCap) return new Prep(false, OutcomeBudget, null, 0);
-
-                chatsBySection[c.Home] = chatsBySection.GetValueOrDefault(c.Home) + 1;
-                est += chatEst;
+                if (!repeat)
+                {
+                    if (est + chatEst > chatCap) return new Prep(false, OutcomeBudget, null, 0);
+                    chatsBySection[c.Home] = chatsBySection.GetValueOrDefault(c.Home) + 1;
+                    est += chatEst;
+                }
                 return new Prep(true, null, cfgNow, chatEst);
             }
 
-            // Обработка одного результата разбора — общая у обоих драйверов: счётчики, выключатель
-            // мёртвого локального ряда, лимит пакетов ночи. Возвращает причину остановить ночь
-            // (null — продолжать). Исключение разбора сюда не доходит: его обрабатывает вызывающий
-            // (курсор не двигает, в analyzed не считает) — как прежний catch.
-            string? ApplyResult(Candidate c, WikiSettingsStore.NightlyConfig cfgNow, WikiChatIngestService.ChatResult r)
+            // Обработка одного результата разбора — общая у обоих драйверов: счётчики, ряд отказов
+            // по исполнителю, лимит пакетов ночи. Engine — исполнитель, на котором шёл этот разбор
+            // (null — путь без названного исполнителя): по нему считается ряд и его выбывание.
+            // Возвращает причину остановить ночь (null — продолжать). Исключение разбора сюда не
+            // доходит: его обрабатывает вызывающий (курсор не двигает, в analyzed не считает) —
+            // как прежний catch.
+            string? ApplyResult(Candidate c, string? engine, WikiSettingsStore.NightlyConfig cfgNow,
+                WikiChatIngestService.ChatResult r)
             {
                 analyzed++;
                 // Фактический вход (WC-4b): сумма по всем разобранным чатам независимо от исхода —
@@ -775,24 +840,23 @@ public sealed class WikiNightlyService : BackgroundService
                     rejected++;
                     firstRejectReason ??= r.Reason;
                     LogInfoSafe("Ночной разбор {Owner}: чат {Chat} отказан: {Reason}", ownerId, c.Session.Id, r.Reason);
-                    // Выключатель мёртвого локального маршрута (2e13d45c, см. LocalDownBreakAfter):
-                    // продолжать не за чем — каждый следующий чат дал бы тот же отказ с тем же
-                    // нулевым входом. Итог — error с причиной первого из ряда (firstRejectReason
-                    // уже назван); error дату не закрывает, следующий тик окна пробует снова.
-                    // Ряд пока общий на весь проход: его переделывает W5 (W4a2).
-                    localDownStreak = IsLocalDownRejection(r) ? localDownStreak + 1 : 0;
-                    if (localDownStreak >= LocalDownBreakAfter)
-                    {
-                        LogInfoSafe("Ночной разбор {Owner}: {Reason} — {Streak} отказов подряд, проход остановлен",
-                            ownerId, WikiIngestService.ReasonLocalUnavailable, localDownStreak);
-                        return OutcomeError;
-                    }
+                    // Выключатель мёртвого исполнителя (W5, см. ExecutorDownState): здесь только
+                    // отметка выбывания и её строка. Продолжать ли проход, решает «есть ли живой
+                    // исполнитель» в CheckStop перед следующей выдачей: при мёртвом маршруте места
+                    // (путь без исполнителей) это ровно тот же итог, что был у 2e13d45c —
+                    // следующая выдача не состоится и проход вернёт error (дату он не закрывает,
+                    // следующий тик окна пробует снова), при живом другом — очередь доиграет на
+                    // нём. Причина первого отказа (firstRejectReason) названа выше — она и есть
+                    // то, чем объяснится итог.
+                    if (IsLocalDownRejection(r) && down.NoteRejection(engine, _clock()))
+                        LogInfoSafe("Ночной разбор {Owner}: {Engine}: {Reason} — {Streak} отказов подряд, исполнитель выбыл до конца прохода",
+                            ownerId, EngineName(engine), WikiIngestService.ReasonLocalUnavailable, LocalDownBreakAfter);
                 }
                 else
                 {
-                    // Любой несостоявшийся этим отказом разбор ряд обнуляет: выключатель считает
-                    // подряд идущие, а не всего ночи.
-                    localDownStreak = 0;
+                    // Любой несостоявшийся этим отказом разбор ряд своего исполнителя обнуляет:
+                    // выключатель считает подряд идущие, а не всего ночи.
+                    down.NoteLive(engine);
                 }
                 var made = r.Outcome switch
                 {
@@ -821,11 +885,14 @@ public sealed class WikiNightlyService : BackgroundService
                 return null;
             }
 
-            // ── драйвер прохода (W4a2) ────────────────────────────────────────────
             // Исполнители места — список стора админа через шов (уже урезанный до maxTotal,
-            // см. CheapTextRunner.LocalExecutorsFor). Пустой список — прежний последовательный
-            // проход с engine=null: ночь не параллельна, исполнитель места не назван (как до фичи).
+            // см. CheapTextRunner.LocalExecutorsFor). Он читается ДО подготовки чата: тот же
+            // список смотрит CheckStop, когда решает «есть ли живой исполнитель» (W5, п.4).
             var executors = _llm.LocalExecutorsFor(LocalActionCatalog.WikiNightly);
+
+            // ── драйвер прохода (W4a2) ────────────────────────────────────────────
+            // Пустой список — прежний последовательный проход с engine=null: ночь не параллельна,
+            // исполнитель места не назван (как до фичи); его ряд отказов — под ключом RouteKey.
             if (executors.Count == 0)
             {
                 foreach (var c in queue)
@@ -842,13 +909,13 @@ public sealed class WikiNightlyService : BackgroundService
                         LogSafe(ex, "Ночной разбор {Owner}: чат {Chat} не разобран", ownerId, c.Session.Id);
                         continue;
                     }
-                    var stopAfter = ApplyResult(c, prep.Cfg!, r);
+                    var stopAfter = ApplyResult(c, null, prep.Cfg!, r);
                     if (stopAfter is not null) { outcome = stopAfter; break; }
                 }
             }
             else
             {
-                outcome = await RunCoordinatedAsync(ownerId, queue, executors, PrepareAsync, ApplyResult, ct);
+                outcome = await RunCoordinatedAsync(ownerId, queue, executors, down, PrepareAsync, ApplyResult, ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -913,41 +980,92 @@ public sealed class WikiNightlyService : BackgroundService
     // (тот же смысл, что прежний catch): координатор и соседние слоты живы; отмена хоста —
     // конец прохода. Исключение prepare/apply — отказ прохода (его ловит общий catch RunPassAsync),
     // но и на этом выходе ни один слот не остаётся в полёте: их ожидание — в finally координатора,
-    // иначе их _analyze шёл бы рядом с точкой (а) судьи или со следующим проходом. Готовность
-    // движка (IsLocalEngineReady) здесь не проверяется: выбывание и повтор — W5.
+    // иначе их _analyze шёл бы рядом с точкой (а) судьи или со следующим проходом. Отказ
+    // исполнителя (W5): ряд «модель недоступна» считается по исполнителю (down, п.1), перед
+    // выдачей — проба готовности (п.2), чат, отказанный без применённого окна, возвращается в
+    // голову очереди не больше одного раза за проход (п.3). Счётные слова и отметка выбывания
+    // живут только здесь: исходы слотов обрабатывает один поток координатора.
     private async Task<string> RunCoordinatedAsync(
         string ownerId, List<Candidate> queue,
-        IReadOnlyList<LocalEngineExecutor> executors,
-        Func<Candidate, Task<Prep>> prepare,
-        Func<Candidate, WikiSettingsStore.NightlyConfig, WikiChatIngestService.ChatResult, string?> apply,
+        IReadOnlyList<LocalEngineExecutor> executors, ExecutorDownState down,
+        Func<Candidate, bool, Task<Prep>> prepare,
+        Func<Candidate, string?, WikiSettingsStore.NightlyConfig, WikiChatIngestService.ChatResult, string?> apply,
         CancellationToken ct)
     {
         var remaining = new List<Candidate>(queue);
         var busy = new Dictionary<string, int>(StringComparer.Ordinal); // раздел → чаты в полёте
         var engineBusy = new Dictionary<string, int>(StringComparer.Ordinal); // исполнитель → занятые слоты
+        // Чаты, которых этот проход уже ставил в голову очереди (п.3: не больше одного повтора),
+        // и исполнитель, который их отказал: повторному чату его прежний исполнитель не отдаётся —
+        // иначе мёртвый движок, ещё не выбывший (ряд не дошёл до лимита), взял бы его снова и
+        // «добрали остальные» не случилось бы.
+        var retried = new Dictionary<string, string>(StringComparer.Ordinal);
         var inflight = new List<Task<SlotOutcome>>();
         string? stop = null;
+        // Сколько чатов подряд этого обхода очереди некому отдать (см. сдвиг в конец очереди):
+        // до полного обхода координатор пробует следующего чата, дальше — ждёт завершения слотов.
+        var stalled = 0;
 
         try
         {
             while (true)
             {
-                // Выдача, пока есть свободный слот, нет упора и есть чат со свободным разделом.
+                stalled = 0; // каждый обход очереди — заново: прошлый счёт чужого обхода не в счёт
+                // Выдача, пока есть исполнитель, которому можно дать чат, нет упора и есть чат со
+                // свободным разделом.
                 while (stop is null && remaining.Count > 0)
                 {
-                    string? engine = null;
-                    foreach (var e in executors)
-                        if (engineBusy.GetValueOrDefault(e.Engine) < e.Parallel) { engine = e.Engine; break; }
-                    if (engine is null) break; // все слоты заняты — ждать завершения
-
+                    // Кому и что дать: сначала чат — первый из очереди, чей раздел сейчас не в
+                    // работе (сродство), затем исполнитель, которому этого чата можно дать ПРЯМО
+                    // СЕЙЧАС (W5, п.1–2): его слот свободен, он не выбыл до конца прохода, он
+                    // готов принять работу (проба — до того, как чат взят из очереди и
+                    // подготовлен: неготовый пропускается, чата не сжигает и сам не выбывает) и
+                    // он не отказал этот чат прежде (повтор берёт другой). Порядок пары тот же,
+                    // что был: любой свободный исполнитель × первый чат со свободным разделом.
                     var idx = -1;
                     for (var i = 0; i < remaining.Count; i++)
                         if (!busy.ContainsKey(remaining[i].Home)) { idx = i; break; }
                     if (idx < 0) break; // все оставшиеся чаты — занятых разделов: ждать завершения
 
                     var c = remaining[idx];
-                    remaining.RemoveAt(idx); // чат выдаётся не более одного раза за проход
-                    var prep = await prepare(c);
+                    string? engine = null;
+                    var anyReadyFree = false; // живой исполнитель со свободным слотом есть
+                    foreach (var e in executors)
+                    {
+                        if (engineBusy.GetValueOrDefault(e.Engine) >= e.Parallel) continue;
+                        if (down.IsWithdrawn(e.Engine)) continue;
+                        if (!await _llm.IsLocalEngineReadyAsync(e.Engine, ct).ConfigureAwait(false)) continue;
+                        anyReadyFree = true;
+                        if (retried.TryGetValue(c.Session.Id, out var failedBy) && failedBy == e.Engine) continue;
+                        engine = e.Engine;
+                        break;
+                    }
+                    if (engine is null)
+                    {
+                        // Ни одного живого и готового — и в полёте никого: продолжать нечем.
+                        // Тот же итог, что «выбыли все» в CheckStop (п.4): error, дату он не
+                        // закрывает, следующий тик окна пробует снова.
+                        if (inflight.Count == 0 && !anyReadyFree)
+                        {
+                            LogInfoSafe("Ночной разбор {Owner}: из {Total} исполнителей живых {Live}, ни один не готов принять работу, в полёте никого — проход остановлен",
+                                ownerId, executors.Count, executors.Count(e => !down.IsWithdrawn(e.Engine)));
+                            return OutcomeError;
+                        }
+                        // Этому чату сейчас некому (его исполнитель занят, или этот чат ему уже
+                        // отказан и другого нет): он не держит очередь — уходит в её конец, а
+                        // координатор пробует следующего. Слот освободится, и к нему вернутся; ряда
+                        // исполнителя это не касается — до разбора чат не дошёл.
+                        if (++stalled >= remaining.Count) break; // ни одному оставшемуся некому — ждать завершения
+                        remaining.RemoveAt(idx);
+                        remaining.Add(c);
+                        continue;
+                    }
+
+                    stalled = 0;
+                    remaining.RemoveAt(idx);
+                    // Чат вне очереди только если его вернул сюда координатор как повтор (п.3) —
+                    // пометка retried и есть признак того, что это вторая выдача того же чата.
+                    var prep = await prepare(c, retried.ContainsKey(c.Session.Id));
                     if (prep.Stop is not null) { stop = prep.Stop; break; }
                     if (!prep.Ready) continue; // чат пропущен — слот свободен, к следующему
 
@@ -977,7 +1095,23 @@ public sealed class WikiNightlyService : BackgroundService
                     LogSafe(o.Error, "Ночной разбор {Owner}: чат {Chat} не разобран", ownerId, o.Chat.Session.Id);
                     continue;
                 }
-                var stopAfter = apply(o.Chat, o.Cfg, o.Result);
+                var stopAfter = apply(o.Chat, o.Engine, o.Cfg, o.Result);
+                // Отказ «модель недоступна» без единого применённого окна (тот же признак, что у
+                // выключателя — IsLocalDownRejection): чат возвращается в голову очереди ОДИН раз
+                // на проход (п.3) — его добирает другой исполнитель. Курсор чата не двигался (его
+                // пишет только AnalyzeAsync при успехе), ряд отказов не рос: чат законен снова.
+                // Отказ плана (плохой JSON, InputTokens > 0) и частичный исход (что-то применено)
+                // не повторяются: иначе чат пошёл бы по кругу, а его остаток и так ждёт следующей
+                // ночи. Повтор не резервирует бюджет второй раз: оценка чата уже зарезерирована
+                // его первой выдачей и остаётся зарезерированной.
+                if (stopAfter is null && IsLocalDownRejection(o.Result) && o.Result.PackageIds is not { Count: > 0 }
+                    && !retried.ContainsKey(o.Chat.Session.Id))
+                {
+                    retried[o.Chat.Session.Id] = o.Engine;
+                    remaining.Insert(0, o.Chat);
+                    LogInfoSafe("Ночной разбор {Owner}: чат {Chat} отказан {Engine}, возвращён в голову очереди (первый повтор)",
+                        ownerId, o.Chat.Session.Id, EngineName(o.Engine));
+                }
                 if (stopAfter is not null) stop ??= stopAfter; // первый названный упор держит итог
             }
         }
@@ -1011,20 +1145,32 @@ public sealed class WikiNightlyService : BackgroundService
         }
     }
 
-    /// <summary>Отказ окна по мёртвому локальному маршруту (2e13d45c): причина отказа несёт
-    /// формулировку WikiIngestService.ReasonLocalUnavailable, а нулевой вход подтверждает, что
-    /// модель не звалась ни разу. Проверка по подстроке: до ночи причина проходит через обёртки
-    /// («разбор окна m1-m8 не удался: синтез: …»). Имени движка нет: их может быть несколько
-    /// (J-W2), выключатель относится к маршруту места.</summary>
+    /// <summary>Отказ «локальной модели нет» (2e13d45c): причина несёт формулировку
+    /// WikiIngestService.ReasonLocalUnavailable, а нулевой вход подтверждает, что модель не
+    /// звалась ни разу. Проверка по подстроке: до ночи причина проходит через обёртки
+    /// («разбор окна m1-m8 не удался: синтез: …»). Нулевой вход — обязательная половина
+    /// признака: отказ, в котором модель отвечала (плохой план, пустой ответ, часть окон уже
+    /// разобрана), даёт InputTokens больше нуля и по нулевому входу отсечён — ряд по нему не
+    /// растёт, чат не повторяется, исполнитель не выбывает. Отказ «слот движка занят» (LocalEngineSlotRefusal
+    /// в тексте причины, WN-4) — тоже нет: движок занят, а не мёртв, на это есть проба
+    /// готовности (W5, п.2); в ряд выбывания он не входит — по формулировке задачи.</summary>
     private static bool IsLocalDownRejection(WikiChatIngestService.ChatResult r) =>
         r.InputTokens == 0 && r.Reason?.Contains(WikiIngestService.ReasonLocalUnavailable, StringComparison.Ordinal) == true;
 
+    /// <summary>Имя исполнителя для журнала и итога: имя движка из списка стора; путь без
+    /// названного исполнителя называется маршрутом места (имени движка там нет, J-W2).</summary>
+    private static string EngineName(string? engine) =>
+        string.IsNullOrEmpty(engine) ? "маршрут места" : engine;
+
     // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось
-    // (window_closed), модель недоступна (error — облако молча не подставляется), упор в лимит
-    // открытых пакетов (open_limit). Настройки перечитываются каждый раз: PUT посреди ночи виден
-    // следующему чату. При ручном проходе (WN-5) окно не проверяется вовсе: человек запустил
-    // разбор вне окна — оно ему не преграда; флаг, тумблер, маршрут и open_limit — как у тика.
-    private (string? Stop, WikiSettingsStore.NightlyConfig? Cfg) CheckStop(string ownerId, string root, DateOnly date, bool manual)
+    // (window_closed), модель недоступна (error — облако молча не подставляется), не осталось
+    // живого исполнителя (error, W5 п.4: все выбыли — дату не закрывает, следующий тик пробует
+    // снова), упор в лимит открытых пакетов (open_limit). Настройки перечитываются каждый раз:
+    // PUT посреди ночи виден следующему чату. При ручном проходе (WN-5) окно не проверяется
+    // вовсе: человек запустил разбор вне окна — оно ему не преграда; флаг, тумблер, маршрут,
+    // живые исполнители и open_limit — как у тика.
+    private (string? Stop, WikiSettingsStore.NightlyConfig? Cfg) CheckStop(
+        string ownerId, string root, DateOnly date, bool manual, ExecutorDownState down)
     {
         if (_flags?.IsEnabled(ownerId, FeatureFlagKeys.LlmWiki) != true) return (OutcomeDisabledMidway, null);
         var cfg = WikiSettingsStore.Read(root).Settings.NightlyOrDefaults();
@@ -1036,6 +1182,16 @@ public sealed class WikiNightlyService : BackgroundService
                 || WindowDate(now, cfg.WindowStartHour, cfg.WindowEndHour) != date) return (OutcomeWindowClosed, null);
         }
         if (!_llm.HasRoute(LocalActionCatalog.WikiNightly)) return (OutcomeError, null);
+        // Пустой список — путь без названных исполнителей: там «живой исполнитель» — сам маршрут
+        // места, и его выбывание даёт прежний итог 2e13d45c. Список непустой — жив хоть один из
+        // назначенных движков (не выбыл до конца прохода).
+        var executors = _llm.LocalExecutorsFor(LocalActionCatalog.WikiNightly);
+        if (!down.AnyLive(executors))
+        {
+            LogInfoSafe("Ночной разбор {Owner}: живых исполнителей не осталось ({Withdrawn} выбыло), проход остановлен",
+                ownerId, down.Withdrawn.Count);
+            return (OutcomeError, null);
+        }
         if (WikiPackageStore.CountOpen(root) >= WikiPackage.MaxOpenPackages) return (OutcomeOpenLimit, null);
         return (null, cfg);
     }

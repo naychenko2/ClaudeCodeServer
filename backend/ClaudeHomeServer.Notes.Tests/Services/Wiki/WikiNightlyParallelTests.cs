@@ -25,6 +25,8 @@ public class WikiNightlyParallelTests : IDisposable
     private const string User = "u1";
     private const string SectionA = "projects/p1";
     private const string SectionB = "projects/p2";
+    private const string SectionC = "projects/p3";
+    private const string SectionD = "projects/p4";
 
     private readonly string _dir;
     private readonly IConfiguration _config;
@@ -581,6 +583,216 @@ public class WikiNightlyParallelTests : IDisposable
         WikiPackageStore.Transition(Root(), pkg.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
     }
 
+    // ─── отказ исполнителя (W5): выбывание, проба готовности, повтор чата ──────────
+    //
+    // Ряд отказов «модель недоступна» считается по исполнителю: три его отказа выводят его из
+    // прохода, живой добивает очередь — в том числе чат мёртвого (один повтор на чат, другому
+    // исполнителю). Неготовый исполнитель чатов не получает и не выбывает. Выбыли или не готовы
+    // все — проход стоит. Границы ряда («подряд идущие», обнуление состоявшимся разбором)
+    // держат тесты последовательного пути (WikiNightlyServiceTests) — здесь только то, что
+    // появляется вместе с исполнителями.
+
+    /// <summary>Фейк разбора по исполнителям: namedDown — движок, который не отвечает (тот же
+    /// признак отказа, что у IsLocalDownRejection: формулировка маршрута + InputTokens 0).
+    /// Всё возвращается сразу: порядок здесь держат очередь и слоты, а не гейты полёта — для
+    /// них тесты выше.</summary>
+    private Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> DownFor(
+        params string[] namedDown) =>
+        DownForChat(null, namedDown);
+
+    /// <summary>То же, но downChats добавляет пары «chat|engine», которые отказывают и для
+    /// живого движка: так видно, что повтор чата — один, а не «пока хоть один движок жив».</summary>
+    private Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> DownForChat(
+        string[]? downChats, params string[] namedDown) =>
+        (owner, chat, engine, ct) =>
+        {
+            lock (_calls) _calls.Add((chat, engine));
+            var down = engine is not null
+                && (Array.IndexOf(namedDown, engine) >= 0
+                    || Array.IndexOf(downChats ?? [], chat + "|" + engine) >= 0);
+            return Task.FromResult(down
+                ? new WikiChatIngestService.ChatResult(
+                    WikiChatIngestService.OutcomeRejected,
+                    "разбор окна m1-m8 не удался: синтез: " + WikiIngestService.ReasonLocalUnavailable, [],
+                    InputTokens: 0)
+                : new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []));
+        };
+
+    [Fact]
+    public async Task DeadExecutor_ChatRetriedOnOther_Once()
+    {
+        // Три исполнителя, «local» мёртв. Его чат c1 возвращается в голову очереди и отдан
+        // другому — ровно один раз: вторая попытка (gemma, тоже отказала c1) расходует лимит, и
+        // третий живой исполнитель c1 уже не берёт. Чат c2 при этом добирается нормально: лимит
+        // одного чата не мешает остальным. Мутации: «повтор без лимита» (retried не спрашивается)
+        // → c1 зовётся трижды, на всех трёх движках (первый assert красный); «не возвращать чат
+        // в очередь» → c1 на другом не идёт вовсе (второй assert красный). Selected — три чата,
+        // а не четыре попытки: повтор не резервирует оценку чата второй раз.
+        Configure();
+        _llm.Executors = [
+            new LocalEngineExecutor("local", "local", 1),
+            new LocalEngineExecutor("gemma", "Gemma", 1),
+            new LocalEngineExecutor("llama", "Llama", 1),
+        ];
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+        AddChat("c3", SectionC, ageMinutes: 30);
+
+        await Tick(Sut(DownForChat(["c1|gemma"], "local")));
+
+        _calls.Count(c => c.Chat == "c1").Should().Be(2, "повтор чата — один на проход, даже когда живой движок ещё есть");
+        _calls.Select(c => c.Engine).Should().Contain(new[] { "gemma" }, "чат мёртвого добрал другой");
+        _calls.Should().NotContain(c => c.Chat == "c1" && c.Engine == "llama",
+            "после израсходованного повтора чат остаётся за этой ночью, а не ходит по всем движкам");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "живые исполнители доиграли очередь");
+        last.Selected.Should().Be(3, "повтор — не новый выбранный чат и не вторая резервация его оценки");
+        last.Rejected.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task PlanRejection_NotRetried()
+    {
+        // Отказ с текстом мёртвого движка, но с nonzero входом: модель в ранних окнах чата
+        // отвечала (плохой план, пустой ответ — что угодно), и только последнее окно упёрлось в
+        // мёртвый движок. Такой чат не повторяется: он уже частично разобран, его остаток ждёт
+        // следующей ночи, а повтор гонял бы его по кругу. По нему и ряд исполнителя не растёт.
+        // Мутация «IsLocalDownRejection без проверки InputTokens == 0» → c1 возвращается в
+        // очередь и добран живым gemma (первый assert красный).
+        Configure();
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1), new LocalEngineExecutor("gemma", "Gemma", 1)];
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+
+        await Tick(Sut((owner, chat, engine, ct) =>
+        {
+            lock (_calls) _calls.Add((chat, engine));
+            var down = engine == "local";
+            return Task.FromResult(down
+                ? new WikiChatIngestService.ChatResult(
+                    WikiChatIngestService.OutcomeRejected,
+                    "разбор окна m1-m8 не удался: синтез: " + WikiIngestService.ReasonLocalUnavailable, [],
+                    InputTokens: 500) // модель отвечала: признак «ни одного вызова» здесь не выполнен
+                : new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []));
+        }));
+
+        _calls.Select(c => c.Chat).Should().Equal(new[] { "c1", "c2" },
+            "каждый чат — одна попытка: отказ состоявшегося разбора не повторяется");
+        _calls.Count(c => c.Chat == "c1").Should().Be(1, "чаты частично разобранного отказа не возвращаются в очередь");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "ряд по таким отказам не растёт: движок не признан мёртвым");
+        last.Analyzed.Should().Be(2);
+        last.Rejected.Should().Be(1);
+        last.InputTokens.Should().Be(500, "понесённый вход отказа не отменяет");
+    }
+
+    [Fact]
+    public async Task NotReady_SkippedNotWithdrawn()
+    {
+        // «local» не готов (проба отказывает): он не получает чатов и при этом не сжигает их
+        // отказом и не выбывает — их берёт готовый «gemma». Мутация «негативная проба = отказ
+        // чата» → c2 не выходит вовсе и ряд local растёт (второй assert красный); «негативная
+        // проба = выбывание» или «неготового всё равно дать» → c2 идёт на local (первый assert
+        // красный).
+        Configure();
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1), new LocalEngineExecutor("gemma", "Gemma", 1)];
+        _llm.ReadyEngines = new HashSet<string>(StringComparer.Ordinal) { "gemma" };
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+        var g1 = NewGate();
+        var sut = Sut(async (owner, chat, engine, ct) =>
+        {
+            lock (_calls) _calls.Add((chat, engine));
+            EnteredOf(chat).TrySetResult();
+            if (chat == "c1") await g1.Task.ConfigureAwait(false);
+            return new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []);
+        });
+
+        var tick = Tick(sut);
+        await GateOpened(EnteredOf("c1")); // c1 держат в полёте: пока он в нём, c2 не выходит
+        _calls.Select(c => c.Chat).Should().Equal(new[] { "c1" });
+        _llm.ReadyChecks.Should().Contain("local", "неготового спрашивают и пропускают");
+
+        g1.SetResult();
+        await tick;
+
+        _calls.Select(c => c.Chat).Should().Equal("c1", "c2");
+        _calls.Select(c => c.Engine).Should().Equal("gemma", "gemma");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+        last.Analyzed.Should().Be(2);
+        last.Rejected.Should().Be(0, "неготовый исполнитель не сжегла ни одного чата");
+    }
+
+    [Fact]
+    public async Task AllDead_Error()
+    {
+        // Ни один исполнитель не готов (никто не звался, ни одного чата не сожжено) и в полёте
+        // никого: продолжать нечем — итог error, дату он не закрывает. Мутация «дать всё равно
+        // неготовому» → error нет, чаты ушли бы в несуществующий движок (второй assert
+        // красный); «пропустить проверку» → то же.
+        Configure();
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1), new LocalEngineExecutor("gemma", "Gemma", 1)];
+        _llm.ReadyEngines = new HashSet<string>(StringComparer.Ordinal); // ни один не готов
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+
+        await Tick(Sut(DownFor()));
+
+        _calls.Should().BeEmpty("ни один вызов не состоялся: ни одного исполнителя не было готово");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeError, "никого живого и готового — ночь не удалась");
+        last.Selected.Should().Be(0);
+        last.Analyzed.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ThreeRejections_ExecutorWithdraws_PassFinishesOnLive()
+    {
+        // Три отказа «модель недоступна» подряд у «local» — он выбыл до конца прохода: дальше ни
+        // одного его вызова, очередь доиграна на «gemma», итог completed. Мутация «не помнить
+        // выбывание» → local зовётся и дальше (счёт его вызовов красный); «ряд по месту, а не по
+        // исполнителю» → local выбывает на первом же отказе c1, отданном gemma (красный).
+        Configure();
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1), new LocalEngineExecutor("gemma", "Gemma", 1)];
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+        AddChat("c3", SectionC, ageMinutes: 30);
+        AddChat("c4", SectionD, ageMinutes: 40);
+        var g2 = NewGate();
+        var sut = Sut(async (owner, chat, engine, ct) =>
+        {
+            lock (_calls) _calls.Add((chat, engine));
+            EnteredOf(chat).TrySetResult();
+            var dead = engine == "local";
+            if (chat == "c2") await g2.Task.ConfigureAwait(false); // gemma держит свой чат: новые берутся на local
+            return dead
+                ? new WikiChatIngestService.ChatResult(
+                    WikiChatIngestService.OutcomeRejected,
+                    "разбор окна m1-m8 не удался: синтез: " + WikiIngestService.ReasonLocalUnavailable, [],
+                    InputTokens: 0)
+                : new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []);
+        });
+
+        var tick = Tick(sut);
+        // Пока gemma держит свой чат, очередь идёт на свободный local: он успевает отказать
+        // c1, c3 и c4 — три отказа подряд. Гейт открывают после третьего: до этого момента
+        // проходу ждать нечего, и он честно стоит на живом слоте.
+        await GateOpened(EnteredOf("c4"));
+        g2.SetResult();
+        await tick;
+
+        _calls.Count(c => c.Engine == "local").Should().Be(3,
+            "три отказа подряд — исполнитель выбыл: его слоты чатов больше не получают");
+        _calls.Count(c => c.Chat == "c1").Should().Be(2,
+            "повтор одного чата — один на проход: мёртвый раз, живой раз");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "живой исполнитель доиграл проход");
+        last.Selected.Should().Be(4);
+        last.Analyzed.Should().Be(7);
+        last.Rejected.Should().Be(3);
+    }
+
     // ─── подмены ─────────────────────────────────────────────────────────────
 
     private sealed class Llm : ICheapTextRunner
@@ -652,6 +864,19 @@ public class WikiNightlyParallelTests : IDisposable
 
         public IReadOnlyList<LocalEngineExecutor> LocalExecutorsFor(string actionKey) =>
             actionKey == LocalActionCatalog.WikiNightly ? Executors : [];
+
+        // Готовность движка (W5): null — готовы все (живой движок без ReadyUrl: «считаем
+        // готовым, решит сам вызов»); непустое — только названные, пустое — никто не готов.
+        // Проба вызывается перед каждой выдачей чата, поэтому её журнал нужен тесту:
+        // «неготового пропускают» проверяется тем, что его спросили и чата ему не дали.
+        public HashSet<string>? ReadyEngines;
+        public List<string> ReadyChecks { get; } = [];
+
+        public Task<bool> IsLocalEngineReadyAsync(string engine, CancellationToken ct = default)
+        {
+            lock (ReadyChecks) ReadyChecks.Add(engine);
+            return Task.FromResult(ReadyEngines is null || ReadyEngines.Contains(engine));
+        }
     }
 
     private sealed class Sessions : ISessionDirectory

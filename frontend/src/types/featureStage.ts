@@ -105,7 +105,63 @@ export interface StageScreen {
   // Вопросы человеку: сначала открытые, затем история (новые сверху); пусто — вопросов не было
   questions: StageQuestion[];
   // Сводка шапки этапа (B07): нужен только чат исполнителя; null/нет поля — кнопки «Чат исполнителя» нет
-  stageSummary?: { executorSessionId: string | null } | null;
+  stageSummary?: StageSummary | null;
+}
+
+// Сводка шапки этапа (B07, зеркало StageSummary из StageScreenService.cs). Поля сверх executorSessionId
+// опциональны: старые ответы и фикстуры несут только его — UI переживает отсутствие.
+export interface StageSummaryExecutor {
+  personaId: string;
+  name: string;
+  roleTitle: string | null;
+  modelLabel: string;
+  modelIsOwnCell: boolean;
+  silenceMinutes: number | null;
+  // notify | nudge | stop (политика простоя слепка)
+  silenceAction: string | null;
+}
+
+export interface StageSummaryKpi {
+  totalMinutes: number;
+  execMinutes: number;
+  reviewMinutes: number;
+  waitedHumanMinutes: number;
+  turns: number;
+  tokens: { input: number; output: number; cache: number } | null;
+  // журнал неполный (легаси): числа приблизительные, «≈»
+  approx: boolean;
+}
+
+export interface StageSummaryTask {
+  taskId: string;
+  stepRef: string | null;
+  title: string;
+  // todo | inProgress | waiting | done
+  state: string;
+  executor: { name: string } | null;
+  minutes: number | null;
+  // accepted | returned | null
+  verdict: string | null;
+  returns: number;
+}
+
+export interface StageSummaryParallel {
+  stageId: string;
+  title: string;
+  doneCount: number;
+  totalCount: number;
+  personaName: string | null;
+}
+
+export interface StageSummary {
+  executorSessionId: string | null;
+  executor?: StageSummaryExecutor | null;
+  templateName?: string | null;
+  templateVersion?: number;
+  returns?: number;
+  kpi?: StageSummaryKpi;
+  tasks?: StageSummaryTask[];
+  parallelNote?: StageSummaryParallel | null;
 }
 
 export interface StageAnswer {

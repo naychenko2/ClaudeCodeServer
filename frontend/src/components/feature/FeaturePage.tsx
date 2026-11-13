@@ -37,6 +37,7 @@ import { FeatureProcessGraphSection } from './FeatureProcessGraphSection';
 import { FeatureStageArea, resolveSelectedStage, stageTasksOf, type StageSelection } from './FeatureStageArea';
 import { FeatureStageScreen } from './FeatureStageScreen';
 import { stageNodeId } from './FeatureProcessGraphModel';
+import { nodeTitle } from './FeatureProcessGraph';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { runRouteKind } from './FeatureWorkflowConfirmModel';
 import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
@@ -409,7 +410,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
                     </div>
                   </div>
                 ) : (
-                  <FeatureStageArea run={okRun} selectedId={selectedStageId} isMobile={isMobile} onOpenTask={openActiveTask} onOpenStage={() => selectedStageId && setStageOpen({ featureId, id: selectedStageId })} />
+                  <FeatureStageArea run={okRun} selectedId={selectedStageId} isMobile={isMobile} onOpenTask={openActiveTask} onOpenStage={() => selectedStageId && setStageOpen({ featureId, id: selectedStageId })} onSelectStage={(id) => setStageSel({ featureId, id })} />
                 )}
               </div>
             ) : emptyGraph ? (
@@ -471,6 +472,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
       isMobile={isMobile}
       chrome={{
         featureTitle: title,
+        stageTitle: nodeTitle(openStageObj),
         onBack: closeStageScreen,
         onOpenChat: (sid) => { recordFeatureReturn(featureId, { kind: 'chat', id: sid }, title); void openChatById(sid); },
       }}

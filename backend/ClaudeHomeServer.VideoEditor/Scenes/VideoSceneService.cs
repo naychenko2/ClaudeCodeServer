@@ -124,8 +124,8 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
         return root is ScenesRoot or "music";
     }
 
-    // Кадры в настройках: image — с threadId и versionId, file — путь существующего файла проекта (у личной
-    // области файлов проекта нет); число вариантов и длительность в пределах
+    // Кадры в настройках: image — с threadId и versionId, file — путь существующего файла проекта или «Личного»
+    // (либо загруженный кадр рабочей папки у личной области); число вариантов и длительность в пределах
     public static Call? SettingsProblem(VideoEditScope scope, VideoSceneSettingsDto s)
     {
         if (s.Count is { } count && (count < 1 || count > VideoThreadStore.MaxCount))
@@ -142,14 +142,12 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
                 case FrameRef.KindImage when string.IsNullOrWhiteSpace(frame.ThreadId) || string.IsNullOrWhiteSpace(frame.VersionId):
                     return Call.Refuse(VideoEditorErrors.InvalidRequest, "У кадра из «Картинок» нужны нить и версия");
                 case FrameRef.KindFile:
-                    if (scope.IsPersonal || scope.Project is not { } project)
-                    {
-                        // Личный чат: только загруженный «С компьютера» кадр рабочей папки; наличие файла проверит съёмка
-                        if (!VideoEditWorkspace.IsFrameRef(frame.Path))
-                            return Call.Refuse(VideoEditorErrors.InvalidRequest,
-                                "У чата вне проекта нет файлов проекта: загрузите кадр «С компьютера»");
-                        break;
-                    }
+                    // Загруженный «С компьютера» кадр рабочей папки личного чата; наличие файла проверит съёмка
+                    if (scope.IsPersonal && VideoEditWorkspace.IsFrameRef(frame.Path)) break;
+                    // Без папки (личная область, «Личное» ещё не создано) файлов нет; иначе — файл проекта или «Личного»
+                    if (!scope.HasFolder || scope.Project is not { } project)
+                        return Call.Refuse(VideoEditorErrors.InvalidRequest,
+                            "У чата вне проекта нет файлов проекта: загрузите кадр «С компьютера»");
                     if (string.IsNullOrWhiteSpace(frame.Path)
                         || ClaudeHomeServer.Services.Media.ProjectLinkGuard.ResolveInside(project.RootPath, frame.Path) is not { } full
                         || !File.Exists(full))

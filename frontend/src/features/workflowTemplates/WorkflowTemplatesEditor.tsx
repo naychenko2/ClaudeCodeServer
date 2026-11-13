@@ -11,7 +11,7 @@
 // у полей этапов.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Plus, RotateCcw, Trash2, Workflow } from 'lucide-react';
+import { AlertTriangle, Info, Plus, RotateCcw, Trash2, Workflow } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import {
@@ -24,13 +24,15 @@ import { showToast } from '../../lib/toast';
 import { workflowTemplatesApi } from './api';
 import { stageErrors } from './workflowTemplateModel';
 import {
-  CONFLICT_MESSAGE, blankTemplate, normalizeForSave, showWriteButton, forkToProject, saveGuarded, templateSnapshot, splitEntries,
+  BUILTIN_DELETE_HINT, BUILTIN_NOTICE, blankTemplate, normalizeForSave, showWriteButton, forkToProject, saveGuarded,
+  templateSnapshot, splitEntries, entryMetaMap, toolbarSubtitle, conflictTitle, errorsHeading, errorSummaryItems,
+  discardChanges, saveAsNew, canSave as canSaveDraft,
   type SaveFailure,
 } from './workflowEditorLogic';
 import { WorkflowStageStrip } from './WorkflowStageStrip';
 import { WorkflowGraphPreview } from './WorkflowGraphPreview';
 import { normalizeStages, removeStageReconnect, renameStageId } from './workflowGraphModel';
-import type { WorkflowStage, WorkflowTemplate } from './types';
+import type { WorkflowEntryMeta, WorkflowStage, WorkflowTemplate } from './types';
 
 export interface WorkflowTemplatesEditorProps {
   // Нет — глобальная область, есть — проектная.
@@ -64,6 +66,11 @@ export function WorkflowTemplatesEditor({
   const [draft, setDraft] = useState<WorkflowTemplate | null>(null);
   const [sel, setSel] = useState<Selection | null>(null);
   const [baseSnap, setBaseSnap] = useState('');
+  // Последний сохранённый вид открытого шаблона — к нему возвращает «Отменить».
+  const [savedTpl, setSavedTpl] = useState<WorkflowTemplate | null>(null);
+  const [metas, setMetas] = useState<Record<string, WorkflowEntryMeta>>({});
+  // Версия на сервере при 409 — для «теперь это vN» и «Загрузить vN».
+  const [conflictVersion, setConflictVersion] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<SaveFailure | null>(null);
   const [confirm, setConfirm] = useState<'delete' | 'reset' | null>(null);
@@ -74,9 +81,12 @@ export function WorkflowTemplatesEditor({
   const formSeq = useRef(0);
   const busyRef = useRef(false);
 
-  const load = useCallback(async (): Promise<{ globals: WorkflowTemplate[]; locals: WorkflowTemplate[] }> => {
+  const load = useCallback(async (): Promise<{
+    globals: WorkflowTemplate[]; locals: WorkflowTemplate[]; metas: Record<string, WorkflowEntryMeta>;
+  }> => {
     // Один GET: с projectId сервер отдаёт глобальные плюс проектные, область — в entry.scope.
-    return splitEntries(await workflowTemplatesApi.listTemplates(projectId), !!projectId);
+    const entries = await workflowTemplatesApi.listTemplates(projectId);
+    return { ...splitEntries(entries, !!projectId), metas: entryMetaMap(entries) };
   }, [projectId]);
 
   useEffect(() => {
@@ -87,7 +97,7 @@ export function WorkflowTemplatesEditor({
     setDraft(null);
     setSel(null);
     load()
-      .then(r => { if (!cancelled) { setGlobals(r.globals); setLocals(r.locals); } })
+      .then(r => { if (!cancelled) { setGlobals(r.globals); setLocals(r.locals); setMetas(r.metas); } })
       .catch(e => { if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Не удалось загрузить шаблоны'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -98,14 +108,17 @@ export function WorkflowTemplatesEditor({
     setDraft(structuredClone(tpl));
     setSel({ scope, isNew });
     setBaseSnap(isNew ? '' : templateSnapshot(tpl));
+    setSavedTpl(isNew ? null : structuredClone(tpl));
     setFailure(null);
+    setConflictVersion(null);
   };
-  const close = () => { formSeq.current += 1; setDraft(null); setSel(null); setFailure(null); };
+  const close = () => { formSeq.current += 1; setDraft(null); setSel(null); setFailure(null); setConflictVersion(null); };
 
   // В проекте глобальные — только чтение; в глобальной области писать может только canWrite.
   const readOnly = !canWrite || (projectMode && sel?.scope === 'global');
   const dirty = !!draft && templateSnapshot(draft) !== baseSnap;
-  const canSave = !!draft && !readOnly && dirty && !busy && draft.name.trim() !== '';
+  const canSave = !!draft && !readOnly && dirty && !busy && draft.name.trim() !== '' && canSaveDraft(draft, failure);
+  const errorItems = draft && !readOnly ? errorSummaryItems(draft, failure) : [];
 
   // Подсказки модели + ответ валидатора — по ролям этапов (у полей, а не общей плашкой).
   const errorsByRole = useMemo(() => {
@@ -153,12 +166,29 @@ export function WorkflowTemplatesEditor({
         setDraft(structuredClone(res.saved));
         setSel({ scope, isNew: false });
         setBaseSnap(templateSnapshot(res.saved));
+        setSavedTpl(structuredClone(res.saved));
+        void load().then(r => setMetas(r.metas)).catch(() => undefined);
         showToast('Шаблоны процесса', 'Шаблон сохранён', 'success');
       }
       return;
     }
     // Отказ показываем, только если форма всё ещё та же; отказ по ушедшей форме не нужен.
-    if (formSeq.current === sentSeq) setFailure(res);
+    if (formSeq.current !== sentSeq) return;
+    setFailure(res);
+    if (res.kind === 'conflict') {
+      // Версию сервера узнаём перечитыванием списка; не вышло — текст без номера.
+      try {
+        const r = await load();
+        if (formSeq.current !== sentSeq) return;
+        const fresh = (scope === 'global' ? r.globals : r.locals).find(t => t.id === draft.id);
+        setConflictVersion(fresh?.version ?? null);
+      } catch { setConflictVersion(null); }
+    }
+  };
+
+  const handleSaveAsNew = () => {
+    if (!draft || !sel) return;
+    open(saveAsNew(draft), sel.scope, true);
   };
 
   const handleReload = async () => {
@@ -166,6 +196,7 @@ export function WorkflowTemplatesEditor({
       const r = await load();
       setGlobals(r.globals);
       setLocals(r.locals);
+      setMetas(r.metas);
       const id = draft?.id;
       const fresh = id ? (sel?.scope === 'global' ? r.globals : r.locals).find(t => t.id === id) : undefined;
       if (fresh && sel) open(fresh, sel.scope); else close();
@@ -267,13 +298,50 @@ export function WorkflowTemplatesEditor({
   );
 
   // === Редактор ===
+  const isBuiltIn = !!draft?.builtInKey && !sel?.isNew;
+  const meta = draft && sel ? metas[`${sel.scope}:${draft.id}`] : undefined;
+  const subtitle = draft && sel && !sel.isNew ? toolbarSubtitle(draft, meta) : null;
+  const basedOnGlobal = meta?.basedOn ? globals.find(t => t.id === meta.basedOn!.templateId) : undefined;
+  const jumpToStage = (index: number) => {
+    const el = document.querySelector(`[data-stage-index="${index}"]`);
+    if (el instanceof HTMLElement) { el.scrollIntoView({ block: 'center' }); el.focus?.(); }
+  };
   const editor = draft && sel && (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, minWidth: 0 }}>
-      {isMobile && (
-        <div>
-          <Button variant="ghost" size="sm" onClick={close}>← К списку</Button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, minWidth: 0 }}>
+        {isMobile && (
+          <div>
+            <Button variant="ghost" size="sm" onClick={close}>‹ Процессы</Button>
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', minWidth: 0 }}>
+          <span style={{
+            fontFamily: FONT.serif, fontSize: FS.lg, fontWeight: 600, color: C.textHeading,
+            minWidth: 0, overflowWrap: 'anywhere',
+          }}>{draft.name.trim() || 'Новый шаблон'}</span>
+          {isBuiltIn && <Badge tone="accent" size="xs">встроенный</Badge>}
+          {sel.scope === 'project' && <Badge tone="neutral" size="xs">проект</Badge>}
         </div>
-      )}
+        {subtitle && (
+          <div style={{ fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans }}>
+            {subtitle.text}
+            {subtitle.staleNote && (
+              <>
+                {' — '}
+                {basedOnGlobal ? (
+                  <button
+                    type="button" onClick={() => open(basedOnGlobal, 'global')}
+                    style={{
+                      background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit',
+                      color: C.accent, textDecoration: 'underline',
+                    }}
+                  >{subtitle.staleNote}</button>
+                ) : subtitle.staleNote}
+              </>
+            )}
+          </div>
+        )}
+      </div>
       {readOnly && (
         <Notice tone="info" icon={AlertTriangle}
           action={projectMode && sel.scope === 'global' && canWrite ? (
@@ -287,12 +355,48 @@ export function WorkflowTemplatesEditor({
             : 'Править шаблоны может только администратор.'}
         </Notice>
       )}
-      {failure && (
-        <Notice tone="danger" icon={AlertTriangle} title={failure.message}
-          action={failure.kind === 'conflict' ? <Button size="sm" variant="secondary" onClick={() => void handleReload()}>Перечитать</Button> : undefined}
-        >
+      {isBuiltIn && !readOnly && (
+        <Notice tone="info" icon={Info}
+          action={isAdmin && !projectMode ? (
+            <Button size="sm" variant="secondary" onClick={() => setConfirm('reset')}
+              leftIcon={<RotateCcw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Сбросить к исходному</Button>
+          ) : undefined}
+        >{BUILTIN_NOTICE}</Notice>
+      )}
+      {failure?.kind === 'conflict' && (
+        <Notice tone="danger" icon={AlertTriangle} title={conflictTitle(conflictVersion)}
+          action={(
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm }}>
+              <Button size="sm" variant="secondary" onClick={() => void handleReload()}>
+                {conflictVersion ? `Загрузить v${conflictVersion} — мои правки пропадут` : 'Загрузить версию сервера — мои правки пропадут'}
+              </Button>
+              <Button size="sm" variant="secondary" onClick={handleSaveAsNew}>Сохранить мои правки новым шаблоном</Button>
+            </div>
+          )}
+        />
+      )}
+      {failure && failure.kind !== 'conflict' && failure.kind !== 'invalid' && (
+        <Notice tone="danger" icon={AlertTriangle} title={failure.message}>
           {failure.generalErrors.map((e, i) => <div key={i}>{e}</div>)}
-          {failure.kind === 'conflict' && <div>{CONFLICT_MESSAGE}</div>}
+        </Notice>
+      )}
+      {errorItems.length > 0 && (
+        <Notice tone="danger" icon={AlertTriangle} title={errorsHeading(errorItems.length)} data-testid="template-error-summary">
+          <ul style={{ margin: 0, paddingLeft: SP.lg }}>
+            {errorItems.map((it, i) => (
+              <li key={i}>
+                {it.stageIndex !== null ? (
+                  <button
+                    type="button" onClick={() => jumpToStage(it.stageIndex as number)}
+                    style={{
+                      background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit',
+                      color: 'inherit', textDecoration: 'underline', textAlign: 'left',
+                    }}
+                  >{it.text}</button>
+                ) : it.text}
+              </li>
+            ))}
+          </ul>
         </Notice>
       )}
 
@@ -326,20 +430,31 @@ export function WorkflowTemplatesEditor({
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center' }}>
-        {showWriteButton(canWrite, readOnly) && (
-          <Button onClick={() => void handleSave()} disabled={!canSave} loading={busy}>
-            {busy ? 'Сохраняю…' : 'Сохранить'}
-          </Button>
+        {!sel.isNew && canWrite && !readOnly && !isMobile && (
+          <Button
+            variant="ghost" size="sm"
+            disabled={isBuiltIn}
+            title={isBuiltIn ? BUILTIN_DELETE_HINT : undefined}
+            ariaLabel={isBuiltIn ? `Удалить — ${BUILTIN_DELETE_HINT}` : undefined}
+            onClick={() => setConfirm('delete')}
+            leftIcon={<Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+          >Удалить</Button>
         )}
-        {dirty && !busy && !readOnly && <span style={{ fontSize: FS.xs, color: C.textMuted }}>Есть несохранённые изменения</span>}
         <div style={{ flex: 1 }} />
-        {!sel.isNew && draft.builtInKey && isAdmin && !projectMode && (
-          <Button variant="ghost" size="sm" onClick={() => setConfirm('reset')}
-            leftIcon={<RotateCcw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Сбросить к исходному</Button>
-        )}
-        {!sel.isNew && !draft.builtInKey && canWrite && !readOnly && (
-          <Button variant="danger" size="sm" onClick={() => setConfirm('delete')}
-            leftIcon={<Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Удалить</Button>
+        {dirty && !busy && !readOnly && <span style={{ fontSize: FS.xs, color: C.textMuted }}>Есть несохранённые изменения</span>}
+        {showWriteButton(canWrite, readOnly) && (
+          <>
+            <Button
+              variant="secondary" disabled={!dirty || busy}
+              onClick={() => {
+                if (sel.isNew || !savedTpl) { close(); return; }
+                setDraft(discardChanges(savedTpl)); setFailure(null); setConflictVersion(null);
+              }}
+            >Отменить</Button>
+            <Button onClick={() => void handleSave()} disabled={!canSave} loading={busy}>
+              {busy ? 'Сохраняю…' : 'Сохранить'}
+            </Button>
+          </>
         )}
       </div>
     </div>

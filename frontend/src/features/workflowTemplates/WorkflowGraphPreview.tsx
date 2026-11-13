@@ -6,13 +6,10 @@
 
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
+import { STAGE_ROLE_LABEL } from './WorkflowStageRow';
 import { normalizeStages, previewColumns } from './workflowGraphModel';
 import type { WorkflowStage } from './types';
 
-const ROLE_LABEL: Record<string, string> = {
-  cut: 'Нарезка', design: 'Дизайн', plan: 'План', step: 'Шаг', review: 'Ревью',
-  qa: 'Проверка', final: 'Финал', merge: 'Слияние',
-};
 const LANE_LABEL: Record<string, string> = { back: 'бэк', front: 'фронт', other: 'другое' };
 
 const NODE_H = 44;
@@ -140,7 +137,7 @@ export function WorkflowGraphPreview({ stages }: { stages: WorkflowStage[] }): R
           </div>
         ))}
         {g.nodes.map(n => {
-          const label = ROLE_LABEL[n.role] ?? n.role;
+          const label = STAGE_ROLE_LABEL[n.role] ?? n.role;
           const lane = n.lane ? LANE_LABEL[n.lane] ?? n.lane : null;
           // Имя узла — из шаблона (тот же порядок, что nodeTitle в FeatureProcessGraph):
           // Title, фолбэк — подпись роли с линией. Без этого параллельные этапы одной роли

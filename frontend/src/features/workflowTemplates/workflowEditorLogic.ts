@@ -4,7 +4,7 @@
 
 import { normalizeStages } from './workflowGraphModel';
 import { STAGE_ROLES, isNonSkippable, stageErrors } from './workflowTemplateModel';
-import type { WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from './types';
+import type { WorkflowEntryMeta, WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from './types';
 
 // Список обёрток { scope, template } → области. Разбиение — по метке entry.scope, а не по id:
 // без projectId глобальные же отдаются и как «свои» (админская вкладка); с projectId
@@ -211,4 +211,86 @@ export function showWriteButton(canWrite: boolean, readOnly: boolean): boolean {
 // Владелец проекта пишет проектные шаблоны (временно, до ответа на вопрос 3 Андрею).
 export function canWriteProjectTemplates(ownerId: string | null | undefined, userId: string | null | undefined): boolean {
   return !!ownerId && ownerId === userId;
+}
+
+// Мета строк списка по ключу «область:id» — для тулбара редактора.
+export function entryMetaMap(entries: WorkflowTemplateEntry[]): Record<string, WorkflowEntryMeta> {
+  const map: Record<string, WorkflowEntryMeta> = {};
+  for (const e of entries) {
+    map[`${e.scope}:${e.template.id}`] = {
+      basedOn: e.basedOn ?? null, basedOnLatestVersion: e.basedOnLatestVersion ?? null,
+      diffFromPreset: e.diffFromPreset ?? null,
+    };
+  }
+  return map;
+}
+
+// Подпись тулбара: «v5 · от «Полного цикла» v3 — глобальный уже v4» / «v4 · отличается от исходного
+// в 3 местах» / «v4 · как исходный». Части — для ссылки на глобальный оригинал.
+export interface ToolbarSubtitle { text: string; staleNote: string | null }
+
+export function pluralRu(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10; const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
+export function toolbarSubtitle(t: WorkflowTemplate, meta: WorkflowEntryMeta | undefined): ToolbarSubtitle | null {
+  if (t.version <= 0) return null;
+  let text = `v${t.version}`;
+  let staleNote: string | null = null;
+  if (t.builtInKey && meta?.diffFromPreset != null) {
+    text += meta.diffFromPreset === 0
+      ? ' · как исходный'
+      : ` · отличается от исходного в ${meta.diffFromPreset} ${pluralRu(meta.diffFromPreset, 'месте', 'местах', 'местах')}`;
+  }
+  const b = meta?.basedOn ?? t.basedOn;
+  if (b && 'name' in b) {
+    text += ` · от «${b.name}» v${b.version}`;
+    if (meta?.basedOnLatestVersion != null && meta.basedOnLatestVersion > b.version) {
+      staleNote = `глобальный уже v${meta.basedOnLatestVersion}`;
+    }
+  }
+  return { text, staleNote };
+}
+
+export const BUILTIN_NOTICE = 'Встроенный шаблон удалить нельзя — его можно править или сбросить к исходному.';
+export const BUILTIN_DELETE_HINT = 'Встроенный шаблон удалить нельзя';
+
+// Текст 409 (§1.4 п.9: «в другом окне» — один раз). Версия сервера неизвестна — без номера.
+export function conflictTitle(serverVersion: number | null | undefined): string {
+  return serverVersion
+    ? `Шаблон изменён в другом окне — теперь это v${serverVersion}. Ваши правки не записаны.`
+    : 'Шаблон изменён в другом окне. Ваши правки не записаны.';
+}
+
+export const errorsHeading = (n: number): string =>
+  `Сохранить нельзя — ${n} ${pluralRu(n, 'ошибка', 'ошибки', 'ошибок')}`;
+
+// Сводка ошибок: каждая — со ссылкой на этап (stageIndex) или без неё (общая).
+export interface ErrorItem { text: string; stageIndex: number | null }
+
+export function errorSummaryItems(draft: WorkflowTemplate, failure?: SaveFailure | null): ErrorItem[] {
+  const norm = normalizeStages(draft.stages);
+  const indexOf = (key: string): number | null => {
+    const byId = norm.findIndex(s => s.id === key);
+    if (byId >= 0) return byId;
+    const byRole = norm.findIndex(s => s.role === key);
+    return byRole >= 0 ? byRole : null;
+  };
+  const items: ErrorItem[] = [];
+  const push = (text: string, stageIndex: number | null) => {
+    if (!items.some(i => i.text === text && i.stageIndex === stageIndex)) items.push({ text, stageIndex });
+  };
+  for (const line of stageErrors(draft)) {
+    const m = STAGE_ERROR_RE.exec(line);
+    const num = /^этап #(\d+):/.exec(line);
+    if (m) push(line, indexOf(m[1]));
+    else if (num) push(line, Number(num[1]) - 1 < norm.length ? Number(num[1]) - 1 : null);
+    else push(line, null);
+  }
+  for (const [key, msgs] of Object.entries(failure?.stageErrors ?? {})) msgs.forEach(m => push(`этап «${key}»: ${m}`, indexOf(key)));
+  for (const g of failure?.generalErrors ?? []) push(g, null);
+  return items;
 }

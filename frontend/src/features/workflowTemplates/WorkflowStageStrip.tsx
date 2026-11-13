@@ -12,7 +12,7 @@ import type { SpecialtyCatalogEntry } from '../specialties/types';
 import { STAGE_ROLES, SINGLE_ROLES } from './workflowTemplateModel';
 import { STAGE_ROLE_LABEL, WorkflowStageRow } from './WorkflowStageRow';
 import { addStage, moveStage, normalizeStages } from './workflowGraphModel';
-import { afterNames, keyboardTarget, stripColumns, stripGroups, whoLabel } from './workflowStripModel';
+import { afterNames, keyboardTarget, stageKeys, stripColumns, stripGroups, whoLabel } from './workflowStripModel';
 import type { WorkflowStage } from './types';
 
 // На сенсорном экране перетаскивание начинается долгим нажатием: короткий жест — прокрутка.
@@ -49,6 +49,7 @@ export function WorkflowStageStrip({
   const norm = normalizeStages(stages);
   const columns = stripColumns(stages);
   const groups = stripGroups(stages);
+  const keys = stageKeys(stages);
   const specLabels = Object.fromEntries(specialties.map(s => [s.key, s.label]));
   const persons = personas.map(p => ({ id: p.id, name: p.name, role: p.role }));
   const usedSingles = new Set(norm.map(s => s.role).filter(r => SINGLE_ROLES.includes(r as never)));
@@ -169,7 +170,7 @@ export function WorkflowStageStrip({
           const s = stages[i];
           rows.push(
             <WorkflowStageRow
-              key={`${s.role}:${i}`}
+              key={keys[i]}
               stage={s}
               stages={stages}
               index={i}

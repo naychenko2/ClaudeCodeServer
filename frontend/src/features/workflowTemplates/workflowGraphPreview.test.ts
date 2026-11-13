@@ -100,3 +100,11 @@ describe('layoutGraph', () => {
     });
   });
 });
+
+describe('подпись роли в превью', () => {
+  it('cut в превью называется «Разрез», как в ленте', async () => {
+    const src = await import('node:fs').then(f => f.readFileSync(new URL('./WorkflowGraphPreview.tsx', import.meta.url), 'utf8'));
+    expect(src).toContain('STAGE_ROLE_LABEL[n.role]');
+    expect(src).not.toContain('Нарезка');
+  });
+});

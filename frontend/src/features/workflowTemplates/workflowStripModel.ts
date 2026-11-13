@@ -63,6 +63,19 @@ export function presenceTag(presence: string): { text: string; tone: 'success' |
   return { text: 'всегда', tone: 'success' };
 }
 
+// Устойчивые ключи строк ленты: по id этапа (неявный id — роль), а не по позиции, чтобы после
+// перестановки строка (фокус на ручке, `open`) ехала вместе с этапом. Повтор id (сервер такое
+// отвергнет) различается порядковым суффиксом, чтобы не плодить дубли ключей React.
+export function stageKeys(stages: WorkflowStage[]): string[] {
+  const seen = new Map<string, number>();
+  return normalizeStages(stages).map(s => {
+    const id = s.id ?? '';
+    const n = seen.get(id) ?? 0;
+    seen.set(id, n + 1);
+    return n === 0 ? id : `${id}#${n}`;
+  });
+}
+
 export interface StripGroup { column: number | null; from: number; to: number; parallel: boolean }
 
 // Группы подряд идущих включённых этапов одной колонки: ≥2 — рамка «параллельно».

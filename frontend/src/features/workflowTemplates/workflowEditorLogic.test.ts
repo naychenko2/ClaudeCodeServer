@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   CONFLICT_MESSAGE, blankTemplate, classifySaveError, forkToProject, listOrNull, parseList,
   saveGuarded, templateSnapshot, normalizeForSave, presenceEditable, showWriteButton,
-  canWriteProjectTemplates, splitEntries, newTemplateDraft, takeComposition, saveAsNew, discardChanges, canSave,
+  canWriteProjectTemplates, splitEntries, toolbarSubtitle, conflictTitle, errorsHeading, errorSummaryItems, entryMetaMap, pluralRu, newTemplateDraft, takeComposition, saveAsNew, discardChanges, canSave,
 } from './workflowEditorLogic';
 import { STAGE_ROLES } from './workflowTemplateModel';
 import type { WorkflowTemplate } from './types';
@@ -262,5 +262,49 @@ describe('saveGuarded: конкурентность', () => {
     expect(r.kind).toBe('failed');
     const r2 = await saveGuarded({ tpl: tpl(), save: async () => tpl(), activeKey: () => 'a' });
     expect(r2.kind).toBe('applied');
+  });
+});
+
+describe('F21: тулбар, 409 и сводка ошибок', () => {
+  it('подпись проектного: версия, оригинал и «глобальный уже vN»', () => {
+    const t = tpl({ builtInKey: null, version: 5, basedOn: { templateId: 'g', version: 3 } });
+    const sub = toolbarSubtitle(t, { basedOn: { templateId: 'g', name: 'Полный цикл', version: 3 }, basedOnLatestVersion: 4, diffFromPreset: null });
+    expect(sub).toEqual({ text: 'v5 · от «Полный цикл» v3', staleNote: 'глобальный уже v4' });
+  });
+  it('встроенный: «как исходный» и «в N местах»', () => {
+    expect(toolbarSubtitle(tpl({ version: 4 }), { diffFromPreset: 0 })?.text).toBe('v4 · как исходный');
+    expect(toolbarSubtitle(tpl({ version: 4 }), { diffFromPreset: 2 })?.text).toBe('v4 · отличается от исходного в 2 местах');
+  });
+  it('новый шаблон — без подписи; оригинал не устарел — без staleNote', () => {
+    expect(toolbarSubtitle(tpl({ version: 0 }), undefined)).toBeNull();
+    const sub = toolbarSubtitle(tpl({ builtInKey: null, version: 2 }), { basedOn: { templateId: 'g', name: 'X', version: 3 }, basedOnLatestVersion: 3 });
+    expect(sub?.staleNote).toBeNull();
+  });
+  it('409: номер версии и «в другом окне» ровно один раз', () => {
+    const t = conflictTitle(7);
+    expect(t).toBe('Шаблон изменён в другом окне — теперь это v7. Ваши правки не записаны.');
+    expect(t.split('в другом окне')).toHaveLength(2);
+    expect(conflictTitle(null)).not.toContain('v');
+  });
+  it('склонения', () => {
+    expect([1, 2, 5, 11, 21].map(n => pluralRu(n, 'ошибка', 'ошибки', 'ошибок'))).toEqual(['ошибка', 'ошибки', 'ошибок', 'ошибок', 'ошибка']);
+    expect(errorsHeading(2)).toBe('Сохранить нельзя — 2 ошибки');
+  });
+  it('сводка: ошибка этапа ссылается на его индекс, общая — без ссылки, дубли схлопнуты', () => {
+    const draft = tpl({ stages: [
+      { role: 'cut', presence: 'on' },
+      { role: 'step', presence: 'on', stallMinutes: 1 },
+    ] });
+    const items = errorSummaryItems(draft, {
+      kind: 'invalid', message: 'x', stageErrors: {}, generalErrors: ['что-то общее', 'что-то общее'],
+    });
+    expect(items.find(i => i.text === 'что-то общее')?.stageIndex).toBeNull();
+    expect(items.filter(i => i.text === 'что-то общее')).toHaveLength(1);
+    const stall = items.find(i => i.text.startsWith('этап «step»'));
+    expect(stall?.stageIndex).toBe(1);
+  });
+  it('мета списка по ключу «область:id»', () => {
+    const m = entryMetaMap([{ scope: 'global', projectId: null, template: tpl(), diffFromPreset: 3 }]);
+    expect(m['global:builtin-full-cycle'].diffFromPreset).toBe(3);
   });
 });

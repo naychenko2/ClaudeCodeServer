@@ -130,9 +130,29 @@ export interface ConfirmWorkflowBody {
   skipped: string[];
 }
 
-// Строка списка GET /api/workflow-templates (WorkflowTemplateEntry на бэке): шаблон с областью.
+// Мета строки списка (B08, WorkflowTemplateListItem на бэке): считает сервер, фронт не пересчитывает.
+export interface WorkflowTemplateBasedOn {
+  templateId: string;
+  // Имя глобального оригинала (нет оригинала — его id).
+  name: string;
+  version: number;
+}
+
+// Строка списка GET /api/workflow-templates (WorkflowTemplateEntry на бэке): шаблон с областью
+// и метой B08. Поля меты необязательны: старый сервер их не отдаёт.
 export interface WorkflowTemplateEntry {
   scope: 'global' | 'project';
   projectId: string | null;
   template: WorkflowTemplate;
+  stageCount?: number;
+  parallelColumns?: number;
+  usageCount?: number;
+  basedOn?: WorkflowTemplateBasedOn | null;
+  // Текущая версия глобального оригинала (для «глобальный уже vN»); нет оригинала — null.
+  basedOnLatestVersion?: number | null;
+  // Встроенный: в скольких позициях отличается от кодового пресета (0 — как исходный); иначе null.
+  diffFromPreset?: number | null;
 }
+
+// Мета выбранного шаблона для тулбара редактора.
+export type WorkflowEntryMeta = Pick<WorkflowTemplateEntry, 'basedOn' | 'basedOnLatestVersion' | 'diffFromPreset'>;

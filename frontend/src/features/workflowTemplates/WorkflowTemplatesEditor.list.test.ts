@@ -6,6 +6,7 @@
 
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
+import { C } from '../../lib/design';
 import type { WorkflowTemplateEntry } from './types';
 
 vi.mock('./api', () => ({
@@ -104,6 +105,25 @@ describe('F22: черновик и пустой проект', () => {
     expect(text).toContain('не сохранён');
   });
 
+  it('мета-строка черновика: «не сохранён» + «8 этапов» («+ Новый» — заготовка blankTemplate из 8 ролей)', async () => {
+    vi.mocked(workflowTemplatesApi.listTemplates).mockResolvedValue([globalFull, projectOwn]);
+    const { container } = mountEditor({ projectId: 'p1', projectName: 'AI Home' });
+    await flush();
+    const btn = findNodeByAttr(container, 'data-testid', 'new-template');
+    expect(btn).not.toBeNull();
+    act(() => { (reactProps(btn!)?.onClick as (e: unknown) => void)({}); });
+    // Скоуп — строка черновика: «8 этапов» есть и в мета-строке глобального элемента,
+    // проверка по всему тексту не отличила бы одно от другого. При открытом черновике
+    // активного элемента списка нет (active требует !sel.isNew) — строка черновика
+    // единственный узел с aria-current.
+    const row = findNodeByAttr(container, 'aria-current', 'true');
+    expect(row).not.toBeNull();
+    const rowText = textNodes(row!).join('');
+    expect(rowText).toContain('Новый шаблон');
+    expect(rowText).toContain('не сохранён');
+    expect(rowText).toContain('8 этапов');
+  });
+
   it('мобильная раскладка: высота элемента списка ≥56 (T10)', async () => {
     installFakeDom();
     const win = (globalThis as { window: { matchMedia: unknown } }).window;
@@ -137,5 +157,37 @@ describe('F22: черновик и пустой проект', () => {
     const t2 = allText(m2.container);
     expect(t2).toContain('Других своих процессов в проекте нет — фичи берут глобальные.');
     expect(t2).not.toContain('Копия глобального…');
+  });
+});
+
+describe('F22: hover элемента списка — через состояние', () => {
+  it('подсветка наведённого переживает перерисовку: открытие/закрытие шаблона и печать в поле имени при курсоре на элементе', async () => {
+    vi.mocked(workflowTemplatesApi.listTemplates).mockResolvedValue([globalFull, projectOwn]);
+    const { container } = mountEditor({ projectId: 'p1', projectName: 'AI Home' });
+    await flush();
+    const item = buttonByText(container, 'Полный цикл');
+    expect(item).not.toBeNull();
+    const fire = (name: 'onMouseEnter' | 'onMouseLeave' | 'onClick', node: Node, arg: unknown) =>
+      act(() => { (reactProps(node)?.[name] as (e: unknown) => void)(arg); });
+    // Наведение обычного элемента — bg-selected.
+    fire('onMouseEnter', item!, { currentTarget: item });
+    expect(item!.style.background).toBe(C.bgSelected);
+    // Открытие этого же шаблона: активный — белая карточка (курсор по-прежнему на элементе).
+    fire('onClick', item!, {});
+    expect(item!.style.background).toBe(C.bgWhite);
+    // Закрытие (открыли другой шаблон): элемент снова обычный, но курсор на нём —
+    // подсветка возвращается из состояния, не дожидаясь нового наведения.
+    // Императивная запись style на мыши здесь и терялась: React возвращает 'transparent'.
+    const other = buttonByText(container, 'Бэк без дизайна');
+    expect(other).not.toBeNull();
+    fire('onClick', other!, {});
+    expect(item!.style.background).toBe(C.bgSelected);
+    // Печать в поле имени открытого шаблона — ещё одна перерисовка: подсветка остаётся.
+    const nameInput = container.querySelectorAll('input').find(n => (n as { value?: unknown }).value === 'Бэк без дизайна');
+    expect(nameInput).not.toBeNull();
+    act(() => { (reactProps(nameInput!)?.onChange as (e: unknown) => void)({ target: { value: 'Бэк без дизайна?' } }); });
+    // Правка действительно дошла до формы — иначе следующий assert ничего не проверял бы.
+    expect(allText(container)).toContain('Бэк без дизайна?');
+    expect(item!.style.background).toBe(C.bgSelected);
   });
 });

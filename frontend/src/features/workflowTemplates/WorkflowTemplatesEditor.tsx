@@ -91,6 +91,10 @@ export function WorkflowTemplatesEditor({
   // Выбранный этап (ключ из stageKeys): открывает «Настройку этапа»; у сохранённого шаблона и у
   // нового — свой, поэтому сбрасывается при каждой смене показанного шаблона.
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
+  // Наведённый элемент списка (ключ «scope:id» из renderItem): подсветка — состояние,
+  // а не императивная запись style на мыши: её стирает любой перерисовка, где React
+  // перепишет background (образец — состояние hover в IconButton).
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
 
   // Счётчик формы: растёт при каждой смене показанного шаблона; ответ на сохранение,
   // отправленное для другого значения, форму не трогает. busyRef — синхронная защита от
@@ -282,11 +286,13 @@ export function WorkflowTemplatesEditor({
   // наведённый — bg-selected, активный — белая карточка с тенью (не accent-подсветка).
   // Мобильная высота ≥56 (T10). Черновик нового — строка с тегом «не сохранён» (T12):
   // она активна всегда, когда открыт, и не кликается — редактор уже открыт.
-  const itemStyle = (active: boolean): React.CSSProperties => ({
+  // hovered — из состояния (hoverKey): подсветка наведённого переживает перерисовку,
+  // чего императивная запись style на мыши не даёт.
+  const itemStyle = (active: boolean, hovered: boolean): React.CSSProperties => ({
     display: 'flex', flexDirection: 'column', gap: SP.xxs, width: '100%',
     padding: `${SP.sm}px ${SP.md}px`, textAlign: 'left', cursor: 'pointer',
     fontFamily: FONT.sans, fontSize: FS.base,
-    background: active ? C.bgWhite : 'transparent',
+    background: active ? C.bgWhite : hovered ? C.bgSelected : 'transparent',
     boxShadow: active ? SHADOW.card : 'none',
     border: 'none', borderRadius: R.lg,
     ...(isMobile ? { minHeight: 56, justifyContent: 'center' as const } : {}),
@@ -296,26 +302,22 @@ export function WorkflowTemplatesEditor({
     fontWeight: 600, color: C.textHeading,
   };
   const itemMetaStyle: React.CSSProperties = { fontSize: FS.xs, color: C.textMuted };
-  const hoverIn = (e: React.MouseEvent<HTMLButtonElement>, active: boolean) => {
-    if (!active) e.currentTarget.style.background = C.bgSelected;
-  };
-  const hoverOut = (e: React.MouseEvent<HTMLButtonElement>, active: boolean) => {
-    // «transparent» — как в itemStyle: возвращаем именно то состояние, что было до наведения.
-    if (!active) e.currentTarget.style.background = 'transparent';
-  };
 
   const renderItem = (t: WorkflowTemplate, scope: Scope) => {
+    const key = `${scope}:${t.id}`;
     const active = sel?.scope === scope && !sel.isNew && draft?.id === t.id;
     const metaLine = itemMetaLine(t, metas[`${scope}:${t.id}`]);
     return (
       <button
-        key={`${scope}:${t.id}`}
+        key={key}
         type="button"
         onClick={() => open(t, scope)}
         aria-current={active ? 'true' : undefined}
-        onMouseEnter={e => hoverIn(e, active)}
-        onMouseLeave={e => hoverOut(e, active)}
-        style={itemStyle(active)}
+        onMouseEnter={() => setHoverKey(key)}
+        // Снимаем подсветку, только если наведена именно эта строка: при переходе
+        // между элементами mouseleave прошлого не должен гасить новый.
+        onMouseLeave={() => setHoverKey(cur => (cur === key ? null : cur))}
+        style={itemStyle(active, hoverKey === key)}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0 }}>
           <span style={itemNameStyle}>{t.name}</span>
@@ -328,7 +330,7 @@ export function WorkflowTemplatesEditor({
   };
 
   const draftRow = draft && (
-    <div aria-current="true" style={itemStyle(true)}>
+    <div aria-current="true" style={itemStyle(true, false)}>
       <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0 }}>
         <span style={itemNameStyle}>{draft.name.trim() || 'Новый шаблон'}</span>
         <Badge tone="warning" size="xs">не сохранён</Badge>

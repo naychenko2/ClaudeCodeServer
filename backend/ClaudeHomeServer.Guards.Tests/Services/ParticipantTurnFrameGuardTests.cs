@@ -357,6 +357,8 @@ public class ParticipantTurnFrameGuardTests : IClassFixture<ParticipantFrameFixt
         new("video-editor", "video_shoot", X, "то же", "{{sc}}", "{}"),
         new("video-editor", "video_state", X, "то же", "{{sc}}", "{}"),
         new("video-editor", "video_cancel", X, "то же", "{{sc}}", "{}"),
+        new("video-editor", "video_enhance", X, "то же", "{{sc}}", "{}"),
+        new("video-editor", "video_voice", X, "то же", "{{sc}}", "{}"),
         new("video-editor", "video_suggest_prompt", X, "то же", "{{sc}}", "{}"),
         new("video-editor", "video_film_build", X, "то же", "{{sc}}", "{}"),
         new("video-editor", "video_film_edit", X, "то же", "{{sc}}", "{}"),

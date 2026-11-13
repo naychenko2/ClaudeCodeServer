@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.VideoEditor.Tests.Mcp;
 // с пометкой масштаба и размером результата, исходная цела, трат нет, сбой и отмена версий не добавляют
 public sealed class VideoEnhanceTests
 {
-    private sealed class LocalEnhancer : IVideoEngine
+    internal sealed class LocalEnhancer : IVideoEngine
     {
         public int Runs;
         public byte[]? SeenVideo;

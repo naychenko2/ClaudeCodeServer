@@ -245,7 +245,10 @@ public sealed class VideoEditorToolsetFeedParityTests
         var covered = Cases.Select(c => c.Name).ToHashSet();
 
         covered.Should().BeEquivalentTo(VideoEditorToolset.Schemas.Select(s => s.Name)
-            .Where(n => n != VideoEditorToolset.ToolState && n != VideoEditorToolset.ToolSuggestPrompt && n != VideoEditorToolset.ToolWait),
+            .Where(n => n != VideoEditorToolset.ToolState && n != VideoEditorToolset.ToolSuggestPrompt && n != VideoEditorToolset.ToolWait
+                // У увеличения и озвучки нет ручки в матрице: им нужен локальный поставщик или шов звука — их паритет с кнопкой
+                // держит VideoEnhanceVoiceToolsTests
+                && n != VideoEditorToolset.ToolEnhance && n != VideoEditorToolset.ToolVoice),
             "каждый инструмент, который что-то меняет, обязан быть в матрице");
     }
 }

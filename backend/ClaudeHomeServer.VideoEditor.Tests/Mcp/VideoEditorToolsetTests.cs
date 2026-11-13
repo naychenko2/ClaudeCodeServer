@@ -17,7 +17,7 @@ namespace ClaudeHomeServer.Services.VideoEditor.Tests.Mcp;
 // CreateNew; траты — с Initiator = Agent; лимита запусков за ход нет
 public sealed class VideoEditorToolsetTests
 {
-    private static readonly string[] Gated = [ToolShoot, ToolCancel, ToolSaveScene, ToolFilmEdit, ToolFilmBuild];
+    private static readonly string[] Gated = [ToolShoot, ToolEnhance, ToolVoice, ToolCancel, ToolSaveScene, ToolFilmEdit, ToolFilmBuild];
 
     private static string[] ProjectFiles(AgentWorld w) =>
         [.. Directory.GetFiles(w.F.ProjectRoot, "*", SearchOption.AllDirectories)
@@ -26,13 +26,13 @@ public sealed class VideoEditorToolsetTests
     // ── Состав ─────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Состав_ровно_одиннадцать_инструментов_и_ровно_список_автодопуска()
+    public void Состав_ровно_тринадцать_инструментов_и_ровно_список_автодопуска()
     {
         using var w = new AgentWorld();
 
         var names = w.Toolset.ToolsFor(w.Ctx()).Select(t => t.Name).ToList();
 
-        names.Should().BeEquivalentTo([ToolState, ToolFocus, ToolNew, ToolSceneSet, ToolSuggestPrompt, ToolShoot, ToolCancel, ToolWait,
+        names.Should().BeEquivalentTo([ToolState, ToolFocus, ToolNew, ToolSceneSet, ToolSuggestPrompt, ToolShoot, ToolEnhance, ToolVoice, ToolCancel, ToolWait,
             ToolSaveScene, ToolFilmEdit, ToolFilmBuild]);
         names.Select(n => $"mcp__{ServerName}__{n}").Should().BeEquivalentTo(
             ClaudeHomeServer.Services.VideoEditor.VideoEditorAgentTools.AutoAllowTools);
@@ -155,7 +155,7 @@ public sealed class VideoEditorToolsetTests
     }
 
     [Fact]
-    public async Task Гейт_стоит_на_всех_пяти_инструментах_и_ровно_на_них()
+    public async Task Гейт_стоит_на_всех_семи_инструментах_и_ровно_на_них()
     {
         using var w = new AgentWorld(delegatedDenied: true);
         var scene = w.NewScene();

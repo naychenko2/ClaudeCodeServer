@@ -91,6 +91,8 @@ public sealed class AudioEditorSubsystem : IAppSubsystem
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.AudioEditorToolset>();
         // Агент позвал local_* напрямую: звук результата получает ту же карточку, что запуск через audio_*
         services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalMediaAdopter, Threads.LocalAudioAdopter>();
+        // «Озвучить сцену» для агента (video_voice модуля «Видео»): запуск звука по видео версии сцены
+        services.AddSingleton<ClaudeHomeServer.Services.Media.IVideoSceneVoice, Jobs.VideoSceneVoice>();
         // Блок хвоста хода «Звук в этом чате»: правило приоритета audio_* над прямыми local_*
         services.AddPromptSectionContributor<Chats.AudioEditorStateContributor>();
     }

@@ -44,7 +44,8 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         // драйвер получает null и скрыт в каталоге, а не роняет резолв
         // Шлюз IMediaGpuYieldGate регистрирует Llm: нет вертикали — null, задания уходят сразу
         services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>(),
-            sp.GetService<ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate>()));
+            sp.GetService<ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate>(),
+            sp.GetService<IConfiguration>(), sp.GetService<ILogger<LocalImageEditor>>()));
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
 
         // Фоновая разметка ракурса и эмоции фото персонажей (ADR-027 §9); нет шва IImageLabeler или флага —
@@ -87,6 +88,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         // Разбор сюжета для подбора фото персонажа: без дешёвого раннера его нет, подбор тогда не работает
         services.AddSingleton(sp => sp.GetService<ClaudeHomeServer.Services.Llm.ICheapTextRunner>() is { } runner
             ? new CharacterSceneParser(runner)
+            : null!);
+        // Категория неоднозначного запроса для «Авто» локальных моделей: без дешёвого раннера — только правила
+        services.AddSingleton(sp => sp.GetService<ClaudeHomeServer.Services.Llm.ICheapTextRunner>() is { } runner
+            ? new ImageRouteClassifier(runner)
             : null!);
         services.AddSingleton<ImageEditLaunchAssembler>();
         // Гейт области ручек: проект или личный чат вне проекта (разрез image-editor-personal-chats)

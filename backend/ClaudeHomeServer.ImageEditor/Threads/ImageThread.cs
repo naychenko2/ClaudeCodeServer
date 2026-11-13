@@ -94,7 +94,10 @@ public sealed record ImageThreadVersion(
     string? CurrentStepId,
     DateTime CreatedAt,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] double? Similarity = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool MostSimilar = false)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool MostSimilar = false,
+    // JSON-описание сцены, по которому Fibo 2.0 нарисовала версию (Ш8), с сидом и холстом: по нему панель
+    // «Доводка» перерисовывает версию с одним изменённым полем; null — версия не от Fibo с расширителем VGL
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] ImageVglScene? Vgl = null)
 {
     public const string OriginId = "origin";
 

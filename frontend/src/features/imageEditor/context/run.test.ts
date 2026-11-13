@@ -23,7 +23,7 @@ vi.mock('../marks', async orig => ({
 vi.stubGlobal('Image', class { onload: (() => void) | null = null; onerror: (() => void) | null = null; set src(_v: string) { queueMicrotask(() => this.onload?.()); } });
 
 const { imageEditorApi } = await import('../api');
-const { __resetPrefs, getPrefs, prefsApi } = await import('../thread/prefs');
+const { __resetPrefs, getPrefs, prefsApi, setModeSettings } = await import('../thread/prefs');
 const { __applyThreads, __resetThreadStore, setThreadMarks } = await import('../thread/threadStore');
 const { __applyChatContext, __resetChatContextStore } = await import('../../../lib/chatContext/store');
 const { threadsApi } = await import('../thread/threadsApi');
@@ -46,7 +46,7 @@ const context = (revision: number): ChatContextDto => ({
   primary: { id: 'i1', kind: 'image', ref: { threadId: 't1' }, by: 'human', addedAt: '2026-10-01T00:00:00Z', label: 'hero.png', version: null, thumb: null, missing: false, role: null },
 });
 
-let started: { op?: unknown; contextRevision?: number; aspectRatio?: string; threadId?: string; marks?: string; mask?: boolean; annotated?: boolean }[];
+let started: { op?: unknown; contextRevision?: number; aspectRatio?: string; style?: string; threadId?: string; marks?: string; mask?: boolean; annotated?: boolean }[];
 let quoted: { op: string; count: number; hasMask: boolean; hasAnnotations?: boolean; sessionId?: string | null; contextRevision?: number | null }[];
 
 beforeEach(async () => {
@@ -63,7 +63,7 @@ beforeEach(async () => {
   const realQuote = api.quote.bind(api);
   vi.spyOn(api, 'quote').mockImplementation(async (p, req) => { quoted.push(req); return realQuote(p, req); });
   vi.spyOn(api, 'startJob').mockImplementation(async (_p, req) => {
-    started.push({ contextRevision: req.contextRevision, aspectRatio: req.aspectRatio, threadId: req.threadId, marks: req.marks, mask: !!req.mask, annotated: !!req.annotated });
+    started.push({ contextRevision: req.contextRevision, aspectRatio: req.aspectRatio, style: req.style, threadId: req.threadId, marks: req.marks, mask: !!req.mask, annotated: !!req.annotated });
     return { jobId: 'j1' } as never;
   });
   vi.stubGlobal('fetch', vi.fn(async () => ({ blob: async () => new Blob([]) })));
@@ -184,5 +184,28 @@ describe('цена, «Чем» и параметры', () => {
     const primary = context(7).primary!;
     expect(imageKindApi.actions(CTX, { primary, refs: [] }).map(a => a.id)).toEqual(['edit', 'removeBg', 'upscale', 'outpaint', 'mark']);
     expect(imageKindApi.actions(CTX, { primary: { ...primary, ref: { threadId: 'нет' } }, refs: [] })).toEqual([]);
+  });
+  it('Krea 2 Turbo: «Нарисовать» несёт параметр style — «Без стиля» и девять плашек; у других моделей его нет', () => {
+    const draw = (model: string) => {
+      setModeSettings(P, 'create', { provider: 'local', model });
+      __applyThreads(S, P, { focus: 'd1', revision: 2, threads: [thread({ id: 'd1', file: null, draftFolder: '' })] });
+      __applyChatContext(S, { ...context(9), primary: { ...context(9).primary!, ref: { threadId: 'd1' } } });
+      return imageKindApi.params!(CTX, 'draw');
+    };
+    const style = draw('krea2-turbo').find(p => p.kind === 'style');
+    expect(style).toMatchObject({ kind: 'style', value: '' });
+    const options = style!.kind === 'style' ? style!.options : [];
+    expect(options).toHaveLength(10);
+    expect(options[0]).toEqual({ value: '', label: 'Без стиля' });
+    expect(options.map(o => o.value).slice(1)).toEqual(['darkbrush', 'dotmatrix', 'kidsdrawing', 'neondrip', 'rainywindow', 'retroanime', 'softwatercolor', 'sunsetblur', 'vintagetarot']);
+    expect(draw('moss-image').some(p => p.kind === 'style')).toBe(false);
+  });
+
+  it('запуск с params.style: стиль уходит в startJob; пустой — поля нет', async () => {
+    __applyThreads(S, P, { focus: 'd1', revision: 2, threads: [thread({ id: 'd1', file: null, draftFolder: '' })] });
+    __applyChatContext(S, { ...context(9), primary: { ...context(9).primary!, ref: { threadId: 'd1' } } });
+    await imageKindApi.launch!(CTX, { op: 'generate', text: 'кот', params: { variants: 1, style: 'darkbrush' }, contextRevision: 9 });
+    await imageKindApi.launch!(CTX, { op: 'generate', text: 'кот', params: { variants: 1, style: '' }, contextRevision: 9 });
+    expect(started.map(x => x.style)).toEqual(['darkbrush', undefined]);
   });
 });

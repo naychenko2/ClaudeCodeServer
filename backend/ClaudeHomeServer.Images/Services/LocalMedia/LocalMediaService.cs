@@ -516,15 +516,23 @@ public sealed partial class LocalMediaService(
 
     // Fibo 2.0, ~1 Мп (замер 2026-11-12, RTX 3090): Dev, 50 шагов с CFG — 53 с прогретой моделью
     // (холодный старт ~63 с), Turbo, 4 шага — 11 с на генерацию и 17 с на правку. Пачка из count
-    // вариантов идёт одним прогоном — время растёт почти линейно
-    public static int Fibo2GenerateEta(bool turbo, int count) => turbo ? 5 + 6 * Math.Max(1, count) : 5 + 50 * Math.Max(1, count);
+    // вариантов идёт одним прогоном — время растёт почти линейно.
+    // Генерация Dev с Ш8 — расширитель VGL (Qwen3-VL 8B пишет JSON-описание, ~23 с) и турбо-LoRA на 8 шагов
+    // (~6 с на картинку): 29–31 с на прогон в пустой очереди. Доводка — то же время: расширитель переписывает
+    // JSON целиком, затем один рендер
+    public static int Fibo2GenerateEta(bool turbo, int count) => turbo ? 5 + 6 * Math.Max(1, count) : 24 + 6 * Math.Max(1, count);
 
+    // Правка Dev с турбо-LoRA (Ш8): 10–15 с на одну картинку против ~120 с без неё
     public static int Fibo2EditEta(bool turbo, int images, int count) =>
-        (turbo ? 10 + 7 * Math.Max(1, count) : 10 + 60 * Math.Max(1, count)) + 5 * (Math.Max(1, images) - 1);
+        (turbo ? 10 + 7 * Math.Max(1, count) : 6 + 7 * Math.Max(1, count)) + 5 * (Math.Max(1, images) - 1);
 
     // Krea 2 Turbo, 1 Мп, 8 шагов (замер 2026-11-12, RTX 3090): 8–12 с прогретой моделью, 19 с
     // холодной. MOSS-Image SFT, 25 шагов с расширителем промпта: 16–27 с
     public static int Krea2GenerateEta(int count) => 4 + 7 * Math.Max(1, count);
+
+    // «Стиль по образцу» Krea 2 Turbo (замер Ш4, 2026-11-12, RTX 3090): энкодер читает образец, плюс LoRA ostris —
+    // 16–23 с на картинку, первая загрузка LoRA +5 с
+    public static int Krea2StyleReferenceEta(int count) => 10 + 10 * Math.Max(1, count);
 
     public static int MossGenerateEta(int count) => 8 + 17 * Math.Max(1, count);
 

@@ -65,6 +65,13 @@ describe('jobForm: faceTarget (ADR-028, этап 3)', () => {
   });
 });
 
+describe('jobForm: style (стили Krea 2 Turbo)', () => {
+  it('style едет полем формы; без него поля нет', () => {
+    expect(jobForm({ quoteId: 'q1', prompt: 'кот', style: 'retroanime' }).get('style')).toBe('retroanime');
+    expect(jobForm({ quoteId: 'q1', prompt: 'кот' }).has('style')).toBe(false);
+  });
+});
+
 describe('быстрые действия', () => {
   it('операция из действия, маска — только у «Убрать отмеченное»', () => {
     expect(quickPlan('removeBackground', '1:1')).toMatchObject({ op: 'removeBackground', prompt: '', useMask: false });

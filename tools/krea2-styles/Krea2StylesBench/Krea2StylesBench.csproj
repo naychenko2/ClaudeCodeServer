@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Замер стилей Krea 2 Turbo через адаптер CCS (шов ILocalImageMedia): графы — ровно те, что видит
+       редактор. В решение не входит: CI его не собирает -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Krea2StylesBench</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\..\..\backend\ClaudeHomeServer.Images\ClaudeHomeServer.Images.csproj" />
+  </ItemGroup>
+
+</Project>

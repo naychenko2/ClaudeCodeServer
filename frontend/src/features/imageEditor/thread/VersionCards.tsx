@@ -8,7 +8,7 @@
 
 import { useState, type ReactNode } from 'react';
 import {
-  AlertTriangle, ChevronDown, ChevronUp, Download, Expand, MoreHorizontal, RotateCcw, Save, ScanFace, Sparkles, Target, X,
+  AlertTriangle, ChevronDown, ChevronUp, Download, Expand, MoreHorizontal, RotateCcw, Save, ScanFace, SlidersHorizontal, Sparkles, Target, X,
 } from 'lucide-react';
 import {
   Badge, Button, Dot, IconButton, Menu, MenuItem, Notice, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
@@ -33,6 +33,7 @@ import {
 } from './model';
 import { recordOf } from './records';
 import { CharacterPhotosStrip } from './CharacterPhotosStrip';
+import { RefinePanel } from './RefinePanel';
 import { TouchHit } from '../TouchHit';
 import { openEditor, useThreads } from './threadStore';
 import type { ImageThread, ImageThreadVersion } from './threadsApi';
@@ -182,6 +183,8 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const faceLocal = faceCatalog ? (faceCatalog.providers.find(p => p.key === 'local')?.available ?? true) : false;
   const faceEntryVisible = !personal && (faceChars?.length ?? 0) > 0 && faceLocal;
   const [faceMenu, setFaceMenu] = useState(false);
+  // «Доводка» (Ш8): только у версии, нарисованной Fibo 2.0 с JSON-описанием сцены
+  const [refine, setRefine] = useState(false);
 
   return (
     <Shell current={current} testId={String(version.number)}
@@ -230,6 +233,13 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           </Button>
         )}
         <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={version.id} fill={fill} />
+        {version.vgl && (
+          <Button size="xs" variant={refine ? 'primary' : 'secondary'} leftIcon={ic(SlidersHorizontal)}
+            title="Поменять одно: свет, ракурс, одежду или цвет, фон, стиль — остальная сцена останется"
+            onClick={() => setRefine(v => !v)}>
+            Доводка
+          </Button>
+        )}
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
           {src && primary !== 'download' && (
             <IconButton size="xs" title="Скачать" ariaLabel="Скачать" onClick={save}>
@@ -251,6 +261,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           )}
         </span>
       </div>
+      {refine && version.vgl && <RefinePanel projectId={projectId} sessionId={sessionId} thread={thread} version={version} />}
     </Shell>
   );
 }

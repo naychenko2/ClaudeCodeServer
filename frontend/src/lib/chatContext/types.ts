@@ -113,6 +113,8 @@ export type LaunchParam =
   | { kind: 'variants'; min: 1; max: number; value: number }
   | { kind: 'duration'; options: readonly number[]; value: number }
   | { kind: 'aspect'; options: readonly string[]; value: string }
+  // Стиль модели (Krea 2 Turbo): плашки; value '' — без стиля
+  | { kind: 'style'; options: readonly { value: string; label: string }[]; value: string }
   | { kind: 'fromQuestion'; label: string };
 
 export interface ExecutorListModel {

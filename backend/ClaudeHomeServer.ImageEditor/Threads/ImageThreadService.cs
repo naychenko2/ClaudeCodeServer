@@ -531,7 +531,7 @@ public sealed class ImageThreadService(
                 var taken = TakeVariants(ownerId, job, thread, launch);
                 if (taken.Count == 0) return;
                 initiator = launch.Initiator;
-                written = store.AddLaunchVersions(ownerId, sessionId, threadId, job.JobId, taken);
+                written = store.AddLaunchVersions(ownerId, sessionId, threadId, job.JobId, taken, job.Scenes);
             }
             finally { _versionsGate.Release(); }
             if (written.Status == ImageThreadWriteStatus.Ok)
@@ -585,7 +585,7 @@ public sealed class ImageThreadService(
                 written = store.FinishLaunch(ownerId, sessionId, threadId, job.JobId, status, taken,
                     (after, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
                         VersionsText(after, launch, all, job), threadId, job.JobId),
-                    faceResults);
+                    faceResults, job.Scenes);
             }
             finally { _versionsGate.Release(); }
             if (written.Status == ImageThreadWriteStatus.Ok)

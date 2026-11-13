@@ -2,7 +2,7 @@
 // поставщика, модели, числа вариантов и признаков запроса. Ничего не тратит.
 
 import { useEffect, useState } from 'react';
-import type { ImageEditEstimate, ImageEditorApi, ImageEditQuote, ImageEditQuoteRequest } from './api';
+import { AUTO_MODEL, type ImageEditEstimate, type ImageEditorApi, type ImageEditQuote, type ImageEditQuoteRequest } from './api';
 
 // Пока новая котировка едет, цена той же модели берётся из прошлой, пересчитанной на число
 // вариантов: иначе у модели без ориентира в каталоге («Авто») низ мигал «Цена уточняется»
@@ -69,3 +69,22 @@ export function useQuote(api: ImageEditorApi, projectId: string, req: ImageEditQ
     stale: fresh ? null : staleEstimate(last, req),
   };
 }
+
+// Значение с задержкой: текст промпта в котировке «Авто» не должен дёргать цену на каждую букву
+export function useDebouncedValue<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    if (Object.is(v, value)) return;
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms, v]);
+  return v;
+}
+
+// Сколько текста промпта уходит в котировку: автовыбору хватает начала запроса
+export const QUOTE_PROMPT_MAX = 600;
+export const QUOTE_PROMPT_DEBOUNCE_MS = 700;
+
+// Промпт в котировку — только у «Авто»: у явной модели от текста ничего не зависит
+export const autoQuotePrompt = (model: string, text: string | null | undefined): string | null =>
+  model === AUTO_MODEL ? (text?.trim().slice(0, QUOTE_PROMPT_MAX) || null) : null;

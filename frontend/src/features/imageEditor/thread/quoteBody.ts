@@ -22,6 +22,8 @@ export interface QuoteBodyInput {
   // Маска уходит инпейнту, когда закрашено кистью
   withMask: boolean;
   removal: boolean;
+  // Текст запроса для авто-выбора локальной модели; без него выбор идёт по операции
+  prompt?: string | null;
   references: number;
   hasCharacter: boolean;
   size: { w: number; h: number } | null;
@@ -43,6 +45,7 @@ export function buildQuoteBody(i: QuoteBodyInput): ImageEditQuoteRequest {
     hasMask: i.withMask,
     hasAnnotations: marksSent(i.op, i.hasImage, i.marks) && hasAnnotationMark([...i.marks]),
     removal: i.removal,
+    ...(i.prompt ? { prompt: i.prompt } : null),
     references: i.references, hasCharacter: i.hasCharacter,
     width: i.size?.w ?? null, height: i.size?.h ?? null,
     ...(face ? null : i.context ? { sessionId: i.context.sessionId, contextRevision: i.context.contextRevision } : null),

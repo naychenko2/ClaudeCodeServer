@@ -72,7 +72,7 @@ export interface SceneCardView {
   upscaleFail: { text: string; tone: 'warning' | 'info'; actionLabel: string | null; jobId: string; versionId: string } | null;
   // «Версия 1 · 1440p · 2528×1440» под превью увеличенного клипа
   upscaledCaption: string | null;
-  // «Увеличить ×2/×4» (RelayVSR, локально): действие над готовой версией, отдельное от «Макс»; нет у личного чата и у версии, уже
+  // «Увеличить ×2/×4» (RelayVSR, локально): действие над готовой версией, отдельное от «Макс»; нет у версии, уже
   // полученной увеличением. enhanceRun — идёт именно оно (у него своя «Отменить увеличение» вне двухстадийной полосы «Макс»)
   canEnhance: boolean;
   enhanceRun: boolean;
@@ -146,7 +146,7 @@ export function sceneCardView(p: {
       ? (f => ({ text: f.text, tone: f.tone, actionLabel: f.action?.label ?? null, jobId: version.jobId, versionId: version.versionId }))(upscaleFailView(vInfo, versions, version))
       : null,
     upscaledCaption: !jobId && version ? upscaledCaption(vInfo, version) : null,
-    canEnhance: !jobId && !running && !!version && !personal && !version.enhanceScale && !version.upscaleError,
+    canEnhance: !jobId && !running && !!version && !version.enhanceScale && !version.upscaleError,
     enhanceRun: !jobId && !stages && !!jobs[0] && (runLaunch?.model ?? '').startsWith('relayvsr-x'),
     enhancedCaption: !jobId && version?.enhanceScale
       ? `Увеличено ×${version.enhanceScale}${version.width && version.height ? ` · ${version.width}×${version.height}` : ''}`

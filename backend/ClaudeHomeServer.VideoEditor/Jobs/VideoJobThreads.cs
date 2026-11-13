@@ -128,6 +128,24 @@ public sealed class VideoJobThreads(
         }
     }
 
+    // «Озвучить сцену»: версия со звуком появилась без задачи видео, поэтому карточку запуска в ленту пишем здесь
+    public Task OnSoundVersionAsync(string sessionId, string sceneId, string jobId, string model, string initiator, string? license,
+        int? durationSec, CancellationToken ct = default) =>
+        RecordAsync(sessionId, VideoThreadRecordTypes.LaunchVersions,
+            $"{(initiator == VideoInitiators.Agent ? "Claude озвучил" : "Вы озвучили")} сцену · {model}",
+            new
+            {
+                sceneId,
+                jobId,
+                provider = VideoSceneSound.Provider,
+                model,
+                count = 1,
+                durationSec,
+                price = new { amount = 0, unit = "free", approx = false, source = "provider" },
+                license,
+                initiator,
+            }, ct);
+
     // Задача кончилась: каждый готовый вариант — новая версия сцены; статус запуска — по итогу.
     // Повтор ничего не дублирует (FinishLaunch идемпотентен)
     public async Task OnFinishedAsync(string ownerId, string scopeKey, string sessionId, string sceneId, string jobId,

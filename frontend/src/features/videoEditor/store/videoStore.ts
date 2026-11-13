@@ -249,7 +249,10 @@ function ensureLive() {
   _unsub = () => { offEvents(); offRe(); };
 }
 
-async function load(scope: string, sessionId: string, force = false) {
+// Сбой чтения состояния (сеть, перезапуск сервера) не должен навсегда оставлять ленту без карточек: повторяем
+// несколько раз с нарастающей паузой. «Нет доступа / модуль выключен» (4xx) — окончательно, пусто
+const LOAD_RETRY_MS = [2_000, 5_000, 15_000];
+async function load(scope: string, sessionId: string, force = false, attempt = 0) {
   const e = _entries.get(sessionId);
   if (e && (e.loading || (e.loaded && !force))) return;
   _entries.set(sessionId, { scope, state: e?.state ?? EMPTY_THREADS, loaded: e?.loaded ?? false, loading: true });
@@ -258,9 +261,12 @@ async function load(scope: string, sessionId: string, force = false) {
     _catalogs.set(scope, st.catalog);
     _prefs.set(scope, st.prefs);
     apply(sessionId, scope, st.threads);
-  } catch {
-    // Модуль выключен или чат не свой — сцен просто нет
-    _entries.set(sessionId, { scope, state: EMPTY_THREADS, loaded: true, loading: false });
+  } catch (err) {
+    const status = (err as { status?: unknown } | null)?.status;
+    const transient = typeof status !== 'number' || status >= 500 || status === 408 || status === 429;
+    const retry = transient && attempt < LOAD_RETRY_MS.length;
+    _entries.set(sessionId, { scope, state: e?.state ?? EMPTY_THREADS, loaded: !retry, loading: false });
+    if (retry) setTimeout(() => { void load(scope, sessionId, false, attempt + 1); }, LOAD_RETRY_MS[attempt]);
     emit();
   }
 }

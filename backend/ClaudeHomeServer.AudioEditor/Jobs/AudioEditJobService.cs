@@ -510,7 +510,8 @@ public sealed class AudioEditJobService : IDisposable
         try
         {
             var added = await _videoScenes.AddSoundVersionAsync(
-                new ClaudeHomeServer.Services.Media.VideoSceneRef(job.OwnerId, job.Scope.Key, sessionId, link.SceneId, link.VersionId),
+                new ClaudeHomeServer.Services.Media.VideoSceneRef(job.OwnerId, job.Scope.Key, sessionId, link.SceneId, link.VersionId,
+                    job.Initiator == AudioEditInitiator.Agent ? "agent" : "human"),
                 audio.Bytes, audio.Extension, request.Model, CancellationToken.None);
             return added.VersionId is null ? "Звук готов, но в сцену он не вклеился: " + added.Error : null;
         }

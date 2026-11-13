@@ -150,10 +150,15 @@ describe('«Увеличить ×2/×4» (RelayVSR, локально): отде�
     launches: [{ jobId: 'job-9', at: '2026-11-13T10:00:00Z', status: 'running', interrupted: false, initiator: 'human', provider: 'local', model: 'relayvsr-x2', count: 1 }],
   });
 
-  it('у готовой версии проекта кнопка «Увеличить» есть, у личного чата и у идущего запуска — нет', () => {
+  it('у готовой версии кнопка «Увеличить» есть и в проекте, и в личном чате, у идущего запуска — нет', () => {
     const s = shot('human');
     expect(view(s).canEnhance).toBe(true);
-    expect(view(s, { personal: true }).canEnhance).toBe(false);
+    const personal = view(s, { personal: true });
+    expect(personal.canEnhance).toBe(true);
+    // Личный чат проекта не имеет: сохранить и положить в фильм нельзя, скачать — можно
+    expect(personal.canSave).toBe(false);
+    expect(personal.canAddToFilm).toBe(false);
+    expect(personal.canDownload).toBe(true);
     expect(view(s, { running: true }).canEnhance).toBe(false);
     const html = renderToStaticMarkup(createElement(SceneCardView, { v: view(s), src: null, busy: false, a: { ...A, onEnhance: noop, onEnhanceQuote: async () => null } }));
     expect(html).toContain('data-video-enhance=""');

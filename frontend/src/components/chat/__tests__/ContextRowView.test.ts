@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 // Без DOM: чипы строки читаем по data-атрибутам статической разметки
 
 import type { FormatModel } from '../../../lib/chatContext/formatTypes';
-import { ContextRowView, rowFacts, showsRow, type ContextRowViewProps, type RowExec, type RowGit } from '../ContextRowView';
+import { ContextRowView, ExecMenuBody, rowFacts, showsRow, type ContextRowViewProps, type RowExec, type RowGit } from '../ContextRowView';
 import { dimmedKindItem } from '../../../lib/chatContext/disabledKind';
 import type { ChatContextPrimary, ChatContextRef, ContextKindApi } from '../../../lib/chatContext/types';
 
@@ -33,6 +33,30 @@ describe('ContextRowView', () => {
   it('«Чем» в «Чате» не рисуется, при выбранном действии — есть', () => {
     expect(has(html(props({ exec: null })), 'exec')).toBe(false);
     expect(has(html(props({ exec })), 'exec')).toBe(true);
+  });
+
+  it('«Чат» с разделами вида: чип «Чем» есть и подписан, для чего выбор («Править:»), подсказка называет оба раздела', () => {
+    const cloud = { ...exec.rows[0], id: 'fal|nb2', group: 'cloud' as const, name: 'fal · Nano Banana 2', free: false };
+    const chat: RowExec = {
+      ...exec, sections: [
+        { rows: exec.rows, value: 'auto', onChange: () => {}, head: 'Править эту картинку', chip: 'Править' },
+        { rows: [...exec.rows, cloud], value: 'fal|nb2', onChange: () => {}, head: 'Новая картинка', chip: 'Создать' },
+      ],
+    };
+    const h = html(props({ exec: chat }));
+    expect(has(h, 'exec')).toBe(true);
+    expect(h).toContain('>Править:<');
+    expect(h).not.toContain('>Чем:<');
+    expect(h).toContain('title="Править эту картинку: ');
+    expect(h).toContain('новая картинка — в том же меню');
+    // Узкая строка: чип не пропадает, ужимается до значка
+    expect(has(html(props({ exec: chat, width: 300 })), 'exec')).toBe(true);
+    // Меню «Чем выполнить»: оба раздела под своими заголовками, у каждого свой выбранный исполнитель
+    const menu = renderToStaticMarkup(createElement(ExecMenuBody, { e: chat, close: () => {} }));
+    expect(menu).toContain('data-exec-section="Править"');
+    expect(menu).toContain('data-exec-section="Создать"');
+    expect(menu.indexOf('Править эту картинку')).toBeLessThan(menu.indexOf('Новая картинка'));
+    expect(menu).toContain('Nano Banana 2');
   });
 
   it('«Чем» не бывает без объекта', () => {

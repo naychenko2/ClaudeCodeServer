@@ -75,7 +75,7 @@ export type { SubsystemManifest, RevealPanelDetail, RevealPanelOptions } from '.
 // ─── chatContext (ADR-023): контракты вида контекста хода ────────────────────
 export type {
   ChatContextDto, ChatContextItem, ChatContextPrimary, ChatContextRef, ContextKindApi, ContextKindCtx, KindState,
-  ContextAction, ActionKind, LaunchParam, ExecutorListModel, ActionResult, ContextReturn, ActionPreset, ActionRun, ActionQuote, LaunchRequest, LaunchHandle,
+  ContextAction, ActionKind, LaunchParam, ExecutorListModel, ChatExecutorSection, ActionResult, ContextReturn, ActionPreset, ActionRun, ActionQuote, LaunchRequest, LaunchHandle,
 } from '../chatContext/types';
 
 export {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { objectKey, rememberAction, resetActionMemory } from './actionMemory';
 import { setRunParam } from './actionRun';
-import { execMenuTitle, selectRowAction } from './rowExec';
+import { execMenuTitle, rowExecOf, selectRowAction } from './rowExec';
 import type { ChatContextPrimary, ContextAction, ContextKindApi } from './types';
 
 const primary = (by: 'human' | 'agent'): ChatContextPrimary => ({
@@ -80,5 +80,34 @@ describe('«Чем» и ответ вопроса действия', () => {
     seen.length = 0;
     selectRowAction({ ...withQuestion, actions: () => [run('denoise')] }, ctx, audio, []);
     expect(seen.at(-1)).toBeNull();
+  });
+});
+
+describe('«Чем» в «Чате»', () => {
+  const sections = [
+    { ...model, head: 'Править эту картинку', chip: 'Править' },
+    { rows: [], value: 'local|moss', onChange: () => {}, head: 'Новая картинка', chip: 'Создать' },
+  ];
+  const withChat: ContextKindApi = { ...api, chatExecutors: () => sections };
+  const chatOf = (a: ContextKindApi) => {
+    rememberAction('s1', objectKey(primary('human')), null);
+    return rowExecOf(a, ctx, selectRowAction(a, ctx, primary('human'), []));
+  };
+
+  it('вид без chatExecutors или без вида — чипа нет (Р2)', () => {
+    expect(chatOf(api)).toBeNull();
+    expect(rowExecOf(null, ctx, { action: null, executors: null })).toBeNull();
+  });
+
+  it('вид с chatExecutors: чип — первый раздел, меню — все', () => {
+    const e = chatOf(withChat)!;
+    expect(e).toMatchObject({ value: 'auto', title: 'Чем выполнить' });
+    expect(e.sections).toBe(sections);
+  });
+
+  it('выбрано run-действие — его исполнители, разделов «Чата» нет', () => {
+    const e = rowExecOf(withChat, ctx, selectRowAction(withChat, ctx, primary('human'), []))!;
+    expect(e).toMatchObject({ value: 'auto', title: 'Чем выполнить «edit»' });
+    expect(e.sections).toBeUndefined();
   });
 });

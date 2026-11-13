@@ -4,7 +4,7 @@
 
 import { Image as ImageIcon, User } from 'lucide-react';
 import {
-  C, ICON_SIZE, ICON_STROKE, R, SP, notifyKindChanged,
+  C, ICON_SIZE, ICON_STROKE, R, SP, getChatContextState, notifyKindChanged,
   type ChatContextItem, type ContextKindApi, type ContextKindCtx,
 } from 'aihome_shell/kit';
 import { enterScope } from '../scope';
@@ -18,7 +18,7 @@ import { activeSrc, resolveModel, versionSrc } from '../thread/useThreadLaunch';
 import { openEditor } from '../thread/threadStore';
 import type { ImageEditOp } from '../api';
 import type { ImageThread } from '../thread/threadsApi';
-import { executorModel, settingsOf } from './executors';
+import { chatExecutorSections, executorModel, settingsOf } from './executors';
 import { launchAction, paramsFor, quoteAction } from './run';
 import { imageFormat } from './format';
 import { imageRefRoles, IMAGE_SAMPLE_ROLES } from './roles';
@@ -134,6 +134,14 @@ export const imageKindApi: ContextKindApi = {
       scope: found.scope, sessionId: ctx.sessionId, thread: found.thread, op: found.action.op as ImageEditOp,
       catalog, hasImage: found.input.hasFile, hasMask: found.input.hasMask,
     });
+  },
+  // «Чем» в «Чате»: модель правки выбранной картинки и модель новой — те, с которыми пойдёт запуск агента
+  chatExecutors: ctx => {
+    const thread = threadOfPrimary(ctx.sessionId, getChatContextState(ctx.sessionId).primary);
+    const scope = enterScope(ctx.projectId, ctx.sessionId);
+    const catalog = thread ? getCatalog(scope) : null;
+    if (!thread || !catalog) return [];
+    return chatExecutorSections({ scope, sessionId: ctx.sessionId, thread, catalog, hasImage: threadHasImage(thread) });
   },
   format: imageFormat,
   params: (ctx, actionId) => {

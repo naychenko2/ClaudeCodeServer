@@ -11,7 +11,7 @@ import { contextRowLadder, CAP, gitChipBox, ladderRungs, NOM, type LadderFacts, 
 import { unusedBy } from '../../lib/chatContext/fill';
 import { roleLabel } from '../../lib/chatContext/roleLabels';
 import { baseName } from '../../lib/chatContext/labels';
-import type { ChatContextPrimary, ChatContextRef } from '../../lib/chatContext/types';
+import type { ChatContextPrimary, ChatContextRef, ChatExecutorSection, ExecutorListModel } from '../../lib/chatContext/types';
 import type { FormatModel } from '../../lib/chatContext/formatTypes';
 import { Badge, Button, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -46,6 +46,9 @@ export interface RowExec {
   onChange: (id: string) => void;
   // Заголовок меню: «Чем выполнить» или «Чем выполнить «Стемы»»
   title: string;
+  // «Чат»: для каких запусков агента выбор («Править эту картинку», «Новая картинка»). Чип — первый
+  // раздел (rows/value/onChange выше — его), меню — все разделы под своими заголовками
+  sections?: readonly ChatExecutorSection[];
 }
 
 // until — срок плашки в сторе (мс, Date.now()): отсчёт «N с» считается от него
@@ -215,7 +218,10 @@ function ExecChip({ e, form, bare, onOpen }: { e: RowExec; form: 1 | 2 | 3; bare
   const price = rowPriceShort(row);
   const free = !!row.free;
   const full = auto ? `Авто${row.now ? ` · ${row.now}` : ''}` : `${row.sub ? `${row.sub} · ` : ''}${row.name}`;
-  const title = `Чем: ${full} · ${price} — сменить исполнителя`;
+  const head = e.sections?.[0];
+  const title = head
+    ? `${head.head}: ${full} · ${price} — сменить${e.sections!.length > 1 ? `; ${e.sections!.slice(1).map(x => x.head.toLowerCase()).join(', ')} — в том же меню` : ''}`
+    : `Чем: ${full} · ${price} — сменить исполнителя`;
   const open = (ev: { currentTarget: HTMLElement }) => onOpen(ev.currentTarget.getBoundingClientRect());
   // Имя облачной модели приходит с поставщиком («fal · Nano Banana 2»): в голой форме оставляем саму модель
   const bareName = auto ? 'Авто' : row.name.split(' · ').pop() ?? row.name;
@@ -232,7 +238,7 @@ function ExecChip({ e, form, bare, onOpen }: { e: RowExec; form: 1 | 2 | 3; bare
         : form === 2
           ? <b style={{ ...ellipsis, ...name }}>{row.name}</b>
           : <>
-              <span style={{ color: C.textMuted, flexShrink: 0 }}>Чем:</span>
+              <span style={{ color: C.textMuted, flexShrink: 0 }}>{head?.chip ?? 'Чем'}:</span>
               <span style={ellipsis}>
                 {auto
                   ? <><b style={name}>Авто</b>{row.now ? ` · ${row.now}` : ''}</>
@@ -347,10 +353,26 @@ function GitActions({ g, onCommit }: { g: RowGit; onCommit: (rect: DOMRect) => v
 }
 
 // Заголовок меню — у шторки на телефоне он в шапке окна, второй раз не повторяем
-function ExecMenuBody({ e, close, head = true }: { e: RowExec; close: () => void; head?: boolean }) {
+export function ExecMenuBody({ e, close, head = true }: { e: RowExec; close: () => void; head?: boolean }) {
   return (
     <>
       {head && <MenuHead>{e.title}</MenuHead>}
+      {e.sections
+        ? e.sections.map((x, i) => (
+            <div key={x.head} data-exec-section={x.chip}>
+              {i > 0 && <MenuSep />}
+              <MenuHead><b style={{ color: C.textHeading }}>{x.head}</b></MenuHead>
+              <ExecRows m={x} close={close} />
+            </div>
+          ))
+        : <ExecRows m={e} close={close} />}
+    </>
+  );
+}
+
+function ExecRows({ m: e, close }: { m: ExecutorListModel; close: () => void }) {
+  return (
+    <>
       {groupExecutorRows(e.rows).map(g => (
         <div key={g.group}>
           {g.group !== 'auto' && <MenuHead>{EXECUTOR_GROUP_LABEL[g.group]}</MenuHead>}
@@ -717,7 +739,8 @@ export function ContextRowView(props: ContextRowViewProps) {
           ? <Menu anchor={menu.rect} onClose={close} minWidth={360} maxWidth={420} maxHeight={formatMenuMax(menu.rect)} innerScroll preferUp anchorAlign="start">
               <MenuHead><b style={{ color: C.textHeading }}>{format?.title}</b></MenuHead>{body}
             </Menu>
-          : <Menu anchor={menu.rect} onClose={close} minWidth={300} maxWidth={340} maxHeight={320} preferUp anchorAlign="start">{body}</Menu>)}
+          // Два раздела «Чем» в «Чате» — меню выше, чтобы второй раздел был виден без прокрутки до края
+          : <Menu anchor={menu.rect} onClose={close} minWidth={300} maxWidth={340} maxHeight={menu.kind === 'exec' && exec?.sections ? 440 : 320} preferUp anchorAlign="start">{body}</Menu>)}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 // «Чем» действия картинки (ADR-023 §Д2.1). Источник в итоге один — ответ `quote` с `executors[]` (шаг 2б-3);
 // пока строки строит `panel/executorRows.ts` из каталога, функцией (catalog, op).
 
-import type { ExecutorListModel, ExecutorRow } from 'aihome_shell/kit';
+import type { ChatExecutorSection, ExecutorListModel, ExecutorRow } from 'aihome_shell/kit';
 import type { ImageEditCatalog, ImageEditOp } from '../api';
 import { quickOf } from './ops';
 import { AUTO_EXECUTOR, executorRows, executorSettings, executorValue } from '../panel/executorRows';
@@ -43,15 +43,37 @@ export function executorModel(o: {
 }): ExecutorListModel {
   const value = executorValue(o.catalog, settingsOf(o.scope, o.thread, o.op));
   const key = [o.scope, o.thread.id, o.op, o.hasImage, o.hasMask, value].join('|');
-  const hit = _cache.get(o.sessionId);
+  // Место кэша — чат и режим настроек: в «Чате» строка держит «Править» и «Создать» разом, они не вытесняют друг друга
+  const slot = `${o.sessionId}|${settingsMode(o.op)}`;
+  const hit = _cache.get(slot);
   if (hit && hit.key === key && hit.catalog === o.catalog) return hit.model;
   const model: ExecutorListModel = {
     rows: rowsForOp(o.catalog, o.op, o.hasImage, o.hasMask),
     value,
     onChange: id => chooseExecutor(o.scope, o.sessionId, o.thread, o.op, id),
   };
-  _cache.set(o.sessionId, { key, catalog: o.catalog, model });
+  _cache.set(slot, { key, catalog: o.catalog, model });
   return model;
 }
 
-export const __resetExecutorCache = () => _cache.clear();
+// «Чем» в «Чате»: агент правит выбранную картинку настройками «Править», а новую рисует настройками
+// «Создать» (ImageProjectPrefs.LaunchSettings на сервере). У черновика правки нет — только «Создать»
+const _chat = new Map<string, { edit: ExecutorListModel | null; create: ExecutorListModel; sections: readonly ChatExecutorSection[] }>();
+
+export function chatExecutorSections(o: {
+  scope: string; sessionId: string; thread: ImageThread; catalog: ImageEditCatalog; hasImage: boolean;
+}): readonly ChatExecutorSection[] {
+  const base = { scope: o.scope, sessionId: o.sessionId, thread: o.thread, catalog: o.catalog, hasMask: false };
+  const create = executorModel({ ...base, op: 'generate', hasImage: false });
+  const edit = o.hasImage ? executorModel({ ...base, op: 'edit', hasImage: true }) : null;
+  const hit = _chat.get(o.sessionId);
+  if (hit && hit.edit === edit && hit.create === create) return hit.sections;
+  const sections: ChatExecutorSection[] = [
+    ...(edit ? [{ ...edit, head: 'Править эту картинку', chip: 'Править' }] : []),
+    { ...create, head: 'Новая картинка', chip: 'Создать' },
+  ];
+  _chat.set(o.sessionId, { edit, create, sections });
+  return sections;
+}
+
+export const __resetExecutorCache = () => { _cache.clear(); _chat.clear(); };

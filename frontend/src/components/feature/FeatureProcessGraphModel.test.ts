@@ -48,16 +48,16 @@ function mkStage(key: StageKey, id: string, role: string, column: number, state:
 const ids = (cs: { stages: FeatureStage[] }[]): string[][] => cs.map(c => c.stages.map(stageNodeId));
 
 // === parallel-cycle (разрез 2 §1.10): 10 этапов, колонки 0..5 ===
-// Порядок списка — топологический (бэк), в нём plan стоит раньше qaplan одной колонки.
+// Порядок списка — топологический (бэк), в нём plan стоит раньше qa-plan одной колонки.
 function parallelCycle(): FeatureStage[] {
   return [
     mkStage('cut', 'cut', 'cut', 0, 'done'),
     mkStage('design', 'design', 'design', 1, 'done', ['cut']),
     mkStage('plan', 'plan', 'plan', 2, 'done', ['design']),
-    mkStage('qa', 'qaplan', 'qa', 2, 'pending', ['design']),
+    mkStage('qa', 'qa-plan', 'qa', 2, 'pending', ['design']),
     mkStage('prod', 'step-back', 'step', 3, 'active', ['plan']),
     mkStage('prod', 'step-front', 'step', 3, 'pending', ['plan']),
-    mkStage('qa', 'qa', 'qa', 3, 'pending', ['qaplan']),
+    mkStage('qa', 'qa', 'qa', 3, 'pending', ['qa-plan']),
     mkStage('review', 'review', 'review', 4, 'pending', ['step-back', 'step-front']),
     mkStage('final', 'final', 'final', 4, 'pending', ['qa']),
     mkStage('merge', 'merge', 'merge', 5, 'pending', ['final']),
@@ -71,7 +71,7 @@ describe('graphColumns — колонки строго по полю column', ()
     expect(ids(cols)).toEqual([
       ['cut'],
       ['design'],
-      ['plan', 'qaplan'],
+      ['plan', 'qa-plan'],
       ['step-back', 'step-front', 'qa'],
       ['review', 'final'],
       ['merge'],
@@ -131,10 +131,10 @@ describe('graphEdges — рёбра строго по after', () => {
     expect(edges).toEqual([
       { from: 'cut', to: 'design' },
       { from: 'design', to: 'plan' },
-      { from: 'design', to: 'qaplan' },
+      { from: 'design', to: 'qa-plan' },
       { from: 'plan', to: 'step-back' },
       { from: 'plan', to: 'step-front' },
-      { from: 'qaplan', to: 'qa' },
+      { from: 'qa-plan', to: 'qa' },
       { from: 'step-back', to: 'review' },
       { from: 'step-front', to: 'review' },
       { from: 'qa', to: 'final' },

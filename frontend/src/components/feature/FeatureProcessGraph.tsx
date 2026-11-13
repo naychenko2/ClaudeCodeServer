@@ -18,7 +18,7 @@
 //
 // Тона активной стадии (цвет графа, карточка §1.9): run — accent, wait — info,
 // stopped — danger, loop — warning (тот же тон, что «стоит»/«доработка» в строке индекса,
-// FeatureGroupHeader.cs:164-166). done — success; pending/absent/skipped — пунктир.
+// chatGroups.ts:512,527). done — success; pending/absent/skipped — пунктир.
 // Слово о состоянии для aria-label — из единого источника stageStatusLabel; «готово» для
 // done — подпись легенды макета (у done слова нет).
 //
@@ -136,10 +136,15 @@ function edgePath(a: NodePos, b: NodePos, mobile: boolean): string {
   return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
 }
 
-// Имя карточки: имя этапа (общий STAGE_NAME через stageName — своей таблицы нет) плюс
-// линия для параллельных этапов одной роли (step-back/step-front дают одинаковое имя «Шаги»;
-// различаются они только линией — без неё две одинаковые карточки).
+// Имя карточки — с бэка (доработка C3a по вердикту R-C3a, контракт a5d0c76e/G7):
+// FeatureStage.Title подтверждённого маршрута; бэк гарантирует различимость имён у этапов
+// с общей парой (role, lane) — «Параллельный цикл» даёт qa-plan «Проверка плана» /
+// qa «Проверка», и оба qa-узла различимы подписью и aria-label. Фолбэк (легаси и этап
+// без имени, как и раньше): общий STAGE_NAME через stageName (своей таблицы имён нет)
+// плюс линия для параллельных этапов одной роли (step-back/step-front дают одинаковое
+// имя «Производство»; различаются они только линией — без неё две одинаковые карточки).
 function nodeTitle(stage: FeatureStage): string {
+  if (stage.title) return stage.title;
   const lane = laneWord(stage.lane ?? null);
   const name = stageName(stage.key);
   return lane ? `${name} · ${lane}` : name;

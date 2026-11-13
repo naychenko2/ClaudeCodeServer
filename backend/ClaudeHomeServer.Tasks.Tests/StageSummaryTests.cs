@@ -146,6 +146,7 @@ public class StageSummaryTests : IDisposable
         var t0 = a.CreatedAt; // окно этапа начинается с CreatedAt задачи, журнал отсчитываем от него
         a.ClaudeStartedAt = t0;
         a.Status = TaskItemStatus.Done; a.CompletedAt = t0.AddMinutes(20);
+        b.Status = TaskItemStatus.Done; b.CompletedAt = t0.AddMinutes(20); // окно b тоже накрывает ревью
         r.ClaudeStartedAt = t0.AddMinutes(100);
         r.Status = TaskItemStatus.Done; r.CompletedAt = t0.AddMinutes(160);
         var journal = new FeatureJournalStore(Path.Combine(_dir, "feature-journal"));

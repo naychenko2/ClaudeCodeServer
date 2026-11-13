@@ -104,7 +104,13 @@ public sealed class PersonalProjectStore : IPersonalProjects
             lock (_gate)
             {
                 _items.Add(project);
-                Save();
+                try { Save(); }
+                catch
+                {
+                    // Записи, которой нет на диске, в памяти быть не должно: после рестарта у неё сменился бы Id
+                    _items.Remove(project);
+                    throw;
+                }
             }
             return project;
         }

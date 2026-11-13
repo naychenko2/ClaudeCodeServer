@@ -77,6 +77,24 @@ public class PersonalProjectStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Ensure_СбойСохранения_НеОставляетЗаписьВПамяти()
+    {
+        var sut = CreateStore();
+        // Путь файла занят каталогом: запись на диск гарантированно падает
+        Directory.CreateDirectory(StorePath);
+
+        var act = async () => await sut.EnsurePersonalAsync(_ownerId);
+
+        await act.Should().ThrowAsync<Exception>();
+        sut.GetPersonalOf(_ownerId).Should().BeNull("запись не попала на диск");
+        sut.GetAllPersonal().Should().BeEmpty();
+
+        Directory.Delete(StorePath);
+        var project = await sut.EnsurePersonalAsync(_ownerId);
+        CreateStore().GetPersonalOf(_ownerId)!.Id.Should().Be(project.Id);
+    }
+
+    [Fact]
     public async Task Ensure_Идемпотентен()
     {
         var sut = CreateStore();

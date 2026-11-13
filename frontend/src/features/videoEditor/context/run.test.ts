@@ -22,6 +22,7 @@ const { __applyChatContext, __resetChatContextStore } = await import('../../../l
 const { __resetVideoExecutors, NO_AI_ROW } = await import('./executors');
 const { videoKindApi } = await import('./kind');
 const { CATALOG, film, FILM_PATH, PREFS, QUOTE, scene, threads, version } = await import('../mocks');
+const { rowExecOf } = await import('../../../lib/chatContext/rowExec');
 import type { ChatContextDto } from '../../../lib/chatContext/types';
 
 const P = 'p1';
@@ -299,5 +300,43 @@ describe('вид из сторов', () => {
     expect(videoKindApi.refRoles!(CTX, sc, 'project-file').map(r => r.role)).toEqual(['frame-a', 'frame-b']);
     expect(videoKindApi.refRoles!(CTX, sc, 'audio')).toEqual([]);
     expect(videoKindApi.refRoles!(CTX, filmCtx(7).primary!, 'image')).toEqual([]);
+  });
+});
+
+describe('«Чем» в «Чате»: модель съёмки сцены', () => {
+  it('сцена: один раздел «Снять эту сцену» с моделью её настроек; та же модель на повторный вызов', () => {
+    applyScene();
+    const s = videoKindApi.chatExecutors!(CTX);
+    expect(s.map(x => [x.chip, x.head])).toEqual([['Снять', 'Снять эту сцену']]);
+    expect(s[0].value).toBe('fal|veo-3.1');
+    expect(s[0].rows.map(r => r.id)).toContain('local|minimax-h3');
+    expect(videoKindApi.chatExecutors!(CTX)).toBe(s);
+    // Строка в «Чате» (действие не выбрано): чип «Чем» есть, его меню — этот раздел
+    const row = rowExecOf(videoKindApi, CTX, { action: null, executors: null })!;
+    expect(row).toMatchObject({ title: 'Чем выполнить', value: 'fal|veo-3.1' });
+    expect(row.sections).toBe(s);
+  });
+
+  it('фильм собирается без ИИ — раздела нет; сцена ещё грузится — тоже', () => {
+    applyFilm();
+    expect(videoKindApi.chatExecutors!(CTX)).toEqual([]);
+    __applyThreads(S, P, threads(4, []));
+    __applyChatContext(S, sceneCtx(8));
+    expect(videoKindApi.chatExecutors!(CTX)).toEqual([]);
+  });
+
+  it('выбор пишется в сцену основного объекта, даже если фокус «Видео» на другой сцене', async () => {
+    const ids: string[] = [];
+    vi.mocked(videoApi.settings).mockImplementation(async (_s, _c, id, settings) => {
+      ids.push(id); saved.push({ ...settings });
+      return threads(5, [scene('sc1'), scene('sc2')], { sceneId: 'sc2' });
+    });
+    __applyThreads(S, P, threads(4, [scene('sc1'), scene('sc2')], { sceneId: 'sc2' }));
+    __applyChatContext(S, sceneCtx(7));
+    const [shoot] = videoKindApi.chatExecutors!(CTX);
+    shoot.onChange('local|minimax-h3');
+    expect(videoKindApi.chatExecutors!(CTX)[0].value).toBe('local|minimax-h3');
+    await vi.waitFor(() => expect(saved[0]).toMatchObject({ provider: 'local', model: 'minimax-h3' }));
+    expect(ids).toEqual(['sc1']);
   });
 });

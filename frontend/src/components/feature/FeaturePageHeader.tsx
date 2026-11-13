@@ -21,6 +21,7 @@ import { api } from '../../lib/api';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 import { NavTargetButton } from './NavTargetButton';
 import { FeatureWorkflowConfirm } from './FeatureWorkflowConfirm';
+import { routeBlockState } from './FeatureWorkflowConfirmModel';
 import { StatusTag, shortRunTagLabel, type FeatureRunTag } from './FeatureStatusTag';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { minutesSince } from './FeatureStatsBits';
@@ -1135,7 +1136,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
 // шаблонов для него не запрашивается.
 export function hasWorkflowRoute(run: FeatureRun | null | undefined): boolean {
   const epic = run?.epic;
-  return !!(epic && (epic.workflowProposal || epic.workflow));
+  return !!epic && routeBlockState(epic.routeRequired, epic.workflowProposal, epic.workflow) !== null;
 }
 
 export function FeaturePageWorkflowConfirm({ run, featureId, projectId, isMobile }: {
@@ -1153,6 +1154,7 @@ export function FeaturePageWorkflowConfirm({ run, featureId, projectId, isMobile
         projectId={projectId}
         proposal={run.epic?.workflowProposal ?? null}
         confirmed={run.epic?.workflow ?? null}
+        routeRequired={run.epic?.routeRequired ?? null}
         isMobile={isMobile}
       />
     </div>

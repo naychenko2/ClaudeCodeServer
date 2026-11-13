@@ -29,8 +29,8 @@ import { workflowTemplatesApi } from '../../features/workflowTemplates/api';
 import { normalizeStages } from '../../features/workflowTemplates/workflowGraphModel';
 import { STAGE_ROLE_LABEL } from '../../features/workflowTemplates/WorkflowStageRow';
 import {
-  applyRecommend, confirmBodyOf, initialRemovedIds, isRemovableStage,
-  pickInitialTemplate, templateUpdateText, type ConfirmedRoute,
+  applyRecommend, confirmBodyOf, confirmedLineText, initialRemovedIds, isRemovableStage,
+  pickInitialTemplate, routeBlockState, templateUpdateText, type ConfirmedRoute,
 } from './FeatureWorkflowConfirmModel';
 import type { WorkflowProposal, WorkflowTemplateEntry, WorkflowTemplateScope } from '../../features/workflowTemplates/types';
 
@@ -48,6 +48,9 @@ export interface FeatureWorkflowConfirmProps {
   // нужно — есть предложение без подтверждения или «шаблон изменился». Подтверждённый маршрут
   // без перемен не занимает места. Каталог шаблонов тот же один запрос, что и без флага.
   quiet?: boolean;
+  // epic.routeRequired: фича в режиме маршрута. Без предложения и подтверждения блок
+  // всё равно виден — состояние «предложения нет» (M5).
+  routeRequired?: boolean | null;
 }
 
 interface SelectedKey { id: string; scope: WorkflowTemplateScope }
@@ -56,7 +59,7 @@ const errText = (e: unknown): string =>
   e instanceof Error && e.message ? e.message : 'Не получилось, попробуйте ещё раз';
 
 export function FeatureWorkflowConfirm({
-  featureId, projectId, proposal, confirmed, isMobile, quiet,
+  featureId, projectId, proposal, confirmed, isMobile, quiet, routeRequired,
 }: FeatureWorkflowConfirmProps): React.ReactElement {
   const [entries, setEntries] = useState<WorkflowTemplateEntry[] | null>(null);
   const [selKey, setSelKey] = useState<SelectedKey | null>(null);
@@ -66,6 +69,8 @@ export function FeatureWorkflowConfirm({
   const [busyConfirm, setBusyConfirm] = useState(false);
   const [busyRecommend, setBusyRecommend] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  // Тихий режим: подтверждённый маршрут свёрнут в строку, «Сменить» разворачивает блок.
+  const [expanded, setExpanded] = useState(false);
 
   const featureIdRef = useRef(featureId);
   // ref-guard, а не state: state обновился бы только со следующим рендером, а двойной
@@ -82,6 +87,7 @@ export function FeatureWorkflowConfirm({
     setRemovedTouched(null);
     setLocalProposal(null);
     setErrorText(null);
+    setExpanded(false);
     abortRef.current?.abort();
   }
 
@@ -189,9 +195,29 @@ export function FeatureWorkflowConfirm({
   const canConfirm = !!selectedEntry && !busyConfirm;
   // Тихий режим: нужен ответ человека (предложение ждёт подтверждения, подобрали новое) или
   // шаблон подтверждённого маршрута изменился; ошибка и идущий запрос блок не прячут.
+  const blockState = routeBlockState(routeRequired, shownProposal, confirmed ?? null);
   const actionable = (!!shownProposal && !confirmed) || !!localProposal || !!updateText
-    || !!errorText || busyConfirm || busyRecommend;
-  if (quiet && !actionable) return <></>;
+    || blockState === 'none' || !!errorText || busyConfirm || busyRecommend;
+  const lineText = confirmed ? confirmedLineText(confirmed, confirmedTemplate) : null;
+  if (quiet && !actionable) {
+    if (!confirmed || !lineText) return <></>;
+    if (!expanded) {
+      return (
+        <div
+          data-testid="feature-workflow-confirm-line"
+          style={{
+            display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+            marginBottom: SP.md, fontFamily: FONT.sans,
+          }}
+        >
+          <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: 0 }}>{lineText}</span>
+          <Button variant="ghost" size="sm" dataTestId="feature-workflow-confirm-change" onClick={() => setExpanded(true)}>
+            Сменить
+          </Button>
+        </div>
+      );
+    }
+  }
 
   const templateOptions = (entries ?? []).map(e => ({
     value: `${e.scope}:${e.template.id}`,
@@ -212,9 +238,13 @@ export function FeatureWorkflowConfirm({
     >
       <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted }}>Маршрут фичи</div>
 
-      {confirmed && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-          <Badge tone="success" size="xs">маршрут подтверждён · v{confirmed.confirmedVersion}</Badge>
+      {lineText && (
+        <div data-testid="feature-workflow-confirm-line" style={{ fontSize: FS.sm, color: C.textSecondary }}>{lineText}</div>
+      )}
+
+      {blockState === 'none' && (
+        <div data-testid="feature-workflow-confirm-none" style={{ fontSize: FS.sm, color: C.textSecondary }}>
+          Предложения пока нет, модель обычно отвечает до полуминуты.
         </div>
       )}
 
@@ -333,7 +363,7 @@ export function FeatureWorkflowConfirm({
           dataTestId="feature-workflow-confirm-recommend"
           onClick={onRecommend}
         >
-          Подобрать маршрут
+          {blockState === 'none' ? 'Подобрать ещё раз' : 'Подобрать маршрут'}
         </Button>
       </div>
     </div>

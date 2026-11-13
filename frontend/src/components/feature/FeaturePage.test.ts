@@ -16,7 +16,7 @@ import { createElement, StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resolveSelectedStage } from './FeatureStageArea';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
-import { featureRunStatusTag } from './FeaturePageHeader';
+import { featureRunStatusTag, hasWorkflowRoute } from './FeaturePageHeader';
 import { __test as pageTest, setFeaturePageTab, setFeatureMainTab, refetchFeaturePage, getFeatureMainTab, type FeatureBrief } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
@@ -2740,5 +2740,19 @@ describe('FeaturePage: вариант A — граф и этап внутри «
     await settle();
     expect(mockTemplates.calls).toBeGreaterThan(0);
     expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')).toBeNull();
+  });
+});
+
+describe('hasWorkflowRoute: монтирование блока маршрута по маркеру режима (M5)', () => {
+  const run = (epic: Record<string, unknown>) => ({ epic } as unknown as Parameters<typeof hasWorkflowRoute>[0]);
+
+  it('routeRequired без предложения и маршрута — блок есть', () => {
+    expect(hasWorkflowRoute(run({ routeRequired: true }))).toBe(true);
+  });
+
+  it('легаси-эпик (ни маркера, ни предложения, ни маршрута) — блока нет', () => {
+    expect(hasWorkflowRoute(run({}))).toBe(false);
+    expect(hasWorkflowRoute(run({ routeRequired: false }))).toBe(false);
+    expect(hasWorkflowRoute(null)).toBe(false);
   });
 });

@@ -81,12 +81,14 @@ const CONFIRMED: ConfirmedRoute = {
 
 const PROPOSED_FAST: WorkflowProposal = { templateId: 'fast-track', scope: 'global', skipped: [] };
 
-async function renderBlock(props: { proposal?: WorkflowProposal | null; confirmed?: ConfirmedRoute | null }) {
+async function renderBlock(props: { proposal?: WorkflowProposal | null; confirmed?: ConfirmedRoute | null; routeRequired?: boolean; quiet?: boolean }) {
   const { container } = mount(createElement(FeatureWorkflowConfirm, {
     featureId: 'f1',
     proposal: props.proposal,
     confirmed: props.confirmed ?? null,
     isMobile: false,
+    routeRequired: props.routeRequired,
+    quiet: props.quiet,
   }));
   // listTemplates — мгновенная заглушка: её then (setEntries) догорает на микрозадачах.
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
@@ -113,7 +115,7 @@ describe('FeatureWorkflowConfirm: строка «шаблон изменился
   it('подтверждённый шаблон в каталоге не отредактирован — строки нет', async () => {
     catalog.entries = [entry(fullCycle(3))];
     const c = await renderBlock({ confirmed: CONFIRMED });
-    expect(text(c)).toContain('маршрут подтверждён');
+    expect(text(c)).toContain('full-cycle · v3 · снято: qa · подтверждён вами');
     expect(text(c)).not.toContain('Шаблон изменился');
   });
 
@@ -162,5 +164,62 @@ describe('FeatureWorkflowConfirm: имена этапов в списке (де�
     // Имени нет → строка как до правки: роль «Проверка» + id «qa-plan».
     expect(text(c)).toContain('qa-plan');
     expect(findNodeByAttr(c, 'aria-label', 'Этап «Проверка» включён в маршрут')).not.toBeNull();
+  });
+});
+
+describe('FeatureWorkflowConfirm: состояние «предложения нет» и строка подтверждённого (M5)', () => {
+  beforeEach(() => { installFakeDom(); });
+  afterEach(() => { uninstallFakeDom(); });
+
+  it('none в тихом режиме: блок виден, текст, без предвыбора, подтверждение выключено, кнопка «Подобрать ещё раз»', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ routeRequired: true, quiet: true });
+    expect(text(c)).toContain('Предложения пока нет, модель обычно отвечает до полуминуты.');
+    expect(reactProps(selectOf(c))?.value).toBe('');
+    expect(reactProps(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-submit')!)?.disabled).toBe(true);
+    expect(text(c)).toContain('Подобрать ещё раз');
+  });
+
+  it('none: выбор шаблона включает «Подтвердить маршрут»', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ routeRequired: true });
+    await selectTemplate(c, 'global:full-cycle');
+    expect(reactProps(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-submit')!)?.disabled).toBeFalsy();
+  });
+
+  it('легаси без маркера и предложения — «предложения нет» не показывается', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({});
+    expect(text(c)).not.toContain('Предложения пока нет');
+    expect(text(c)).toContain('Подобрать маршрут');
+  });
+
+  it('тихий режим + подтверждённый: только строка и «Сменить»; клик разворачивает полный блок', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ confirmed: CONFIRMED, quiet: true });
+    expect(text(c)).toContain('full-cycle · v3 · снято: qa · подтверждён вами');
+    expect(selectOf(c)).toBeNull();
+    const change = findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-change')!;
+    await act(async () => { (reactProps(change)!.onClick as () => void)(); });
+    expect(selectOf(c)).not.toBeNull();
+  });
+
+  it('автоподтверждение моделью — строка «выбрано моделью — можно сменить»', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ confirmed: { ...CONFIRMED, autoConfirmed: true }, quiet: true });
+    expect(text(c)).toContain('выбрано моделью — можно сменить');
+  });
+
+  it('перерисовка с confirmed на none: строка подтверждённого, Select скрыт (тихий режим)', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const mk = (confirmed: ConfirmedRoute | null) => createElement(FeatureWorkflowConfirm, {
+      featureId: 'f1', confirmed, routeRequired: true, quiet: true, isMobile: false,
+    });
+    const { container, root } = mount(mk(null));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(selectOf(container)).not.toBeNull();
+    await act(async () => { root.render(mk(CONFIRMED)); });
+    expect(selectOf(container)).toBeNull();
+    expect(text(container)).toContain('подтверждён вами');
   });
 });

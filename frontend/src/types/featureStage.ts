@@ -102,6 +102,25 @@ export interface StageScreen {
   review: StageReview;
   // null — у задачи нет фичи с эпиком: блок метрик не рисуется
   metrics: StageMetrics | null;
+  // Вопросы человеку: сначала открытые, затем история (новые сверху); пусто — вопросов не было
+  questions: StageQuestion[];
+}
+
+export interface StageAnswer {
+  text: string;
+  by: string | null;
+  at: string;
+}
+
+export interface StageQuestion {
+  id: string;
+  status: 'open' | 'answered';
+  askedBy: { personaId: string | null; name: string };
+  askedAt: string;
+  text: string;
+  // Открытый — сколько ждёт до сих пор, отвеченный — сколько ждал до ответа
+  waitedMinutes: number | null;
+  answer: StageAnswer | null;
 }
 
 export interface StageCommitDiff {

@@ -236,7 +236,9 @@ public class TasksController(
     // подбора нет (прямая сборка без DI в тестах); в боевом хосте его регистрирует tasks.
     WorkflowRecommender? workflowRecommender = null,
     // Лог нужен только отказу фона (сам сбой модели логирует рекомендатель): null — без лога.
-    ILogger<TasksController>? log = null) : ControllerBase
+    ILogger<TasksController>? log = null,
+    // B04: доставка ответа человека в чат исполнителя. null — ответ только записывается и снимает ожидание
+    ISessionMessageSender? messageSender = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -543,6 +545,37 @@ public class TasksController(
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
         var result = stage.Build(taskId, UserId);
         return result.Outcome == StageOutcome.Ok ? Ok(result.Value) : NotFound(new { error = "Задача не найдена" });
+    }
+
+    // Ответ человека на открытый вопрос этапа (B04). Только человек: сервисный токен — 403. Снимает
+    // ожидание, пишет ответ в журнал и пересылает его исполнителю в чат задачи (если чат привязан)
+    public record StageAnswerRequest(string? Text);
+
+    [HttpPost("{taskId}/stage/questions/{questionId}/answer")]
+    public async Task<IActionResult> AnswerStageQuestion(string taskId, string questionId, [FromBody] StageAnswerRequest? req)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "На вопрос этапа отвечает только человек" });
+        if (stage is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        var task = tasks.GetById(taskId);
+        if (task is not null && TaskActionDenied(task, ProjectRight.RunTurn) is { } denied) return denied;
+        var result = stage.AnswerQuestion(taskId, questionId, req?.Text, UserId);
+        switch (result.Outcome)
+        {
+            case StageOutcome.BadRequest: return BadRequest(new { error = result.Error });
+            case StageOutcome.Ok: break;
+            default: return NotFound(new { error = "Вопрос не найден или уже отвечен" });
+        }
+        var answered = result.Value!;
+        // Доставка и рассылка — после записи: их сбой ответ не отменяет
+        try
+        {
+            if (messageSender is not null && answered.Task.LinkedSessionId is { Length: > 0 } sessionId)
+                await messageSender.SendOrEnqueueAsync(sessionId, answered.Question.Answer!.Text, senderUserId: UserId);
+        }
+        catch (Exception ex) { log?.LogWarning(ex, "Ответ на вопрос этапа {Task}: не доставлен в чат", taskId); }
+        return Ok(answered.Question);
     }
 
     // Дифф одного коммита из списка этапа с потолком размера (truncated = true — обрезан). sha вне

@@ -64,6 +64,7 @@ function screen(taskId: string, over: Partial<StageScreen> = {}): StageScreen {
     },
     review: { own: null, reviews: [{ taskId: 'r1', title: 'ревью', role: 'review', status: 'done', verdict: 'returned', returnReason: null, notes: 'замечание', blocker: true, verifiedAt: null }], awaitingHuman: null },
     metrics: null,
+    questions: [],
     ...over,
   };
 }

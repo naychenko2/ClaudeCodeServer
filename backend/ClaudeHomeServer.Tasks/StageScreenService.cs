@@ -29,8 +29,14 @@ public sealed class StageScreenService(
     IChatTranscriptReader? transcripts = null,
     // D1b: журнал фичи и шов расхода — оба опциональны (подсистема выключена → approx / null-поля, не 500)
     FeatureJournalStore? journal = null,
-    ISpendFeatureReader? spend = null)
+    ISpendFeatureReader? spend = null,
+    // B04: имя персоны-автора вопроса; null — имя берётся из названия задачи
+    IPersonaLookup? personas = null)
 {
+    // Потолки блока вопросов: история отвеченных и длина ответа человека
+    public const int MaxAnsweredQuestions = 100;
+    public const int MaxAnswerChars = 4_000;
+
     // Потолок размера диффа одного коммита (символов): дальше — truncated = true
     public const int MaxDiffChars = 200_000;
     // Потолки списков: коммиты одной задачи цепочки, вызовы инструментов, прочитанные файлы
@@ -61,8 +67,84 @@ public sealed class StageScreenService(
             Artifacts: new StageArtifacts(commits, commitsAvailable, task.LinkedFiles.ToList(), task.ResultMarkdown),
             Input: BuildInput(task, actorId),
             Review: BuildReview(task),
-            Metrics: BuildMetrics(task));
+            Metrics: BuildMetrics(task),
+            Questions: BuildQuestions(task, chain));
         return StageResult<StageScreen>.Ok(screen);
+    }
+
+    // Вопросы человеку на этапе (B04). Источник — ожидания человека задач цепочки этапа: открытые
+    // берутся из пары AwaitingHumanSince/Reason, история — из пар waiting → waiting_cleared журнала
+    // фичи (текст ответа и автор лежат в записи снятия; снятие ответом в чате текста не несёт —
+    // тогда answer.text пуст). Сначала открытые, затем отвеченные, новые сверху. id вопроса стабилен:
+    // «{taskId}:{момент постановки в мс}».
+    private List<StageQuestion> BuildQuestions(TaskItem task, List<TaskItem> chain)
+    {
+        var result = new List<StageQuestion>();
+        var now = DateTime.UtcNow;
+        foreach (var t in chain)
+        {
+            if (t.AwaitingHumanSince is not { } since) continue;
+            var reason = t.AwaitingHumanReason ?? "";
+            result.Add(new StageQuestion(QuestionId(t.Id, since), "open", AskedBy(t), since, reason,
+                Math.Max(0, (int)(now - since).TotalMinutes), null));
+        }
+        var open = result.OrderByDescending(q => q.AskedAt).ToList();
+
+        var answered = new List<StageQuestion>();
+        if (journal is not null && task.FeatureId is { } featureId && task.OwnerId is { } ownerId)
+        {
+            var ids = chain.ToDictionary(t => t.Id, StringComparer.Ordinal);
+            var entries = journal.Read(ownerId, featureId).Entries;
+            foreach (var group in entries.Where(e => e.TaskId is not null && ids.ContainsKey(e.TaskId)
+                         && e.Kind is "waiting" or "waiting_cleared").GroupBy(e => e.TaskId!))
+            {
+                FeatureJournalEntry? pending = null;
+                foreach (var e in group.OrderBy(e => e.At))
+                {
+                    if (e.Kind == "waiting") { pending = e; continue; }
+                    if (pending is null) continue;
+                    var owner = ids[group.Key];
+                    answered.Add(new StageQuestion(QuestionId(group.Key, pending.At), "answered", AskedBy(owner),
+                        pending.At, pending.Reason ?? "",
+                        Math.Max(0, (int)(e.At - pending.At).TotalMinutes),
+                        new StageAnswer(e.Reason ?? "", e.By, e.At)));
+                    pending = null;
+                }
+            }
+        }
+        var history = answered.OrderByDescending(q => q.Answer!.At).Take(MaxAnsweredQuestions);
+        return open.Concat(history).ToList();
+    }
+
+    private static string QuestionId(string taskId, DateTime since) =>
+        taskId + ":" + new DateTimeOffset(DateTime.SpecifyKind(since, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+
+    private StageQuestionAuthor AskedBy(TaskItem t) =>
+        new(t.PersonaId, (t.PersonaId is { } pid ? personas?.GetByIdInternal(pid)?.Name : null) ?? t.Title);
+
+    // Ответ человека на открытый вопрос этапа (B04). Только человек (контроллер отсекает сервисный токен).
+    // Видимость — как у экрана; вопрос не из этого этапа или уже не открыт — 404; пустой/слишком длинный
+    // текст — 400. Снимает ожидание задачи и кладёт ответ в журнал; доставку агенту делает вызывающий.
+    public StageResult<StageAnsweredQuestion> AnswerQuestion(string taskId, string questionId, string? text, string actorId)
+    {
+        if (Visible(taskId, actorId) is not { } task) return StageResult<StageAnsweredQuestion>.NotFound();
+        var trimmed = (text ?? "").Trim();
+        if (trimmed.Length == 0) return StageResult<StageAnsweredQuestion>.BadRequest("text: нужен непустой ответ");
+        if (trimmed.Length > MaxAnswerChars)
+            return StageResult<StageAnsweredQuestion>.BadRequest($"text: не длиннее {MaxAnswerChars} символов");
+
+        var chain = Chain(task);
+        var question = BuildQuestions(task, chain).FirstOrDefault(q => q.Id == questionId && q.Status == "open");
+        if (question is null) return StageResult<StageAnsweredQuestion>.NotFound();
+        var targetId = questionId[..questionId.LastIndexOf(':')];
+        var cleared = tasks.AnswerAwaitingHuman(targetId, trimmed, actorId);
+        if (cleared is null) return StageResult<StageAnsweredQuestion>.NotFound();
+        var answered = question with
+        {
+            Status = "answered",
+            Answer = new StageAnswer(trimmed, actorId, DateTime.UtcNow),
+        };
+        return StageResult<StageAnsweredQuestion>.Ok(new StageAnsweredQuestion(answered, cleared));
     }
 
     // Метрики этапа (D1b). T берётся только внутри фичи собственной задачи (FeatureId → эпик того же
@@ -284,7 +366,8 @@ public sealed record StageResult<T>(StageOutcome Outcome, T? Value, string? Erro
 // Ответ GET /api/tasks/{id}/stage. Metrics — блок метрик этапа (D1b); null — у задачи нет фичи с эпиком
 public sealed record StageScreen(
     string TaskId, string? FeatureId, string? Role, string? StepRef, string Title, string Status,
-    StageSnapshot? Stage, StageArtifacts Artifacts, StageInput Input, StageReview Review, StageMetrics? Metrics);
+    StageSnapshot? Stage, StageArtifacts Artifacts, StageInput Input, StageReview Review, StageMetrics? Metrics,
+    IReadOnlyList<StageQuestion> Questions);
 
 // CommitsAvailable = false — дерево задачи недоступно или git не ответил (список пуст не потому, что коммитов нет)
 public sealed record StageArtifacts(
@@ -313,6 +396,19 @@ public sealed record StageReviewItem(
     string? Notes, bool Blocker, DateTime? VerifiedAt);
 
 public sealed record StageAwaitingHuman(DateTime Since, string? Reason);
+
+// Вопрос человеку на этапе (B04). Status — open | answered; WaitedMinutes — сколько ждали (для открытого —
+// до сих пор, для отвеченного — до ответа); Answer = null у открытого
+public sealed record StageQuestion(
+    string Id, string Status, StageQuestionAuthor AskedBy, DateTime AskedAt, string Text,
+    int? WaitedMinutes, StageAnswer? Answer);
+
+public sealed record StageQuestionAuthor(string? PersonaId, string Name);
+
+public sealed record StageAnswer(string Text, string? By, DateTime At);
+
+// Результат ответа: сам вопрос и задача после снятия ожидания (для рассылки task_changed)
+public sealed record StageAnsweredQuestion(StageQuestion Question, TaskItem Task);
 
 public sealed record StageCommitDiff(
     string Sha, string Subject, IReadOnlyList<string> Files, string Diff, bool Truncated, int MaxChars);

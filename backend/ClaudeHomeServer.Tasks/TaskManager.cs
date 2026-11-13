@@ -163,7 +163,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // самого поля (started/stopped/waiting/dropped); у снятий (stop_cleared/waiting_cleared)
     // и у status/verdict — момент мутации (DateTime.UtcNow). Задача без фичи не пишется.
     // Сбой записи не роняет мутацию (AppendJournal).
-    private void WriteJournalTransitions(TaskItem task, TaskTransition before)
+    private void WriteJournalTransitions(TaskItem task, TaskTransition before,
+        string? answerText = null, string? answerBy = null)
     {
         // featureId: у эпика (Role=feature) — его собственный id, у дочерней — FeatureId.
         var featureId = task.Role == TaskRoles.Feature ? task.Id : task.FeatureId;
@@ -233,6 +234,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                     At = now,
                     Kind = "waiting_cleared",
                     TaskId = task.Id,
+                    // Ответ человека через экран этапа: текст и автор едут в самой записи снятия
+                    Reason = answerText,
+                    By = answerBy,
                 });
         }
 
@@ -2076,6 +2080,24 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             task.AwaitingHumanReason = null;
             task.UpdatedAt = DateTime.UtcNow;
             WriteJournalTransitions(task, before);
+            ScheduleSave();
+            return task;
+        }
+    }
+
+    // Ответ человека на ожидание через экран этапа (B04): то же снятие, что ClearAwaitingHuman,
+    // но запись waiting_cleared несёт текст ответа и автора. Ожидания нет — null, без мутации.
+    public TaskItem? AnswerAwaitingHuman(string id, string text, string by)
+    {
+        lock (_awaitLock)
+        {
+            var task = _tasks.GetValueOrDefault(id);
+            if (task is null || task.AwaitingHumanSince is null) return null;
+            var before = Capture(task);
+            task.AwaitingHumanSince = null;
+            task.AwaitingHumanReason = null;
+            task.UpdatedAt = DateTime.UtcNow;
+            WriteJournalTransitions(task, before, text, by);
             ScheduleSave();
             return task;
         }

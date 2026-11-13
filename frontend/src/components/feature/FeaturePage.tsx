@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Inbox } from 'lucide-react';
-import { R, FS, SP } from '../../lib/design';
+import { Inbox, Workflow } from 'lucide-react';
+import { C, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage, refetchFeaturePage, useFeatureMainTab, setFeatureMainTab, stepsTabCount, featureMainTabLabel, hasRouteOfRun, type FeatureBrief } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage, useFeatureMainTab, setFeatureMainTab, stepsTabCount, featureMainTabLabel, hasRouteOfRun, hasProposalGraph, type FeatureBrief } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
@@ -36,6 +36,7 @@ import { FeatureFirstScreen } from './FeatureFirstScreen';
 import { FeatureProcessGraphSection } from './FeatureProcessGraphSection';
 import { FeatureStageArea, resolveSelectedStage, type StageSelection } from './FeatureStageArea';
 import { analysisLineState } from './FeatureAnalysisModel';
+import { runRouteKind } from './FeatureWorkflowConfirmModel';
 import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
 
 // Куда ведёт закрытие (кнопка «Закрыть»):
@@ -153,6 +154,19 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   // с фичей, а читается через resolveSelectedStage: чужой фиче выбор не принадлежит, при
   // смене фичи страница сама возвращается к defaultSelected — без эффекта сброса.
   const [stageSel, setStageSel] = useState<StageSelection | null>(null);
+  // Блок подтверждения маршрута раскрыт (F08): «Посмотреть и подтвердить» в шапке и «Подтвердить»
+  // в области этапа открывают один и тот же блок. Ключ — featureId: чужой фиче раскрытие не принадлежит.
+  const [confirmOpenFor, setConfirmOpenFor] = useState<string | null>(null);
+  const confirmOpen = confirmOpenFor === featureId;
+  const openConfirm = () => {
+    setConfirmOpenFor(featureId);
+    // Блок живёт в шапке, а «Подтвердить» нажимают из области этапа: подводим его в видимость.
+    if (typeof document !== 'undefined' && typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        document.querySelector('[data-testid="feature-page-workflow-confirm"]')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+      });
+    }
+  };
 
   // Регистрация страницы в канале окна возврата (GC-F11R4): окно снимка живёт ради этого
   // открытия страницы — закрытие гасит его (отложенная проверка в featureBackNav), а
@@ -336,10 +350,14 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     const lineKey = okRun.attention ? null : analysisLineState(okRun, Date.now()).key;
     const watchdogOrIdle = okRun.state === 'not_started' || lineKey === 'stuck' || lineKey === 'nudged' || lineKey === 'quiet';
     const graphShown = hasRouteOfRun(okRun);
+    // Граф предложения (F08): узлы есть, маршрут не подтверждён — детали этапов ждут подтверждения.
+    const proposalGraph = hasProposalGraph(okRun);
+    // «Модель не предложила» / режим маршрута без этапов: графа нет и конвейер не рисуем.
+    const emptyGraph = !graphShown && runRouteKind(okRun.epic) === 'none';
     const selectedStageId = resolveSelectedStage(stageSel, featureId, okRun);
     body = (
       <>
-        <FeaturePageWorkflowConfirm run={okRun} featureId={featureId} projectId={okRun.epic?.projectId ?? projectId ?? undefined} isMobile={isMobile} />
+        <FeaturePageWorkflowConfirm run={okRun} featureId={featureId} projectId={okRun.epic?.projectId ?? projectId ?? undefined} isMobile={isMobile} open={confirmOpen} onOpen={openConfirm} />
         <FeatureFirstScreen
           status="ok"
           brief={page.page.brief ?? null}
@@ -371,7 +389,30 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
                   selectedId={selectedStageId}
                   onSelect={(id) => setStageSel({ featureId, id })}
                 />
-                <FeatureStageArea run={okRun} selectedId={selectedStageId} isMobile={isMobile} onOpenTask={openActiveTask} />
+                {proposalGraph ? (
+                  <div data-testid="feature-page-unconfirmed" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
+                    <Notice
+                      icon={Workflow}
+                      action={<Button size="xs" variant="ghost" dataTestId="feature-page-unconfirmed-confirm" onClick={openConfirm}>Подтвердить</Button>}
+                    >
+                      Разрез готов, дальше работа стоит: исполнители не стартуют, пока маршрут не подтверждён.
+                    </Notice>
+                    <div data-testid="feature-page-unconfirmed-hint" style={{ fontSize: FS.sm, color: C.textSecondary, textAlign: 'center' }}>
+                      Детали этапов появятся после подтверждения маршрута.
+                    </div>
+                  </div>
+                ) : (
+                  <FeatureStageArea run={okRun} selectedId={selectedStageId} isMobile={isMobile} onOpenTask={openActiveTask} />
+                )}
+              </div>
+            ) : emptyGraph ? (
+              <div data-testid="feature-page-empty-graph">
+                <EmptyState
+                  compact inline
+                  icon={<Workflow size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+                  title="Этапов пока нет"
+                  subtitle="Граф появится, когда вы подтвердите маршрут."
+                />
               </div>
             ) : (
               <FeatureProgressWithNames

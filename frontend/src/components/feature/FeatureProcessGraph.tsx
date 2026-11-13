@@ -319,6 +319,8 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
             const from = stagesById.get(e.from);
             // Пройденное ребро — зелёное (макет .link.done): источник done — поток прошёл.
             const done = from?.state === 'done';
+            // Ребро предложенного маршрута (макет P26) — фиолетовый пунктир: ещё не подтверждено.
+            const proposed = stagesById.get(e.to)?.proposed === true;
             const far = isFarEdge(ranks, e);
             return (
               <path
@@ -327,9 +329,10 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                 data-far={far ? 'true' : undefined}
                 d={edgePath(a, b, nodeW, far ? { bottom: lay.bottom, lane: farLane++ } : null)}
                 fill="none"
-                stroke={done ? C.success : C.progressTrack}
+                data-proposed={proposed ? 'true' : undefined}
+                stroke={proposed ? C.planBorder : done ? C.success : C.progressTrack}
                 strokeWidth={2}
-                strokeDasharray={far ? '5 4' : undefined}
+                strokeDasharray={proposed || far ? '5 4' : undefined}
               />
             );
           })}
@@ -363,6 +366,7 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
           const selected = selectedId === id;
           const active = stage.state === 'active';
           const quiet = stage.state !== 'done' && !active; // pending/absent/skipped
+          const proposed = stage.proposed === true;
           const returns = stage.returns ?? 0;
           const meta = nodeMeta(stage);
           const line = laneWord(stage.line ?? null);
@@ -374,6 +378,7 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
               ref={(el) => { if (el) nodeRefs.current.set(id, el); else nodeRefs.current.delete(id); }}
               data-testid={`pgraph-node-${id}`}
               data-state={stage.state}
+              data-proposed={proposed ? 'true' : undefined}
               data-tone={active ? stage.tone ?? 'run' : undefined}
               aria-pressed={selected}
               aria-label={nodeAria(stage)}
@@ -383,9 +388,10 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                 boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center',
                 gap: SP.xs, padding: `${SP.xs}px ${SP.sm}px`, textAlign: 'left', cursor: 'pointer', zIndex: 1,
                 borderRadius: R.lg, font: 'inherit',
-                background: quiet ? 'transparent' : C.bgWhite,
-                border: `1px ${quiet && !selected ? 'dashed' : 'solid'} ${
+                background: proposed ? C.planLight : quiet ? 'transparent' : C.bgWhite,
+                border: `1px ${(quiet || proposed) && !selected ? 'dashed' : 'solid'} ${
                   selected ? C.accent
+                    : proposed ? C.planBorder
                     : active ? toneColor(stage.tone)
                       : quiet ? C.dashed
                         : C.borderLight}`,

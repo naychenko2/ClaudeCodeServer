@@ -4,14 +4,12 @@
 import { useEffect, useState } from 'react';
 import { workflowTemplatesApi } from '../../features/workflowTemplates/api';
 import { FeatureProcessGraph, type FeatureProcessGraphProps } from './FeatureProcessGraph';
+import type { WorkflowTemplateScope } from '../../features/workflowTemplates/types';
 
-export function FeatureProcessGraphSection(props: FeatureProcessGraphProps) {
-  const route = props.run.epic?.workflow ?? null;
-  const projectId = props.run.epic?.projectId ?? undefined;
+// Имя шаблона по id+scope из каталога (один запрос на смену ключа); пока не пришло или не
+// нашлось — null: вызывающий подставляет id. templateId не задан — запроса нет.
+export function useTemplateName(templateId: string | undefined, scope: WorkflowTemplateScope | undefined, projectId: string | undefined): string | null {
   const [name, setName] = useState<string | null>(null);
-  const templateId = route?.templateId;
-  const scope = route?.scope;
-
   useEffect(() => {
     setName(null);
     if (!templateId) return;
@@ -26,6 +24,11 @@ export function FeatureProcessGraphSection(props: FeatureProcessGraphProps) {
       .catch(() => { /* имя — украшение: без него в подписи остаётся id */ });
     return () => { cancelled = true; };
   }, [templateId, scope, projectId]);
+  return name;
+}
 
+export function FeatureProcessGraphSection(props: FeatureProcessGraphProps) {
+  const route = props.run.epic?.workflow ?? null;
+  const name = useTemplateName(route?.templateId, route?.scope, props.run.epic?.projectId ?? undefined);
   return <FeatureProcessGraph {...props} templateName={name} />;
 }

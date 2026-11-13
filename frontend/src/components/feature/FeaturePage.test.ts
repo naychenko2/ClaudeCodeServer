@@ -2719,7 +2719,8 @@ describe('FeaturePage: вариант A — граф и этап внутри «
     await settle();
     expect(tabLabels(c), 'вкладки легаси-фичи').toEqual(['Ход', 'Материалы', 'Разбор']);
     expect(findNodeByAttr(c, 'data-testid', 'feature-process-graph')).toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-workflow-confirm')).toBeNull();
+    // Легаси (F08): обёртка несёт только строку «старая фича», сам блок и каталог — после клика.
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-route-legacy')).not.toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')).toBeNull();
     expect(mockTemplates.calls).toBe(0);
     // Содержимое «Хода» не меняется: конвейер на месте.
@@ -2730,6 +2731,9 @@ describe('FeaturePage: вариант A — граф и этап внутри «
     routed({ workflow: null, workflowProposal: { templateId: 't', scope: 'global', skipped: [], rationale: 'потому что' } });
     const c = render({});
     await settle();
+    // Предложение свёрнуто в строку шапки (F08): блок с обоснованием — после «Посмотреть и подтвердить».
+    expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')).toBeNull();
+    await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-page-route-proposal-action')!)!.onClick as () => void)(); });
     expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')).not.toBeNull();
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')!).join('')).toContain('потому что');
   });
@@ -2740,6 +2744,126 @@ describe('FeaturePage: вариант A — граф и этап внутри «
     await settle();
     expect(mockTemplates.calls).toBeGreaterThan(0);
     expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')).toBeNull();
+  });
+});
+
+// F08: страница без подтверждённого маршрута — граф предложения, строка «ждёт вас»,
+// Notice «Разрез готов…», легаси-строка «Выбрать шаблон» и пустой граф.
+describe('FeaturePage: состояния без подтверждённого маршрута (F08)', () => {
+  const stage = (id: string, after: string[], column: number, proposed: boolean) =>
+    ({ key: 'prod', id, role: 'step', title: `Этап ${id}`, after, column, state: 'pending', passes: 0, taskIds: [], rounds: [], proposed });
+  const setRun = (epic: Record<string, unknown>, stages: unknown[], state = 'running') => {
+    const run = {
+      featureId: 'f1', state,
+      epic: { id: 'f1', title: 'Моя фича', projectId: 'p1', ...epic },
+      steps: [], reviews: [], qa: [], final: null, merge: null, stages,
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      progress: 0, ready: false,
+    };
+    mockGetFeature.result = pageData({ run: run as never });
+  };
+  const proposal = { templateId: 't', scope: 'global', skipped: [], rationale: 'потому что' };
+  const proposedStages = () => [stage('a', [], 0, true), stage('b', ['a'], 1, true)];
+  const has = (c: ReturnType<typeof render>, id: string) => findNodeByAttr(c, 'data-testid', id) !== null;
+  const click = async (c: ReturnType<typeof render>, id: string) => {
+    await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', id)!)!.onClick as () => void)(); });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    mockTemplates.calls = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => { vi.useRealTimers(); uninstallFakeDom(); vi.restoreAllMocks(); });
+
+  it('предложение: граф пунктиром, строка «ждёт вас», блок свёрнут; «Посмотреть и подтвердить» раскрывает его', async () => {
+    setRun({ workflowProposal: proposal }, proposedStages());
+    const c = render({});
+    await settle();
+    expect(has(c, 'feature-process-graph'), 'граф предложения').toBe(true);
+    expect(findNodeByAttr(c, 'data-testid', 'pgraph-node-a')!.getAttribute('data-proposed')).toBe('true');
+    const edge = findNodeByAttr(c, 'data-testid', 'pgraph-edge-a-b')!;
+    expect(edge.getAttribute('stroke')).toBe(C.planBorder);
+    expect(edge.getAttribute('stroke-dasharray')).toBe('5 4');
+    const row = textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-route-proposal')!).join('');
+    expect(row).toContain('ждёт вас');
+    expect(row).toContain('Модель предлагает «t»');
+    expect(row).toContain('исполнители не стартуют');
+    expect(has(c, 'feature-workflow-confirm'), 'блок свёрнут').toBe(false);
+    await click(c, 'feature-page-route-proposal-action');
+    expect(has(c, 'feature-workflow-confirm'), 'блок раскрыт').toBe(true);
+    expect(has(c, 'feature-page-route-proposal'), 'строка заменена блоком').toBe(false);
+  });
+
+  it('предложение: вместо области этапа — Notice «Разрез готов…» и подсказка; «Подтвердить» раскрывает блок', async () => {
+    setRun({ workflowProposal: proposal }, proposedStages());
+    const c = render({});
+    await settle();
+    expect(has(c, 'feature-stage-area'), 'области этапа нет').toBe(false);
+    const box = textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-unconfirmed')!).join('');
+    expect(box).toContain('Разрез готов, дальше работа стоит: исполнители не стартуют, пока маршрут не подтверждён.');
+    expect(box).toContain('Детали этапов появятся после подтверждения маршрута.');
+    await click(c, 'feature-page-unconfirmed-confirm');
+    expect(has(c, 'feature-workflow-confirm')).toBe(true);
+  });
+
+  it('подтверждённый маршрут: Notice и граф предложения не рисуются, область этапа на месте', async () => {
+    setRun({ workflow: { templateId: 't', scope: 'global', stages: [], skipped: [], confirmedVersion: 1 }, workflowProposal: proposal }, proposedStages().map(s => ({ ...s, proposed: false })));
+    const c = render({});
+    await settle();
+    expect(has(c, 'feature-page-unconfirmed')).toBe(false);
+    expect(has(c, 'feature-page-route-proposal')).toBe(false);
+    expect(has(c, 'feature-stage-area')).toBe(true);
+  });
+
+  it('легаси: строка «старая фича» + «Выбрать шаблон», графа нет, каталог не грузится до клика', async () => {
+    setRun({}, [stage('a', [], 0, false)]);
+    const c = render({});
+    await settle();
+    const row = textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-route-legacy')!).join('');
+    expect(row).toContain('старая фича');
+    expect(row).toContain('Создана до шаблонов: маршрута нет, замеры приблизительные');
+    expect(has(c, 'feature-process-graph'), 'графа у легаси нет').toBe(false);
+    expect(has(c, 'progress-tab'), 'прежний «Ход»').toBe(true);
+    expect(mockTemplates.calls).toBe(0);
+    await click(c, 'feature-page-route-legacy-action');
+    expect(has(c, 'feature-workflow-confirm')).toBe(true);
+    expect(mockTemplates.calls).toBeGreaterThan(0);
+  });
+
+  it('легаси влитой фичи: строки «Выбрать шаблон» нет', async () => {
+    setRun({}, [stage('a', [], 0, false)], 'merged');
+    const c = render({});
+    await settle();
+    expect(has(c, 'feature-page-route-legacy')).toBe(false);
+  });
+
+  it('режим маршрута без этапов: EmptyState «Этапов пока нет», ни графа, ни конвейера', async () => {
+    setRun({ routeRequired: true }, []);
+    const c = render({});
+    await settle();
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-empty-graph')!).join('')).toContain('Этапов пока нет');
+    expect(has(c, 'feature-process-graph')).toBe(false);
+    expect(has(c, 'progress-tab')).toBe(false);
+  });
+
+  it('«модель не предложила» (state=none): тот же пустой граф, а не граф предложения', async () => {
+    setRun({ workflowProposal: { ...proposal, state: 'none' } }, []);
+    const c = render({});
+    await settle();
+    expect(has(c, 'feature-page-empty-graph')).toBe(true);
+    expect(has(c, 'feature-page-unconfirmed')).toBe(false);
   });
 });
 

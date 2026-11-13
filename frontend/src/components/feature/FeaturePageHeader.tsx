@@ -6,6 +6,7 @@ import { refetchFeaturePage } from '../../lib/featurePage';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Button } from '../ui/Button';
+import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { alarmView } from '../chat/feature/featureTruthModel';
@@ -21,7 +22,8 @@ import { api } from '../../lib/api';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 import { NavTargetButton } from './NavTargetButton';
 import { FeatureWorkflowConfirm } from './FeatureWorkflowConfirm';
-import { routeBlockState } from './FeatureWorkflowConfirmModel';
+import { routeBlockState, runRouteKind } from './FeatureWorkflowConfirmModel';
+import { useTemplateName } from './FeatureProcessGraphSection';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { minutesSince } from './FeatureStatsBits';
 import { useNow } from '../../lib/useNow';
@@ -1136,24 +1138,114 @@ export function hasWorkflowRoute(run: FeatureRun | null | undefined): boolean {
   return !!epic && routeBlockState(epic.routeRequired, epic.workflowProposal, epic.workflow) !== null;
 }
 
-export function FeaturePageWorkflowConfirm({ run, featureId, projectId, isMobile }: {
+// Состояния run, у которых маршрут уже не нужен: «Выбрать шаблон» у них бессмысленно.
+const ROUTE_FINISHED: readonly FeatureState[] = ['merged', 'closed'];
+
+// Легаси-строка показывается, пока фича жива: у влитой/закрытой выбирать шаблон поздно.
+export function showLegacyRouteRow(run: FeatureRun | null | undefined): boolean {
+  return !!run && runRouteKind(run.epic) === 'legacy' && !ROUTE_FINISHED.includes(run.state);
+}
+
+// Предложение ждёт человека (F08): есть предложение шаблона и подтверждённого маршрута нет.
+export function proposalAwaitsConfirm(run: FeatureRun | null | undefined): boolean {
+  return !!run && runRouteKind(run.epic) === 'proposal';
+}
+
+// Компактная строка шапки (макет P10/P12): тег, текст и одна кнопка раскрытия.
+function RouteHeaderRow({ testId, tone, tag, children, actionLabel, onAction, isMobile }: {
+  testId: string;
+  tone: 'plan' | 'neutral';
+  tag: string;
+  children: ReactNode;
+  actionLabel: string;
+  onAction: () => void;
+  isMobile: boolean;
+}) {
+  return (
+    <div
+      data-testid={testId}
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+        padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg, marginBottom: SP.md,
+        fontFamily: FONT.sans, fontSize: FS.sm, color: C.textPrimary,
+        background: tone === 'plan' ? C.planLight : C.bgWhite,
+        border: `1px solid ${tone === 'plan' ? C.planBorder : C.borderLight}`,
+      }}
+    >
+      <Badge tone={tone === 'plan' ? 'warning' : 'neutral'} size="xs">{tag}</Badge>
+      <span style={{ flex: '1 1 220px', minWidth: 0 }}>{children}</span>
+      <Button
+        variant={tone === 'plan' ? 'primary' : 'ghost'} size={isMobile ? 'sm' : 'xs'}
+        fullWidth={isMobile} style={isMobile ? { minHeight: 40 } : undefined}
+        dataTestId={`${testId}-action`} onClick={onAction}
+      >
+        {actionLabel}
+      </Button>
+    </div>
+  );
+}
+
+// Строка предложения: имя шаблона берётся из каталога (пока нет — id).
+function ProposalRow({ run, onOpen, isMobile }: { run: FeatureRun; onOpen: () => void; isMobile: boolean }) {
+  const proposal = run.epic?.workflowProposal ?? null;
+  const name = useTemplateName(proposal?.templateId, proposal?.scope, run.epic?.projectId ?? undefined);
+  const label = name || proposal?.templateId || 'шаблон';
+  return (
+    <RouteHeaderRow
+      testId="feature-page-route-proposal" tone="plan" tag="ждёт вас"
+      actionLabel="Посмотреть и подтвердить" onAction={onOpen} isMobile={isMobile}
+    >
+      Модель предлагает «{label}». Пока не подтвердите, исполнители не стартуют.
+    </RouteHeaderRow>
+  );
+}
+
+// Подтверждение маршрута в шапке: предложение — компактная строка, «Посмотреть и подтвердить»
+// раскрывает блок F03 (open держит страница: «Подтвердить» из области этапа открывает то же);
+// легаси — строка «старая фича» с «Выбрать шаблон»; прочие состояния — блок в тихом режиме.
+export function FeaturePageWorkflowConfirm({ run, featureId, projectId, isMobile, open = false, onOpen }: {
   run: FeatureRun | null;
   featureId: string;
   projectId?: string;
   isMobile: boolean;
+  open?: boolean;
+  onOpen?: () => void;
 }) {
-  if (!run || !hasWorkflowRoute(run)) return null;
-  return (
-    <div data-testid="feature-page-workflow-confirm">
-      <FeatureWorkflowConfirm
-        quiet
-        featureId={featureId}
-        projectId={projectId}
-        proposal={run.epic?.workflowProposal ?? null}
-        confirmed={run.epic?.workflow ?? null}
-        routeRequired={run.epic?.routeRequired ?? null}
-        isMobile={isMobile}
-      />
-    </div>
+  if (!run) return null;
+  const block = (quiet: boolean) => (
+    <FeatureWorkflowConfirm
+      quiet={quiet}
+      featureId={featureId}
+      projectId={projectId}
+      proposal={run.epic?.workflowProposal ?? null}
+      confirmed={run.epic?.workflow ?? null}
+      routeRequired={run.epic?.routeRequired ?? null}
+      isMobile={isMobile}
+    />
   );
+  if (proposalAwaitsConfirm(run) && !open) {
+    return (
+      <div data-testid="feature-page-workflow-confirm">
+        <ProposalRow run={run} onOpen={() => onOpen?.()} isMobile={isMobile} />
+      </div>
+    );
+  }
+  if (showLegacyRouteRow(run)) {
+    return (
+      <div data-testid="feature-page-workflow-confirm">
+        {open ? (
+          <div style={{ marginBottom: SP.md }}>{block(false)}</div>
+        ) : (
+          <RouteHeaderRow
+            testId="feature-page-route-legacy" tone="neutral" tag="старая фича"
+            actionLabel="Выбрать шаблон" onAction={() => onOpen?.()} isMobile={isMobile}
+          >
+            Создана до шаблонов: маршрута нет, замеры приблизительные.
+          </RouteHeaderRow>
+        )}
+      </div>
+    );
+  }
+  if (!hasWorkflowRoute(run)) return null;
+  return <div data-testid="feature-page-workflow-confirm">{block(true)}</div>;
 }

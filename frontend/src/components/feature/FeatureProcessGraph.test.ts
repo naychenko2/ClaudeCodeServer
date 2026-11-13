@@ -6,15 +6,18 @@
 //   подписаны по title и различимы — «Проверка плана» / «Проверка», aria-label тоже различны
 //   (пункт Major вердикта: раньше оба назывались «Проверка»);
 // - без title (легаси и этап без имени) — как раньше: имя роли (stageName) + линия (laneWord)
-//   для параллельных этапов одной роли; без линии — просто имя роли.
+//   для параллельных этапов одной роли; без линии — просто имя роли;
+// - длинное имя этапа (как в шагах воспроизведения дефекта) ограничено рамкой узла:
+//   multiline-clamp на 2 строки; полное имя остаётся в title и aria-label.
 // Колонки, рёбра и состояния компонент не пересчитывает — это покрыто в FeatureProcessGraphModel.test.ts.
 //
 // Мутации (проверяются прогоном): (1) убрать `if (stage.title)` в nodeTitle — краснеет
-// «данные пресета…»; (2) убрать линию в фолбэке — краснеет «без title…».
+// «данные пресета…»; (2) убрать линию в фолбэке — краснеет «без title…»; (3) убрать clamp
+// подписи (WebkitLineClamp/overflow) — краснеет «подпись узла ограничена рамкой».
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes } from '../chat/__tests__/fakeDom';
+import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../chat/__tests__/fakeDom';
 import { FeatureProcessGraph } from './FeatureProcessGraph';
 import type { FeatureRun, FeatureStage, StageKey, StageState } from '../../types/featureRun';
 
@@ -115,5 +118,51 @@ describe('FeatureProcessGraph: подпись узла — имя этапа с 
     // Имя с бэка не дополняется линией, даже когда lane пришла: title — итоговая подпись.
     const stages = parallelCycle(true).map(s => (s.id === 'qa-plan' ? { ...s, lane: 'test' } : s));
     expect(nodeLabel(render(stages), 'qa-plan').text).toBe('Проверка плана');
+  });
+});
+
+// Узел карточки фиксирован (NODE_W×NODE_H = 120×56, FeatureProcessGraph.tsx), поэтому длинное
+// имя с бэка обязано остаться внутри рамки: перенос не больше двух строк с многоточием.
+// Раньше (дефект) длинное имя давало подпись 70 px при узле 56 — слова наезжали на обводку
+// и на соседнюю колонку.
+describe('FeatureProcessGraph: длинное имя этапа остаётся внутри узла', () => {
+  const LONG_TITLE = 'Проверка плана и макетов перед работами'; // имя из шагов воспроизведения дефекта
+
+  type AnyNode = { getAttribute(n: string): string | null; children: AnyNode[] };
+
+  function nodeById(c: unknown, id: string): AnyNode {
+    const n = findNodeByAttr(c as never, 'data-testid', `pgraph-node-${id}`) as unknown as AnyNode | null;
+    expect(n, `узел pgraph-node-${id}`).not.toBeNull();
+    return n;
+  }
+
+  // Span подписи внутри кнопки узла (дети: маркер состояния, затем подпись).
+  function titleSpanOf(c: unknown, id: string): AnyNode {
+    const span = nodeById(c, id).children.find((ch) => textNodes(ch as never).join('').includes(LONG_TITLE));
+    expect(span, 'span подписи узла').not.toBeNull();
+    return span!;
+  }
+
+  const longQaNode = () => render([mkStage('qa', 'qa-long', 'qa', 0, 'pending', [], undefined, LONG_TITLE)]);
+
+  it('подпись узла ограничена рамкой: multiline-clamp на 2 строки, overflow hidden', () => {
+    const c = longQaNode();
+    const style = (reactProps(titleSpanOf(c, 'qa-long') as never) as { style: Record<string, unknown> }).style;
+    // Тот же приём, что GlobalSearch.tsx:114: 2 строки и многоточие вместо выхода за рамку.
+    expect(style.display).toBe('-webkit-box');
+    expect(style.WebkitLineClamp).toBe(2);
+    expect(style.WebkitBoxOrient).toBe('vertical');
+    expect(style.overflow).toBe('hidden');
+    // flex-item должен сжиматься до ширины узла (80 px между маркером и правым padding),
+    // иначе длинное слово раздвинет подпись за NODE_W.
+    expect(style.minWidth).toBe(0);
+  });
+
+  it('полное имя остаётся доступным: aria-label и title не обрезаются', () => {
+    const c = longQaNode();
+    // Доступность и смысл не режутся: экран показывает две строки, полное имя — в title
+    // (тултип при наведении) и в aria-label (скринридер).
+    expect(nodeById(c, 'qa-long').getAttribute('aria-label')).toBe(`${LONG_TITLE}: впереди`);
+    expect(titleSpanOf(c, 'qa-long').getAttribute('title')).toBe(LONG_TITLE);
   });
 });

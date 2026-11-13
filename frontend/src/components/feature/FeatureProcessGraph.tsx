@@ -24,6 +24,11 @@
 //
 // Мобильные тач-цели: карточка 120×56 (≥40, контракт C3a); ширина графа ≤140 — документ
 // на 360 не переполняется.
+//
+// Имя внутри карточки: узел фиксирован (NODE_W×NODE_H), поэтому подпись ограничена рамкой —
+// две строки с многоточием (multiline-clamp, тот же приём, что GlobalSearch.tsx:114). Длинное
+// имя с бэка не должно лезть за нижнюю границу узла и на соседнюю колонку; полное имя остаётся
+// в title (тултип) и aria-label — доступность и смысл не режутся.
 
 import type { CSSProperties } from 'react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
@@ -291,7 +296,18 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect }: Featur
               }}
             >
               <MarkerIcon stage={stage} />
-              <span style={{ fontSize: FS.sm, fontWeight: 600, color: quiet ? C.textSecondary : C.textHeading }}>
+              {/* Подпись ограничена рамкой узла (дефект: длинное имя давало подпись 70 px
+                  при узле 56 и лезла за нижнюю границу). Ширина текста: NODE_W − 2·SP.sm (padding)
+                  − 16 (маркер) − SP.sm (gap) = 80 px; две строки FS.sm×1.25 = 30 px ≤ NODE_H.
+                  Полное имя — в title (тултип) и aria-label. */}
+              <span
+                title={nodeTitle(stage)}
+                style={{
+                  flex: '1 1 auto', minWidth: 0, lineHeight: 1.25,
+                  fontSize: FS.sm, fontWeight: 600, color: quiet ? C.textSecondary : C.textHeading,
+                  display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                }}
+              >
                 {nodeTitle(stage)}
               </span>
             </button>

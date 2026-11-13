@@ -25,6 +25,15 @@
 // (7) убрать у шапки position: sticky → краснеет;
 // (8) в балле убрать ветку «без балла» (всегда `балл ${score}`) → «балл справа» краснеет;
 // (9) в chooseFilter не сбрасывать scrollTop → «скролл при смене фильтра» краснеет.
+//
+// M1b-rw (доработка по ревью 04360cfd): узкая ветка карточки ({narrow && marks}) — главный
+// новый layout шага — проверяется отдельным describe с управляемыми моками useWikiNarrow и
+// useIsMobile (приём WikiHealth.test): при narrow=true пометки своим рядом под причиной
+// (внутри колонки контента), при narrow=false — справа карточки; тач-размер — на isMobile,
+// независимо от narrow.
+// Мутация M1b-rw (прогнана в копии дерева, вывод — в отчёте задачи):
+// (10) поменять местами {narrow && marks} и {!narrow && marks} в компоненте → «narrow=true:
+//      пометки своим рядом под причиной» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -47,6 +56,22 @@ vi.mock('../../../../lib/offline', async (orig) => ({
   ...await orig<typeof import('../../../../lib/offline')>(),
   request: vi.fn(),
   readStoredUserId: vi.fn(() => 'u1'),
+}));
+
+// M1b-rw: флаг узкости под управлением теста. Настоящий useWikiNarrow в fakeDom всегда
+// «широко» (у фейк-DOM нет clientWidth), поэтому узкая ветка без мока не проверяется ничем.
+// По умолчанию false — то же поведение, что без мока (приём и мок — как в WikiHealth.test).
+const narrowFlag = vi.hoisted(() => ({ narrow: false }));
+vi.mock('../useWikiNarrow', async (orig) => ({
+  ...await orig<typeof import('../useWikiNarrow')>(),
+  useWikiNarrow: () => [() => () => {}, narrowFlag.narrow],
+}));
+// M1b-rw: «isMobile» — тоже управляемый флаг (в node нет matchMedia — настоящий хук дал бы
+// false всегда). По умолчанию false — то же поведение, что без мока (приём — SharedBadge.test).
+const mobileFlag = vi.hoisted(() => ({ mobile: false }));
+vi.mock('../../../../lib/breakpoints', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/breakpoints')>(),
+  useIsMobile: () => mobileFlag.mobile,
 }));
 
 import { request } from '../../../../lib/offline';
@@ -237,6 +262,10 @@ describe('фильтры и поиск «Отбора чатов» (M1a)', () =>
     req.mockReset();
     serverItems = [];
     serveChats();
+    // M1b-rw: флаги моков по умолчанию выключены — существующие тесты видят ту же
+    // раскладку, что и без мока
+    narrowFlag.narrow = false;
+    mobileFlag.mobile = false;
   });
 
   afterEach(() => {
@@ -415,6 +444,78 @@ describe('фильтры и поиск «Отбора чатов» (M1a)', () =>
       expect(styleOf(marks).display).toBe('flex');
       // оба контрола на месте: «Важный» и «Не разбирать»
       expect(textNodes(marks).map(t => t.trim()).filter(Boolean)).toEqual(['Важный', 'Не разбирать']);
+    });
+  });
+
+  // ─── M1b-rw (ревью 04360cfd): узкая раскладка карточки — главный новый layout шага ───
+  // Ветка {narrow && marks} без мока не проверялась ни одним тестом: настоящий useWikiNarrow
+  // в fakeDom всегда «широко». Утверждения — о структуре DOM (порядок детей колонки
+  // контента) и о стилях кнопок: в fakeDom нет layout, и порядок детей — единственный
+  // наблюдаемый признак «своего ряда под причиной».
+
+  describe('узкая раскладка карточки чата (M1b-rw)', () => {
+    it('narrow=true: пометки своим рядом под причиной (внутри колонки контента), правого столбца карточки нет', async () => {
+      narrowFlag.narrow = true;
+      serverItems = [plainItem('n1')];
+      const c = render();
+      await settle();
+      const row = findNodeByAttr(c, 'data-testid', 'wiki-triage-row')!;
+      // правая ветка не отрендерена: единственный ребёнок строки — колонка контента
+      expect(row.childNodes.length).toBe(1);
+      const content = row.childNodes[0];
+      const kids = content.childNodes;
+      // пометки — последний ребёнок колонки контента: display:flex ряд, оба контрола на месте
+      const marks = kids[kids.length - 1];
+      expect(marks.nodeName).toBe('SPAN');
+      expect(styleOf(marks).display).toBe('flex');
+      expect(textNodes(marks).map(t => t.trim()).filter(Boolean)).toEqual(['Важный', 'Не разбирать']);
+      // «своим рядом под строкой причины»: ряд пометок идёт сразу за элементом причины
+      const reasonEl = findNodeWithOwnText(row, 'формулировки решений');
+      expect(reasonEl).toBeTruthy();
+      expect(kids.indexOf(reasonEl!)).toBe(kids.length - 2);
+    });
+
+    it('narrow=false: пометки — справа карточки, колонка контента заканчивается причиной', async () => {
+      narrowFlag.narrow = false;
+      serverItems = [plainItem('w1')];
+      const c = render();
+      await settle();
+      const row = findNodeByAttr(c, 'data-testid', 'wiki-triage-row')!;
+      const marks = row.childNodes[1];
+      expect(marks.nodeName).toBe('SPAN');
+      expect(textNodes(marks).map(t => t.trim()).filter(Boolean)).toEqual(['Важный', 'Не разбирать']);
+      // внутри колонки контента ряда пометок нет: её последний ребёнок — элемент причины
+      const content = row.childNodes[0];
+      expect(textNodes(content).map(t => t.trim()).filter(Boolean)).not.toContain('Важный');
+      const reasonEl = findNodeWithOwnText(content, 'формулировки решений');
+      expect(reasonEl).toBeTruthy();
+      expect(content.childNodes[content.childNodes.length - 1]).toBe(reasonEl!);
+    });
+
+    it('тач-размер — на isMobile и не зависит от narrow: 40 px на тач, базовые 24 px на десктопе в обеих раскладках', async () => {
+      for (const narrow of [true, false]) {
+        // тач: та же цель 40 px и в узкой, и в широкой — её даёт isMobile, не narrow
+        narrowFlag.narrow = narrow;
+        mobileFlag.mobile = true;
+        serverItems = [plainItem(`t-${narrow}`)];
+        const c = render();
+        await settle();
+        const stTouch = styleOf(findNodeByAttr(c, 'data-testid', `wiki-triage-mark-important-t-${narrow}`)!);
+        expect(stTouch.minHeight).toBe(40);
+        expect(stTouch.height).toBe('auto');
+        for (const root of roots.splice(0)) void root.unmount();
+        uninstallFakeDom();
+        // десктоп при той же узкости: тач-размера нет — narrow его не добавляет (base xs)
+        mobileFlag.mobile = false;
+        serverItems = [plainItem(`d-${narrow}`)];
+        const c2 = render();
+        await settle();
+        const stDesk = styleOf(findNodeByAttr(c2, 'data-testid', `wiki-triage-mark-important-d-${narrow}`)!);
+        expect(stDesk.minHeight).toBe(24);
+        expect(stDesk.height).toBe(24);
+        for (const root of roots.splice(0)) void root.unmount();
+        uninstallFakeDom();
+      }
     });
   });
 });

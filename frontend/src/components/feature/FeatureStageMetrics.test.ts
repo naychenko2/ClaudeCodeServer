@@ -114,7 +114,10 @@ describe('FeatureStageMetrics', () => {
     expect(out).toContain('Итого');
     const total = out.slice(out.indexOf('Итого'));
     expect(total).toContain('1:36');
-    expect(total).toContain('>27<');
+    expect(total).toContain('>24<');
+    // Ответы человека в «Итого» не входят: ход, начатый человеком, уже посчитан у исполнителя.
+    expect(total).not.toContain('>27<');
+    expect(out).toContain('3 (из них)');
     expect(out).toContain('1:14');
     expect(out).toContain('0:41');
     expect(out).toContain('stage-metrics-seg-executor');

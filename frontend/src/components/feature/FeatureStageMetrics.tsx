@@ -199,11 +199,11 @@ export function FeatureStageMetrics({ metrics, nowMs }: FeatureStageMetricsProps
           <Table testId="stage-metrics-table" head={['Кто', 'Время', 'Ходы', 'Токены', 'Ожидание']}>
             <Row cells={['Исполнитель', hm(ex.minutes), ex.turns == null ? DASH : String(ex.turns), tokenSum(ex) == null ? DASH : formatTokens(tokenSum(ex) as number), DASH]} />
             {rv && <Row cells={['Ревью', hm(rv.minutes), rv.turns == null ? DASH : String(rv.turns), tokenSum(rv) == null ? DASH : formatTokens(tokenSum(rv) as number), DASH]} />}
-            <Row cells={['Человек', DASH, hu.replies == null ? DASH : String(hu.replies), DASH, hm(hu.minutes)]} />
+            <Row cells={['Человек', DASH, hu.replies == null ? DASH : `${hu.replies} (из них)`, DASH, hm(hu.minutes)]} />
             <Row total cells={[
               'Итого',
               hm(addNullable(ex.minutes, rv?.minutes, null)),
-              (() => { const t = addNullable(ex.turns, rv?.turns, hu.replies); return t == null ? DASH : String(t); })(),
+              (() => { const t = addNullable(ex.turns, rv?.turns); return t == null ? DASH : String(t); })(),
               (() => { const t = addNullable(tokenSum(ex), tokenSum(rv)); return t == null ? DASH : formatTokens(t); })(),
               hm(hu.minutes),
             ]} />
@@ -218,7 +218,7 @@ export function FeatureStageMetrics({ metrics, nowMs }: FeatureStageMetricsProps
         </span>
       )}
       <span data-testid="stage-metrics-hint" style={CAPTION}>
-        Время исполнителя — как полосы «Хронологии»; паузы дольше 2 мин — простой. «Ответов человека» — ходы, начатые вами.
+        Время исполнителя — как полосы «Хронологии»; паузы дольше 2 мин — простой. «Ответов человека» — ходы, начатые вами; они уже входят в ходы исполнителя и ревью, поэтому в «Итого» не прибавляются.
         {approx ? ' Журнал неполный: время исполнителя приближённое, у ревью и человека — без данных.' : ''}
       </span>
     </div>

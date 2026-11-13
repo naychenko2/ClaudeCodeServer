@@ -98,6 +98,20 @@ public class StageArtifactFilesTests : IDisposable
         _sut.BuildFileDiff(step.Id, "A.cs", "3", "1", Owner).Outcome.Should().Be(StageOutcome.BadRequest);
     }
 
+    [Theory]
+    [InlineData("../secret.txt")]
+    [InlineData("a/../../etc/passwd")]
+    [InlineData("")]
+    [InlineData(".")]
+    public void Путь_вне_дерева_или_корень_даёт_400_и_git_не_вызывается(string path)
+    {
+        var step = Step();
+        _git.Commits = [new WorktreeCommit(Sha('a'), "1", T0, ["A.cs"])];
+
+        _sut.BuildFileDiff(step.Id, path, "1", "1", Owner).Outcome.Should().Be(StageOutcome.BadRequest);
+        _git.LastFileDiff.Should().Be(default((string, string, string, int)));
+    }
+
     [Fact]
     public void Пустой_этап_без_файлов_и_нулевые_итоги()
     {

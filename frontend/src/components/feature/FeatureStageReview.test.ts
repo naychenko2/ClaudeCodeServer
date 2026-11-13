@@ -57,11 +57,26 @@ describe('FeatureStageReview', () => {
     expect(findNodeByAttr(container, 'data-testid', 'stage-review-legacy')).not.toBeNull();
   });
 
-  it('structured=false без hint: тоже «подробностей нет»', () => {
+  it('structured=false без hint: подписи про старый формат нет', () => {
     const r = rev([round({ verdict: 'accepted', returnReason: null, structured: false })]);
     r.reviewRounds!.structured = false;
     const { container } = render(r);
-    expect(text(container)).toContain('Подробностей нет: ревью старой фичи не хранило блокеры.');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-review-legacy')).toBeNull();
+    expect(text(container)).not.toContain('Подробностей нет');
+  });
+
+  it('смешанный случай: блокер структурного раунда виден, подписи про старый формат нет', () => {
+    const r = rev([
+      round({ round: 1, verdict: 'returned', structured: true, blockers: [{ tag: 'блокер', file: 'Svc.cs', line: 412, text: 'порог из конфига' }] }),
+      round({ round: 2, verdict: 'accepted', returnReason: null, structured: false, remarks: ['сырой текст'] }),
+    ]);
+    r.reviewRounds!.structured = false;
+    const { container } = render(r);
+    const t = text(container);
+    expect(t).toContain('Svc.cs:412 — порог из конфига');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-review-blocker')).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'stage-review-legacy')).toBeNull();
+    expect(t).not.toContain('Подробностей нет');
   });
 
   it('пусто: «Ревью ещё не было»', () => {

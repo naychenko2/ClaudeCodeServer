@@ -51,7 +51,10 @@ function roundWord(n: number) {
   return m >= 11 && m <= 14 ? 'раундов' : d === 1 ? 'раунд' : d >= 2 && d <= 4 ? 'раунда' : 'раундов';
 }
 
-function Round({ r, legacy, total }: { r: StageReviewRound; legacy: boolean; total: number }) {
+// Раунд сам решает, структурный ли он: режим «без подробностей» — по r.structured каждого
+// раунда, а не по общему признаку блока (у блока он «все раунды структурные»).
+function Round({ r, total }: { r: StageReviewRound; total: number }) {
+  const legacy = !r.structured;
   const b = verdictBadge(r.verdict);
   const meta = [
     r.reviewer?.name,
@@ -106,7 +109,8 @@ function PendingRound({ r, executorName }: { r: StageReviewRound; executorName?:
 export function FeatureStageReview({ review, executorName }: { review: StageReview; executorName?: string | null }) {
   const items = [...(review.own ? [review.own] : []), ...review.reviews];
   const rounds = review.reviewRounds?.rounds ?? [];
-  const legacy = rounds.some(r => !r.pending) && (review.reviewRounds?.hint === 'legacy' || review.reviewRounds?.structured === false);
+  // Подпись про старый формат — только когда сервер прямо сказал, что фича старая (hint='legacy').
+  const legacyHint = review.reviewRounds?.hint === 'legacy';
   const done = rounds.filter(r => !r.pending);
   return (
     <section data-testid="stage-review" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
@@ -115,8 +119,8 @@ export function FeatureStageReview({ review, executorName }: { review: StageRevi
         <>
           {rounds.map(r => r.pending
             ? <PendingRound key={r.round} r={r} executorName={executorName} />
-            : <Round key={r.round} r={r} legacy={legacy} total={done.length} />)}
-          {legacy && (
+            : <Round key={r.round} r={r} total={done.length} />)}
+          {legacyHint && (
             <div data-testid="stage-review-legacy" style={{ fontSize: FS.xs, color: C.textMuted }}>
               Подробностей нет: ревью старой фичи не хранило блокеры.
             </div>

@@ -128,7 +128,7 @@ public sealed partial class ImageEditorToolset
                         ["role"] = OneOf(Roles, "Роль образца"),
                     }, "path", "role"),
                 },
-                ["character"] = Str("Персонаж проекта (slug папки characters/; только в чате проекта). "
+                ["character"] = Str("Персонаж проекта или «Личного» (slug папки characters/; у личного чата — если персонаж уже заведён). "
                     + "Не передан — персонаж из контекста чата, пустая строка — без персонажа. " + NotWithoutAsk),
                 ["face"] = new JsonObject
                 {

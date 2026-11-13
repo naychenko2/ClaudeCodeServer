@@ -25,7 +25,13 @@ namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 // current («продолжить от версии») и steps (правка без ИИ в текущую версию) — для всех нитей;
 // take / rollback / dismiss — только для нитей до 27.09 со стопками. Сохранить в проект — только
 // человек (решение Андрея 1).
-public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEditJobs? jobs) : ControllerBase
+public abstract class ImageThreadEndpoints(
+    ImageThreadService threads,
+    IImageEditJobs? jobs,
+    ImageEditSteps? steps = null,
+    IProjectManager? projects = null,
+    ILocalImageMedia? localMedia = null,
+    Faces.FaceDetectionCache? faces = null) : ControllerBase
 {
     protected string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -194,6 +200,63 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
     private static string Relative(string root, string full) =>
         Path.GetRelativePath(root, full).Replace('\\', '/');
 
+    // «Найти лица на версии» (ADR-028, этап 2): детекция ComfyUI по байтам версии, результат —
+    // список лиц (n с 1, bbox, score, small) + facesKey (детерминирован по байтам, для сверки 7b).
+    // Детекция — не запуск: версию не создаёт, трату не пишет, в ленту не кладёт.
+    // Наследник проходит свой гейт и передаёт область: проектную или личную (ADR-040, Ф2-4)
+    protected async Task<IActionResult> FacesIn(ImageEditScope scope, string sessionId, string threadId, string versionId,
+        CancellationToken ct)
+    {
+        // Локальные модели — опциональная зависимость: нет шва (подсистема images выключена) —
+        // provider_unavailable, не 500
+        if (localMedia is null)
+            return StatusCode(StatusCodes.Status409Conflict,
+                new { error = "Локальные модели не настроены: детекция лиц недоступна", code = "provider_unavailable" });
+
+        var state = Threads.Get(scope.Tenant, sessionId);
+        if (!Threads.OwnChat(scope.Key, sessionId) || state.Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
+            return StatusCode(StatusCodes.Status404NotFound,
+                new { error = "Картинка не найдена в этом чате", code = ImageEditErrorCodes.ThreadNotFound });
+        if (thread.Version(versionId) is not { } version)
+            return StatusCode(StatusCodes.Status404NotFound,
+                new { error = "Версии нет в этой картинке", code = ImageEditErrorCodes.VersionNotFound });
+
+        // Байты версии: шаг версии, иначе файл проекта (у исходника). Не прочитано — нет картинки
+        var bytes = await VersionBytesAsync(scope, thread, version, ct);
+        if (bytes is null)
+            return StatusCode(StatusCodes.Status404NotFound,
+                new { error = "У версии ещё нет изображения", code = ImageEditErrorCodes.VersionNotFound });
+
+        // Детекция на CancellationToken.None: отмена ct одного вызывающего не должна отменять
+        // детекцию остальных ожидающих (single-flight). Вызывающий перестаёт ждать через WaitAsync(ct)
+        var result = await (faces ?? new ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache())
+            .GetOrDetectAsync(UserId, bytes, () => localMedia.DetectFacesAsync(bytes, CancellationToken.None), ct);
+
+        if (result.Busy)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = "Видеокарта занята долгой задачей. Попробуйте чуть позже", code = "busy" });
+        if (result.Error is not null)
+            return StatusCode(StatusCodes.Status409Conflict,
+                new { error = result.Error, code = "provider_unavailable" });
+
+        return Ok(ImageThreadFacesResponse.FromDetection(bytes, result));
+    }
+
+    // Картинка версии: её текущий шаг (байты из рабочей папки), у исходника файловой нити — файл
+    // проекта. null — картинки ещё нет (пустой черновик) или файл не прочитан
+    private async Task<byte[]?> VersionBytesAsync(ImageEditScope scope, ImageThread thread,
+        ImageThreadVersion version, CancellationToken ct)
+    {
+        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && steps?.Open(scope.Tenant, scope.Key, stepId) is { } found)
+            return found.Image.Bytes;
+        if (thread.File is { Length: > 0 } file && (scope.Project ?? projects?.GetById(scope.Key)) is { } project)
+        {
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(UserId, project.RootPath, file, "Версия", ct);
+            return read.Value?.Bytes;
+        }
+        return null;
+    }
+
     private ObjectResult Error(int status, string code, string error) => StatusCode(status, new { error, code });
 }
 
@@ -211,7 +274,7 @@ public class ThreadsController(
     ImageEditSteps? steps = null,
     IProjectManager? projects = null,
     ILocalImageMedia? localMedia = null,
-    Faces.FaceDetectionCache? faces = null) : ImageThreadEndpoints(threads, jobs)
+    Faces.FaceDetectionCache? faces = null) : ImageThreadEndpoints(threads, jobs, steps, projects, localMedia, faces)
 {
     [HttpGet]
     public IActionResult Get(string projectId, string sessionId) =>
@@ -265,65 +328,11 @@ public class ThreadsController(
         [FromBody] ImageThreadSettingsRequest req) =>
         Gate(projectId, sessionId, out var scope, out var denied) ? await SettingsIn(scope, sessionId, threadId, req) : denied;
 
-    // «Найти лица на версии» (ADR-028, этап 2): детекция ComfyUI по байтам версии, результат —
-    // список лиц (n с 1, bbox, score, small) + facesKey (детерминирован по байтам, для сверки 7b).
-    // Детекция — не запуск: версию не создаёт, трату не пишет, в ленту не кладёт. Только проектная
-    // область: в личной (PersonalThreadsController) маршрута нет — 404.
+    // «Найти лица на версии» (ADR-028, этап 2): тело — в ImageThreadEndpoints.FacesIn, общее с личным чатом
     [HttpPost("{threadId}/versions/{versionId}/faces")]
     public async Task<IActionResult> Faces(string projectId, string sessionId, string threadId, string versionId,
-        CancellationToken ct)
-    {
-        if (!Gate(projectId, sessionId, out var scope, out var denied)) return denied;
-
-        // Локальные модели — опциональная зависимость: нет шва (подсистема images выключена) —
-        // provider_unavailable, не 500
-        if (localMedia is null)
-            return StatusCode(StatusCodes.Status409Conflict,
-                new { error = "Локальные модели не настроены: детекция лиц недоступна", code = "provider_unavailable" });
-
-        var state = Threads.Get(scope.Tenant, sessionId);
-        if (!Threads.OwnChat(scope.Key, sessionId) || state.Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
-            return StatusCode(StatusCodes.Status404NotFound,
-                new { error = "Картинка не найдена в этом чате", code = ImageEditErrorCodes.ThreadNotFound });
-        if (thread.Version(versionId) is not { } version)
-            return StatusCode(StatusCodes.Status404NotFound,
-                new { error = "Версии нет в этой картинке", code = ImageEditErrorCodes.VersionNotFound });
-
-        // Байты версии: шаг версии, иначе файл проекта (у исходника). Не прочитано — нет картинки
-        var bytes = await VersionBytesAsync(scope, thread, version, ct);
-        if (bytes is null)
-            return StatusCode(StatusCodes.Status404NotFound,
-                new { error = "У версии ещё нет изображения", code = ImageEditErrorCodes.VersionNotFound });
-
-        // Детекция на CancellationToken.None: отмена ct одного вызывающего не должна отменять
-        // детекцию остальных ожидающих (single-flight). Вызывающий перестаёт ждать через WaitAsync(ct)
-        var result = await (faces ?? new ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache())
-            .GetOrDetectAsync(UserId, bytes, () => localMedia.DetectFacesAsync(bytes, CancellationToken.None), ct);
-
-        if (result.Busy)
-            return StatusCode(StatusCodes.Status503ServiceUnavailable,
-                new { error = "Видеокарта занята долгой задачей. Попробуйте чуть позже", code = "busy" });
-        if (result.Error is not null)
-            return StatusCode(StatusCodes.Status409Conflict,
-                new { error = result.Error, code = "provider_unavailable" });
-
-        return Ok(ImageThreadFacesResponse.FromDetection(bytes, result));
-    }
-
-    // Картинка версии: её текущий шаг (байты из рабочей папки), у исходника файловой нити — файл
-    // проекта. null — картинки ещё нет (пустой черновик) или файл не прочитан
-    private async Task<byte[]?> VersionBytesAsync(ImageEditScope scope, ImageThread thread,
-        ImageThreadVersion version, CancellationToken ct)
-    {
-        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && steps?.Open(scope.Tenant, scope.Key, stepId) is { } found)
-            return found.Image.Bytes;
-        if (thread.File is { Length: > 0 } file && projects?.GetById(scope.Key) is { } project)
-        {
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(UserId, project.RootPath, file, "Версия", ct);
-            return read.Value?.Bytes;
-        }
-        return null;
-    }
+        CancellationToken ct) =>
+        Gate(projectId, sessionId, out var scope, out var denied) ? await FacesIn(scope, sessionId, threadId, versionId, ct) : denied;
 
     private bool Gate(string projectId, string sessionId, [NotNullWhen(true)] out ImageEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>

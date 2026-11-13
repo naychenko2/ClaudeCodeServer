@@ -12,8 +12,8 @@ namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 // Редактор картинок в личном чате вне проекта (разрез
 // docs/research/image-editor-personal-chats-cut-2026-09.md, «Бэкенд» п.3). Тело ручек — общее с
 // проектом (ImageEditorEndpoints, ImageThreadEndpoints), здесь только личный гейт и выбор человека.
-// save, save/check и characters* здесь нет намеренно: записи в проект и персонажей у личного чата
-// нет по построению, эти пути — 404 маршрутизации, а не 500.
+// save и save/check здесь нет намеренно (сохранение — Ф2-3, ADR-040): эти пути — 404 маршрутизации, а не 500.
+// Персонажи — в папке «Личного» (ADR-040): читающие ручки её не создают, первый персонаж создаёт лениво.
 [ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
@@ -28,8 +28,14 @@ public class PersonalImageEditorController(
     ImageEditSteps? steps = null,
     IConfiguration? config = null,
     IImageRaster? raster = null,
-    ImageContextLaunch? context = null)
-    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
+    ImageContextLaunch? context = null,
+    IProjectFiles? files = null,
+    ILocalImageMedia? localMedia = null,
+    CharacterTrainingPhotos? trainingPhotos = null,
+    CharacterPhotoLabeling? labeling = null,
+    CharacterLoraRuns? loraRuns = null)
+    : ImageEditorCharacterEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context,
+        files, localMedia, trainingPhotos, labeling, loraRuns)
 {
     [HttpGet("catalog")]
     public IActionResult Catalog(string sessionId) =>
@@ -83,7 +89,7 @@ public class PersonalImageEditorController(
     public IActionResult GetPrefs(string sessionId) =>
         Gate(sessionId, out var scope, out var denied) ? Ok(prefs.Get(scope.Tenant, scope)) : denied;
 
-    // characterSlug принудительно null: персонажей у личной области нет
+    // characterSlug принудительно null: персонаж берётся из контекста хода, а не из префов (как и у проекта)
     [HttpPut("prefs")]
     public async Task<IActionResult> PutPrefs(string sessionId, [FromBody] ImageProjectPrefs? req)
     {
@@ -93,13 +99,62 @@ public class PersonalImageEditorController(
         return Ok(await prefs.SetAsync(scope.Tenant, scope, req!));
     }
 
+    // ── Персонажи личной области (ADR-040, Ф2-4) ───────────────────────────────────
+    // Папка — «Личное» владельца. Нет папки — персонажей нет: список пуст, остальное 404
+
+    [HttpGet("characters")]
+    public IActionResult Characters(string sessionId) =>
+        Gate(sessionId, out var scope, out var denied)
+            ? (scope.Project is { } project ? CharactersIn(project) : Ok(Array.Empty<CharacterDto>()))
+            : denied;
+
+    [HttpGet("loras")]
+    public async Task<IActionResult> Loras(string sessionId, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await LorasIn(scope.Tenant, scope.Project, ct) : denied;
+
+    [HttpGet("characters/{slug}")]
+    public IActionResult Character(string sessionId, string slug) =>
+        Gate(sessionId, out var scope, out var denied)
+            ? (scope.Project is { } project ? CharacterIn(project, slug) : CharacterNotFound())
+            : denied;
+
+    [HttpPost("characters")]
+    [RequestSizeLimit(MaxCharacterBodyBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxCharacterBodyBytes)]
+    public async Task<IActionResult> CreateCharacter(string sessionId, [FromForm] CharacterForm form, CancellationToken ct)
+    {
+        if (!Gate(sessionId, out var scope, out var denied)) return denied;
+        var (project, folderDenied) = await gate.EnsurePersonalFolderAsync(scope, ct);
+        return project is null ? folderDenied! : await CreateCharacterIn(project, form, ct);
+    }
+
+    [HttpPut("characters/{slug}")]
+    [RequestSizeLimit(MaxCharacterBodyBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxCharacterBodyBytes)]
+    public async Task<IActionResult> UpdateCharacter(string sessionId, string slug, [FromForm] CharacterForm form, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied)
+            ? (scope.Project is { } project ? await UpdateCharacterIn(project, slug, form, ct) : CharacterNotFound())
+            : denied;
+
+    [HttpDelete("characters/{slug}")]
+    public IActionResult DeleteCharacter(string sessionId, string slug) =>
+        Gate(sessionId, out var scope, out var denied)
+            ? (scope.Project is { } project ? DeleteCharacterIn(project, slug) : CharacterNotFound())
+            : denied;
+
+    [HttpGet("characters/{slug}/photos/{file}")]
+    public IActionResult CharacterPhoto(string sessionId, string slug, string file) =>
+        Gate(sessionId, out var scope, out var denied)
+            ? (scope.Project is { } project ? CharacterPhotoIn(project, slug, file) : CharacterNotFound())
+            : denied;
+
     private bool Gate(string sessionId, [NotNullWhen(true)] out ImageEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>
         gate.TryPersonalChat(UserId, sessionId, out scope, out denied);
 }
 
 // Нити картинок личного чата вне проекта: тело — ImageThreadEndpoints, взять в работу можно только
-// черновик в корне (draftFolder: ""), нить по файлу и черновик в папке — 400.
+// черновик в корне (draftFolder: ""), нить по файлу и черновик в папке — 400. Поиск лиц (faces) — как у проекта.
 [ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
@@ -107,7 +162,10 @@ public class PersonalImageEditorController(
 public class PersonalThreadsController(
     ImageEditScopeGate gate,
     ImageThreadService threads,
-    IImageEditJobs? jobs = null) : ImageThreadEndpoints(threads, jobs)
+    IImageEditJobs? jobs = null,
+    ImageEditSteps? steps = null,
+    ILocalImageMedia? localMedia = null,
+    Faces.FaceDetectionCache? faces = null) : ImageThreadEndpoints(threads, jobs, steps, null, localMedia, faces)
 {
     [HttpGet]
     public IActionResult Get(string sessionId) =>
@@ -154,6 +212,11 @@ public class PersonalThreadsController(
     [HttpPut("{threadId}/settings")]
     public async Task<IActionResult> Settings(string sessionId, string threadId, [FromBody] ImageThreadSettingsRequest req) =>
         Gate(sessionId, out var scope, out var denied) ? await SettingsIn(scope, sessionId, threadId, req) : denied;
+
+    // «Найти лица на версии» для подстановки персонажа на лицо в личной области (ADR-028, ADR-040 Ф2-4)
+    [HttpPost("{threadId}/versions/{versionId}/faces")]
+    public async Task<IActionResult> Faces(string sessionId, string threadId, string versionId, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await FacesIn(scope, sessionId, threadId, versionId, ct) : denied;
 
     private bool Gate(string sessionId, [NotNullWhen(true)] out ImageEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>

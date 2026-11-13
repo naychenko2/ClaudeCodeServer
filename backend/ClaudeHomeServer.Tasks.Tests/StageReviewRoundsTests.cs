@@ -150,4 +150,67 @@ public class StageReviewRoundsTests : IDisposable
         rr.Rounds.Should().BeEmpty();
         rr.Structured.Should().BeFalse();
     }
+
+    [Fact]
+    public void Дословная_строка_ревьюера_До_мержа_даёт_блокеры()
+    {
+        var step = Step(legacy: false);
+        Review(step, TaskVerdicts.Returned,
+            "Возврат. Причина: нарушен контракт. До мержа: ReviewNotesParser.cs:14 разбор формата; тест pending при Done");
+
+        var round = _sut.Build(step.Id, Owner).Value!.Review.ReviewRounds.Rounds[0];
+
+        round.Structured.Should().BeTrue();
+        round.Blockers.Should().HaveCount(2);
+        round.Blockers[0].File.Should().Be("ReviewNotesParser.cs");
+        round.Blockers[0].Line.Should().Be(14);
+        round.Blockers[1].Text.Should().Be("тест pending при Done");
+    }
+
+    [Fact]
+    public void До_мержа_нет_блокеров_ноль()
+    {
+        var step = Step(legacy: false);
+        Review(step, TaskVerdicts.AcceptedWithRemarks, "Принято. Причина: ок. До мержа: нет");
+
+        var round = _sut.Build(step.Id, Owner).Value!.Review.ReviewRounds.Rounds.Single();
+
+        round.Structured.Should().BeTrue();
+        round.Blockers.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Блокеров_нет_не_ложный_блокер()
+    {
+        var step = Step(legacy: false);
+        Review(step, TaskVerdicts.AcceptedWithRemarks, "Блокеров нет");
+
+        var round = _sut.Build(step.Id, Owner).Value!.Review.ReviewRounds.Rounds.Single();
+
+        round.Blockers.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Возврат_но_шаг_закрыт_ожидания_раунда_нет()
+    {
+        var step = Step(legacy: false);
+        Review(step, TaskVerdicts.Returned, "блокер: A.cs:1 — что-то");
+        _tasks.GetById(step.Id)!.Status = TaskItemStatus.Done;
+
+        var rounds = _sut.Build(step.Id, Owner).Value!.Review.ReviewRounds.Rounds;
+
+        rounds.Should().ContainSingle();
+        rounds.Any(r => r.Pending).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Снято_withdrawn_ожидания_раунда_нет()
+    {
+        var step = Step(legacy: false);
+        Review(step, TaskVerdicts.Withdrawn, "снято");
+
+        var rounds = _sut.Build(step.Id, Owner).Value!.Review.ReviewRounds.Rounds;
+
+        rounds.Any(r => r.Pending).Should().BeFalse();
+    }
 }

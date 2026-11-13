@@ -9,12 +9,16 @@
 // Медианы шага (B2a и величина 5) перенесены из «Объёма» (FP-R2, таблица
 // feature-review-returns-v1.md: «это время, а не объём»); источники и формат — те же, что
 // были в «Объёме» (FeatureReviewVolume, до FP-R3).
+// Дорожки этапов (F18b, макет materials-review-placement.html M33 «Время и срок · дорожки
+// этапов») — здесь, после полосы состава: с F18b они убраны из «Хронологии». Блок делает
+// FeatureReviewStageLanes (тот же, что был в FeatureReviewHistory): здесь только подключение.
 // Шкалу срока (etaScale) делает FS-FR1b: приходит пропом и рисуется последней.
 
 import { type CSSProperties, type ReactNode } from 'react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { plural } from '../../lib/plural';
 import { FeatureStatsTiles } from './FeatureStatsTiles';
+import { FeatureReviewStageLanes } from './FeatureReviewHistory';
 import { ReviewKv, type ReviewKvRow } from './FeatureReviewParts';
 import { formatDuration, kindBackground } from './FeatureStatsBits';
 import { COMP_LABEL, type CompositionKind } from './FeatureStatsPulseModel';
@@ -137,6 +141,9 @@ export function FeatureReviewTime({ run, stats, isMobile = false, etaScale }: Fe
           </div>
         </>
       )}
+      {/* Дорожки этапов (F18b, M33): по одной строке на этап, в порядке run.stages, ось над
+          ними. Нет журнала времени — пустое состояние блока («шкалы нет»), не нули. */}
+      <FeatureReviewStageLanes run={run} stats={stats} isMobile={isMobile} />
       {etaScale}
     </div>
   );

@@ -5,6 +5,10 @@
 // секция остаётся как в FS-FR1. Медианы шага (FP-R2, перенесены из «Объёма»): строки в конце
 // списка из typical.stepMinutes.median и stepMedianMinutes; нет данных (поля нет, null) — строк
 // нет. Ровно две плитки, порядок строк kv и слот шкалы срока.
+// F18b (макет M33): в секции — блок дорожек этапов (FeatureReviewStageLanes): по строке на этап
+// в порядке run.stages, ось над ними, место — после легенды состава, перед шкалой срока;
+// нет журнала времени — пустое состояние блока. Сам блок (геометрия, факт vs «≈») тестирует
+// FeatureReviewHistory.test.ts.
 // Окружение node: разметка — renderToStaticMarkup (счёт и порядок — по html), состояний и
 // кликов здесь нет.
 //
@@ -27,7 +31,7 @@ import { describe, it, expect } from 'vitest';
 import { FeatureReviewTime } from './FeatureReviewTime';
 import { formatDuration } from './FeatureStatsBits';
 import { COMP_LABEL } from './FeatureStatsPulseModel';
-import type { FeatureRun } from '../../types/featureRun';
+import type { FeatureRun, FeatureStage } from '../../types/featureRun';
 import type { FeatureEstimateDrift, FeatureStats, FeatureTimeline, TypicalFeatureStats } from '../../types/featureStats';
 
 function mkRun(over: Partial<FeatureRun> = {}): FeatureRun {
@@ -333,5 +337,65 @@ describe('порядок секции и слот шкалы срока', () => 
   it('без etaScale пропа в DOM нет ничего лишнего', () => {
     const h = html(mkRun(), mkStats(C1));
     expect(h).not.toContain('eta-scale');
+  });
+});
+
+describe('дорожки этапов в секции (F18b, M33)', () => {
+  // Этап и интервал — те же формы, что в фикстуре блока (FeatureReviewHistory.test.ts):
+  // approx 999 заведомо отличается от фактических 30 минут интервала.
+  const mkStage = (over: Partial<FeatureStage> = {}): FeatureStage => ({
+    key: 'prod', state: 'pending', tone: null, passes: 0, taskIds: [], runningSince: null,
+    rounds: [], longestStepRef: null, firstStartedAt: null, lastCompletedAt: null, barEnd: null,
+    approxMinutes: 999, overlapsActive: false, executors: [], ...over,
+  });
+  const iv = (from: string, to: string, taskIds: string[]) =>
+    ({ from, to, minutes: 30, live: false, lastOutcome: null, taskIds, turns: [] });
+
+  const runWithLanes = (): FeatureRun => mkRun({
+    stages: [
+      mkStage({ key: 'prod', state: 'active', tone: 'run', firstStartedAt: '2026-10-20T10:00:00Z', taskIds: ['t-prod'] }),
+      mkStage({ key: 'review', state: 'done', firstStartedAt: '2026-10-20T11:00:00Z', taskIds: ['t-rev'] }),
+    ],
+  });
+  // Журнал с ходом у каждого из двух этапов.
+  const laneStats = (): FeatureStats => mkStats(C1, {
+    timeline: {
+      from: '2026-10-20T10:00:00Z', to: '2026-10-20T12:00:00Z',
+      stages: [], segments: [], current: null, totals: mkTotals(C1),
+      intervalsByStage: {
+        prod: [iv('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', ['t-prod'])],
+        review: [iv('2026-10-20T11:00:00Z', '2026-10-20T11:30:00Z', ['t-rev'])],
+      },
+    },
+  });
+  const laneRows = (h: string): string[] =>
+    [...h.matchAll(/data-testid="review-stage-lane-([a-z]+)"/g)].map((m) => m[1]!);
+
+  it('журнал двух этапов → в секции ровно две строки дорожек, в порядке этапов', () => {
+    const h = html(runWithLanes(), laneStats());
+    expect(laneRows(h)).toEqual(['prod', 'review']);
+    expect(h).toContain('data-testid="review-stage-lanes"');
+    // Дорожки и их интервалы — из модели (FeatureStageLane рисует lane-interval-<этап>-<i>).
+    expect(h).toContain('data-testid="lane-interval-prod-0"');
+    expect(h).toContain('data-testid="lane-interval-review-0"');
+    // Ось — над строками дорожек (тот же контракт, что у «Хронологии»).
+    expect(h.indexOf('data-testid="lane-axis"')).toBeLessThan(h.indexOf('data-testid="review-stage-lane-prod"'));
+  });
+
+  it('место в секции: после легенды состава, перед шкалой срока (etaScale)', () => {
+    const h = html(runWithLanes(), laneStats(), createElement('div', { 'data-testid': 'eta-scale' }, 'шкала'));
+    const iLegend = h.indexOf('data-testid="review-time-legend"');
+    const iLanes = h.indexOf('data-testid="review-stage-lanes"');
+    const iEta = h.indexOf('data-testid="eta-scale"');
+    expect(iLegend).toBeGreaterThanOrEqual(0);
+    expect(iLegend).toBeLessThan(iLanes);
+    expect(iLanes).toBeLessThan(iEta);
+  });
+
+  it('нет журнала (intervalsByStage нет) → 0 дорожек и пустое состояние блока', () => {
+    const h = html(mkRun(), mkStats(C1));
+    expect(laneRows(h)).toEqual([]);
+    expect(h).not.toContain('data-testid="lane-axis"');
+    expect(h).toContain('Шкала появится, когда у фичи будет журнал времени');
   });
 });

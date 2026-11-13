@@ -1,11 +1,13 @@
-// Тесты секции «Хронология» вкладки «Разбор» (FS-FR6). Окружение node: renderToStaticMarkup
-// (интеракции здесь нет: строки событий и их переходы тестирует FeatureEventsTab.test.ts).
+// Тесты секции «Хронология» вкладки «Разбор» (FS-FR6) и блока дорожек (FeatureReviewStageLanes,
+// F18b). Окружение node: renderToStaticMarkup (интеракции здесь нет: строки событий и их
+// переходы тестирует FeatureEventsTab.test.ts).
 //
 // c1: из 5 событий видов created/started/accepted/returned/merged → в DOM 3 строки (только
 //     ключевые виды); eventsTotal=40 → подпись «из 40 в истории».
 // c2: intervalsByStage для 2 этапов → 2 строки дорожек и ось над ними; intervalsByStage=null →
 //     0 дорожек и «Шкала появится, когда у фичи будет журнал времени».
-// Порядок (контракт): дорожки → события → подпись.
+// Порядок (контракт): «Хронология» — события → подпись; дорожек в ней нет с F18b (M33) — они
+// в секции «Время и срок», их подключение к секции тестирует FeatureReviewTime.test.ts.
 //
 // Мутация c3 (проверена прогоном, 10.11, в копии дерева): убрать фильтр по видам
 // (`KEY_EVENT_KINDS.has(e.kind)` → `true`) → «3 из 5» краснеет (5 строк вместо 3);
@@ -14,7 +16,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect } from 'vitest';
-import { FeatureReviewHistory } from './FeatureReviewHistory';
+import { FeatureReviewHistory, FeatureReviewStageLanes } from './FeatureReviewHistory';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
 import type { FeatureEvent } from '../../types/featureIndex';
@@ -109,18 +111,27 @@ function html(props: Partial<Parameters<typeof FeatureReviewHistory>[0]> = {}): 
   }));
 }
 
-// Строки дорожек секции (testid строки — review-history-lane-<этап>).
+// Блок дорожек сам по себе (он живёт в секции «Время и срок», но модель и рендеры — здесь).
+function lanesHtml(props: Partial<Parameters<typeof FeatureReviewStageLanes>[0]> = {}): string {
+  return renderToStaticMarkup(createElement(FeatureReviewStageLanes, {
+    run: mkRun(),
+    stats: laneStats(),
+    ...props,
+  }));
+}
+
+// Строки дорожек блока (testid строки — review-stage-lane-<этап>).
 function laneRows(h: string): string[] {
-  return [...h.matchAll(/data-testid="review-history-lane-([a-z]+)"/g)].map((m) => m[1]!);
+  return [...h.matchAll(/data-testid="review-stage-lane-([a-z]+)"/g)].map((m) => m[1]!);
 }
 // Строки событий FeatureEventsTab (testid строки — event-row-<вид>-<задача>-<индекс>).
 function eventRows(h: string): string[] {
   return [...h.matchAll(/data-testid="event-row-([a-z_]+)-/g)].map((m) => m[1]!);
 }
 
-describe('дорожки этапов (c2)', () => {
+describe('дорожки этапов (c2) — блок FeatureReviewStageLanes', () => {
   it('журнал для 2 этапов → ровно 2 строки дорожек, в порядке этапов; третьих нет', () => {
-    const h = html();
+    const h = lanesHtml();
     expect(laneRows(h)).toEqual(['prod', 'review']);
     // Дорожка и её интервалы — из модели (FeatureStageLane рисует lane-interval-<этап>-<i>).
     expect(h).toContain('data-testid="lane-prod"');
@@ -129,13 +140,13 @@ describe('дорожки этапов (c2)', () => {
   });
 
   it('ось времени стоит над строками дорожек', () => {
-    const h = html();
+    const h = lanesHtml();
     expect(h.indexOf('data-testid="lane-axis"')).toBeGreaterThanOrEqual(0);
-    expect(h.indexOf('data-testid="lane-axis"')).toBeLessThan(h.indexOf('data-testid="review-history-lane-prod"'));
+    expect(h.indexOf('data-testid="lane-axis"')).toBeLessThan(h.indexOf('data-testid="review-stage-lane-prod"'));
   });
 
   it('длительность справа от дорожки — факт времени модели, а не оценка «≈» (30 мин интервала prod)', () => {
-    const h = html();
+    const h = lanesHtml();
     expect(h).toContain('30 мин');
     // Инвариант: факт приоритетнее «≈». Оценка этапа (999) отличается от минут
     // интервала (30), поэтому «≈» в DOM означает, что приоритет подменён.
@@ -143,14 +154,14 @@ describe('дорожки этапов (c2)', () => {
   });
 
   it('нет журнала (intervalsByStage=null) → 0 дорожек и строка о журнале времени (c2)', () => {
-    const h = html({ stats: mkStats(null) });
+    const h = lanesHtml({ stats: mkStats(null) });
     expect(laneRows(h)).toEqual([]);
     expect(h).not.toContain('data-testid="lane-axis"');
     expect(h).toContain('Шкала появится, когда у фичи будет журнал времени');
   });
 
   it('stats=null → те же 0 дорожек и та же строка', () => {
-    const h = html({ stats: null });
+    const h = lanesHtml({ stats: null });
     expect(laneRows(h)).toEqual([]);
     expect(h).toContain('Шкала появится, когда у фичи будет журнал времени');
   });
@@ -194,13 +205,14 @@ describe('ключевые события (c1)', () => {
 });
 
 describe('порядок блоков (контракт)', () => {
-  it('дорожки → события → подпись', () => {
+  it('«Хронология» — события → подпись; дорожек в ней нет (F18b, M33: они в «Время и срок»)', () => {
     const h = html({ events: [ev({ kind: 'accepted', taskId: 't2' })], eventsTotal: 9 });
-    const iGantt = h.indexOf('data-testid="review-history-gantt"');
     const iEvent = h.indexOf('data-testid="event-row-accepted-t2-0"');
     const iNote = h.indexOf('data-testid="review-history-events-note"');
-    expect(iGantt).toBeGreaterThanOrEqual(0);
-    expect(iGantt).toBeLessThan(iEvent);
+    expect(iEvent).toBeGreaterThanOrEqual(0);
     expect(iEvent).toBeLessThan(iNote);
+    // Блок дорожек в «Хронологии» не рендерится: ни его контейнера, ни оси.
+    expect(h).not.toContain('data-testid="review-stage-lanes"');
+    expect(h).not.toContain('data-testid="lane-axis"');
   });
 });

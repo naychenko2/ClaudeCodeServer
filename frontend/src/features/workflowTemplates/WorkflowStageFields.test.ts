@@ -19,7 +19,7 @@ vi.mock('../../lib/modelTiers', async orig => ({
 }));
 
 const { StageFields, mcpNotGranted } = await import('./WorkflowStageFields');
-const { templateSnapshot } = await import('./workflowEditorLogic');
+const { templateSnapshot, canSave, normalizeForSave } = await import('./workflowEditorLogic');
 
 const noop = () => {};
 const base: WorkflowStage = { role: 'review', presence: 'on', after: ['cut'] };
@@ -104,5 +104,12 @@ describe('поля этапа', () => {
       id: 'g', name: 'n', version: 1, stages: [{ ...cut, defaultTier: tier }],
     });
     expect(t('strong')).not.toBe(t(null));
+  });
+
+  it('порог 300 блокирует «Сохранить», 30 — нет; defaultTier уходит в тело сохранения', () => {
+    const tpl = (n: number) => ({ id: 'g', name: 'n', version: 1, stages: [{ ...cut, stallMinutes: n, defaultTier: 'weak' as const }] });
+    expect(canSave(tpl(300))).toBe(false);
+    expect(canSave(tpl(30))).toBe(true);
+    expect(normalizeForSave(tpl(30)).stages[0].defaultTier).toBe('weak');
   });
 });

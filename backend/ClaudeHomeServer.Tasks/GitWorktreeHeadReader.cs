@@ -86,6 +86,19 @@ public sealed class GitWorktreeHeadReader(ILauncherFactory launchers) : IWorktre
             "--no-ext-diff", "--format=", "--patch", fullSha);
     }
 
+    public WorktreeDiff? FileDiff(string worktreePath, string fromRef, string toRef, string file, int maxChars)
+    {
+        // Ссылки — только hex (fromRef допускает один хвостовой «^») и путь после «--»: ничто из запроса не станет опцией git
+        static bool Ref(string r, bool parentAllowed)
+        {
+            if (parentAllowed && r.EndsWith('^')) r = r[..^1];
+            return r.Length >= 7 && r.All(Uri.IsHexDigit);
+        }
+        if (!Ref(fromRef, true) || !Ref(toRef, false) || string.IsNullOrWhiteSpace(file) || maxChars <= 0) return null;
+        return GitCapped(worktreePath, maxChars, "-c", "core.quotepath=false", "diff", "--no-color",
+            "--no-ext-diff", fromRef, toRef, "--", file);
+    }
+
     // Как Git, но вывод режется по maxChars: огромный дифф не читается в память целиком, процесс гасится
     private WorktreeDiff? GitCapped(string worktreePath, int maxChars, params string[] args)
     {

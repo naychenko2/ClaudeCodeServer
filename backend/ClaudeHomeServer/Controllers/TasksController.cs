@@ -595,6 +595,21 @@ public class TasksController(
         };
     }
 
+    // Дифф файла этапа между версиями (B06): from/to — номера версий файла или all (по умолчанию all)
+    [HttpGet("{taskId}/stage/files/diff")]
+    public IActionResult GetStageFileDiff(string taskId, [FromQuery] string? path, [FromQuery] string? from, [FromQuery] string? to)
+    {
+        if (stage is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        var result = stage.BuildFileDiff(taskId, path, from, to, UserId);
+        return result.Outcome switch
+        {
+            StageOutcome.Ok => Ok(result.Value),
+            StageOutcome.BadRequest => BadRequest(new { error = result.Error }),
+            _ => NotFound(new { error = "Файл или версия не найдены" }),
+        };
+    }
+
     [HttpPut("{taskId}")]
     public async Task<IActionResult> Update(string taskId, [FromBody] UpdateTaskRequest req)
     {

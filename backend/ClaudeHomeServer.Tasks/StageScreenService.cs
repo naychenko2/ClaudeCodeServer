@@ -64,7 +64,8 @@ public sealed class StageScreenService(
             TaskId: task.Id, FeatureId: task.FeatureId, Role: task.Role, StepRef: task.StepRef,
             Title: task.Title, Status: StatusName(task.Status),
             Stage: task.Stage,
-            Artifacts: new StageArtifacts(commits, commitsAvailable, task.LinkedFiles.ToList(), task.ResultMarkdown),
+            Artifacts: new StageArtifacts(commits, commitsAvailable, task.LinkedFiles.ToList(), task.ResultMarkdown,
+                BuildFiles(commits, chain), new StageArtifactTotals(FilesOf(commits).Count, commits.Count)),
             Input: BuildInput(task, actorId),
             Review: BuildReview(task),
             Metrics: BuildMetrics(task),
@@ -194,6 +195,78 @@ public sealed class StageScreenService(
         if (diff is null) return StageResult<StageCommitDiff>.NotFound();
         return StageResult<StageCommitDiff>.Ok(
             new StageCommitDiff(commit.Sha, commit.Subject, commit.Files, diff.Text, diff.Truncated, MaxDiffChars));
+    }
+
+    // Версии файлов этапа (B06): версия файла = коммит этапа, тронувший его; n=1 — самый ранний.
+    // afterReturn — коммит сделан после первого возврата ревью этой цепочки
+    private List<StageFile> BuildFiles(List<StageCommit> commits, List<TaskItem> chain)
+    {
+        var returnedAt = ReturnedAt(chain);
+        return FilesOf(commits).Select(kv => new StageFile(kv.Key,
+            kv.Value.Select((c, i) => new StageFileVersion(i + 1, c.Sha, c.Subject, c.At,
+                returnedAt is { } r && c.At is { } at && at > r)).ToList())).ToList();
+    }
+
+    // Файл → коммиты, его тронувшие (порядок коммитов — от старого к новому); порядок файлов — по первому появлению
+    private static List<KeyValuePair<string, List<StageCommit>>> FilesOf(List<StageCommit> commits)
+    {
+        var map = new Dictionary<string, List<StageCommit>>(StringComparer.Ordinal);
+        foreach (var c in commits)
+            foreach (var f in c.Files.Distinct(StringComparer.Ordinal))
+            {
+                if (!map.TryGetValue(f, out var list)) map[f] = list = [];
+                list.Add(c);
+            }
+        return map.ToList();
+    }
+
+    // Момент первого возврата ревью цепочки этапа; null — возвратов не было
+    private DateTime? ReturnedAt(List<TaskItem> chain)
+    {
+        var ids = chain.Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
+        var owner = chain[0].OwnerId;
+        return tasks.GetAll()
+            .Where(t => t.Role == TaskRoles.Review && t.OwnerId == owner
+                && t.Verification?.Verdict == TaskVerdicts.Returned && t.ReviewOf?.Any(ids.Contains) == true)
+            .Select(t => (DateTime?)t.Verification!.VerifiedAt)
+            .Min();
+    }
+
+    // Дифф файла между версиями (B06). from/to — номер версии файла или «all» (from=all — состояние до
+    // первой версии, to=all — после последней); не заданы — all. Файл — только из списка этапа
+    public StageResult<StageFileDiff> BuildFileDiff(string taskId, string? path, string? from, string? to, string actorId)
+    {
+        if (Visible(taskId, actorId) is not { } task) return StageResult<StageFileDiff>.NotFound();
+        if (string.IsNullOrWhiteSpace(path)) return StageResult<StageFileDiff>.BadRequest("path обязателен");
+        if (!TryVersion(from, out var f)) return StageResult<StageFileDiff>.BadRequest("from — номер версии или all");
+        if (!TryVersion(to, out var t)) return StageResult<StageFileDiff>.BadRequest("to — номер версии или all");
+        if (f is not null && t is not null && f > t) return StageResult<StageFileDiff>.BadRequest("from не может быть позже to");
+
+        var chain = Chain(task);
+        var commits = CollectCommits(task, chain, out _);
+        if (FilesOf(commits).FirstOrDefault(kv => kv.Key == path).Value is not { } versions)
+            return StageResult<StageFileDiff>.NotFound();
+        if (f > versions.Count || t > versions.Count || f < 1 || t < 1) return StageResult<StageFileDiff>.NotFound();
+
+        var fromCommit = versions[(f ?? 1) - 1];
+        var toCommit = versions[(t ?? versions.Count) - 1];
+        // from = all или from = to — показываем изменение самой версии: от состояния ДО коммита
+        var fromRef = f is null || f == t ? fromCommit.Sha + "^" : fromCommit.Sha;
+        if (git is null || WorktreeOf(task, toCommit.TaskId) is not { } wt) return StageResult<StageFileDiff>.NotFound();
+        var diff = git.FileDiff(wt, fromRef, toCommit.Sha, path, MaxDiffChars);
+        if (diff is null) return StageResult<StageFileDiff>.NotFound();
+        return StageResult<StageFileDiff>.Ok(new StageFileDiff(path, f?.ToString() ?? "all", t?.ToString() ?? "all",
+            diff.Text, diff.Truncated, MaxDiffChars));
+    }
+
+    // null в out — «all» (или не задано); false — не число и не all
+    private static bool TryVersion(string? raw, out int? n)
+    {
+        n = null;
+        if (string.IsNullOrEmpty(raw) || raw == "all") return true;
+        if (!int.TryParse(raw, out var v)) return false;
+        n = v;
+        return true;
     }
 
     // Задача фичи, видимая актору, или null. Не-фичевая задача (ни роли, ни featureId) — не предмет
@@ -375,7 +448,18 @@ public sealed record StageScreen(
 // CommitsAvailable = false — дерево задачи недоступно или git не ответил (список пуст не потому, что коммитов нет)
 public sealed record StageArtifacts(
     IReadOnlyList<StageCommit> Commits, bool CommitsAvailable,
-    IReadOnlyList<string> LinkedFiles, string? ResultMarkdown);
+    IReadOnlyList<string> LinkedFiles, string? ResultMarkdown,
+    IReadOnlyList<StageFile> Files, StageArtifactTotals Totals);
+
+// Файл этапа с версиями (B06): версия = коммит этапа, тронувший файл; N — с 1, от раннего к позднему
+public sealed record StageFile(string Path, IReadOnlyList<StageFileVersion> Versions);
+
+public sealed record StageFileVersion(int N, string CommitSha, string Subject, DateTime? At, bool AfterReturn);
+
+public sealed record StageArtifactTotals(int Files, int Commits);
+
+// From/To — номера версий или «all»
+public sealed record StageFileDiff(string Path, string From, string To, string Diff, bool Truncated, int MaxChars);
 
 // Version — номер версии артефакта в цепочке шага и доработок (с 1, по времени коммита)
 public sealed record StageCommit(

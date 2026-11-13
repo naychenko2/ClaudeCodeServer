@@ -14,6 +14,10 @@ public interface IWorktreeCommitReader
     // Дифф ОДНОГО коммита по ПОЛНОМУ sha (вызывающий берёт его из списка выше, а не из запроса).
     // Текст режется по maxChars: Truncated = true — дифф длиннее потолка. null — не удалось
     WorktreeDiff? CommitDiff(string worktreePath, string fullSha, int maxChars);
+
+    // Дифф ОДНОГО файла между двумя состояниями дерева. Ссылки — полный sha коммита из списка этапа,
+    // fromRef может быть «sha^» (состояние до коммита). Режется по maxChars, как CommitDiff. null — не удалось
+    WorktreeDiff? FileDiff(string worktreePath, string fromRef, string toRef, string file, int maxChars);
 }
 
 // Files — пути изменённых коммитом файлов от корня дерева через «/»

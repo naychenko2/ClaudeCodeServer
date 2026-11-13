@@ -94,9 +94,10 @@ public class McpSharedWithMembersTurnTests : IDisposable
     public async Task ОбщийПроект_НепомеченныйСнимается_ПомеченныйДоезжает()
     {
         var (project, owner) = await CreateProjectAsync($"Общий-{_tag}");
+        // чат до участников: в общем проекта без руководителя провижна владельца нет (W4-B1a 2)
+        var chat = await CreateChatInProjectAsync(project);
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(project,
             [new ProjectMember { UserId = "участник-" + _tag, Role = ProjectRole.Editor }]);
-        var chat = await CreateChatInProjectAsync(project);
 
         var off = await CreateServerAsync($"s2a7-off-{_tag}"); // включён в реестр, пометки нет
         var on = await CreateServerAsync($"s2a7-on-{_tag}");

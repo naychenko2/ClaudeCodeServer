@@ -100,15 +100,15 @@ describe('PersonaMemoryPanel: действия записи по роли (W3-F1
     expect(countOf(html, ADD_CARD), 'карточка добавления в HTML читателю').toBe(0);
   });
 
-  it('редактор: запись есть; «в заметку» нет', () => {
+  it('редактор: как читатель — ни записи, ни «в заметку» (решение Андрея 12.11)', () => {
     const html = renderWithRole('editor');
     const props = captured.props!;
-    expect(typeof props.onAdd, 'добавление редактору (memoryWrite открыт)').toBe('function');
-    expect(typeof props.onEdit, 'правка редактору (memoryWrite открыт)').toBe('function');
-    expect(typeof props.onRemove, 'удаление редактору (memoryWrite открыт)').toBe('function');
-    expect(typeof props.onConfirm, 'подтверждение редактору (memoryWrite открыт)').toBe('function');
-    expect(typeof props.onToNote, '«в заметку» (memoryNote — Configure) редактору').toBe('undefined');
-    expect(countOf(html, ADD_CARD), 'карточка добавления редактору').toBe(1);
+    expect(typeof props.onAdd, 'добавление (memoryWrite) редактору').toBe('undefined');
+    expect(typeof props.onEdit, 'правка (memoryWrite) редактору').toBe('undefined');
+    expect(typeof props.onRemove, 'удаление (memoryWrite) редактору').toBe('undefined');
+    expect(typeof props.onConfirm, 'подтверждение (memoryWrite) редактору').toBe('undefined');
+    expect(typeof props.onToNote, '«в заметку» (memoryNote) редактору').toBe('undefined');
+    expect(countOf(html, ADD_CARD), 'карточка добавления редактору').toBe(0);
   });
 
   it('владелец: всё, как раньше', () => {

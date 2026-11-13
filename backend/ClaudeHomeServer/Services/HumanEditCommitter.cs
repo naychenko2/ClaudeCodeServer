@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Git;
@@ -67,14 +68,14 @@ public sealed class HumanEditCommitter(
         var project = projects.GetById(projectId);
         // Только общий проект на серверных файлах и только git-репозиторий: личный проект
         // и каталог без репозитория — молчаливый no-op.
-        if (project is null || project.Members is not { Count: > 0 }) return;
+        if (project is null || !ProjectAccess.IsShared(project)) return;
         if (!ProjectCapabilities.FilesOnServer(project)) return;
         if (!git.IsGitRepo(root)) return;
         // Корень обязан быть корнем самого проекта (или лежать под ним): иначе журнал закоммитил
         // бы чужой репозиторий от имени владельца проекта.
         if (!IsUnderProjectRoot(root, project.RootPath)) return;
         // Автор — владелец или участник проекта; чужой userId — fail-closed.
-        if (userId != project.OwnerId && !project.Members.Any(m => m.UserId == userId)) return;
+        if (userId != project.OwnerId && !project.Members!.Any(m => m.UserId == userId)) return;
         string full;
         try { full = SafePath.JoinBelowRoot(root, relPath); }
         catch { return; }
@@ -141,7 +142,7 @@ public sealed class HumanEditCommitter(
         foreach (var project in projects.GetAll())
         {
             if (ct.IsCancellationRequested) return;
-            if (project.Members is not { Count: > 0 }) continue;
+            if (!ProjectAccess.IsShared(project)) continue;
             if (!ProjectCapabilities.FilesOnServer(project)) continue;
             if (string.IsNullOrWhiteSpace(project.RootPath) || !git.IsGitRepo(project.RootPath)) continue;
             try
@@ -236,7 +237,7 @@ public sealed class HumanEditCommitter(
         // Состояние проекта могло измениться за окно дебаунса (участников убрали, репозиторий
         // удалили) — проверяем заново, лишних коммитов не делаем.
         var project = projects.GetById(projectId);
-        if (project is null || project.Members is not { Count: > 0 } || !git.IsGitRepo(root)) return;
+        if (project is null || !ProjectAccess.IsShared(project) || !git.IsGitRepo(root)) return;
         var user = users.GetById(userId);
         if (user is null)
         {

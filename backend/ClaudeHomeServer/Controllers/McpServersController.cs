@@ -236,8 +236,11 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
         foreach (var owner in registry.GetAllOwners())
         {
             if (registry.Get(owner, id) is null) continue;
+            // «Я в списке участников» — тот же идиом, что у ProjectMembershipService:71,113:
+            // Any() на пустом списке и есть false, отдельная проверка «список непустой» здесь
+            // была копией определения «проект общий» (W4-T10) и лишней
             return projects.GetByOwner(owner).Any(p =>
-                p.Members is { Count: > 0 } && p.Members.Any(m => m.UserId == UserId));
+                p.Members?.Any(m => m.UserId == UserId) == true);
         }
         return false;
     }

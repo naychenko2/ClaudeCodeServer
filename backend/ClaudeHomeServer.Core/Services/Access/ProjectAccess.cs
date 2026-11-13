@@ -83,6 +83,18 @@ public static class ProjectAccess
         RoleHasRight(Check(project, userId), right);
 
     /// <summary>
+    /// «Проект общий» — единственное определение: с непустым списком участников (пустой список
+    /// нормализован в null, <c>Project.Members</c>). Форма членства, поэтому точка — здесь, рядом
+    /// с <see cref="Check"/>. Ей различают личное и общее пространство проекта (TurnFrame) и ей же
+    /// отказывают «Приватным можно сделать только чат общего проекта»: тумблер видимости
+    /// (ChatVisibility) и обе точки создания чата с флагом private (POST /api/projects/{pid}/sessions,
+    /// POST /api/personas/{id}/chats). Вне ядра сессий она держится потому, что на неё ссылается
+    /// и роль ядра, и контроллер: правило 4 сторожа формы ядра (SessionCoreShapeGuardTests)
+    /// запрещает контроллеру ссылаться на типы Services.Sessions.
+    /// </summary>
+    public static bool IsShared(Project? project) => project?.Members is { Count: > 0 };
+
+    /// <summary>
     /// Матрица «роль → права» (разрез §2.1, минимальная): владелец имеет все права,
     /// редактор — Read, Write и RunTurn (отправка и ведение своего хода, S2a-10; Configure не
     /// получит никогда), читатель — только Read («нет права на запись»). Приглашение участников

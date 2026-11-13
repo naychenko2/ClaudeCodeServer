@@ -119,16 +119,20 @@ public class SharedProjectPersonaTaskTests : IClassFixture<TestWebApplicationFac
     {
         var owner = Owner();
         await SetFlagAsync(owner);
-        if (memberRole is not null) await SetFlagAsync(Member());
 
         var projectId = await PostAsync(owner, "/api/projects",
             new { name = "Персоны задач" + Guid.NewGuid().ToString("N")[..6], rootPath = NewDir("spt") });
-        if (memberRole is not null)
-            (await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
-                new { username = TestWebApplicationFactory.SecondUsername, role = memberRole }))
-                .EnsureSuccessStatusCode();
+        if (memberRole is not null) await AddMemberAsync(projectId, memberRole);
 
         return (projectId, await ProjectPersonaAsync(owner, projectId));
+    }
+
+    /// <summary>Делает проект общим: участник этой роли (флаг — и ему тоже).</summary>
+    private async Task AddMemberAsync(string projectId, string role)
+    {
+        await SetFlagAsync(Member());
+        (await Owner().PostAsJsonAsync($"/api/projects/{projectId}/members",
+            new { username = TestWebApplicationFactory.SecondUsername, role })).EnsureSuccessStatusCode();
     }
 
     private async Task<string> ProjectTaskIdAsync(string projectId, string title) =>
@@ -470,10 +474,13 @@ public class SharedProjectPersonaTaskTests : IClassFixture<TestWebApplicationFac
     private async Task<(string ProjectId, string ProjectPersonaId, string ChatId)> SharedChatWithTurnAsync(
         bool asEditor = true)
     {
-        var (projectId, projectPersona) = await SharedAsync();
+        // Чат до участников: пока проект личный, провижна владельца нет; в общем проекта без
+        // руководителя она не запускается никому (W4-B1a доработка 2, финал ed64271c)
+        var (projectId, projectPersona) = await SharedAsync(memberRole: null);
         var chat = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
         chat.EnsureSuccessStatusCode();
         var chatId = IdOf(await chat.Content.ReadAsStringAsync());
+        await AddMemberAsync(projectId, "editor");
 
         var speaker = asEditor ? Member() : Owner();
         (await speaker.PostAsJsonAsync($"/api/sessions/{chatId}/messages",

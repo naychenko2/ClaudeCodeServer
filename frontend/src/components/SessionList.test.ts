@@ -713,6 +713,178 @@ describe('SessionList: reportNewChatError — отказ «Нового чата
   });
 });
 
+// === W4-FB3: «Приватный чат» при создании в общем проекте ===
+// В общем проекте (myRole owner/editor) тулбар получает onNewPrivate: его вызов создаёт
+// чат одним запросом с private: true (W4-FB1) и сразу открывает его. В обычном проекте
+// (myRole нет) проп не передаётся — кнопка ведёт себя как раньше. Читателю «Новый»
+// скрыт (hideNew) и onNewPrivate не передаётся. Мутация (c2): заменить privateAllowed
+// на `true` → кейс «без myRole» красный (onNewPrivate становится функцией), читатель — тоже.
+const toolbarProps = vi.hoisted(() => [] as { onNew?: () => void; onNewPrivate?: () => void; hideNew?: boolean; creating?: boolean }[]);
+const createChatMock = vi.hoisted(() => vi.fn());
+// Обёртка настоящего тулбара: рендерит как он (кейсы файла ниже зависят от его разметки),
+// но записывает пропсы — признак готовности именно в них (меню внутри тулбара проверено
+// его тестом, W4-FB2)
+vi.mock('./ChatListToolbar', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('./ChatListToolbar')>();
+  return { ...orig, ChatListToolbar: (props: Parameters<typeof orig.ChatListToolbar>[0]) => {
+    toolbarProps.push(props);
+    return createElement(orig.ChatListToolbar, props);
+  } };
+});
+// Хелпер создания: аргументы проверяются (mode + private), реальный запрос не идёт;
+// остальные экспорты остаются как есть
+vi.mock('../lib/defaultPersona', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../lib/defaultPersona')>();
+  return { ...orig, createChatWithContextPersona: createChatMock };
+});
+
+describe('SessionList: W4-FB3 «Приватный чат» при создании в общем проекте', () => {
+  const createdChat = (): Session => ({
+    id: 'new-private', projectId: 'p1', name: 'Приватный чат', mode: 'auto', status: 'waiting',
+    messageCount: 0, createdAt: '2026-11-12T10:00:00Z', updatedAt: '2026-11-12T10:00:00Z',
+    origin: 'manual', privateToUserId: 'u1',
+  } as Session);
+
+  // Рендер списка с данным проектом → пропсы последнего рендера тулбара + onSelect
+  async function renderToolbar(pr: Project) {
+    featuresIndexTest.reset();
+    mockIndex = { features: [], chats: {} };
+    mockSessions = [];
+    store.clear();
+    toolbarProps.length = 0;
+    createChatMock.mockReset();
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    const onSelect = vi.fn();
+    await act(async () => { root.render(createElement(SessionList, { project: pr, activeSession: null, onSelect })); });
+    return { props: toolbarProps[toolbarProps.length - 1], onSelect, unmount: () => root.unmount() };
+  }
+
+  it('общий проект (owner): тулбар получает onNewPrivate; вызов → один запрос с private: true и открытие чата', async () => {
+    const pr = { ...project, myRole: 'owner' as const };
+    const { props, onSelect, unmount } = await renderToolbar(pr);
+    expect(typeof props.onNewPrivate, 'тулбар общего проекта обязан получить onNewPrivate').toBe('function');
+    const created = createdChat();
+    createChatMock.mockImplementation(async () => created);
+    await act(async () => { props.onNewPrivate!(); });
+    expect(createChatMock, 'приватный чат создаётся одним запросом').toHaveBeenCalledTimes(1);
+    expect(createChatMock).toHaveBeenCalledWith(pr, { mode: 'auto', private: true });
+    expect(onSelect, 'созданный чат сразу открывается').toHaveBeenCalledWith(created);
+    unmount();
+  });
+
+  it('общий проект (editor): тулбар получает onNewPrivate', async () => {
+    const { props, unmount } = await renderToolbar({ ...project, myRole: 'editor' as const });
+    expect(typeof props.onNewPrivate, 'редактору доступен приватный чат').toBe('function');
+    unmount();
+  });
+
+  it('читатель: «Новый» скрыт (hideNew), onNewPrivate не передаётся', async () => {
+    const { props, unmount } = await renderToolbar({ ...project, myRole: 'reader' as const });
+    expect(props.onNewPrivate, 'читателю приватный чат не предлагается').toBeUndefined();
+    expect(props.hideNew, 'кнопка «Новый» читателю скрыта').toBe(true);
+    unmount();
+  });
+
+  it('обычный проект (myRole нет): onNewPrivate не передаётся, onNew прежний', async () => {
+    const { props, unmount } = await renderToolbar(project);
+    expect(props.onNewPrivate, 'в обычном проекте создание прежнее — без выбора вида').toBeUndefined();
+    expect(typeof props.onNew, 'обычная кнопка «Новый» остаётся').toBe('function');
+    unmount();
+  });
+});
+
+// === W4-T1 (ревью R-W4-FB3): «Новый» блокируется на время запроса ===
+// До фикса второй клик по «Новому» до ответа сервера заводил второй чат: SessionList
+// не держал creating и не передавал его в ChatListToolbar (тот умеет: Button loading).
+// Порядок тот же, что в ChatsPage.newChat: ранний выход по creating → setCreating(true)
+// → снятие в finally (и при отказе). Мутации: убрать creating={creating} у
+// <ChatListToolbar> → первый кейс красный (после клика creating не приходит);
+// убрать ранний выход в createNew → красный по счёту createChatMock (2 вместо 1).
+describe('SessionList: W4-T1 «Новый» блокируется на время запроса', () => {
+  const newChatFixture = (): Session => ({
+    id: 'new-chat', projectId: 'p1', name: 'Новый чат', mode: 'auto', status: 'waiting',
+    messageCount: 0, createdAt: '2026-11-12T12:00:00Z', updatedAt: '2026-11-12T12:00:00Z',
+    origin: 'manual',
+  } as Session);
+
+  // Рендер списка с ОТЛОЖЕННЫМ созданием: ответ/отказ приносит сам кейс (settle/fail),
+  // поэтому «запрос ещё идёт» — реальное состояние между кликом и ответом
+  async function renderWithDeferredCreate(pr: Project = project) {
+    featuresIndexTest.reset();
+    mockIndex = { features: [], chats: {} };
+    mockSessions = [];
+    store.clear();
+    toolbarProps.length = 0;
+    createChatMock.mockReset();
+    toastMock.mockReset();
+    let settle!: (s: Session) => void;
+    let fail!: (e: unknown) => void;
+    createChatMock.mockImplementation(() => new Promise<Session>((res, rej) => { settle = res; fail = rej; }));
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    const onSelect = vi.fn();
+    await act(async () => { root.render(createElement(SessionList, { project: pr, activeSession: null, onSelect })); });
+    return {
+      // пропсы тулбара ПОСЛЕДНЕГО рендера: клик пользователя идёт актуальным замыканием
+      latest: () => toolbarProps[toolbarProps.length - 1],
+      settle: (s: Session) => settle(s),
+      failWith: (e: unknown) => fail(e),
+      onSelect,
+      unmount: () => root.unmount(),
+    };
+  }
+
+  it('клик ставит creating; второй клик до ответа — no-op; ответ открывает чат и снимает блок', async () => {
+    const r = await renderWithDeferredCreate();
+    expect(r.latest().creating, 'в покое кнопка не заблокирована').toBeFalsy();
+    await act(async () => { r.latest().onNew!(); });
+    expect(createChatMock).toHaveBeenCalledTimes(1);
+    expect(r.latest().creating, 'на время запроса тулбар получает creating (Button loading)').toBe(true);
+    await act(async () => { r.latest().onNew!(); });
+    expect(createChatMock, 'повторный клик до ответа ничего не создаёт').toHaveBeenCalledTimes(1);
+    await act(async () => { r.settle(newChatFixture()); });
+    expect(r.onSelect, 'созданный чат открывается один раз').toHaveBeenCalledTimes(1);
+    expect(r.latest().creating, 'после ответа блок снят').toBeFalsy();
+    r.unmount();
+  });
+
+  it('приватный путь держит тот же блок: обычный клик во время приватного запроса — no-op', async () => {
+    const r = await renderWithDeferredCreate({ ...project, myRole: 'owner' as const });
+    await act(async () => { r.latest().onNewPrivate!(); });
+    expect(createChatMock).toHaveBeenCalledTimes(1);
+    expect(r.latest().creating, 'приватный запрос тоже блокирует «Новый»').toBe(true);
+    await act(async () => { r.latest().onNew!(); });
+    expect(createChatMock, 'обычный клик во время приватного запроса — no-op').toHaveBeenCalledTimes(1);
+    await act(async () => { r.settle(newChatFixture()); });
+    expect(r.latest().creating).toBeFalsy();
+    r.unmount();
+  });
+
+  it('отказ API снимает блок: тост с текстом сервера, следующий клик снова создаёт', async () => {
+    const r = await renderWithDeferredCreate();
+    await act(async () => { r.latest().onNew!(); });
+    expect(r.latest().creating).toBe(true);
+    await act(async () => { r.failWith(new Error('В проекте нет руководителя — попросите владельца назначить')); });
+    expect(r.onSelect, 'несозданный чат не открывается').not.toHaveBeenCalled();
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect((toastMock.mock.calls[0] as [string, string])[1]).toBe('В проекте нет руководителя — попросите владельца назначить');
+    expect(r.latest().creating, 'отказ снимает блок').toBeFalsy();
+    await act(async () => { r.latest().onNew!(); });
+    expect(createChatMock, 'после отказа кнопка снова работает').toHaveBeenCalledTimes(2);
+    await act(async () => { r.settle(newChatFixture()); });
+    r.unmount();
+  });
+
+  it('ответ после размонтирования — без исключения наружу и без тоста', async () => {
+    const r = await renderWithDeferredCreate();
+    await act(async () => { r.latest().onNew!(); });
+    r.unmount();
+    await act(async () => { r.settle(newChatFixture()); });
+    expect(toastMock, 'несмонтированное дерево не роняет ответ в отказ').not.toHaveBeenCalled();
+  });
+});
+
 // === FI-4 (хвосты ревью FI-2): отсев чатов чужого проекта + «Чатов пока нет» рядом со строкой загрузки ===
 describe('SessionList: FI-4 отсев чатов чужого проекта', () => {
   // Форма индекса — как в Ф-2.2: kind — единственный признак состояния; «живой» чат

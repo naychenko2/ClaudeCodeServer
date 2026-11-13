@@ -74,7 +74,9 @@ public static class TurnFrame
             return TurnFrameKind.Narrow;
 
         // Личный проект: своих участников нет, личное пространство и так открыто своему владельцу.
-        if (!IsSharedProject(project))
+        // Определение общего проекта — общее с точкой членства (доработка W4-B1a, ревью f62c03b7):
+        // прежняя приватная копия здесь свёрнута в неё, чтобы «оно одно» было не словами.
+        if (!ProjectAccess.IsShared(project))
             return TurnFrameKind.Wide;
 
         // Общий проект: Wide — только приватный чат владельца при акторе-владельце: рамка открывает
@@ -87,7 +89,4 @@ public static class TurnFrame
 
         return TurnFrameKind.Narrow;
     }
-
-    /// <summary>Общий проект — с непустым списком участников; пустой список нормализован в null (Project.Members).</summary>
-    private static bool IsSharedProject(Project? project) => project?.Members is { Count: > 0 };
 }

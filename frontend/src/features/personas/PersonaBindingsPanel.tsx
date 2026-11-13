@@ -24,7 +24,6 @@ import { ToolTargetPicker } from './ToolTargetPicker';
 import { PluginTargetPicker } from './PluginTargetPicker';
 import { ownProjectId } from '../../lib/personaZone';
 import { canPersona, personaRole } from './personaRights';
-import { isMcpUserKey } from './toolMeta';
 
 // Вкладка «Умения» студии персоны (фича persona-bindings): карточки привязок
 // «источник + правило, когда им пользоваться». Семантика мгновенного сохранения
@@ -66,36 +65,6 @@ interface AddPanelState {
 // Типы привязок «Сотрудничество с другими проектами» — показываются отдельной секцией
 const CROSS_PROJECT_TYPES: PersonaBindingType[] = ['projectPersonas', 'projectTasks'];
 
-// «Цель этого проекта» (И-4 разреза shared-projects-personas-cut-2026-11): решается по
-// идентификатору цели, не по тексту подписи: проектные типы — сами являются
-// id проекта; заметки проекта — тот же id (ключ источника = id проекта, NotesService.cs:254);
-// tool — ключи без 'mcp:' (личный реестр владельца); skill — имена без 'plugin:'
-// (навыки плагинов — личное владельца); knowledge — датасет этого проекта (meta цели —
-// id проекта, ветка knowledge в PersonasController.cs:1157). Вызывается только когда
-// право чужих целей закрыто участнику (mayBind && !mayBindForeign — по матрице
-// personaRights это ровно редактор); owner/без роли проходят через mayBindForeign и
-// сюда не заходят.
-function bindingTargetInProject(
-  b: PersonaBinding,
-  projectId: string | undefined,
-  knowledgeProject: Map<string, string | null>,
-): boolean {
-  if (!projectId) return true; // персона без проекта (своя/глобальная) — как раньше
-  switch (b.type) {
-    case 'project': case 'projectPath': case 'projectPersonas': case 'projectTasks':
-    case 'notes':
-      return b.target === projectId;
-    case 'knowledge':
-      return knowledgeProject.get(b.target) === projectId;
-    case 'tool':
-      return !isMcpUserKey(b.target);
-    case 'skill':
-      return !b.target.toLowerCase().startsWith('plugin:');
-    case 'plugin':
-      return false; // всегда цель 'plugin:…*' — личное владельца
-  }
-}
-
 // Текстовая подпись пути для крошки шага ③ (см. AddPanelState.path/pathLabel)
 function panelPathSuffix(panel: AddPanelState): string {
   if (panel.type === 'projectTasks')
@@ -126,15 +95,14 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
   accent: string;
   isMobile: boolean;
 }) {
-  // Гейт по роли (W3-F1f, разрез §2/§3.4): роль — только через personaRights по проекту
-  // персоны. Нет роли (своя персона / обычный проект / старый бэк) и owner — всё как раньше.
-  // Читателю закрыто право bindingWrite (всё редактирование), редактору открыт bindingWrite,
-  // но закрыты bindingMcpPlugin (цели mcp:/plugin:* — Configure на бэке), skills (навыки —
-  // Configure) и bindingForeignTarget (правка привязок к целям вне этого проекта — И-4).
+  // Гейт по роли (W3-F1f, разрез §2/§3.4 + решение 12.11 из W4-FA1): роль — только через
+  // personaRights по проекту персоны. Нет роли (своя персона / обычный проект / старый бэк)
+  // и owner — всё как раньше; редактору и читателю закрыто всё редактирование привязок;
+  // редактору открыт только чат с персоной, читателю — ничего (canPersona для reader
+  // возвращает false по любому действию, включая chat).
   const role = personaRole(persona, projects);
   const mayBind = canPersona(role, 'bindingWrite');
   const mayMcpPlugin = canPersona(role, 'bindingMcpPlugin');
-  const mayBindForeign = canPersona(role, 'bindingForeignTarget');
   const maySkills = canPersona(role, 'skills');
 
   const [bindings, setBindings] = useState<PersonaBinding[] | null>(null);
@@ -262,34 +230,6 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
   const localBindings = list.filter(b => !CROSS_PROJECT_TYPES.includes(b.type));
   const crossBindings = list.filter(b => CROSS_PROJECT_TYPES.includes(b.type));
 
-  // «Датасет этого проекта» решается по meta цели — id проекта датасета
-  // (ветка knowledge в binding-targets, PersonasController.cs:1157). Мета нужна ровно там,
-  // где решается «своя/чужая цель» — при закрытом праве чужих целей (те же флаги, что в
-  // canEditBinding: mayBind && !mayBindForeign); owner/без роли проходят через
-  // mayBindForeign и мета им не нужна. Запрос тот же, что у подписей целей: модульный
-  // кэш fetchBindingTargets дублирует его, новой попытки нет. Каталога нет (ошибка/пустой)
-  // — у датасета кнопки остаются скрыты: при неизвестном проекте фронт не обещает то,
-  // что бэк может отказать (fail-closed, И-4).
-  const needKnowledgeMeta = mayBind && !mayBindForeign && list.some(b => b.type === 'knowledge');
-  const [knowledgeProject, setKnowledgeProject] = useState<Map<string, string | null>>(() => new Map());
-  useEffect(() => {
-    if (!needKnowledgeMeta) return;
-    let alive = true;
-    fetchBindingTargets('knowledge')
-      .then(l => { if (alive) setKnowledgeProject(new Map(l.map(t => [t.id, t.meta ?? null]))); })
-      .catch(() => { /* мета недоступна — у привязок knowledge кнопки остаются скрыты */ });
-    return () => { alive = false; };
-  }, [needKnowledgeMeta]);
-
-  // Можно ли менять/удалять эту привязку этому человеку: owner/без роли — все
-  // (mayBindForeign); читатель — никаких (mayBind закрыт); редактор — только цели этого
-  // проекта (bindingForeignTarget закрыт в personaRights, И-4). Порядок списка при этом
-  // не меняется — гейт прячет только органы.
-  const canEditBinding = (b: PersonaBinding): boolean => {
-    if (!mayBind) return false;
-    return mayBindForeign || bindingTargetInProject(b, persona.projectId, knowledgeProject);
-  };
-
   // Сводка по серверам личного MCP-реестра — каталог тот же, что у пикера инструментов
   // (статический + серверы владельца, ключи «mcp:»). Семантика читается по флагу
   // mcp-allowlist (та же граница, что развёл бэк в GetToolDefaultState/McpDelivery):
@@ -410,21 +350,19 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
       // Один цельный набор для PUT-замены: существующие привязки как есть, кроме
       // последней по каждому ключу каталога — она выключается; недостающие ключи
       // добавляются новыми off-привязками. touchedIdx — позиции, которые реально меняются.
-      // Серверы личного MCP-реестра ('mcp:') участнику без права bindingMcpPlugin не
-      // трогались ни в какую сторону: существующие остаются как есть, новых off-привязок
-      // на них не заводится (П1 доработки W3-F1f — иначе «Минимум» редактора менял чужие
-      // цели, хотя редактор их не правит).
+      // Все ключи каталога, включая 'mcp:' серверы личного реестра, обрабатываются
+      // одинаково: после решения 12.11 (W4-FA1) не осталось роли с правом bindingWrite,
+      // но без bindingMcpPlugin — у панели нет случая трогать чужие цели (П1 доработки
+      // W3-F1f больше нечего защищать).
       const touchedIdx = new Set<number>();
       const next: PersonaBindingDto[] = current.map((b, i) => {
-        if (b.type !== 'tool' || lastByTarget.get(b.target.toLowerCase()) !== b.id || b.mode === 'off'
-          || (!mayMcpPlugin && isMcpUserKey(b.target)))
+        if (b.type !== 'tool' || lastByTarget.get(b.target.toLowerCase()) !== b.id || b.mode === 'off')
           return { type: b.type, target: b.target, path: b.path ?? undefined, condition: b.condition, mode: b.mode };
         touchedIdx.add(i);
         return { type: b.type, target: b.target, path: b.path ?? undefined, condition: b.condition, mode: 'off' };
       });
       for (const t of catalog) {
         if (lastByTarget.has(t.id.toLowerCase())) continue;
-        if (!mayMcpPlugin && isMcpUserKey(t.id)) continue;
         touchedIdx.add(next.length);
         next.push({ type: 'tool', target: t.id, mode: 'off', condition: '' });
       }
@@ -636,10 +574,12 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
   // Карточка одной привязки — общая для секции «Умения и правила» и секции
   // «Сотрудничество с другими проектами» (обе используют один и тот же список бindings)
   const renderBindingCard = (b: PersonaBinding) => {
-    // Гейт по цели (W3-F1f): не-редактируемая этому человеку карточка не раскрывается
-    // (в раскрытом теле живут textarea условия, переключатель режима и «Удалить привязку»)
-    // и не имеет меню «⋯». Сама карточка и её режим остаются видимыми — право Read.
-    const editable = canEditBinding(b);
+    // Гейт по роли (W3-F1f + решение 12.11 из W4-FA1): карточку может менять только тот,
+    // у кого открыто право bindingWrite (owner / без роли); редактору и читателю — никаких
+    // привязок. Нередактируемая этому человеку карточка не раскрывается (в раскрытом теле
+    // живут textarea условия, переключатель режима и «Удалить привязку») и не имеет меню «⋯».
+    // Сама карточка и её режим остаются видимыми — право Read; порядок списка не меняется.
+    const editable = mayBind;
     const open = editable && expandedId === b.id;
     const dim = b.mode === 'off' && !open;
     const flashing = flashIds.has(b.id);

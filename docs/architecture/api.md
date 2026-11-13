@@ -12,7 +12,8 @@
 ```
 POST /api/auth/login            { username, password } → { token, expiresAt, username, displayName } | 400 | 401 | 429
 GET/POST/PUT/DELETE /api/projects
-GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId?, model? }
+GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId?, model?, private? }
+    private=true — чат приватный с рождения (виден только автору); не общий проект → 409 { code: "not_shared_project" }, чат не создаётся
 PUT                 /api/projects/{id}/sessions/{sid} body: { name?, model? } → обновлённая сессия
 GET                 /api/projects/{id}/sessions/{sid}/history  ?limit=&before=  → [msg…] | { messages, hasMore, cursor }
     без параметров — полный плоский массив (прежний контракт); с limit и/или before — страница:
@@ -52,7 +53,8 @@ POST                /api/push/subscribe|unsubscribe   { endpoint, p256dh?, auth?
 GET/POST/PUT/DELETE /api/personas                     (CRUD персон; ?scope=context&projectId= — доступные в контексте)  [флаг personas]
 GET                 /api/personas/pantheon             → { templates[] } (каталог пантеона OmO + connectedPersonaId)
 POST                /api/personas/pantheon/connect     { keys? } → Persona[]  (идемпотентно подключить команду глобально)
-GET/POST            /api/personas/{id}/chats          POST body { mode?, resumeSessionId?, name?, projectId? } → Session (чат от лица персоны; projectId — контекст проекта: глобальная персона получает чат В нём)
+GET/POST            /api/personas/{id}/chats          POST body { mode?, resumeSessionId?, name?, projectId?, private? } → Session (чат от лица персоны; projectId — контекст проекта: глобальная персона получает чат В нём)
+    private=true — чат приватный с рождения (проектная персона — её проект, иначе projectId); не общий проект → 409 { code: "not_shared_project" }, чат не создаётся
 GET/POST            /api/personas/{id}/memory         ?type=  / body { type, text, tags? } → записи памяти
 GET                 /api/personas/{id}/memory/search  ?q=&topK=  → hits (relevance×recency×type)
 DELETE              /api/personas/{id}/memory/{entryId}

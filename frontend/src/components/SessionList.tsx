@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { canCreateChats, chatActionDeniedReason, isNotChatAuthorError } from '../features/projects/members/participantGate';
+import { isSharedProject } from '../features/projects/members/messageAuthor';
 import { FilterX, ChevronUp, ChevronDown, ChevronRight, MessageCircle, Archive, CheckCircle2, Sparkles } from 'lucide-react';
 import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureIndexFeature } from '../types/featureIndex';
@@ -173,6 +174,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Раскрытая свайпом карточка (мобильная раскладка) — как в глобальном ChatList:
   // одна максимум, закрывается скроллом/открытием другой
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
+  // «Новый» блокируется на время запроса (R-W4-FB3): пока идёт создание, повторный клик
+  // не заводит второй чат, а кнопка в тулбаре стоит с loading. Тот же порядок, что в
+  // ChatsPage (newChat): ранний выход по creating → setCreating(true) → снятие в finally
+  const [creating, setCreating] = useState(false);
   const initializedRef = useRef(false);
   // Свежие activeSession/onSelect для обработчика chat_deleted (realtime-подписка живёт дольше рендера)
   const activeRef = useRef(activeSession);
@@ -426,13 +431,30 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // eslint-disable-next-line react-hooks/set-state-in-effect -- прокидывание списка наверх, не локальный setState
   useEffect(() => { if (loaded) onSessionsListChanged?.(sessions); }, [loaded, sessions, onSessionsListChanged]);
 
-  const createNew = async (): Promise<Session> => {
-    // Чат создаётся от лица дефолт-персоны проекта
-    const s = await createChatWithContextPersona(project, { mode: 'auto' });
-    // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
-    if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
-    onSelect(s);
-    return s;
+  // «Приватный чат» (W4-FB3): выбор есть только там, где приватность имеет смысл и где
+  // чат создавать можно: общий проект (isSharedProject), владелец и редактор
+  // (canCreateChats). Читателю «Новый» скрыт и так (hideNew), в обычном проекте — нет
+  const privateAllowed = isSharedProject(project) && canCreateChats(project);
+
+  // opts.private (W4-FB3): приватный чат общего проекта — тот же путь создания (W4-FB1),
+  // тот же путь обновления списка и открытия.
+  // Блок на время запроса (R-W4-FB3): повторный вызов, пока creating=true, ничего не
+  // создаёт (null); ответ или отказ снимают блок в finally — текст отказа уходит
+  // вызывающему через reportNewChatError. Ответ после размонтирования — setState на
+  // несмонтированном дереве в React no-op, наружу ничего не летит.
+  const createNew = async (opts?: { private?: boolean }): Promise<Session | null> => {
+    if (creating) return null;
+    setCreating(true);
+    try {
+      // Чат создаётся от лица дефолт-персоны проекта
+      const s = await createChatWithContextPersona(project, { mode: 'auto', private: opts?.private });
+      // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
+      if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
+      onSelect(s);
+      return s;
+    } finally {
+      setCreating(false);
+    }
   };
 
   // Загрузка и поллинг сессий
@@ -1267,6 +1289,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <ChatListToolbar
         onNew={() => { createNew().catch(reportNewChatError); }}
+        // Общий проект: кнопка «Новый» предлагает выбор «Обычный / Приватный» (W4-FB2).
+        // Отказ (409 not_shared_project и любой другой) — текст сервера через reportNewChatError
+        onNewPrivate={privateAllowed ? () => { createNew({ private: true }).catch(reportNewChatError); } : undefined}
+        // Блок на время запроса (R-W4-FB3): тулбар отдаёт его в Button loading (W4-FB2)
+        creating={creating}
         hideNew={!online || !canCreateChats(project)}
         sessions={sessions}
         filters={groupBy === filters.groupBy ? filters : { ...filters, groupBy }}

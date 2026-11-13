@@ -1,7 +1,8 @@
 // W3-F1e: гейт по роли в форме персоны (матрица §2 разреза
 // docs/research/shared-projects-personas-cut-2026-11.md §3.4). Читатель — форма только для
 // чтения: поля disabled, «Удалить» нет (своей «Сохранить» у формы нет никогда — она в
-// тулбаре родителя, для читателя форма сообщает canSave=false). Редактор — карточка
+// тулбаре родителя, для читателя и редактора форма сообщает canSave=false; состояние
+// кнопки проверяется в PersonaToolbar.gate.test.ts, W4-T4). Редактор — карточка
 // правится; поля зоны и денег (зона, профиль доступа, модель/уровень/усилие, специальность —
 // доработка ревью fd328e70 п.3) выключены с видимым текстом «Меняет только владелец
 // проекта», «Удалить» нет. Владелец и обычный проект (myRole нет) — всё, как раньше.
@@ -97,7 +98,7 @@ const SPEC_MARK = 'aria-label="Специальность"';
 const HINT_TEXT = 'Меняет только владелец проекта';
 
 describe('PersonaForm: гейт по роли (W3-F1e)', () => {
-  it('читатель: имя и зона выключены, модельные контролы выключены, «Сохранить»/«Удалить» нет', () => {
+  it('читатель: имя и зона выключены, модельные контролы выключены, «Удалить» нет', () => {
     const html = renderForm('reader');
     const nameTag = openTagWith(html, '<input', NAME_MARK);
     expect(nameTag, 'поля имени нет').not.toBeNull();
@@ -111,15 +112,14 @@ describe('PersonaForm: гейт по роли (W3-F1e)', () => {
     const specTag = openTagWith(html, '<select', SPEC_MARK);
     expect(specTag, 'выбора специальности нет').not.toBeNull();
     expect(specTag!, 'выбор специальности читателю не выключен').toContain('disabled');
-    expect(countOf(html, 'Сохранить'), '«Сохранить» в форме читателю').toBe(0);
     expect(countOf(html, 'Удалить'), '«Удалить» в форме читателю').toBe(0);
   });
 
-  it('редактор: имя открыто; зона и модель выключены; «Удалить» нет', () => {
+  it('редактор: как читатель — имя, зона, модель выключены; «Удалить» нет', () => {
     const html = renderForm('editor');
     const nameTag = openTagWith(html, '<input', NAME_MARK);
     expect(nameTag, 'поля имени нет').not.toBeNull();
-    expect(nameTag!, 'поле имени редактору выключено').not.toContain('disabled');
+    expect(nameTag!, 'поле имени редактору не выключено (editCard — Configure)').toContain('disabled');
     const zoneTag = openTagWith(html, '<select', ZONE_MARK);
     expect(zoneTag, 'выбора зоны нет').not.toBeNull();
     expect(zoneTag!, 'выбор зоны редактору не выключен').toContain('disabled');

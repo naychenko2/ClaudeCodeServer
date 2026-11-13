@@ -84,16 +84,16 @@ describe('TeamCommandCenter: гейт по роли (W3-F1b)', () => {
     expect(countOf(emptyHtml, 'Новая персона'), 'создание персоны у читателя в пустом состоянии').toBe(0);
   });
 
-  it('редактор: ИИ-сборка и «Новая персона» есть, «Сменить» нет; чаты с персонами открыты', () => {
+  it('редактор: ни ИИ-сборки, ни «Новой персоны», ни «Сменить»; чаты с персонами открыты', () => {
     teamRef.current = [];
     const emptyHtml = renderCenter(projectWith('editor'));
-    expect(countOf(emptyHtml, 'Сформировать команду'), 'ИИ-сборка редактору (B3 открыта)').toBe(1);
-    expect(countOf(emptyHtml, 'Новая персона'), 'создание персоны редактору в пустом состоянии').toBe(1);
+    expect(countOf(emptyHtml, 'Сформировать команду'), 'ИИ-сборка редактору (aiTeam — Configure)').toBe(0);
+    expect(countOf(emptyHtml, 'Новая персона'), 'создание персоны редактору в пустом состоянии').toBe(0);
     teamRef.current = TEAM;
     const html = renderCenter(projectWith('editor'));
     expect(countOf(html, 'Сменить'), 'смена руководителя редактору (makeLead — Configure)').toBe(0);
     expect(countOf(html, 'Созвать команду'), 'групповой чат редактору (chat открыт)').toBe(1);
-    expect(countOf(html, 'Новая персона'), 'создание персоны редактору (ряд героя)').toBe(1);
+    expect(countOf(html, 'Новая персона'), 'создание персоны редактору (ряд героя)').toBe(0);
   });
 
   it('владелец: «Сменить», «Созвать команду», ИИ-сборка и «Новая персона» — всё есть', () => {

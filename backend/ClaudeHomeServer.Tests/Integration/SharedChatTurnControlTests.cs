@@ -48,14 +48,18 @@ public class SharedChatTurnControlTests : IDisposable
         var project = await _owner.PostAsJsonAsync("/api/projects", new { name = $"Общий-{tag}" });
         project.EnsureSuccessStatusCode();
         var projectId = IdOf(await project.Content.ReadFromJsonAsync<JsonElement>());
+        // Чат до участников: пока проект личный, провижна владельца нет; в общем проекта без
+        // руководителя она не запускается никому (W4-B1a доработка 2, финал ed64271c)
+        var chat = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        chat.EnsureSuccessStatusCode();
+        var chatId = IdOf(await chat.Content.ReadFromJsonAsync<JsonElement>());
+
         var ownerUser = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!;
         var editorUser = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.SecondUsername)!;
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(projectId,
             [new ProjectMember { UserId = editorUser.Id, Role = ProjectRole.Editor, AddedBy = ownerUser.Id }]);
 
-        var chat = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
-        chat.EnsureSuccessStatusCode();
-        return IdOf(await chat.Content.ReadFromJsonAsync<JsonElement>());
+        return chatId;
     }
 
     /// <summary>Арендатор чата — владелец его проекта: тот, чьим ключом живут хранилища и чей

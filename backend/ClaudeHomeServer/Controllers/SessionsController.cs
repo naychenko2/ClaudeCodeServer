@@ -46,6 +46,12 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     [ProjectScope(Right = ProjectRight.RunTurn)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
+        // Приватный чат создаётся приватным атомарно (W4-B1a): флаг принимается только общим
+        // проектом — та же проверка и тот же отказ, что у тумблера видимости (ChatsController
+        // .SetVisibility → not_shared_project). Отказ идёт ДО всякой работы (резолва персоны,
+        // провижна ассистента): отказанное создание не оставило в проекте ни чата, ни персоны.
+        if (req.Private && !ProjectAccess.IsShared(projects.GetById(projectId)))
+            return Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" });
         // FIN3-2 (FINAL-3, п. 3 ревью b13f2105): resume принимается только для транскрипта чата,
         // видимого вызывающему. ClaudeSessionId — ключ истории (HistoryKeyOf, SessionManager.cs:557)
         // и транскрипта CLI: новый общий чат с csid чужого приватного получил бы его разговор
@@ -57,37 +63,40 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
             return NotFound(new { error = "Чат не найден" });
         string? personaId = req.PersonaId;
         // Последний рубеж инварианта «новый чат человека — только с персоной» (парная связь
-        // с фронтом): без personaId/resumeSessionId сначала провижним ассистента и продолжим
-        // с ним. 400 — только когда провижн невозможен. Служебные пути (задачи, one-shot)
-        // REST не используют, поэтому гейт их не задевает.
+        // с фронтом): без personaId/resumeSessionId сначала резолвим руководителя проекта,
+        // в личном проекте — провижним ассистента и продолжим с ним. 400 — когда собеседника
+        // взять нечем. Служебные пути (задачи, one-shot) REST не используют, поэтому гейт их
+        // не задевает.
         if (string.IsNullOrWhiteSpace(personaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId))
         {
             // Правило «персона контекста» — то же, что на фронте (lib/defaultPersona.ts):
-            // в проекте чат ведёт руководитель, и только если его нет — личный ассистент.
-            // Сервер обязан повторять это правило, иначе не-браузерный потребитель REST
-            // (скрипт, будущий адаптер мессенджера) получил бы в проекте с назначенным
+            // в проекте чат ведёт руководитель; личный ассистент — собеседник личного
+            // проекта. Сервер обязан повторять это правило, иначе не-браузерный потребитель
+            // REST (скрипт, будущий адаптер мессенджера) получил бы в проекте с назначенным
             // руководителем чат от личного ассистента — и вместе с ним молча потерял бы
             // командные механики (SessionManager отдаёт их только персоне-руководителю).
             // Резолв в живую персону, а не проверка поля: сирота не должна подменять правило.
             // Ключ руководителя — арендатор (W3-B4b, И-2): участник получает руководителя
-            // проекта, а не свою подмену. Фолбэк на личного ассистента — право владельца:
-            // участнику провижн не запускается — инвариант «участник не получает чат общего
-            // проекта с глобальной персоной (своей или владельца)».
+            // проекта, а не свою подмену. Фолбэк на личного ассистента — право личного
+            // проекта: в общем он не запускается никому, включая владельца (W4-B1a доработка 2,
+            // финал ed64271c) — глобальная персона не может быть собеседником общего чата
+            // (S2a-8), а путь провижна этой рамки не проверял.
             var scope = HttpContext.GetRequestScope();
-            var lead = projects.GetById(projectId)?.DefaultPersonaId is { } leadId
+            var project = projects.GetById(projectId);
+            var lead = project?.DefaultPersonaId is { } leadId
                 ? personas.Get(leadId, scope.TenantOwnerId)
                 : null;
             // Руководитель вне своей зоны (персона сферы, проект вышел из сферы) не считается
             if (lead is not null && !sessions.PersonaVisibleIn(lead, projectId)) lead = null;
             if (lead is not null) personaId = lead.Id;
-            else if (scope.Role == ProjectRole.Owner)
+            else if (scope.Role == ProjectRole.Owner && !ProjectAccess.IsShared(project))
             {
                 var provisioned = await provisioner.EnsureAsync(UserId, HttpContext.RequestAborted);
                 if (provisioned is null)
                     return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
                 personaId = provisioned.Id;
             }
-            else return NoProjectPersonaDenied();
+            else return NoProjectPersonaDenied(scope.Role == ProjectRole.Owner);
         }
         try
         {
@@ -110,8 +119,11 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
                 sessions.EnsurePersonasVisibleInFrame(projectId, new[] { assigned });
             }
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
+            // Приватность ставится в объект чата ДО его регистрации (S2d-7b-1, W4-B1a): окно,
+            // в котором чат был бы общим, отсутствует по построению
             var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name,
-                req.Model, req.AgentName, req.Effort, personaId: personaId, createdByUserId: UserId);
+                req.Model, req.AgentName, req.Effort, personaId: personaId, createdByUserId: UserId,
+                privateToUserId: req.Private ? UserId : null);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
@@ -202,11 +214,16 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         new(new { error = "Пока чат приватный, «Не сохранять решения» нельзя выключить", code = "private_chat_dossiers" })
             { StatusCode = StatusCodes.Status409Conflict };
 
-    // В общем проекте нет руководителя, а личного ассистента участнику не подставляют (W3-B4b):
-    // провижн глобальной персоны — право владельца. 400 с машинным кодом — фронт по нему
-    // показывает текст «попросите владельца назначить» (W3-F2a).
-    private static ObjectResult NoProjectPersonaDenied() =>
-        new(new { error = "В проекте нет руководителя — попросите владельца назначить", code = "no_project_persona" })
+    // В общем проекте нет руководителя, а личного ассистента в общий чат не подставляют никому,
+    // включая владельца (W3-B4b + доработка W4-B1a 2, финал ed64271c): провижн глобальной
+    // персоны — право личного проекта. 400 с машинным кодом — фронт по нему отдаёт текст отказа
+    // вызывающему как есть (W3-F2a, defaultPersona.ts). Текст различается по роли: участнику —
+    // «попросите владельца», владельцу — «назначьте его»: руководитель — его решение.
+    private static ObjectResult NoProjectPersonaDenied(bool isOwner) =>
+        new(new { error = isOwner
+                ? "В проекте нет руководителя — назначьте его в команде проекта"
+                : "В проекте нет руководителя — попросите владельца назначить",
+            code = "no_project_persona" })
             { StatusCode = StatusCodes.Status400BadRequest };
 
     // Назначить/сменить/снять собеседника (персону или .md-агента) у проектной сессии — в т.ч. по ходу разговора.
@@ -325,11 +342,14 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // прежний контракт идемпотентного удаления (строка выше) сохранён, существование не выдаётся кодом,
         // сам чат не тронут. Видимость — первым шагом, как требует порядок «решение прав после видимости».
         if (sessions.GetAccessible(sessionId, UserId) is null) return NoContent();
-        // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): удалить может автор чата или владелец
-        // проекта. Авторство — CreatedByUserId (только это поле; nil — автор неизвестен и автором не
-        // считается, тот же fail-closed, что у DenyTurnAuthor). Видимому не-автору (читателю, редактору
-        // чужого чата) — прежний 403 по контракту ChatAuthorGate, чат цел.
-        if (session.CreatedByUserId != UserId && sessions.GetOwnedVisible(sessionId, UserId) is null)
+        // W4-C1 (решение Андрея, 12.11): общий чат удаляет только владелец проекта (GetOwnedVisible —
+        // владение проектом + видимость), даже если создал его редактор. Автор своего приватного чата
+        // (PrivateToUserId == CreatedByUserId == вызывающий) удаляет его по-прежнему: владелец чужой
+        // приватный не видит, иначе его не удалил бы никто. Авторство — CreatedByUserId (только это
+        // поле; nil — автор неизвестен и автором не считается, тот же fail-closed, что у DenyTurnAuthor).
+        // Видимому не-автору (читателю, редактору чужого чата) — прежний 403 по контракту ChatAuthorGate, чат цел.
+        if (sessions.GetOwnedVisible(sessionId, UserId) is null &&
+            (session.PrivateToUserId != UserId || session.CreatedByUserId != UserId))
             return ChatAuthorGate.Denied();
         await sessions.DeleteAsync(sessionId);
         return NoContent();
@@ -412,7 +432,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
 
 // PersonaId — собеседник нового чата; под флагом default-personas-onboarding обязателен
 // (либо resumeSessionId — продолжение существующего разговора).
-public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null, string? PersonaId = null);
+// Private (W4-B1a) — создать чат приватным сразу (виден только вызывающему); принимается только
+// общим проектом, иначе 409 not_shared_project. По умолчанию false — поведение прежнего запроса не изменилось.
+public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null, string? PersonaId = null, bool Private = false);
 
 // Запись контекста чата на вход PUT (Type/Id/Title — см. SessionContextEntry; Title
 // необязателен — подпись со стороны добавившего, сервер только тримит).

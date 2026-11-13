@@ -58,14 +58,20 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
         created.EnsureSuccessStatusCode();
         var projectId = IdOf(await created.Content.ReadAsStringAsync());
 
+        // Чат-вызыватель создаётся ДО добавления участника: пока проект личный, провижна
+        // владельца нет (W4-B1a доработка 2, финал ed64271c — в общем проекте без руководителя
+        // она не запускается никому). Итоговое состояние то же: чат с личным ассистентом
+        // владельца в проекте, который стал общим.
+        var chat = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        chat.EnsureSuccessStatusCode();
+        var chatId = IdOf(await chat.Content.ReadAsStringAsync());
+
         if (memberRole is not null)
             (await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
                 new { username = TestWebApplicationFactory.SecondUsername, role = memberRole }))
                 .EnsureSuccessStatusCode();
 
-        var chat = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
-        chat.EnsureSuccessStatusCode();
-        return (projectId, IdOf(await chat.Content.ReadAsStringAsync()));
+        return (projectId, chatId);
     }
 
     private static async Task<string> CreatePersonaAsync(HttpClient client, string name,
@@ -171,6 +177,36 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
         var text = result.GetProperty("content")[0].GetProperty("text").GetString()!;
         JsonSerializer.Deserialize<JsonElement>(text).GetProperty("code").GetString()
             .Should().Be(GlobalPersonaInSharedException.Code);
+        (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
+            "отказ не оставил в проекте нового чата");
+    }
+
+    /// <summary>Владелец просит новый чат общего проекта без руководителя (без personaId):
+    /// тот же отказ, что в REST — провижна личного ассистента в общем проекте нет никому
+    /// (W4-B1a доработка 2, финал ed64271c). Актор-участник до этого пути не доходит:
+    /// chats_create — OwnerOnly (ActorRightGate.cs:75-76).</summary>
+    [Fact]
+    public async Task McpChatsCreateВОбщемПроектеБезРуководителя_ОтказNoProjectPersonaИЧатНеСоздан()
+    {
+        var (projectId, callerChatId) = await ProjectWithChatAsync("editor");
+        var before = await ProjectChatIdsAsync(Owner(), projectId);
+
+        (await Owner().PostAsJsonAsync($"/api/sessions/{callerChatId}/messages",
+            new { text = "создай чат в этом проекте", wait = "none" })).EnsureSuccessStatusCode();
+
+        var resp = await Owner().AsCaller(callerChatId).PostAsJsonAsync($"/mcp/wsp/{callerChatId}", new
+        {
+            jsonrpc = "2.0", id = 1, method = "tools/call",
+            @params = new { name = "chats_create", arguments = new { projectId } },
+        });
+        resp.EnsureSuccessStatusCode();
+        var result = (await BodyAsync(resp)).GetProperty("result");
+        result.GetProperty("isError").GetBoolean().Should().BeTrue();
+        var text = result.GetProperty("content")[0].GetProperty("text").GetString()!;
+        var body = JsonSerializer.Deserialize<JsonElement>(text);
+        body.GetProperty("code").GetString().Should().Be("no_project_persona",
+            "тот же машинный код, что у REST: агент различает отказ кодом");
+        body.GetProperty("error").GetString().Should().Be("В проекте нет руководителя — назначьте его в команде проекта");
         (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
             "отказ не оставил в проекте нового чата");
     }

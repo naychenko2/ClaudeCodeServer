@@ -58,13 +58,14 @@ public class EditorTurnInSharedChatTests : IDisposable
         var shared = await _owner.PostAsJsonAsync("/api/projects", new { name = $"Общий-{tag}" });
         shared.EnsureSuccessStatusCode();
         var sharedId = IdOf(await shared.Content.ReadFromJsonAsync<JsonElement>());
+        // чат до участников: в общем проекта без руководителя провижна владельца нет (W4-B1a 2, финал ed64271c)
+        var chat = await _owner.PostAsJsonAsync($"/api/projects/{sharedId}/sessions", new { mode = "auto" });
+        chat.EnsureSuccessStatusCode();
+        var chatId = IdOf(await chat.Content.ReadFromJsonAsync<JsonElement>());
         var editorUser = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.SecondUsername)!;
         var ownerUser = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!;
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(sharedId,
             [new ProjectMember { UserId = editorUser.Id, Role = ProjectRole.Editor, AddedBy = ownerUser.Id }]);
-        var chat = await _owner.PostAsJsonAsync($"/api/projects/{sharedId}/sessions", new { mode = "auto" });
-        chat.EnsureSuccessStatusCode();
-        var chatId = IdOf(await chat.Content.ReadFromJsonAsync<JsonElement>());
 
         var response = await _editor.PostAsJsonAsync($"/api/sessions/{chatId}/messages",
             new { text = "вопрос редактора", wait = "none" });

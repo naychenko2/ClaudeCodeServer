@@ -18,17 +18,21 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// «POST/PUT/DELETE {id}/bindings», §4 И-4): привязки проектной персоны — ключ арендатора и
 /// сужение целей для не-владельца одним методом PersonaBindingsService.NonOwnerBindingEditDenied.
 ///
+/// Правило с 12.11 (решение Андрея): правка привязок — Configure, только владелец проекта.
+/// Редактор и читатель на любом записывающем пути получают 403 с машинным кодом project_scope
+/// ещё до тела (отказ решает [ProjectScope]), посторонний — 404 (существование не раскрываем);
+/// отказ — без записи: ни новой привязки, ни изменённой, ни под ключом вызывающего. Чтение
+/// привязок открыто всем участникам (редактор владельческую привязку видит).
+///
 /// Матрица «роль × действие × цель» на настоящем сервере (образец — SharedProjectTaskWriteRightsTests,
-/// SharedProjectPersonaRightsTests):
-/// - редактор привязывает персону к данным ЭТОГО проекта (Notes=projectId, Tool без mcp:) — 2xx,
-///   запись лежит под ключом владельца и видна его GET;
-/// - чужая личная цель (Notes=personal) — 400; MCP/плагин-цель (Tool mcp:*) — 403 (это Configure);
-/// - существующую привязку владельца к личной цели редактор видит (GET), но не меняет и не удаляет
-///   (403, привязка на месте); свою проектную — правит и удаляет;
-/// - читатель на любом записывающем пути — 403 с машинным кодом project_scope (отказ решает
-///   [ProjectScope]), ничего не меняет; посторонний — 404 (существование не раскрываем);
-/// - владелец — без сужения, как раньше.
-/// Отказ — без записи: ни новой привязки, ни изменённой, ни под ключом вызывающего.
+/// SharedProjectPersonaRightsTests): владелец — без сужения, как раньше (mcp-цель без реестра у него
+/// даёт 400 валидации, а не 403); остальные роли — отказ по праву независимо от цели.
+///
+/// Сужение NonOwnerBindingEditDenied осталось вторым рубежом: до не-владельца через
+/// записывающие действия оно не доходит (фильтр отказывает раньше), тестов прямым вызовом
+/// сервиса нет. Путь без фильтра на действии — каталог целей (GET binding-targets, [ProjectScope]
+/// на действии нет): каждый его элемент проходит тот же сужение, путь держит
+/// BindingTargets_РедакторЧужойПроектнойПерсоны_ТолькоЦелиЭтогоПроекта.
 ///
 /// Порядок отказа: сужение решается ДО ValidateAsync (отказ по праву не зависит от валидности
 /// цели: mcp-сервера может не быть в реестре — 403 всё равно 403). Отдельный тест держит это:
@@ -36,67 +40,46 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///
 /// Ключ: ValidateAsync и UpdateBindings — под scope.TenantOwnerId (И-2). Сторож PersonaScopeGuard
 /// этих вызовов не видит (CallRe не покрывает _bindings./_personas.UpdateBindings) — путь держат
-/// строки матрицы: вернуть в AddBinding/UpdateBinding/DeleteBinding ключ вызывающего — краснеют
-/// «Notes проекта» (404: персоны под ключом вызывающего нет) и «свою проектную» (404).
+/// строки матрицы.
 ///
-/// Конкурентность: ParallelAddBinding_OwnerAndEditor_BothKept и ParallelAddAndUpdateBinding_
-/// BothKept — одновременные записи одной персоны не перечёркивают друг друга. UpdateBindings
-/// пишет список ЦЕЛИКОМ из переданного значения — additive- и точечная правка поверх снимка
-/// теряют чужую одновременную запись (классическая потерянная правка). Поэтому все три
-/// пути идут через read-modify-write под _saveLock в PersonaManager: AppendBinding (POST),
-/// UpdateBinding/RemoveBinding (PUT/DELETE одной; доработка возврата ревью 5a794ef5).
-/// Полная замена PUT {id}/bindings остаётся last-write-wins по семантике, но с доработки
-/// — под ключом арендатора и с сужением набора для не-владельца (хвост 1 того же возврата);
-/// MCP personas_bindings_set — под ключом владельца, без сужения.
+/// Конкурентность: ParallelAddBinding_TwoOwnerRequests_BothKept (два запроса владельца — две
+/// вкладки) и ParallelAddAndUpdateBinding_BothKept — одновременные записи одной персоны не
+/// перечёркивают друг друга. UpdateBindings пишет список ЦЕЛИКОМ из переданного значения —
+/// additive- и точечная правка поверх снимка теряют чужую одновременную запись (классическая
+/// потерянная правка). Поэтому все три пути идут через read-modify-write под _saveLock в
+/// PersonaManager: AppendBinding (POST), UpdateBinding/RemoveBinding (PUT/DELETE одной;
+/// доработка возврата ревью 5a794ef5). Полная замена PUT {id}/bindings остаётся last-write-wins
+/// по семантике; MCP personas_bindings_set — под ключом владельца, без сужения.
 ///
 /// W3-B5b (та же строка §3.1 «GET /binding-targets», «POST {id}/bindings/suggest, /generate,
-/// /apply-defaults»; И-2, И-4): каталог целей и ИИ-подбор — под ключом арендатора; элемент
-/// каталога и кандидат подбора проходят тот же NonOwnerBindingEditDenied до ответа/записи:
-/// редактор не видит в выдаче и не получает от подбора ни одной личной цели владельца и ни
-/// одной mcp/плагин-цели. Без personaId или для своей персоны — как раньше; owner — без
-/// сужения (регрессии нет).
+/// /apply-defaults»; И-2, И-4): каталог целей — под ключом арендатора; элемент каталога
+/// проходит тот же NonOwnerBindingEditDenied до ответа: редактор не видит в выдаче ни одной
+/// личной цели владельца и ни одной mcp/плагин-цели. ИИ-подбор и типовые умения (suggest /
+/// generate / apply-defaults) — только владельцу: редактору и читателю отказывает фильтр до
+/// работы. Без personaId или для своей персоны каталог — как раньше; owner — без сужения.
 ///
-/// W3-B5b доработка (ревью aaf13fce): роль вызывающего из области запроса доходит до ИИ-подбора
-/// при создании (POST /api/personas с autoBindings и quick-create → CreateAsync/TryAutoBindAsync) —
-/// созданная редактором персона не получает через авто-подбор личных целей владельца и mcp:*;
-/// владелец тем же вызовом — как раньше.
+/// Создание проектной персоны — тоже только владелец (Configure, 12.11): редактор получает 403
+/// и на POST /api/personas (в том числе с autoBindings и явными bindings), и на quick-create;
+/// владелец тем же вызовом — с авто-подбором и явными привязками как раньше.
 ///
-/// W3-B5b доработка 2 (возврат дельта-ревью 7ace425a): явные привязки в теле того же создания
-/// (POST /api/personas с bindings) идут через NonOwnerBindingEditDenied ДО ValidateAsync — тот же
-/// порядок отказа, что у AddBinding: редактор не создаёт проектную персону с привязкой к личным
-/// заметкам владельца (400) и не создаёт её с mcp-целью (403, а не 400 «нет в реестре»);
-/// отказ — до personas.Create, полусозданной персоны нет. Владелец тем же телом — без сужения.
-///
-/// Мутации (проверяются на копиях дерева, scripts/mutation-copy.sh):
-/// - NonOwnerBindingEditDenied всегда возвращает null («сужение разрешает всё») — краснеют
-///   «mcp-цель» (200/400 вместо 403), «личная цель» (200 вместо 400) и обе строки «личную
-///   не удалить/не изменить» (200 вместо 403);
-/// - IsOwnerOnlyTarget в NonOwnerBindingEditDenied — false — краснеет «mcp-цель» (400 вместо 403);
-/// - IsProjectBoundTarget — true — краснеет «личная цель» (200 вместо 400);
-/// - вернуть ключ вызывающего в AddBinding — краснеет «Notes проекта» (404);
+/// Мутации, которые краснеют сейчас (проверяются на копиях дерева, scripts/mutation-copy.sh):
+/// - снять [ProjectScope] (или понизить право до WriteContent) с записывающих действий
+///   привязок — краснеют строки матрицы для Editor (2xx/400 вместо 403);
+/// - вернуть в AddBinding ключ вызывающего вместо арендатора — краснеют строки владельца,
+///   если вызывающий не владелец проекта (см. «свою проектную» и привязки на проект);
 /// - вернуть запись из снимка в PUT/DELETE одной привязки (UpdateBindings поверх
 ///   persona.Bindings!.ToList() вместо UpdateBinding/RemoveBinding) — краснеет
 ///   ParallelAddAndUpdateBinding_BothKept по числу tool-привязок;
-/// - вернуть SetBindings на ключ вызывающего или снять сужение полной замены — краснеет
-///   ПолнаяЗаменаПривязок_НеВладелецНеТрогаетЛичныеВладельца_ПроектныеМожет (404 вместо 403);
-/// - W3-B5b: убрать фильтр TargetAllowed в BindingTargets — краснеет
+/// - убрать фильтр TargetAllowed в BindingTargets — краснеет
 ///   BindingTargets_РедакторЧужойПроектнойПерсоны_ТолькоЦелиЭтогоПроекта (редактор видит
 ///   «personal» и чужие проекты);
-/// - W3-B5b: снять проверку NonOwnerBindingEditDenied в SuggestBindingsAsync /
-///   MaterializeDefaultBindingsAsync (или не передать callerRole из контроллера) — краснеют
+/// - снять отказ Configure с suggest/generate/apply-defaults — краснеют
 ///   ПодборИГенерацияПривязок_РедакторуТолькоРазрешённыеЦели и
-///   ТиповыеУмения_РедакторНеДобавляетЛичныхЦелейВладельца (applied=1 вместо 0);
-/// - W3-B5b доработка (ревью aaf13fce): не передать callerRole/projectId в CreateAsync и
-///   TryAutoBindAsync (Owner по умолчанию) — краснеют
-///   СозданиеПроектнойПерсоныРедактором_АвтоПодборНеПишетЛичныхЦелейВладельца и
-///   КвикСозданиеПроектнойПерсоныРедактором_АвтоПодборНеПишетЛичныхЦелейВладельца:
-///   созданная редактором персона получает «notes|personal» (прочие чужие цели в тестовом
-///   хосте отбивает и валидация — личная цель единственная проходит её под ключом владельца).
-/// - W3-B5b доработка 2 (возврат 7ace425a): снять проверку NonOwnerBindingEditDenied в цикле
-///   req.Bindings в CreateAsync — краснеют
-///   СозданиеПроектнойПерсоныРедактором_ЯвныеПривязкиЧужихЦелейОтказаныБезСоздания:
-///   «личная цель» — 200 вместо 400 (под ключом владельца ValidateAsync её пропускает),
-///   «mcp-цель» — 400 вместо 403.
+///   ТиповыеУмения_РедакторНеДобавляетЛичныхЦелейВладельца;
+/// - снять отказ Configure с создания проектной персоны — краснеют
+///   СозданиеПроектнойПерсоныРедактором_403ВладелецСАвтоПодбором,
+///   КвикСозданиеПроектнойПерсоныРедактором_403ВладелецСАвтоПодбором и
+///   СозданиеПроектнойПерсоныРедактором_ЯвныеПривязкиЧужихЦелейОтказаныБезСоздания.
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicationFactory>
@@ -290,20 +273,20 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
 
     private static readonly Act[] Actions =
     [
-        // POST: цель этого проекта — разрешена всем с WriteContent; личная цель владельца — 400;
-        // mcp-цель — 403 (это Configure). Читателя отказывает фильтр (project_scope),
-        // постороннего — 404.
+        // С 12.11 правка привязок — Configure (только владелец): редактору и читателю отказывает
+        // фильтр (403 project_scope) до тела, постороннему — 404. Сужение NonOwnerBindingEditDenied
+        // осталось вторым рубежом и до не-владельца через REST не доходит.
         new("Notes проекта", HttpMethod.Post, "/api/personas/{p}/bindings",
-            (r, ids) => NotesBody(ids["p"]), Ok2xx, Ok2xx, 403, 404),
+            (r, ids) => NotesBody(ids["p"]), Ok2xx, 403, 403, 404),
         new("личная цель", HttpMethod.Post, "/api/personas/{p}/bindings",
-            (r, _) => NotesBody("personal"), Ok2xx, 400, 403, 404),
+            (r, _) => NotesBody("personal"), Ok2xx, 403, 403, 404),
         // mcp-цель: не-владельцу — 403 сужением (до валидности цели); владельцу — сужения нет,
         // он доходит до ValidateAsync и получает 400 «не найден в вашем реестре» (в тестовом
         // хосте реестра владельца пуст — отдельный тест McpЦельБезРеестра… держит этот порядок).
         new("mcp-цель", HttpMethod.Post, "/api/personas/{p}/bindings",
             (r, _) => ToolBody("mcp:" + r), 400, 403, 403, 404),
         new("Tool каталога", HttpMethod.Post, "/api/personas/{p}/bindings",
-            (r, _) => ToolBody("web"), Ok2xx, Ok2xx, 403, 404),
+            (r, _) => ToolBody("web"), Ok2xx, 403, 403, 404),
         // PUT/DELETE существующей привязки: личная цель владельца — 403 (не-владелец её не
         // меняет и не удаляет, И-4); своя проектная — правится и удаляется.
         new("личную не изменить", HttpMethod.Put, "/api/personas/{p}/bindings/{b}",
@@ -311,9 +294,9 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         new("личную не удалить", HttpMethod.Delete, "/api/personas/{p}/bindings/{b}",
             (r, _) => null, Ok2xx, 403, 403, 404),
         new("свою проектную изменить", HttpMethod.Put, "/api/personas/{p}/bindings/{b}",
-            (r, ids) => NotesBodyWithCondition(ids["p"], "Условие " + r), Ok2xx, Ok2xx, 403, 404),
+            (r, ids) => NotesBodyWithCondition(ids["p"], "Условие " + r), Ok2xx, 403, 403, 404),
         new("свою проектную удалить", HttpMethod.Delete, "/api/personas/{p}/bindings/{b}",
-            (r, _) => null, 204, 204, 403, 404),
+            (r, _) => null, 204, 403, 403, 404),
     ];
 
     // Фикстур под строки PUT/DELETE: существующая привязка, записанная владельцем —
@@ -364,8 +347,8 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         else
         {
             status.Should().Be(expected, $"{role}: {actionName}");
-            if (expected == 403 && role == Reader)
-                code.Should().Be(NoRight, $"{role}: {actionName} — отказ читателя решает фильтр (machine code)");
+            if (expected == 403)
+                code.Should().Be(NoRight, $"{role}: {actionName} — отказ решает фильтр (machine code)");
         }
 
         // Состояние стора после полного цикла: разрешённое лежит под ключом арендатора и видно
@@ -373,7 +356,7 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         var persona = Personas.Get(personaId, TenantId)!;
         switch (actionName, role)
         {
-            case ("Notes проекта", Owner or Editor):
+            case ("Notes проекта", Owner):
                 HasBinding(persona, "notes", projectId).Should().BeTrue(
                     $"{role}: привязка к проекту легла под ключом арендатора (И-2)");
                 var view = await BodyAsync(await OwnerClient().GetAsync($"/api/personas/{personaId}/bindings"));
@@ -396,7 +379,7 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
             case ("mcp-цель", _):
                 HasBinding(persona, "tool", "mcp:" + runId).Should().BeFalse($"{role}: mcp-привязка не записана");
                 break;
-            case ("Tool каталога", Owner or Editor):
+            case ("Tool каталога", Owner):
                 HasBinding(persona, "tool", "web").Should().BeTrue(
                     $"{role}: Tool без mcp: — разрешённая цель (И-4)");
                 break;
@@ -419,7 +402,7 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
                 HasBinding(persona, "notes", "personal").Should().BeTrue(
                     $"{role}: отказанное удаление оставило привязку на месте");
                 break;
-            case ("свою проектную изменить", Owner or Editor):
+            case ("свою проектную изменить", Owner):
                 HasBindingWithCondition(persona, "notes", projectId, "Условие " + runId).Should().BeTrue(
                     $"{role}: правка своей проектной привязки записана");
                 break;
@@ -427,7 +410,7 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
                 HasBindingWithCondition(persona, "notes", projectId, "Условие " + runId).Should().BeFalse(
                     $"{role}: отказанная правка не тронула привязку");
                 break;
-            case ("свою проектную удалить", Owner or Editor):
+            case ("свою проектную удалить", Owner):
                 HasBinding(persona, "notes", projectId).Should().BeFalse($"{role}: привязка удалена");
                 break;
             case ("свою проектную удалить", _):
@@ -511,15 +494,14 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     // wk-записью, что KnownDatasets).
 
     [Fact]
-    public async Task KnowledgeЦельНеВладельцу400ДоВалидации()
+    public async Task KnowledgeЦельНеВладельцу403ВладельцуДоВалидации400()
     {
         var (_, personaId) = await ArrangeAsync(Editor);
         var target = "dataset-" + RunId();
 
-        var (editorStatus, _, editorBody) = await SendAsync(SecondClient(), HttpMethod.Post,
+        var (editorStatus, _, _) = await SendAsync(SecondClient(), HttpMethod.Post,
             $"/api/personas/{personaId}/bindings", KnowledgeBody(target));
-        editorStatus.Should().Be(400, "Knowledge не-владельцу — только датасет этого проекта; произвольная цель — чужая");
-        editorBody.Should().Contain("этого проекта", "отказ — текстом сужения, не «база не найдена»");
+        editorStatus.Should().Be(403, "правка привязок — только владелец (Configure): фильтр отказывает до сужения");
 
         var (ownerStatus, _, ownerBody) = await SendAsync(OwnerClient(), HttpMethod.Post,
             $"/api/personas/{personaId}/bindings", KnowledgeBody(target));
@@ -536,7 +518,7 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     // Project/ProjectPath/ProjectPersonas/ProjectTasks разрешены только с ЭТИМ projectId.
 
     [Fact]
-    public async Task ЧужойПроектЦелью_Редактору400Владельцу200()
+    public async Task ЧужойПроектЦелью_Редактору403Владельцу200()
     {
         var (_, personaId) = await ArrangeAsync(Editor);
         var dir = Directory.CreateDirectory(
@@ -546,10 +528,9 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         other.EnsureSuccessStatusCode();
         var otherId = IdOf(await other.Content.ReadAsStringAsync());
 
-        var (editorStatus, _, editorBody) = await SendAsync(SecondClient(), HttpMethod.Post,
+        var (editorStatus, _, _) = await SendAsync(SecondClient(), HttpMethod.Post,
             $"/api/personas/{personaId}/bindings", ProjectBody(otherId));
-        editorStatus.Should().Be(400, "привязка к другому проекту — чужая цель (И-4), даже при валидности для арендатора");
-        editorBody.Should().Contain("этого проекта");
+        editorStatus.Should().Be(403, "редактор привязок не правит вовсе (Configure), в том числе к другому проекту");
 
         var (ownerStatus, _, _) = await SendAsync(OwnerClient(), HttpMethod.Post,
             $"/api/personas/{personaId}/bindings", ProjectBody(otherId));
@@ -560,24 +541,26 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     // ── И-2: запись редактора видна владельцу (общий стор) и отсутствует под ключом вызывающего ──
 
     [Fact]
-    public async Task ПривязкаРедактораЛожитПодКлючомВладельца_ИЕёВидитЕгоGET()
+    public async Task ПривязкаРедактора_403ИНичегоНеПишет_ВладелецПишетПодСвоимКлючом()
     {
-        var (projectId, personaId) = await ArrangeAsync(Editor);
+        var (_, personaId) = await ArrangeAsync(Editor);
 
-        var post = await SecondClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", ToolBody("web"));
+        var (status, code, _) = await SendAsync(SecondClient(), HttpMethod.Post,
+            $"/api/personas/{personaId}/bindings", ToolBody("web"));
+        status.Should().Be(403, "правка привязок — только владелец (решение 12.11)");
+        code.Should().Be(NoRight);
+        HasBinding(Personas.Get(personaId, TenantId)!, "tool", "web").Should().BeFalse("отказ — без записи");
+
+        var post = await OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", ToolBody("web"));
         post.EnsureSuccessStatusCode();
         var id = (await BodyAsync(post)).GetProperty("id").GetString()!;
-
-        var view = await BodyAsync(await OwnerClient().GetAsync($"/api/personas/{personaId}/bindings"));
+        var view = await BodyAsync(await SecondClient().GetAsync($"/api/personas/{personaId}/bindings"));
         view.EnumerateArray().Select(b => b.GetProperty("id").GetString())
-            .Should().Contain(id, "стор один: запись участника в сторе владельца (И-2)");
-
-        // Под ключом вызывающего персоны нет вовсе — с ключом вызывающего в UpdateBindings
-        // привязка осела бы в несуществующей записи.
+            .Should().Contain(id, "редактор привязки видит (чтение открыто)");
         Personas.Get(personaId, MemberId).Should().BeNull("персона не дублируется в личное пространство участника");
     }
 
-    // ── Конкурентность: гонка — владелец и редактор добавляют привязку одной персоны одновременно ─
+    // ── Конкурентность: гонка — два запроса владельца (две вкладки) добавляют привязку одной персоны ─
     //
     // До AppendBinding оба запроса читали пустой набор и каждый писал свой список — одна из
     // привязок терялась (снимок → полная замена). AppendBinding строит список под _saveLock
@@ -585,23 +568,23 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     // записанной. Ожидаем ровно обе, без дублей.
 
     [Fact]
-    public async Task ParallelAddBinding_OwnerAndEditor_BothKept()
+    public async Task ParallelAddBinding_TwoOwnerRequests_BothKept()
     {
         var (projectId, personaId) = await ArrangeAsync(Editor);
-        var ownerTarget = "personal"; // личная цель — законна владельцу
-        var editorTarget = projectId; // цель проекта — законна редактору
+        var firstTarget = "personal"; // личная цель — законна владельцу
+        var secondTarget = projectId; // цель проекта
 
-        var ownerPost = OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", NotesBody(ownerTarget));
-        var editorPost = SecondClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", NotesBody(editorTarget));
-        foreach (var response in await Task.WhenAll(ownerPost, editorPost))
+        var firstPost = OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", NotesBody(firstTarget));
+        var secondPost = OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", NotesBody(secondTarget));
+        foreach (var response in await Task.WhenAll(firstPost, secondPost))
             response.EnsureSuccessStatusCode();
 
         var persona = Personas.Get(personaId, TenantId)!;
         persona.Bindings!.Count(b => b.Type == PersonaBindingType.Notes).Should().Be(2,
             "ровно две привязки: ни одна из одновременных не потеряна, дублей нет");
-        HasBinding(persona, "notes", ownerTarget).Should().BeTrue("привязка владельца в сторе");
-        HasBinding(persona, "notes", editorTarget).Should().BeTrue(
-            "привязка редактора в том же сторе: additive-слияние UpdateBindings ничего не перезаписало");
+        HasBinding(persona, "notes", firstTarget).Should().BeTrue("привязка первой вкладки в сторе");
+        HasBinding(persona, "notes", secondTarget).Should().BeTrue(
+            "привязка второй вкладки в том же сторе: additive-слияние UpdateBindings ничего не перезаписало");
 
         var view = await BodyAsync(await OwnerClient().GetAsync($"/api/personas/{personaId}/bindings"));
         view.EnumerateArray().Count(b => b.GetProperty("type").GetString() == "notes").Should().Be(2,
@@ -695,7 +678,7 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
                     NotesBodyWithCondition("personal", condition)),
             };
             reqs.AddRange(httpKeys.Select(k =>
-                SecondClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", ToolBody(k))));
+                OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", ToolBody(k))));
             foreach (var r in await Task.WhenAll(reqs))
                 r.EnsureSuccessStatusCode();
             stop1.Cancel();
@@ -723,7 +706,7 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
                 OwnerClient().DeleteAsync($"/api/personas/{personaId}/bindings/{doomedId}"),
             };
             reqs2.AddRange(httpKeys2.Select(k =>
-                SecondClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", ToolBody(k))));
+                OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", ToolBody(k))));
             foreach (var r in await Task.WhenAll(reqs2))
                 r.EnsureSuccessStatusCode();
             stop2.Cancel();
@@ -762,46 +745,32 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     // полная замена участника касается только проектной части набора.
 
     [Fact]
-    public async Task ПолнаяЗаменаПривязок_НеВладелецНеТрогаетЛичныеВладельца_ПроектныеМожет()
+    public async Task ПолнаяЗаменаПривязок_РедакторуОтказ403_ВладелецМожет()
     {
         var (projectId, personaId) = await ArrangeAsync(Editor);
         var personalId = await SeedBindingAsync(OwnerClient(), personaId, true, "personal");
         var projectBindingId = await SeedBindingAsync(OwnerClient(), personaId, true, projectId);
 
-        // 1. Набор без личной привязки владельца — попытка удаления: 403, стор нетронут.
-        var (delStatus, _, delBody) = await SendAsync(SecondClient(), HttpMethod.Put,
-            $"/api/personas/{personaId}/bindings", new { bindings = new[] { NotesBody(projectId) } });
-        delStatus.Should().Be(403, "участник не удаляет личные привязки владельца");
-        delBody.Should().Contain("личной цели", "отказ — текстом сужения (тот же метод)");
-
-        // 2. Набор с изменённой копией личной — попытка подмены: 403, стор нетронут.
-        var (modStatus, _, _) = await SendAsync(SecondClient(), HttpMethod.Put,
-            $"/api/personas/{personaId}/bindings",
-            new { bindings = new[] { NotesBodyWithCondition("personal", "Подменено " + RunId()), NotesBody(projectId) } });
-        modStatus.Should().Be(403, "участник не подменяет личные привязки владельца");
+        // Любая полная замена от редактора — 403 project_scope, стор нетронут (сужение — второй рубеж).
+        foreach (var body in new object[]
+        {
+            new { bindings = new[] { NotesBody(projectId) } },
+            new { bindings = new[] { NotesBodyWithCondition("personal", "Подменено " + RunId()), NotesBody(projectId) } },
+            new { bindings = new[] { NotesBody("personal"), NotesBodyWithCondition(projectId, "Новое " + RunId()) } },
+        })
+        {
+            var (status, code, _) = await SendAsync(SecondClient(), HttpMethod.Put,
+                $"/api/personas/{personaId}/bindings", body);
+            status.Should().Be(403, "полная замена привязок — только владелец (Configure)");
+            code.Should().Be(NoRight);
+        }
 
         var persona = Personas.Get(personaId, TenantId)!;
-        persona.Bindings!.Single(b => b.Id == personalId).Condition.Should().Be("",
-            "отказ оставил личную привязку без изменений");
+        persona.Bindings!.Single(b => b.Id == personalId).Condition.Should().Be("", "личная привязка не тронута");
         persona.Bindings!.Any(b => b.Id == projectBindingId).Should().BeTrue("проектная тоже на месте");
-
-        // 3. Личная дословно + новая проектная вместо прежней — разрешено: личная остаётся
-        // как была, проектная часть заменена; запись — под ключом арендатора (И-2).
-        var newCondition = "Новое " + RunId();
-        var (okStatus, _, _) = await SendAsync(SecondClient(), HttpMethod.Put,
-            $"/api/personas/{personaId}/bindings",
-            new { bindings = new[] { NotesBody("personal"), NotesBodyWithCondition(projectId, newCondition) } });
-        (okStatus >= 200 && okStatus < 300).Should().BeTrue(
-            "полная замена участника — проектной части набора");
-        persona = Personas.Get(personaId, TenantId)!;
-        persona.Bindings!.Single(b => b.Id == personalId).Condition.Should().Be("",
-            "личная, повторённая дословно, остаётся как была: id и поля не заменяются");
-        persona.Bindings!.Any(b => b.Id == projectBindingId).Should().BeFalse("прежняя проектная заменена");
-        HasBindingWithCondition(persona, "notes", projectId, newCondition).Should().BeTrue(
-            "новая проективная записана под ключом арендатора");
         Personas.Get(personaId, MemberId).Should().BeNull("под ключом вызывающего записи нет");
 
-        // 4. Владелец может удалить проектные: сужение его не касается.
+        // Владелец может удалить проектные: набор перезаписывается.
         (await OwnerClient().PutAsJsonAsync($"/api/personas/{personaId}/bindings",
             new { bindings = new[] { NotesBody("personal") } })).EnsureSuccessStatusCode();
         persona = Personas.Get(personaId, TenantId)!;
@@ -823,7 +792,7 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
 
         var suggest = await SecondClient().PostAsync($"/api/personas/{personaId}/bindings/suggest",
             new StringContent("", Encoding.UTF8, "application/json"));
-        ((int)suggest.StatusCode).Should().Be(403, "читателя отказывает [ProjectScope(WriteContent)] — до работы");
+        ((int)suggest.StatusCode).Should().Be(403, "читателя отказывает [ProjectScope(Configure)] — до работы");
         Personas.Get(personaId, MemberId).Should().BeNull("отказ не тронул ничего");
 
         var ownerSuggest = await OwnerClient().PostAsync($"/api/personas/{personaId}/bindings/suggest",
@@ -944,8 +913,8 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     // «personal» доходит до ответа (регрессии нет; mcp и knowledge у него отбиты валидацией —
     // их нет в тестовом хосте, это не этот шаг). suggest и generate идут по одному пути
     // обработки кандидатов — проверяются оба.
-    // Мутация: снять проверку NonOwnerBindingEditDenied в SuggestBindingsAsync — красный:
-    // редактор видит «notes|personal».
+    // Мутация: снять [ProjectScope] с действий SuggestBindings/GenerateBindings — красный:
+    // редактор получает 500 вместо 403 (без фильтра GetRequestScope бросает — fail-closed).
 
     private static List<string> CandidateKeys(JsonElement body) =>
         body.GetProperty("candidates").EnumerateArray()
@@ -957,21 +926,13 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     {
         var (_, personaId) = await ArrangeAsync(Editor, nameSuffix: NoLlm.Marker);
 
-        var suggest = await BodyAsync(await SecondClient().PostAsync(
-            $"/api/personas/{personaId}/bindings/suggest",
-            new StringContent("", Encoding.UTF8, "application/json")));
-        var suggestKeys = CandidateKeys(suggest);
-        suggestKeys.Should().Contain("tool|web", "разрешённый кандидат дошёл — подбор живой");
-        suggestKeys.Should().NotContain("notes|personal", "личную цель владельца редактору не отдают (И-4)");
-        suggestKeys.Should().NotContain("knowledge|dataset-тест", "чужая база знаний редактору не отдаётся");
-        suggestKeys.Should().NotContain("tool|mcp:тест", "mcp-сервер — право Configure, не-владельцу не отдаётся");
-
-        var generate = await BodyAsync(await SecondClient().PostAsJsonAsync(
-            $"/api/personas/{personaId}/bindings/generate",
-            new { prompt = NoLlm.Marker + " подбери что-нибудь полезное" }));
-        var generateKeys = CandidateKeys(generate);
-        generateKeys.Should().Contain("tool|web", "тот же путь под свободным запросом");
-        generateKeys.Should().NotContain("notes|personal").And.NotContain("tool|mcp:тест");
+        // С 12.11 ИИ-подбор привязок — только владельцу: редактору отказывает фильтр до работы.
+        var suggest = await SecondClient().PostAsync($"/api/personas/{personaId}/bindings/suggest",
+            new StringContent("", Encoding.UTF8, "application/json"));
+        ((int)suggest.StatusCode).Should().Be(403, "подбор привязок — Configure");
+        var generate = await SecondClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings/generate",
+            new { prompt = NoLlm.Marker + " подбери что-нибудь полезное" });
+        ((int)generate.StatusCode).Should().Be(403, "генерация привязок — Configure");
 
         var ownerGenerate = await BodyAsync(await OwnerClient().PostAsJsonAsync(
             $"/api/personas/{personaId}/bindings/generate",
@@ -987,8 +948,8 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     // имени стаб отдаёт «personal»-заметки и несуществующую базу знаний. Для редактора обе
     // чужие: applied=0, стор нетронут. Владелец тем же вызовом добавляет «personal» —
     // кандидаты были достижимы тем же конвейером, тест не вакуумный.
-    // Мутация: снять проверку NonOwnerBindingEditDenied в SuggestBindingsAsync /
-    // MaterializeDefaultBindingsAsync — красный: applied=1 вместо 0 и личная привязка в сторе.
+    // Мутация: снять [ProjectScope] с действия ApplyDefaultBindings — красный: редактор
+    // получает 500 вместо 403 (тот же механизм: без фильтра GetRequestScope бросает).
 
     [Fact]
     public async Task ТиповыеУмения_РедакторНеДобавляетЛичныхЦелейВладельца()
@@ -1000,11 +961,9 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         (await OwnerClient().PutAsJsonAsync($"/api/personas/{personaId}", new { specialty = "librarian" }))
             .EnsureSuccessStatusCode();
 
-        var (status, _, body) = await SendAsync(SecondClient(), HttpMethod.Post,
+        var (status, _, _) = await SendAsync(SecondClient(), HttpMethod.Post,
             $"/api/personas/{personaId}/bindings/apply-defaults");
-        (status >= 200 && status < 300).Should().BeTrue($"сужение apply-defaults — не статусный отказ: {body}");
-        JsonSerializer.Deserialize<JsonElement>(body).GetProperty("applied").GetInt32()
-            .Should().Be(0, "ни одна цель профиля не законна редактору: ничего не записано");
+        status.Should().Be(403, "«Применить типовые» — Configure: редактору отказывает фильтр до работы");
         var persona = Personas.Get(personaId, TenantId)!;
         (persona.Bindings?.Count ?? 0).Should().Be(0, "отказанный подбор не оставил следа в сторе");
         HasBinding(persona, "notes", "personal").Should().BeFalse("привязки к личной цели владельца нет (И-4)");
@@ -1049,50 +1008,41 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         return IdOf(await created.Content.ReadAsStringAsync());
     }
 
-    // Итог авто-подбора на свежесозданной персоне: суженный — без личных целей владельца,
-    // mcp:* и чужой базы, но с разрешённым «web»; несуженный — с личной целью (не вакуум).
-    private void AssertAutoBindResult(string personaId, bool narrowed)
+    // Итог авто-подбора владельца на свежесозданной персоне: личная цель на месте, конвейер живой.
+    private void AssertAutoBindResult(string personaId)
     {
         var persona = Personas.Get(personaId, TenantId)!;
-        if (narrowed)
-        {
-            HasBinding(persona, "notes", "personal").Should().BeFalse(
-                "ИИ-подбор при создании не пишет участнику личную цель владельца (И-4)");
-            (persona.Bindings ?? []).Any(b => b.Type == PersonaBindingType.Tool
-                && b.Target.StartsWith("mcp:", StringComparison.OrdinalIgnoreCase)).Should().BeFalse(
-                "mcp-цель — право Configure, авто-подбор не добавляет её участнику");
-            HasBinding(persona, "knowledge", "dataset-тест").Should().BeFalse("чужая база знаний не записана");
-            HasBinding(persona, "tool", "web").Should().BeTrue(
-                "разрешённый кандидат записан: подбор жив, различие — только в сужении");
-        }
-        else
-        {
-            HasBinding(persona, "notes", "personal").Should().BeTrue(
-                "своего создания владельца сужение не касается (регрессии нет)");
-            HasBinding(persona, "tool", "web").Should().BeTrue();
-        }
+        HasBinding(persona, "notes", "personal").Should().BeTrue(
+            "своего создания владельца сужение не касается (регрессии нет)");
+        HasBinding(persona, "tool", "web").Should().BeTrue();
     }
 
     [Fact]
-    public async Task СозданиеПроектнойПерсоныРедактором_АвтоПодборНеПишетЛичныхЦелейВладельца()
+    public async Task СозданиеПроектнойПерсоныРедактором_403ВладелецСАвтоПодбором()
     {
         var (projectId, _) = await ArrangeAsync(Editor);
 
-        AssertAutoBindResult(await CreateWithAutoBindingsAsync(SecondClient(), projectId, "АвтоРед"),
-            narrowed: true);
-        AssertAutoBindResult(await CreateWithAutoBindingsAsync(OwnerClient(), projectId, "АвтоВлац"),
-            narrowed: false);
+        var name = "АвтоРед" + RunId() + NoLlm.Marker;
+        var (status, code, _) = await SendAsync(SecondClient(), HttpMethod.Post, "/api/personas",
+            new { name, scope = "project", projectId, autoBindings = true });
+        status.Should().Be(403, "создание проектной персоны — только владелец (Configure, решение 12.11)");
+        code.Should().Be(NoRight);
+        AssertNoPersonaNamed(projectId, name);
+
+        AssertAutoBindResult(await CreateWithAutoBindingsAsync(OwnerClient(), projectId, "АвтоВлац"));
     }
 
     [Fact]
-    public async Task КвикСозданиеПроектнойПерсоныРедактором_АвтоПодборНеПишетЛичныхЦелейВладельца()
+    public async Task КвикСозданиеПроектнойПерсоныРедактором_403ВладелецСАвтоПодбором()
     {
         var (projectId, _) = await ArrangeAsync(Editor);
 
-        AssertAutoBindResult(await QuickCreateWithAutoBindingsAsync(SecondClient(), projectId),
-            narrowed: true);
-        AssertAutoBindResult(await QuickCreateWithAutoBindingsAsync(OwnerClient(), projectId),
-            narrowed: false);
+        var (status, code, _) = await SendAsync(SecondClient(), HttpMethod.Post, "/api/personas/ai/quick-create",
+            new { prompt = NoLlm.Marker + " собери аналитика для проекта", scope = "project", projectId });
+        status.Should().Be(403, "quick-create проектной персоны — только владелец");
+        code.Should().Be(NoRight);
+
+        AssertAutoBindResult(await QuickCreateWithAutoBindingsAsync(OwnerClient(), projectId));
     }
 
     // ── W3-B5b доработка 2 (возврат дельта-ревью 7ace425a): явные привязки в теле создания ─────
@@ -1123,19 +1073,15 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         var (projectId, _) = await ArrangeAsync(Editor);
 
         var personalName = "ЯвнаяЛичнаяРед" + RunId();
-        var (personalStatus, personalBody) = await CreateWithBindingsAsync(SecondClient(), projectId,
+        var (personalStatus, _) = await CreateWithBindingsAsync(SecondClient(), projectId,
             personalName, [NotesBody("personal")]);
-        personalStatus.Should().Be(400,
-            "личная цель владельца — чужая цель: та же грань и тот же текст, что POST {id}/bindings");
-        personalBody.Should().Contain("Участник может привязывать персону");
+        personalStatus.Should().Be(403, "создание проектной персоны — Configure: отказ фильтра до тела");
         AssertNoPersonaNamed(projectId, personalName);
 
         var mcpName = "ЯвнаяMcpРед" + RunId();
-        var (mcpStatus, mcpBody) = await CreateWithBindingsAsync(SecondClient(), projectId,
+        var (mcpStatus, _) = await CreateWithBindingsAsync(SecondClient(), projectId,
             mcpName, [ToolBody("mcp:" + RunId())]);
-        mcpStatus.Should().Be(403,
-            "mcp/плагин-цели — право Configure, и отказ решён ДО ValidateAsync (не 400 «нет в реестре»)");
-        mcpBody.Should().Contain("MCP-серверы и навыки плагинов");
+        mcpStatus.Should().Be(403, "тот же отказ фильтра, без 400 «нет в реестре»");
         AssertNoPersonaNamed(projectId, mcpName);
     }
 

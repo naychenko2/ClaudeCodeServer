@@ -23,10 +23,12 @@ export const sessionsApi = {
     // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки чатов»)
     iconBatch: (projectId: string) =>
       request<{ processed: number; skipped: number }>(`/projects/${encodeURIComponent(projectId)}/sessions/icon-batch`, { method: 'POST' }),
-    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string) =>
+    // isPrivate (W4-FB1): приватный чат общего проекта (privateToUserId = автор).
+    // Без флага поле private в тело не попадает вовсе — тело байт в байт прежнее.
+    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string, isPrivate?: boolean) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
-        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort }),
+        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort, ...(isPrivate ? { private: true } : {}) }),
       }),
     update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {

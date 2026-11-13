@@ -4,9 +4,8 @@
 //  • сбой сохранения (400/сеть) — текст ошибки в степпере, панель не закрывается.
 //
 // Гейт по роли в проекте (W3-F1f, разрез docs/research/shared-projects-personas-cut-2026-11.md
-// §2/§3.4, И-4): читатель — список только для чтения; редактор — без типа «Плагин» и mcp:-целей,
-// без правки/удаления привязок к целям вне этого проекта, без «Найти навык» и без mcp:-целей
-// в пресете «Минимум»; owner/без роли — как раньше.
+// §2/§3.4, И-4): читатель и редактор — список только для чтения (редактор — решение Андрея 12.11);
+// owner/без роли — как раньше.
 //
 // Окружение node: минимальный фейк-DOM (createRoot + act, паттерн fakeDom).
 
@@ -271,121 +270,25 @@ describe('Гейт по роли в PersonaBindingsPanel', () => {
     expect(text()).not.toContain('Найти навык');
   });
 
-  it('editor — «Добавить» есть; в выборе типов нет «Плагина»; в целях инструментов нет MCP', async () => {
-    vi.mocked(api.personas.bindingTargets).mockImplementation(async (type) =>
-      type === 'tool' ? TOOL_TARGETS : []);
+  it('editor — как читатель: список только для чтения, без «Добавить», правки, «Минимум» и «Найти навык»', async () => {
+    vi.mocked(api.personas.bindings).mockResolvedValue(BINDINGS_NOTES as never);
     const { container, text } = await renderPanel({
       persona: projectPersona('persona-editor-1'), projects: [sharedProject('editor')],
     });
 
-    // «Добавить привязку» — право bindingWrite открыто редактору
-    const add = findButton(container, 'Добавить привязку');
-    expect(add, 'кнопка «Добавить привязку» не найдена').not.toBeNull();
-    await act(async () => { add!.onClick(); });
-
-    // сетка типов: тип «Плагин» (цель всегда plugin:…) закрыт (bindingMcpPlugin);
-    // остальные типы — на месте
-    expect(findButtonByIncludes(container, 'Плагин'), 'тип «Плагин» открыт редактору').toBeNull();
-    const toolType = findButtonByIncludes(container, 'Инструмент');
-    expect(toolType, 'тип «Инструмент» закрыт редактору').not.toBeNull();
-    await act(async () => { toolType!.onClick(); });
-
-    // пикер инструментов: серверы личного реестра (mcp:) выпадены, обычные ключи доступны
-    expect(text()).not.toContain('Foo MCP');
-    expect(text()).not.toContain('Свои MCP-серверы');
-    expect(text()).toContain('Задачи');
-  });
-
-  it('editor — цели вне этого проекта без правки/удаления; цель этого проекта — с ней', async () => {
-    vi.mocked(api.personas.bindings).mockResolvedValue(BINDINGS_NOTES as never);
-    const { container, text } = await renderPanel({
-      persona: projectPersona('persona-editor-2'), projects: [sharedProject('editor')],
-    });
-
-    // порядок привязок прежний (гейт прячет органы, список не переставляет)
-    const t0 = text();
-    expect(t0.indexOf('Заметки · personal')).toBeGreaterThanOrEqual(0);
-    expect(t0.indexOf('Заметки · personal')).toBeLessThan(t0.indexOf('Заметки · p-shared'));
-
-    // меню «⋯» ровно одно — на привязке к заметкам этого проекта (цель = id проекта)
-    expect(countActionMenus(container), 'лишние меню действий у чужих целей').toBe(1);
-    // личная цель владельца: строка без onClick — ни тела правки, ни удаления
-    expect(findButtonByIncludes(container, 'Заметки · personal'), 'чужая цель редактируется').toBeNull();
-    // цель этого проекта: открывается, есть «Удалить привязку»
-    const row = findButtonByIncludes(container, 'Заметки · p-shared');
-    expect(row, 'своя цель не открывается').not.toBeNull();
-    await act(async () => { row!.onClick(); });
-    expect(text()).toContain('Удалить привязку');
-  });
-
-  it('editor — знания: датасет этого проекта правится (по meta цели), личный датасет владельца — нет', async () => {
-    vi.mocked(api.personas.bindings).mockResolvedValue([
-      { id: 'b-kn-project', type: 'knowledge', target: 'ds-project', path: null, condition: 'знания проекта', mode: 'auto', createdAt: '', updatedAt: '' },
-      { id: 'b-kn-personal', type: 'knowledge', target: 'ds-personal', path: null, condition: 'личный датасет', mode: 'auto', createdAt: '', updatedAt: '' },
-    ] as never);
-    vi.mocked(api.personas.bindingTargets).mockImplementation(async (type) =>
-      type === 'knowledge'
-        ? [
-          { id: 'ds-project', label: 'База этого проекта', hint: 'База знаний проекта', meta: PROJECT_ID },
-          { id: 'ds-personal', label: 'Личная база владельца', hint: 'База знаний', meta: null },
-        ]
-        : []);
-    const { container, text } = await renderPanel({
-      persona: projectPersona('persona-editor-3'), projects: [sharedProject('editor')],
-    });
-
-    // «цель этого проекта» — по meta (id проекта), не по тексту подписи
-    expect(findButtonByIncludes(container, 'Знания «Личная база владельца»'), 'чужой датасет редактируется').toBeNull();
-    const row = findButtonByIncludes(container, 'Знания проекта «База этого проекта»');
-    expect(row, 'свой датасет не открывается').not.toBeNull();
-    await act(async () => { row!.onClick(); });
-    expect(text()).toContain('Удалить привязку');
-  });
-
-  it('editor — «Минимум» не трогает mcp:-цели: существующую оставляет, новой не заводит', async () => {
-    // Привязки: обычный ключ (auto) и сервер личного MCP-реестра (auto) — mcp: для
-    // редактора закрыт (bindingMcpPlugin), пресет обязан оставить его как есть.
-    vi.mocked(api.personas.bindings).mockResolvedValue([
-      { id: 'b-tool-tasks', type: 'tool', target: 'tasks', path: null, condition: 'задачи', mode: 'auto', createdAt: '', updatedAt: '' },
-      { id: 'b-tool-mcp', type: 'tool', target: 'mcp:foo', path: null, condition: 'свой сервер', mode: 'auto', createdAt: '', updatedAt: '' },
-    ] as never);
-    // Каталог шире привязок: mcp:bar без привязки — новый off на нём заводить нельзя
-    vi.mocked(api.personas.bindingTargets).mockImplementation(async (type) =>
-      type === 'tool' ? [...TOOL_TARGETS, { id: 'mcp:bar', label: 'Bar MCP сервер', hint: null, meta: null }] : []);
-    // PUT-замена как на бэке: возвращает тот же набор с ids
-    vi.mocked(api.personas.setBindings).mockReset().mockImplementation(async (_id, dtos) =>
-      dtos.map((d, i) => ({ ...d, id: `b-min-${i}`, createdAt: '', updatedAt: '' })) as never);
-    const { container } = await renderPanel({
-      persona: projectPersona('persona-editor-4'), projects: [sharedProject('editor')],
-    });
-
-    const preset = findButton(container, 'Пресет «Минимум»');
-    expect(preset, 'кнопка пресета «Минимум» не найдена').not.toBeNull();
-    await act(async () => { preset!.onClick(); await new Promise(r => setTimeout(r, 0)); });
-    // подтверждение — ConfirmDialog (портал на document.body)
-    const body = (globalThis as { document: { body: unknown } }).document.body as FNode;
-    const confirm = findButton(body, 'Выключить');
-    expect(confirm, 'кнопка подтверждения пресета не найдена').not.toBeNull();
-    await act(async () => { confirm!.onClick(); await new Promise(r => setTimeout(r, 0)); });
-
-    expect(api.personas.setBindings).toHaveBeenCalledTimes(1);
-    const payload = vi.mocked(api.personas.setBindings).mock.calls[0][1];
-    const mcp = payload.filter(p => p.type === 'tool' && p.target.toLowerCase().startsWith('mcp:'));
-    expect(mcp.length, 'mcp:-привязок в наборе больше, чем было').toBe(1);
-    expect(mcp[0].mode, 'пресет изменил режим mcp:-привязки').toBe('auto');
-    // свои ключи пресет выключает по-прежнему
-    expect(payload.find(p => p.type === 'tool' && p.target === 'tasks')?.mode, 'обычный ключ не выключен').toBe('off');
-  });
-
-  it('editor — «Добавить» есть, «Найти навык» нет (skills — отдельное право)', async () => {
-    vi.mocked(api.personas.bindings).mockResolvedValue(BINDINGS_NOTES as never);
-    const { container, text } = await renderPanel({
-      persona: projectPersona('persona-editor-5'), projects: [sharedProject('editor')],
-    });
-    // «Добавить привязку» — bindingWrite открыт (строка кнопок под списком)
-    expect(findButton(container, 'Добавить привязку'), 'кнопка «Добавить привязку» не найдена').not.toBeNull();
-    // «Найти навык» — закрыта: maySkills ≠ mayBind (мутация maySkills = mayBind краснеет)
-    expect(text(), '«Найти навык» открыта редактору').not.toContain('Найти навык');
+    // список виден (право Read), порядок фикстуры не тронут
+    expect(text()).toContain('Заметки · personal');
+    expect(text()).toContain('Заметки · p-shared');
+    // правка привязок — Configure (решение Андрея 12.11): ни меню «⋯», ни входов записи
+    expect(countActionMenus(container), 'редактору открыто меню карточки').toBe(0);
+    expect(findButton(container, 'Добавить привязку'), 'кнопка «Добавить привязку» у редактора').toBeNull();
+    expect(findButton(container, 'Пресет «Минимум»'), 'пресет «Минимум» у редактора').toBeNull();
+    expect(text()).not.toContain('Добавить');
+    expect(text()).not.toContain('Удалить');
+    expect(text()).not.toContain('✨');
+    expect(text()).not.toContain('Найти навык');
+    // даже привязка к цели этого проекта не раскрывается
+    expect(findButtonByIncludes(container, 'Заметки · p-shared'), 'карточка редактору доступна').toBeNull();
   });
 
   it('owner/без роли — как раньше: «Плагин» и mcp:-цели доступны (граница гейта)', async () => {

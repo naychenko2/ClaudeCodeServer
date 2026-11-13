@@ -19,6 +19,20 @@ const fieldLabel = { fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, co
 const diffMark = { fontFamily: FONT.sans, fontSize: FS.sm, color: C.warningText, fontWeight: 600 } as const;
 const hint = { fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.45, color: C.textMuted, marginTop: SP.sm } as const;
 
+// Дата копирования — формат проекта для прошлых дат (тот же, что lib/postTime.ts и
+// memoryTypes.ts): «13 нояб.», год — только когда он не текущий. Сырой ISO не показываем.
+const FMT_COPIED = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
+const FMT_COPIED_YEAR = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
+function formatCopiedAt(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return (d.getFullYear() === new Date().getFullYear() ? FMT_COPIED : FMT_COPIED_YEAR).format(d);
+}
+
+// Бэк считает отличия областями (профиль / набор инструментов / набор запретов), т. е. 0..3
+// (PersonaManager.AccessDiff) — падеж нужен только для «1 месте», дальше «местах».
+const placesWord = (n: number) => (n === 1 ? 'месте' : 'местах');
+
 export interface PersonaAccessGroupProps {
   inherited: boolean;
   onModeChange: (own: boolean) => void;
@@ -36,6 +50,13 @@ export interface PersonaAccessGroupProps {
   onDisallowed: (d: string[]) => void;
   // Отличия от специальности (только для «Своё»); null — сравнивать не с чем
   diff: AccessDiff | null;
+  // Дата, когда права были скопированы в «своё» (бэковый accessCopiedAt): null/пусто —
+  // копирования не было, строки нет
+  copiedAt?: string | null;
+  // Число отличий копии от текущего шаблона (бэковый accessDiffCount, 0..3). НЕ diff.count:
+  // фронтовый список считает по местам (каждый ключ и запрет), бэковский — по областям;
+  // для пометок «≠» остаётся diff, число в подписи — бэковское (F26a)
+  diffCount?: number | null;
 }
 
 export function PersonaAccessGroup(p: PersonaAccessGroupProps) {
@@ -52,6 +73,10 @@ export function PersonaAccessGroup(p: PersonaAccessGroupProps) {
   };
 
   const toggleTool = (key: string, on: boolean) => p.onTools(toggleToolKey(p.tools, key, on));
+
+  // Строка «скопировано …» — только в «своём» и только когда копия была: при наследовании
+  // бэк дату обнуляет, а карточка и так показывает источник (access-source ниже).
+  const copiedDate = !p.inherited && p.copiedAt ? formatCopiedAt(p.copiedAt) : null;
 
   return (
     <div data-testid="access-group">
@@ -78,6 +103,15 @@ export function PersonaAccessGroup(p: PersonaAccessGroupProps) {
             />
           </div>
         </div>
+
+        {copiedDate && (
+          <div data-testid="access-copied" style={{ ...hint, marginTop: SP.sm }}>
+            ↳ скопировано {copiedDate}
+            {typeof p.diffCount === 'number' && p.diffCount > 0 && (
+              <> · <span style={diffMark}>отличается в {p.diffCount} {placesWord(p.diffCount)}</span></>
+            )}
+          </div>
+        )}
 
         {p.inherited && (
           <div data-testid="access-source" style={{ ...hint, marginTop: SP.sm }}>

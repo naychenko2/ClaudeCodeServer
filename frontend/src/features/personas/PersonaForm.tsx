@@ -1609,6 +1609,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             diff={inheritsAccess || !specialtyTemplate ? null : accessDiff(
               { access, tools, disallowedTools: parseDisallowed(disallowedText) },
               { access: specialtyTemplate.access, tools: specialtyTemplate.tools, disallowedTools: specialtyTemplate.disallowedTools })}
+            // Строка «скопировано …» читается из полей ответа бэка (F26a); форма их не правит —
+            // после переключения в «Своё» дата появится только с перечитыванием персоны.
+            copiedAt={persona?.accessCopiedAt ?? null}
+            diffCount={persona?.accessDiffCount ?? null}
           />
         </div>
       </div>

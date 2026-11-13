@@ -30,6 +30,12 @@ public sealed record ImageProjectPrefs(string? Provider, string? Model, int Coun
     // Настройки правки (и новой нити): выбор «Править», иначе плоские поля
     public ImageThreadSettings EditSettings() => Settings(Edit?.Provider, Edit?.Model, Edit?.Count);
 
+    // С чем пойдёт запуск операции без явных аргументов: генерация — выбор «Создать» (пока его не
+    // сохраняли — как правка), правка — настройки нити, иначе «Править». Одна функция для MCP
+    // image_generate и строки «Чем» хвоста хода: разойдутся — агент видит одну модель, а запуск идёт на другой
+    public ImageThreadSettings LaunchSettings(ImageEditOp op, ImageThreadSettings? thread) =>
+        op == ImageEditOp.Generate && Create is not null ? CreateSettings() : thread ?? EditSettings();
+
     // Поставщик и модель — парой: модель плоских полей могла быть выбрана у другого поставщика
     private ImageThreadSettings Settings(string? provider, string? model, int? count) =>
         provider is null && model is null

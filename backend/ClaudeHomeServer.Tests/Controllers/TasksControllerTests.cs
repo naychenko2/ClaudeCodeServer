@@ -197,6 +197,18 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         });
     }
 
+    // Подтверждение маршрута реальным эндпоинтом confirm (M1): новый эпик, созданный при сторе с
+    // непустым каталогом, несёт маркер RouteRequired, и до подтверждения маршрута гейт держит
+    // задачи фичи на запуске — включая мерж (merge — обязательный этап маршрута, WorkflowRules).
+    // Фича, которую мержат, — фича с подтверждённым маршрутом; неподтверждённый случай мерится
+    // явно в MergeFeature_МаршрутНеПодтверждён_400.
+    private async Task ConfirmFeatureRouteAsync(string epicId)
+    {
+        var response = await _client.PostAsJsonAsync($"/api/tasks/{epicId}/workflow/confirm",
+            new { templateId = "builtin-fast-track" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "confirm встроенного пресета fast-track");
+    }
+
     // Персона-исполнитель DevOps (уникальное имя, чтобы не конфликтовать с персонами других тестов).
     private ClaudeHomeServer.Models.Persona CreateDevopsPersona(string tag)
     {
@@ -2157,6 +2169,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task MergeFeature_СоздаётЗадачу_200()
     {
         var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await ConfirmFeatureRouteAsync(epicId);
         await CreateAcceptedFinalAsync(projectId, epicId);
         // Персона напрямую: уникальное имя, чтобы не конфликтовать с персонами других тестов.
         var personas = _factory.Services.GetRequiredService<PersonaManager>();
@@ -2193,11 +2206,46 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         }
     }
 
+    // M1 (гейт подтверждения маршрута) на двери мержа: новая фича с принятым финалом, но без
+    // подтверждённого маршрута не мержится — отказ исполнителя доходит до 400 с текстом гейта
+    // (разрез §5 «Без подтверждения»: ExecuteAsync отказывает любой задаче фичи, кроме consult;
+    // merge — этап маршрута). После подтверждения тот же вызов проходит: идемпотентная ветка
+    // запускает уже заведённую merge-задачу, дубля нет. Мутация «убрать RouteRequired из предиката
+    // FeatureRouteLaunchRefusal» краснит этот тест (гейт молчит → первый вызов отдаёт 200).
+    [Fact]
+    public async Task MergeFeature_МаршрутНеПодтверждён_400_ПослеПодтверждения_200()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-noroute");
+
+        try
+        {
+            var denied = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            denied.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+            (await denied.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString()
+                .Should().Be("маршрут фичи не подтверждён — подтвердите его на странице фичи");
+
+            await ConfirmFeatureRouteAsync(epicId);
+            var ok = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            ok.StatusCode.Should().Be(HttpStatusCode.OK);
+            var task = await ok.Content.ReadFromJsonAsync<JsonElement>();
+            task.GetProperty("role").GetString().Should().Be("merge");
+            Tasks.GetByProject(projectId).Count(t => t.Role == "merge").Should().Be(1,
+                "второй вызов не заводит дубль: та же задача идемпотентной ветки");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
     // Идемпотентность: двойной вызов → одна задача (второй вызов возвращает существующую).
     [Fact]
     public async Task MergeFeature_ДвойнойВызов_ОднаЗадача()
     {
         var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await ConfirmFeatureRouteAsync(epicId);
         await CreateAcceptedFinalAsync(projectId, epicId);
         // Персона напрямую: уникальное имя, чтобы не конфликтовать с персонами других тестов.
         var personas = _factory.Services.GetRequiredService<PersonaManager>();
@@ -2232,6 +2280,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task MergeFeature_ОписаниеСодержитШаблон()
     {
         var (epicId, worktree, branch, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await ConfirmFeatureRouteAsync(epicId);
         await CreateAcceptedFinalAsync(projectId, epicId);
         var persona = CreateDevopsPersona("DevOps-desc");
 
@@ -2265,6 +2314,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task MergeFeature_ИсполнительЗапущен()
     {
         var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await ConfirmFeatureRouteAsync(epicId);
         await CreateAcceptedFinalAsync(projectId, epicId);
         var persona = CreateDevopsPersona("DevOps-exec");
 
@@ -2289,6 +2339,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task MergeFeature_КонкурентныеВызовы_ОднаЗадача()
     {
         var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await ConfirmFeatureRouteAsync(epicId);
         await CreateAcceptedFinalAsync(projectId, epicId);
         var persona = CreateDevopsPersona("DevOps-race");
 
@@ -2409,6 +2460,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task MergeFeature_КроссПроектнаяПерсона_НеЛожный409()
     {
         var (epicId, _, _, epicProjectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await ConfirmFeatureRouteAsync(epicId);
         await CreateAcceptedFinalAsync(epicProjectId, epicId);
 
         // Другой проект + проектная DevOps-персона с ProjectTasks-привязкой к проекту эпика.
@@ -2799,6 +2851,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task MergeFeature_ГейтЖивётДоРестарта()
     {
         var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await ConfirmFeatureRouteAsync(epicId);
         await CreateAcceptedFinalAsync(projectId, epicId);
         var persona = CreateDevopsPersona("DevOps-gate");
 
@@ -2869,6 +2922,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         CreateMergeTailFixtureAsync(string tag, string stepRef = "Ш1")
     {
         var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await ConfirmFeatureRouteAsync(epicId);
         await CreateAcceptedFinalAsync(projectId, epicId);
         var step = await CreateProjectTaskAsync(projectId, new
         {
@@ -3022,6 +3076,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task MergeFeature_Withdraw_ВитокСЖивойЦельюНеСнимается()
     {
         var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await ConfirmFeatureRouteAsync(epicId);
         await CreateAcceptedFinalAsync(projectId, epicId);
         var stepTail = await CreateProjectTaskAsync(projectId,
             new { title = "шаг ШД", featureId = epicId, role = "step", stepRef = "ШД", status = "done" });

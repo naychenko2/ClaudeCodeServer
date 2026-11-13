@@ -3,7 +3,6 @@
 // Проверка не повторяет ночь: падение проверки перезапускается отдельно и ночь не сжигает.
 
 import { test, expect, type APIRequestContext } from '@playwright/test';
-import { api, login } from './helpers';
 import fs from 'node:fs';
 import path from 'node:path';
 import {

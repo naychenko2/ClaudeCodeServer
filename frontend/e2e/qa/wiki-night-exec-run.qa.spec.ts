@@ -9,7 +9,7 @@
 // движка. Модель за прокси (общая локальная) не трогается.
 
 import { test, expect, type APIRequestContext } from '@playwright/test';
-import { api, login } from './helpers';
+import { login } from './helpers';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -54,7 +54,6 @@ test(`ночь по плану: ${plan.mode} / ${plan.group}`, async () => {
   const g = group(seed, plan.group);
   const owner = await ownerApi(request, seed);
   const adminToken = await login(request);
-  const admin = api(request, adminToken);
 
   // Исполнители: пустой список — сценарий «прежнее поведение», иначе две модели.
   const put = await request.put(NIGHTLY, {
@@ -98,7 +97,6 @@ test(`ночь по плану: ${plan.mode} / ${plan.group}`, async () => {
       await new Promise(r => setTimeout(r, 400));
     }
     killed.night2 = kill('proxy-night2.pid');
-    if (plan.mode === 'both-dead') killed.local = kill('proxy-local.pid');
   }
 
   await waitNightEnd(owner.client, 420_000);

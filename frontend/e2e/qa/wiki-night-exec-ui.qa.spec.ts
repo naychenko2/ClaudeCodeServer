@@ -9,7 +9,7 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
 import { api } from './helpers';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ATT, ownerApi, readSeed } from './wiki-night-exec-helpers';
+import { ATT, readSeed } from './wiki-night-exec-helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:5560';
 const SHOTS = path.join(ATT, 'shots');

@@ -209,3 +209,25 @@ export function tiersModeAction(target: 'own' | 'inherited', ownNow: boolean, ow
 export function clearedTiers(): Required<TierCell> {
   return { tierStrong: '', tierMedium: '', tierWeak: '' };
 }
+
+// ── Исход сброса уровней (F28) ────────────────────────────────────────────────────────
+
+// Что вернул PUT сброса уровней: успех с сохранённой персоной или отказ с текстом.
+export type TierResetOutcome =
+  | { ok: true; saved: unknown }
+  | { ok: false; error: string };
+
+// Решение по исходу PUT: применять ли ответ форме и что показать.
+// isAlive — жив ли ещё экземпляр формы. Родители перемонтируют форму по смене персоны
+// (key={persona.id}), поэтому «ответ мой» определяется не сравнением id (у размонтированного
+// экземпляра ref не обновляется и сравнение никогда не станет истинным), а живостью.
+// Ответ умершего экземпляра не трогает ни форму, ни родителя: иначе правка чужой персоны
+// закрылась бы и несохранённое пропало.
+export function settleTierReset(
+  outcome: TierResetOutcome,
+  isAlive: boolean,
+): { apply: boolean; error: string | null; saved?: unknown } {
+  if (!outcome.ok) return { apply: false, error: outcome.error };
+  if (!isAlive) return { apply: false, error: null };
+  return { apply: true, error: null, saved: outcome.saved };
+}

@@ -8,7 +8,7 @@ import { PersonaVoicePicker } from './PersonaVoicePicker';
 import { ReturnInheritDialog, SwitchSpecialtyInheritDialog, SwitchSpecialtyOwnDialog } from './PersonaInheritDialogs';
 import { PersonaAccessGroup } from './PersonaAccessGroup';
 import { PersonaModelsGroup } from './PersonaModelsGroup';
-import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, claimTierReset, clearedTiers, ownTierCount, takeReturn, tiersModeAction, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
+import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, claimTierReset, clearedTiers, ownTierCount, settleTierReset, takeReturn, tiersModeAction, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey, type TierResetOutcome } from './personaInheritModel';
 import { createVoicePayload } from './voicePayload';
 import { PersonaPromptTab, SECTIONS_RESET_TEXT, SECTIONS_RESET_TITLE, sectionsResetNeedsConfirm } from './PersonaPromptTab';
 import { applySections, emptyState, toOverrides, type PromptSectionsState } from './promptSectionsModel';
@@ -99,6 +99,62 @@ interface PersonaFormProps {
 // Подсказка выключенных полей зоны и денег (W3-F1e): видимым текстом под полем, тот же
 // смысл, что у отказа бэка (403 owner_settings на PUT этих полей участнику)
 const OWNER_ONLY_HINT = 'Меняет только владелец проекта';
+
+// ── Сброс уровней персоны: отправка и решение по исходу (F28) ─────────────────────────
+// Вынесено из тела формы отдельными функциями, чтобы путь сброса был проверяем тестом:
+// форма перемонтируется родителем по смене персоны, и «ответ мой» определяется живостью
+// экземпляра, а не сравнением id.
+
+// Живость экземпляра формы: после размонтирования (родитель сменил персону) — false.
+export function useMountedRef(): { current: boolean } {
+  const ref = useRef(true);
+  useEffect(() => {
+    ref.current = true;
+    return () => { ref.current = false; };
+  }, []);
+  return ref;
+}
+
+// Отправка сброса уровней: захват права на отправку (пока идёт первая, вторая не уходит)
+// и сам PUT. null — не отправляли, право занято. Отказ не бросается наружу, а становится
+// исходом: текст ошибки должен дойти до формы целиком.
+export async function runTierReset(
+  flag: { current: boolean },
+  put: () => Promise<unknown>,
+  onSend?: () => void,
+): Promise<TierResetOutcome | null> {
+  if (!claimTierReset(flag)) return null;
+  onSend?.();
+  try {
+    const saved = await put();
+    return { ok: true, saved };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Не удалось сбросить уровни' };
+  }
+}
+
+// Полный путь сброса: отправка → решение по исходу (успех / отказ / умерший экземпляр) →
+// показ ошибки или применение ответа. apply=false у умершего экземпляра: ответ чужой
+// персоны не трогает ни форму, ни родителя.
+export async function performTierReset(deps: {
+  flag: { current: boolean };
+  put: () => Promise<unknown>;
+  isAlive: () => boolean;
+  setError: (message: string | null) => void;
+  onApplied: (saved: unknown) => void;
+}): Promise<boolean> {
+  try {
+    const outcome = await runTierReset(deps.flag, deps.put, () => deps.setError(null));
+    if (!outcome) return false;
+    const settled = settleTierReset(outcome, deps.isAlive());
+    if (settled.error) deps.setError(settled.error);
+    if (!settled.apply) return true;
+    deps.onApplied(settled.saved);
+    return true;
+  } finally {
+    deps.flag.current = false;
+  }
+}
 
 // Инлайн-форма создания/редактирования персоны (без Modal-обёртки).
 // Редизайн «Студия-профиль»: ОДНА центрированная колонка с плоскими секциями,
@@ -793,36 +849,34 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // оси настройки. Бьёт сразу, не дожидаясь общего «Сохранить» — уровни в форме и так
   // независимы от остальных полей (пусто = наследование от специальности/слотов).
   // Busy-ref, а не state: два вызова до перерисовки видят одно замкнутое состояние.
-  // Ответ, пришедший после смены персоны в форме, игнорируем — он чужой.
   const tiersBusyRef = useRef(false);
-  const currentPersonaIdRef = useRef(persona?.id);
-  currentPersonaIdRef.current = persona?.id;
+  // Живость экземпляра формы: родители перемонтируют её по смене персоны (key={persona.id}),
+  // поэтому «ответ мой» — это «экземпляр ещё жив», а не сравнение id.
+  const mountedRef = useMountedRef();
   const resetPersonaTiers = async () => {
     if (!persona) { setTierStrong(''); setTierMedium(''); setTierWeak(''); setTiersOwn(false); return; }
-    if (!claimTierReset(tiersBusyRef)) return;
     setTiersResetBusy(true);
-    setError(null);
     const personaId = persona.id;
     try {
-      // tierStrong/… не входят в типаж CreatePersonaDto/UpdatePersonaDto (только в Persona
-      // и SpecialtyTemplateSettings), хотя бэкенд их принимает — тот же неполный тип уже
-      // обходит save() ниже, посылая их в общем dto среди полей, которые в типе есть
-      const dto = clearedTiers() as unknown as UpdatePersonaDto;
-      const saved = await api.personas.update(personaId, dto);
-      if (currentPersonaIdRef.current !== personaId) return;
-      setTierStrong('');
-      setTierMedium('');
-      setTierWeak('');
-      setTiersOwn(false);
-      bumpPersonas();
-      invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
-      onSaved(saved);
-    } catch (e) {
-      if (currentPersonaIdRef.current === personaId) {
-        setError(e instanceof Error ? e.message : 'Не удалось сбросить уровни');
-      }
+      await performTierReset({
+        flag: tiersBusyRef,
+        // tierStrong/… не входят в типаж CreatePersonaDto/UpdatePersonaDto (только в Persona
+        // и SpecialtyTemplateSettings), хотя бэкенд их принимает — тот же неполный тип уже
+        // обходит save() ниже, посылая их в общем dto среди полей, которые в типе есть
+        put: () => api.personas.update(personaId, clearedTiers() as unknown as UpdatePersonaDto),
+        isAlive: () => mountedRef.current,
+        setError,
+        onApplied: (saved: unknown) => {
+          setTierStrong('');
+          setTierMedium('');
+          setTierWeak('');
+          setTiersOwn(false);
+          bumpPersonas();
+          invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
+          onSaved(saved as Persona);
+        },
+      });
     } finally {
-      tiersBusyRef.current = false;
       setTiersResetBusy(false);
     }
   };

@@ -16,6 +16,7 @@ import { nodeTitle } from './FeatureProcessGraph';
 import { stageNodeId, defaultSelected } from './FeatureProcessGraphModel';
 import { allFeatureTasks } from './FeatureTasksTab';
 import { FeatureStepDetails } from './FeatureStepDetails';
+import { FeatureStageScreen } from './FeatureStageScreen';
 import type { FeatureRun, FeatureStage, FeatureTask } from '../../types/featureRun';
 
 // Выбор стадии на странице: ключ — featureId + id стадии.
@@ -78,7 +79,7 @@ export interface FeatureStageAreaProps {
   selectedId: string | null;
   isMobile: boolean;
   onOpenTask?: (taskId: string) => void;
-  // Место под экран этапа (D1c): рисуется под задачами стадии.
+  // Дополнительное место под экраном этапа.
   slot?: ReactNode;
 }
 
@@ -119,6 +120,7 @@ export function FeatureStageArea({ run, selectedId, isMobile, onOpenTask, slot }
       ) : (
         tasks.map(t => <TaskRow key={t.id} task={t} isMobile={isMobile} onOpenTask={onOpenTask} />)
       )}
+      <FeatureStageScreen tasks={tasks.map(t => ({ id: t.id, title: t.title, stepRef: t.stepRef }))} isMobile={isMobile} />
       {slot}
     </div>
   );

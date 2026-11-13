@@ -95,6 +95,8 @@ vi.mock('../../lib/api', () => ({
     chats: { get: async (id: string) => mockChats.get(id) ?? null },
     tasks: {
       featuresIndex: async () => mockIndex,
+      // Экран этапа (D1c) в этих тестах не предмет: запрос вечно «в пути»
+      stage: () => new Promise(() => {}),
       getFeature: (fid: string, eventsLimit?: string) => {
         mockGetFeature.calls.push({ fid, eventsLimit });
         if (mockGetFeature.pending) return new Promise<FeaturePageData>(() => {});

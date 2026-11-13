@@ -299,11 +299,32 @@ public class PersonasController(
     /// </summary>
     [HttpGet("{id}/prompt-sections")]
     [ProjectScope(From = ScopeSource.Persona)]
-    public ActionResult<IReadOnlyList<Services.Llm.EffectivePromptSection>> PromptSections(string id)
+    public ActionResult<IReadOnlyList<PersonaPromptSectionView>> PromptSections(string id)
     {
         var scope = HttpContext.GetRequestScope();
         if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
-        return Ok(_promptSections.EffectiveSectionsFor(persona.OwnerId, persona));
+        // B09: секция «обновилась от специальности» — набор менялся админом с момента, когда человек
+        // его видел (persona.ChangedByAdminSince), и значение секции сейчас идёт от настройки
+        // специальности (источник Global), а не от своего слоя персоны
+        var changed = persona.ChangedByAdminSince == true;
+        return Ok(_promptSections.EffectiveSectionsFor(persona.OwnerId, persona)
+            .Select(s => new PersonaPromptSectionView(s,
+                changed && (s.EnabledSource == Services.Llm.SectionSource.Global
+                    || s.TextSource == Services.Llm.SectionSource.Global)))
+            .ToList());
+    }
+
+    /// <summary>
+    /// B09: человек просмотрел секции специальности — текущий набор становится базой для
+    /// «изменено админом с тех пор» (Persona.ChangedByAdminSince). Права — как у правки персоны.
+    /// </summary>
+    [HttpPost("{id}/sections-seen")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    public ActionResult<Persona> MarkSectionsSeen(string id)
+    {
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        return Ok(_personas.MarkSectionsSeen(id, scope.TenantOwnerId));
     }
 
     // Арендатор проекта, названного в ТЕЛЕ записывающего действия персон (W3-B3a, разрез §3.1
@@ -2397,3 +2418,14 @@ public record PersonaAskRequest(string? Handle, string Question, string? Context
     // Кросс-проектные extra-скоупы вызывающей персоны (ProjectPersonas-привязки) — расширяют
     // резолв handle за пределы контекста ProjectId; заполняет MCP personas-server
     List<string>? ExtraProjectIds = null, List<string>? ExtraPersonaIds = null);
+
+// Секция в выдаче GET {id}/prompt-sections: эффективное состояние плюс признак B09
+// «обновилось от специальности» (поля состояния — в той же плоской форме, что раньше)
+public sealed record PersonaPromptSectionView(
+    string Id, bool Enabled, string Text,
+    Services.Llm.SectionSource EnabledSource, Services.Llm.SectionSource TextSource,
+    bool UpdatedFromRole)
+{
+    public PersonaPromptSectionView(Services.Llm.EffectivePromptSection s, bool updatedFromRole)
+        : this(s.Id, s.Enabled, s.Text, s.EnabledSource, s.TextSource, updatedFromRole) { }
+}

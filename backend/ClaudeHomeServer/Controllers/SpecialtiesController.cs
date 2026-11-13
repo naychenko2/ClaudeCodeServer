@@ -46,6 +46,22 @@ public class SpecialtiesController(
         }));
     }
 
+    // Одна специальность: подпись и наследники — персоны вызывающего, наследующие её секции
+    // (все с этой специальностью), с числом секций, которые у каждой «своё» (B09).
+    [HttpGet("{key}")]
+    public IActionResult Get(string key)
+    {
+        if (!SpecialtyCatalog.TryGetByKey(key, out var entry) || entry.Specialty == PersonaSpecialty.None)
+            return NotFound(new { error = $"Неизвестная специальность: {key}" });
+        return Ok(new
+        {
+            key = entry.Key,
+            label = entry.Label,
+            inheritors = personas.SpecialtyInheritors(UserId, entry.Specialty)
+                .Select(i => new { personaId = i.PersonaId, name = i.Name, ownSections = i.OwnSections }),
+        });
+    }
+
     // Каталог секций промптов: состав секций задаёт система, здесь — их метаданные и
     // дефолты кода по каждой специальности (включённость и типовой текст — пресет
     // «Типовой текст…» и база для клиентского резолва поверх слоёв). Профиль типовых

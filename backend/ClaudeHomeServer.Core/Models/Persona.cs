@@ -168,6 +168,25 @@ public class Persona
     // миграции, или переписал бы наследование из-за изменившегося шаблона. Аддитивное
     // nullable-поле: старый personas.json читается без правок (null — решения ещё нет)
     public DateTime? InheritsAccessMigratedAt { get; set; }
+    // Когда при выключении наследования (true → false) права скопированы со специальности (B09).
+    // Хранимое поле: сбрасывается при повторном включении наследования. null — копии не было
+    // (персона «своя» с создания или до появления поля). Аддитивное nullable-поле.
+    public DateTime? AccessCopiedAt { get; set; }
+    // Число отличий копии прав от ТЕКУЩЕГО шаблона специальности (профиль, инструменты, запрещённые:
+    // 0..3) — поле ОТВЕТА, считает PersonaManager.Hydrate на копии, в personas.json не пишется.
+    // null — копии нет или шаблона нет (сравнивать не с чем).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? AccessDiffCount { get; set; }
+    // Версия набора секций специальности, которую человек видел последней (B09, хеш
+    // PersonaManager.SectionsVersion). Хранимое; null — базовая точка не отмечена, «изменено
+    // админом» не считается. Обновляется POST {id}/sections-seen.
+    public string? SectionsSeenVersion { get; set; }
+    // Поля ОТВЕТА (не хранятся, ставит Hydrate на копии, только при заданном SectionsSeenVersion):
+    // текущая версия набора и признак «админ менял секции специальности с момента SectionsSeenVersion».
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SectionsVersion { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ChangedByAdminSince { get; set; }
     // Поверхностная копия: PersonaManager отдаёт её вместо записи кэша, когда подставляет права
     public Persona ShallowCopy() => (Persona)MemberwiseClone();
     // Первое приветственное сообщение при открытии чата (опционально)

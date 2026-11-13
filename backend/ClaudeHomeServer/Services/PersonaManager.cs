@@ -107,7 +107,99 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // Соглашение A1b (M3 из R-A1a): EffectiveAccessTemplate возвращает null и для Specialty=None,
     // и для «шаблона нет» — поэтому None проверяется ЯВНО до вызова, а null после него значит
     // только «шаблона нет»: права персоны остаются материализованными (как в Apply), не Full.
-    internal Persona Hydrate(Persona p)
+    internal Persona Hydrate(Persona p) => DecorateInheritance(HydrateAccess(p));
+
+    // Поля ответа наследования (B09): число отличий копии прав и «админ менял секции». Считаются
+    // только когда есть от чего (AccessCopiedAt / SectionsSeenVersion), на копии — запись кэша
+    // не мутируется и в personas.json эти поля не попадают.
+    private Persona DecorateInheritance(Persona p)
+    {
+        var diff = p is { InheritsAccess: false, AccessCopiedAt: not null } ? AccessDiff(p) : null;
+        var version = p.SectionsSeenVersion is null ? null : CurrentSectionsVersion(p);
+        if (diff is null && version is null) return p;
+        var copy = p.ShallowCopy();
+        copy.AccessDiffCount = diff;
+        if (version is not null)
+        {
+            copy.SectionsVersion = version;
+            copy.ChangedByAdminSince = !string.Equals(version, p.SectionsSeenVersion, StringComparison.Ordinal);
+        }
+        return copy;
+    }
+
+    // Отличия копии прав персоны от текущего шаблона её специальности: профиль, инструменты,
+    // запрещённые (null и пустой список запрещённых равны). Нет шаблона — null.
+    private int? AccessDiff(Persona p)
+    {
+        SpecialtyTemplate? template;
+        try { template = SpecialtyTemplatesService.EffectiveAccessTemplate(_specialty, p.OwnerId, p.Specialty); }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Не удалось прочитать шаблон прав специальности для персоны {Id}", p.Id);
+            return null;
+        }
+        if (template is null) return null;
+        var diff = p.Access != template.Access ? 1 : 0;
+        var tools = NormalizeTools(template.Tools?.ToList());
+        if (!SameSet(p.Tools, tools)) diff++;
+        if (!SameSet(p.DisallowedTools, template.DisallowedTools?.ToList())) diff++;
+        return diff;
+    }
+
+    private static bool SameSet(IReadOnlyCollection<string>? a, IReadOnlyCollection<string>? b) =>
+        (a ?? []).ToHashSet(StringComparer.Ordinal).SetEquals(b ?? []);
+
+    // Версия набора секций специальности: хеш (id, enabled, text) базового состояния в порядке
+    // каталога — без слоя персоны, чтобы правка секций самой персоны версию не двигала.
+    // Короткий hex (12 знаков SHA-256): сравнение на равенство, не безопасность.
+    internal static string SectionsVersion(IReadOnlyList<EffectivePromptSection> baseStates)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var s in baseStates)
+            sb.Append(s.Id).Append('\u001f').Append(s.Enabled ? '1' : '0').Append('\u001f').Append(s.Text).Append('\u001e');
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(hash, 0, 6).ToLowerInvariant();
+    }
+
+    // Текущая версия набора секций специальности персоны; без стора настроек или при сбое — null
+    // (ChangedByAdminSince тогда не выставляется)
+    public string? CurrentSectionsVersion(Persona p)
+    {
+        if (_specialty is null || p.Specialty == PersonaSpecialty.None) return null;
+        try { return SectionsVersion(_specialty.EffectivePromptSectionStates(p.OwnerId, p.Specialty)); }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Не удалось посчитать версию секций специальности для персоны {Id}", p.Id);
+            return null;
+        }
+    }
+
+    // Отмечает текущий набор секций специальности как «виденный» (база для ChangedByAdminSince).
+    // Specialty=None — секций нет, отмечать нечего (null не пишется).
+    public Persona MarkSectionsSeen(string id, string userId)
+    {
+        var persona = GetRaw(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        var version = CurrentSectionsVersion(persona);
+        if (version is not null)
+        {
+            lock (_saveLock) { persona.SectionsSeenVersion = version; }
+            Save();
+        }
+        return Hydrate(persona);
+    }
+
+    // Персоны владельца, наследующие секции специальности (все с этой специальностью), и число
+    // секций, которые у каждой «своё» (слой PromptSections нормализован: только реальные подмены)
+    public IReadOnlyList<(string PersonaId, string Name, int OwnSections)> SpecialtyInheritors(
+        string ownerId, PersonaSpecialty specialty) =>
+        specialty == PersonaSpecialty.None ? [] : _personas.Values
+            .Where(p => p.OwnerId == ownerId && p.Specialty == specialty)
+            .OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Select(p => (p.Id, p.Name, p.PromptSections?.Count ?? 0))
+            .ToList();
+
+    private Persona HydrateAccess(Persona p)
     {
         if (!p.InheritsAccess) return p;
         if (p.Specialty == PersonaSpecialty.None)
@@ -1068,7 +1160,13 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             // Наследование прав (A1d): null — не менять (частичный PUT не сбрасывает флаг);
             // запись — в объект из GetRaw под тем же _saveLock, что и остальные поля:
             // гидратированная копия из Hydrate наружу не пишется, её правка пропала бы (A1a)
-            if (inheritsAccess is not null) persona.InheritsAccess = inheritsAccess.Value;
+            if (inheritsAccess is not null)
+            {
+                // true → false: фиксируем момент копирования прав; повторное включение — сброс
+                if (persona.InheritsAccess && !inheritsAccess.Value) persona.AccessCopiedAt = DateTime.UtcNow;
+                else if (inheritsAccess.Value) persona.AccessCopiedAt = null;
+                persona.InheritsAccess = inheritsAccess.Value;
+            }
             // null — не менять; явный Unspecified — сбросить сигнал рода
             if (gender is not null) persona.Gender = gender.Value;
             // null — не менять; список — установить (полный набор нормализуется в null)

@@ -173,20 +173,26 @@ function nodeAria(stage: FeatureStage): string {
 
 // Вторая строка узла (B01): ждёт человека — warning («ждёт ответа вас»), ждёт ветки —
 // приглушённо; иначе «Персона · время» (части без данных пропускаются); пусто — строки нет.
-// F33a (макет .nm): у proposed-узла пометка «предложено» живёт здесь же: при пустой мете —
-// на её месте, при занятой — рядом через « · »; в нижней строке с ролью её нет.
+// F33a (макет .nm): у незавершённого proposed-узла пометка «предложено» живёт здесь же:
+// при пустой мете — на её месте, при занятой — рядом через « · »; в нижней строке с ролью её нет.
+// R-F33a (решение Майи, 14.11): «предложено» говорит только о том, чего ещё не было, —
+// завершённый узел предложенного маршрута в этой пометке не нуждается; вместо неё в мете
+// суффикс «до маршрута» (макет feature-page.html:447): с исполнителем — после « · »,
+// без него — просто суффикс, без висящего разделителя.
 export function nodeMeta(
   stage: FeatureStage,
 ): { text: string; color: string; proposed?: boolean } | null {
-  if (stage.waiting === 'human') return { text: 'ждёт ответа вас', color: C.warning, proposed: stage.proposed };
-  if (stage.waiting === 'branches') return { text: 'ждёт обе ветки', color: C.textMuted, proposed: stage.proposed };
+  const asProposed = stage.proposed === true && stage.state !== 'done';
+  if (stage.waiting === 'human') return { text: 'ждёт ответа вас', color: C.warning, proposed: asProposed };
+  if (stage.waiting === 'branches') return { text: 'ждёт обе ветки', color: C.textMuted, proposed: asProposed };
   const parts: string[] = [];
   const names = (stage.personaNames ?? []).filter(Boolean);
   if (names.length > 0) parts.push(names.join(', '));
   if (stage.elapsedMinutes != null) parts.push(formatDuration(stage.elapsedMinutes));
-  if (parts.length > 0) return { text: parts.join(' · '), color: C.textSecondary, proposed: stage.proposed };
+  if (stage.proposed === true && stage.state === 'done') parts.push('до маршрута');
+  if (parts.length > 0) return { text: parts.join(' · '), color: C.textSecondary, proposed: asProposed };
   // Мета пуста, но есть пометка — строка нужна ради неё (цвет .nm макета — text-muted).
-  return stage.proposed === true ? { text: '', color: C.textMuted, proposed: true } : null;
+  return asProposed ? { text: '', color: C.textMuted, proposed: true } : null;
 }
 
 // Сегменты полоски задач ветки: готово (success) → в работе (accent) → остальное (трек).
@@ -376,7 +382,9 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
           const selected = selectedId === id;
           const active = stage.state === 'active';
           const quiet = stage.state !== 'done' && !active; // pending/absent/skipped
-          const proposed = stage.proposed === true;
+          // R-F33a: оформление proposed — только у незавершённой стадии; рамка и цвет узла
+          // читают его состояние: завершённый узел предложенного маршрута — обычный done.
+          const proposed = stage.proposed === true && stage.state !== 'done';
           const returns = stage.returns ?? 0;
           const meta = nodeMeta(stage);
           const line = laneWord(stage.line ?? null);

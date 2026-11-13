@@ -13,12 +13,18 @@
 //   пометка «предложено» в строке меты (при пустой мете — на её месте, при занятой —
 //   рядом через « · »), один раз и не в нижней строке; proposed=false (бэк шлёт false
 //   у подтверждённого маршрута) — стиль прежний; строка легенды только при proposed-узле.
+// - доработка R-F33a: «предложено» и фиолетовый пунктир — только незавершённым стадиям;
+//   завершённый узел предложенного маршрута — обычный done (рамка и заголовок как у done
+//   без признака, пометки нет), в мете суффикс «до маршрута» (с исполнителем — после « · »,
+//   без него — без висящего разделителя); незавершённый proposed в том же графе — как раньше.
 // Колонки, рёбра и состояния компонент не пересчитывает — это покрыто в FeatureProcessGraphModel.test.ts.
 //
 // Мутации (проверяются прогоном): (1) убрать `if (stage.title)` в nodeTitle — краснеет
 // «данные пресета…»; (2) убрать линию в фолбэке — краснеет «без title…»; (3) убрать clamp
 // подписи (WebkitLineClamp/overflow) — краснеет «подпись узла ограничена рамкой»;
-// (4) игнорировать признак proposed (nodeMeta и рендер узла) — краснеют блоки F33a.
+// (4) игнорировать признак proposed (nodeMeta и рендер узла) — краснеют блоки F33a;
+// (5) вернуть оформление proposed без учёта state (asProposed → stage.proposed в nodeMeta
+// и в рендере узла) — краснеет блок R-F33a.
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -278,5 +284,53 @@ describe('FeatureProcessGraph: узел «предложено» по макет
     expect(get(without, 'pgraph-legend-proposed')).toBeNull();
     // Остальная легенда — без изменений.
     expect(get(without, 'pgraph-legend')).not.toBeNull();
+  });
+});
+
+describe('FeatureProcessGraph: завершённый узел предложенного маршрута — обычный done (доработка R-F33a)', () => {
+  const get = (c: unknown, tid: string) => findNodeByAttr(c as never, 'data-testid', tid);
+  const txt = (n: unknown) => textNodes(n as never).join('');
+  const css = (n: unknown, key: string): string =>
+    String((reactProps(n as never) as { style: Record<string, unknown> }).style[key]);
+
+  it('done+proposed: рамка и заголовок как у done без признака, пометки «предложено» нет', () => {
+    // Та же страница, что в сценарии отказа: неподтверждённый маршрут, «Разрез» сделан,
+    // следующий этап — ещё нет. Завершённый узел неотличим от обычного done,
+    // незавершённый сосед — остаётся в фиолетовом пунктире (инвариант: рамка и цвет
+    // читают состояние, «предложено» говорит только о том, чего ещё не было).
+    const c = render([
+      { ...mkStage('design', 'dz', 'design', 0, 'done'), proposed: true },
+      { ...mkStage('plan', 'pl', 'plan', 1, 'pending', ['dz']), proposed: true },
+    ]);
+    const plain = render([mkStage('design', 'dz', 'design', 0, 'done')]);
+    const node = get(c, 'pgraph-node-dz')!;
+    expect(node.getAttribute('data-proposed')).toBeNull();
+    const border = css(node, 'border');
+    expect(border).toBe(css(get(plain, 'pgraph-node-dz'), 'border'));
+    expect(border).toContain('1px solid');
+    expect(border).not.toContain('var(--c-plan)');
+    const titleColor = css(get(c, 'pgraph-title-dz'), 'color');
+    expect(titleColor).not.toBe('var(--c-plan-text)');
+    expect(titleColor).toBe(css(get(plain, 'pgraph-title-dz'), 'color'));
+    expect(get(c, 'pgraph-proposed-dz')).toBeNull();
+    expect(txt(node)).not.toContain('предложено');
+    // Контрольный сосед: незавершённый proposed в том же графе — как сейчас (F33a).
+    const plNode = get(c, 'pgraph-node-pl')!;
+    expect(plNode.getAttribute('data-proposed')).toBe('true');
+    expect(css(plNode, 'border')).toBe('1px dashed var(--c-plan)');
+    expect(css(get(c, 'pgraph-title-pl'), 'color')).toBe('var(--c-plan-text)');
+    expect(txt(get(c, 'pgraph-proposed-pl'))).toBe('предложено');
+  });
+
+  it('мета done+proposed: «Александр · до маршрута»; без исполнителя — «до маршрута», без висящего разделителя', () => {
+    // Бэк у неподтверждённого маршрута personaNames = [] и elapsedMinutes = null
+    // (FeatureProjector.cs:581, routed=false) — «до маршрута» остаётся единственной строкой.
+    const c = render([
+      { ...mkStage('design', 'dz', 'design', 0, 'done'), proposed: true, personaNames: ['Александр'] },
+      { ...mkStage('plan', 'pl', 'plan', 1, 'done', ['dz']), proposed: true },
+    ]);
+    expect(txt(get(c, 'pgraph-meta-dz'))).toBe('Александр · до маршрута');
+    expect(txt(get(c, 'pgraph-meta-pl'))).toBe('до маршрута');
+    expect(txt(get(c, 'pgraph-meta-pl'))).not.toContain('предложено');
   });
 });

@@ -122,7 +122,7 @@ public sealed class VideoEditorStateContributorTests : IDisposable
 
         text.Should().Contain(VideoEditorStateContributor.PersonalPriorityRule)
             .And.Contain("video_shoot с provider local")
-            .And.Contain("фильмов и сохранения в проект")
+            .And.Contain("файлов проектов и фильмов здесь нет").And.Contain("video_save_scene")
             .And.NotContain("Локальных моделей для видео");
         text.Should().NotContain("а не local_image_to_video", "прямых local_* в личном чате нет");
     }

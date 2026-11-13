@@ -267,6 +267,15 @@ scope.HasFolder => Project is not null   // новый признак: «ест�
 - Ключи не тронуты: `Job.Scope.Project?.Id` в запросах локальных движков (`AudioEditJobService`, `VideoEditJobService`) заменён на `ProjectIdOf(Key)`, а `ImageContextKind` берёт ключ префов из `Session.ProjectId ?? personal` — иначе id «Личного» утёк бы в метку происхождения и ключ префов.
 - Остальные `scope.Project is null`-отказы вертикалей (персонажи, образцы, файл нити, подстановка лица, голоса, `ProjectFileContextKind`) сняты автоматически, когда у области есть папка; живыми они становятся вместе с Ф2-3…Ф2-5 (папка до них не создаётся). Тексты «скачать может только человек» не менялись: сохранения в Личное ещё нет.
 
+**Что реально сделано в Ф2-4 (расхождения с текстом ADR):**
+
+- Тело ручек персонажей вынесено из `ImageEditorController` в `ImageEditorCharacterEndpoints` (общая база проектного и личного контроллеров, как `ImageEditorEndpoints`). Личные ручки `characters*` и `loras` — в `PersonalImageEditorController` (`api/image-editor/chats/{sessionId}/…`), отдельных `PersonalCharacters…`-контроллеров нет.
+- Обучающие фото, `lora-train` и `lora-versions` не дублируются: `CharacterLoraTrainController` и `CharacterLoraVersionsController` получили второй `[Route]` с `{sessionId}`; проект берёт `ImageEditScopeGate.TryCharacterProject` (с `projectId` — гейт проекта, с `sessionId` — «Личное» чата). Ключ обучения для личных персонажей — настоящий `Project.Id` «Личного», а не `personal` (по нему доводчик находит запись через `GetByIdIncludingPersonal`).
+- `EnsureAsync` зовёт только создание персонажа (`EnsurePersonalFolderAsync`). Обучение LoRA и фото работают с уже существующим персонажем, а он есть лишь при папке, поэтому им хватает `Find`; список и карточка без папки отдают пустой список и 404, папку не создают. Остаточный риск: запись стора потеряна, а папка с персонажами осталась — ручки видят «пусто», пока `Ensure` не вызовет создание нового персонажа.
+- `LoraTrainingFinisher` ходит в «Личное» через необязательный `IPersonalProjects` (`ProjectById`, `AllProjects`); сторож: `LoraTrainingFinisher.cs|2`.
+- Поиск лиц (`…/threads/{threadId}/versions/{versionId}/faces`) вынесен в `ImageThreadEndpoints.FacesIn` и добавлен в `PersonalThreadsController`: без него подстановка лица в личной области не имела бы детекции. Сама подстановка (`faceTarget` в запуске, `face`/`faces` в тулсете) заработала автоматически от `scope.Project`.
+- Остаётся прежним: `PutPrefs` личной области пишет `characterSlug = null` (персонаж берётся из контекста хода, как и у проекта); тексты отказов тулсета при отсутствии папки («только в чате проекта») не менялись; админские ручки LoRA (`LoraTrainAdminController`) «Личного» не касаются.
+
 Порядок: Ф2-1 → Ф2-2 → {Ф2-3, Ф2-4, Ф2-5 параллельно после Ф2-2} → Ф2-6 → Ф2-7 → Ф2-8. Файлы вертикалей не пересекаются между Ф2-3/4/5 (картинки/звук/видео), общий — только Ф2-2. Шаг «бэкап» отдельным не выделяется: фильтр уже пропускает файл (п. 1.4), правка — одна строка теста и `ValidateBackupPath` в Ф2-1.
 
 ## 8. Вопросы к Андрею (закрыты 2026-11-13: приняты все рекомендации)

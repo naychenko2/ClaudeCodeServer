@@ -18,6 +18,10 @@ namespace ClaudeHomeServer.Services.Tasks;
 // отбрасывается; мусор/сбой модели — предложения нет, без исключения: рекомендация улучшает
 // создание фичи, её отсутствие — обычное рабочее состояние (маршрут выбирает человек).
 //
+// M2 (правило Андрея): предложение несёт «нужен ли человек» (NeedsHuman) и причину сомнения
+// (DoubtReason, белый список 3 — WorkflowDoubtReasons). Разбор fail-closed: false — только
+// явный ответ модели без допустимой причины; мусорный или неполный ответ = «нужен человек».
+//
 // Каталог в промпте — id/роль/presence/«после» каждого этапа после WorkflowGraph.Normalize
 // (G5): модель видит граф, а не список ролей, и отвечает id этапа. Белые списки проверяются по
 // каталогу, перечитанному ПОСЛЕ ответа: правка или удаление шаблона, пока модель думала,
@@ -92,7 +96,8 @@ public sealed class WorkflowRecommender(
         var sb = new StringBuilder();
         sb.AppendLine("Подбери шаблон процесса (маршрут этапов) для фичи ниже по её названию и описанию.");
         sb.AppendLine("Ответь ТОЛЬКО JSON-объектом без пояснений и без markdown-обёртки:");
-        sb.AppendLine("{\"templateId\":\"<id шаблона>\",\"skipped\":[\"<id этапа, который снимаем>\"],\"rationale\":\"одно предложение почему\"}");
+        sb.AppendLine("{\"templateId\":\"<id шаблона>\",\"skipped\":[\"<id этапа, который снимаем>\"],\"rationale\":\"одно предложение почему\",");
+        sb.AppendLine("\"needsHuman\":true|false,\"doubtReason\":\"<одно из no-fit|ambiguous|custom-route|low-confidence>\"}");
         sb.AppendLine("templateId — строго один из id списка ниже, не выдумывай его.");
         sb.AppendLine("skipped — только id этапов, помеченные presence=optional у выбранного шаблона (id — первое поле в");
         sb.AppendLine("скобках этапов), если по описанию фичи они не нужны (маленькая правка — снять design и qa);");
@@ -100,6 +105,11 @@ public sealed class WorkflowRecommender(
         sb.AppendLine("этапы с presence=on снять нельзя.");
         sb.AppendLine("«после=[…]» — id предшественников этапа: несколько этапов с одним «после» идут параллельно,");
         sb.AppendLine("снять такой этап — значит убрать одну из веток, остальные останутся связны.");
+        sb.AppendLine("needsHuman=false — только если ровно один шаблон из списка явно подходит по описанию фичи");
+        sb.AppendLine("и снимать этапы не нужно; иначе needsHuman=true и doubtReason — причина сомнения,");
+        sb.AppendLine("ровно одна из: no-fit — ни один шаблон не подходит; ambiguous — несколько сравнимы, выбор");
+        sb.AppendLine("неочевиден; custom-route — маршрут требует правок за пределами снятия optional-этапов;");
+        sb.AppendLine("low-confidence — однозначного решения по описанию нет.");
         sb.AppendLine();
         sb.AppendLine($"Название фичи: «{epic.Title}»");
         var description = epic.Description ?? "";
@@ -135,6 +145,8 @@ public sealed class WorkflowRecommender(
         string templateId;
         List<string> skipped;
         string? rationale;
+        bool? saysNoHuman; // null — поле отсутствует или не bool (M2, см. правило ниже)
+        string? doubtReason;
         try
         {
             using var doc = JsonDocument.Parse(json);
@@ -150,6 +162,16 @@ public sealed class WorkflowRecommender(
                 : [];
             rationale = root.TryGetProperty("rationale", out var r) && r.ValueKind == JsonValueKind.String
                 ? r.GetString()?.Trim() : null;
+            // M2: допустимы ровно JSON-true/false; строка, число, null или отсутствие поля —
+            // то же самое, что «не доверено» (fail-closed ниже).
+            saysNoHuman = root.TryGetProperty("needsHuman", out var nh)
+                && nh.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? nh.ValueKind == JsonValueKind.False : null;
+            // Белый список 3: причина сомнения — только из WorkflowDoubtReasons.All;
+            // вне списка — null и на NeedsHuman не влияет.
+            var rawDoubt = root.TryGetProperty("doubtReason", out var d) && d.ValueKind == JsonValueKind.String
+                ? d.GetString()?.Trim() : null;
+            doubtReason = rawDoubt is not null && WorkflowDoubtReasons.All.Contains(rawDoubt) ? rawDoubt : null;
         }
         catch (JsonException) { return null; }
 
@@ -165,6 +187,10 @@ public sealed class WorkflowRecommender(
             .ToHashSet(StringComparer.Ordinal);
         var kept = skipped.Where(optional.Contains).Distinct(StringComparer.Ordinal).ToList();
 
+        // M2, fail-closed: NeedsHuman=false только если модель явно ответила false И причины
+        // сомнения нет; поле отсутствует, не bool или пришла допустимая причина — человек нужен.
+        var needsHuman = saysNoHuman != true || doubtReason is not null;
+
         return new WorkflowProposal
         {
             TemplateId = entry.Template.Id,
@@ -172,6 +198,8 @@ public sealed class WorkflowRecommender(
             Scope = entry.Scope == WorkflowTemplateScope.Project ? "project" : "global",
             Skipped = kept,
             Rationale = string.IsNullOrWhiteSpace(rationale) ? null : rationale,
+            NeedsHuman = needsHuman,
+            DoubtReason = doubtReason,
         };
     }
 }

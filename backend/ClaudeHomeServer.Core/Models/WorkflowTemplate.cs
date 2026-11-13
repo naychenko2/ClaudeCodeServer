@@ -125,6 +125,32 @@ public class WorkflowProposal
     public string? Rationale { get; set; }
     public DateTime ProposedAt { get; set; }
     public string? Model { get; set; }
+    // M2 (правило Андрея: человека зовём только при сомнении): нужен ли человек для выбора
+    // этого маршрута. Дефолт — true: поле отсутствует или разбор не доверен = человек нужен
+    // (fail-closed, WorkflowRecommender.ParseAndCut). false — только явный ответ модели
+    // без допустимой причины сомнения.
+    public bool NeedsHuman { get; set; } = true;
+    // Причина сомнения — только из WorkflowDoubtReasons.All; любое другое значение → null.
+    public string? DoubtReason { get; set; }
+}
+
+// Белый список причин сомнения (M2): почему рекомендатель зовёт человека. Строки, а не enum
+// (тот же урок, что у WorkflowStagePresence). Числовой уверенности нет — только флаг и причина.
+public static class WorkflowDoubtReasons
+{
+    // Ни один шаблон каталога не подходит под описание фичи.
+    public const string NoFit = "no-fit";
+    // Несколько шаблонов сравнимы, выбор неочевиден.
+    public const string Ambiguous = "ambiguous";
+    // Маршрут требует правок за пределами снятия optional-этапов.
+    public const string CustomRoute = "custom-route";
+    // Выбор неочевиден — однозначного решения по описанию нет.
+    public const string LowConfidence = "low-confidence";
+
+    public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
+    {
+        NoFit, Ambiguous, CustomRoute, LowConfidence,
+    };
 }
 
 // Подтверждённый человеком маршрут эпика (TaskItem.Workflow, разрез §1, инвариант И7): единственный
@@ -141,6 +167,10 @@ public class FeatureWorkflow
     public int ConfirmedVersion { get; set; }
     public DateTime ConfirmedAt { get; set; }
     public bool ConfirmedByUser { get; set; } = true;
+    // M2/M3: true ставит только авто-путь подтверждения (M3), когда выбор маршрута был
+    // очевиден. ConfirmedByUser не переделываем: подтверждение человеком и авто-путь —
+    // разные поля. Миграции нет: старые записи без поля читаются как false.
+    public bool AutoConfirmed { get; set; }
 }
 
 // Этап подтверждённого маршрута (разрез 2 §1.2): After — уже после обхода снятых этапов.

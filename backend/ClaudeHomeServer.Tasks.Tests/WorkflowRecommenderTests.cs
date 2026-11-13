@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Tasks;
@@ -11,6 +12,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // не-JSON и сбой модели — предложения нет, без исключения. И7: epic.Workflow не трогается
 // никогда. Устаревшее предложение (маршрут подтвердили, пока ждали ответ) не пишется; два
 // параллельных подбора оставляют в эпике одно целое предложение.
+// M2: NeedsHuman/DoubtReason — fail-closed: «не нужен человек» только при явном false модели
+// без допустимой причины; мусорный или неполный ответ = «нужен человек». Старые записи
+// FeatureWorkflow без autoConfirmed читаются как false (миграции нет).
 public class WorkflowRecommenderTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), $"wrec-{Guid.NewGuid():N}");
@@ -121,6 +125,13 @@ public class WorkflowRecommenderTests : IDisposable
 
     private static string Answer(string templateId, string skipped = "", string rationale = "по описанию") =>
         "{\"templateId\":\"" + templateId + "\",\"skipped\":[" + skipped + "],\"rationale\":\"" + rationale + "\"}";
+
+    // Ответ с полями M2: needsHuman — как текст (можно передать не-bool, напр. "\"false\"");
+    // doubtReason — null значит «поля в ответе нет»
+    private static string AnswerNeeds(string templateId, string needsHuman, string? doubtReason = null) =>
+        "{\"templateId\":\"" + templateId + "\",\"skipped\":[],\"rationale\":\"по описанию\"" +
+        ",\"needsHuman\":" + needsHuman +
+        (doubtReason is null ? "" : ",\"doubtReason\":\"" + doubtReason + "\"") + "}";
 
     // Маршрут для гонки «человек подтвердил, пока ждали модель»: Stages — той же production-точкой,
     // что у TaskWorkflowController.Confirm (G1), переходный шим Route удалён (G3, п.8).
@@ -422,5 +433,103 @@ public class WorkflowRecommenderTests : IDisposable
         runner.LastPrompt.Should().Contain(new string('о', WorkflowRecommender.MaxDescriptionChars));
         runner.LastJsonFormat.Should().Be("json", "строгий JSON-контракт места");
         runner.LastActionKey.Should().Be(LocalActionCatalog.FeatureWorkflowRecommend);
+    }
+
+    // M2 (c1): явный needsHuman=false без причины сомнения → предложение «человек не нужен»;
+    // поле доезжает до эпика тем же целым объектом, что и остальной proposal
+    [Fact]
+    public async Task Recommend_NeedsHumanFalse_БезПричины_ЧеловекНеНужен()
+    {
+        var tpl = Template();
+        var epic = Epic();
+        var runner = new StubRunner { Text = AnswerNeeds(tpl.Id, "false") };
+
+        var result = await MakeService(runner).RecommendAsync(epic.Id, Owner, CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.NeedsHuman.Should().BeFalse();
+        result.DoubtReason.Should().BeNull();
+        var stored = _tasks.GetById(epic.Id)!.WorkflowProposal!;
+        stored.NeedsHuman.Should().BeFalse("пишется тем же целым объектом через SetWorkflowProposal");
+        stored.DoubtReason.Should().BeNull();
+        // промпт объясняет модели обе новые поля
+        runner.LastPrompt.Should().Contain("\"needsHuman\":true|false");
+        runner.LastPrompt.Should().Contain("no-fit|ambiguous|custom-route|low-confidence");
+    }
+
+    // M2 (c2), fail-closed: ответ без поля needsHuman → человек нужен (дефолт разбора — true)
+    [Fact]
+    public async Task Recommend_NeedsHumanОтсутствует_НуженЧеловек()
+    {
+        var tpl = Template();
+        var epic = Epic();
+
+        var result = await MakeService(new StubRunner { Text = Answer(tpl.Id) })
+            .RecommendAsync(epic.Id, Owner, CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.NeedsHuman.Should().BeTrue("поле отсутствует — fail-closed");
+        result.DoubtReason.Should().BeNull();
+        _tasks.GetById(epic.Id)!.WorkflowProposal!.NeedsHuman.Should().BeTrue();
+    }
+
+    // M2: needsHuman не-bool (строка "false") — не доверено, как отсутствие поля
+    [Fact]
+    public async Task Recommend_NeedsHumanНеBool_НуженЧеловек()
+    {
+        var tpl = Template();
+        var epic = Epic();
+
+        var result = await MakeService(new StubRunner { Text = AnswerNeeds(tpl.Id, "\"false\"") })
+            .RecommendAsync(epic.Id, Owner, CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.NeedsHuman.Should().BeTrue("строка вместо bool — не доверено");
+    }
+
+    // M2 (c3): допустимая причина сомнения сильнее явного false модели — человек нужен,
+    // причина остаётся в предложении
+    [Fact]
+    public async Task Recommend_DoubtReasonДопустимый_ПерекрываетFalse()
+    {
+        var tpl = Template();
+        var epic = Epic();
+
+        var result = await MakeService(new StubRunner { Text = AnswerNeeds(tpl.Id, "false", "ambiguous") })
+            .RecommendAsync(epic.Id, Owner, CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.NeedsHuman.Should().BeTrue("пришла допустимая причина — даже при явном false");
+        result.DoubtReason.Should().Be(WorkflowDoubtReasons.Ambiguous);
+    }
+
+    // M2 (c3): причина вне белого списка → DoubtReason=null и на NeedsHuman не влияет:
+    // явный false без ДОПУСТИМОЙ причины остаётся «человек не нужен»
+    [Fact]
+    public async Task Recommend_DoubtReasonВнеСписка_NullБезВлияния()
+    {
+        var tpl = Template();
+        var epic = Epic();
+
+        var result = await MakeService(new StubRunner { Text = AnswerNeeds(tpl.Id, "false", "maybe") })
+            .RecommendAsync(epic.Id, Owner, CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.DoubtReason.Should().BeNull("вне WorkflowDoubtReasons.All");
+        result.NeedsHuman.Should().BeFalse("недопустимая причина не меняет явный false");
+    }
+
+    // M2 (c4): старый JSON FeatureWorkflow без поля autoConfirmed читается как false —
+    // те же опции чтения, что у стора задач (TaskManager.Load), миграции нет
+    [Fact]
+    public void FeatureWorkflow_СтарыйJsonБезAutoConfirmed_false()
+    {
+        var json = """{"TemplateId":"t","Scope":"global","Stages":[],"Skipped":[],"ConfirmedVersion":1,"ConfirmedAt":"2026-11-01T00:00:00Z","ConfirmedByUser":true}""";
+
+        var wf = JsonSerializer.Deserialize<FeatureWorkflow>(json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+
+        wf.AutoConfirmed.Should().BeFalse("запись до M2: поле отсутствует — false");
+        wf.ConfirmedByUser.Should().BeTrue();
     }
 }

@@ -244,6 +244,8 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
               onColorChange={setLiveColor}
               onOpenMemory={() => goView('memory')}
               onOpenKnowledge={() => goView('knowledge')}
+              // «Отменить» футера формы — тот же выход из правки, что кнопка тулбара выше
+              onCancelEdit={() => { if (status.dirty) setConfirmDiscard(() => () => setEditing(false)); else setEditing(false); }}
               onSaved={() => setEditing(false)}
               onDelete={mayDelete ? () => onDelete(persona) : undefined}
             />

@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Info, Pencil, Trash2 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaAccess, PersonaContract, PersonaGender, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project, UpdatePersonaDto } from '../../types';
 import { api } from '../../lib/api';
@@ -12,7 +12,7 @@ import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeA
 import { createVoicePayload } from './voicePayload';
 import { PersonaPromptTab, SECTIONS_RESET_TEXT, SECTIONS_RESET_TITLE, sectionsResetNeedsConfirm } from './PersonaPromptTab';
 import { applySections, emptyState, toOverrides, type PromptSectionsState } from './promptSectionsModel';
- import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Select, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
+ import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Select, Menu, MenuItem, Notice, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
 import { PillSwitch } from '../../components/Toolbar';
@@ -28,7 +28,7 @@ import { effectiveSpecialtyRecord } from '../../lib/specialties';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -89,6 +89,9 @@ interface PersonaFormProps {
   onOpenMemory?: () => void;
   // Переход во вкладку «Знания» из плашки-переадресации (фича persona-bindings)
   onOpenKnowledge?: () => void;
+  // «Отменить» футера формы — тот же выход из правки, что кнопка тулбара-родителя:
+  // родитель передаёт один и тот же обработчик и в тулбар, и в форму
+  onCancelEdit?: () => void;
   // Дефолты зоны при создании (persona=null): для проектной панели персон —
   // сразу «Проект» + id текущего проекта, чтобы персона создавалась проектной.
   defaultScope?: PersonaScope;
@@ -96,9 +99,8 @@ interface PersonaFormProps {
   defaultSphereId?: string;
 }
 
-// Подсказка выключенных полей зоны и денег (W3-F1e): видимым текстом под полем, тот же
-// смысл, что у отказа бэка (403 owner_settings на PUT этих полей участнику)
-const OWNER_ONLY_HINT = 'Меняет только владелец проекта';
+// Подсказка выключенных полей зоны и денег (W3-F1e) — с F29 (макет P3) не повторяется
+// у каждого поля: для участника в начале секции «Поведение и контекст» одна плашка Notice
 
 // ── Сброс уровней персоны: отправка и решение по исходу (F28) ─────────────────────────
 // Вынесено из тела формы отдельными функциями, чтобы путь сброса был проверяем тестом:
@@ -160,10 +162,12 @@ export async function performTierReset(deps: {
 // Редизайн «Студия-профиль»: ОДНА центрированная колонка с плоскими секциями,
 // разделёнными тонкой линией (паттерн TaskEditForm/FeatureFlagsModal),
 // character-first (идентичность → характер → поведение → память). Кнопки действий
-// (сохранить/удалить/отмена) живут в тулбаре РОДИТЕЛЯ: форма экспонирует
-// save()/remove() через ref и сообщает своё состояние через onStatus.
+// (сохранить/удалить) живут в тулбаре РОДИТЕЛЯ: форма экспонирует save()/remove() через
+// ref и сообщает своё состояние через onStatus. С F29 (макет P24) в конце формы — ещё и
+// свой футер «Отменить / Сохранить»: save() та же, что у тулбара, «Отменить» — тот же
+// обработчик, что кнопка тулбара (parent передаёт его и туда, и сюда через onCancelEdit).
 export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(function PersonaForm(
-  { persona, projects, onSaved, onDelete, initial, onStatus, onColorChange, onOpenMemory, defaultScope, defaultProjectId, defaultSphereId }, ref,
+  { persona, projects, onSaved, onDelete, initial, onStatus, onColorChange, onOpenMemory, onCancelEdit, defaultScope, defaultProjectId, defaultSphereId }, ref,
 ) {
   const isEdit = !!persona;
   // Гейт по роли (W3-F1e, разрез §2/§3.4): роль читается только через personaRights — по
@@ -1396,6 +1400,13 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const behaviorSection = (
     <div style={section}>
       <SectionLabel style={{ marginBottom: 14 }}>Поведение и контекст</SectionLabel>
+      {/* P3 (макет A3b): для участника — одна плашка вместо hint у каждого поля зоны и
+          денег: те же права, что отказ бэка 403 owner_settings на PUT этих полей */}
+      {ownerOnlyFields && (
+        <Notice tone="info" icon={Info} style={{ marginBottom: SP.md }}>
+          Права, модели и специальность меняет владелец проекта — вам они видны только для чтения.
+        </Notice>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
         {/* Модели по уровням (спека, блок 4): три ячейки Сильная/Средняя/Слабая — модель
             или цепочка; пустая ячейка наследуется (специальность → «Модели по умолчанию»).
@@ -1403,14 +1414,20 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             «Сейчас пойдёт» под каждой ячейкой — резолв места chat-persona с уровнем: видно
             реальную модель и откуда она возьмётся, без догадок про наследование. */}
         <div style={{ gridColumn: '1 / -1' }}>
-          {/* Модель/уровень/усилие — деньга арендатора (Configure): участнику поля выключены
-              с видимой подсказкой (не только в title), и в DTO они не едут */}
+          {/* Модель/уровень/усилие — деньга арендатора (Configure): участнику поля выключены,
+              объяснение — в общей плашке Notice выше; в DTO эти поля для участника не едут */}
+          {/* P27 (макет A3b): без специальности источник моделей — общий слой «Модели по
+              умолчанию»: подпись над карточкой, пока группа «Как у специальности» */}
+          {!tiersOwn && specialty === 'none' && (
+            <div data-testid="models-source" style={{ fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted, marginBottom: SP.xs }}>
+              ↳ «Модели по умолчанию»
+            </div>
+          )}
           <PersonaModelsGroup
             own={tiersOwn}
             onModeChange={switchTiersMode}
             busy={tiersResetBusy}
             readOnly={ownerOnlyFields}
-            readOnlyHint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}
             ownCount={ownTierCount({ tierStrong, tierMedium, tierWeak })}
             cells={{ strong: tierStrong, medium: tierMedium, weak: tierWeak }}
             inheritedLabel={t => {
@@ -1449,7 +1466,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         </div>
 
         {caps.supportsEffort && (
-          <Field label="Усилие рассуждения" hint={ownerOnlyFields ? OWNER_ONLY_HINT : 'Выше — глубже размышляет, но дольше и дороже.'}>
+          <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
             <SegmentedControl value={effort}
               options={effortsForProvider(modelProvider(model)).map(o => ({ ...o, disabled: ownerOnlyFields }))}
               onChange={setEffort} columns={3} />
@@ -1493,7 +1510,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
         {/* Зона (Scope/ProjectId/SphereId) — Configure: участнику выключена с видимой
             подсказкой; в DTO её поля для участника не едут */}
-        <Field label="Зона" hint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}>
+        <Field label="Зона">
           {spheresOn ? (
             <PersonaZoneSelect
               value={{ scope, projectId, sphereId }}
@@ -1532,8 +1549,23 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
         {/* Специальность — Configure (доработка ревью fd328e70, п.3): бэк (01ebbf0ed)
             отвечает участнику 403 owner_settings на её смену, поэтому тот же гейт, что у
-            полей зоны и денег, и та же подсказка — фронт не обещает того, что бэк откажет. */}
-        <Field label="Специальность" hint={ownerOnlyFields ? OWNER_ONLY_HINT : 'Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.'}>
+            полей зоны и денег; для участника объяснение — в общей плашке Notice выше.
+            Подсказка по состоянию (P4/P5, макет A3b): со специальностью — откуда берутся
+            права/модели/умения и ссылка на неё; без — что наследовать не от кого. */}
+        <Field
+          label="Специальность"
+          hint={specialty === 'none'
+            ? 'Наследовать не от кого: права — полный доступ, модели — «Модели по умолчанию», типовых умений нет.'
+            : (
+              <>
+                От неё приходят права, модели и типовые умения. {' '}
+                <a href={`#/specialties/${specialty}`} style={{ color: C.accent }}>
+                  Открыть специальность «{specialtyLabel(specialtyCatalog, specialty)}» →
+                </a>
+                {' '}<span style={{ color: C.textMuted }}>(правит админ)</span>
+              </>
+            )}
+        >
           <select
             value={specialty}
             onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)}
@@ -1541,7 +1573,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             aria-label="Специальность"
             disabled={ownerOnlyFields}
           >
-            <option value="none">Не задана</option>
+            <option value="none">Без специальности</option>
             {specialtyCatalog?.filter(e => e.key !== 'none').map(e => (
               <option key={e.key} value={e.key}>{specialtyLabel(specialtyCatalog, e.key)}</option>
             ))}
@@ -1565,7 +1597,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             inherited={inheritsAccess}
             onModeChange={switchAccessMode}
             readOnly={ownerOnlyFields}
-            readOnlyHint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}
             specialtyKey={specialty}
             specialtyTitle={specialtyLabel(specialtyCatalog, specialty)}
             access={inheritsAccess ? (effectiveGroup.access ?? 'full') : access}
@@ -1766,6 +1797,16 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         )}
         {error && (
           <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
+        )}
+        {/* P24 (макет A3b): футер правки «Отменить / Сохранить» — в конце формы, на обеих
+            вкладках. «Сохранить» вызывает ту же save(), что тулбар через ref; «Отменить» —
+            тот же обработчик выхода, что кнопка тулбара (parent передаёт один и тот же).
+            На мобиле кнопки переносятся (flexWrap) и остаются tappable-целями Button sm */}
+        {isEdit && onCancelEdit && (
+          <div data-testid="persona-form-footer" style={{ display: 'flex', gap: SP.sm, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+            <Button variant="ghost" size={isMobile ? 'md' : 'sm'} onClick={onCancelEdit}>Отменить</Button>
+            <Button variant="primary" size={isMobile ? 'md' : 'sm'} disabled={!canSave || busy} loading={busy} onClick={() => { void save(); }}>Сохранить</Button>
+          </div>
         )}
       </div>
 

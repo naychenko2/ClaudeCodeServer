@@ -1,6 +1,6 @@
 import { test, expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
-import { api, collectConsoleErrors, login, seed, type Api } from './helpers';
+import { api, login, seed, type Api } from './helpers';
 
 // QA-2 (задача fc2ba512): перепроверка дефекта 8f521cac — «Подобрать ещё раз».
 // Сценарий: фича в режиме маршрута, модель не отвечает.

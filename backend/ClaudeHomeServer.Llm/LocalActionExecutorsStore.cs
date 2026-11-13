@@ -290,16 +290,27 @@ public sealed class LocalActionExecutorsStore
                 }
 
                 // Строка списка тоже правится руками: «"executors":[null]» даёт элемент null
-                // (инициализатор на элемент не действует), «{"engine":""}» — пустое имя. Их
-                // пропускаем ЗДЕСЬ, как чужое имя: до TryGet такой элемент доходит как
-                // исключение на e.Engine, и падает тогда весь вызывающий — GET /api/usage
-                // (DescribeExecutors) и каждый тик ночи (LocalExecutorsFor внутри try прохода,
-                // дата при этом не закрывается).
+                // (инициализатор на элемент не действует), «{"engine":""}» — пустое имя, одна и
+                // та же строка дважды — повтор имени движка (copy-paste). Их пропускаем ЗДЕСЬ,
+                // как чужое имя: до TryGet битый элемент доходит как исключение на e.Engine, и
+                // падает тогда весь вызывающий — GET /api/usage (DescribeExecutors) и каждый
+                // тик ночи (LocalExecutorsFor внутри try прохода, дата при этом не
+                // закрывается). Повтор же не роняет ничего, но удваивает: две строки одного
+                // движка — два кандидата в LocalExecutorsFor и до 2× его потолка слотов на одном
+                // физическом движке. Оставляем ПЕРВУЮ строку — порядок списка есть приоритет.
                 var kept = new List<LocalActionExecutorConfig>(cfg.Executors.Count);
+                // Имя опознаётся тем же правилом, что у Validate при записи (:122–135): Trim +
+                // без учёта регистра — иначе чтение приняло бы то, что запись отвергла.
+                var seenEngines = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var hadBrokenElement = false;
                 foreach (var e in cfg.Executors)
                 {
                     if (e is null || string.IsNullOrWhiteSpace(e.Engine))
+                    {
+                        hadBrokenElement = true;
+                        continue;
+                    }
+                    if (!seenEngines.Add(e.Engine.Trim()))
                     {
                         hadBrokenElement = true;
                         continue;
@@ -323,8 +334,8 @@ public sealed class LocalActionExecutorsStore
             // контейнера, warning на строку был бы шумом (тот же порядок, что у пропускаемых
             // имён движков — их список тоже называется разом).
             if (broken is not null)
-                _log?.LogWarning("{Path}: битая запись исполнителей у «{Actions}» (пустой список "
-                                 + "или строка без имени движка), игнорирую",
+                _log?.LogWarning("{Path}: битая запись исполнителей у «{Actions}» (пустой список, "
+                                 + "строка без имени движка или повтор имени), игнорирую",
                     _storePath, string.Join(", ", broken));
             _configs = clean;
         }

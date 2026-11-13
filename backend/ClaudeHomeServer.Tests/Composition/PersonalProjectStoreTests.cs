@@ -254,7 +254,10 @@ public class PersonalProjectStoreTests : IDisposable
         var regular = JsonSerializer.Serialize(new Project { Name = "a" });
         var personal = JsonSerializer.Serialize(new Project { Name = "a", Kind = ProjectKind.Personal });
 
-        regular.Should().NotContain("\"Kind\"");
-        personal.Should().Contain("\"Kind\":1");
+        using var regularDoc = JsonDocument.Parse(regular);
+        using var personalDoc = JsonDocument.Parse(personal);
+
+        regularDoc.RootElement.TryGetProperty("Kind", out _).Should().BeFalse("Regular на верхнем уровне не пишется; Kind внутри Icon — другое поле");
+        personalDoc.RootElement.GetProperty("Kind").GetInt32().Should().Be(1);
     }
 }

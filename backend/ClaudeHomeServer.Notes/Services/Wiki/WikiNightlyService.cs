@@ -150,7 +150,8 @@ public sealed class WikiNightlyService : BackgroundService
     /// <summary>Путь без названного исполнителя (пустой список стора — прежний маршрут места):
     /// в состоянии отказов (W5) он занимает этот ключ (пустая строка). «Исполнителей» там ровно
     /// один, поэтому счёт по нему совпадает с прежним общим рядом прохода (2e13d45c), а его
-    /// выбывание даёт тот же итог error.</summary>
+    /// выбывание даёт тот же итог error. В счётчиках итога (W6a) этот ключ не появляется: имени
+    /// движка у пути нет (J-W2), Executors остаётся пустым.</summary>
     private const string RouteKey = "";
 
     /// <summary>Состояние отказов «модель недоступна» по исполнителям прохода (W5): ряд
@@ -225,8 +226,11 @@ public sealed class WikiNightlyService : BackgroundService
     /// операции судьи; судья применяет пакет целиком, поэтому в Applied он не переходит.
     /// Stage2Refused / FirstStage2Refusal (хвост ревью R-J-W0) — сколько раз ступень 2 отказала
     /// серому чату и причина первой из них: без неё нелокальный маршрут места молча оставлял
-    /// чаты серыми весь проход. В файле итога поля аддитивны: старый итог (без поля)
-    /// читается нулями, старый Manual — false.</summary>
+    /// чаты серыми весь проход. Executors (W6a) — счётчики по названным исполнителям прохода в
+    /// порядке их списка стора; пустой список — путь без названных исполнителей (имени движка
+    /// там нет, J-W2). В файле итога поля аддитивны: старый итог (без поля)
+    /// читается нулями, старый Manual — false, Executors — null: «не измерено», а не «ни одного
+    /// исполнителя не было» (читать его пустым нельзя — это разные вещи).</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
         int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0,
@@ -234,7 +238,17 @@ public sealed class WikiNightlyService : BackgroundService
         int Dropped = 0, string? FirstDropReason = null,
         int JudgeCalls = 0, decimal JudgeCostUsd = 0m, int JudgeApplied = 0, int JudgeRejected = 0,
         int JudgeDeferred = 0, int CodeRejected = 0,
-        int Stage2Refused = 0, string? FirstStage2Refusal = null);
+        int Stage2Refused = 0, string? FirstStage2Refusal = null,
+        IReadOnlyList<NightExecutorStat>? Executors = null);
+
+    /// <summary>Счётчики одного названного исполнителя прохода (W6a): что он сделал в этой ночи.
+    /// Engine — имя движка из списка стора (тот же ключ, что в состоянии отказов W5);
+    /// Analyzed/Rejected — его разборы и из них отказанные; InputTokens — его понесённый вход
+    /// (часть той же суммы NightResult.InputTokens: вход ступени 2 к движку не относится — он
+    /// не на названном движке шёл). WithdrawnAt — время, на котором исполнитель выбыл до конца
+    /// прохода (три отказа «модели нет» подряд, W5); null — дожил до конца.</summary>
+    public sealed record NightExecutorStat(
+        string Engine, int Analyzed, int Rejected, long InputTokens, DateTimeOffset? WithdrawnAt);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -447,6 +461,15 @@ public sealed class WikiNightlyService : BackgroundService
         args.Add(r.JudgeCalls);
         args.Add(CostText(r.JudgeCostUsd));
         args.Add(r.Manual);
+        // Исполнители (W6a): по движку «анализировано/отказано», при выбывании — время. Части нет
+        // вовсе при пути без названных исполнителей. Причин по исполнителю здесь нет: причина
+        // отказа — только ReasonMarker выше (полная — в файле итога и построчных записях).
+        var execs = ExecutorsText(r.Executors);
+        if (execs is not null)
+        {
+            template.Append("; исполнители {Executors}");
+            args.Add(execs);
+        }
 
         var line = template.ToString();
         object?[] values = [.. args];
@@ -480,6 +503,23 @@ public sealed class WikiNightlyService : BackgroundService
         text = text.TrimEnd(' ', ':', '«', '»', '"', '\'', '(', ')');
         if (text.Length > MaxReasonMarkerChars) text = text[..MaxReasonMarkerChars];
         return text.Length == 0 ? "полная причина — в файле итога" : text;
+    }
+
+    /// <summary>Часть «исполнители …» строки итога (W6a): по движку «{имя} {анализировано}/
+    /// {отказано}», при выбывании — «выбыл HH:mm» (время прохода, wall-clock того же журнала).
+    /// Только имена из списка исполнителей и числа: текста знаний и причин по исполнителю здесь
+    /// нет. Пустой список (путь без названных исполнителей) — части нет вовсе.</summary>
+    private static string? ExecutorsText(IReadOnlyList<NightExecutorStat>? executors)
+    {
+        if (executors is not { Count: > 0 }) return null;
+        var parts = new List<string>(executors.Count);
+        foreach (var e in executors)
+        {
+            var s = $"{e.Engine} {e.Analyzed}/{e.Rejected}";
+            if (e.WithdrawnAt is not null) s += $" выбыл {e.WithdrawnAt.Value:HH:mm}";
+            parts.Add(s);
+        }
+        return string.Join("; ", parts);
     }
 
     /// <summary>Стоимость судьи для строки журнала: инвариантный формат, разделитель —
@@ -705,6 +745,11 @@ public sealed class WikiNightlyService : BackgroundService
         // Ряд отказов «модель недоступна» по исполнителям (W5, см. ExecutorDownState): ряд свой
         // у каждого исполнителя; другой исход того же исполнителя обнуляет его ряд.
         var down = new ExecutorDownState();
+        // Список исполнителей места и счётчики по ним (W6a): список читается здесь и один раз —
+        // он же порядок Executors и тот же, что видит драйвер. Путь без названных исполнителей
+        // (engine=null) счётчиков не заполняет вовсе — Executors пуст.
+        IReadOnlyList<LocalEngineExecutor> executors = [];
+        var perEngine = new Dictionary<string, (int Analyzed, int Rejected, long InputTokens)>(StringComparer.Ordinal);
         var dropped = 0;
         string? firstDropReason = null;
         // Отказы ступени 2 (хвост ревью R-J-W0): раньше их не было ни в журнале, ни в итоге.
@@ -833,6 +878,15 @@ public sealed class WikiNightlyService : BackgroundService
                 // отказанный план понесённый расход не отменяет (тот же смысл, что у ChatResult).
                 // Чат, упавший исключением выше, до analyzed++ не доходит: его токенов нет.
                 inputTokens += r.InputTokens;
+                // Счётчики по исполнителю (W6a): тот же учёт, что по ночи, только по своему
+                // движку; путь без названного исполнителя (engine=null) в них не входит.
+                if (engine is not null)
+                {
+                    var st = perEngine.GetValueOrDefault(engine);
+                    perEngine[engine] = (st.Analyzed + 1,
+                        st.Rejected + (r.Outcome == WikiChatIngestService.OutcomeRejected ? 1 : 0),
+                        st.InputTokens + r.InputTokens);
+                }
                 dropped += r.Dropped;
                 firstDropReason ??= r.FirstDropReason;
                 // Отказанные разборы (WN-2): считаются и называются в журнале — без них ночь из
@@ -901,7 +955,12 @@ public sealed class WikiNightlyService : BackgroundService
             // Исполнители места — список стора админа через шов (уже урезанный до maxTotal,
             // см. CheapTextRunner.LocalExecutorsFor). Он читается ДО подготовки чата: тот же
             // список смотрит CheckStop, когда решает «есть ли живой исполнитель» (W5, п.4).
-            var executors = _llm.LocalExecutorsFor(LocalActionCatalog.WikiNightly);
+            // Здесь список читается один раз на проход: на нём держатся порядок и счётчики итога
+            // (W6a) — две разные картины в одном итоге были бы, если бы порядок брали из другого
+            // чтения. CheckStop перечитывает стора сам перед каждой выдачей (свежий PUT посреди
+            // ночи виден следующему чату) — это решение «идти дальше или нет», к итогу оно не
+            // относится.
+            executors = _llm.LocalExecutorsFor(LocalActionCatalog.WikiNightly);
 
             // ── драйвер прохода (W4a2) ────────────────────────────────────────────
             // Пустой список — прежний последовательный проход с engine=null: ночь не параллельна,
@@ -977,7 +1036,23 @@ public sealed class WikiNightlyService : BackgroundService
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
             overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual, dropped, firstDropReason,
             judgeCalls, judgeCost, judgeApplied, judgeRejected, judgeDeferred, codeRejected,
-            stage2Refused, firstStage2Refusal);
+            stage2Refused, firstStage2Refusal, ExecutorStats());
+
+        // Счётчики итога по исполнителям (W6a): порядок — как список стора. Движок, которому ни
+        // одного чата не досталось (не был готов, был занят), в списке есть с нулями: владельцу
+        // видно, что ночь на нём не шла. Путь без названных исполнителей — пустой список.
+        List<NightExecutorStat> ExecutorStats()
+        {
+            if (executors.Count == 0) return [];
+            var list = new List<NightExecutorStat>(executors.Count);
+            foreach (var e in executors)
+            {
+                var st = perEngine.GetValueOrDefault(e.Engine);
+                list.Add(new NightExecutorStat(e.Engine, st.Analyzed, st.Rejected, st.InputTokens,
+                    down.Withdrawn.TryGetValue(e.Engine, out var at) ? at : null));
+            }
+            return list;
+        }
     }
 
     // ── координатор ночи (W4a2, разрез «ночь вики на нескольких локальных исполнителях») ──────
@@ -1187,6 +1262,18 @@ public sealed class WikiNightlyService : BackgroundService
     private static string EngineName(string? engine) =>
         string.IsNullOrEmpty(engine) ? "маршрут места" : engine;
 
+    /// <summary>Подпись движка для текста владельцу (W6a): Title из списка исполнителей места
+    /// (LocalEngineExecutor.Title — то же имя, что в «Поставщиках моделей»); списка или такого
+    /// движка в нём нет — техническое имя (назвать надо чем-то). Список читается в момент
+    /// доставки: настройки могли измениться посреди ночи, и текст говорит то, что владелец видит
+    /// сейчас, а не то, что было в начале прохода.</summary>
+    private string EngineTitle(string engine)
+    {
+        foreach (var e in _llm.LocalExecutorsFor(LocalActionCatalog.WikiNightly))
+            if (e.Engine == engine) return e.Title;
+        return engine;
+    }
+
     // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось
     // (window_closed), модель недоступна (error — облако молча не подставляется), не осталось
     // живого исполнителя (error, W5 п.4: все выбыли — дату не закрывает, следующий тик пробует
@@ -1305,9 +1392,11 @@ public sealed class WikiNightlyService : BackgroundService
     /// причина необычного исхода, затем по одной сводной строке за ночь («ИИ заменил N ваших
     /// формулировок», «ИИ отметил противоречие на N страницах», «Во «Входящих» N пакетов…»,
     /// «судья недоступен — ждут решения: N», «отклонено кодом: N»; нулевая строка не пишется,
-    /// строки на каждую замену нет) и путь к «Журналу». Второго уведомления нет.</summary>
+    /// строки на каждую замену нет), по одному предложению о каждом выбывшем исполнителе (W6a)
+    /// и путь к «Журналу». Второго уведомления нет.</summary>
     internal static string NotificationBody(string? reason, int overrodeHuman, int disputedPages,
-        int toInbox, int judgeDeferred, int codeRejected)
+        int toInbox, int judgeDeferred, int codeRejected,
+        IReadOnlyList<NightExecutorStat>? executors = null, Func<string, string>? engineTitle = null)
     {
         var parts = new List<string>();
         if (reason is not null) parts.Add(reason);
@@ -1328,8 +1417,40 @@ public sealed class WikiNightlyService : BackgroundService
         // закрыта не судьёй.
         if (codeRejected > 0)
             parts.Add($"отклонено кодом: {codeRejected}.");
+        // W6a: часть ночи могла делаться не одной моделью — владельцу видно, какая выбыла и на
+        // какой разбор дошёл до конца. Одно предложение на каждого выбывшего.
+        foreach (var s in ExecutorSentences(executors, engineTitle)) parts.Add(s);
         parts.Add("Подробности — во вкладке «Вики» → «Журнал».");
         return string.Join(' ', parts);
+    }
+
+    /// <summary>По одному предложению о каждом выбывшем исполнителе (W6a): «Модель {Title}
+    /// выбыла в HH:mm, разбор продолжила {Title}.» Имена — подписи движков из настроек места
+    /// (engineTitle даёт LocalEngineExecutor.Title, то же, что владелец видит в «Поставщиках
+    /// моделей»); технической ключ в тексте владельцу не звучит. Продолживших больше одного —
+    /// «разбор продолжили …, …»; живых не осталось — «разбор не продолжен». Выбывших нет —
+    /// предложений нет.</summary>
+    private static List<string> ExecutorSentences(IReadOnlyList<NightExecutorStat>? executors,
+        Func<string, string>? engineTitle)
+    {
+        var result = new List<string>();
+        if (executors is not { Count: > 0 }) return result;
+        string Name(string engine) => engineTitle is null ? engine : engineTitle(engine);
+        foreach (var e in executors)
+        {
+            if (e.WithdrawnAt is null) continue;
+            var others = new List<string>();
+            foreach (var o in executors)
+                if (o.WithdrawnAt is null) others.Add(Name(o.Engine));
+            var cont = others.Count switch
+            {
+                0 => "разбор не продолжен",
+                1 => $"разбор продолжила {others[0]}",
+                _ => $"разбор продолжили {string.Join(", ", others)}",
+            };
+            result.Add($"Модель {Name(e.Engine)} выбыла в {e.WithdrawnAt.Value:HH:mm}, {cont}.");
+        }
+        return result;
     }
 
     // Русское число: 1 — one, 2–4 — few, остальное (5–20, 0) — many; 11–14 всегда many.
@@ -1370,7 +1491,7 @@ public sealed class WikiNightlyService : BackgroundService
                 Title = $"Ночной разбор: применено {result.Applied}; судья принял {result.JudgeApplied}, "
                     + $"отклонил {result.JudgeRejected}; ждут {result.JudgeDeferred}; {NoticeCostText(result.JudgeCostUsd)}",
                 Body = NotificationBody(reason, result.OverrodeHuman, result.DisputedPages,
-                    result.ToInbox, result.JudgeDeferred, result.CodeRejected),
+                    result.ToInbox, result.JudgeDeferred, result.CodeRejected, result.Executors, EngineTitle),
                 // Url открывает вкладку «Вики» на её подкладке по умолчанию («Страницы»): deep-link на
                 // подвкладку «Журнал» во фронте не предусмотрен (WikiTab держит подвкладку локально),
                 // поэтому текст называет путь, а не обещает переход.

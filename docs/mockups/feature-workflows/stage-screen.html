@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light" data-w="desk" data-v="a" data-st="full" data-tab="rev">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · Процессы фичи · экран этапа (D1c, D1d) — на согласование</title>
+<!--
+  Макет к записке feature-workflows-proposal.md, §4. Код продукта не правится.
+  Привязка: featureId a149e308-fc09-4ad1-9bdd-e72b54e6360d, задача c1a597af (role=design). Пользуются шаги D1c (артефакты, вход и транскрипт)
+  и D1d (метрики, ревью и вопросы человеку).
+  Данные (разрез 12.11, D1): артефакты — коммиты с трейлером CCS-Task + linkedFiles/resultMarkdown; вход — StageSnapshot, постановка,
+  history.json чата исполнителя; метрики — SpendRecord по TaskId, интервалы FeatureStageIntervals, ожидание человека
+  (раздельные метрики «исполнитель/ревью/человек» — отдельный мини-разрез D1, в макете — целевая форма); ревью — Verification и задачи review с ReviewOf.
+  Варианты: A — вкладки (один блок на экране, сводка сверху); B — панель 2×2 (все четыре блока сразу).
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, имена — C.* / SHADOW.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--…). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF; --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E; --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-progress-track:#D8CFBE; --c-dashed:#D0C6B4;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196; --c-plan-border:#D6CFEF;
+  --c-diff-add-bg:#E8F5E9; --c-diff-add-text:#1B5E20; --c-diff-rem-bg:#FFEBEE; --c-diff-rem-text:#B71C1C;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-modal:0 12px 40px rgba(40,30,20,.22);
+  /* FS */ --fs-xxs:10px; --fs-xs:11px; --fs-sm:12px; --fs-base:13px; --fs-md:14px; --fs-lg:16px; --fs-xl:18px; --fs-h2:22px;
+  /* SP */ --sp-xxs:2px; --sp-xs:4px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px; --sp-xl:24px; --sp-xxl:32px;
+  /* R  */ --r-sm:6px; --r-md:8px; --r-lg:10px; --r-xl:12px; --r-max:999px;
+  --font-sans:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-serif:'PT Serif',Georgia,serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+}
+:root[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25; --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072; --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-progress-track:#5C544A; --c-dashed:#4A443B;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6; --c-plan-border:#45406A;
+  --c-diff-add-bg:#1E2E1E; --c-diff-add-text:#8FCB79; --c-diff-rem-bg:#33201E; --c-diff-rem-text:#EE8A72;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-modal:0 16px 48px rgba(0,0,0,.6);
+}
+/* ===== дальше — только переменные ===== */
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+body { margin:0; background:var(--c-bg-main); color:var(--c-text-primary); font:var(--fs-base)/1.45 var(--font-sans); }
+button, input, textarea, select { font:inherit; color:inherit; }
+button { cursor:pointer; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:var(--font-mono); }
+.serif { font-family:var(--font-serif); }
+.muted { color:var(--c-text-muted); } .sec { color:var(--c-text-secondary); }
+.row { display:flex; align-items:center; gap:var(--sp-sm); min-width:0; } .wrap { flex-wrap:wrap; }
+.col { display:flex; flex-direction:column; gap:var(--sp-sm); min-width:0; }
+.grow { flex:1 1 auto; min-width:0; } .ell { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sp { flex:1 1 auto; }
+
+/* --- пульт прототипа (не продукт) --- */
+.ctl { position:sticky; top:0; z-index:40; display:flex; flex-wrap:wrap; gap:var(--sp-sm) var(--sp-md); align-items:center;
+  padding:var(--sp-sm) var(--sp-lg); background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.ctl h1 { font:600 var(--fs-md)/1.2 var(--font-serif); margin:0 var(--sp-sm) 0 0; color:var(--c-text-heading); }
+.ctl .lb { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.pseg { display:inline-flex; flex-wrap:wrap; gap:var(--sp-xxs); align-items:center; }
+.pseg button { border:1px solid var(--c-border); background:var(--c-bg-card); padding:0 var(--sp-md); border-radius:var(--r-lg); font-size:var(--fs-sm); color:var(--c-text-secondary); min-height:32px; }
+.pseg button[aria-pressed="true"] { background:var(--c-text-heading); border-color:var(--c-text-heading); color:var(--c-bg-main); font-weight:600; }
+.stage { padding:var(--sp-xl); }
+/* подпись карточки: какой шаг закрывает, статус согласования */
+.cap { display:flex; flex-wrap:wrap; gap:var(--sp-xs) var(--sp-sm); align-items:center; font-size:var(--fs-xs); color:var(--c-text-muted); margin:0 auto var(--sp-sm); max-width:1240px; }
+.cap b { color:var(--c-text-secondary); }
+.agree { font:600 var(--fs-xxs)/1.6 var(--font-sans); text-transform:uppercase; letter-spacing:.06em; padding:0 var(--sp-xs); border-radius:var(--r-sm); background:var(--c-plan-light); color:var(--c-plan-text); }
+.why { max-width:1240px; margin:0 auto var(--sp-md); font-size:var(--fs-sm); color:var(--c-text-secondary); }
+
+/* --- раскладка: десктоп 1240 — острова в ряд; мобила — панели становятся телефонами 360×740 --- */
+.app { display:flex; gap:var(--sp-sm); width:min(1240px,100%); margin:0 auto; height:800px; position:relative; }
+.pane { min-width:0; min-height:0; display:flex; flex-direction:column; }
+.m-only { display:none !important; }
+[data-w="mob"] .d-only { display:none !important; }
+[data-w="mob"] .m-only { display:revert !important; }
+[data-w="mob"] .m-only.flex { display:flex !important; }
+[data-w="mob"] .app { height:auto; width:auto; max-width:100%; flex-wrap:wrap; gap:var(--sp-xxl) var(--sp-xl); justify-content:center; align-items:flex-start; }
+[data-w="mob"] .app > .pane { width:360px !important; height:740px; flex:none !important; border:1px solid var(--c-border); border-radius:var(--r-xl); overflow:hidden; position:relative; background:var(--c-bg-main); }
+[data-w="mob"] .app > .pane[data-mcap]::before { content:attr(data-mcap); position:absolute; top:0; left:0; right:0; z-index:30; font:600 var(--fs-xxs)/18px var(--font-mono); color:var(--c-on-accent); background:var(--c-info); padding:0 var(--sp-sm); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+[data-w="mob"] .app > .pane[data-mcap] { padding-top:18px; }
+[data-w="mob"] .pane .island { border-radius:0; box-shadow:none; }
+@media (max-width:480px) { .stage { padding:var(--sp-sm) 0; } [data-w="mob"] .app > .pane { border-radius:0; border-left:0; border-right:0; } }
+
+/* ===== Компоненты продукта (имя — как в коде) ===== */
+/* Island + IslandHeader */
+.island { background:var(--c-bg-panel); border-radius:var(--r-xl); box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; min-width:0; min-height:0; flex:1; }
+.ih { display:flex; align-items:center; gap:var(--sp-sm); min-height:44px; padding:0 var(--sp-md) 0 var(--sp-lg); border-bottom:1px solid var(--c-border-light); flex:none; }
+.ih .t { font:600 var(--fs-md)/1.2 var(--font-sans); color:var(--c-text-heading); }
+.body { flex:1; min-height:0; overflow:auto; padding:var(--sp-lg); background:var(--c-bg-card); }
+[data-w="mob"] .body { padding:var(--sp-md); }
+/* Toolbar (TB.heightDesktop 52 / Mobile 56) */
+.tb { display:flex; align-items:center; gap:var(--sp-sm); min-height:52px; padding:var(--sp-sm) var(--sp-lg); background:var(--c-bg-main); border-bottom:1px solid var(--c-border); flex:none; min-width:0; }
+[data-w="mob"] .tb { min-height:56px; padding:var(--sp-sm) 14px; }
+.tname { font:600 var(--fs-lg)/1.25 var(--font-serif); color:var(--c-text-heading); }
+/* IconButton / ToolbarIconButton 32 (мобила 40) */
+.ib { width:32px; height:32px; flex:none; border:0; background:none; border-radius:var(--r-md); color:var(--c-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:var(--fs-md); }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+[data-w="mob"] .ib { width:40px; height:40px; }
+/* BackButton */
+.back { display:inline-flex; align-items:center; gap:var(--sp-xxs); min-height:32px; border:0; background:none; border-radius:var(--r-md); padding:0 var(--sp-xs) 0 0; color:var(--c-text-secondary); font-weight:600; flex:none; }
+.back:hover { background:var(--c-bg-selected); }
+[data-w="mob"] .back { min-height:40px; }
+/* Button: xs h24 · sm min-h 32 · md min-h 40; вес 600 */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:var(--sp-xs); font-weight:600; white-space:nowrap; flex:none; border:1px solid transparent; background:transparent; }
+.btn.xs { height:24px; padding:0 9px; font-size:var(--fs-sm); border-radius:var(--r-md); }
+.btn.sm { min-height:32px; padding:6px 13px; font-size:var(--fs-base); border-radius:var(--r-lg); }
+.btn.md { min-height:40px; padding:10px var(--sp-lg); font-size:var(--fs-md); border-radius:var(--r-xl); }
+[data-w="mob"] .btn.sm, [data-w="mob"] .btn.xs { min-height:40px; height:auto; }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.secondary { background:var(--c-bg-white); color:var(--c-text-primary); border-color:var(--c-border); }
+.btn.ghost { color:var(--c-text-secondary); border-color:var(--c-border); }
+.btn.ghostAccent { color:var(--c-accent); }
+.btn.danger { background:var(--c-danger); color:var(--c-on-accent); }
+.btn.dashed { border:1px dashed var(--c-dashed); color:var(--c-text-secondary); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity:.45; cursor:not-allowed; }
+.btn.primary:disabled { opacity:1; background:var(--c-accent-muted); color:var(--c-text-muted); }
+/* Badge / StatusTag (FS.xs 600, R.sm) */
+.tag { display:inline-flex; align-items:center; gap:var(--sp-xxs); font:600 var(--fs-xs)/16px var(--font-sans); padding:2px var(--sp-xs); border-radius:var(--r-sm); background:var(--c-bg-inset); color:var(--c-text-secondary); white-space:nowrap; flex:none; }
+.tag.info { background:var(--c-info-bg); color:var(--c-info); } .tag.ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.tag.w { background:var(--c-warning-bg); color:var(--c-warning-text); } .tag.s { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.tag.plan { background:var(--c-plan-light); color:var(--c-plan-text); } .tag.acc { background:var(--c-accent-light); color:var(--c-accent); }
+/* Chip (soft) + ChipX */
+.chip { display:inline-flex; align-items:center; gap:var(--sp-xs); min-height:28px; padding:0 var(--sp-sm); border-radius:var(--r-max); border:1px solid var(--c-border); background:var(--c-bg-white); font-size:var(--fs-sm); color:var(--c-text-primary); white-space:nowrap; }
+.chip .x { border:0; background:none; padding:0; width:18px; height:18px; border-radius:var(--r-max); color:var(--c-text-muted); line-height:18px; }
+.chip.off { color:var(--c-text-muted); text-decoration:line-through; border-style:dashed; background:transparent; }
+[data-w="mob"] .chip { min-height:36px; }
+/* Field: TextField / TextArea / Select + FieldLabel */
+.fl { font:600 var(--fs-xs)/1.3 var(--font-sans); color:var(--c-text-secondary); text-transform:uppercase; letter-spacing:.04em; margin-bottom:var(--sp-xs); display:flex; gap:var(--sp-xs); align-items:baseline; }
+.fl .h { text-transform:none; letter-spacing:0; font-weight:400; color:var(--c-text-muted); }
+.fld { width:100%; min-height:36px; padding:var(--sp-sm) var(--sp-md); border:1px solid var(--c-border); border-radius:var(--r-lg); background:var(--c-bg-white); font-size:var(--fs-base); color:var(--c-text-primary); }
+textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
+.fld.inh { color:var(--c-text-muted); background:var(--c-bg-inset); border-style:dashed; }
+.fld.err { border-color:var(--c-danger); box-shadow:0 0 0 3px var(--c-danger-bg); }
+.fld[disabled] { opacity:.7; cursor:not-allowed; }
+.ferr { font-size:var(--fs-xs); color:var(--c-danger-text); margin-top:var(--sp-xs); }
+.fhint { font-size:var(--fs-xs); color:var(--c-text-muted); margin-top:var(--sp-xs); }
+[data-w="mob"] .fld { min-height:44px; font-size:var(--fs-lg); }
+/* SegmentedControl */
+.seg { display:inline-flex; padding:2px; gap:2px; border-radius:var(--r-lg); background:var(--c-bg-inset); flex:none; }
+.seg button { border:0; background:none; min-height:28px; padding:0 var(--sp-md); border-radius:var(--r-md); font-size:var(--fs-sm); color:var(--c-text-secondary); white-space:nowrap; }
+.seg button[aria-pressed="true"] { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; box-shadow:var(--shadow-card); }
+.seg button:disabled { opacity:.45; cursor:not-allowed; }
+[data-w="mob"] .seg button { min-height:36px; }
+/* Toggle */
+.tgl { width:34px; height:20px; border-radius:var(--r-max); background:var(--c-progress-track); position:relative; flex:none; border:0; padding:0; }
+.tgl::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:var(--r-max); background:var(--c-bg-white); transition:left .15s; }
+.tgl[aria-checked="true"] { background:var(--c-accent); } .tgl[aria-checked="true"]::after { left:16px; }
+.tgl:disabled { opacity:.45; }
+/* Checkbox */
+.cb { display:inline-flex; align-items:center; gap:var(--sp-sm); font-size:var(--fs-base); min-height:28px; }
+.cb i { width:16px; height:16px; border-radius:4px; border:1.5px solid var(--c-border); background:var(--c-bg-white); flex:none; display:inline-flex; align-items:center; justify-content:center; font:700 var(--fs-xxs)/1 var(--font-sans); font-style:normal; color:var(--c-on-accent); }
+.cb i.on { background:var(--c-accent); border-color:var(--c-accent); }
+.cb.dis { color:var(--c-text-muted); } .cb.dis i.on { background:var(--c-text-muted); border-color:var(--c-text-muted); }
+[data-w="mob"] .cb { min-height:40px; }
+/* Notice (warning / danger / info) */
+.notice { display:flex; gap:var(--sp-sm); align-items:flex-start; padding:var(--sp-sm) var(--sp-md); border-radius:var(--r-lg); border:1px solid var(--c-warning); background:var(--c-warning-bg); color:var(--c-warning-text); font-size:var(--fs-sm); }
+.notice.danger { border-color:var(--c-danger-border); background:var(--c-danger-bg); color:var(--c-danger-text); }
+.notice.info { border-color:var(--c-info); background:var(--c-info-bg); color:var(--c-text-primary); }
+.notice .ic { flex:none; font-weight:700; }
+.notice .act { display:flex; gap:var(--sp-xs); flex-wrap:wrap; margin-top:var(--sp-xs); }
+/* EmptyState */
+.empty { display:flex; flex-direction:column; align-items:center; text-align:center; gap:var(--sp-sm); padding:var(--sp-xl) var(--sp-lg); color:var(--c-text-secondary); }
+.empty .em-ic { width:40px; height:40px; border-radius:var(--r-max); background:var(--c-bg-inset); color:var(--c-text-muted); display:flex; align-items:center; justify-content:center; font-size:var(--fs-lg); }
+.empty .em-t { font:600 var(--fs-md)/1.3 var(--font-sans); color:var(--c-text-heading); }
+.empty .em-x { font-size:var(--fs-sm); max-width:340px; }
+.empty.sm { padding:var(--sp-md); } .empty.sm .em-ic { width:28px; height:28px; font-size:var(--fs-sm); }
+/* Карточка-строка внутри острова */
+.card { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-md); }
+.sect { font:600 var(--fs-xxs)/1.4 var(--font-sans); text-transform:uppercase; letter-spacing:.07em; color:var(--c-text-muted); margin:var(--sp-lg) 0 var(--sp-sm); }
+.sect:first-child { margin-top:0; }
+.hr { height:1px; background:var(--c-border-light); margin:var(--sp-md) 0; }
+/* Menu / Tooltip (статично) */
+.menu { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:var(--r-lg); box-shadow:var(--shadow-island); padding:var(--sp-xs); min-width:220px; }
+.mi { display:flex; gap:var(--sp-sm); align-items:center; padding:6px var(--sp-sm); border-radius:var(--r-md); font-size:var(--fs-base); }
+.mi:hover, .mi.on { background:var(--c-bg-selected); }
+.tip { position:absolute; z-index:12; background:var(--c-text-heading); color:var(--c-bg-main); font-size:var(--fs-xs); padding:var(--sp-xs) var(--sp-sm); border-radius:var(--r-md); max-width:240px; }
+/* Modal + ModalActions; на мобиле — шторка */
+.scrim { position:absolute; inset:0; background:var(--c-overlay); z-index:20; display:flex; align-items:center; justify-content:center; padding:var(--sp-lg); }
+.modal { background:var(--c-bg-card); border-radius:var(--r-xl); box-shadow:var(--shadow-modal); width:100%; max-height:100%; display:flex; flex-direction:column; overflow:hidden; }
+.modal .mh { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-md) var(--sp-lg); border-bottom:1px solid var(--c-border-light); font:600 var(--fs-lg)/1.3 var(--font-serif); color:var(--c-text-heading); }
+.modal .mb { padding:var(--sp-lg); overflow:auto; }
+.modal .ma { display:flex; justify-content:flex-end; gap:var(--sp-sm); padding:var(--sp-md) var(--sp-lg); border-top:1px solid var(--c-border-light); }
+[data-w="mob"] .scrim { align-items:flex-end; padding:0; }
+[data-w="mob"] .modal { border-radius:var(--r-xl) var(--r-xl) 0 0; max-width:none !important; max-height:88%; }
+[data-w="mob"] .modal .ma { flex-direction:column-reverse; } [data-w="mob"] .modal .ma .btn { width:100%; }
+/* ProgressBar */
+.pb { height:6px; border-radius:var(--r-max); background:var(--c-progress-track); overflow:hidden; display:flex; }
+.pb i { display:block; height:100%; background:var(--c-accent); }
+/* Tabs (подчёркивание) */
+.tabs { display:flex; gap:var(--sp-lg); border-bottom:1px solid var(--c-border-light); overflow-x:auto; flex:none; }
+.tabs button { border:0; background:none; padding:var(--sp-sm) 0; min-height:36px; font-size:var(--fs-base); color:var(--c-text-secondary); border-bottom:2px solid transparent; white-space:nowrap; display:inline-flex; gap:var(--sp-xs); align-items:center; }
+.tabs button[aria-selected="true"] { color:var(--c-text-heading); font-weight:600; border-bottom-color:var(--c-accent); }
+[data-w="mob"] .tabs button { min-height:44px; }
+.cnt { font:600 var(--fs-xxs)/16px var(--font-sans); min-width:16px; padding:0 var(--sp-xs); border-radius:var(--r-max); background:var(--c-bg-inset); color:var(--c-text-secondary); text-align:center; }
+.cnt.s { background:var(--c-danger-bg); color:var(--c-danger-text); } .cnt.w { background:var(--c-warning-bg); color:var(--c-warning-text); }
+/* Аватар-кружок персоны (UserAvatar-подобный) */
+.av { width:22px; height:22px; border-radius:var(--r-max); background:var(--c-accent-light); color:var(--c-accent); font:700 var(--fs-xxs)/22px var(--font-sans); text-align:center; flex:none; }
+.av.p { background:var(--c-plan-light); color:var(--c-plan-text); } .av.i { background:var(--c-info-bg); color:var(--c-info); } .av.g { background:var(--c-success-bg); color:var(--c-success-text); }
+.av.lg { width:40px; height:40px; line-height:40px; font-size:var(--fs-md); }
+/* «унаследовано» — серая подпись со ссылкой на источник */
+.inh { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.inh a, a.lnk { color:var(--c-accent); text-decoration:none; } .inh a:hover, a.lnk:hover { text-decoration:underline; }
+</style>
+<script>
+// Пульт прототипа: кнопки .pseg[data-k] пишут значение в html[data-<k>]; элементы с data-show="k:v1|v2 k2:v" видны,
+// когда совпали все условия. Кликабельные элементы макета с data-go="k:v" переключают то же состояние.
+(function(){
+  const H = document.documentElement;
+  function sync(){
+    document.querySelectorAll('.pseg[data-k]').forEach(g=>{ const k=g.dataset.k; g.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', String(H.dataset[k]===b.dataset.v))); });
+    document.querySelectorAll('[data-show]').forEach(el=>{
+      const ok = el.dataset.show.trim().split(/\s+/).every(c=>{ const [k,v]=c.split(':'); const neg=k.startsWith('!'); const kk=neg?k.slice(1):k; const hit=v.split('|').includes(H.dataset[kk]); return neg?!hit:hit; });
+      el.hidden = !ok;
+    });
+  }
+  function set(k,v){ H.dataset[k]=v; sync(); }
+  document.addEventListener('click', e=>{
+    const b = e.target.closest('.pseg[data-k] button'); if (b) { set(b.closest('.pseg').dataset.k, b.dataset.v); return; }
+    const g = e.target.closest('[data-go]'); if (g) { e.preventDefault(); g.dataset.go.split(/\s+/).forEach(p=>{ const [k,v]=p.split(':'); set(k,v); }); }
+  });
+  document.addEventListener('DOMContentLoaded', sync);
+})();
+</script>
+
+<style>
+.p-stage { flex:1; }
+.sh { padding:var(--sp-md) var(--sp-xl); background:var(--c-bg-card); border-bottom:1px solid var(--c-border-light); flex:none; }
+[data-w="mob"] .sh { padding:var(--sp-md); }
+.stt { font:600 var(--fs-h2)/1.25 var(--font-serif); color:var(--c-text-heading); margin:0; }
+[data-w="mob"] .stt { font-size:var(--fs-xl); }
+.tsw { display:flex; gap:var(--sp-xs); overflow-x:auto; margin-top:var(--sp-sm); padding-bottom:2px; }
+.tsw .chip { cursor:pointer; } .tsw .chip.on { border-color:var(--c-accent); background:var(--c-accent-light); font-weight:600; }
+.strip { display:grid; grid-template-columns:repeat(5,1fr); gap:var(--sp-sm); margin-top:var(--sp-md); }
+[data-w="mob"] .strip { grid-template-columns:repeat(2,1fr); }
+[data-w="mob"] .strip .kpi:nth-child(2), [data-w="mob"] .strip .kpi:nth-child(3) { display:none; }
+.kpi { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-xs) var(--sp-md); }
+.kpi .kl { font-size:var(--fs-xs); color:var(--c-text-muted); } .kpi .kv { font:600 var(--fs-md)/1.4 var(--font-sans); color:var(--c-text-heading); }
+.sbody { flex:1; min-height:0; overflow:auto; background:var(--c-bg-card); padding:0 var(--sp-xl) var(--sp-xl); }
+[data-w="mob"] .sbody { padding:0 var(--sp-md) var(--sp-lg); }
+/* вкладки (A) / сетка (B) */
+.tabsbar { position:sticky; top:0; z-index:2; background:var(--c-bg-card); margin-bottom:var(--sp-md); }
+[data-v="b"] .tabsbar { display:none; }
+.blocks { display:block; }
+[data-v="b"] .blocks { display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-md); padding-top:var(--sp-md); }
+[data-w="mob"][data-v="b"] .blocks { grid-template-columns:1fr; }
+[data-v="a"] .blk { display:none; }
+[data-v="a"][data-tab="art"] .blk.art, [data-v="a"][data-tab="inp"] .blk.inp, [data-v="a"][data-tab="met"] .blk.met, [data-v="a"][data-tab="rev"] .blk.rev { display:block; }
+[data-v="b"] .blk { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:var(--r-xl); padding:var(--sp-md) var(--sp-lg); min-width:0; }
+.bh { display:none; align-items:center; gap:var(--sp-sm); margin-bottom:var(--sp-sm); }
+[data-v="b"] .bh { display:flex; }
+.bh .bt { font:600 var(--fs-md)/1.3 var(--font-sans); color:var(--c-text-heading); }
+/* мобила B: якоря по блокам */
+.anch { display:none; gap:var(--sp-xs); overflow-x:auto; position:sticky; top:0; z-index:2; background:var(--c-bg-card); padding:var(--sp-sm) 0; }
+[data-w="mob"][data-v="b"] .anch { display:flex; }
+/* артефакты */
+.art-grid { display:grid; grid-template-columns:240px 1fr; gap:var(--sp-md); }
+[data-v="b"] .art-grid, [data-w="mob"] .art-grid { grid-template-columns:1fr; }
+.art-grid > div { min-width:0; }
+.fi { display:flex; align-items:center; gap:var(--sp-sm); padding:6px var(--sp-sm); border-radius:var(--r-md); font-size:var(--fs-sm); cursor:pointer; }
+.fi.on { background:var(--c-bg-selected); } .fi .mono { font-size:var(--fs-xs); }
+[data-w="mob"] .fi { min-height:40px; }
+.diff { font:var(--fs-xs)/1.6 var(--font-mono); border:1px solid var(--c-border-light); border-radius:var(--r-lg); overflow:auto; background:var(--c-bg-white); }
+.diff .dl { padding:0 var(--sp-sm); white-space:pre; }
+.diff .add { background:var(--c-diff-add-bg); color:var(--c-diff-add-text); } .diff .rem { background:var(--c-diff-rem-bg); color:var(--c-diff-rem-text); }
+.diff .hh { background:var(--c-bg-inset); color:var(--c-text-muted); }
+.cm { display:flex; gap:var(--sp-sm); align-items:baseline; font-size:var(--fs-sm); padding:var(--sp-xxs) 0; }
+.cm .mono { font-size:var(--fs-xs); color:var(--c-text-muted); }
+/* вход */
+.ps { border:1px solid var(--c-border-light); border-radius:var(--r-lg); background:var(--c-bg-white); }
+.ps + .ps { margin-top:var(--sp-xs); }
+.ps .psh { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-sm) var(--sp-md); font-weight:600; color:var(--c-text-heading); }
+.ps .psb { padding:0 var(--sp-md) var(--sp-md); font:var(--fs-xs)/1.55 var(--font-mono); color:var(--c-text-primary); white-space:pre-wrap; }
+.ps.stage { border-color:var(--c-plan-border); } .ps.stage .psh { color:var(--c-plan-text); }
+table.t { width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
+.t th { text-align:left; font:600 var(--fs-xxs)/1.3 var(--font-sans); text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); padding:var(--sp-xs) var(--sp-sm); border-bottom:1px solid var(--c-border); }
+.t td { padding:var(--sp-xs) var(--sp-sm); border-bottom:1px solid var(--c-border-light); }
+.t td.n { text-align:right; font-variant-numeric:tabular-nums; } .t th.n { text-align:right; }
+.t tr.tot td { font-weight:600; color:var(--c-text-heading); border-bottom:0; }
+/* метрики: полоса времени */
+.tbar { display:flex; height:10px; border-radius:var(--r-max); overflow:hidden; background:var(--c-progress-track); margin:var(--sp-sm) 0 var(--sp-xs); }
+.tbar i { display:block; height:100%; } .tbar .e { background:var(--c-accent); } .tbar .r { background:var(--c-plan); } .tbar .h { background:var(--c-warning); }
+.lg { display:flex; flex-wrap:wrap; gap:var(--sp-xs) var(--sp-md); font-size:var(--fs-xs); color:var(--c-text-secondary); }
+.lg i { display:inline-block; width:8px; height:8px; border-radius:var(--r-sm); margin-right:var(--sp-xs); }
+.lg .e { background:var(--c-accent); } .lg .r { background:var(--c-plan); } .lg .h { background:var(--c-warning); }
+/* ревью */
+.rv { border:1px solid var(--c-border-light); border-radius:var(--r-lg); background:var(--c-bg-white); padding:var(--sp-sm) var(--sp-md); }
+.rv + .rv { margin-top:var(--sp-sm); }
+.bl { display:flex; gap:var(--sp-sm); align-items:flex-start; padding:var(--sp-xs) 0; font-size:var(--fs-sm); }
+.bl + .bl { border-top:1px solid var(--c-border-light); }
+.q { border:1px solid var(--c-warning); background:var(--c-warning-bg); border-radius:var(--r-lg); padding:var(--sp-sm) var(--sp-md); }
+.q .qt { color:var(--c-text-heading); font-weight:600; }
+.lane-t { font-size:var(--fs-xs); line-height:18px; padding:0 var(--sp-xs); border-radius:var(--r-sm); background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.parnote { display:flex; gap:var(--sp-sm); align-items:flex-start; margin-top:var(--sp-sm); padding:var(--sp-sm) var(--sp-md); border:1px dashed var(--c-border); border-radius:var(--r-lg); font-size:var(--fs-sm); color:var(--c-text-secondary); }
+.parnote .pi { color:var(--c-text-muted); }
+</style>
+</head>
+<body>
+<div class="ctl">
+  <h1>Экран этапа</h1>
+  <span class="lb">Тема</span><span class="pseg" data-k="theme"><button data-v="light">Светлая</button><button data-v="dark">Тёмная</button></span>
+  <span class="lb">Ширина</span><span class="pseg" data-k="w"><button data-v="desk">1240</button><button data-v="mob">360</button></span>
+  <span class="lb">Вариант</span><span class="pseg" data-k="v"><button data-v="a">A · вкладки</button><button data-v="b">B · панель 2×2</button></span>
+  <span class="lb">Вкладка (A)</span><span class="pseg" data-k="tab"><button data-v="rev">Ревью и вопросы</button><button data-v="art">Артефакты</button><button data-v="inp">Вход</button><button data-v="met">Метрики</button></span>
+  <span class="lb">Состояние</span><span class="pseg" data-k="st"><button data-v="full">Идёт, есть всё</button><button data-v="empty">Только начался</button><button data-v="legacy">Старая фича (approx)</button></span>
+</div>
+<div class="stage">
+  <div class="cap"><span class="agree">на согласование</span><b>D1c · D1d · Экран этапа</b>
+    <span data-show="v:a">· вариант A «Вкладки»: сверху сводка, ниже один из четырёх блоков; открывается на том, что ждёт человека</span>
+    <span data-show="v:b">· вариант B «Панель»: все четыре блока сразу, порядок по важности для человека</span></div>
+  <p class="why">Открывается кнопкой «Открыть этап» со страницы фичи, в центре — как страница фичи, с возвратом «‹ Фича». Этап «Шаги» состоит из нескольких задач — переключатель задач в шапке; в «Параллельном цикле» шаги идут двумя ветками (бэк ‖ фронт) — экран открыт на ветке «бэк», вторая видна строкой со ссылкой; у этапов из одной задачи (разрез, план, финал) переключателя нет.</p>
+  <div class="app">
+    <div class="pane p-stage" data-mcap="D1c/D1d · экран этапа (360)">
+      <div class="island">
+        <div class="tb"><button class="back">‹ Фича</button><span class="inh ell grow d-only">Процессы фичи: шаблоны и наследование</span><span class="sp m-only flex"></span><button class="btn xs ghost">Чат исполнителя</button></div>
+        <div class="sh">
+          <div class="row wrap"><span class="sect" style="margin:0">Этап · Шаги</span><span class="lane-t">бэк</span><span class="tag acc" data-show="!st:empty">доработка</span><span class="tag info" data-show="st:empty">в работе</span><span class="tag s" data-show="st:full">↺ 1 возврат</span></div>
+          <h2 class="stt">B3 · исполнение по этапу</h2>
+          <div class="row wrap" style="margin-top:var(--sp-xxs)"><span class="av i">Т</span><span class="sec">Тимур · Backend-разработчик</span><span class="inh" data-show="!st:legacy">· Sonnet 5.5 (своя ячейка этапа) · молчит 45 мин → только сообщить</span><span class="inh" data-show="st:legacy">· этап без слепка шаблона</span></div>
+          <div class="tsw"><span class="chip">B1 ✓</span><span class="chip">B2 ✓</span><span class="chip on">B3 ●</span></div>
+          <div class="parnote" data-show="!st:legacy"><span class="pi">⇉</span><span class="grow">Ветка «бэк» идёт параллельно с <a class="lnk" href="#">Шаги · фронт</a> (Полина, 1 из 2). Обе сходятся в «Ревью»: оно стартует, когда закончатся обе.</span></div>
+          <div class="strip">
+            <div class="kpi"><div class="kl">Всего</div><div class="kv" data-show="st:full">2 ч 30 мин</div><div class="kv" data-show="st:empty">12 мин</div><div class="kv" data-show="st:legacy">≈ 1 ч 40 мин</div></div>
+            <div class="kpi"><div class="kl">Исполнитель</div><div class="kv" data-show="st:full">1 ч 15 мин</div><div class="kv" data-show="st:empty">12 мин</div><div class="kv muted" data-show="st:legacy">—</div></div>
+            <div class="kpi"><div class="kl">Ревью</div><div class="kv" data-show="st:full">40 мин</div><div class="kv muted" data-show="!st:full">—</div></div>
+            <div class="kpi"><div class="kl">Ждало вас</div><div class="kv" data-show="st:full" style="color:var(--c-warning-text)">35 мин</div><div class="kv muted" data-show="!st:full">—</div></div>
+            <div class="kpi d-only"><div class="kl">Токены</div><div class="kv" data-show="st:full">1,3 М</div><div class="kv" data-show="st:empty">84 К</div><div class="kv muted" data-show="st:legacy">—</div></div>
+          </div>
+        </div>
+        <div class="sbody">
+          <div class="tabsbar"><div class="tabs">
+            <button data-go="tab:rev" data-show="!tab:rev">Ревью и вопросы <span class="cnt w" data-show="st:full">1</span></button><button aria-selected="true" data-show="tab:rev">Ревью и вопросы <span class="cnt w" data-show="st:full">1</span></button>
+            <button data-go="tab:art" data-show="!tab:art">Артефакты <span class="cnt" data-show="!st:empty">13</span></button><button aria-selected="true" data-show="tab:art">Артефакты <span class="cnt" data-show="!st:empty">13</span></button>
+            <button data-go="tab:inp" data-show="!tab:inp">Вход и транскрипт</button><button aria-selected="true" data-show="tab:inp">Вход и транскрипт</button>
+            <button data-go="tab:met" data-show="!tab:met">Метрики</button><button aria-selected="true" data-show="tab:met">Метрики</button>
+          </div></div>
+          <div class="anch"><a class="chip" href="#b-rev">Ревью · 1</a><a class="chip" href="#b-art">Артефакты</a><a class="chip" href="#b-met">Метрики</a><a class="chip" href="#b-inp">Вход</a></div>
+
+          <div class="blocks">
+            <!-- ===== Ревью и вопросы ===== -->
+            <section class="blk rev" id="b-rev">
+              <div class="bh"><span class="bt">Ревью и вопросы</span><span class="cnt w" data-show="st:full">1</span></div>
+              <div class="sect">Вопросы к вам</div>
+              <div data-show="st:full">
+                <div class="q"><div class="row"><span class="av g">Г</span><span class="qt grow">Глеб · 12.11 17:20</span><span class="tag w">ждёт 35 мин</span></div>
+                  <div style="margin:var(--sp-xs) 0 var(--sp-sm)">Финал в шаблоне сделан несъёмным, но в разрезе это открытый вопрос. Оставляем несъёмным или даём снять у мелких фич?</div>
+                  <textarea class="fld" style="min-height:56px" placeholder="Ваш ответ — уйдёт исполнителю и ревьюеру"></textarea>
+                  <div class="row" style="margin-top:var(--sp-xs)"><span class="sp"></span><button class="btn sm primary">Ответить</button></div></div>
+                <div class="rv" style="margin-top:var(--sp-xs)"><div class="row"><span class="tag ok">отвечено</span><span class="sec grow ell">Тимур: «Слепок этапа пишем и для rework?» — «Да, текущая версия»</span></div></div>
+              </div>
+              <div data-show="!st:full"><div class="empty sm"><div class="em-ic">✓</div><div class="em-t">Вопросов к вам нет</div><div class="em-x">Если исполнитель или ревьюер спросит — вопрос появится здесь и на странице фичи.</div></div></div>
+
+              <div class="sect">Ревью</div>
+              <div data-show="st:full">
+                <div class="rv"><div class="row wrap"><span class="tag s">возвращено</span><span class="sec">Глеб · раунд 1 · 12.11 16:40 · причина «контракт»</span></div>
+                  <div class="bl"><span class="tag s">блокер</span><span class="grow"><span class="mono">TaskExecutionService.cs:412</span> — <span class="mono">ClassifyStall</span> берёт порог из конфига, а не из <span class="mono">task.Stage</span>.</span></div>
+                  <div class="bl"><span class="tag s">блокер</span><span class="grow">Нет сторожа «правила в постановке байт в байт» при промпте этапа.</span></div>
+                  <div class="bl"><span class="tag">замечание</span><span class="grow">Имя <span class="mono">StallPolicy.StopAlert</span> расходится с разрезом.</span></div>
+                </div>
+                <div class="rv"><div class="row"><span class="tag">раунд 2</span><span class="sec grow">ждёт доработку Тимура</span><span class="inh">запустится сам</span></div></div>
+              </div>
+              <div data-show="st:empty"><div class="empty sm"><div class="em-ic">◇</div><div class="em-t">Ревью ещё не было</div><div class="em-x">Ревьюер подключится, когда исполнитель закроет задачу.</div></div></div>
+              <div data-show="st:legacy"><div class="rv"><div class="row"><span class="tag ok">принято</span><span class="sec grow">Глеб · 1 раунд</span></div><div class="fhint">Подробностей нет: ревью старой фичи не хранило блокеры.</div></div></div>
+            </section>
+
+            <!-- ===== Артефакты ===== -->
+            <section class="blk art" id="b-art">
+              <div class="bh"><span class="bt">Артефакты</span><span class="cnt" data-show="!st:empty">13</span></div>
+              <div data-show="st:empty"><div class="empty sm"><div class="em-ic">▤</div><div class="em-t">Артефактов пока нет</div><div class="em-x">Появятся с первым коммитом исполнителя (трейлер CCS-Task) или итогом задачи.</div></div></div>
+              <div data-show="!st:empty">
+                <div class="art-grid">
+                  <div>
+                    <div class="sect">Файлы</div>
+                    <div class="fi on"><span class="mono grow ell">TaskExecutionService.cs</span><span class="tag">v3</span></div>
+                    <div class="fi"><span class="mono grow ell">PersonaAccessPolicy.cs</span><span class="tag">v2</span></div>
+                    <div class="fi"><span class="mono grow ell">StageSnapshotTests.cs</span><span class="tag">v1</span></div>
+                    <div class="fi"><span class="sec">ещё 10 файлов</span></div>
+                    <div class="sect">Коммиты</div>
+                    <div class="cm"><span class="mono">4e1a9c2</span><span class="ell">fix(tasks): брать порог молчания из слепка этапа</span></div>
+                    <div class="cm"><span class="mono">b77d013</span><span class="ell">feat(tasks): секция ## ЭТАП в постановке</span></div>
+                    <div class="cm"><span class="mono">0c52e8f</span><span class="ell">feat(tasks): гейт подтверждения маршрута</span></div>
+                  </div>
+                  <div>
+                    <div class="row wrap" style="margin-bottom:var(--sp-xs)"><span class="mono grow ell">TaskExecutionService.cs</span><span class="seg"><button>v1</button><button aria-pressed="true">v2 → v3</button><button>всё</button></span></div>
+                    <div class="diff">
+                      <div class="dl hh">@@ ClassifyStall · строка 408 @@</div>
+                      <div class="dl">    var stage = task.Stage;</div>
+                      <div class="dl rem">-   var limit = _opt.ExecutorStaleMinutes;</div>
+                      <div class="dl add">+   var limit = stage?.StallMinutes ?? _opt.ExecutorStaleMinutes;</div>
+                      <div class="dl add">+   var policy = stage?.StallPolicy ?? StallPolicies.NudgeAlert;</div>
+                      <div class="dl">    if (silence &lt; limit) return StallVerdict.None;</div>
+                    </div>
+                    <div class="fhint">v3 — после возврата Глеба. Версия файла = коммит этапа, который его тронул.</div>
+                    <div class="sect">Итог исполнителя</div>
+                    <div class="card" style="font-size:var(--fs-sm)" data-show="st:full">Гейт подтверждения, секция <span class="mono">## ЭТАП</span>, сужение прав этапа и порог молчания из слепка. Сторож правил байт в байт — добавлен после ревью.</div>
+                    <div class="card" style="font-size:var(--fs-sm)" data-show="st:legacy">Итог задачи из трекера (resultMarkdown). Коммитов с трейлером не нашлось — показаны только прикреплённые файлы.</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ===== Метрики ===== -->
+            <section class="blk met" id="b-met">
+              <div class="bh"><span class="bt">Метрики</span></div>
+              <div data-show="st:full">
+                <div class="tbar"><i class="e" style="width:50%"></i><i class="r" style="width:27%"></i><i class="h" style="width:23%"></i></div>
+                <div class="lg"><span><i class="e"></i>исполнитель 1 ч 15 мин</span><span><i class="r"></i>ревью 40 мин</span><span><i class="h"></i>ждало вас 35 мин</span></div>
+                <table class="t" style="margin-top:var(--sp-md)">
+                  <thead><tr><th>Кто</th><th class="n">Время</th><th class="n">Ходы</th><th class="n">Токены</th><th class="n">Ожидание</th></tr></thead>
+                  <tbody>
+                    <tr><td>Исполнитель · Тимур</td><td class="n">1:15</td><td class="n">48</td><td class="n">1,0 М</td><td class="n">—</td></tr>
+                    <tr><td>Ревью · Глеб</td><td class="n">0:40</td><td class="n">14</td><td class="n">0,3 М</td><td class="n">—</td></tr>
+                    <tr><td>Человек · вы</td><td class="n">—</td><td class="n">1</td><td class="n">—</td><td class="n">0:35</td></tr>
+                    <tr class="tot"><td>Итого</td><td class="n">2:30</td><td class="n">63</td><td class="n">1,3 М</td><td class="n">0:35</td></tr>
+                  </tbody>
+                </table>
+                <div class="fhint">Ожидание — время, пока этап стоял с вопросом к вам.</div>
+              </div>
+              <div data-show="st:empty"><div class="empty sm"><div class="em-ic">◔</div><div class="em-t">Замеров пока мало</div><div class="em-x">Исполнитель работает 12 минут. Разбивка по ревью и вам появится, когда они подключатся.</div></div></div>
+              <div data-show="st:legacy">
+                <div class="notice info"><span class="ic">≈</span><span>Старая фича: ходы и токены по задаче тогда не записывались. Время — оценка по интервалам этапа, без разбивки на исполнителя, ревью и вас.</span></div>
+                <table class="t" style="margin-top:var(--sp-md)"><thead><tr><th>Кто</th><th class="n">Время</th><th class="n">Ходы</th><th class="n">Токены</th></tr></thead>
+                  <tbody><tr class="tot"><td>Этап целиком</td><td class="n">≈ 1:40</td><td class="n muted">—</td><td class="n muted">—</td></tr></tbody></table>
+              </div>
+            </section>
+
+            <!-- ===== Вход и транскрипт ===== -->
+            <section class="blk inp" id="b-inp">
+              <div class="bh"><span class="bt">Вход и транскрипт</span></div>
+              <div class="sect">Постановка исполнителю</div>
+              <div class="ps"><div class="psh"><span class="grow">ПРАВИЛА · ДЕЛЕГИРОВАНИЕ</span><span class="inh">общие, без изменений</span><span class="muted">▸</span></div></div>
+              <div class="ps stage" data-show="!st:legacy"><div class="psh"><span class="grow">## ЭТАП</span><span class="tag plan">из шаблона «Полный цикл» v4</span><span class="muted">▾</span></div>
+                <div class="psb">Шаги исполняй строго по плану. Тесты — только затронутые проекты. Перед закрытием — мутация своего теста.</div></div>
+              <div class="ps"><div class="psh"><span class="grow">ЗАДАЧА · КОНТЕКСТ</span><span class="inh">3 120 знаков</span><span class="muted">▸</span></div></div>
+              <div class="sect">Прочитанные файлы <span class="cnt" data-show="!st:legacy">21</span></div>
+              <div data-show="!st:legacy"><div class="row wrap"><span class="chip mono">TaskExecutionService.cs ×6</span><span class="chip mono">TaskItem.cs ×3</span><span class="chip mono">PersonaAccessPolicy.cs ×2</span><span class="chip">ещё 18</span></div></div>
+              <div data-show="st:legacy"><div class="empty sm"><div class="em-x">Транскрипт старого хода не разобран — откройте чат исполнителя.</div></div></div>
+              <div data-show="!st:legacy">
+                <div class="sect">Вызванные инструменты</div>
+                <table class="t"><thead><tr><th>Инструмент</th><th class="n">Раз</th><th>Последний</th></tr></thead>
+                  <tbody><tr><td class="mono">Read</td><td class="n">42</td><td class="sec">16:58</td></tr><tr><td class="mono">Edit</td><td class="n">18</td><td class="sec">17:02</td></tr><tr><td class="mono">mcp__tests__run_tests</td><td class="n" data-show="st:full">4</td><td class="n" data-show="st:empty">0</td><td class="sec">17:10</td></tr><tr><td class="mono">mcp__tasks__tasks_update</td><td class="n">2</td><td class="sec">17:11</td></tr></tbody></table>
+              </div>
+              <button class="btn sm ghost" style="margin-top:var(--sp-md)">Весь транскрипт в чате исполнителя →</button>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

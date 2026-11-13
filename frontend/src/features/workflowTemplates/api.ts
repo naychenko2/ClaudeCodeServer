@@ -5,8 +5,8 @@
 // Область определяется наличием projectId: параметра нет — глобальная, есть — проектная.
 // Отказ возвращается как есть: промис с ошибкой request() (Error с .status/.body) —
 // 409 различим по status; обёртку «перечитать и править снова» делает экран (C1b), не здесь.
-// recommendWorkflow/confirmWorkflow — ручки B4b (разрез §5): только обёртки, вызывает их
-// блок подтверждения маршрута (C2).
+// recommendWorkflow/confirmWorkflow — ручки B4b (разрез §5), вызывает их блок подтверждения
+// маршрута (C2); recommend разворачивает серверный ответ { proposal } здесь (см. ниже).
 import { request } from '../../lib/offline';
 import type { ConfirmWorkflowBody, WorkflowProposal, WorkflowTemplate, WorkflowTemplateEntry } from './types';
 
@@ -46,11 +46,17 @@ export const workflowTemplatesApi = {
   resetBuiltIn: (id: string) =>
     request<WorkflowTemplate>(`/workflow-templates/${encodeURIComponent(id)}/reset`, { method: 'POST' }),
 
-  // Подбор маршрута (B4b): запускает рекомендатель, отвечает текущим предложением.
+  // Подбор маршрута (B4b): запускает рекомендатель. Сервер отвечает обёрткой
+  // { proposal: WorkflowProposal | null } (TaskWorkflowController.Recommend) — разворачиваем
+  // её здесь, на границе: вызывающий видит только WorkflowProposal | null, обёртку выше
+  // никто не знает.
   // Модель может ждать десятки секунд — сигнал вызывающего (отмена при уходе со страницы, C2)
   // уходит в request() как есть, он объединяет его со своим таймаутом.
-  recommendWorkflow: (epicId: string, signal?: AbortSignal) =>
-    request<WorkflowProposal>(`/tasks/${encodeURIComponent(epicId)}/workflow/recommend`, { method: 'POST', signal }),
+  recommendWorkflow: async (epicId: string, signal?: AbortSignal): Promise<WorkflowProposal | null> => {
+    const resp = await request<{ proposal?: WorkflowProposal | null }>(
+      `/tasks/${encodeURIComponent(epicId)}/workflow/recommend`, { method: 'POST', signal });
+    return resp?.proposal ?? null;
+  },
 
   // Подтверждение маршрута (B4b): единственный писатель epic.Workflow, только человек (И7).
   // Тело ответа не используется: состояние эпика приходит штатным task_changed.

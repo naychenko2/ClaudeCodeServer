@@ -336,11 +336,22 @@ describe('api — отказ различим по коду (Контракт к
     expect(JSON.parse(optsC.body!)).toEqual({ templateId: 't1', scope: 'project', skipped: ['design'] });
 
     const ctrl = new AbortController();
-    request.mockResolvedValue({ templateId: 't1', scope: 'global', skipped: [] });
+    // Ответ — в реальной форме ручки: обёртка { proposal } (TaskWorkflowController.Recommend).
+    request.mockResolvedValue({ proposal: { templateId: 't1', scope: 'global', skipped: [] } });
     await workflowTemplatesApi.recommendWorkflow('e1', ctrl.signal);
     const [urlR, optsR] = request.mock.calls[1] as [string, ReqOpts];
     expect(urlR).toBe('/tasks/e1/workflow/recommend');
     expect(optsR.method).toBe('POST');
     expect(optsR.signal).toBe(ctrl.signal);
+  });
+
+  it('recommend разворачивает обёртку на границе: {proposal: P} → P, {proposal: null} → null', async () => {
+    // Дефект приёмки QA (сценарий 4б): фронт клал обёртку в состояние как предложение —
+    // блок показывал «Предложение модели» без шаблона. Разворот — только здесь, в api.
+    const proposed = { templateId: 't1', scope: 'global' as const, skipped: ['design'], rationale: 'по описанию' };
+    request.mockResolvedValue({ proposal: proposed });
+    expect(await workflowTemplatesApi.recommendWorkflow('e1')).toBe(proposed);
+    request.mockResolvedValue({ proposal: null });
+    expect(await workflowTemplatesApi.recommendWorkflow('e1')).toBeNull();
   });
 });

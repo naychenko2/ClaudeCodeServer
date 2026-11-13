@@ -198,7 +198,7 @@ function StageBody({ taskId, isMobile, stageTitle, onChat, onOpenChat }: { taskI
       {tab === 'review' && (
         <>
           <FeatureStageQuestions key={s.taskId} taskId={s.taskId} questions={s.questions ?? []} isMobile={isMobile} onAnswered={reloadQuiet} />
-          <FeatureStageReview review={s.review} />
+          <FeatureStageReview review={s.review} executorName={s.stageSummary?.executor?.name} />
         </>
       )}
       {tab === 'metrics' && s.metrics && <FeatureStageMetrics metrics={s.metrics} nowMs={now} />}

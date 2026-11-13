@@ -116,10 +116,39 @@ export interface StageAwaitingHuman {
   reason: string | null;
 }
 
+export interface StageReviewBlocker {
+  tag: string;
+  file: string | null;
+  line: number | null;
+  text: string;
+}
+
+// Раунд ревью (B05). Pending — запись-ожидание следующего раунда: ревьюера, вердикта и времени нет.
+export interface StageReviewRound {
+  round: number;
+  reviewer: { personaId: string | null; name: string } | null;
+  verdict: string | null;
+  returnReason: string | null;
+  at: string | null;
+  blockers: StageReviewBlocker[];
+  remarks: string[];
+  structured: boolean;
+  pending: boolean;
+}
+
+// hint = 'legacy' — ревью старой фичи не хранило блокеры
+export interface StageReviewRounds {
+  rounds: StageReviewRound[];
+  structured: boolean;
+  hint: string | null;
+}
+
 export interface StageReview {
   own: StageReviewItem | null;
   reviews: StageReviewItem[];
   awaitingHuman: StageAwaitingHuman | null;
+  // Нет поля — сервер старый, рисуем прежний список вердиктов
+  reviewRounds?: StageReviewRounds;
 }
 
 export interface StageScreen {

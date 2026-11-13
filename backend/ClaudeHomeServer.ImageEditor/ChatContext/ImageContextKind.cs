@@ -109,12 +109,18 @@ public sealed class ImageContextKind(
         ];
     }
 
-    // «Чем»: поставщик и модель нити (иначе выбор «Править» проекта), цена — по курируемому каталогу
+    // «Чем»: с чем пойдёт запуск агента без аргументов (ImageProjectPrefs.LaunchSettings, как в MCP
+    // image_generate): у черновика без картинки — выбор «Создать», у картинки — настройки нити, иначе
+    // «Править». Цена — по курируемому каталогу
     public string? DescribeExecutor(ContextScope scope, ContextItem primary)
     {
         if (primary.Kind != Kind || Text(primary.Ref, "threadId") is not { } threadId) return null;
-        var settings = Find(scope, threadId)?.Settings
-            ?? (scope.Project is { } project && prefs is not null ? prefs.Get(scope.OwnerId, project.Id).EditSettings() : null);
+        var thread = Find(scope, threadId);
+        var hasImage = thread is not null && (thread.File is { Length: > 0 } || thread.CurrentVersion is { Steps.Count: > 0 });
+        var settings = prefs is null
+            ? thread?.Settings
+            : prefs.Get(scope.OwnerId, scope.Project?.Id ?? ImageEditScope.Personal)
+                .LaunchSettings(hasImage ? ImageEditOp.Edit : ImageEditOp.Generate, thread?.Settings);
         var provider = string.IsNullOrWhiteSpace(settings?.Provider) ? null : settings.Provider;
         var modelId = string.IsNullOrWhiteSpace(settings?.Model) || settings.Model == ImageEditCatalog.AutoModelId ? null : settings.Model;
         var editor = provider is null ? null : editors?.FirstOrDefault(e => e.Key == provider);

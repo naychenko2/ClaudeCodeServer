@@ -36,7 +36,7 @@ export function warm(ctx: ContextKindCtx, primary: ChatContextPrimary) {
     void ensureVideoThreads(scope, ctx.sessionId);
   }
   const path = filmPathOf(primary);
-  if (path && !isPersonalScope(scope)) void loadFilm(scope, ctx.sessionId, path);
+  if (path) void loadFilm(scope, ctx.sessionId, path);
 }
 
 export function sceneOfPrimary(sessionId: string, primary: ChatContextPrimary | null): VideoScene | null {

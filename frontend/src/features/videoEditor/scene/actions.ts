@@ -282,7 +282,7 @@ export const takeVersion = (scope: string, sessionId: string, sceneId: string, v
 export async function saveScene(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, target: SaveTarget | null): Promise<SaveSceneResult | null> {
   try {
     const res = await videoApi.save(scope, sessionId, scene.sceneId, { ...(versionId ? { versionId } : {}), ...(target ?? {}) });
-    showToast(`Сохранено: ${res.path}`, '', 'info');
+    showToast(`${isPersonalScope(scope) ? 'Сохранено в Личное' : 'Сохранено'}: ${res.path}`, '', 'info');
     return res;
   } catch (e) {
     showToast(errorText(e, 'Не удалось сохранить сцену'), '', 'error');

@@ -11,7 +11,7 @@ import { openProjectFile } from '../film/nav';
 import { currentResolved, runErrorText, stopJob } from '../scene/actions';
 import { etaText } from './format';
 import { plural, priceLines, modelLabel, snapTo, type ResolvedScene } from '../scene/model';
-import { isPersonalScope, videoScope } from '../scope';
+import { videoScope } from '../scope';
 import { cancelBuild, getCatalog, getFilm, getJobsOf, jobFraction, setFilmBuild, subscribeVideoStore } from '../store/videoStore';
 import { filmPathOf, sceneOfPrimary } from './state';
 
@@ -173,7 +173,7 @@ async function launchShoot(ctx: ContextKindCtx, req: LaunchRequest): Promise<Lau
 async function launchBuild(ctx: ContextKindCtx, req: LaunchRequest): Promise<LaunchHandle> {
   const scope = videoScope(ctx.projectId);
   const path = filmPathOf(getChatContextState(ctx.sessionId).primary);
-  if (!path || isPersonalScope(scope)) throw new Error('Фильм недоступен');
+  if (!path) throw new Error('Фильм недоступен');
   const first = await videoApi.buildFilm(scope, ctx.sessionId, path, req.contextRevision);
   setFilmBuild(ctx.sessionId, path, first);
   return {

@@ -10,7 +10,6 @@ import {
 } from 'aihome_shell/kit';
 import type { VideoScene } from '../api';
 import { FILM_KIND, filmPathOf, SCENE_KIND } from '../context/state';
-import { isPersonalScope, videoScope } from '../scope';
 import { closeVideoEditor, filmName, useVideoStoreVersion } from '../store/videoStore';
 import { FilmTab, useFilmPanel } from './montage/FilmTab';
 
@@ -33,7 +32,6 @@ export function MontageEditor({ projectId, sessionId }: { projectId: string | nu
   const path = film ? filmPathOf(film as never) : null;
   const panel = useFilmPanel(projectId, sessionId, mobile, path);
   const foot = panel.foot;
-  const personal = isPersonalScope(videoScope(projectId));
 
   const workWith = (scene: VideoScene) => {
     void setPrimary(sessionId, { kind: SCENE_KIND, ref: { sceneId: scene.sceneId } }).then(res => {
@@ -63,7 +61,7 @@ export function MontageEditor({ projectId, sessionId }: { projectId: string | nu
         </div>
       )}>
       <div data-video-montage="" style={{ padding: mobile ? SP.md : SP.lg, overflowY: 'auto', flex: 1, minHeight: 0, boxSizing: 'border-box' }}>
-        {personal || !path
+        {!path
           ? <div style={{ fontSize: FS.sm, color: C.textMuted }}>Фильм не выбран — возьмите его в работу в чате.</div>
           : <FilmTab ctx={{ projectId, sessionId, isMobile: mobile, onClose: closeVideoEditor }} path={path} editor={{ workWith, afterNewScene }} />}
       </div>

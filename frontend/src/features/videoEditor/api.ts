@@ -8,7 +8,7 @@
 // написания живого сервера у них нет: фронт ходит в них через videoApi, а тесты и e2e — на моках.
 
 import { onMessage, readStoredToken, request, type MediaFormatCaps, type MediaFormatWish, type ResolvedFormat } from 'aihome_shell/kit';
-import { chatBase, isPersonalScope, PERSONAL_SCOPE, videoBase } from './scope';
+import { chatBase, PERSONAL_SCOPE, videoBase } from './scope';
 import type { LocalGpuQueueInfo } from '../../types/localGpuQueue';
 
 // ── Кадры и настройки сцены ──
@@ -378,7 +378,8 @@ export const ERR = {
   nameTaken: 'name_taken',
   revisionConflict: 'revision_conflict',
   dspUnavailable: 'dsp_unavailable',
-  personalNoFilms: 'personal_scope_no_films',
+  // Личная область: папку «Личного» создать нельзя (нет домашней папки, нет места)
+  personalFolderUnavailable: 'personal_scope_no_films',
   projectLocal: 'project_local_unsupported',
   outsideFolders: 'outside_allowed_folders',
   filmInvalid: 'film_invalid',
@@ -490,13 +491,13 @@ export const videoApi = {
   // URL клипа для <video src>: токен через ?access_token=, тег заголовков не шлёт
   versionFileUrl: (scope: string, sessionId: string, sceneId: string, versionId: string, download = false) =>
     withToken(`/api${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/file`, download ? { download: 'true' } : {}),
-  // Сохранить в проект — только у проекта: у личного чата ручки нет, отказ до запроса (блок 2)
-  save: (scope: string, sessionId: string, sceneId: string, req: Omit<SaveSceneRequest, 'sessionId' | 'sceneId'>) => {
-    if (isPersonalScope(scope)) throw new Error('У личного чата нет проекта — клип можно только скачать');
-    return json<SaveSceneResult>(`${sceneUrl(scope, sessionId, sceneId)}/save`, { ...req, sessionId, sceneId });
-  },
+  // Сохранить в проект; у личного чата — в «Личное»: без filmPath/folder плоский клип Personal/video/,
+  // с filmPath или folder = video/<фильм> — в фильм (ADR-040 Ф2-3/Ф2-6)
+  save: (scope: string, sessionId: string, sceneId: string, req: Omit<SaveSceneRequest, 'sessionId' | 'sceneId'>) =>
+    json<SaveSceneResult>(`${sceneUrl(scope, sessionId, sceneId)}/save`, { ...req, sessionId, sceneId }),
 
-  // Фильмы — ручки проекта, не чата (FilmController); личный чат — personal_scope_no_films
+  // Фильмы: проект — ручки проекта (FilmController), личный чат — те же ручки на чате (PersonalFilmController).
+  // У личного чата без «Личного» список пуст (200), состояние/правка/сборка — 404 file_not_found, статус сборки — 404 job_not_found
   films: (scope: string, sessionId: string) =>
     request<FilmSummary[]>(`${videoBase(scope, sessionId)}/films`, { live: true }),
   filmState: (scope: string, sessionId: string, path: string) =>
@@ -520,7 +521,7 @@ export const videoApi = {
     form.append('file', file);
     return request<FrameRef>(`${videoBase(PERSONAL_SCOPE, sessionId)}/frames/upload`, { method: 'POST', body: form, timeoutMs: 120_000 });
   },
-  // «Новый фильм»: пустой .film, занятое имя — 409 name_taken. Только проектные
+  // «Новый фильм»: пустой .film, занятое имя — 409 name_taken. У личной области создаёт папку «Личного»
   createFilm: (scope: string, sessionId: string, path: string, aspect?: string) =>
     json<FilmState>(`${videoBase(scope, sessionId)}/films`, { path, ...(aspect ? { aspect } : {}) }),
   // Превью кадра личного чата: байты из рабочей папки (путь кадра — frames/<id>.<ext>)

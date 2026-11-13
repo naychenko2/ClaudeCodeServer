@@ -13,7 +13,7 @@ import { ERR, errorCode, errorText, videoApi, type FilmState, type VideoScene } 
 import { ProjectPicker } from '../ProjectPicker';
 import { Hint, ic, Label } from '../primitives';
 import { createScene, fitSceneToFilm } from '../../scene/actions';
-import { isPersonalScope, videoScope } from '../../scope';
+import { videoScope } from '../../scope';
 import {
   buildFilm, cancelBuild, filmName, focusFilm, loadFilmList, patchFilm, useFilm, useFilmList, useVideoStoreVersion,
   useVideoThreads,
@@ -63,18 +63,14 @@ export interface FilmPanelModel {
 // pathOverride — редактор «Монтаж» работает с фильмом основного объекта контекста, а не серверного фокуса
 export function useFilmPanel(projectId: string | null, sessionId: string | null, isMobile = false, pathOverride?: string | null): FilmPanelModel {
   const scope = videoScope(projectId);
-  const personal = isPersonalScope(scope);
   const threads = useVideoThreads(scope, sessionId);
   useVideoStoreVersion();
-  const path = personal ? null : pathOverride ?? threads.focus.filmPath ?? null;
+  const path = pathOverride ?? threads.focus.filmPath ?? null;
   const film = useFilm(scope, path ? sessionId : null, path);
   const f = film.state;
   const name = path ? filmName(path) : '';
   const blocked = useBlocked(path);
   const nameOf = (p: string) => filmName(p);
-  if (personal) {
-    return { count: 0, context: <span>Фильмы — только в проекте</span>, nameOf };
-  }
   if (!path || !sessionId) {
     return { count: 0, context: <span>Фильм не выбран</span>, nameOf, peekSummary: 'Фильм не выбран' };
   }
@@ -232,12 +228,11 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
 }) {
   const { sessionId, isMobile } = ctx;
   const scope = videoScope(ctx.projectId);
-  const personal = isPersonalScope(scope);
   const threads = useVideoThreads(scope, sessionId);
   useVideoStoreVersion();
-  const path = personal ? null : pathOverride ?? threads.focus.filmPath ?? null;
+  const path = pathOverride ?? threads.focus.filmPath ?? null;
   const film = useFilm(scope, path ? sessionId : null, path);
-  const films = useFilmList(scope, personal ? null : sessionId);
+  const films = useFilmList(scope, sessionId);
   const dspBlocked = useBlocked(path);
   const [newOpen, openNew, closeNew] = useNewFilm(sessionId);
   const [picking, setPicking] = useState<Picking>(null);
@@ -248,14 +243,6 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
   // Открыли вкладку заново — прошлый отказ «сборка выключена» мог устареть: проверим при следующем «Собрать»
   useEffect(() => { if (path) setBlocked(path, null); }, [path]);
 
-  if (personal) {
-    return (
-      <Empty title="Фильмы живут в проекте.">
-        Фильм — файл <code>.film</code> в папке проекта: порядок сцен, склейки, музыка. В личном чате сцены можно снимать и скачивать,
-        а собрать их в фильм — в чате проекта.
-      </Empty>
-    );
-  }
   if (!sessionId) return <Empty title="Сначала начните чат." />;
 
   const create = async (name: string) => {

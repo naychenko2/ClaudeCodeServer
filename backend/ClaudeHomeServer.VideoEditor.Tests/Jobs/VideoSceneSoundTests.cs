@@ -106,9 +106,9 @@ public class VideoSceneSoundTests : IDisposable
         created.Cost.Should().Be(new ClaudeHomeServer.Services.VideoEditor.Contracts.VideoCostDto("local", 0));
         var record = _w.Feed.Records.Should().ContainSingle(r => r.Record.RecordType == "video_launch_versions").Subject;
         record.SessionId.Should().Be(FilmWorld.Session);
-        record.Record.Data.GetProperty("sceneId").GetString().Should().Be(scene.SceneId);
-        record.Record.Data.GetProperty("jobId").GetString().Should().Be(created.JobId);
-        record.Record.Data.GetProperty("initiator").GetString().Should().Be("agent");
+        record.Record.Data!.Value.GetProperty("sceneId").GetString().Should().Be(scene.SceneId);
+        record.Record.Data!.Value.GetProperty("jobId").GetString().Should().Be(created.JobId);
+        record.Record.Data!.Value.GetProperty("initiator").GetString().Should().Be("agent");
     }
 
     [Fact]

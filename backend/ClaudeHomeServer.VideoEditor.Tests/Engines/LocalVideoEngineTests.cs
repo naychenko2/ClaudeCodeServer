@@ -85,6 +85,8 @@ public class LocalVideoEngineTests
         engine.ScopeRefusal(VideoEditScope.Of(ServerProject)).Should().BeNull();
         engine.ScopeRefusal(VideoEditScope.Of(DeviceProject)).Should().Be(LocalVideoEngine.DeviceProjectReason);
         engine.ScopeRefusal(new VideoEditScope(VideoEditScope.Personal, null)).Should().BeNull("личная область пускает локальное видео");
+        // «Личное» с папкой (ADR-040): ключ personal, Project есть — движок по-прежнему пускает
+        engine.ScopeRefusal(new VideoEditScope(VideoEditScope.Personal, ServerProject)).Should().BeNull("личная область с папкой пускает локальное видео");
     }
 
     [Theory]

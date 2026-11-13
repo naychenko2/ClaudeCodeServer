@@ -82,7 +82,7 @@ public sealed class AudioEditorStateContributorTests : IDisposable
 
         text.Should().Contain(AudioEditorStateContributor.PriorityRuleFor(personal: true))
             .And.Contain("audio_generate с provider local")
-            .And.Contain("Голосов из библиотеки").And.Contain("сохранения в проект")
+            .And.Contain("Файлов проектов в этом чате нет").And.Contain("сохранить результат в «Личное»")
             .And.NotContain("local_speech").And.NotContain("Локальных моделей для звука в этом чате нет");
     }
 

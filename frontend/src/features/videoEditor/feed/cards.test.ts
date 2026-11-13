@@ -193,7 +193,7 @@ describe('строка запуска: превью готовых версий 
     expect(cancelled.html).toContain('Отменено · деньги не списаны');
   });
 
-  it('личный чат: то же превью, без кнопок проекта; без srcOf плееров нет', () => {
+  it('личный чат: то же превью (кнопки сохранения — на полной карточке сцены); без srcOf плееров нет', () => {
     const s = scene('s1', { versions: [version(1, { jobId: 'job-7' })], currentVersionId: 'ver-1', launches: [launch('done')] });
     const r = row(s, { personal: true });
     expect(r.html).toContain('<video');
@@ -218,10 +218,12 @@ describe('«Увеличить ×2/×4» (RelayVSR, локально): отде�
     expect(view(s).canEnhance).toBe(true);
     const personal = view(s, { personal: true });
     expect(personal.canEnhance).toBe(true);
-    // Личный чат проекта не имеет: сохранить и положить в фильм нельзя, скачать — можно
-    expect(personal.canSave).toBe(false);
-    expect(personal.canAddToFilm).toBe(false);
+    // Личный чат (ADR-040): сохранить в «Личное» и положить в фильм можно, скачать — тоже
+    expect(personal.canSave).toBe(true);
+    expect(personal.canAddToFilm).toBe(true);
     expect(personal.canDownload).toBe(true);
+    expect(personal.personal).toBe(true);
+    expect(view(s).canDownload).toBe(false);
     expect(view(s, { running: true }).canEnhance).toBe(false);
     const html = renderToStaticMarkup(createElement(SceneCardView, { v: view(s), src: null, busy: false, a: { ...A, onEnhance: noop, onEnhanceQuote: async () => null } }));
     expect(html).toContain('data-video-enhance=""');

@@ -85,7 +85,8 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
 
     public string? ScopeRefusal(VideoEditScope scope)
     {
-        if (scope.IsPersonal || scope.Project is not { } project) return null;
+        if (!scope.HasFolder) return null;
+        var project = scope.Project!;
         return ProjectCapabilities.FilesOnServer(project) ? null : DeviceProjectReason;
     }
 

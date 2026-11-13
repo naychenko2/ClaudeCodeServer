@@ -46,14 +46,13 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
         return await PublishedAsync(ownerId, scope, sessionId, written);
     }
 
-    // Фокус: сцена в работе и открытый фильм. Фильм — только у проекта и только внутри video/**: путь хранится
-    // как есть, диска не касаемся
+    // Фокус: сцена в работе и открытый фильм — только внутри video/**: путь хранится как есть, диска не касаемся
+    // (у личной области фильм лежит в Personal/video/, папку создаёт пишущий путь)
     public async Task<Call> FocusAsync(string ownerId, VideoEditScope scope, string sessionId, VideoFocusDto focus,
         long? revision, ContextActor by = ContextActor.Human)
     {
-        if (focus.FilmPath is not null && (scope.IsPersonal || !InsideAllowed(focus.FilmPath)))
-            return Call.Refuse(scope.IsPersonal ? VideoEditorErrors.PersonalScopeNoFilms : VideoEditorErrors.OutsideAllowedFolders,
-                scope.IsPersonal ? "Фильмы — только в чате проекта" : "Фильм должен лежать в video/");
+        if (focus.FilmPath is not null && !InsideAllowed(focus.FilmPath))
+            return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders, "Фильм должен лежать в video/");
         // Фильм — только по правилу пути video/<имя фильма>/*.film (то же, что у Validate вида): иначе он встал бы основным мимо него
         if (!string.IsNullOrWhiteSpace(focus.FilmPath) && !FilmPaths.IsFilmPath(FilmPaths.Normalize(focus.FilmPath) ?? ""))
             return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders, "Фильм должен лежать в папке video/<имя фильма>/");
@@ -95,20 +94,18 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
 
     // ── Проверки входов ──────────────────────────────────────────────────────────
 
-    // Папка сцены: у личной области только пустая (диска проекта нет — отказ до RootPath); у проекта — внутри
-    // video/** без «..» и без символических ссылок по существующим сегментам
+    // Папка сцены: внутри video/** без «..» и без символических ссылок по существующим сегментам. У личной области
+    // папка «Личного» может быть ещё не создана (её создаёт пишущий путь) — тогда ссылок быть не может, проверяется форма
     public static Call? FolderProblem(VideoEditScope scope, string? raw, out string folder)
     {
         folder = "";
         var value = (raw ?? "").Trim().Replace('\\', '/').Trim('/');
         if (value.Length == 0) return null;
-        if (scope.Project is not { } project)
-            return Call.Refuse(VideoEditorErrors.InvalidRequest,
-                "У чата вне проекта нет папок проекта: сцену можно завести только без папки");
         if (!InsideAllowed(value))
             return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders,
                 $"Сцены лежат только в video/ проекта, а получено «{value}»: укажи полный путь от корня проекта, например video/утро");
-        if (ClaudeHomeServer.Services.Media.ProjectLinkGuard.ResolveInside(project.RootPath, value) is null)
+        if (scope.Project is { } project
+            && ClaudeHomeServer.Services.Media.ProjectLinkGuard.ResolveInside(project.RootPath, value) is null)
             return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders, "Путь идёт через символическую ссылку или вне проекта");
         folder = value;
         return null;
@@ -123,8 +120,8 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
         return root is ScenesRoot or "music";
     }
 
-    // Кадры в настройках: image — с threadId и versionId, file — путь существующего файла проекта (у личной
-    // области файлов проекта нет); число вариантов и длительность в пределах
+    // Кадры в настройках: image — с threadId и versionId, file — путь существующего файла проекта или «Личного»
+    // (либо загруженный кадр рабочей папки у личной области); число вариантов и длительность в пределах
     public static Call? SettingsProblem(VideoEditScope scope, VideoSceneSettingsDto s)
     {
         if (s.Count is { } count && (count < 1 || count > VideoThreadStore.MaxCount))
@@ -141,14 +138,12 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
                 case FrameRef.KindImage when string.IsNullOrWhiteSpace(frame.ThreadId) || string.IsNullOrWhiteSpace(frame.VersionId):
                     return Call.Refuse(VideoEditorErrors.InvalidRequest, "У кадра из «Картинок» нужны нить и версия");
                 case FrameRef.KindFile:
-                    if (scope.Project is not { } project)
-                    {
-                        // Личный чат: только загруженный «С компьютера» кадр рабочей папки; наличие файла проверит съёмка
-                        if (!VideoEditWorkspace.IsFrameRef(frame.Path))
-                            return Call.Refuse(VideoEditorErrors.InvalidRequest,
-                                "У чата вне проекта нет файлов проекта: загрузите кадр «С компьютера»");
-                        break;
-                    }
+                    // Загруженный «С компьютера» кадр рабочей папки личного чата; наличие файла проверит съёмка
+                    if (scope.IsPersonal && VideoEditWorkspace.IsFrameRef(frame.Path)) break;
+                    // Без папки (личная область, «Личное» ещё не создано) файлов нет; иначе — файл проекта или «Личного»
+                    if (!scope.HasFolder || scope.Project is not { } project)
+                        return Call.Refuse(VideoEditorErrors.InvalidRequest,
+                            "У чата вне проекта нет файлов проекта: загрузите кадр «С компьютера»");
                     if (string.IsNullOrWhiteSpace(frame.Path)
                         || ClaudeHomeServer.Services.Media.ProjectLinkGuard.ResolveInside(project.RootPath, frame.Path) is not { } full
                         || !File.Exists(full))

@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Tests.AudioEditor;
 // Ручки модуля «Звук» на собранном приложении (ADR-021 §2, §6): авторизация и изоляция владельцев
 // (чужое неотличимо от несуществующего), ревизия нитей — 409, отдача файла версии с Range, сохранение
 // в проект новыми файлами с версионированием имени и папкой стемов, отказ путям вне проекта, личный
-// чат без сохранения в проект. Поставщик — фейк в памяти поверх настоящего исполнителя задач.
+// чат сохраняет только в «Личное» (Ф2-3). Поставщик — фейк в памяти поверх настоящего исполнителя задач.
 [Trait("Category", "Host")]
 public class AudioEditorControllerTests : IClassFixture<AudioEditorControllerTests.Hosts>
 {
@@ -295,8 +295,11 @@ public class AudioEditorControllerTests : IClassFixture<AudioEditorControllerTes
         prefs.GetProperty("voice").GetProperty("inputs").GetProperty("language").GetString().Should().Be("ru");
 
         var chat = await Sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный");
-        (await _client.PutAsJsonAsync($"/api/audio-editor/chats/{chat.Id}/prefs/voice", new { inputs })).StatusCode
-            .Should().Be(HttpStatusCode.BadRequest, "у личного чата путей проекта нет");
+        // Файлы в личном чате — только из «Личного» (Ф2-3); есть ли у стенда его папка, зависит от соседних тестов класса,
+        // поэтому проверяем неизменное: выход из корня отвергается всегда
+        (await _client.PutAsJsonAsync($"/api/audio-editor/chats/{chat.Id}/prefs/voice",
+                new { inputs = new { referencePath = "../secret.mp3" } })).StatusCode
+            .Should().Be(HttpStatusCode.BadRequest, "путь вне корня личного чата отвергается");
     }
 
     [Fact]
@@ -560,7 +563,7 @@ public class AudioEditorControllerTests : IClassFixture<AudioEditorControllerTes
     // ── Личный чат ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Личный_чат_генерирует_и_отдаёт_файл_но_не_сохраняет_в_проект()
+    public async Task Личный_чат_генерирует_и_отдаёт_файл_а_сохраняет_только_в_Личное()
     {
         Start();
         var chat = await Sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный");
@@ -578,9 +581,10 @@ public class AudioEditorControllerTests : IClassFixture<AudioEditorControllerTes
         download.Content.Headers.ContentDisposition!.DispositionType.Should().Be("attachment");
         (await download.Content.ReadAsByteArrayAsync()).Should().Equal(Mp3);
 
+        // ADR-040, Ф2-3: ручка сохранения у личного чата есть (маршрут не 404); результат зависит от того, настроена ли
+        // у стенда домашняя папка владельца: 200 — файл лёг в Personal/audio/, 503 — «папка Личного недоступна»
         var save = await _client.PostAsJsonAsync($"{personal}/threads/{threadId}/save", new { versionId });
-        save.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await save.Content.ReadAsStringAsync()).Should().BeEmpty("сохранения у личного чата нет по построению — 404 маршрутизации");
+        save.StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable);
 
         var quote = await Json(await _client.PostAsJsonAsync($"{personal}/quote",
             new { mode = "voice", operation = "speak", provider = "fake", model = "fake-model" }));
@@ -590,7 +594,7 @@ public class AudioEditorControllerTests : IClassFixture<AudioEditorControllerTes
             { new StringContent("intro.mp3"), "referencePath" },
         };
         (await _client.PostAsync($"{personal}/jobs", form)).StatusCode.Should().Be(HttpStatusCode.BadRequest,
-            "путь в проекте у личного чата отвергается до диска");
+            "такого файла в «Личном» нет (или самой папки нет) — отказ до чтения");
     }
 
     [Fact]

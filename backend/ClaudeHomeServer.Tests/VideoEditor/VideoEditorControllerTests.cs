@@ -275,7 +275,7 @@ public class VideoEditorControllerTests : IClassFixture<VideoEditorControllerTes
     // ── Личный чат ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Личный_чат_снимает_local_доступен_а_проектных_путей_и_фильмов_нет()
+    public async Task Личный_чат_снимает_local_доступен_а_проектных_файлов_нет()
     {
         var chat = await Sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный");
         var personal = $"/api/video-editor/chats/{chat.Id}";
@@ -285,8 +285,8 @@ public class VideoEditorControllerTests : IClassFixture<VideoEditorControllerTes
         local.GetProperty("available").GetBoolean().Should().BeTrue("личная область пускает локальные модели");
         (!local.TryGetProperty("reason", out var reason) || reason.ValueKind == JsonValueKind.Null).Should().BeTrue();
 
-        (await _client.PostAsJsonAsync($"{personal}/scenes", new { folder = "video", revision = 0 })).StatusCode
-            .Should().Be(HttpStatusCode.BadRequest, "папок проекта у личного чата нет");
+        (await _client.PostAsJsonAsync($"{personal}/scenes", new { folder = "docs", revision = 0 })).StatusCode
+            .Should().Be(HttpStatusCode.BadRequest, "сцены лежат только в video/ (папки «Личного» — тоже, Ф2-6)");
         var opened = await _client.PostAsJsonAsync($"{personal}/scenes", new { folder = "", settings = Settings("т"), revision = 0 });
         opened.StatusCode.Should().Be(HttpStatusCode.OK, await opened.Content.ReadAsStringAsync());
         var sceneId = (await Json(opened)).GetProperty("focus").GetProperty("sceneId").GetString()!;
@@ -301,7 +301,7 @@ public class VideoEditorControllerTests : IClassFixture<VideoEditorControllerTes
         download.StatusCode.Should().Be(HttpStatusCode.OK);
         download.Content.Headers.ContentDisposition!.DispositionType.Should().Be("attachment");
 
-        // Кадр-файл и открытый фильм — файлы проекта, которых у личного чата нет
+        // Кадр-файл — файл проекта, которого у личного чата без папки нет; открытый фильм — путь в video/ «Личного»
         var withFile = await _client.PutAsJsonAsync($"{personal}/scenes/{sceneId}/settings", new
         {
             settings = new { frameA = new { kind = "file", path = "a.png" }, text = "т" },
@@ -313,8 +313,7 @@ public class VideoEditorControllerTests : IClassFixture<VideoEditorControllerTes
             focus = new { sceneId, filmPath = "video/a/a.film" },
             revision = await Revision(personal),
         });
-        film.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await Json(film)).GetProperty("code").GetString().Should().Be(VideoEditorErrors.PersonalScopeNoFilms);
+        film.StatusCode.Should().Be(HttpStatusCode.OK, "открытый фильм — путь внутри video/ «Личного», диска фокус не касается (Ф2-6)");
     }
 
     [Fact]

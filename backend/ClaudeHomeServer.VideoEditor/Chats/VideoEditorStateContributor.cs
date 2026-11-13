@@ -75,7 +75,7 @@ public sealed class VideoEditorStateContributor(
     // к этому же контрибьютору (цикл при сборке контейнера, тихое зависание старта)
     private VideoSpentDto? SpentOf(string ownerId, VideoEditScope scope, VideoThreadsState state)
     {
-        if (side is null || scope.IsPersonal || state.Focus.FilmPath is not { } path) return null;
+        if (side is null || state.Focus.FilmPath is not { } path) return null;
         var spends = side.Get(ownerId, scope.Key, path).Spends.ToDictionary(s => s.VersionId);
         var folder = FilmPaths.FolderOf(path);
         foreach (var scene in state.Scenes.Where(s => s.FilmRef?.Path == path || FilmPaths.Normalize(s.Folder) == folder))
@@ -143,10 +143,12 @@ public sealed class VideoEditorStateContributor(
         + "мимо редактора: иначе получится ролик без карточки сцены.";
 
     // Личный чат: локальные модели редактора работают как в проекте (ролик уходит в версию нити). «Увеличить ×2/×4»
-    // — video_enhance. Недоступно: кадры из файлов проекта, фильмы и сохранение в проект
+    // — video_enhance. Недоступно: файлы проектов; кадр-файл, сохранение сцены и фильмы — в «Личном»
     public const string PersonalPriorityRule = EditorFirst
         + " Просьба снять локально / на своей видеокарте / бесплатно — video_shoot с provider local; кадры — картинки "
-        + "из «Картинок» этого чата, файлов проекта, фильмов и сохранения в проект здесь нет. "
+        + "из «Картинок» этого чата и файлы «Личного», файлов проектов здесь нет; сохранить сцену в «Личное» "
+        + "можно через video_save_scene (с filmPath или folder video/<фильм> она встаёт в фильм «Личного»), "
+        + "фильм правят и собирают video_film_edit и video_film_build. "
         + "Прямые generate_video Higgsfield и fal для видео — только по явной просьбе, мимо редактора.";
 
     // Темп съёмки: потолка трат нет, поэтому правило держит текст. «Сделай N сцен» — это завести сцены и снять первую:
@@ -154,7 +156,7 @@ public sealed class VideoEditorStateContributor(
     public const string PaceRule =
         "Темп съёмки: просьба «сделай N сцен» — завести сцены (video_new, video_scene_set) и снять ТОЛЬКО первую; после неё "
         + "спроси человека «Снимать следующую?» и остановись. «Сними все» означает довести дело до конца, не спрашивая: снять "
-        + "ВСЕ оставшиеся сцены, СОХРАНИТЬ их в проект (video_save_scene) и СОБРАТЬ фильм (video_film_build). Съёмка идёт "
+        + "ВСЕ оставшиеся сцены, СОХРАНИТЬ их в проект, а в личном чате — в «Личное» (video_save_scene), и СОБРАТЬ фильм (video_film_build). Съёмка идёт "
         + "минутами, поэтому дожидайся её циклом video_wait (до готовности, не заканчивая ход на ожидании), потом снимай "
         + "следующую; после последней сразу сохрани и собери, не предлагая этого вопросом. Без явного «сними все» не вызывай "
         + "несколько video_shoot в одном ответе. Результат съёмки ищи в video_state или video_wait, не выдумывай его. "

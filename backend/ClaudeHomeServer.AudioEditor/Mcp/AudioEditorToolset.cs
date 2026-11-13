@@ -68,6 +68,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
 
     private readonly IMcpSessionAccessor _sessions;
     private readonly IProjectManager _projects;
+    private readonly ClaudeHomeServer.Services.Composition.PersonalFolderResolver? _personalFolder;
     private readonly IEnumerable<IAudioEngine> _engines;
     private readonly AudioJobThreads _threads;
     private readonly AudioEditJobService _jobs;
@@ -100,9 +101,11 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         ITurnEventBus? events = null,
         IConfiguration? config = null,
         ChatContext.AudioContextLaunch? context = null,
-        ITurnActorRegistry? turnActors = null)
+        ITurnActorRegistry? turnActors = null,
+        ClaudeHomeServer.Services.Composition.PersonalFolderResolver? personalFolder = null)
     {
         _turnActors = turnActors;
+        _personalFolder = personalFolder;
         _context = context;
         _sessions = sessions;
         _projects = projects;
@@ -145,6 +148,10 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         if (ToolsOfInstance.All(t => t.Name != tool))
             return Deny($"Инструмент {tool} недоступен на этом сервере.");
 
+        // Вход из файлов требует диска: «Личное» создаём здесь, лениво (ADR-040 §1.2); состав и голоса папки не просят
+        if (scope.IsPersonal && scope.Project is null && _personalFolder is not null && NeedsDisk(tool, arguments))
+            scope = scope with { Project = await _personalFolder.EnsureAsync(context.OwnerId, ct) };
+
         return tool switch
         {
             ToolState => Json(DescribeState(context.OwnerId, session, scope)),
@@ -158,6 +165,15 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             _ => Deny($"Неизвестный инструмент: {tool}"),
         };
     }
+
+    private static bool NeedsDisk(string tool, JsonObject args) => tool switch
+    {
+        ToolFocus => Str(args, "file") is not null,
+        ToolConcat => args["pieces"] is JsonArray pieces && pieces.Any(p => p is JsonObject o && Str(o, "file") is not null),
+        ToolGenerate => args["params"] is JsonObject fields
+            && fields.Any(kv => kv.Key.Contains("path", StringComparison.OrdinalIgnoreCase)),
+        _ => false,
+    };
 
     // ── audio_focus и audio_new ────────────────────────────────────────────────
 
@@ -213,9 +229,9 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         var folder = Normalize(Str(args, "folder") ?? "");
         if (folder.Length > 0)
         {
-            // Папка — место сохранения в проект; у личной области проекта нет, черновик человек скачает
-            if (scope.Project is not { } project)
-                return Deny("В чате вне проекта папок нет: вызови audio_new без folder — человек скачает звук сам.");
+            // Папка — место сохранения в проект; у личной области папок нет, человек сохранит звук в «Личное» сам
+            if (scope.IsPersonal || scope.Project is not { } project)
+                return Deny("В чате вне проекта папок нет: вызови audio_new без folder — человек сохранит звук в «Личное» сам.");
             if (ProjectLinkGuard.ResolveInside(project.RootPath, folder) is not { } full || !Directory.Exists(full))
                 return Deny($"Папка не найдена в проекте: {folder}");
         }
@@ -466,7 +482,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             quote = new { final.Provider, final.Model, op = AudioEditJobService.OpName(final.Op), final.Count, final.Price, final.License },
             note = "Операция идёт отдельно от хода: остановка разговора её не отменяет, отмена — audio_cancel. "
                 + "Каждый вариант станет новой версией звука; "
-                + (scope.IsPersonal ? "скачать её может только человек." : "сохранить в проект может только человек."),
+                + (scope.IsPersonal ? "сохранить её в «Личное» может только человек." : "сохранить в проект может только человек."),
         });
     }
 
@@ -486,7 +502,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             value.ThreadId,
             value.VersionId,
             note = "Монтаж без ИИ завёл новую версию звука. " + (scope.IsPersonal
-                ? "Скачать её может только человек."
+                ? "Сохранить её в «Личное» может только человек."
                 : "Сохранить в проект может только человек."),
         });
     }
@@ -561,7 +577,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             done.VersionId,
             done.Name,
             note = "Склейка — новый звук в работе. " + (scope.IsPersonal
-                ? "Скачать его может только человек."
+                ? "Сохранить его в «Личное» может только человек."
                 : "Сохранить в проект может только человек."),
         });
     }
@@ -618,7 +634,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
                 (0, true) => "В этом чате ещё нет звуков. Заведи новый (audio_new): это чат вне проекта, файлов проекта тут нет.",
                 (0, false) => "В этом чате ещё нет звуков. Возьми звуковой файл проекта в работу (audio_focus с file) "
                     + "или заведи новый (audio_new).",
-                (_, true) => "Каждый вариант запуска и каждый монтаж — версия звука. Скачать звук может только человек.",
+                (_, true) => "Каждый вариант запуска и каждый монтаж — версия звука. Сохранить звук в «Личное» может только человек.",
                 _ => "Каждый вариант запуска и каждый монтаж — версия звука. Сохранить в проект может только человек.",
             },
         };
@@ -633,7 +649,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         {
             folder = t.DraftFolder ?? "",
             note = scope.IsPersonal
-                ? "Звука ещё нет: это новый звук, человек скачает его сам."
+                ? "Звука ещё нет: это новый звук, человек сохранит его в «Личное»."
                 : "Звука ещё нет: это новый звук, человек сохранит его в проект.",
         },
         currentVersionId = t.CurrentVersionId,
@@ -722,7 +738,8 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             scope = AudioEditScope.Of(found);
         }
         else
-            scope = AudioEditScope.Of(owned);
+            // Личная область: «Личное» — только если папка уже есть (инструменты её не создают), ключ остаётся personal
+            scope = AudioEditScope.Of(owned) with { Project = _personalFolder?.Find(context.OwnerId) };
         session = owned;
         return true;
     }

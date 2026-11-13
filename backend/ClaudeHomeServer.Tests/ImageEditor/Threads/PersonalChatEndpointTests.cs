@@ -16,7 +16,8 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 
 // Личный маршрут редактора api/image-editor/chats/{sessionId} на собранном приложении (разрез
 // docs/research/image-editor-personal-chats-cut-2026-09.md): черновик → запуск → версии → байты шага,
-// чужой личный чат и чат проекта неотличимы, у личного чата нет записи в проект, персонажей и файлов.
+// чужой личный чат и чат проекта неотличимы, у личного чата нет записи в проект и файлов проекта
+// (персонажи — в папке «Личного», PersonalCharacterEndpointsTests).
 [Trait("Category", "Host")]
 public class PersonalChatEndpointTests : IClassFixture<PersonalChatEndpointTests.Hosts>
 {
@@ -188,16 +189,14 @@ public class PersonalChatEndpointTests : IClassFixture<PersonalChatEndpointTests
     }
 
     [Fact]
-    public async Task Сохранения_и_персонажей_у_личного_чата_нет()
+    public async Task Проверка_имени_без_папки_Личного_свободна_а_персонаж_не_найден()
     {
         var chat = await PersonalChat();
 
-        (await _client.PostAsJsonAsync($"{Personal(chat.Id)}/save", new { stepId = "s", variant = 0 }))
-            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        // Сохранение в «Личное» (Ф2-3): проверка имени — GET, папку не создаёт; без папки имя свободно
         (await _client.GetAsync($"{Personal(chat.Id)}/save/check?name=a&format=png"))
-            .StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await _client.GetAsync($"{Personal(chat.Id)}/characters"))
-            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        // Персонажи личной области — в папке «Личного» (ADR-040, Ф2-4); героя в ней нет
         (await _client.GetAsync($"{Personal(chat.Id)}/characters/hero"))
             .StatusCode.Should().Be(HttpStatusCode.NotFound);
     }

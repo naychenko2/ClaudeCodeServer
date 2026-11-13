@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.VideoEditor.Assembly;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
@@ -7,9 +8,9 @@ using ClaudeHomeServer.Services.VideoEditor.Scenes;
 
 namespace ClaudeHomeServer.Services.VideoEditor.Films;
 
-// Фильмы проекта (ADR-022 §2): список, состояние, правка патчем под ревизией. Только область проекта: у личной
-// области нет диска проекта, и всё здесь отказывает ДО RootPath (personal_scope_no_films). Писать можно только в
-// video/** и music/** через ProjectLinkGuard.ResolveInside; символическая ссылка наружу — отказ.
+// Фильмы проекта (ADR-022 §2): список, состояние, правка патчем под ревизией. Область проекта или личная область
+// с папкой «Личного» (ADR-040, Ф2-6); без папки всё здесь отказывает ДО RootPath (personal_scope_no_films).
+// Писать можно только в video/** и music/** через ProjectLinkGuard.ResolveInside; символическая ссылка наружу — отказ.
 //
 // Состояние фильма вне файла (FilmSideStore) — траты и пометки «✦ Claude»; признаки «устарел» и «● обновлена»
 // вычисляются (FilmStaleness). Агент (блок 3) правит теми же методами с initiator = Agent.
@@ -38,11 +39,11 @@ public sealed class FilmService(
 
     public sealed record Resolved(Project Project, string Relative, string Full);
 
-    // Корень проекта области; у личной области — отказ до диска
+    // Корень проекта области; у личной области без папки «Личного» — отказ до диска
     public static FilmCallResult<Project> ProjectOf(VideoEditScope scope) =>
         scope.Project is { } project
             ? FilmCallResult<Project>.Ok(project)
-            : FilmCallResult<Project>.Fail(VideoEditorErrors.PersonalScopeNoFilms, "Фильмы — только в чате проекта");
+            : FilmCallResult<Project>.Fail(VideoEditorErrors.PersonalScopeNoFilms, PersonalFolderResolver.UnavailableText);
 
     public static FilmCallResult<Resolved> ResolveFilm(VideoEditScope scope, string? raw, string? actorId)
     {

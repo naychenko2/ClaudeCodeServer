@@ -13,7 +13,8 @@ public sealed class ImageFrameSource(
     ImageThreadService threads,
     IProjectManager projects,
     ISessionDirectory directory,
-    ImageEditSteps? steps = null) : IImageFrameSource
+    ImageEditSteps? steps = null,
+    PersonalFolderResolver? personal = null) : IImageFrameSource
 {
     // Сколько раз повторяем создание черновика, если человек записал нити между чтением и записью
     private const int DraftAttempts = 3;
@@ -32,16 +33,20 @@ public sealed class ImageFrameSource(
 
             if (thread.ImageStepOf(version) is { Length: > 0 } stepId && steps?.Open(owner, scopeKey, stepId) is { } step)
                 return new ImageFrame(step.Image.Bytes, step.Image.ContentType);
-            // Исходник нити по файлу — файл проекта; у личной области проекта нет
-            if (thread.File is { Length: > 0 } file && projects.GetById(scopeKey) is { } project)
+            // Исходник нити по файлу — файл проекта, у личной области — файл «Личного» (если папка есть)
+            if (thread.File is { Length: > 0 } file && RootOf(scopeKey, owner) is { } root)
             {
-                var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(actorId, project.RootPath, file, "Кадр", ct);
+                var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(actorId, root, file, "Кадр", ct);
                 return read.Value is { } image ? new ImageFrame(image.Bytes, image.ContentType) : null;
             }
             return null;
         }
         return null;
     }
+
+    // Личная ветка: ключ personal не id проекта, корень берётся из «Личного» владельца (ADR-040 §2.1); папку не создаёт
+    private string? RootOf(string scopeKey, string ownerId) =>
+        scopeKey == ImageEditScope.Personal ? personal?.Find(ownerId)?.RootPath : projects.GetById(scopeKey)?.RootPath;
 
     public async Task<ImageFrameDraft?> CreateDraftAsync(string ownerId, string scopeKey, string sessionId, string folder,
         CancellationToken ct)

@@ -4,15 +4,15 @@ using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.AudioEditor.Voices;
 
-// Библиотека «Голоса» области (ADR-021 §2): голоса живут только в серверном проекте. Личная область и
-// локальный проект получают отказ ДО диска: у личной корня нет вовсе, у локального файлы на устройстве
-// (ProjectCapabilityGuard, группа FileBound). Часы подменяемые — по ним считается признак «клон MiniMax
-// протух».
+// Библиотека «Голоса» области (ADR-021 §2): голоса живут в папке серверного проекта или «Личного»
+// (ADR-040). Личная область без папки и локальный проект получают отказ ДО диска: у первой корня ещё нет,
+// у локального файлы на устройстве (ProjectCapabilityGuard, группа FileBound). Часы подменяемые — по
+// ним считается признак «клон MiniMax протух».
 public sealed class VoiceLibrary(TimeProvider? time = null) : Mcp.IAudioVoiceLibrary
 {
-    // Код отказа личной области: фронт рисует по нему честный пустой экран «Голоса живут в проекте»
+    // Код отказа области без папки (личная, пока «Личное» не создано)
     public const string ProjectOnlyCode = "voices_project_only";
-    public const string ProjectOnlyReason = "Библиотека «Голоса» живёт в проекте — в личном чате загрузите образец";
+    public const string ProjectOnlyReason = "У этой области нет папки: библиотека «Голоса» недоступна";
 
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 

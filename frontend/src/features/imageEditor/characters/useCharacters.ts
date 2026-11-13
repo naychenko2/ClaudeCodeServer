@@ -2,8 +2,8 @@
 // «Картинки»: правка в панели сразу видна в полосе, без второго запроса.
 
 import { useEffect, useSyncExternalStore } from 'react';
+import { onLogoutReset } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditCharacter } from '../api';
-import { isPersonalScope } from '../scope';
 
 interface Entry { list: ImageEditCharacter[] | null; loading: Promise<void> | null; error: boolean }
 
@@ -16,11 +16,19 @@ function emit() {
   _listeners.forEach(fn => fn());
 }
 
+// Ключи кэша ('personal' и id проектов) принадлежат владельцу: при выходе из аккаунта список не должен
+// дожить до следующего входа без перезагрузки страницы
+export function resetCharactersCache() {
+  _entries.clear();
+  emit();
+}
+onLogoutReset(resetCharactersCache);
+
 function load(projectId: string, force = false): Promise<void> {
   const e = _entries.get(projectId);
   if (e?.loading) return e.loading;
   if (e?.list && !force) return Promise.resolve();
-  // Синхронный отказ (projectBase у личной области) — в ветку .catch, а не из useEffect
+  // Синхронный отказ (личная область без чата) — в ветку .catch, а не из useEffect
   const loading = Promise.resolve().then(() => imageEditorApi().listCharacters(projectId))
     .then(list => { _entries.set(projectId, { list, loading: null, error: false }); })
     // Модуль выключен или связи нет — список пуст, панель покажет ошибку с повтором
@@ -48,12 +56,10 @@ export function dropCharacter(projectId: string, slug: string) {
   emit();
 }
 
-// projectId = null — персонажей нет (личный чат вне проекта): список пуст, запроса нет.
-// Область (включая 'personal') нормализуем в null: проектная ручка персонажей у неё
-// по построению не зовётся, а projectBase('personal') бросает синхронно — одна точка на всех
-// вызывающих, им не нужно самим различать область и проект
+// projectId = null — области нет: список пуст, запроса нет. Личная область ('personal') ходит
+// на личные ручки чата («Личное» владельца), как проект — на ручки проекта
 export function useCharacters(projectId: string | null): { list: ImageEditCharacter[] | null; error: boolean } {
-  const pid = projectId && !isPersonalScope(projectId) ? projectId : null;
+  const pid = projectId;
   useSyncExternalStore(
     fn => { _listeners.add(fn); return () => { _listeners.delete(fn); }; },
     () => _version, () => _version,

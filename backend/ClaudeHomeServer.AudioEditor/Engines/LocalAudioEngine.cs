@@ -39,7 +39,8 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
 
     public string? ScopeRefusal(AudioEditScope scope)
     {
-        if (scope.IsPersonal || scope.Project is not { } project) return null;
+        if (!scope.HasFolder) return null;
+        var project = scope.Project!;
         return ProjectCapabilities.FilesOnServer(project) ? null : DeviceProjectReason;
     }
 

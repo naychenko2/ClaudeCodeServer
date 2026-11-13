@@ -42,9 +42,10 @@ public static class AudioProjectSaver
 
     public sealed record Outcome(Saved? Value, string? ErrorCode, string? Error, string? Suggestion = null);
 
-    // folder и fileName: у «Сохранить как» — выбор человека; у «следующей версии» fileName — имя черновика
+    // folder и fileName: у «Сохранить как» — выбор человека; у «следующей версии» fileName — имя черновика.
+    // defaultFolder — папка по умолчанию вместо папки нити (в «Личном» черновик идёт в audio/)
     public static Outcome Save(string root, AudioThread thread, IReadOnlyList<Item> items, string mode,
-        string? folder, string? fileName)
+        string? folder, string? fileName, string? defaultFolder = null)
     {
         if (items.Count == 0) return Invalid("У версии нет файлов");
         var primary = items.FirstOrDefault(i => i.Role == AudioFileRoles.Main) ?? items[0];
@@ -54,7 +55,7 @@ public static class AudioProjectSaver
         if (mode == As)
         {
             if (ValidateName(fileName, Path.GetExtension(primary.Source), out stem) is { } nameError) return Invalid(nameError);
-            var rel = folder ?? DefaultFolder(thread);
+            var rel = folder ?? defaultFolder ?? DefaultFolder(thread);
             if (ResolveFolder(root, rel, out dirRel) is { } folderError) return Invalid(folderError);
             var target = Plan(root, dirRel, stem, items);
             if (target.Any(t => Exists(t.Full)))
@@ -63,7 +64,7 @@ public static class AudioProjectSaver
             return Write(root, dirRel, stem, items, target);
         }
 
-        if (ResolveFolder(root, DefaultFolder(thread), out dirRel) is { } error) return Invalid(error);
+        if (ResolveFolder(root, defaultFolder ?? DefaultFolder(thread), out dirRel) is { } error) return Invalid(error);
         int first;
         if (thread.File is { } file)
         {

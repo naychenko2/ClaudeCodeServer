@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  createMockApi, findFaces, facesError, imageEditErrorCode, MOCK_SOURCE_SIZE, nameTakenSuggestion,
+  createMockApi, findFaces, imageEditErrorCode, MOCK_SOURCE_SIZE, nameTakenSuggestion,
   type ImageEditorApi,
 } from './api';
 
@@ -146,13 +146,12 @@ describe('findFaces', () => {
     );
   });
 
-  it('личная область: not_found без сетевого запроса', async () => {
+  it('личная область: тот же запрос на личных нитях чата', async () => {
     const { request } = await import('aihome_shell/kit');
     (request as ReturnType<typeof vi.fn>).mockClear();
-    const e = await rejection(findFaces('personal', 's1', 't1', 'v1'));
-    expect((e as { status: number }).status).toBe(404);
-    expect(facesError(e).code).toBe('not_found');
-    expect(request).not.toHaveBeenCalled();
+    (request as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ facesKey: 'k', faces: [] });
+    await findFaces('personal', 's1', 't1', 'v1');
+    expect(request).toHaveBeenCalledWith('/image-editor/chats/s1/threads/t1/versions/v1/faces', { method: 'POST' });
   });
 });
 

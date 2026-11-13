@@ -17,7 +17,8 @@ public sealed class AudioTrackSource(
     AudioJobThreads threads,
     AudioEditWorkspace workspace,
     IProjectManager projects,
-    ISessionDirectory directory) : IAudioTrackSource
+    ISessionDirectory directory,
+    PersonalFolderResolver? personal = null) : IAudioTrackSource
 {
     public async Task<AudioTrackDraft?> CreateDraftAsync(string ownerId, string scopeKey, string sessionId, string folder,
         CancellationToken ct)
@@ -48,8 +49,10 @@ public sealed class AudioTrackSource(
             if (version.File(AudioFileRoles.Main) is not { } main || directory.GetById(sessionId) is not { } session)
                 return null;
             var scope = AudioEditScope.Of(session);
-            // Исходник нити по файлу лежит в проекте: диск проекта нужен только ему
-            if (!scope.IsPersonal && projects.GetById(scope.Key) is { } project) scope = AudioEditScope.Of(project);
+            // Исходник нити по файлу лежит в проекте, у личной области — в «Личном» (если папка есть): диск нужен только ему
+            if (scope.IsPersonal)
+                scope = scope with { Project = personal?.Find(owner) };
+            else if (projects.GetById(scope.Key) is { } project) scope = AudioEditScope.Of(project);
             if (AudioVersionFiles.Resolve(workspace, owner, owner, scope, version, main) is not { } path || !File.Exists(path))
                 return null;
             return new AudioTrackFile(await File.ReadAllBytesAsync(path, ct), Path.GetExtension(path).ToLowerInvariant());

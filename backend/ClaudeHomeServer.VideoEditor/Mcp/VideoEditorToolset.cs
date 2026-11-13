@@ -52,6 +52,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
     private readonly IMcpSessionAccessor _sessions;
     private readonly IProjectManager _projects;
+    private readonly ClaudeHomeServer.Services.Composition.PersonalFolderResolver? _personalFolder;
     private readonly IEnumerable<IVideoEngine> _engines;
     private readonly VideoJobThreads _threads;
     private readonly VideoEditJobService _jobs;
@@ -59,6 +60,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
     private readonly VideoSceneService _scenes;
     private readonly FilmService _films;
     private readonly FilmSceneSaver _saver;
+    private readonly PersonalSceneSaver? _personalSaver;
     private readonly ITurnActorRegistry? _turnActors;
     private readonly FilmAssembler _assembler;
     private readonly IDelegatedTurnGate? _turnGate;
@@ -79,10 +81,14 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         IDelegatedTurnGate? turnGate = null,
         IConfiguration? config = null,
         ITurnActorRegistry? turnActors = null,
-        IVideoSceneVoice? voice = null)
+        IVideoSceneVoice? voice = null,
+        ClaudeHomeServer.Services.Composition.PersonalFolderResolver? personalFolder = null,
+        PersonalSceneSaver? personalSaver = null)
     {
+        _personalSaver = personalSaver;
         _voice = voice;
         _turnActors = turnActors;
+        _personalFolder = personalFolder;
         _sessions = sessions;
         _projects = projects;
         _engines = engines;
@@ -178,8 +184,6 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         CancellationToken ct)
     {
         var folder = Str(args, "folder");
-        if (folder is not null && scope.Project is null)
-            return Deny("В чате вне проекта папок нет: вызови video_new без folder.");
         if (ApplySettings(args, _prefs.ForNewScene(owner, scope), out var settings) is { } bad) return Deny(bad);
 
         var call = await _scenes.AddAsync(owner, scope, session.Id, folder, settings, Str(args, "name"), null, ct, ContextActor.Agent);
@@ -488,7 +492,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         if (_voice is null)
             return Fail(VideoEditorErrors.ProviderUnavailable, "Модуль «Звук» на этом сервере не подключён: сцену озвучить нельзя");
 
-        var started = await _voice.StartAsync(new VideoVoiceRequest(owner, Actor(owner, session), scope.Project?.Id, session.Id,
+        var started = await _voice.StartAsync(new VideoVoiceRequest(owner, Actor(owner, session), VideoEditScope.ProjectIdOf(scope.Key), session.Id,
             sceneId, versionId, Str(args, "text"), Str(args, "model")), ct);
         if (started.Value is not { } created) return Fail(started.Code, started.Error);
         return Json(new
@@ -587,6 +591,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         CancellationToken ct)
     {
         if (GateTurn(owner, session, "Сохранение сцены в проект") is { } denied) return denied;
+        if (scope.IsPersonal) return await SavePersonalSceneAsync(args, owner, session, scope, ct);
         if (FilmsRefusal(scope) is { } refusal) return refusal;
         if (Str(args, "sceneId") is not { } sceneId) return Deny("Не указан sceneId: возьми его из video_state.");
 
@@ -602,6 +607,29 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             done.AddedToFilm,
             note = "Сцена сохранена в проект (перезаписи нет); человек видит тихую строку «✦ Claude» в ленте. "
                 + "Собрать фильм — video_film_build.",
+        });
+    }
+
+    // Личная область: клип в Personal/video/ либо, с filmPath/папкой video/<фильм>, сцена в фильм «Личного» (Ф2-6).
+    // Папку «Личного» создаёт сам сохранитель
+    private async Task<McpToolCallResult> SavePersonalSceneAsync(JsonObject args, string owner, Session session, VideoEditScope scope,
+        CancellationToken ct)
+    {
+        if (_personalSaver is null) return Deny("Сохранение в «Личное» недоступно на этом сервере.");
+        if (Str(args, "sceneId") is not { } sceneId) return Deny("Не указан sceneId: возьми его из video_state.");
+        var saved = await _personalSaver.SaveAsync(owner, scope,
+            new SaveSceneRequest(session.Id, sceneId, Str(args, "versionId"), Str(args, "folder"), Str(args, "fileName"), Str(args, "filmPath")),
+            VideoInitiators.Agent, ct, Actor(owner, session));
+        if (saved.Value is not { } done) return FilmFail(saved.ErrorCode, saved.Error, saved.Conflict);
+        return Json(new
+        {
+            done.Path,
+            done.FramePaths,
+            done.AddedToFilm,
+            note = "Сцена сохранена в «Личное» (перезаписи нет); человек видит тихую строку «✦ Claude» в ленте. "
+                + (done.AddedToFilm
+                    ? "Сцена встала в фильм; собрать его — video_film_build."
+                    : "Это клип в папке video без фильма: чтобы собрать фильм, сохраняй сцены с filmPath или folder video/<фильм>."),
         });
     }
 
@@ -746,9 +774,10 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             agentLaunch = _agentLaunch,
             note = (state.Scenes.Count, scope.IsPersonal) switch
             {
-                (0, true) => "В этом чате ещё нет сцен. Заведи новую (video_new): это чат вне проекта, фильмов и файлов проекта тут нет.",
+                (0, true) => "В этом чате ещё нет сцен. Заведи новую (video_new): это чат вне проекта, файлы и фильмы здесь — в «Личном».",
                 (0, false) => "В этом чате ещё нет сцен. Заведи новую (video_new), настрой (video_scene_set) и сними (video_shoot).",
-                (_, true) => "Каждый вариант съёмки — версия сцены. Фильмы и сохранение в проект — только в чате проекта.",
+                (_, true) => "Каждый вариант съёмки — версия сцены. Сохранить версию в «Личное» — video_save_scene (с filmPath или "
+                    + "folder video/<фильм> — сцена встаёт в фильм «Личного»), править и собирать фильм — video_film_edit и video_film_build.",
                 _ => "Каждый вариант съёмки — версия сцены. Сохранить версию в проект — video_save_scene, править и собирать фильм — "
                     + "video_film_edit и video_film_build.",
             },
@@ -817,12 +846,13 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         return denied is null ? null : Deny(denied);
     }
 
-    // Фильмы и сохранение в проект: у личной области диска проекта нет, у локального проекта (ADR-016) файлы на
-    // устройстве — отказ до обращения к диску
+    // Фильмы и сохранение в проект: у личной области без папки «Личного» фильмов ещё нет (её создаёт сохранение сцены),
+    // у локального проекта (ADR-016) файлы на устройстве — отказ до обращения к диску
     private static McpToolCallResult? FilmsRefusal(VideoEditScope scope)
     {
         if (scope.Project is not { } project)
-            return Fail(VideoEditorErrors.PersonalScopeNoFilms, "Фильмы — только в чате проекта");
+            return Fail(VideoEditorErrors.PersonalScopeNoFilms,
+                "В «Личном» ещё нет фильмов: сохрани сцену с filmPath или folder video/<фильм> (video_save_scene) — фильм появится");
         return ClaudeHomeServer.Models.ProjectCapabilities.FilesOnServer(project)
             ? null
             : Fail(VideoEditorErrors.ProjectLocalUnsupported, "Файлы локального проекта лежат на устройстве: сервер их не трогает");
@@ -845,7 +875,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             scope = VideoEditScope.Of(found);
         }
         else
-            scope = VideoEditScope.Of(owned);
+            // Личная область: «Личное» — только если папка уже есть (инструменты её не создают), ключ остаётся personal
+            scope = VideoEditScope.Of(owned) with { Project = _personalFolder?.Find(context.OwnerId) };
         session = owned;
         return true;
     }

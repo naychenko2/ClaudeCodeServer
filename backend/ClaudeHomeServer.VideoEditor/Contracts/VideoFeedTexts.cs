@@ -8,6 +8,9 @@ public static class VideoFeedTexts
     public static string SceneSaved(string initiator, string sceneName, string path) =>
         $"{Verb(initiator, "Сохранил", "Вы сохранили")} сцену «{sceneName}» в проект: {path}";
 
+    public static string SceneSavedPersonal(string initiator, string sceneName, string path) =>
+        $"{Verb(initiator, "Сохранил", "Вы сохранили")} сцену «{sceneName}» в «Личное»: {path}";
+
     public static string FilmBuilt(string initiator, string filmName, string? file) =>
         $"{Verb(initiator, "Собрал", "Вы собрали")} фильм {filmName}: {file}";
 

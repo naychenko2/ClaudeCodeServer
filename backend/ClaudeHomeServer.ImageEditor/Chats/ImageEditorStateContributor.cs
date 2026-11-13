@@ -251,7 +251,7 @@ public sealed class ImageEditorStateContributor(
         + "Видео, аудио и музыка — как раньше.\n" + NewOrContinueRule;
 
     // То же для личного чата вне проекта: local-media там нет, локальная картинка — драйвер local
-    // редактора, а черновик человек скачивает, а не сохраняет в проект
+    // редактора, а черновик человек сохраняет в «Личное» (папка images), а не в проект
     public const string PersonalPriorityRule =
         "Картинки в этом чате рисуй через image_new → image_generate: они уважают выбор человека в "
         + "строке контекста и цену. Просьба нарисовать локально / на своей видеокарте / бесплатно — это "
@@ -284,9 +284,9 @@ public sealed class ImageEditorStateContributor(
     public static string DraftFolderText(string? folder) =>
         string.IsNullOrEmpty(folder) ? "корень проекта" : $"папку {folder}";
 
-    // Куда денется черновик: в проекте человек сохранит его в папку, в личном чате — скачает
+    // Куда денется черновик: в проекте человек сохранит его в папку, в личном чате — в «Личное»
     public static string DraftSaveText(string? folder, bool personal) =>
-        personal ? "человек скачает её" : $"человек сохранит её в {DraftFolderText(folder)}";
+        personal ? "человек сохранит её в «Личное»" : $"человек сохранит её в {DraftFolderText(folder)}";
 
     private static string Outcome(ImageEditJobDto? job) => job switch
     {

@@ -119,6 +119,52 @@ public sealed class VoiceLaunchTests : IDisposable
             .Should().Be("https://cdn.test/e/voice.safetensors");
     }
 
+    // ── Личная область (ADR-040 Ф2-5) ────────────────────────────────────────────
+
+    // Голос из папки «Личного» применяется так же, как проектный: ключ области personal, корень — Personal
+    [Fact]
+    public async Task FalQwenClone_PersonalScope_VoiceFromPersonalFolder()
+    {
+        var personalRoot = Path.Combine(_root, "Personal");
+        Directory.CreateDirectory(personalRoot);
+        var personal = new AudioEditScope(AudioEditScope.Personal,
+            new Project { Id = "personal-id", RootPath = personalRoot, OwnerId = Owner, Kind = ProjectKind.Personal })
+            { TenantOwnerId = Owner };
+        var slug = _lib.CreateFromSamples(personal, "Аня", Transcript, [new VoiceSampleUpload(Wav)]).Value!.Manifest.Slug;
+        Directory.Exists(Path.Combine(personalRoot, "voices", slug)).Should().BeTrue();
+        _lib.List(_scope)!.Select(v => v.Slug).Should().Equal(_slug);
+        _fal.Job(AudioCatalog.FalQwenClone, "c1", ["COMPLETED"], """{"speaker_embedding":{"url":"https://cdn.test/e/voice.safetensors"}}""");
+        _fal.Job(AudioCatalog.FalQwenTts, "t1", ["COMPLETED"], """{"audio":{"url":"https://cdn.test/e/out1.mp3"}}""");
+        _fal.File("https://cdn.test/e/out1.mp3", [9]);
+        var svc = Service(Fal());
+
+        var quote = await svc.QuoteAsync(Owner, personal, new AudioQuoteRequest(AudioModes.Voice,
+            AudioEditJobService.OpName(AudioOp.CloneVoice), "fal", AudioCatalog.FalQwenClone, Text: "Скажи это моим голосом"),
+            CancellationToken.None);
+        quote.Error.Should().BeNull();
+        var started = await svc.StartAsync(Owner, personal,
+            new AudioJobInput(quote.Value!.QuoteId, Text: "Скажи это моим голосом", Voice: AudioVoiceRefs.Prefix + slug),
+            CancellationToken.None);
+        started.Error.Should().BeNull();
+        await svc.WhenDone(started.Value!.JobId);
+
+        JsonNode.Parse(Posts()[0].Body!)!["audio_url"]!.GetValue<string>()
+            .Should().Be("data:audio/wav;base64," + Convert.ToBase64String(Wav));
+        VoiceStore.Get(personalRoot, slug)!.Providers[VoiceProviders.FalQwen]!["embeddingUrl"]!.GetValue<string>()
+            .Should().Be("https://cdn.test/e/voice.safetensors");
+    }
+
+    // Личная область без папки: голос для запуска — отказ области до диска
+    [Fact]
+    public async Task PersonalScope_NoFolder_ForLaunchRefused()
+    {
+        var personal = new AudioEditScope(AudioEditScope.Personal, null);
+
+        var use = await _lib.ForLaunchAsync(personal, _slug, CancellationToken.None);
+
+        use.ErrorCode.Should().Be(VoiceLibrary.ProjectOnlyCode);
+    }
+
     // ── fal: MiniMax ─────────────────────────────────────────────────────────────
 
     [Fact]

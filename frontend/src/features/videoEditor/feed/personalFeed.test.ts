@@ -197,7 +197,7 @@ describe('лента видео в личном чате', () => {
     expect(html).not.toBe('');
     expect(html).toContain('Сцена 1');
     expect(html).toContain('data-video-enhance');
-    expect(html).not.toContain('Сохранить сцену');
+    expect(html).toContain('Сохранить сцену');
   });
 
   it('video_launch_versions рисует строку запуска', () => {

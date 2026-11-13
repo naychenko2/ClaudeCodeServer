@@ -9,9 +9,6 @@ import {
 import type { AudioQuote } from '../api';
 import { money } from '../panel/model';
 
-export const PERSONAL_TITLE = '«Голоса» живут в проекте';
-export const PERSONAL_TEXT =
-  'Библиотека хранится в папке voices/ проекта. В личном чате можно озвучивать готовыми дикторами, по описанию и по образцу из файла.';
 export const EMPTY_TITLE = 'Голосов пока нет';
 export const EMPTY_TEXT =
   'Добавьте запись 5–15 секунд чистой речи. Голос — это записи человека и их расшифровка: его смогут взять все поставщики, которые умеют клонировать.';
@@ -20,16 +17,12 @@ export const MINIMAX_TTL_TEXT = 'MiniMax удаляет клон через 7 д
 export type VoicesView =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
-  | { kind: 'personal' }
   | { kind: 'empty' }
   | { kind: 'list'; voices: AudioVoice[] };
 
-// Личный чат определяется и по области (запроса нет), и по ответу сервера available:false
-export function voicesView(personal: boolean, list: VoicesList | null, error: string | null): VoicesView {
-  if (personal) return { kind: 'personal' };
+export function voicesView(list: VoicesList | null, error: string | null): VoicesView {
   if (error) return { kind: 'error', message: error };
   if (!list) return { kind: 'loading' };
-  if (!list.available) return { kind: 'personal' };
   if (list.voices.length === 0) return { kind: 'empty' };
   return { kind: 'list', voices: [...list.voices].sort((a, b) => a.name.localeCompare(b.name, 'ru')) };
 }

@@ -36,10 +36,9 @@ describe('faceRect: bbox в пикселях → доли', () => {
 
 // ── Видимость входа ───────────────────────────────────────────────────────────
 describe('faceSwapEntryVisible: вход скрыт', () => {
-  const on = { personal: false, flag: true, hasCharacters: true, localAvailable: true };
+  const on = { flag: true, hasCharacters: true, localAvailable: true };
   it('все условия — вход есть', () => expect(faceSwapEntryVisible(on)).toBe(true));
   it('флаг off — нет', () => expect(faceSwapEntryVisible({ ...on, flag: false })).toBe(false));
-  it('личная область — нет', () => expect(faceSwapEntryVisible({ ...on, personal: true })).toBe(false));
   it('нет персонажей — нет', () => expect(faceSwapEntryVisible({ ...on, hasCharacters: false })).toBe(false));
   it('локальные модели недоступны — нет', () => expect(faceSwapEntryVisible({ ...on, localAvailable: false })).toBe(false));
 });

@@ -1,12 +1,11 @@
 // Клиент библиотеки «Голоса» (ADR-021 §2): ручки AudioVoicesController
-// (/projects/{projectId}/audio-editor/voices) и единственная ручка личного чата
-// (/audio-editor/chats/{sessionId}/voices — всегда available:false, поэтому в сеть не ходим).
-// Типы — зеркало VoiceDto и VoiceProviderState бэкенда (Voices/VoiceManifest.cs). Мутирующих ручек
-// у личного чата нет вовсе: отказ — до запроса.
+// (/projects/{projectId}/audio-editor/voices) и PersonalAudioVoicesController — те же ручки на личном
+// чате (/audio-editor/chats/{sessionId}/voices, «Личное» владельца, ADR-040 Ф2-5).
+// Типы — зеркало VoiceDto и VoiceProviderState бэкенда (Voices/VoiceManifest.cs).
 
 import { readStoredToken, request } from 'aihome_shell/kit';
 import type { AudioQuote } from '../api';
-import { audioBase, isPersonalScope } from '../scope';
+import { audioBase, enterVoicesScope, voicesScopeBase } from '../scope';
 
 export type VoiceKind = 'samples' | 'rvc';
 export type VoiceProviderKey = 'higgsfield' | 'minimax' | 'falQwen' | 'rvc';
@@ -46,12 +45,7 @@ export interface NewVoiceInput {
 export const MAX_VOICE_SAMPLES = 5;
 export const MAX_VOICE_SAMPLE_MB = 50;
 
-const projectOnly = () => new Error('Библиотека «Голоса» живёт в проекте — в личном чате её нет');
-
-function voicesBase(scope: string): string {
-  if (isPersonalScope(scope)) throw projectOnly();
-  return `${audioBase(scope, null)}/voices`;
-}
+const voicesBase = (scope: string) => `${voicesScopeBase(scope)}/voices`;
 
 const voiceUrl = (scope: string, slug: string) => `${voicesBase(scope)}/${encodeURIComponent(slug)}`;
 
@@ -65,11 +59,11 @@ export function samplesForm(input: Partial<NewVoiceInput>): FormData {
 }
 
 export const voicesApi = {
-  // Личный чат — тот же ответ, что дал бы сервер (available:false), без запроса
-  list: (scope: string, sessionId: string | null): Promise<VoicesList> =>
-    isPersonalScope(scope)
-      ? Promise.resolve({ available: false, voices: [] })
-      : request<VoicesList>(`${audioBase(scope, sessionId)}/voices`, { live: true }),
+  // Личный чат: без «Личного» (ещё не создавали) список пуст, available: true
+  list: (scope: string, sessionId: string | null): Promise<VoicesList> => {
+    enterVoicesScope(scope, sessionId);
+    return request<VoicesList>(`${audioBase(scope, sessionId)}/voices`, { live: true });
+  },
   create: (scope: string, input: NewVoiceInput) =>
     request<AudioVoice>(voicesBase(scope), { method: 'POST', body: samplesForm(input), timeoutMs: 300_000 }),
   update: (scope: string, slug: string, patch: { name?: string; transcript?: string }) =>

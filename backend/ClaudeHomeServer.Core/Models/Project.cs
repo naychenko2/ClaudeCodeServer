@@ -10,6 +10,11 @@ namespace ClaudeHomeServer.Models;
 // по-прежнему не используется: старая растровая запись не должна стать «новой картинкой».
 public enum ProjectIconKind { Initials = 0, Glyph = 2, Image = 3 }
 
+// Вид проекта (ADR-040). Числа закреплены явно, как у ProjectIconKind: enum лежит на диске
+// числом. Personal — проект «Личное» из отдельного стора personal-projects.json; в
+// projects.json такие записи не попадают, поле — маркер для защиты в глубину.
+public enum ProjectKind { Regular = 0, Personal = 1 }
+
 // Тег проекта — элемент реестра общих тегов (имя, порядок, цвет)
 public sealed class ProjectTag
 {
@@ -98,6 +103,9 @@ public class Project
     // Смена при существующих чатах запрещена (409). Nullable-поле: старые записи
     // projects.json читаются серверными, BackupSchema.Version не двигается.
     public string? DeviceId { get; set; }
+    // Вид проекта; обычный в файл не пишется — projects.json остаётся прежним
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public ProjectKind Kind { get; set; } = ProjectKind.Regular;
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public string? OwnerId { get; set; }

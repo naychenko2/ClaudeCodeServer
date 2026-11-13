@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.ChatSubjects;
 
@@ -32,11 +33,14 @@ public class ProjectManager : IProjectManager
     private readonly Lock _saveLock = new();
     // Рубильник и флаг общих проектов; null — в тестах без гейта (участники не видны, fail-closed)
     private readonly SharedProjectsGate? _sharedGate;
+    // Стор «Личного»: нужен только EnsureRootFree; null — в тестах без стора
+    private readonly IPersonalProjects? _personal;
 
     public ProjectManager(IConfiguration config, UserStore users, AppSettingsService appSettings,
         Execution.SandboxManager? sandbox = null, UserHomeResolver? homes = null,
-        SharedProjectsGate? sharedGate = null)
+        SharedProjectsGate? sharedGate = null, IPersonalProjects? personal = null)
     {
+        _personal = personal;
         _users = users;
         _sharedGate = sharedGate;
         _sandbox = sandbox;
@@ -107,6 +111,13 @@ public class ProjectManager : IProjectManager
             && ProjectCapabilities.FolderKey(p) == key);
         if (taken is not null)
             throw new ArgumentException($"Эта папка уже подключена как проект «{taken.Name}»");
+        // «Личное» лежит в другом сторе и в _projects не попадает, но папку делить с ним нельзя (ADR-040 §1.3)
+        // Совпадение, вложенность и родитель: корень проекта не должен пересекаться с папкой «Личного»
+        if (_personal?.GetPersonalOf(userId) is { } personal
+            && (ProjectCapabilities.FolderKey(personal) == key
+                || deviceId is null && ProjectCapabilities.FilesOnServer(personal)
+                    && (UserHomeResolver.IsInside(rootPath, personal.RootPath) || UserHomeResolver.IsInside(personal.RootPath, rootPath))))
+            throw new ArgumentException("Эта папка занята служебным проектом");
     }
 
     // Путь серверного проекта: каноничная форма, папка обязана существовать на сервере

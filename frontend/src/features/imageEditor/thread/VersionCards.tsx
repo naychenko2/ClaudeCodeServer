@@ -26,10 +26,10 @@ import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { enterScope, isPersonalScope } from '../scope';
 import { saveToProject, versionSaved } from './actions';
-import { download, PERSONAL_DOWNLOAD_HINT } from './download';
+import { download } from './download';
 import {
   downloadName, findVersion, fromVersion, launchEndNote, launchOf, launchVersions, ORIGIN,
-  threadName, versionDone, versionHasImage, versionMeta, versionName, versionPrimary, versionStep,
+  threadName, versionDone, versionHasImage, versionMeta, saveLabel, versionName, versionPrimary, versionStep,
 } from './model';
 import { recordOf } from './records';
 import { CharacterPhotosStrip } from './CharacterPhotosStrip';
@@ -163,7 +163,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const character = stripVisible({ versionId: version.id, cropNote: cropNote ?? null, character: launch?.character ?? null })
     ? (launch?.character ?? null) : null;
   const personal = isPersonalScope(projectId);
-  const primary = versionPrimary(thread, version, focused, saved, personal);
+  const primary = versionPrimary(thread, version, focused, saved);
   const save = () => { if (src) void download(src, mime => downloadName(thread, version, mime)); };
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); await fn(); setBusy(false); };
   const open = () => openEditor(sessionId, thread.id, version.id);
@@ -181,7 +181,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const metaTitle = sim === 'лицо не найдено' ? `${meta} — сходство не посчитано` : meta;
   const faceCatalog = useCatalog(projectId);
   const faceLocal = faceCatalog ? (faceCatalog.providers.find(p => p.key === 'local')?.available ?? true) : false;
-  const faceEntryVisible = !personal && (faceChars?.length ?? 0) > 0 && faceLocal;
+  const faceEntryVisible = (faceChars?.length ?? 0) > 0 && faceLocal;
   const [faceMenu, setFaceMenu] = useState(false);
   // «Доводка» (Ш8): только у версии, нарисованной Fibo 2.0 с JSON-описанием сцены
   const [refine, setRefine] = useState(false);
@@ -201,7 +201,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           </Badge>
         )}
         {current && <Badge size="xs" tone="accent" icon={ic(Target)}>{fill.byAgent ? 'В работе ✦' : 'В работе'}</Badge>}
-        {!personal && <Badge size="xs" tone={saved ? 'success' : 'warning'}>{saved ? 'в проекте' : 'черновик'}</Badge>}
+        <Badge size="xs" tone={saved ? 'success' : 'warning'}>{saved ? (personal ? 'в «Личном»' : 'в проекте') : 'черновик'}</Badge>
       </div>
       {done && <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{done}</div>}
       <Picture src={src} onOpen={open} />
@@ -224,12 +224,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
         {primary === 'save' && (
           <Button size="xs" variant="secondary" leftIcon={ic(Save)} disabled={busy}
             onClick={() => { void run(() => saveToProject(projectId, sessionId, thread, versionStep(thread, version))); }}>
-            Сохранить в проект
-          </Button>
-        )}
-        {primary === 'download' && src && (
-          <Button size="xs" variant="secondary" leftIcon={ic(Download)} title={personal ? PERSONAL_DOWNLOAD_HINT : undefined} onClick={save}>
-            Скачать
+            {saveLabel(personal)}
           </Button>
         )}
         <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={version.id} fill={fill} />
@@ -241,7 +236,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           </Button>
         )}
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
-          {src && primary !== 'download' && (
+          {src && (
             <IconButton size="xs" title="Скачать" ariaLabel="Скачать" onClick={save}>
               {ic(Download)}
             </IconButton>

@@ -44,6 +44,7 @@ import { api } from './lib/api'
 import { notificationTargetUrl } from './swPush'
 import { idbClear } from './lib/idb'
 import { resetChatContextMemory } from './lib/chatContext/forget'
+import { runLogoutResets } from './lib/logoutReset'
 import { setAllFlags, useFeatureFlagsRefresh } from './lib/featureFlags'
 import { SUBSYSTEMS, isSubsystemEnabled, setAllSubsystems, useSubsystem } from './lib/subsystems'
 import { getSubsystem, getSubsystemTab } from './lib/subsystems/registry'
@@ -581,6 +582,8 @@ export default function App() {
       resetCacheWarnOnLogout()
       resetWallOwner()
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
+    runLogoutResets() // сторы модулей прежнего пользователя — см. cc-unauthorized выше
+      runLogoutResets() // сторы модулей (персонажи «Картинок» и др.) прежнего пользователя
       resetFeaturesIndexOwner() // срез индекса фич прежнего владельца (FI-3)
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
       // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого

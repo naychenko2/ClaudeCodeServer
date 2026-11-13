@@ -418,7 +418,7 @@ public sealed class AudioEditJobService : IDisposable
             input.Language, input.DurationSec, input.StartSec, input.EndSec, parameters,
             input.Source, input.Reference, input.Clips, input.VoiceModel, input.VoiceIndex, input.Seed, voice.Value,
             OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: HeavyOf(job),
-            ProjectId: job.Scope.Project?.Id, SourceJobId: job.Id, Video: input.Video);
+            ProjectId: AudioEditScope.ProjectIdOf(job.Scope.Key), SourceJobId: job.Id, Video: input.Video);
         job.VideoLink = input.VideoLink;
         job.Completion = Task.Run(() => RunAsync(job, engine, request));
 

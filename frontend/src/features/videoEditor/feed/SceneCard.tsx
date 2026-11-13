@@ -95,6 +95,8 @@ export interface SceneCardView {
   versionModel: string | null;
   isCurrent: boolean;
   savedPath: string | null;
+  // Личная область: сохранено в «Личное», а не в проект
+  personal: boolean;
   canSave: boolean;
   canDownload: boolean;
   canAddToFilm: boolean;
@@ -175,12 +177,13 @@ export function sceneCardView(p: {
     versionModel: version ? modelLabel(p.catalog ?? null, version.provider, version.model) : null,
     isCurrent: !!version && version.versionId === cur?.versionId,
     savedPath: saved?.path ?? null,
-    canSave: !!version && !personal && !saved,
+    personal,
+    canSave: !!version && !saved,
     canDownload: !!version && personal,
-    canAddToFilm: !!version && !personal && !scene.filmRef,
+    canAddToFilm: !!version && !scene.filmRef,
     stale: staleNotes(scene),
     emptyText: !version && !running ? (scene.settings.text ? `«${scene.settings.text.slice(0, 140)}»` : 'Сцена без клипа — кадры и текст в редакторе сцены') : null,
-    film: scene.filmRef && !personal ? { path: scene.filmRef.path, name: filmName(scene.filmRef.path), position: scene.filmRef.position } : null,
+    film: scene.filmRef ? { path: scene.filmRef.path, name: filmName(scene.filmRef.path), position: scene.filmRef.position } : null,
   };
 }
 
@@ -327,9 +330,9 @@ export function SceneCardView({ v, src, busy, a, chooser, gpuBlock }: { v: Scene
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
         {v.canDownload && (
           <Button size="sm" variant="secondary" leftIcon={ic(Download)} onClick={a.onDownload}
-            title="В личном чате клип живёт только в этом чате — скачайте файл">Скачать</Button>
+            title="Скачать клип файлом">Скачать</Button>
         )}
-        {v.savedPath && <Badge tone="success">В проекте: {v.savedPath.split('/').pop()}</Badge>}
+        {v.savedPath && <Badge tone="success">{v.personal ? 'В «Личном»' : 'В проекте'}: {v.savedPath.split('/').pop()}</Badge>}
         {v.canSave && <Button size="sm" variant="secondary" leftIcon={ic(Save)} loading={busy} onClick={a.onSave}>Сохранить сцену</Button>}
         {v.canAddToFilm && <Button size="sm" variant="ghost" loading={busy} onClick={a.onAddToFilm}>В фильм →</Button>}
         {!v.focused && (
@@ -402,7 +405,7 @@ export async function addToFilm(scope: string, sessionId: string, scene: VideoSc
 }
 
 // «Сохранить сцену»: клип ложится в папку фильма и встаёт в него
-export async function saveToFolder(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, to: SaveTarget): Promise<void> {
+export async function saveToFolder(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, to: SaveTarget | null): Promise<void> {
   const res = await saveScene(scope, sessionId, scene, versionId, to);
   if (res?.addedToFilm) void loadFilmList(scope, sessionId, true);
 }
@@ -410,6 +413,8 @@ export async function saveToFolder(scope: string, sessionId: string, scene: Vide
 // Старт «Сохранить сцену» / «В фильм →»: открытый фильм старше папки сцены; нигде не лежит — false, спросить человека
 export function startSceneSave(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, kind: 'save' | 'film'): boolean {
   const to = saveTargetFor(getFocusedFilmPath(sessionId), scene);
+  // Личная область: «Сохранить сцену» вне фильма — плоский клип в Personal/video/, спрашивать нечего
+  if (!to && kind === 'save' && isPersonalScope(scope)) { void saveToFolder(scope, sessionId, scene, versionId, null); return true; }
   if (!to) return false;
   void (kind === 'save' ? saveToFolder(scope, sessionId, scene, versionId, to) : addToFilm(scope, sessionId, scene, versionId, to));
   return true;

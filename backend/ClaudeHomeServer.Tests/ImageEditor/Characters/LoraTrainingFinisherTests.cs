@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -355,6 +356,75 @@ public sealed class LoraTrainingFinisherTests : IDisposable
         await _sut.SettleAsync(Guid.NewGuid().ToString(), _project.Id, Slug, default);
 
         _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Training);
+    }
+
+    // «Личное» не отдают ни GetById, ни GetAll (ADR-040): доводчик находит его через IPersonalProjects
+    private LoraTrainingFinisher PersonalOnlySut(out Mock<IPersonalProjects> personal)
+    {
+        var folder = new Project { Id = _project.Id, Name = "Личное", RootPath = _root, OwnerId = Owner, Kind = ProjectKind.Personal };
+        var projects = new Mock<IProjectManager>();
+        projects.Setup(p => p.GetAll()).Returns([]);
+        personal = new Mock<IPersonalProjects>();
+        personal.Setup(p => p.GetByIdIncludingPersonal(folder.Id)).Returns(folder);
+        personal.Setup(p => p.GetAllPersonal()).Returns([folder]);
+        return new LoraTrainingFinisher(projects.Object, _runs, NullLogger<LoraTrainingFinisher>.Instance,
+            _trainer, _media.Object, personal: personal.Object);
+    }
+
+    [Fact]
+    public async Task Personal_FirstVersion_BecomesReady_AndConnectsItself()
+    {
+        var sut = PersonalOnlySut(out _);
+        Training(1);
+        Job(1, LoraTrainStatus.Completed);
+
+        await sut.RunOnceAsync(default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Ready);
+        ActiveLora().Should().Be(File(1), "первая готовая версия личного персонажа подключается сама");
+    }
+
+    [Fact]
+    public async Task Personal_SettleAsync_FindsFolderById_AndFinishesRun()
+    {
+        var sut = PersonalOnlySut(out var personal);
+        Training(1);
+        Job(1, LoraTrainStatus.Completed);
+
+        await sut.SettleAsync(Owner, _project.Id, Slug, default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Ready);
+        personal.Verify(p => p.GetByIdIncludingPersonal(_project.Id), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task Personal_DeletingVersion_IsErasedWhenWorkerConfirms()
+    {
+        var sut = PersonalOnlySut(out _);
+        _runs.Create(_root, Slug, new CharacterLoraRun(1, RunId(1), null, CharacterLoraRuns.Status.Deleting, null,
+            "standard", "ccsandrey", 30, "sha256:ab", DateTimeOffset.UtcNow, null, null, null, null, null));
+        _runs.RegisterDeleting(_root, Slug);
+        _trainer.Delete[RunId(1)] = LoraDeleteState.Deleted;
+
+        await sut.RunOnceAsync(default);
+
+        _runs.Get(_root, Slug, RunId(1)).Should().BeNull("запись «deleting» личного персонажа вычищается");
+    }
+
+    [Fact]
+    public async Task WithoutPersonalSeam_PersonalProjectIsInvisible()
+    {
+        Training(1);
+        Job(1, LoraTrainStatus.Completed);
+        var projects = new Mock<IProjectManager>();
+        projects.Setup(p => p.GetAll()).Returns([]);
+        var sut = new LoraTrainingFinisher(projects.Object, _runs, NullLogger<LoraTrainingFinisher>.Instance,
+            _trainer, _media.Object);
+
+        await sut.SettleAsync(Owner, _project.Id, Slug, default);
+
+        _runs.Get(_root, Slug, RunId(1))!.Status.Should().Be(CharacterLoraRuns.Status.Training,
+            "без IPersonalProjects «Личное» не находится — прежнее поведение");
     }
 
     private sealed class FakeTrainer : ILocalLoraTrainer

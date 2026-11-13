@@ -8,6 +8,7 @@ import {
   Button, ConfirmDialog, ContextAddButton, IconButton, Notice, ICON_SIZE, ICON_STROKE, C, FS, R, SP,
 } from 'aihome_shell/kit';
 import { loraTrainApi } from '../api';
+import { isPersonalScope } from '../scope';
 import type { CardAction } from './characterCardView';
 import { CHIPS, HERO } from './characterTexts';
 import type { useCharacterTrain } from './useCharacterTrain';
@@ -166,7 +167,9 @@ export function CharacterHero({
       body = main(startBtn(HERO.retry, <RefreshCw {...ico} />));
       break;
     case 'toContext':
-      body = contextSessionId
+      body = isPersonalScope(projectId)
+        ? main(<Button variant="primary" size="lg" fullWidth disabled leftIcon={<Plus {...ico} />}>{HERO.toChatContext}</Button>, HERO.personalContext)
+        : contextSessionId
         ? <div data-hero="main"><ContextAddButton sessionId={contextSessionId} projectId={projectId} size="lg" toggle
           candidate={{ kind: 'image-character', ref: { slug } }} /></div>
         : main(<Button variant="primary" size="lg" fullWidth disabled leftIcon={<Plus {...ico} />}>{HERO.toChatContext}</Button>, HERO.noChat);

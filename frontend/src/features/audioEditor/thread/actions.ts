@@ -70,17 +70,16 @@ export type SaveOutcome =
   | { ok: false; error: string; suggestion: string | null };
 
 // «Сохранить в проект» — следующей версией рядом с исходником; as — «Сохранить как…» в папку и под имя.
-// В личном чате проекта нет: сюда не доходит, вместо кнопки — «Скачать»
+// В личном чате — то же, но в audio/ «Личного»
 export async function saveVersion(
   scope: string, sessionId: string, thread: AudioThread, versionId: string,
   as?: { folder: string; fileName: string },
 ): Promise<SaveOutcome> {
-  if (isPersonalScope(scope)) return { ok: false, error: 'У личного чата нет проекта — версию можно только скачать', suggestion: null };
   try {
     const r = await audioApi.save(scope, sessionId, thread.id, as
       ? { versionId, mode: 'as', folder: as.folder, fileName: as.fileName }
       : { versionId, mode: 'nextVersion', ...(thread.file ? {} : { fileName: draftStem(thread) }) });
-    showToast(`Сохранено: ${r.path}`, r.files.length > 1 ? `файлов: ${r.files.length}` : '', 'info');
+    showToast(`${isPersonalScope(scope) ? 'Сохранено в Личное' : 'Сохранено'}: ${r.path}`, r.files.length > 1 ? `файлов: ${r.files.length}` : '', 'info');
     return { ok: true, path: r.path };
   } catch (e) {
     const suggestion = nameTakenSuggestion(e);

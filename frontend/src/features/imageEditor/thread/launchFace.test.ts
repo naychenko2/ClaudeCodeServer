@@ -15,7 +15,6 @@ const fakeStorage = (m: Map<string, string>) => ({
 }) as Storage;
 vi.stubGlobal('localStorage', fakeStorage(storage));
 vi.stubGlobal('sessionStorage', fakeStorage(new Map()));
-const { imageEditorApi } = await import('../api');
 const { loadCatalog } = await import('./catalog');
 
 // «Подставить персонажа» (этап 2 · шаг 10c): подпись «{Имя} → лицо {n}» на карточке запуска
@@ -118,12 +117,10 @@ describe('LaunchAnchor: строка идущего запуска', () => {
   });
 });
 
-// Личный чат вне проекта (регрессия naychenko.me): ctx.projectId = null → область 'personal'.
-// useCharacters('personal') не должен дёргать проектную ручку персонажей (projectBase бросает
-// синхронно) — рендер якоря/карточки в личной области идёт без броска и без /characters.
+// Личный чат вне проекта: ctx.projectId = null → область 'personal'. Рендер якоря/карточки идёт без
+// броска; маршрут персонажей личного чата проверяет api-слой (api.test.ts).
 describe('LaunchAnchor / VersionCard: личный чат (ctx.projectId = null)', () => {
-  it('LaunchAnchor: рендер без броска, в /characters не ходит', async () => {
-    const listChars = vi.spyOn(imageEditorApi(), 'listCharacters');
+  it('LaunchAnchor: рендер без броска', () => {
     const t = thread([launch({ status: 'running' })]);
     __applyThreads('s1', 'personal', state(t));
     const html = renderToStaticMarkup(createElement(LaunchAnchor, {
@@ -134,8 +131,6 @@ describe('LaunchAnchor / VersionCard: личный чат (ctx.projectId = null)
       },
     }));
     expect(html).toContain('hero.png');
-    await new Promise<void>(r => setTimeout(r, 0));
-    expect(listChars).not.toHaveBeenCalled();
   });
 
   it('VersionCard: projectId = personal рендерится без броска', () => {

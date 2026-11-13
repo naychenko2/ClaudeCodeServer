@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.Composition;
+
 namespace ClaudeHomeServer.Services.Backup;
 
 // Снятие снапшотов по расписанию.
@@ -11,6 +13,7 @@ namespace ClaudeHomeServer.Services.Backup;
 public class BackupService(
     IConfiguration config,
     IProjectManager projects,
+    IPersonalProjects personalProjects,
     ILogger<BackupService> log) : BackgroundService
 {
     private static readonly TimeSpan Tick = TimeSpan.FromMinutes(60);
@@ -79,7 +82,8 @@ public class BackupService(
     public string? ValidateBackupPath(string path)
     {
         var ctx = BuildContext();
-        var roots = projects.GetAll().Select(p => p.RootPath).Where(p => !string.IsNullOrWhiteSpace(p));
+        // «Личного» нет в GetAll — без него архив внутри {home}/Personal прошёл бы проверку
+        var roots = projects.GetAll().Concat(personalProjects.GetAllPersonal()).Select(p => p.RootPath).Where(p => !string.IsNullOrWhiteSpace(p));
         return BackupPaths.ValidateBackupPath(
             path, ctx.DataDir, ctx.BaseDirectory, roots, config["Sandbox:ProjectsRoot"]);
     }

@@ -20,6 +20,8 @@ public class BackupPathsTests
     [InlineData("personas.json")]
     [InlineData("notes/user1/Заметка.md")]
     [InlineData("instance-id.txt")]
+    // Стор «Личного» (ADR-040 §1.4): в корне data, не секрет и не временный — едет в архив
+    [InlineData("personal-projects.json")]
     [InlineData("handle-migration-v1.done")]
     [InlineData(".personas-project-bindings-migrated")]
     // Паспорта изменений (ADR-004): невосстановимы (сырьё — история чатов), в архив по
@@ -87,6 +89,8 @@ public class BackupPathsTests
     // Копия исходника при частичном подъёме стора — дубликат живого файла (на проде
     // sessions.json это ~2 МБ), в архив не едет
     [InlineData("sessions.json.partial-20260921-153000.bak")]
+    [InlineData("personal-projects.json.partial-20261113-120000.bak")]
+    [InlineData("personal-projects.json.corrupt-20261113-120000.bak")]
     // Корзина синка профилей — мусорная зона с TTL, восстановлению не подлежит
     [InlineData(".sync-trash/deepseek/2026-09-02T11-30-00Z/CLAUDE.md")]
     [InlineData(".sync-trash/deepseek/2026-09-02T11-30-00Z/rules/extra.md")]

@@ -57,6 +57,13 @@ describe('FeatureStageReview', () => {
     expect(findNodeByAttr(container, 'data-testid', 'stage-review-legacy')).not.toBeNull();
   });
 
+  it('structured=false без hint: тоже «подробностей нет»', () => {
+    const r = rev([round({ verdict: 'accepted', returnReason: null, structured: false })]);
+    r.reviewRounds!.structured = false;
+    const { container } = render(r);
+    expect(text(container)).toContain('Подробностей нет: ревью старой фичи не хранило блокеры.');
+  });
+
   it('пусто: «Ревью ещё не было»', () => {
     const { container } = render(rev([]));
     expect(findNodeByAttr(container, 'data-testid', 'stage-review-empty')).not.toBeNull();

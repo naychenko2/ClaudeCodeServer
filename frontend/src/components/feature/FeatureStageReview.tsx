@@ -106,7 +106,7 @@ function PendingRound({ r, executorName }: { r: StageReviewRound; executorName?:
 export function FeatureStageReview({ review, executorName }: { review: StageReview; executorName?: string | null }) {
   const items = [...(review.own ? [review.own] : []), ...review.reviews];
   const rounds = review.reviewRounds?.rounds ?? [];
-  const legacy = review.reviewRounds?.hint === 'legacy';
+  const legacy = rounds.some(r => !r.pending) && (review.reviewRounds?.hint === 'legacy' || review.reviewRounds?.structured === false);
   const done = rounds.filter(r => !r.pending);
   return (
     <section data-testid="stage-review" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>

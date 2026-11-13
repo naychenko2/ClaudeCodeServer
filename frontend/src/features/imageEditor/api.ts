@@ -12,7 +12,7 @@ import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
 import type { MediaFormatState, MediaFormatWish } from 'aihome_shell/kit';
 import type { LocalGpuQueueInfo } from '../../types/localGpuQueue';
 import { mockFormatState, mockTierFactor } from './mockFormat';
-import { isPersonalScope, projectBase, scopeBase, threadsBase } from './scope';
+import { projectBase, scopeBase, threadsBase } from './scope';
 import { transformedSize } from './transforms';
 
 export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale' | 'enhanceFaces';
@@ -489,13 +489,9 @@ function parseFacesResponse(v: unknown): FacesResponse | null {
   return r;
 }
 
-// «Найти лица» (этап 2 · шаг 10a): POST {threadsBase}/{threadId}/versions/{versionId}/faces.
-// Только проектная область: в личной области персонажей нет по построению → типизированный
-// отказ not_found без сетевого запроса. Отказ — типизированный FacesError (facesError)
+// «Найти лица» (этап 2 · шаг 10a): POST {threadsBase}/{threadId}/versions/{versionId}/faces —
+// у личной области тот же путь на чате (ADR-040 Ф2-4). Отказ — типизированный FacesError (facesError)
 export function findFaces(scope: string, sessionId: string, threadId: string, versionId: string): Promise<FacesResponse> {
-  if (isPersonalScope(scope)) {
-    return Promise.reject(Object.assign(new Error('not_found'), { status: 404, body: { code: 'not_found' } }));
-  }
   return request<FacesResponse>(
     `${threadsBase(scope, sessionId)}/${encodeURIComponent(threadId)}/versions/${encodeURIComponent(versionId)}/faces`,
     { method: 'POST' },

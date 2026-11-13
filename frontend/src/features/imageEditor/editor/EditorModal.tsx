@@ -33,9 +33,9 @@ import {
   applyStep, continueFrom, rollbackTo, saveAsInThread, saveToProject, savedStepOf, versionSaved,
 } from '../thread/actions';
 import { JobBlock } from '../thread/ThreadCard';
-import { download, PERSONAL_DOWNLOAD_HINT } from '../thread/download';
+import { download } from '../thread/download';
 import {
-  chainOf, currentIndex, currentStack, currentVersion, downloadName, findVersion, isLegacyThread, ORIGIN, originFile, saveFolder, stepOf,
+  chainOf, currentIndex, currentStack, currentVersion, downloadName, findVersion, isLegacyThread, ORIGIN, originFile, PERSONAL_SAVE_FOLDER, saveFolder, saveLabel, savedLabel, stepOf,
   threadName, versionHasImage, versionLabel, versionName, versionShort, versionsOf, versionStep,
 } from '../thread/model';
 import { closeEditor, getThreadMarks, getThreadsState, setThreadMarks, showEditorVersion, useThreads, type EditorTool } from '../thread/threadStore';
@@ -84,7 +84,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
 }) {
   const mobile = useIsMobile();
   const api = useMemo(() => imageEditorApi(), []);
-  // Личный чат вне проекта: сохранять некуда — вместо «Сохранить» в футере «Скачать»
+  // Личный чат вне проекта: «Сохранить» кладёт в «Личное» владельца
   const personal = isPersonalScope(projectId);
   const state = useThreads(projectId, sessionId);
   const thread = state.threads.find(t => t.id === threadId) ?? null;
@@ -257,7 +257,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   };
 
   const save = async () => { setSaving(true); await saveToProject(projectId, sessionId, thread, viewedStep); setSaving(false); };
-  const folder = saveFolder(thread);
+  const folder = personal ? PERSONAL_SAVE_FOLDER : saveFolder(thread);
   const baseName = thread.file ? defaultStem(splitPath(thread.file).name) : 'kartinka';
   const format: ImageEncodeFormat = thread.file && /\.jpe?g$/i.test(thread.file) ? 'jpeg' : thread.file && /\.webp$/i.test(thread.file) ? 'webp' : 'png';
 
@@ -501,7 +501,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
   );
 
   const subtitle = viewed
-    ? [versionName(viewed), personal ? null : inProject ? 'в проекте' : 'черновик', isCurrent ? 'в работе' : null].filter(Boolean).join(' · ')
+    ? [versionName(viewed), inProject ? (personal ? 'в «Личном»' : 'в проекте') : 'черновик', isCurrent ? 'в работе' : null].filter(Boolean).join(' · ')
     : [versionLabel(thread, cur, saved), chain.length ? stepOf(at, chain.length) : null].filter(Boolean).join(' · ');
 
   return (
@@ -521,21 +521,17 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
                   : 'Пометки уйдут со следующим сообщением — в режиме «Картинка» или агенту'}
               </span>
             )}
-            {personal ? (
+            {personal && (
               <Button size="sm" variant="secondary" leftIcon={ic(Download)} disabled={!src || !hasImage || transforming}
-                title={PERSONAL_DOWNLOAD_HINT}
                 onClick={() => { if (src) void download(src, mime => (viewed ? downloadName(thread, viewed, mime) : threadName(thread))); }}>
                 Скачать
               </Button>
-            ) : (
-              <>
-                <Button size="sm" variant="secondary" leftIcon={ic(Save)} disabled={!canSave} onClick={() => setSaveAs(true)}>Сохранить как…</Button>
-                <Button size="sm" variant="secondary" disabled={!canSave || inProject} loading={saving}
-                  onClick={() => { void save(); }}>
-                  {inProject ? 'В проекте' : 'Сохранить в проект'}
-                </Button>
-              </>
             )}
+            <Button size="sm" variant="secondary" leftIcon={ic(Save)} disabled={!canSave} onClick={() => setSaveAs(true)}>Сохранить как…</Button>
+            <Button size="sm" variant="secondary" disabled={!canSave || inProject} loading={saving}
+              onClick={() => { void save(); }}>
+              {inProject ? savedLabel(personal) : saveLabel(personal)}
+            </Button>
             <Button size="sm" variant="primary" leftIcon={ic(Check)} onClick={closeEditor}>Готово</Button>
           </div>
         )}>
@@ -563,7 +559,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
           onCancel={() => setBrushConfirm(false)}
           onConfirm={() => { setBrushConfirm(false); faceSwap.clearAssignments(); startBrush(); }} />
       )}
-      {saveAs && !personal && (
+      {saveAs && (
         <SaveAsDialog projectId={projectId} sourcePath={thread.file}
           defaultName={thread.file ? baseName : nameStem(baseName)} folder={folder} format={format}
           onCheck={(f, name) => api.saveCheck(projectId, { folder: f, name, format })}

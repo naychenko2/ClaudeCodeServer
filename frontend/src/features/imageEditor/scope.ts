@@ -1,8 +1,9 @@
 // Область редактора (разрез docs/research/image-editor-personal-chats-cut-2026-09.md, §4):
 // внутри модуля всегда есть непустой ключ области — id проекта у чата проекта или
 // `personal` у личного чата вне проекта. Параметры `projectId: string` модуля — это ключ
-// области, а не обязательно проект: проектное API каркаса (файлы, персонажи, «Сохранить
-// в проект») у личной области не зовётся никогда, проверять isPersonalScope.
+// области, а не обязательно проект: файловое API каркаса (appApi.files, дерево проекта)
+// у личной области не зовётся — проверять isPersonalScope; персонажи и «Сохранить»
+// ходят по projectBase на личных маршрутах чата.
 
 export const PERSONAL_SCOPE = 'personal';
 
@@ -38,10 +39,10 @@ export function enterScope(projectId: string | null, sessionId: string | null): 
 
 export const scopeBase = (scope: string) => imageBase(scope, isPersonalScope(scope) ? _personalChat : null);
 
-// Проектные ручки (save, characters): у личной области их нет по построению — отказ до запроса
+// Ручки с диском (save, characters, lora-train): у проекта — по проекту, у личной области —
+// те же пути на чате (ADR-040 Ф2-3…Ф2-4, «Личное» владельца)
 export function projectBase(scope: string): string {
-  if (isPersonalScope(scope)) throw new Error('У личного чата нет проекта');
-  return imageBase(scope, null);
+  return isPersonalScope(scope) ? scopeBase(scope) : imageBase(scope, null);
 }
 
 // Сброс — только для тестов

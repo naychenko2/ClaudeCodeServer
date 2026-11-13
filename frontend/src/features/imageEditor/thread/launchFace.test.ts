@@ -118,11 +118,10 @@ describe('LaunchAnchor: строка идущего запуска', () => {
   });
 });
 
-// Личный чат вне проекта (регрессия naychenko.me): ctx.projectId = null → область 'personal'.
-// useCharacters('personal') не должен дёргать проектную ручку персонажей (projectBase бросает
-// синхронно) — рендер якоря/карточки в личной области идёт без броска и без /characters.
+// Личный чат вне проекта: ctx.projectId = null → область 'personal'. Рендер якоря/карточки идёт без
+// броска; персонажи берутся с личной ручки чата (ADR-040 Ф2-4), а не с проектной.
 describe('LaunchAnchor / VersionCard: личный чат (ctx.projectId = null)', () => {
-  it('LaunchAnchor: рендер без броска, в /characters не ходит', async () => {
+  it('LaunchAnchor: рендер без броска, персонажи — с личной ручки', async () => {
     const listChars = vi.spyOn(imageEditorApi(), 'listCharacters');
     const t = thread([launch({ status: 'running' })]);
     __applyThreads('s1', 'personal', state(t));
@@ -135,7 +134,7 @@ describe('LaunchAnchor / VersionCard: личный чат (ctx.projectId = null)
     }));
     expect(html).toContain('hero.png');
     await new Promise<void>(r => setTimeout(r, 0));
-    expect(listChars).not.toHaveBeenCalled();
+    expect(listChars).toHaveBeenCalledWith('personal');
   });
 
   it('VersionCard: projectId = personal рендерится без броска', () => {

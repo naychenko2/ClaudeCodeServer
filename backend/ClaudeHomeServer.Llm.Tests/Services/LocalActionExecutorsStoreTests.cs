@@ -16,7 +16,9 @@ namespace ClaudeHomeServer.Tests.Services;
 //   «local» — MaxConcurrentTurns провайдера по LocalLlm:EngineKey), а не своё правило;
 // • конкурентность — статический замок по пути + temp + rename: после гонки файл валиден и
 //   в нём ровно то же, что в памяти стора (мутация «снять замок» краснит);
-// • битый JSON — пустой список без исключения наружу (стор читается на старте контейнера).
+// • битый JSON — пустой список без исключения наружу (стор читается на старте контейнера);
+// • null-запись в правленном руками файле («"wiki-nightly": null», «"executors": null») —
+//   не становится исполнителем и не роняет чтение.
 public class LocalActionExecutorsStoreTests
 {
     private const string Key = LocalActionCatalog.WikiNightly;
@@ -262,13 +264,37 @@ public class LocalActionExecutorsStoreTests
         Assert.Null(Store(DataDir(), Engines(("gemma", 2))).TryGet(Key));
     }
 
-    [Fact]
-    public void ConcurrentSaves_LastWinsAndFileValid()
+    [Theory]
+    // Файл правят руками: null вместо записи или вместо списка доходит до стора —
+    // десериализация ставит null поверх non-nullable и инициализаторов. Битая запись не
+    // должна ни становиться исполнителем, ни ронять чтение (И3, путь 6): TryGet на ней
+    // возвращает null, а не бросает, и живая запись после неё пишется как обычно.
+    [InlineData("""{"wiki-nightly":null}""")]
+    [InlineData("""{"wiki-nightly":{"maxTotal":2,"executors":null}}""")]
+    [InlineData("""{"wiki-triage":null,"wiki-nightly":{"maxTotal":2,"executors":null}}""")]
+    public void Load_NullRecordOrNullList_TryGetNullWithoutThrow(string json)
     {
-        // Гонка двух PUT (тот же ключ): статический замок по пути делает «прочитать снимок →
-        // изменить → записать» атомарным, поэтому после гонки файл валиден и в нём ровно то
-        // же, что в памяти стора. Мутация «снять lock» краснит этот тест: два потока строят
-        // снимок из одного prev, и последний в памяти перестаёт быть последним в файле.
+        var dir = DataDir();
+        File.WriteAllText(StoreFile(dir), json);
+        var store = Store(dir, Engines(("gemma", 2)));
+
+        Assert.Null(store.TryGet(Key));
+        Assert.Null(store.TryGet(LocalActionCatalog.WikiTriage));
+
+        // Чтение не сломано битой строкой: живая запись после неё работает.
+        Assert.True(store.Save(Key, Cfg(1, Ex("gemma"))));
+        Assert.NotNull(store.TryGet(Key));
+    }
+
+    [Fact]
+    public void ConcurrentSaves_FileValidAndMemoryMatchesFile()
+    {
+        // Гонка PUT (тот же ключ): под замком «прочитать снимок → изменить → записать» целиком,
+        // поэтому после гонки файл валиден и в нём ровно то же, что в памяти стора. Порядок
+        // «кто победил» тест не утверждает — он недетерминирован; проверяется согласованность
+        // памяти и файла. Мутация «снять lock» краснит этот тест; мутация «строить снимок вне
+        // замка» — нет: при одном месте с ParallelExecutors два живых Save могут касаться только
+        // одного ключа, и окно потери обновления снаружи недостижимо (см. доработку W2a).
         var dir = DataDir();
         var engines = Engines(("e1", 1), ("e2", 1), ("e3", 1), ("e4", 1));
         var store = Store(dir, engines);

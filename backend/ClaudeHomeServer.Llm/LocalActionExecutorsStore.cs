@@ -174,18 +174,21 @@ public sealed class LocalActionExecutorsStore
             return false;
         }
 
-        var next = new Dictionary<string, LocalActionExecutorsConfig>(_configs, StringComparer.OrdinalIgnoreCase);
-        if (config.Executors.Count == 0) next.Remove(action.Key);
-        else
-        {
-            var executors = new List<LocalActionExecutorConfig>(config.Executors.Count);
-            foreach (var e in config.Executors) executors.Add(e with { Engine = e.Engine.Trim() });
-            next[action.Key] = config with { MaxTotal = config.MaxTotal, Executors = executors };
-        }
-
+        // «Прочитать текущий снимок → изменить → записать» — целиком под замком: вне него два
+        // Save разных ключей строили бы снимок из одного prev, и последний победивший в памяти
+        // перестал бы быть последним в файле (потеря обновления).
+        Dictionary<string, LocalActionExecutorsConfig> next;
         lock (FileLocks.GetOrAdd(_storePath, _ => new object()))
         {
             var prev = _configs;
+            next = new Dictionary<string, LocalActionExecutorsConfig>(prev, StringComparer.OrdinalIgnoreCase);
+            if (config.Executors.Count == 0) next.Remove(action.Key);
+            else
+            {
+                var executors = new List<LocalActionExecutorConfig>(config.Executors.Count);
+                foreach (var e in config.Executors) executors.Add(e with { Engine = e.Engine.Trim() });
+                next[action.Key] = config with { Executors = executors };
+            }
             _configs = next;
             if (!Persist(next))
             {
@@ -264,8 +267,18 @@ public sealed class LocalActionExecutorsStore
             // переименовали или флаг сняли): его игнорируем, но файл не переписываем —
             // чтение не правит чужую настройку.
             var clean = new Dictionary<string, LocalActionExecutorsConfig>(StringComparer.OrdinalIgnoreCase);
+            List<string>? broken = null;
             foreach (var (key, cfg) in loaded)
             {
+                // Файл правят руками: «"wiki-nightly": null» или «"executors": null» —
+                // десериализация ставит null поверх non-nullable и инициализаторов, и без этого
+                // фильтра каждое чтение TryGet бросало бы на cfg.Executors.Count (И3, путь 6:
+                // битая запись не роняет чтение и не становится исполнителем).
+                if (cfg is null || cfg.Executors is null)
+                {
+                    (broken ??= []).Add(key);
+                    continue;
+                }
                 if (LocalActionCatalog.Find(key) is not { ParallelExecutors: true } action)
                 {
                     _log?.LogWarning("{Path}: место «{Action}» не ведёт нескольких исполнителей, игнорирую",
@@ -274,6 +287,12 @@ public sealed class LocalActionExecutorsStore
                 }
                 clean[action.Key] = cfg;
             }
+            // Один сигнал на загрузку, а не на каждую битую строку: файл читается на старте
+            // контейнера, warning на строку был бы шумом (тот же порядок, что у пропускаемых
+            // имён движков — их список тоже называется разом).
+            if (broken is not null)
+                _log?.LogWarning("{Path}: пустая запись исполнителей у «{Actions}», игнорирую",
+                    _storePath, string.Join(", ", broken));
             _configs = clean;
         }
         catch (Exception ex)

@@ -73,12 +73,10 @@ describe('список «Исполнитель»', () => {
     expect(executorRows(CATALOG, 'speak').find(r => r.id === 'yandex|speechkit')?.sub).toBe('Яндекс');
   });
 
-  it('в личном чате «Локально» — с замком, причина каталога остаётся; в проекте замка нет', () => {
-    const reason = 'Локальные модели работают только в чате проекта';
-    const personal = { ...CATALOG, providers: [FAL, { ...LOCAL, available: false, reason }] };
-    const rows = executorRows(personal, 'speak', true);
-    expect(rows.find(r => r.id === 'local|qwen')).toMatchObject({ locked: true, disabled: true, reason });
-    expect(rows.find(r => r.id === 'fal|fal-ai/minimax/speech')?.locked).toBeUndefined();
+  it('замков нет нигде: «Локально» доступно и в личном чате, недоступный поставщик серый с причиной каталога', () => {
+    const reason = 'Поставщик сейчас недоступен';
+    const down = { ...CATALOG, providers: [FAL, { ...LOCAL, available: false, reason }] };
+    expect(executorRows(down, 'speak').find(r => r.id === 'local|qwen')).toMatchObject({ disabled: true, reason });
     expect(executorRows(CATALOG, 'speak').some(r => r.locked)).toBe(false);
   });
 

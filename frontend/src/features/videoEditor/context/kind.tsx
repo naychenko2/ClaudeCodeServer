@@ -10,7 +10,7 @@ import {
 } from 'aihome_shell/kit';
 import { videoApi } from '../api';
 import { createScene, currentResolved } from '../scene/actions';
-import { isPersonalScope, videoScope } from '../scope';
+import { videoScope } from '../scope';
 import { getCatalog, openVideoEditor, useVideoStoreVersion } from '../store/videoStore';
 import { NO_AI_MODEL, shootExecutors } from './executors';
 import { videoFormat } from './format';
@@ -64,7 +64,7 @@ export const videoKindApi: ContextKindApi = {
     if (!found || !scene) return null;
     return shootExecutors({
       scope: found.scope, sessionId: ctx.sessionId, catalog: getCatalog(found.scope),
-      personal: isPersonalScope(found.scope), r: currentResolved(ctx.sessionId, found.scope, scene),
+      r: currentResolved(ctx.sessionId, found.scope, scene),
     });
   },
   params: (ctx, actionId) => {

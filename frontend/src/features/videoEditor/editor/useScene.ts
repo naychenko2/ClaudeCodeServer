@@ -126,7 +126,7 @@ export function useScene(projectId: string | null, sessionId: string | null): Sc
   const anyAvailable = !!catalog?.providers.some(p => p.available);
   const providerOk = r.auto ? anyAvailable : !!r.provider?.available;
   const reason = runReason({
-    sessionId, r, personal, providerOk,
+    sessionId, r, providerOk,
     providerReason: !catalog ? 'Загружаем каталог…' : !anyAvailable ? 'Снимать нечем: поставщиков не настроил администратор' : r.provider?.reason,
     quoteError, running,
   });

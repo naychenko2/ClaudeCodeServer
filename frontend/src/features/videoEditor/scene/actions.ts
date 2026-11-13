@@ -21,7 +21,7 @@ import {
   type PendingSettings,
 } from '../store/videoStore';
 import type { SaveTarget } from '../film/model';
-import { PERSONAL_LOCAL_REASON, resolveScene, settingsOf, type ResolvedScene } from './model';
+import { resolveScene, settingsOf, type ResolvedScene } from './model';
 
 const SAVE_DELAY = 500;
 const CONTENT_KEYS = ['frameA', 'frameB', 'text'];
@@ -222,9 +222,7 @@ export interface RunInput { scope: string; sessionId: string; scene: VideoScene;
 
 // Запуск строго по котировке: настройки уходят в сцену ДО запуска (сервер берёт текст и кадры из нити).
 // Просьба из поля ввода добавляется к тексту сцены строкой (в запуске для неё поля нет)
-// Съёмка: код local_unavailable_personal — человеку понятная причина, а не общий текст бэкенда
-export const runErrorText = (e: unknown) =>
-  errorCode(e) === ERR.localPersonal ? PERSONAL_LOCAL_REASON : errorText(e, 'Съёмка не запустилась');
+export const runErrorText = (e: unknown) => errorText(e, 'Съёмка не запустилась');
 
 export async function runScene(i: RunInput, extraText = ''): Promise<boolean> {
   const { scope, sessionId, scene, quote } = i;

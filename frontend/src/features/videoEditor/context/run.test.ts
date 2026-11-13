@@ -102,8 +102,8 @@ describe('запуск съёмки по ревизии контекста', () 
     const conflict = Object.assign(new Error('conflict'), { status: 409, body: { error: 'context_changed', context: sceneCtx(8) } });
     vi.spyOn(videoApi, 'startJob').mockRejectedValueOnce(conflict);
     await expect(run('shoot')).rejects.toBe(conflict);
-    vi.spyOn(videoApi, 'startJob').mockRejectedValueOnce(Object.assign(new Error('x'), { status: 409, body: { code: 'local_unavailable_personal', error: 'x' } }));
-    await expect(run('shoot')).rejects.toThrow(/Локальные модели работают только в чате проекта/);
+    vi.spyOn(videoApi, 'startJob').mockRejectedValueOnce(Object.assign(new Error('x'), { status: 409, body: { code: 'provider_unavailable', error: 'Поставщик недоступен' } }));
+    await expect(run('shoot')).rejects.toThrow(/Поставщик недоступен/);
   });
 });
 

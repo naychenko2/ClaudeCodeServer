@@ -115,7 +115,7 @@ public class ProjectManager : IProjectManager
         // Совпадение, вложенность и родитель: корень проекта не должен пересекаться с папкой «Личного»
         if (_personal?.GetPersonalOf(userId) is { } personal
             && (ProjectCapabilities.FolderKey(personal) == key
-                || deviceId is null && personal.DeviceId is null
+                || deviceId is null && ProjectCapabilities.FilesOnServer(personal)
                     && (UserHomeResolver.IsInside(rootPath, personal.RootPath) || UserHomeResolver.IsInside(personal.RootPath, rootPath))))
             throw new ArgumentException("Эта папка занята служебным проектом");
     }

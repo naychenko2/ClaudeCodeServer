@@ -154,5 +154,7 @@ export interface WorkflowTemplateEntry {
   diffFromPreset?: number | null;
 }
 
-// Мета выбранного шаблона для тулбара редактора.
-export type WorkflowEntryMeta = Pick<WorkflowTemplateEntry, 'basedOn' | 'basedOnLatestVersion' | 'diffFromPreset'>;
+// Мета строки списка для редактора: счётчики B08 — для мета-строки элемента
+// (itemMetaLine), basedOn/…/diffFromPreset — для тулбара.
+export type WorkflowEntryMeta = Pick<WorkflowTemplateEntry,
+  'stageCount' | 'parallelColumns' | 'usageCount' | 'basedOn' | 'basedOnLatestVersion' | 'diffFromPreset'>;

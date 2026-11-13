@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   CONFLICT_MESSAGE, blankTemplate, classifySaveError, forkToProject, listOrNull, parseList,
   saveGuarded, templateSnapshot, normalizeForSave, presenceEditable, showWriteButton,
-  canWriteProjectTemplates, splitEntries, toolbarSubtitle, conflictTitle, errorsHeading, errorSummaryItems, entryMetaMap, pluralRu, newTemplateDraft, takeComposition, saveAsNew, discardChanges, canSave, failureAfterEdit,
+  canWriteProjectTemplates, splitEntries, toolbarSubtitle, conflictTitle, errorsHeading, errorSummaryItems, entryMetaMap, pluralRu, newTemplateDraft, takeComposition, saveAsNew, discardChanges, canSave, failureAfterEdit, itemMetaLine, draftMetaLine,
 } from './workflowEditorLogic';
 import { STAGE_ROLES } from './workflowTemplateModel';
 import type { WorkflowTemplate } from './types';
@@ -319,8 +319,47 @@ describe('F21: тулбар, 409 и сводка ошибок', () => {
     const stall = items.find(i => i.text.startsWith('этап «step»'));
     expect(stall?.stageIndex).toBe(1);
   });
-  it('мета списка по ключу «область:id»', () => {
-    const m = entryMetaMap([{ scope: 'global', projectId: null, template: tpl(), diffFromPreset: 3 }]);
+  it('мета списка по ключу «область:id» — и счётчики B08, и поля тулбара', () => {
+    const m = entryMetaMap([{
+      scope: 'global', projectId: null, template: tpl(), diffFromPreset: 3,
+      stageCount: 8, parallelColumns: 2, usageCount: 14,
+    }]);
     expect(m['global:builtin-full-cycle'].diffFromPreset).toBe(3);
+    expect(m['global:builtin-full-cycle'].stageCount).toBe(8);
+    expect(m['global:builtin-full-cycle'].parallelColumns).toBe(2);
+    expect(m['global:builtin-full-cycle'].usageCount).toBe(14);
+  });
+});
+
+describe('F22: мета-строка элемента списка (T7, поля B08)', () => {
+  const eight = Array.from({ length: 8 }, () => ({ role: 'step', presence: 'on' as const }));
+
+  it('«8 этапов · v4 · 14 фич» при stageCount=8, version=4, usageCount=14', () => {
+    const t = tpl({ id: 'g1', version: 4, builtInKey: null, stages: eight });
+    expect(itemMetaLine(t, { stageCount: 8, usageCount: 14 })).toBe('8 этапов · v4 · 14 фич');
+  });
+
+  it('параллельные колонки — при >1; при 0/1 их нет; фичи при 0 — нет', () => {
+    const t = tpl({ id: 'g2', version: 1, builtInKey: null, stages: Array.from({ length: 10 }, () => ({ role: 'step', presence: 'on' as const })) });
+    expect(itemMetaLine(t, { stageCount: 10, parallelColumns: 2 })).toBe('10 этапов · v1 · 2 параллельные колонки');
+    expect(itemMetaLine(t, { stageCount: 10, parallelColumns: 1, usageCount: 0 })).toBe('10 этапов · v1');
+  });
+
+  it('копия: «от «Имя» v3» — только когда мета дала имя оригинала', () => {
+    const t = tpl({ id: 'p1', version: 5, builtInKey: null, basedOn: { templateId: 'g1', version: 3 }, stages: Array.from({ length: 7 }, () => ({ role: 'step', presence: 'on' as const })) });
+    expect(itemMetaLine(t, { stageCount: 7, basedOn: { templateId: 'g1', name: 'Полный цикл', version: 3 } }))
+      .toBe('7 этапов · v5 · от «Полный цикл» v3');
+    // старого формата basedOn (id без имени) в строке нет — для происхождения есть бейдж «копия»
+    expect(itemMetaLine(t, undefined)).toBe('7 этапов · v5');
+  });
+
+  it('без меты B08 (старый сервер): stageCount — длина своего списка, остального нет', () => {
+    const t = tpl({ id: 'g3', version: 2, builtInKey: null, stages: [1, 2, 3].map(() => ({ role: 'step', presence: 'on' as const })) });
+    expect(itemMetaLine(t, undefined)).toBe('3 этапа · v2');
+  });
+
+  it('черновик: «этапов пока нет» / локальный счёт', () => {
+    expect(draftMetaLine([])).toBe('этапов пока нет');
+    expect(draftMetaLine([1, 2].map(() => ({ role: 'step', presence: 'on' as const })))).toBe('2 этапа');
   });
 });

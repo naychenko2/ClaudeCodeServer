@@ -1,4 +1,4 @@
-// Секция «Шаблоны процесса» в настройках проекта (C1b): проектные шаблоны фич.
+// Секция «Процессы» в настройках проекта (C1b): проектные шаблоны фич.
 // Писать может только владелец проекта (временно, до ответа на вопрос 3 Андрею).
 import { Workflow } from 'lucide-react';
 import { useMe } from '../../lib/defaultPersona';
@@ -10,9 +10,10 @@ import type { Project } from '../../types';
 export function WorkflowTemplatesProjectSection({ project }: { project: Project }): React.ReactElement {
   const me = useMe();
   return (
-    <AccordionSection icon={Workflow} title="Шаблоны процесса">
+    <AccordionSection icon={Workflow} title="Процессы">
       <WorkflowTemplatesEditor
         projectId={project.id}
+        projectName={project.name}
         canWrite={canWriteProjectTemplates(project.ownerId, me.userId)}
         isAdmin={me.role === 'admin'}
         mcpChoices={project.mcpServersOn ?? []}

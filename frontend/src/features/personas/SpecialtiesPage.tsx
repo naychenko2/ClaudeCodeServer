@@ -29,7 +29,7 @@ type Section = 'specialties' | 'workflows';
 
 const SECTION_OPTIONS: { value: Section; label: string }[] = [
   { value: 'specialties', label: 'Специальности' },
-  { value: 'workflows', label: 'Шаблоны процесса' },
+  { value: 'workflows', label: 'Процессы фичи' },
 ];
 
 export function SpecialtiesPage({ auth, onLogout, onHubTab }: {
@@ -40,7 +40,7 @@ export function SpecialtiesPage({ auth, onLogout, onHubTab }: {
   const isMobile = useIsMobile();
   const me = useMe();
   const isAdmin = me.role === 'admin';
-  // Раздел «Шаблоны процесса» — только админу; локальное состояние, адреса не трогает.
+  // Раздел «Процессы фичи» — только админу; локальное состояние, адреса не трогает.
   const [section, setSection] = useState<Section>('specialties');
   const showWorkflows = isAdmin && section === 'workflows';
 

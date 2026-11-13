@@ -1,8 +1,14 @@
 // Редактор шаблонов процесса фичи (feature-workflows, C1b).
-// Один экран на две области: глобальные шаблоны (раздел рядом со специальностями, правит
-// только admin) и проектные (настройки проекта, правит владелец — временно, до ответа на
-// вопрос 3 Андрею). Область задаёт projectId: нет — глобальная, есть — проектная.
-//   • список: встроенные помечены, у встроенного — «Сбросить к исходному», удалить можно
+// Один экран на две области: глобальные шаблоны (раздел «Процессы фичи» рядом со
+// специальностями, правит только admin) и проектные (секция «Процессы» в настройках
+// проекта, правит владелец — временно, до ответа на вопрос 3 Андрею). Область задаёт
+// projectId: нет — глобальная, есть — проектная.
+//   • список (экран 1, F22): остров с шапкой «Процессы» + «+ Новый»; секции «Глобальные ·
+//     правит админ» (сверху) и «Проект «Имя» · правит владелец»; у элемента — мета-строка
+//     B08 (itemMetaLine); активный — белая карточка с тенью, наведённый — bg-selected,
+//     на мобиле высота ≥56; черновик нового — строка «Новый шаблон» с тегом «не сохранён»;
+//     пустой проект — «Других своих процессов в проекте нет» + «Копия глобального…»;
+//     встроенные помечены, у встроенного — «Сбросить к исходному», удалить можно
 //     только свой; в проекте глобальные видны только на чтение и копируются в проектные
 //     (копия с basedOn);
 //   • редактор: этапы в порядке маршрута (WorkflowStageRow), общая кнопка «Сохранить».
@@ -11,11 +17,11 @@
 // у полей этапов.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Plus, Workflow } from 'lucide-react';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { AlertTriangle, Workflow } from 'lucide-react';
+import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import {
-  Badge, Button, ConfirmDialog, EmptyState, Field, Notice, TextArea, TextField,
+  Badge, Button, ConfirmDialog, EmptyState, Field, Island, IslandHeader, Notice, TextArea, TextField,
 } from '../../components/ui';
 import { useIsMobile } from '../../lib/breakpoints';
 import { usePersonas } from '../../lib/personas';
@@ -27,6 +33,7 @@ import {
   blankTemplate, normalizeForSave, forkToProject, saveGuarded,
   templateSnapshot, splitEntries, entryMetaMap, toolbarSubtitle, errorSummaryItems,
   discardChanges, saveAsNew, canSave as canSaveDraft, failureAfterEdit,
+  itemMetaLine, draftMetaLine,
   type SaveFailure,
 } from './workflowEditorLogic';
 import { WorkflowStageStrip } from './WorkflowStageStrip';
@@ -38,6 +45,8 @@ import type { WorkflowEntryMeta, WorkflowStage, WorkflowTemplate } from './types
 export interface WorkflowTemplatesEditorProps {
   // Нет — глобальная область, есть — проектная.
   projectId?: string;
+  // Имя проекта для подписи секции «Проект «Имя» · правит владелец».
+  projectName?: string;
   // Может ли текущий человек писать в эту область (admin / владелец проекта).
   canWrite: boolean;
   // Admin: только он сбрасывает встроенные пресеты (серверный запрет, ручка {id}/reset).
@@ -52,7 +61,7 @@ interface Selection { scope: Scope; isNew: boolean }
 const STAGE_ERR_RE = /^этап «([^»]+)»:\s*(.*)$/;
 
 export function WorkflowTemplatesEditor({
-  projectId, canWrite, isAdmin, mcpChoices,
+  projectId, projectName, canWrite, isAdmin, mcpChoices,
 }: WorkflowTemplatesEditorProps): React.ReactElement {
   const isMobile = useIsMobile();
   const catalog = useSpecialtyCatalog();
@@ -255,53 +264,108 @@ export function WorkflowTemplatesEditor({
   const setStage = (idx: number, next: WorkflowStage) =>
     editDraft(d => (d ? { ...d, stages: d.stages.map((s, i) => (i === idx ? next : s)) } : d));
 
-  // === Список ===
+  // === Список (экран 1, F22) ===
+  // Элемент — две строки (имя с тегом + мета B08), без рамки: обычный — прозрачный,
+  // наведённый — bg-selected, активный — белая карточка с тенью (не accent-подсветка).
+  // Мобильная высота ≥56 (T10). Черновик нового — строка с тегом «не сохранён» (T12):
+  // она активна всегда, когда открыт, и не кликается — редактор уже открыт.
+  const itemStyle = (active: boolean): React.CSSProperties => ({
+    display: 'flex', flexDirection: 'column', gap: SP.xxs, width: '100%',
+    padding: `${SP.sm}px ${SP.md}px`, textAlign: 'left', cursor: 'pointer',
+    fontFamily: FONT.sans, fontSize: FS.base,
+    background: active ? C.bgWhite : 'transparent',
+    boxShadow: active ? SHADOW.card : 'none',
+    border: 'none', borderRadius: R.lg,
+    ...(isMobile ? { minHeight: 56, justifyContent: 'center' as const } : {}),
+  });
+  const itemNameStyle: React.CSSProperties = {
+    flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontWeight: 600, color: C.textHeading,
+  };
+  const itemMetaStyle: React.CSSProperties = { fontSize: FS.xs, color: C.textMuted };
+  const hoverIn = (e: React.MouseEvent<HTMLButtonElement>, active: boolean) => {
+    if (!active) e.currentTarget.style.background = C.bgSelected;
+  };
+  const hoverOut = (e: React.MouseEvent<HTMLButtonElement>, active: boolean) => {
+    // «transparent» — как в itemStyle: возвращаем именно то состояние, что было до наведения.
+    if (!active) e.currentTarget.style.background = 'transparent';
+  };
+
   const renderItem = (t: WorkflowTemplate, scope: Scope) => {
     const active = sel?.scope === scope && !sel.isNew && draft?.id === t.id;
+    const metaLine = itemMetaLine(t, metas[`${scope}:${t.id}`]);
     return (
       <button
         key={`${scope}:${t.id}`}
         type="button"
         onClick={() => open(t, scope)}
         aria-current={active ? 'true' : undefined}
-        style={{
-          display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%', minHeight: 44,
-          padding: `${SP.sm}px ${SP.md}px`, textAlign: 'left', cursor: 'pointer',
-          fontFamily: FONT.sans, fontSize: FS.base, color: C.textHeading,
-          background: active ? C.accentLight : C.bgWhite,
-          border: `1px solid ${active ? C.accent : C.border}`, borderRadius: R.lg,
-        }}
+        onMouseEnter={e => hoverIn(e, active)}
+        onMouseLeave={e => hoverOut(e, active)}
+        style={itemStyle(active)}
       >
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
-          {t.name}
+        <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0 }}>
+          <span style={itemNameStyle}>{t.name}</span>
+          {t.builtInKey && <Badge tone="accent" size="xs">встроенный</Badge>}
+          {t.basedOn && <Badge tone="neutral" size="xs" title={`Основан на «${t.basedOn.templateId}» v${t.basedOn.version}`}>копия</Badge>}
         </span>
-        {t.builtInKey && <Badge tone="accent" size="xs">встроенный</Badge>}
-        {t.basedOn && <Badge tone="neutral" size="xs" title={`Основан на «${t.basedOn.templateId}» v${t.basedOn.version}`}>копия</Badge>}
+        {metaLine && <span style={itemMetaStyle}>{metaLine}</span>}
       </button>
     );
   };
 
-  const listBlock = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
-      {projectMode && <ListLabel>Проектные</ListLabel>}
-      {locals.length === 0 && projectMode && (
-        <div style={{ fontSize: FS.sm, color: C.textMuted }}>Своих шаблонов у проекта нет.</div>
-      )}
-      {(projectMode ? locals : globals).map(t => renderItem(t, projectMode ? 'project' : 'global'))}
-      {canWrite && (
-        <Button
-          variant="dashed" size="sm" fullWidth
-          leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-          onClick={() => open(blankTemplate(), projectMode ? 'project' : 'global', true)}
-        >Новый шаблон</Button>
-      )}
-      {projectMode && globals.length > 0 && (
-        <>
-          <ListLabel>Глобальные</ListLabel>
-          {globals.map(t => renderItem(t, 'global'))}
-        </>
+  const draftRow = draft && (
+    <div aria-current="true" style={itemStyle(true)}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0 }}>
+        <span style={itemNameStyle}>{draft.name.trim() || 'Новый шаблон'}</span>
+        <Badge tone="warning" size="xs">не сохранён</Badge>
+      </span>
+      <span style={itemMetaStyle}>{draftMetaLine(draft.stages)}</span>
+    </div>
+  );
+
+  const emptyProjectBlock = (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm, padding: `${SP.md}px` }}>
+      <div style={{ fontSize: FS.sm, color: C.textSecondary, textAlign: 'center' }}>
+        Других своих процессов в проекте нет — фичи берут глобальные.
+      </div>
+      {canWrite && globals.length > 0 && (
+        <Button variant="ghost" size="xs" dataTestId="copy-global" onClick={() => open(forkToProject(globals[0]), 'project', true)}>
+          Копия глобального…
+        </Button>
       )}
     </div>
+  );
+
+  const listBlock = (
+    <Island>
+      <IslandHeader
+        title="Процессы"
+        actions={canWrite ? (
+          <Button variant="ghost" size="xs" title="Новый шаблон" dataTestId="new-template"
+            onClick={() => open(blankTemplate(), projectMode ? 'project' : 'global', true)}>
+            + Новый
+          </Button>
+        ) : undefined}
+      />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, padding: SP.md, minWidth: 0 }}>
+        <ListLabel>Глобальные · правит админ</ListLabel>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+          {sel && sel.isNew && sel.scope === 'global' && draftRow}
+          {globals.map(t => renderItem(t, 'global'))}
+        </div>
+        {projectMode && (
+          <>
+            <ListLabel>Проект «{projectName ?? ''}» · правит владелец</ListLabel>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+              {sel && sel.isNew && sel.scope === 'project' && draftRow}
+              {locals.map(t => renderItem(t, 'project'))}
+              {locals.length === 0 && emptyProjectBlock}
+            </div>
+          </>
+        )}
+      </div>
+    </Island>
   );
 
   // === Редактор ===

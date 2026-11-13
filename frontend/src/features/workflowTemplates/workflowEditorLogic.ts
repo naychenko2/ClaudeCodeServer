@@ -219,16 +219,46 @@ export function canWriteProjectTemplates(ownerId: string | null | undefined, use
   return !!ownerId && ownerId === userId;
 }
 
-// Мета строк списка по ключу «область:id» — для тулбара редактора.
+// Мета строк списка по ключу «область:id»: и для мета-строки элемента (itemMetaLine),
+// и для тулбара редактора.
 export function entryMetaMap(entries: WorkflowTemplateEntry[]): Record<string, WorkflowEntryMeta> {
   const map: Record<string, WorkflowEntryMeta> = {};
   for (const e of entries) {
     map[`${e.scope}:${e.template.id}`] = {
+      stageCount: e.stageCount, parallelColumns: e.parallelColumns, usageCount: e.usageCount,
       basedOn: e.basedOn ?? null, basedOnLatestVersion: e.basedOnLatestVersion ?? null,
       diffFromPreset: e.diffFromPreset ?? null,
     };
   }
   return map;
+}
+
+// Мета-строка элемента списка (T7): «8 этапов · v4 · 14 фич», «2 параллельные колонки»,
+// «от «Полного цикла» v3». Считает сервер (B08), фронт не пересчитывает: параллельных
+// колонок здесь не меряем вовсе; stageCount старого сервера — длина своего списка
+// (этапы уже в модели, это не пересчёт). Части — только из того, что есть:
+// фичи при usageCount>0, колонки при >1, «от …» — когда известно имя оригинала
+// (meta.basedOn; из WorkflowTemplate.basedOn одно id — его в строку не ставим,
+// для происхождения уже есть бейдж «копия»).
+export function itemMetaLine(t: WorkflowTemplate, meta: WorkflowEntryMeta | undefined): string | null {
+  const parts: string[] = [];
+  const stages = meta?.stageCount ?? t.stages.length;
+  if (stages > 0) parts.push(`${stages} ${pluralRu(stages, 'этап', 'этапа', 'этапов')}`);
+  if (t.version > 0) parts.push(`v${t.version}`);
+  const used = meta?.usageCount ?? 0;
+  if (used > 0) parts.push(`${used} ${pluralRu(used, 'фича', 'фичи', 'фич')}`);
+  const cols = meta?.parallelColumns ?? 0;
+  if (cols > 1) parts.push(`${cols} ${pluralRu(cols, 'параллельная колонка', 'параллельные колонки', 'параллельных колонок')}`);
+  const b = meta?.basedOn;
+  if (b) parts.push(`от «${b.name}» v${b.version}`);
+  return parts.length ? parts.join(' · ') : null;
+}
+
+// Мета-строка черновика (несохранённого нового шаблона): сервера ещё нет, счёт локальный.
+export function draftMetaLine(stages: WorkflowStage[]): string {
+  return stages.length === 0
+    ? 'этапов пока нет'
+    : `${stages.length} ${pluralRu(stages.length, 'этап', 'этапа', 'этапов')}`;
 }
 
 // Подпись тулбара: «v5 · от «Полного цикла» v3 — глобальный уже v4» / «v4 · отличается от исходного

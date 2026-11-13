@@ -229,7 +229,9 @@ export function WikiPurgeBlock() {
             ) : null}
           </div>
           {lastResult && !runBusy && (
-            <IconButton ariaLabel="Скрыть" title="Скрыть" size="sm" onClick={() => setLastResult(null)}>
+            // Тач-цель (ревью М2): на мобиле × — lg (40), как «Начать заново» (мин. 40);
+            // на десктопе остаётся sm (28) — полоса не растёт в высоту под мышью
+            <IconButton ariaLabel="Скрыть" title="Скрыть" size={isMobile ? 'lg' : 'sm'} onClick={() => setLastResult(null)}>
               <X size={16} />
             </IconButton>
           )}

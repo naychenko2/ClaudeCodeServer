@@ -29,7 +29,8 @@
 // (6) не строить строку статуса при runBusy → «Чистка выполняется…» краснеет в обоих
 //     новых тестах;
 // (7) в purgeStripCompact поднять порог 300→301 → «300→false» краснеет;
-// (8) не снимать итог по «Скрыть» (setLastResult(null) → noop) → «Скрыть снимает» краснеет.
+// (8) не снимать итог по «Скрыть» (setLastResult(null) → noop) → «Скрыть снимает» краснеет;
+// (9) вернуть «Скрыть» фиксированный size="sm" → «тач-цель» краснеет (доработка по ревью М2).
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -350,5 +351,13 @@ describe('блок «Начать вики заново» (J-F4)', () => {
     const src = readFileSync(fileURLToPath(new URL('../WikiPurgeBlock.tsx', import.meta.url)), 'utf8');
     expect(src).toContain("position: 'sticky'");
     expect(src).toContain('bottom: 0');
+  });
+
+  it('тач-цель «Скрыть» (×): lg (40) на мобиле, sm (28) на десктопе — размер по isMobile', () => {
+    // Ревью М2 (Глеб): фиксированный size="sm" давал тач-цель 28 < 40. Инвариант:
+    // на десктопе полоса не растёт в высоту (× остаётся 28), на мобиле — 40, как «Начать заново»
+    const src = readFileSync(fileURLToPath(new URL('../WikiPurgeBlock.tsx', import.meta.url)), 'utf8');
+    // мутация (9): вернуть size="sm" — эта строка краснеет
+    expect(src).toContain("size={isMobile ? 'lg' : 'sm'}");
   });
 });

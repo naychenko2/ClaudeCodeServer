@@ -15,7 +15,9 @@
 // (2) убрать <WikiNightlyBlock /> из контейнера → «встроен первым» краснеет;
 // (3) поставить его после «Применения» → «встроен первым» краснеет;
 // (4) в WIKI_SUBTABS подставить записи «settings» заглушку (stubNote) или другой component →
-//     тест проводки краснеет (доработка по ревью R-S7d-3).
+//     тест проводки краснеет (доработка по ревью R-S7d-3);
+// (5) поменять в WikiSettings местами <WikiChatTriageList /> и <WikiPurgeBlock /> →
+//     «последний элемент стопки» краснеет (доработка по ревью М2).
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -178,5 +180,18 @@ describe('контейнер «Настройки» (S7d-3)', () => {
     expect(iNightSrc).toBeGreaterThanOrEqual(0);
     expect(iNightSrc).toBeLessThan(src.indexOf('<WikiApplySettings'));
     expect(src.indexOf('<WikiApplySettings')).toBeLessThan(src.indexOf('<WikiChatTriageList'));
+  });
+
+  it('полоса «Начать вики заново» — последний элемент стопки (М2/П4): страж порядка в источнике', () => {
+    // Ревью М2 (Глеб): инвариант был без стража. Полоса прижимается к нижней кромке
+    // тела только оставаясь последним элементом контейнера (см. комментарий WikiSettings.tsx);
+    // поднять её в стопку или опустить другой блок ниже — полоса отклеится от низа (А2).
+    // Страж по образцу соседнего теста порядка: поиск без закрытия тега, с guard'ом -1
+    const src = readFileSync(fileURLToPath(new URL('../WikiSettings.tsx', import.meta.url)), 'utf8');
+    const iTriage = src.indexOf('<WikiChatTriageList');
+    expect(iTriage).toBeGreaterThanOrEqual(0);
+    // мутация (5): поменять местами <WikiChatTriageList /> и <WikiPurgeBlock /> — краснеет;
+    // убрать любой из двух блоков из стопки — тоже краснеет (-1 не проходит)
+    expect(iTriage).toBeLessThan(src.indexOf('<WikiPurgeBlock'));
   });
 });

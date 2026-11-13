@@ -58,6 +58,22 @@
 //     краснеет (3 кнопки вместо 1) (доработка b0065470);
 // (24) не рендерить пометку статуса (PACKAGE_STATUS_BADGE пуст) → «пометка „откачен“ /
 //     „не применён“» краснеет (доработка b0065470).
+//
+// М6 (макет wiki-panels-v1, «Журнал» A6, П1/П2/П3): раскладка строки — от ширины контейнера
+// (узкость решает useWikiNarrow, М0; здесь мок даёт состояние, проверяется отображение
+// narrow → раскладка, паттерн — SaveConflictDialog.test); действия — под текстом с отступом
+// на ширину иконки; ряды вида и фильтров — один закреплённый sticky-блок; окно вердиктов —
+// короткая строка shortVerdictWindow, полный текст — в title.
+// Мутации М6 (вывод — в отчёте задачи):
+// (25) убрать narrow-ветку меты → «узко — время в мете» краснеет;
+// (26) рендерить колонку времени безусловно (снять !narrow) → «узко — время в мете»
+//     краснеет (время в строке дважды);
+// (27) убрать колонку времени вовсе → «широко — время отдельной колонкой» краснеет;
+// (28) снять отступ-обёртку действий (рендерить кнопку без div) → «отступ на ширину иконки»
+//     краснеет;
+// (29) выбросить из shortVerdictWindow хвост «· очередь — ${queueText}» → чистый тест и
+//     «вид ночи — короткая строка» краснеют;
+// (30) снять sticky-стили бара → «закреплённый блок управления» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -65,7 +81,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
-import { WikiJournal } from '../WikiJournal';
+import { C, SP } from '../../../../lib/design';
+import { ICON_SIZE } from '../../../../components/ui/icons';
+import { shortVerdictWindow, WikiJournal } from '../WikiJournal';
 import { WIKI_SUBTABS } from '../wikiTabs';
 
 // Тост отката уходит событием 'cc-local-toast' (lib/toast): шпион на showToast читает, что
@@ -94,6 +112,10 @@ vi.mock('../../../../components/ui/Select', () => ({
   Select: ({ placeholder, onChange }: { placeholder?: string; onChange?: (v: string) => void }) =>
     createElement('button', { 'data-testid': `mock-select-${placeholder ?? ''}`, onClick: () => onChange?.(sel.value) }, placeholder ?? ''),
 }));
+// М6: узкость контейнера даёт мок (решение «узко» проверяет useWikiNarrow.test, М0; здесь —
+// отображение narrow → раскладка). Дефолт — широко: существующие тесты не затронуты.
+const narrowFlag = vi.hoisted(() => ({ value: false }));
+vi.mock('../useWikiNarrow', () => ({ useWikiNarrow: () => [() => {}, narrowFlag.value] }));
 
 import { request } from '../../../../lib/offline';
 import {
@@ -261,6 +283,7 @@ beforeEach(() => {
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
   sel.value = '';
+  narrowFlag.value = false;
   toast.calls.length = 0;
   // стор вики — модульный (тот же транспорт, что мокается здесь): каждый тест с чистого
   // состояния, открытые страницы и поколения — из прошлого теста не переносятся
@@ -1298,5 +1321,109 @@ describe('«Журнал»: вид «Решения за ночь» (J-F2)', () 
     expect(String(calls[2][0])).toBe('/wiki/journal');
     expect(rows(c)).toHaveLength(5);
     expect(nightRows(c)).toHaveLength(0);
+  });
+});
+
+// ─── М6: раскладка «Журнала» от ширины панели (A6, П1/П2/П3) ───
+
+// HH:MM для ts-фикстуры — та же локальная вычислка, что timeText: тест не зависит от
+// часового пояса машины
+function localTime(iso: string): string {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+describe('M6: shortVerdictWindow (чистая функция, П3)', () => {
+  it('короткая строка окна — «Окно: dd.MM–dd.MM · очередь — сейчас», даты — date part без сдвига поясом', () => {
+    // фактические поля вызова — локальные даты окна (localDay, «YYYY-MM-DD»)
+    expect(shortVerdictWindow('2026-11-12', '2026-11-13', 'сейчас')).toBe('Окно: 12.11–13.11 · очередь — сейчас');
+    // полная ISO-дата даёт ту же дату: берётся date part строки, Date здесь не нужен
+    expect(shortVerdictWindow('2026-11-12T01:00:00', '2026-11-13T05:00:00', 'сейчас')).toBe('Окно: 12.11–13.11 · очередь — сейчас');
+  });
+});
+
+describe('M6: узкая раскладка строки журнала (П1)', () => {
+  it('узко — время в первой строке меты («раздел · источник · HH:MM»), колонки времени справа нет', async () => {
+    narrowFlag.value = true;
+    seedJournal(RESP);
+    const c = render();
+    await settle();
+    const row = rows(c)[0];
+    const hhmm = localTime(ENTRY_AUTO.ts);
+    // мутация (25): убрать narrow-ветку меты — этот assert краснеет
+    expect(has(row, `projects/p1 · чат · ${hhmm}`)).toBe(true);
+    // время в строке ровно одно: отдельной колонки справа в узкой раскладке нет
+    // (мутация (26): рендерить колонку безусловно — этот assert краснеет, «03:12» станет дважды)
+    expect(textNodes(row).filter(t => t.includes(hhmm))).toHaveLength(1);
+  });
+
+  it('широко — время отдельной колонкой справа, мета без времени', async () => {
+    seedJournal(RESP);
+    const c = render();
+    await settle();
+    const row = rows(c)[0];
+    const hhmm = localTime(ENTRY_AUTO.ts);
+    // мутация (26): рендерить колонку безусловно — первый assert краснеет
+    expect(has(row, `· ${hhmm}`)).toBe(false);
+    expect(has(row, hhmm)).toBe(true);
+  });
+});
+
+describe('M6: действия строки — под текстом с отступом на ширину иконки (A6)', () => {
+  it('обёртки «Вернуть мою» и «Открыть страницу» — paddingLeft = SP.md + ICON_SIZE.sm + SP.sm', async () => {
+    seedMixed();
+    const c = render();
+    await settle();
+    click(chipNode(c), 'чип «ИИ поменял моё»');
+    await settle();
+    const indent = SP.md + ICON_SIZE.sm + SP.sm;
+    for (const testId of ['wiki-journal-restore', 'wiki-journal-open-page']) {
+      const btn = buttonByTestId(c, testId);
+      expect(btn, testId).not.toBeNull();
+      // мутация (27): снять div-обёртку (рендерить кнопку без отступа) — этот assert краснеет
+      const wrap = (btn as unknown as { parentNode: AnyNode }).parentNode;
+      const style = (reactProps(wrap)?.style ?? {}) as Record<string, unknown>;
+      expect(style.paddingLeft, testId).toBe(indent);
+    }
+  });
+});
+
+describe('M6: закреплённый блок управления (П2)', () => {
+  it('ряды вида и фильтров — один sticky-блок с непрозрачным фоном и нижней границей', async () => {
+    seedJournal(RESP);
+    const c = render();
+    await settle();
+    const bar = findNodeByAttr(c, 'data-testid', 'wiki-journal-bar');
+    expect(bar).not.toBeNull();
+    // мутация (29): снять sticky-стили бара — эти четыре assert краснеют
+    const st = (reactProps(bar!)?.style ?? {}) as Record<string, unknown>;
+    expect(st.position).toBe('sticky');
+    expect(st.top).toBe(0);
+    expect(st.background).toBe(C.bgWhite);
+    expect(st.borderBottom).toBe(`1px solid ${C.borderLight}`);
+    // один блок, а не два ряда по отдельности: и переключатель вида, и фильтры — внутри
+    expect(findNodeByAttr(bar!, 'data-testid', 'mock-select-Все разделы')).not.toBeNull();
+    expect(findNodeByAttr(bar!, 'data-testid', 'mock-select-Все источники')).not.toBeNull();
+  });
+});
+
+describe('M6: короткое окно вердиктов в виде ночи (П3)', () => {
+  it('вид ночи — короткая строка окна без mono, полный текст — в title', async () => {
+    await seedNight(NIGHT_2110);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    const win = findNodeByAttr(c, 'data-testid', 'wiki-night-window');
+    expect(win).not.toBeNull();
+    // мутация (28): вернуть прежний длинный текст — этот assert краснеет
+    expect(textNodes(win!).join(' ')).toMatch(/^Окно: \d{2}\.\d{2}–\d{2}\.\d{2} · очередь — сейчас$/);
+    // полный прежний текст — в title: границы окна («включая / не включая») остаются человеку
+    const title = String(reactProps(win!)?.title ?? '');
+    expect(title).toContain('включая');
+    expect(title).toContain('не включая');
+    // без mono: это подпись, не данные
+    const st = (reactProps(win!)?.style ?? {}) as Record<string, unknown>;
+    expect(st.fontFamily).toBeUndefined();
   });
 });

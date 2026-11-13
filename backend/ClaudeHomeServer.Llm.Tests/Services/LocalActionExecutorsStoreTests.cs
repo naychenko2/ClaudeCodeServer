@@ -18,7 +18,11 @@ namespace ClaudeHomeServer.Tests.Services;
 //   в нём ровно то же, что в памяти стора (мутация «снять замок» краснит);
 // • битый JSON — пустой список без исключения наружу (стор читается на старте контейнера);
 // • null-запись в правленном руками файле («"wiki-nightly": null», «"executors": null») —
-//   не становится исполнителем и не роняет чтение.
+//   не становится исполнителем и не роняет чтение;
+// • та же судьба у битой СТРОКИ списка: «"executors":[null]» и элемент без имени —
+//   пропуск с Warning, а не NRE в TryGet / LocalExecutorsFor / GET /api/usage;
+// • числа из правленного руками файла урезаются при чтении до тех же границ, что держит
+//   Validate: maxTotal 1..MaxTotalLimit, parallel 1..потолок движка.
 public class LocalActionExecutorsStoreTests
 {
     private const string Key = LocalActionCatalog.WikiNightly;
@@ -284,6 +288,89 @@ public class LocalActionExecutorsStoreTests
         // Чтение не сломано битой строкой: живая запись после неё работает.
         Assert.True(store.Save(Key, Cfg(1, Ex("gemma"))));
         Assert.NotNull(store.TryGet(Key));
+    }
+
+    [Theory]
+    // MAJOR по сверке W2a: десериализация ставит null и ВНУТРИ списка («"executors":[null]»),
+    // а «{"engine":""}» — запись без имени. До фильтра в Load такой элемент доходил до
+    // TryGet как NRE на e.Engine: падал и GET /api/usage (DescribeExecutors), и каждый тик
+    // ночи (LocalExecutorsFor внутри try прохода — дата не закрывалась, падение повторное).
+    [InlineData("""{"wiki-nightly":{"maxTotal":2,"executors":[null]}}""")]
+    [InlineData("""{"wiki-nightly":{"maxTotal":2,"executors":[{"engine":null,"parallel":1}]}}""")]
+    [InlineData("""{"wiki-nightly":{"maxTotal":2,"executors":[{"engine":"","parallel":1},{"engine":"   "}]}}""")]
+    public void Load_AllElementsBroken_TryGetNullWithoutThrow(string json)
+    {
+        var dir = DataDir();
+        File.WriteAllText(StoreFile(dir), json);
+        var store = Store(dir, Engines(("gemma", 2)));
+
+        // Живых исполнителей нет — то же «нет списка», что при пустом списке: null, не бросок.
+        Assert.Null(store.TryGet(Key));
+        // Чтение не сломано: живая запись после битого файла работает как обычно.
+        Assert.True(store.Save(Key, Cfg(1, Ex("gemma"))));
+        Assert.NotNull(store.TryGet(Key));
+    }
+
+    [Theory]
+    [InlineData("""{"wiki-nightly":{"maxTotal":2,"executors":[{"engine":"local","parallel":1},null]}}""", "local")]
+    [InlineData("""{"wiki-nightly":{"maxTotal":2,"executors":[null,{"engine":"gemma","parallel":1}]}}""", "gemma")]
+    [InlineData("""{"wiki-nightly":{"maxTotal":2,"executors":[{"engine":"local","parallel":1},{"engine":""},{"engine":null}]}}""", "local")]
+    public void Load_BrokenElementAmongLive_KeepsOnlyLiveOnes(string json, string expectedEngine)
+    {
+        var dir = DataDir();
+        File.WriteAllText(StoreFile(dir), json);
+        var store = Store(dir, Engines(("gemma", 2)));
+
+        var cfg = store.TryGet(Key);
+        Assert.NotNull(cfg);
+        // Ровно тот инвариант, на котором стоит DescribeExecutors (UsageController.cs:184:
+        // cfg.Executors.Select(e => e.Engine…)): в списке нет null и нет пустого имени,
+        // порядок живых — прежний.
+        Assert.Equal([expectedEngine], cfg.Executors.Select(e => e.Engine));
+        Assert.All(cfg.Executors, e => Assert.False(string.IsNullOrWhiteSpace(e.Engine)));
+    }
+
+    [Fact]
+    public void Load_HandEditedNumbers_ClampedToTheBoundsValidateEnforces()
+    {
+        // Файл правят руками: maxTotal 9 и parallel 0/9 проходят в него без валидатора.
+        // При чтении берутся те же границы, что держит Validate при записи: maxTotal 1..4,
+        // parallel 1..потолок движка (для «local» — MaxConcurrentTurns провайдера, здесь 2).
+        var dir = DataDir();
+        var config = Config(dir, new Dictionary<string, string?>
+        {
+            ["LocalLlm:EngineKey"] = "local-qwen",
+            ["LlmProviders:local-qwen:DisplayName"] = "Local Qwen",
+            ["LlmProviders:local-qwen:BaseUrl"] = "http://localhost:8080",
+            ["LlmProviders:local-qwen:MaxConcurrentTurns"] = "2",
+        });
+        File.WriteAllText(StoreFile(dir),
+            """{"wiki-nightly":{"maxTotal":9,"executors":[{"engine":"gemma","parallel":0},{"engine":"local","parallel":9}]}}""");
+        var store = new LocalActionExecutorsStore(config, NullLogger<LocalActionExecutorsStore>.Instance,
+            Engines(("gemma", 2)), new LlmProviderRegistry(config));
+
+        var cfg = store.TryGet(Key);
+        Assert.NotNull(cfg);
+        Assert.Equal(LocalActionExecutorsStore.MaxTotalLimit, cfg.MaxTotal);
+        Assert.Equal([1, 2], cfg.Executors.Select(e => e.Parallel));
+
+        // maxTotal без числа в файле (default 0) — тоже нижняя граница, а не «ноль слотов»:
+        // иначе место с живым списком молча оставалось бы без исполнителей.
+        File.WriteAllText(StoreFile(dir), """{"wiki-nightly":{"executors":[{"engine":"gemma"}]}}""");
+        var again = Store(dir, Engines(("gemma", 2)));
+        Assert.Equal(1, again.TryGet(Key)!.MaxTotal);
+    }
+
+    [Fact]
+    public void LocalExecutorsFor_HandEditedBrokenElement_NoThrow_OnlyLiveOnes()
+    {
+        // Тот же битый файл на стороне вызывающего ночи: LocalExecutorsFor брал e.Engine.Trim()
+        // прямо из списка стора и на null-элементе падал вместе с проходом.
+        var dir = DataDir();
+        File.WriteAllText(StoreFile(dir),
+            """{"wiki-nightly":{"maxTotal":2,"executors":[{"engine":"gemma","parallel":1},null,{"engine":""}]}}""");
+        var (runner, _) = Stand(dir, Engines(("gemma", 2)));
+        Assert.Equal(["gemma"], runner.LocalExecutorsFor(Key).Select(e => e.Engine));
     }
 
     [Fact]

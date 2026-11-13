@@ -373,6 +373,51 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
             "без списка место идёт по своему маршруту, как до фичи");
     }
 
+    // MAJOR по сверке W2a: файл стора правят руками, и в нём бывает «[null]» или строка без
+    // имени движка. Путь GET /api/usage (TryGet → DescribeExecutors) обязан на таком файле не
+    // падать: его читает экран «Использование» при каждой загрузке. Стор подменяю своим:
+    // он Load'ит файл при создании, а синглтон тестового хоста был бы прочитан раньше,
+    // чем я успел бы его записать.
+    [Fact]
+    public async Task GetUsage_ИсполнителиМеста_БитыйФайлНеРоняетОтвет_ЧислаУрезаны()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cc-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "local-action-executors.json"),
+            """{"wiki-nightly":{"maxTotal":9,"executors":[{"engine":"local","parallel":9},null,{"engine":""}]}}""");
+        var storeConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var store = new LocalActionExecutorsStore(storeConfig);
+
+        using var host = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                foreach (var d in services.Where(d => d.ServiceType == typeof(LocalActionExecutorsStore)).ToList())
+                    services.Remove(d);
+                services.AddSingleton(store);
+            });
+        });
+
+        var client = await AuthenticateAsync(host);
+        var usage = await client.GetFromJsonAsync<JsonElement>("/api/usage");
+        var actions = usage.GetProperty("ollama").GetProperty("actions").EnumerateArray().ToList();
+
+        var nightly = actions.First(a => a.GetProperty("key").GetString() == LocalActionCatalog.WikiNightly);
+        var exec = nightly.GetProperty("executors");
+        // Ответ живой, а не 500, и числа в нём уже внутри границ стора: 9 → 4; parallel 9 у
+        // «local» → потолок той же основной локали (без реестра провайдеров — DefaultLimit).
+        exec.GetProperty("maxTotal").GetInt32().Should().Be(LocalActionExecutorsStore.MaxTotalLimit);
+        var items = exec.GetProperty("items").EnumerateArray().ToList();
+        items.Should().ContainSingle("null-элемент и строка без имени не доходят до ответа");
+        items[0].GetProperty("engine").GetString().Should().Be(LocalActionOverridesStore.LocalRoute);
+        items[0].GetProperty("parallel").GetInt32().Should().Be(TrackedLocalLlmClient.DefaultLimit);
+    }
+
     // Список движков для выбора (И3): только «local» и имена включённых LocalEngines:*.
     // В тестовом хосте облачные провайдеры настроены базовым appsettings.json (deepseek, glm, …) —
     // ни одного их ключа в списке быть не может. Имя = значение engine в PUT (контракт W2b);

@@ -288,13 +288,43 @@ public sealed class LocalActionExecutorsStore
                         _storePath, key);
                     continue;
                 }
-                clean[action.Key] = cfg;
+
+                // Строка списка тоже правится руками: «"executors":[null]» даёт элемент null
+                // (инициализатор на элемент не действует), «{"engine":""}» — пустое имя. Их
+                // пропускаем ЗДЕСЬ, как чужое имя: до TryGet такой элемент доходит как
+                // исключение на e.Engine, и падает тогда весь вызывающий — GET /api/usage
+                // (DescribeExecutors) и каждый тик ночи (LocalExecutorsFor внутри try прохода,
+                // дата при этом не закрывается).
+                var kept = new List<LocalActionExecutorConfig>(cfg.Executors.Count);
+                var hadBrokenElement = false;
+                foreach (var e in cfg.Executors)
+                {
+                    if (e is null || string.IsNullOrWhiteSpace(e.Engine))
+                    {
+                        hadBrokenElement = true;
+                        continue;
+                    }
+                    // Числа из файла не выходят за те же границы, что держит Validate при
+                    // записи: maxTotal — 1..MaxTotalLimit, parallel — 1..потолок движка
+                    // (запись по-прежнему только через Validate; здесь правится только то,
+                    // что человек дописал в файл руками). Max(1, …) — чтобы провайдер с
+                    // нулевым MaxConcurrentTurns не дал Clamp(min > max) и не выбросил файл.
+                    var ceiling = Math.Max(1, MaxConcurrencyOf(e.Engine));
+                    kept.Add(e with { Parallel = Math.Clamp(e.Parallel, 1, ceiling) });
+                }
+                if (hadBrokenElement) (broken ??= []).Add(key);
+                clean[action.Key] = cfg with
+                {
+                    MaxTotal = Math.Clamp(cfg.MaxTotal, 1, MaxTotalLimit),
+                    Executors = kept,
+                };
             }
             // Один сигнал на загрузку, а не на каждую битую строку: файл читается на старте
             // контейнера, warning на строку был бы шумом (тот же порядок, что у пропускаемых
             // имён движков — их список тоже называется разом).
             if (broken is not null)
-                _log?.LogWarning("{Path}: пустая запись исполнителей у «{Actions}», игнорирую",
+                _log?.LogWarning("{Path}: битая запись исполнителей у «{Actions}» (пустой список "
+                                 + "или строка без имени движка), игнорирую",
                     _storePath, string.Join(", ", broken));
             _configs = clean;
         }

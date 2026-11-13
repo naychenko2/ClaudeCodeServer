@@ -240,9 +240,15 @@ public class CharacterLoraTrainController(
     private int PresetEta() =>
         LoraTrainPresets.Eta(LoraTrainPresets.Standard, config.GetValue("LocalMedia:LoraTrainStartSeconds", DefaultStartSeconds))!.Value;
 
+    private string? RouteValue(string key) => RouteData.Values.TryGetValue(key, out var value) ? value as string : null;
+
     private bool Character(string? projectId, string? sessionId, string slug, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Project? project,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out IActionResult? denied)
     {
+        // string? в параметрах action биндится и из query: значимы только значения маршрута, иначе
+        // ?sessionId=… на проектном маршруте (и ?projectId=… на чатовом) подменил бы область
+        projectId = RouteValue("projectId");
+        sessionId = RouteValue("sessionId");
         if (!gate.TryCharacterProject(UserId, projectId, sessionId, out project, out denied)) return false;
         if (!CharacterStore.IsValidSlug(slug) || CharacterStore.Get(project.RootPath, slug) is null)
         {

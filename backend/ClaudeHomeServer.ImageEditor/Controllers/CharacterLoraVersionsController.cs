@@ -129,11 +129,17 @@ public class CharacterLoraVersionsController(
         foreach (var rel in change.Deleted) files.NotifyMutated(root, rel, FileMutationKind.Delete);
     }
 
+    private string? RouteValue(string key) => RouteData.Values.TryGetValue(key, out var value) ? value as string : null;
+
     private bool Character(string? projectId, string? sessionId, string slug, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Project? project,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CharacterManifest? manifest,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out IActionResult? denied)
     {
         manifest = null;
+        // string? в параметрах action биндится и из query: значимы только значения маршрута, иначе
+        // ?sessionId=… на проектном маршруте (и ?projectId=… на чатовом) подменил бы область
+        projectId = RouteValue("projectId");
+        sessionId = RouteValue("sessionId");
         if (!gate.TryCharacterProject(UserId, projectId, sessionId, out project, out denied)) return false;
         manifest = CharacterStore.IsValidSlug(slug) ? CharacterStore.Get(project.RootPath, slug) : null;
         if (manifest is null)

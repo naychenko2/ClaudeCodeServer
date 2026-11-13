@@ -281,6 +281,8 @@ export interface FeatureStage {
   returns?: number;
   taskSegments?: FeatureStageSegments | null;
   line?: 'back' | 'front' | null;
+  // B10: маршрут ещё не подтверждён человеком — узел показывает пометку «предложено».
+  proposed?: boolean;
 }
 
 // Полоска задач этапа (B01, бэк: FeatureStageSegments): закрытые / идущие / всего.

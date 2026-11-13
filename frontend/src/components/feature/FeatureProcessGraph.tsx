@@ -429,6 +429,11 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                 </span>
               )}
               <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+                {stage.proposed === true && (
+                  <span data-testid={`pgraph-proposed-${id}`} style={{ fontSize: FS.xxs, fontStyle: 'italic', color: C.textMuted }}>
+                    предложено
+                  </span>
+                )}
                 {stage.role && (
                   <span data-testid={`pgraph-role-${id}`} style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>
                     {stage.role}

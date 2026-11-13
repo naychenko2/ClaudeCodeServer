@@ -201,4 +201,14 @@ describe('FeatureProcessGraph: данные узла B01 (F06)', () => {
     expect(get(c, 'pgraph-returns-l')).toBeNull();
     expect(get(c, 'pgraph-segments')).toBeNull();
   });
+
+  it('proposed: пометка «предложено» только у узла с признаком', () => {
+    const c = render([
+      { ...mkStage('review', 'rv', 'review', 0, 'pending'), proposed: true },
+      mkStage('final', 'fn', 'final', 1, 'pending', ['rv']),
+    ]);
+    expect(txt(get(c, 'pgraph-proposed-rv'))).toBe('предложено');
+    expect(get(c, 'pgraph-proposed-fn')).toBeNull();
+    expect(txt(get(c, 'pgraph-role-rv'))).toBe('review');
+  });
 });

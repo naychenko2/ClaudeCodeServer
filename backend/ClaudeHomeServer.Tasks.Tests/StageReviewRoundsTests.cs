@@ -156,7 +156,7 @@ public class StageReviewRoundsTests : IDisposable
     {
         var step = Step(legacy: false);
         Review(step, TaskVerdicts.Returned,
-            "Возврат. Причина: нарушен контракт. До мержа: ReviewNotesParser.cs:14 разбор формата; тест pending при Done");
+            "returned. Причина: нарушен контракт. До мержа: ReviewNotesParser.cs:14 разбор формата; тест pending при Done");
 
         var round = _sut.Build(step.Id, Owner).Value!.Review.ReviewRounds.Rounds[0];
 
@@ -165,6 +165,22 @@ public class StageReviewRoundsTests : IDisposable
         round.Blockers[0].File.Should().Be("ReviewNotesParser.cs");
         round.Blockers[0].Line.Should().Be(14);
         round.Blockers[1].Text.Should().Be("тест pending при Done");
+    }
+
+    [Fact]
+    public void Причина_цитирует_формат_блокеры_только_из_хвостовой_секции()
+    {
+        var step = Step(legacy: false);
+        Review(step, TaskVerdicts.Returned,
+            "returned. Причина: ReviewNotesParser не понимает реальный формат notes ревьюера («<вердикт>. Причина: … До мержа: п1; п2 | нет») — на живых данных blockers всегда пуст. " +
+            "До мержа: разбор секции «До мержа:» + тест на дословную строку; тест returned+Done без pending (мутация не краснеет); ложный блокер «Блокеров нет».");
+
+        var round = _sut.Build(step.Id, Owner).Value!.Review.ReviewRounds.Rounds[0];
+
+        round.Structured.Should().BeTrue();
+        round.Blockers.Should().HaveCount(3);
+        round.Blockers.Select(b => b.Text).Should().NotContain(t => t.Contains("п1") || t.Contains("п2"));
+        round.Blockers[0].Text.Should().StartWith("разбор секции");
     }
 
     [Fact]

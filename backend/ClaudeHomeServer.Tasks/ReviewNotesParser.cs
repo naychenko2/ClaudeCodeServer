@@ -20,7 +20,7 @@ public static class ReviewNotesParser
         @"(?<file>[\w./\\-]+\.\w{1,6}):(?<line>\d+)", RegexOptions.Compiled);
 
     private static readonly Regex BeforeMerge = new(
-        @"До\s+мержа\s*:\s*(?<items>.*)$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        @"(?<!«)До\s+мержа\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly string[] BlockerTags = ["блокер", "blocker", "major", "critical"];
 
@@ -35,10 +35,12 @@ public static class ReviewNotesParser
         {
             if (string.IsNullOrWhiteSpace(raw)) continue;
             var m = Line.Match(raw);
-            if (!m.Success && BeforeMerge.Match(raw) is { Success: true } bm)
+            // секция — хвост строки: «Причина» может цитировать сам формат, поэтому берём ПОСЛЕДНЕЕ
+            // совпадение (цитата в кавычках «До мержа:» отсекается lookbehind'ом)
+            if (!m.Success && BeforeMerge.Matches(raw) is { Count: > 0 } bms)
             {
                 tagged = true;
-                foreach (var item in bm.Groups["items"].Value.Split(';'))
+                foreach (var item in raw[(bms[^1].Index + bms[^1].Length)..].Split(';'))
                     AddBlocker(blockers, "блокер", item.Trim());
                 continue;
             }

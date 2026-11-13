@@ -970,6 +970,61 @@ public class WikiIngestTests : IDisposable
         PackagesOnDisk().Should().BeEmpty();
     }
 
+    // ── W5b: пустой engine — отказ окна без вызова модели; порядок «engine до стража noCloud» ──
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task W5b_ПустойEngine_ОтказБезВызоваМодели(string engine)
+    {
+        // Пустая или пробельная строка — не «исполнитель не назван», а названный пустым:
+        // прежний признак (Length > 0) отдавал пустую строку маршруту места — модель звалась
+        // на другой там, где просили этот движок; пробельная уходила в шов с пустым именем.
+        // Ни в какой движок такое имя не резолвится: отказ окна той же причиной маршрута, что
+        // мёртвый движок, InputTokens 0, ни одного вызова. Мутация «вернуть
+        // engine is { Length: > 0 }» → пустой engine уходит в ночную ветку маршрута →
+        // LocalOrChosenCalls 1 → краснеет этот тест.
+        var llm = new FakeLlm(synth: SynthJson, nightly: true);
+
+        var res = await Sut(llm).IngestAsync(User, Req(),
+            actionKey: LocalActionCatalog.WikiNightly, engine: engine);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
+        res.Reason.Should().Contain("синтез").And.Contain(WikiIngestService.ReasonLocalUnavailable,
+            "отказ называет проход и причину маршрута — по ней ночь гасит исполнителя");
+        res.Reason.Should().NotContain("пустой ответ", "модель не зввалась — «пустой ответ» лжёт");
+        res.InputTokens.Should().Be(0, "модель не звалась — понесённого расхода нет");
+        llm.EngineCalls.Should().BeEmpty("пустое имя не резолвится в движок");
+        llm.LocalOrChosenCalls.Should().Be(0, "прежний путь с выбором маршрутом — не этот случай");
+        llm.CloudCalls.Should().Be(0, "И3: окно с исполнителем не уходит в облако");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task W5b_ИсполнительДоСтражаNoCloud()
+    {
+        // Порядок веток (И3): страж noCloud (решение 6 ADR-039) гасит ночь без локального
+        // маршрута места, но названный исполнитель важнее его — при UsesLocal(WikiNightly)
+        // == false и заданном engine вызов идёт в RunOnLocalEngineDetailedAsync, облачных
+        // вызовов ноль. Движок взят мёртвым (EngineDown): изолирует решение о ветке от
+        // остальной цепочки — важен сам факт вызова на названном движке.
+        // Мутация «страж noCloud впереди ветки engine»: окно отказано до вызова →
+        // EngineCalls пусто → краснеет этот тест.
+        var llm = new FakeLlm(synth: SynthJson, nightly: false) { EngineDown = true };
+
+        var res = await Sut(llm).IngestAsync(User, Req(),
+            actionKey: LocalActionCatalog.WikiNightly, engine: "gemma");
+
+        llm.EngineCalls.Should().ContainSingle(c => c.Engine == "gemma",
+            "исполнитель назван аргументом — до стража маршрута места");
+        llm.EngineCalls.Should().OnlyContain(c => c.ActionKey == LocalActionCatalog.WikiNightly,
+            "место вызова — место заявки");
+        llm.LocalOrChosenCalls.Should().Be(0, "пути с выбором исполнителя маршрутом здесь нет");
+        llm.CloudCalls.Should().Be(0, "И3: ни одного облачного вызова");
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
+        res.InputTokens.Should().Be(0);
+    }
+
     // ── подменённый ICheapTextRunner: классифицирует вызов по промпту, помечает всё ──
 
     private sealed class FakeLlm : ICheapTextRunner

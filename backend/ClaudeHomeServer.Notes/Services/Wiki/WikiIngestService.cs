@@ -186,7 +186,9 @@ public sealed class WikiIngestService
     /// из LocalEngines:*, его даёт только ночь. Не-null — модель зовётся ровно на этом движке
     /// (RunOnLocalEngineDetailedAsync: ни выбора исполнителя маршрутом, ни его страховки, ни
     /// облачного шага); его отказ — отказ окна с причиной маршрута, подмены другим исполнителем
-    /// нет. null — прежний путь. В in-flight-ключ не входит (см. шапку).</summary>
+    /// нет. Пустая или пробельная строка — тоже ветка исполнителя: пустое имя не резолвится
+    /// ни в какой движок, окно отказано без вызова модели (W5b). null — прежний путь.
+    /// В in-flight-ключ не входит (см. шапку).</summary>
     public Task<IngestResult> IngestAsync(string ownerId, Request? request, CancellationToken ct = default,
         string? actionKey = null, string? engine = null)
     {
@@ -692,9 +694,10 @@ public sealed class WikiIngestService
     /// <summary>Один one-shot вызов места разбора (без инструментов; формат — «json»):
     /// actionKey — место заявки (N7a), null — прежний wiki-ingest; все вызовы передают его
     /// явно (default снят, чтобы вызов не мог остаться без места). Ключ проверен каталогом
-    /// на входе IngestAsync. engine (W3) — названный локальный исполнитель: при нём вызов
-    /// идёт только через RunOnLocalEngineDetailedAsync (путь без выбора исполнителя и без
-    /// облака), при null — прежние две ветки. Сбой/пустой ответ — ModelAnswer с причиной:
+    /// на входе IngestAsync. engine (W3) — названный локальный исполнитель: при не-null engine
+    /// (W5b) вызов идёт только через RunOnLocalEngineDetailedAsync (путь без выбора
+    /// исполнителя и без облака); пустое/пробельное имя — отказ окна без вызова модели;
+    /// при null — прежние две ветки. Сбой/пустой ответ — ModelAnswer с причиной:
     /// вызывающий отказывает заявку, а не ловит исключение.
     /// Токены вызова — в аккумулятор разбора (usage=null — нераспознанный
     /// формат метрик — переживаем: это разрешено контрактом шва).</summary>
@@ -714,7 +717,10 @@ public sealed class WikiIngestService
         // FallbackRoute, ни облачного шага, то есть до облака не доходит ни при каком маршруте
         // места. Исполнителя даёт только ночь (её обёртка в WikiNightlyService:217 зовёт
         // AnalyzeAsync с местом ночи), поэтому без места заявки берётся она.
-        var viaEngine = engine is { Length: > 0 };
+        // W5b: назван — значит не-null. Прежнее ветвление (Length > 0) отдавало пустую строку
+        // маршруту места молча: вызывающий просил этот движок, а модель звалась на другом.
+        // Пустое или пробельное имя ни в какой движок не резолвится — отказ окна ниже.
+        var viaEngine = engine is not null;
         // Решение 6 ADR-039 (поправляет ADR-035 §12ж): ночь не уходит в облако ни на одном
         // шаге цепочки. Финальный claude-шаг гасит RunLocalOrChosenDetailedAsync, но шаг 1
         // цепочки зовёт выбранную админом облачную модель — поэтому облачный маршрут места
@@ -727,6 +733,13 @@ public sealed class WikiIngestService
         {
             if (viaEngine)
             {
+                if (string.IsNullOrWhiteSpace(engine))
+                    // Пустой/пробельный engine (W5b): по такому имени движок не резолвится ни в
+                    // какой — звать модель не на чём, и решать это должен не шов. Отказ окна той
+                    // же формулировкой и с InputTokens 0, что мёртвый движок: по ним ночь отличает
+                    // отказ движка от отказа плана (IsLocalDownRejection, WikiNightlyService:1158).
+                    // Ни одного вызова: по пустой строке прежний путь звал модель маршрута места.
+                    return new ModelAnswer(null, $"{passName}: {ReasonLocalUnavailable}");
                 var onEngine = await _llm.RunOnLocalEngineDetailedAsync(
                     engine!, actionKey ?? LocalActionCatalog.WikiNightly, prompt, ownerId,
                     jsonFormat: "json", ct: ct);

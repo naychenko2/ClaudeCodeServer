@@ -1,15 +1,21 @@
-// Экран этапа (D1c): гонка ответов при смене задачи, один запрос диффа на коммит, отказ диффа
-// не гасит остальные блоки, metrics = null — блока метрик нет, три блока из ответа.
+// Экран этапа (D1c/D1e, вариант A): гонка ответов при смене задачи, один запрос диффа на коммит,
+// отказ диффа не гасит экран, metrics = null — вкладки «Метрики» нет.
+// Вкладки: активна одна — остальных блоков в DOM нет; сводка — над полосой при любой вкладке;
+// при выборе другой задачи открыта первая вкладка; полоса на 360 скроллится внутри себя.
 //
 // Мутации (в отчёте): (1) убрать `if (signal.aborted) return` в StageBody → тест гонки красный;
 // (2) убрать защиту inFlight в FeatureStageArtifacts → тест «один запрос» красный;
-// (3) убрать пометку taskId у состояния → тест гонки красный.
+// (3) убрать пометку taskId у состояния → тест гонки красный;
+// (4) убрать пометку taskId у выбора вкладки → тест «первая вкладка» красный;
+// (5) убрать сводку из StageBody → тест «сводка над полосой» красный;
+// (6) показывать четыре вкладки независимо от metrics → тест «Метрики при metrics = null» красный.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureStageScreen } from './FeatureStageScreen';
 import { findNodeByAttr, installFakeDom, mount, reactProps, textNodes, uninstallFakeDom } from '../chat/__tests__/fakeDom';
 import type { StageScreen, StageCommitDiff } from '../../types/featureStage';
+import type { StageMetrics } from '../../types/featureStats';
 
 const { stageMock, diffMock } = vi.hoisted(() => ({ stageMock: vi.fn(), diffMock: vi.fn() }));
 vi.mock('../../lib/api', async (importOriginal) => {
@@ -20,6 +26,16 @@ vi.mock('../../lib/api', async (importOriginal) => {
 type FNode = Parameters<typeof findNodeByAttr>[0];
 
 const SHA_A = 'a'.repeat(40);
+
+const METRICS: StageMetrics = {
+  mode: 'journal',
+  window: { from: '2026-11-12T10:00:00Z', to: '2026-11-12T12:30:00Z', live: false, elapsedMinutes: 150 },
+  executor: { minutes: 75, live: false, turns: 48, errorTurns: null, tokens: null, costUsd: null, costPartial: false, hiddenCostModels: [], models: [] },
+  review: null,
+  human: { minutes: 35, waits: 1, replies: null, waitingNow: null },
+  idleMinutes: null,
+  spendFrom: null,
+};
 
 function screen(taskId: string, over: Partial<StageScreen> = {}): StageScreen {
   return {
@@ -42,9 +58,9 @@ function screen(taskId: string, over: Partial<StageScreen> = {}): StageScreen {
 const flush = () => new Promise(r => setTimeout(r, 0));
 const roots: ReturnType<typeof mount>['root'][] = [];
 
-function render(tasks = [{ id: 'A', title: 'A' }, { id: 'B', title: 'B' }]) {
+function render(tasks = [{ id: 'A', title: 'A' }, { id: 'B', title: 'B' }], isMobile = false) {
   installFakeDom();
-  const r = mount(createElement(FeatureStageScreen, { tasks, isMobile: false }));
+  const r = mount(createElement(FeatureStageScreen, { tasks, isMobile }));
   roots.push(r.root);
   return r;
 }
@@ -53,6 +69,24 @@ function click(container: FNode, testid: string) {
   const n = findNodeByAttr(container, 'data-testid', testid);
   expect(n, testid).not.toBeNull();
   act(() => { (reactProps(n!)!.onClick as (e: unknown) => void)({ stopPropagation() {}, preventDefault() {} }); });
+}
+
+// Кнопка вкладки (role="tab") по её подписи; null — нет (тот же приём, что у полосы страницы фичи).
+function findTab(c: FNode, label: string): FNode | null {
+  let hit: FNode | null = null;
+  const walk = (x: FNode) => {
+    if (hit) return;
+    if (x.nodeType === 1 && x.getAttribute?.('role') === 'tab' && textNodes(x).join('').includes(label)) { hit = x; return; }
+    for (const ch of x.childNodes) walk(ch);
+  };
+  walk(c);
+  return hit;
+}
+
+function clickTab(c: FNode, label: string) {
+  const t = findTab(c, label);
+  expect(t, `вкладка ${label}`).not.toBeNull();
+  act(() => { (reactProps(t!)!.onClick as (e: unknown) => void)({ stopPropagation() {}, preventDefault() {} }); });
 }
 
 const text = (c: FNode) => textNodes(c).join('|');
@@ -72,16 +106,99 @@ afterEach(() => {
 });
 
 describe('FeatureStageScreen', () => {
-  it('рисует артефакты, вход и ревью из ответа', async () => {
+  it('открыт один блок: первая вкладка — «Артефакты», входа и ревью в DOM нет', async () => {
     stageMock.mockResolvedValue(screen('A'));
     const { container } = render([{ id: 'A', title: 'A' }]);
     await act(async () => { await flush(); });
     const t = text(container);
     expect(t).toContain('коммит A');
     expect(t).toContain('итог A');
-    expect(t).toContain('/x/A.cs');
-    expect(t).toContain('замечание');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts')).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'stage-input')).toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'stage-review')).toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'stage-screen-picker')).toBeNull(); // одна задача — выбора нет
+  });
+
+  it('переключение вкладок: активен один блок, остальные не отрисованы', async () => {
+    stageMock.mockResolvedValue(screen('A'));
+    const { container } = render([{ id: 'A', title: 'A' }]);
+    await act(async () => { await flush(); });
+    clickTab(container, 'Вход');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-input')).not.toBeNull();
+    expect(text(container)).toContain('/x/A.cs');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts')).toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'stage-review')).toBeNull();
+    clickTab(container, 'Ревью');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-review')).not.toBeNull();
+    expect(text(container)).toContain('замечание');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-input')).toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts')).toBeNull();
+  });
+
+  it('сводка — над полосой вкладок и видна при любой открытой вкладке', async () => {
+    stageMock.mockResolvedValue(screen('A', { metrics: METRICS }));
+    const { container } = render([{ id: 'A', title: 'A' }]);
+    await act(async () => { await flush(); });
+    clickTab(container, 'Ревью');
+    const summary = findNodeByAttr(container, 'data-testid', 'stage-screen-summary');
+    expect(summary).not.toBeNull();
+    const t = text(container);
+    // сводка стоит раньше и названия задачи, и содержимого открытого блока
+    // (stepRef и title — соседние текстовые узлы, в склейке разделены «|»)
+    expect(t).toContain('A · ');
+    expect(t).toContain('задача A');
+    expect(t).toContain('готово');
+    expect(t.indexOf('задача A'), 'сводка над содержимым вкладки').toBeLessThan(t.indexOf('замечание'));
+    // ключевые цифры — из metrics как есть
+    expect(t).toContain('Время');
+    expect(t).toContain('Ходы');
+    expect(t).toContain('Ждёт вас');
+  });
+
+  it('metrics = null — вкладки «Метрики» нет и блока метрик нет', async () => {
+    stageMock.mockResolvedValue(screen('A', { metrics: null }));
+    const { container } = render([{ id: 'A', title: 'A' }]);
+    await act(async () => { await flush(); });
+    expect(findNodeByAttr(container, 'data-testid', 'stage-screen-body')).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'stage-metrics')).toBeNull();
+    expect(findTab(container, 'Метрики')).toBeNull();
+    expect(text(container)).not.toContain('Метрики');
+    // сводка без цифр остаётся: название и состояние
+    expect(text(findNodeByAttr(container, 'data-testid', 'stage-screen-summary')!)).toContain('задача A');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-screen-kpis')).toBeNull();
+  });
+
+  it('metrics есть — вкладка «Метрики» открывается как блок', async () => {
+    stageMock.mockResolvedValue(screen('A', { metrics: METRICS }));
+    const { container } = render([{ id: 'A', title: 'A' }]);
+    await act(async () => { await flush(); });
+    clickTab(container, 'Метрики');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-metrics')).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts')).toBeNull();
+  });
+
+  it('выбор другой задачи открывает первую вкладку, а не вкладку прошлой задачи', async () => {
+    stageMock.mockImplementation((id: string) => Promise.resolve(screen(id)));
+    const { container } = render();
+    await act(async () => { await flush(); });
+    clickTab(container, 'Ревью'); // у A открыт «Ревью»
+    expect(text(container)).toContain('замечание');
+    click(container, 'stage-screen-pick-B');
+    await act(async () => { await flush(); });
+    const body = findNodeByAttr(container, 'data-testid', 'stage-screen-body')!;
+    expect(body.getAttribute('data-task-id')).toBe('B');
+    expect(text(container)).toContain('коммит B');
+    expect(text(container)).not.toContain('замечание'); // чужая вкладка не перешла
+    expect(findTab(container, 'Артефакты')!.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('полоса вкладок на 360 скроллится внутри себя, а не выпирает', async () => {
+    stageMock.mockResolvedValue(screen('A'));
+    const { container } = render([{ id: 'A', title: 'A' }], true);
+    await act(async () => { await flush(); });
+    const tablist = findNodeByAttr(container, 'role', 'tablist');
+    expect(tablist).not.toBeNull();
+    expect((tablist as { style?: Record<string, string> }).style?.overflowX).toBe('auto');
   });
 
   it('гонка: ответ этапа A после выбора этапа B не применяется', async () => {
@@ -100,14 +217,6 @@ describe('FeatureStageScreen', () => {
     expect((stageMock.mock.calls[0][1] as AbortSignal).aborted).toBe(true);
   });
 
-  it('metrics = null — блока метрик нет', async () => {
-    stageMock.mockResolvedValue(screen('A', { metrics: null }));
-    const { container } = render([{ id: 'A', title: 'A' }]);
-    await act(async () => { await flush(); });
-    expect(findNodeByAttr(container, 'data-testid', 'stage-screen-body')).not.toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'stage-metrics')).toBeNull();
-  });
-
   it('повторный клик по диффу не шлёт второй запрос, пока первый идёт', async () => {
     stageMock.mockResolvedValue(screen('A'));
     const d = deferred<StageCommitDiff>();
@@ -122,7 +231,7 @@ describe('FeatureStageScreen', () => {
     expect(findNodeByAttr(container, 'data-testid', `stage-commit-diff-${SHA_A}`)).not.toBeNull();
   });
 
-  it('ошибка диффа показывается в блоке и не гасит остальные блоки', async () => {
+  it('ошибка диффа показывается в блоке и не гасит экран: другие вкладки живы', async () => {
     stageMock.mockResolvedValue(screen('A'));
     diffMock.mockRejectedValue(new Error('Коммит не найден'));
     const { container } = render([{ id: 'A', title: 'A' }]);
@@ -131,8 +240,11 @@ describe('FeatureStageScreen', () => {
     await act(async () => { await flush(); });
     expect(text(findNodeByAttr(container, 'data-testid', `stage-commit-error-${SHA_A}`)!)).toContain('Коммит не найден');
     const t = text(container);
-    expect(t).toContain('замечание'); // ревью живо
-    expect(t).toContain('/x/A.cs');   // вход живой
+    expect(t).toContain('коммит A'); // артефакты живы
+    clickTab(container, 'Ревью');
+    expect(text(container)).toContain('замечание'); // ревью живо
+    clickTab(container, 'Вход');
+    expect(text(container)).toContain('/x/A.cs'); // вход живой
   });
 
   it('ошибка загрузки экрана показывается текстом с «Повторить»', async () => {

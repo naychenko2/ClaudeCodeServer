@@ -31,7 +31,9 @@ public sealed class StageScreenService(
     FeatureJournalStore? journal = null,
     ISpendFeatureReader? spend = null,
     // B04: имя персоны-автора вопроса; null — имя берётся из названия задачи
-    IPersonaLookup? personas = null)
+    IPersonaLookup? personas = null,
+    // B07: название шаблона для шапки этапа; null — templateName пуст
+    WorkflowTemplateStore? templates = null)
 {
     // Потолки блока вопросов: история отвеченных и длина ответа человека
     public const int MaxAnsweredQuestions = 100;
@@ -69,7 +71,8 @@ public sealed class StageScreenService(
             Input: BuildInput(task, actorId),
             Review: BuildReview(task),
             Metrics: BuildMetrics(task),
-            Questions: BuildQuestions(task, chain));
+            Questions: BuildQuestions(task, chain),
+            StageSummary: BuildStageSummary(task, actorId));
         return StageResult<StageScreen>.Ok(screen);
     }
 
@@ -174,6 +177,175 @@ public sealed class StageScreenService(
             records = spend.Slice(ownerId, ids, [], [], null).Records;
         }
         return FeatureStageMetrics.Build(task, reviews, read, records, DateTime.UtcNow);
+    }
+
+    // Сводка шапки этапа (B07): исполнитель, шаблон, KPI, задачи ветки, соседняя ветка, чат исполнителя.
+    // «Этап» — все шаги и доработки фичи с тем же stage.id (слепок), у слепков без id — цепочка шага.
+    // Агрегаты считаются по всем его задачам; approx = журнал неполный хотя бы у одной (легаси тоже).
+    private StageSummary BuildStageSummary(TaskItem task, string actorId)
+    {
+        var epic = task.FeatureId is { } fid ? tasks.GetById(fid) : null;
+        var members = StageMembers(task);
+        var byStep = members.GroupBy(t => t.StepRef ?? t.Id).ToList();
+
+        var rows = new List<StageSummaryTask>();
+        var metrics = new List<StageMetrics>();
+        foreach (var group in byStep)
+        {
+            var main = group.OrderBy(t => t.Role == TaskRoles.Step ? 0 : 1).ThenBy(t => t.CreatedAt).First();
+            var chain = group.ToList();
+            var reviews = ReviewsOf(chain);
+            var returns = reviews.Count(r => r.Verification?.Verdict == TaskVerdicts.Returned);
+            var last = reviews.LastOrDefault(r => r.Verification?.Verdict is not null)?.Verification?.Verdict;
+            var verdict = last switch
+            {
+                TaskVerdicts.Returned => "returned",
+                TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks => "accepted",
+                _ => null
+            };
+            int? minutes = null;
+            foreach (var t in chain)
+            {
+                var m = BuildMetrics(t);
+                if (m is null) continue;
+                metrics.Add(m);
+                if (m.Executor.Minutes is { } em) minutes = (minutes ?? 0) + em;
+            }
+            var name = PersonaName(main.PersonaId ?? main.Stage?.PersonaId);
+            var state = chain.Any(t => t.AwaitingHumanSince is not null) ? "waiting"
+                : chain.All(t => t.Status == TaskItemStatus.Done) ? "done"
+                : StatusName(chain.Any(t => t.Status == TaskItemStatus.InProgress) ? TaskItemStatus.InProgress : main.Status);
+            rows.Add(new StageSummaryTask(main.Id, main.StepRef, main.Title, state,
+                name is null ? null : new StageSummaryExecutorName(name), minutes, verdict, returns));
+        }
+
+        var window = metrics.Count == 0 ? 0
+            : FeatureTimeMath.Minutes(metrics.Min(m => m.Window.From), metrics.Max(m => m.Window.To));
+        var tokenParts = metrics.SelectMany(m => new[] { m.Executor.Tokens, m.Review?.Tokens }).Where(t => t is not null).Select(t => t!).ToList();
+        var kpi = new StageSummaryKpi(
+            window,
+            metrics.Sum(m => m.Executor.Minutes ?? 0),
+            metrics.Sum(m => m.Review?.Minutes ?? 0),
+            metrics.Sum(m => m.Human.Minutes ?? 0),
+            metrics.Sum(m => (m.Executor.Turns ?? 0) + (m.Review?.Turns ?? 0)),
+            tokenParts.Count == 0 ? null : new StageSummaryTokens(
+                tokenParts.Sum(t => t.Input), tokenParts.Sum(t => t.Output),
+                tokenParts.Sum(t => t.CacheRead + t.CacheCreation)),
+            metrics.Count == 0 || metrics.Any(m => m.Mode != "journal"));
+
+        return new StageSummary(
+            BuildExecutor(task), TemplateName(task, epic), task.Stage?.TemplateVersion ?? 0,
+            rows.Sum(r => r.Returns), kpi, rows, BuildParallelNote(task, epic), ExecutorSessionId(task, actorId));
+    }
+
+    // Задачи этапа: тот же stage.id в одной фиче одного арендатора (шаги и доработки); без id — цепочка шага
+    private List<TaskItem> StageMembers(TaskItem task)
+    {
+        var id = task.Stage?.StageId;
+        if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(task.FeatureId)) return Chain(task);
+        var list = new List<TaskItem> { task };
+        list.AddRange(tasks.GetAll().Where(t => t.Id != task.Id && t.OwnerId == task.OwnerId && t.FeatureId == task.FeatureId
+            && t.Role is TaskRoles.Step or TaskRoles.Rework && t.Stage?.StageId == id));
+        return list;
+    }
+
+    private List<TaskItem> ReviewsOf(List<TaskItem> chain)
+    {
+        var ids = chain.Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
+        return tasks.GetAll()
+            .Where(t => t.Role == TaskRoles.Review && t.OwnerId == chain[0].OwnerId && t.ReviewOf?.Any(ids.Contains) == true)
+            .OrderBy(t => t.CreatedAt)
+            .ToList();
+    }
+
+    private string? PersonaName(string? personaId) =>
+        personaId is null ? null : personas?.GetByIdInternal(personaId)?.Name;
+
+    private StageSummaryExecutor? BuildExecutor(TaskItem task)
+    {
+        var pid = task.PersonaId ?? task.Stage?.PersonaId;
+        if (pid is null || personas?.GetByIdInternal(pid) is not { } persona) return null;
+
+        // Эффективный уровень: задача → слепок этапа → персона → средний. Ячейка этапа — «своя»
+        var tier = task.ModelTier ?? task.Stage?.DefaultTier ?? persona.ModelTier ?? ModelTier.Medium;
+        var stageCell = tier switch
+        {
+            ModelTier.Strong => task.Stage?.TierStrong, ModelTier.Weak => task.Stage?.TierWeak, _ => task.Stage?.TierMedium
+        };
+        var personaCell = tier switch
+        {
+            ModelTier.Strong => persona.TierStrong, ModelTier.Weak => persona.TierWeak, _ => persona.TierMedium
+        };
+        var own = !string.IsNullOrWhiteSpace(stageCell);
+        var label = own ? stageCell!
+            : !string.IsNullOrWhiteSpace(personaCell) ? personaCell!
+            : !string.IsNullOrWhiteSpace(persona.Model) ? persona.Model!
+            : JsonNamingPolicy.CamelCase.ConvertName(tier.ToString());
+
+        int? silence = task.Stage?.StallMinutes is > 0 ? task.Stage.StallMinutes : null;
+        var action = silence is null ? null : task.Stage?.StallPolicy switch
+        {
+            WorkflowStallPolicies.Alert => "notify",
+            WorkflowStallPolicies.StopAlert => "stop",
+            _ => "nudge"
+        };
+        return new StageSummaryExecutor(persona.Id, persona.Name, persona.Role, label, own, silence, action);
+    }
+
+    private string? TemplateName(TaskItem task, TaskItem? epic)
+    {
+        if (templates is null || task.Stage is not { TemplateId.Length: > 0 } st) return null;
+        var scope = string.Equals(epic?.Workflow?.Scope, "project", StringComparison.Ordinal)
+            ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
+        return templates.Get(st.TemplateId, scope, task.ProjectId)?.Name;
+    }
+
+    // Соседняя ветка: другой шаг маршрута, не связанный с этапом ни предком, ни потомком. Из них —
+    // та, где ещё идёт работа, иначе первая; у ветки без задач показывать нечего — null
+    private StageSummaryParallel? BuildParallelNote(TaskItem task, TaskItem? epic)
+    {
+        var stages = epic?.Workflow?.Stages;
+        var myId = task.Stage?.StageId;
+        if (stages is null || string.IsNullOrEmpty(myId) || task.Role is not (TaskRoles.Step or TaskRoles.Rework)) return null;
+        var byId = stages.Where(s => s.Id.Length > 0).GroupBy(s => s.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+
+        HashSet<string> Ancestors(string id)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var stack = new Stack<string>([id]);
+            while (stack.Count > 0 && byId.TryGetValue(stack.Pop(), out var s))
+                foreach (var a in s.After.Where(seen.Add)) stack.Push(a);
+            return seen;
+        }
+        if (!byId.ContainsKey(myId)) return null;
+        var mine = Ancestors(myId);
+
+        var candidates = new List<(RouteStage Stage, List<TaskItem> Tasks)>();
+        foreach (var s in stages.Where(s => s.Role == TaskRoles.Step && s.Id != myId))
+        {
+            if (mine.Contains(s.Id) || Ancestors(s.Id).Contains(myId)) continue;
+            var own = tasks.GetAll().Where(t => t.OwnerId == task.OwnerId && t.FeatureId == task.FeatureId
+                && t.Role is TaskRoles.Step or TaskRoles.Rework && t.Stage?.StageId == s.Id).ToList();
+            if (own.Count > 0) candidates.Add((s, own));
+        }
+        if (candidates.Count == 0) return null;
+        var pick = candidates.FirstOrDefault(c => c.Tasks.Any(t => t.Status != TaskItemStatus.Done));
+        if (pick.Stage is null) pick = candidates[0];
+
+        var steps = pick.Tasks.GroupBy(t => t.StepRef ?? t.Id).ToList();
+        var done = steps.Count(g => g.All(t => t.Status == TaskItemStatus.Done));
+        var lead = pick.Tasks.OrderBy(t => t.CreatedAt).First();
+        return new StageSummaryParallel(pick.Stage.Id, pick.Stage.Title ?? pick.Stage.Role, done, steps.Count,
+            PersonaName(lead.PersonaId ?? lead.Stage?.PersonaId));
+    }
+
+    // Чат исполнителя — только если читатель вправе его видеть (та же дверь, что у транскрипта)
+    private string? ExecutorSessionId(TaskItem task, string actorId)
+    {
+        var sessionId = task.LinkedSessionId;
+        if (string.IsNullOrEmpty(sessionId)) return null;
+        var canSee = task.OwnerId == actorId || access?.ResolveSession(actorId, sessionId, ProjectRight.Read) is not null;
+        return canSee ? sessionId : null;
     }
 
     public StageResult<StageCommitDiff> BuildDiff(string taskId, string? sha, string actorId)
@@ -481,7 +653,7 @@ public sealed record StageResult<T>(StageOutcome Outcome, T? Value, string? Erro
 public sealed record StageScreen(
     string TaskId, string? FeatureId, string? Role, string? StepRef, string Title, string Status,
     StageSnapshot? Stage, StageArtifacts Artifacts, StageInput Input, StageReview Review, StageMetrics? Metrics,
-    IReadOnlyList<StageQuestion> Questions);
+    IReadOnlyList<StageQuestion> Questions, StageSummary StageSummary);
 
 // CommitsAvailable = false — дерево задачи недоступно или git не ответил (список пуст не потому, что коммитов нет)
 public sealed record StageArtifacts(
@@ -548,3 +720,30 @@ public sealed record StageAnsweredQuestion(StageQuestion Question, TaskItem Task
 
 public sealed record StageCommitDiff(
     string Sha, string Subject, IReadOnlyList<string> Files, string Diff, bool Truncated, int MaxChars);
+
+// Сводка шапки этапа (B07). Executor = null — у этапа нет персоны-исполнителя; ParallelNote = null —
+// соседней ветки нет; ExecutorSessionId = null — чат не привязан или закрыт читателю. Kpi.Approx — журнал
+// неполный (легаси), тогда Tokens может быть null; Returns — возвраты ревью по всем шагам этапа.
+public sealed record StageSummary(
+    StageSummaryExecutor? Executor, string? TemplateName, int TemplateVersion, int Returns, StageSummaryKpi Kpi,
+    IReadOnlyList<StageSummaryTask> Tasks, StageSummaryParallel? ParallelNote, string? ExecutorSessionId);
+
+// SilenceAction: notify | nudge | stop (политика простоя слепка); ModelIsOwnCell — модель задана ячейкой этапа
+public sealed record StageSummaryExecutor(
+    string PersonaId, string Name, string? RoleTitle, string ModelLabel, bool ModelIsOwnCell,
+    int? SilenceMinutes, string? SilenceAction);
+
+public sealed record StageSummaryKpi(
+    int TotalMinutes, int ExecMinutes, int ReviewMinutes, int WaitedHumanMinutes, int Turns,
+    StageSummaryTokens? Tokens, bool Approx);
+
+public sealed record StageSummaryTokens(long Input, long Output, long Cache);
+
+// State: todo | inProgress | waiting | done; Verdict: accepted | returned | null
+public sealed record StageSummaryTask(
+    string TaskId, string? StepRef, string Title, string State, StageSummaryExecutorName? Executor,
+    int? Minutes, string? Verdict, int Returns);
+
+public sealed record StageSummaryExecutorName(string Name);
+
+public sealed record StageSummaryParallel(string StageId, string Title, int DoneCount, int TotalCount, string? PersonaName);

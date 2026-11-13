@@ -209,7 +209,8 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
             VoiceModel: req.VoiceModel ?? req.Voice?.RvcModel,
             VoiceIndex: req.VoiceIndex ?? req.Voice?.RvcIndex,
             Seed: req.Seed,
-            Origin: origin);
+            Origin: origin,
+            Video: req.Video?.Bytes);
     }
 
     private static readonly AudioCost Free = new(0, AudioPriceUnits.Free);

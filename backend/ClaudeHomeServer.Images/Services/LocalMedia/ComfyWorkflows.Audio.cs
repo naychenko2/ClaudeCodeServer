@@ -244,7 +244,93 @@ public static partial class ComfyWorkflows
     {
         "separate", "tts", "voice_clone", "tts_chatterbox", "tts_moss", "voice_convert", "rvc_convert", "rvc_train",
         "audio_to_midi", "denoise", "upsample", "master", "music_edit", "transcribe", "lora_train", "lora_delete",
+        "sfx_moss",
     };
+
+    // Эффекты и звук по видео (Ш4). Модели и параметры — по рабочим графам стенда (media-bench, 13.11.2026):
+    // Foley и MMAudio — ноды, установленные в прод-ComfyUI без смены существующих пакетов;
+    // MOSS-SFX — семейство воркера sfx_moss (свой venv)
+    public const string FoleyXl = "hunyuanvideo_foley_xl.safetensors";
+    public const string FoleyXxl = "hunyuanvideo_foley.safetensors";
+    private const string FoleyVae = "vae_128d_48k_fp16.safetensors";
+    private const string FoleySynchformer = "synchformer_state_dict_fp16.safetensors";
+    private const string MmAudioModel = "mmaudio_large_44k_v2_fp16.safetensors";
+    private const string MmAudioVae = "mmaudio_vae_44k_fp16.safetensors";
+    private const string MmAudioSynchformer = "mmaudio_synchformer_fp16.safetensors";
+    private const string MmAudioClip = "apple_DFN5B-CLIP-ViT-H-14-384_fp16.safetensors";
+    public const int MaxSfxPromptLength = 1000;
+
+    // Звук по видео моделью Foley: кадры и частота — из LoadVideo; результат — flac 48 кГц
+    public static JsonObject FoleyVideoToAudio(string model, string video, string prompt, double seconds, long seed,
+        string filenamePrefix) => new()
+    {
+        ["lv"] = Node("LoadVideo", new JsonObject { ["file"] = video }),
+        ["comp"] = Node("GetVideoComponents", new JsonObject { ["video"] = Link("lv") }),
+        ["hm"] = Node("HunyuanModelLoader", new JsonObject { ["model_name"] = model, ["precision"] = "bf16", ["quantization"] = "none" }),
+        ["hd"] = Node("HunyuanDependenciesLoader", new JsonObject { ["vae_name"] = FoleyVae, ["synchformer_name"] = FoleySynchformer }),
+        ["smp"] = Node("HunyuanFoleySampler", new JsonObject
+        {
+            ["hunyuan_model"] = Link("hm"),
+            ["hunyuan_deps"] = Link("hd"),
+            ["image"] = Link("comp"),
+            ["frame_rate"] = Link("comp", 2),
+            ["duration"] = seconds,
+            ["prompt"] = prompt,
+            ["negative_prompt"] = "noisy, harsh",
+            ["cfg_scale"] = 4.5,
+            ["steps"] = 50,
+            ["sampler"] = "euler",
+            ["batch_size"] = 1,
+            ["seed"] = seed,
+            ["force_offload"] = true,
+        }),
+        ["save"] = SaveFlac("smp", filenamePrefix),
+    };
+
+    // MMAudio large 44k: по видео (video != null) или по одному тексту; результат — flac 44,1 кГц
+    public static JsonObject MmAudio(string? video, string prompt, double seconds, long seed, string filenamePrefix)
+    {
+        var wf = new JsonObject
+        {
+            ["mm"] = Node("MMAudioModelLoader", new JsonObject { ["mmaudio_model"] = MmAudioModel, ["base_precision"] = "fp16" }),
+            ["fu"] = Node("MMAudioFeatureUtilsLoader", new JsonObject
+            {
+                ["vae_model"] = MmAudioVae,
+                ["synchformer_model"] = MmAudioSynchformer,
+                ["clip_model"] = MmAudioClip,
+                ["mode"] = "44k",
+                ["precision"] = "fp16",
+            }),
+        };
+        var sampler = new JsonObject
+        {
+            ["mmaudio_model"] = Link("mm"),
+            ["feature_utils"] = Link("fu"),
+            ["duration"] = seconds,
+            ["steps"] = 25,
+            ["cfg"] = 4.5,
+            ["seed"] = seed,
+            ["prompt"] = prompt,
+            ["negative_prompt"] = "",
+            ["mask_away_clip"] = false,
+            ["force_offload"] = true,
+        };
+        if (video is not null)
+        {
+            wf["lv"] = Node("LoadVideo", new JsonObject { ["file"] = video });
+            wf["comp"] = Node("GetVideoComponents", new JsonObject { ["video"] = Link("lv") });
+            sampler["images"] = Link("comp");
+        }
+        wf["smp"] = Node("MMAudioSampler", sampler);
+        wf["save"] = SaveFlac("smp", filenamePrefix);
+        return wf;
+    }
+
+    private static JsonObject SaveFlac(string source, string filenamePrefix) => Node("SaveAudio", new JsonObject
+    {
+        ["audio"] = Link(source),
+        ["filename_prefix"] = filenamePrefix,
+    });
 
     // Префикс файлов воркера — jobId: результат ляжет как ccs-local-media/{jobId}_{хвост}
     public static JsonObject AudioWorker(string op, JsonObject parameters, IReadOnlyList<string> inputs, string jobId,

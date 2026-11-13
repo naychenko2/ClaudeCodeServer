@@ -3,6 +3,7 @@
 // spread'ом (адрес api.personas.* остаётся прежним для потребителей); типы персон —
 // в features/personas/types.ts, доступны через ../../types.
 import { cachedToken, readStoredToken, request } from '../../lib/offline';
+import type { PersonaPromptSection } from './promptSectionsModel';
 import type {
   ApplyDefaultBindingsResult,
   AutomationRuleDto,
@@ -56,6 +57,15 @@ export const personasApi = {
     // дефолтом её проекта
     makeDefault: (id: string) =>
       request<Persona>(`/personas/${encodeURIComponent(id)}/make-default`, { method: 'POST' }),
+
+    // Эффективные секции промпта персоны (P2a, GET {id}/prompt-sections): ВСЕ секции каталога
+    // специальности с наложенным слоем самой персоны — включая выключенные специальностью
+    // (enabled=false, enabledSource='code', базовый текст есть). Единственная точка наложения —
+    // бэк (PromptSectionsContributor → PromptSectionOverlay.Apply); фронт читает готовое
+    // состояние и не резолвит слои сам. signal — отмена запроса при смене персоны; устаревший
+    // ответ отбрасывает модель (promptSectionsModel.applySections), а не этот метод.
+    getPromptSections: (id: string, signal?: AbortSignal) =>
+      request<PersonaPromptSection[]>(`/personas/${encodeURIComponent(id)}/prompt-sections`, { signal }),
     // Чаты, ведущиеся от лица персоны (этап 2): список + создание нового.
     // projectId — глобальная персона, позванная из проекта, получает чат В этом проекте.
     chats: (id: string) => request<Session[]>(`/personas/${encodeURIComponent(id)}/chats`),

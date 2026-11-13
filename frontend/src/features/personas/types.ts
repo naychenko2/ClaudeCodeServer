@@ -315,6 +315,12 @@ export interface CreatePersonaDto {
   inheritsAccess?: boolean;
   // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
   specialty?: PersonaSpecialty;
+  // Слой секций промпта (разрез 2, §2.2): [{id, enabled?, text?}]. id — только из каталога
+  // /api/specialties/prompt-sections, текст ≤1024 — проверяет бэк (400, нормализация PersonaManager, P1b).
+  // В теле создания отсутствие — «своих секций нет». В теле UpdatePersonaDto (Partial): null — не менять,
+  // список — заменить целиком, пустой список — явный сброс к «всё как у специальности». Эффективное
+  // состояние читается не отсюда, а из GET {id}/prompt-sections: фронт наложение не повторяет (P2a).
+  promptSections?: PersonaPromptSectionOverride[] | null;
   // Доступ ко всем проектам владельца (текущим и будущим); только для scope === 'global'
   allProjectsAccess?: boolean;
   // true — сгенерировать фото-аватар сразу после создания (опт-ин для авто/LLM-путей,
@@ -322,6 +328,16 @@ export interface CreatePersonaDto {
   autoAvatar?: boolean;
   // Описание внешности для фотопортрета (англ.); пусто — берётся из роли/описания персоны
   avatarPrompt?: string;
+}
+
+// Переопределение одной секции промпта в теле записи (CreatePersonaDto/UpdatePersonaDto
+// promptSections) — форма бэкового PromptSectionOverride (Core/Services/Llm/IPromptSectionProvider.cs:29):
+// параметр «задан» только когда имеет значение; text null/пусто — «не задан» (типовой текст базы),
+// как на бэке (PromptSectionOverlay.Apply).
+export interface PersonaPromptSectionOverride {
+  id: string;
+  enabled?: boolean;
+  text?: string;
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны

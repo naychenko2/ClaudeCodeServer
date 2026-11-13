@@ -182,4 +182,23 @@ describe('FeatureProcessGraph: данные узла B01 (F06)', () => {
     const bar = get(c, 'pgraph-segments') as unknown as { children: { getAttribute(n: string): string | null }[] };
     expect(bar.children.map((x) => x.getAttribute('data-kind'))).toEqual(['done', 'run', 'todo']);
   });
+
+  it('{2,1,3} → «2/3» и три сегмента; role=qa → метка «qa»; returns=0 → бейджа нет', () => {
+    const c = render([{ ...mkStage('qa', 'q', 'qa', 0, 'active'), returns: 0, taskSegments: { done: 2, running: 1, total: 3 } }]);
+    expect(txt(get(c, 'pgraph-segcount-q'))).toBe('2/3');
+    expect((get(c, 'pgraph-segments') as unknown as { children: unknown[] }).children).toHaveLength(3);
+    expect(txt(get(c, 'pgraph-role-q'))).toBe('qa');
+    expect(get(c, 'pgraph-returns-q')).toBeNull();
+  });
+
+  it('легаси: поля B01 null/отсутствуют — узел рендерится без меты, бейджа и полоски', () => {
+    const c = render([{
+      ...mkStage('prod', 'l', 'step', 0, 'active'),
+      personaNames: undefined, elapsedMinutes: null, waiting: null, returns: undefined, taskSegments: null, line: null,
+    }]);
+    expect(get(c, 'pgraph-node-l')).not.toBeNull();
+    expect(get(c, 'pgraph-meta-l')).toBeNull();
+    expect(get(c, 'pgraph-returns-l')).toBeNull();
+    expect(get(c, 'pgraph-segments')).toBeNull();
+  });
 });

@@ -47,7 +47,7 @@ public class LocalVideoEngineEnhanceTests
         result.Outcome.Should().Be(VideoOutcome.Ok);
         (result.File!.Width, result.File.Height, result.File.HasSound).Should().Be((1728, 960, true));
         media.Verify(m => m.SubmitEnhanceAsync(It.Is<LocalVideoEnhanceRequest>(r =>
-            r.Scale == 2 && r.Video == Clip && r.Origin!.Heavy && r.Origin.Op == "видео ×2"
+            r.Scale == 2 && r.Video == Clip && r.Origin!.Heavy && r.Origin.Op == "видео ×2 · RelayVSR"
             && r.Origin.Source == LocalJobOrigin.SourceVideoEditor && r.Origin.SourceJobId == "job-1"), It.IsAny<CancellationToken>()));
         progress.Events.Should().Contain(e => e.Stage == VideoStage.Upscaling && e.RemoteId == "t-enh");
     }

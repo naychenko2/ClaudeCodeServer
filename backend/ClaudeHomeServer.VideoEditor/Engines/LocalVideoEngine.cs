@@ -144,7 +144,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
     {
         if (media is null) return VideoResult.Fail(VideoOutcome.Unavailable, "Локальные модели недоступны на этом сервере");
         var origin = request.OwnerId is { } owner
-            ? new LocalJobOrigin(owner, request.SessionId, "video", $"видео ×{request.Scale}", true,
+            ? new LocalJobOrigin(owner, request.SessionId, "video", $"видео ×{request.Scale} · RelayVSR", true,
                 ProjectId: request.ProjectId, Source: LocalJobOrigin.SourceVideoEditor, SourceJobId: request.SourceJobId)
             : null;
         string? ticket = null;

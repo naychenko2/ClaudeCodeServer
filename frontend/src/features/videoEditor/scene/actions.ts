@@ -265,6 +265,17 @@ export async function retryUpscale(scope: string, sessionId: string, sceneId: st
   }
 }
 
+// «Увеличить ×2/×4»: новая задача на локальной видеокарте, ход виден как у любой задачи, итог — новая версия
+export async function enhanceVersion(scope: string, sessionId: string, sceneId: string, versionId: string, scale: 2 | 4): Promise<boolean> {
+  try {
+    await videoApi.enhance(scope, sessionId, sceneId, versionId, scale);
+    return true;
+  } catch (e) {
+    showToast((e as { status?: number } | null)?.status === 429 ? 'Видеокарта занята' : errorText(e, 'Не удалось запустить увеличение'), '', 'error');
+    return false;
+  }
+}
+
 // «Продолжить от версии»
 export const takeVersion = (scope: string, sessionId: string, sceneId: string, versionId: string) =>
   mutate(scope, sessionId, rev => videoApi.current(scope, sessionId, sceneId, versionId, rev), true);

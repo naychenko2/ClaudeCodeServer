@@ -328,6 +328,7 @@ const OP_LABEL: Record<string, string> = {
   image_to_video: 'из картинки',
   reference_to_video: 'по референсам',
   video_upscale: 'апскейл',
+  video_enhance: 'увеличение ×2/×4',
   video_inpaint: 'правка видео',
   music_generate: 'песня',
   music_edit: 'правка музыки',

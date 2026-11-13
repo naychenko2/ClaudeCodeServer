@@ -28,6 +28,7 @@ ENGINE_UNIT = os.environ.get("ARBITER_ENGINE_UNIT", "local-llm.service")
 ENGINE_HEALTH = os.environ.get("ARBITER_ENGINE_HEALTH", "http://127.0.0.1:18030/health")
 PORT = int(os.environ.get("ARBITER_PORT", "18031"))
 POLL_S = float(os.environ.get("ARBITER_POLL_S", "0.5"))
+START_WAIT_S = float(os.environ.get("ARBITER_START_WAIT_S", "60"))
 RETURN_QUIET_S = float(os.environ.get("ARBITER_RETURN_QUIET_S", "10"))
 # Пауза возврата после заданий ComfyUI — больше обычной: серия картинок идёт с перерывами на
 # просмотр, и возврат LLM между кадрами заставил бы ComfyUI грузить модели заново на каждом.
@@ -47,6 +48,9 @@ HEAVY_MARKERS = [s.lower() for s in os.environ.get(
 OWN_PROCS = [s for s in os.environ.get("ARBITER_OWN_PROCS", "ComfyUI-h3,llama-server").split(",") if s]
 # Под systemd у root в PATH нет /usr/lib/wsl/lib, где в WSL лежит nvidia-smi.
 NVSMI = shutil.which("nvidia-smi") or "/usr/lib/wsl/lib/nvidia-smi"
+# nvidia-smi в WSL идёт в драйвер WDDM той же 3090, что выводит рабочий стол; под нагрузкой
+# запрос висит секундами. Поэтому не чаще раза в NVSMI_EVERY_S (до 02.11.2026 — каждые POLL_S).
+NVSMI_EVERY_S = float(os.environ.get("ARBITER_NVSMI_EVERY_S", "5"))
 _warned: set[str] = set()
 
 
@@ -87,6 +91,16 @@ def gpu_foreign_procs() -> list[str]:
             continue
         found.append(f"{pid}:{cmd[:60]}")
     return found
+
+
+_gpu_cache = {"t": 0.0, "procs": []}
+
+
+def gpu_foreign_procs_throttled() -> list[str]:
+    if time.time() - _gpu_cache["t"] >= NVSMI_EVERY_S:
+        _gpu_cache["procs"] = gpu_foreign_procs()
+        _gpu_cache["t"] = time.time()
+    return _gpu_cache["procs"]
 
 
 def _graph_heavy(prompt: dict) -> bool:
@@ -173,8 +187,10 @@ def loop():
     last_reason_comfy = False
     while True:
         reasons = [f"lease:{r}" for r in active_leases()]
-        reasons += [f"gpu:{p}" for p in gpu_foreign_procs()]
         reasons += [f"comfy:{j}" for j in comfy_heavy_jobs()]
+        if not reasons:
+            # аренда или задание ComfyUI уже держат карту — драйвер не опрашиваем
+            reasons += [f"gpu:{p}" for p in gpu_foreign_procs_throttled()]
         active = engine_active()
         if reasons:
             quiet_since = None
@@ -204,15 +220,15 @@ def loop():
                 if not vram_room_for_engine():
                     _warn_once("vram", f"для LLM нет {VRAM_NEEDED_MB} МБ VRAM даже после /free — жду")
                     _state["engine"] = "waiting-vram"
-                    time.sleep(POLL_S)
+                    time.sleep(max(POLL_S, NVSMI_EVERY_S))
                     continue
                 last_reason_comfy = False
                 systemctl("start", ENGINE_UNIT)
                 _state["returns"] += 1
                 _state["since"] = time.time()
                 _state["engine"] = "starting"
-                # ждём готовности, но не дольше 60 с — иначе юнит сам перезапустится
-                while time.time() - t0 < 60 and not engine_healthy():
+                # ждём готовности, но не дольше START_WAIT_S (по умолчанию 60 с) — иначе юнит сам перезапустится
+                while time.time() - t0 < START_WAIT_S and not engine_healthy():
                     time.sleep(0.25)
                 _state["last_return_s"] = round(time.time() - t0, 2)
             _state["engine"] = "ready" if active or engine_healthy() else ("starting" if engine_active() else "yielded")

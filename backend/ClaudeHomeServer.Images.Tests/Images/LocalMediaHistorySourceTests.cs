@@ -71,6 +71,22 @@ public class LocalMediaHistorySourceTests : IDisposable
         res!.Reason.Should().Be(MediaHistoryGoneReason.ProjectGone);
     }
 
+    // Задача без проекта (личный чат): не project_gone — проекта и не было; файла в папке проекта нет — missing
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task БезПроекта_Missing_НеProjectGone(string? projectId)
+    {
+        var store = NewStore();
+        store.Add(JobWithOneOutput());
+        var src = new LocalMediaHistorySource(store,
+            new ProbeAccess(new MediaHistoryProjectProbe(MediaHistoryProjectState.Gone, null)), new ManualTime());
+        var res = await src.ResolveAsync(new MediaHistoryRef("p1", "owner-1", projectId, "job-1", "chat-1"), 0, CancellationToken.None);
+        res.Should().NotBeNull();
+        res!.Reason.Should().Be(MediaHistoryGoneReason.Missing);
+        res.VariantCount.Should().Be(1);
+    }
+
     // 410 local_project: проект переехал на устройство (probe Local)
     [Fact]
     public async Task LocalProject_410()

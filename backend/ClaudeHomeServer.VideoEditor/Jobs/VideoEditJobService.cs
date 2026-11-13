@@ -208,7 +208,7 @@ public sealed class VideoEditJobService : IDisposable
             if (!SafeEnabled(engine))
                 return Fail<VideoQuoteResponse>(VideoEditorErrors.ProviderUnavailable, $"Поставщик «{engine.Label}» сейчас недоступен");
             if (engine.ScopeRefusal(scope) is { } refusal)
-                return Fail<VideoQuoteResponse>(ScopeRefusalCode(scope), refusal);
+                return Fail<VideoQuoteResponse>(VideoEditorErrors.ProjectLocalUnsupported, refusal);
             await RefreshModelsQuietly(engine, ct);
             model = VideoCatalog.Pick(engine, modelId, need);
             if (model is null)
@@ -346,7 +346,7 @@ public sealed class VideoEditJobService : IDisposable
         if (engine is null)
             return Fail<VideoJobCreated>(VideoEditorErrors.ProviderUnavailable, $"Поставщик «{quote.Provider}» больше недоступен");
         if (engine.ScopeRefusal(scope) is { } refusal)
-            return Fail<VideoJobCreated>(ScopeRefusalCode(scope), refusal);
+            return Fail<VideoJobCreated>(VideoEditorErrors.ProjectLocalUnsupported, refusal);
 
         var parameters = input.Params?.DeepClone().AsObject() ?? new JsonObject();
         // При ревизии текст поля ввода едет в params.request — просьба поверх текста сцены, не частный параметр модели
@@ -797,7 +797,7 @@ public sealed class VideoEditJobService : IDisposable
         if (engine is null)
             return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.ProviderUnavailable, $"Поставщик «{version.Provider}» больше недоступен");
         if (engine.ScopeRefusal(scope) is { } refusal)
-            return Fail<VideoUpscaleRetryResult>(ScopeRefusalCode(scope), refusal);
+            return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.ProjectLocalUnsupported, refusal);
 
         PruneRetryContexts();
         _retryContexts.TryGetValue(RetryKey(version.JobId, version.Variant), out var context);
@@ -945,7 +945,7 @@ public sealed class VideoEditJobService : IDisposable
         if (version.EnhanceScale is not null) return (VideoEditorErrors.InvalidRequest, VideoEnhanceTexts.AlreadyEnhanced);
         engine = VideoCatalog.Available(_engines).FirstOrDefault(e => string.Equals(e.Key, VideoCatalog.LocalKey, StringComparison.OrdinalIgnoreCase));
         if (engine is null) return (VideoEditorErrors.ProviderUnavailable, "Локальные модели сейчас недоступны");
-        if (engine.EnhanceRefusal(scope) is { } refusal) return (ScopeRefusalCode(scope), refusal);
+        if (engine.EnhanceRefusal(scope) is { } refusal) return (VideoEditorErrors.ProjectLocalUnsupported, refusal);
         return null;
     }
 
@@ -1044,10 +1044,6 @@ public sealed class VideoEditJobService : IDisposable
     private static string NoModelText(IVideoEngine engine, VideoCatalog.Need need) =>
         $"У поставщика «{engine.Label}» нет модели для этой сцены ({(need.FrameA ? "кадр A" : "без кадров")}"
         + (need.FrameB ? " → кадр B" : "") + $", {need.DurationSec} с)";
-
-    // Отказ области (личный чат, локальный проект) — свой код; прочие отказы — «поставщик недоступен»
-    private static string ScopeRefusalCode(VideoEditScope scope) =>
-        scope.IsPersonal ? VideoEditorErrors.LocalUnavailablePersonal : VideoEditorErrors.ProjectLocalUnsupported;
 
     private async Task RefreshModelsQuietly(IVideoEngine engine, CancellationToken ct)
     {

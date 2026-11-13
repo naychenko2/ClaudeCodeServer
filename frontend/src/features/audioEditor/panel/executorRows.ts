@@ -54,8 +54,7 @@ export const FAL_NOTE = 'отобранные · остальные — по з�
 
 // Строки списка: «Авто», затем свои видеокарты, затем облако; внутри — порядок каталога.
 // Поставщик без модели под операцию в список не попадает; недоступный — серый с причиной.
-// В личном чате «Локально» закрыт самим местом — строка с замком, причина остаётся
-export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = false, stemSet: AudioStemSet | null = null): ExecutorRow[] {
+export function executorRows(catalog: AudioCatalog, op: AudioOp, stemSet: AudioStemSet | null = null): ExecutorRow[] {
   const auto = autoPick(catalog, op, stemSet);
   const rows: ExecutorRow[] = [{
     id: AUTO_EXECUTOR, group: 'auto', name: 'Авто',
@@ -69,7 +68,6 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = fals
   const ordered = [...providers.filter(onOwnGpu), ...providers.filter(p => !onOwnGpu(p))];
   for (const p of ordered) {
     const why = p.available ? null : p.reason ?? 'Поставщик сейчас недоступен';
-    const locked = personal && p.key === 'local';
     p.models.filter(x => supports(x, op) && (!stemSet || x.caps.stemSet === stemSet)).forEach((m, i) => {
       const b = badges(m, op);
       rows.push({
@@ -81,7 +79,6 @@ export function executorRows(catalog: AudioCatalog, op: AudioOp, personal = fals
         free: rowFree(p, m),
         ...(b.length ? { badges: b } : null),
         ...(why ? { disabled: true, reason: why } : null),
-        ...(locked ? { locked: true } : null),
       });
     });
   }

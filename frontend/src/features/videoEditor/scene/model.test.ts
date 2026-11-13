@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOG, PREFS, QUOTE, scene, version } from '../mocks';
 import {
-  executorRows, PERSONAL_LOCAL_REASON, priceLines, resolveScene, runReason, settingsOf, snapTo, staleNotes,
+  executorRows, priceLines, resolveScene, runReason, settingsOf, snapTo, staleNotes,
 } from './model';
 
 describe('модель сцены: цепочка настроек', () => {
@@ -34,7 +34,7 @@ describe('модель сцены: цепочка настроек', () => {
 });
 
 describe('причины «Снять» (тексты макета v7)', () => {
-  const base = { sessionId: 's1', personal: false, providerOk: true, running: false };
+  const base = { sessionId: 's1', providerOk: true, running: false };
   it('нет кадров, нет текста', () => {
     expect(runReason({ ...base, r: resolveScene(null, null, PREFS, CATALOG) })).toBe('Нужны оба кадра: выберите кадр A и кадр B выше');
     const noText = resolveScene(scene('s1'), { text: '  ' }, PREFS, CATALOG);
@@ -44,9 +44,9 @@ describe('причины «Снять» (тексты макета v7)', () => {
     const r = resolveScene(null, null, PREFS, CATALOG);
     expect(runReason({ ...base, providerOk: false, providerReason: 'Снимать нечем', r })).toBe('Снимать нечем');
   });
-  it('личный чат и локальные модели — причина видна', () => {
+  it('локальные модели не отказывают по причине области: личный чат снимает ими как проект', () => {
     const r = resolveScene(scene('s1'), { provider: 'local', model: 'minimax-h3' }, PREFS, CATALOG);
-    expect(runReason({ ...base, personal: true, r })).toBe(PERSONAL_LOCAL_REASON);
+    expect(runReason({ ...base, r })).toBeNull();
   });
   it('всё на месте — снять можно', () => {
     expect(runReason({ ...base, r: resolveScene(scene('s1'), null, PREFS, CATALOG) })).toBeNull();
@@ -54,7 +54,7 @@ describe('причины «Снять» (тексты макета v7)', () => {
 });
 
 describe('Kandinsky: экспериментальная модель без кадра B', () => {
-  const base = { sessionId: 's1', personal: false, providerOk: true, running: false };
+  const base = { sessionId: 's1', providerOk: true, running: false };
   const k = { provider: 'local', model: 'kandinsky-6-lite' };
   it('хватает текста: кадры не нужны', () => {
     const r = resolveScene(null, k, PREFS, CATALOG);
@@ -66,7 +66,7 @@ describe('Kandinsky: экспериментальная модель без ка
     expect(runReason({ ...base, r: { ...r, frameB: r.frameA, text: 'x' } })).toMatch(/не берёт кадр B/);
   });
   it('в «Чем» не серая, с бейджем и подсказкой', () => {
-    const row = executorRows(CATALOG, false, '').find(x => x.id === 'local|kandinsky-6-lite')!;
+    const row = executorRows(CATALOG, '').find(x => x.id === 'local|kandinsky-6-lite')!;
     expect(row.disabled).toBeUndefined();
     expect(row.badges?.[0].label).toBe('экспериментальная');
     expect(row.sub).toMatch(/вдвое медленнее/i);
@@ -74,10 +74,12 @@ describe('Kandinsky: экспериментальная модель без ка
 });
 
 describe('исполнитель и цена', () => {
-  it('личный чат: local под замком, недоступный поставщик и модель без кадра B — серые с причиной', () => {
-    const rows = executorRows(CATALOG, true, '');
+  it('local без замка и причины; недоступный поставщик и модель без кадра B — серые с причиной', () => {
+    const rows = executorRows(CATALOG, '');
     const local = rows.find(r => r.id === 'local|minimax-h3')!;
-    expect(local).toMatchObject({ disabled: true, locked: true, reason: PERSONAL_LOCAL_REASON, group: 'local' });
+    expect(local).toMatchObject({ group: 'local' });
+    expect(local.disabled).toBeUndefined();
+    expect(local.locked).toBeUndefined();
     expect(rows.find(r => r.id === 'higgsfield|kling3_0')).toMatchObject({ disabled: true, reason: 'Нет доступа к Higgsfield' });
     expect(rows.find(r => r.id === 'fal|no-last')).toMatchObject({ disabled: true, reason: 'Не умеет «кадр A → кадр B»' });
     expect(rows.find(r => r.id === 'fal|seedance-2.5')!.disabled).toBeUndefined();
@@ -126,6 +128,6 @@ describe('«Формат» сцены: желание и рамка кадров
   });
 
   it('«Чем»: пропорции не серят модели (перевод на ближайшую делает «Формат»)', () => {
-    expect(executorRows(CATALOG, false, '').find(x => x.id === 'fal|veo-3.1')?.disabled).toBeUndefined();
+    expect(executorRows(CATALOG, '').find(x => x.id === 'fal|veo-3.1')?.disabled).toBeUndefined();
   });
 });

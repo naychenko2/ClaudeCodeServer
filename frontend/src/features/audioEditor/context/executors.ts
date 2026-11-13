@@ -49,7 +49,7 @@ export function executorModel(o: {
   const hit = _cache.get(o.sessionId);
   if (hit && hit.key === key && hit.catalog === o.catalog) return hit.model;
   const model: ExecutorListModel = {
-    rows: executorRows(o.catalog, o.op, o.personal, stemSet),
+    rows: executorRows(o.catalog, o.op, stemSet),
     value,
     onChange: id => chooseExecutor(o.sessionId, o.op, id, o.notify),
   };

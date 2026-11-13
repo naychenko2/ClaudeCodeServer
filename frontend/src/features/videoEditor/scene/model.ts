@@ -10,8 +10,6 @@ import type {
 
 export const TEXT_MAX = 2000;
 export const LOCAL_PROVIDER = 'local';
-// Один текст отказа: что нельзя, почему и что делать (сервер в LocalVideoEngine говорит то же по смыслу)
-export const PERSONAL_LOCAL_REASON = 'Локальные модели работают только в чате проекта: клипу некуда лечь. Выберите другого поставщика или откройте проект';
 
 export interface ResolvedScene {
   provider: VideoProvider | null;
@@ -111,11 +109,10 @@ export const frameName = (f: FrameRef | null | undefined): string => {
 
 // Причина, по которой снять нельзя (макет v7, «Тексты»); null — можно
 export function runReason(p: {
-  sessionId: string | null; r: ResolvedScene; personal: boolean; providerOk: boolean; providerReason?: string | null;
+  sessionId: string | null; r: ResolvedScene; providerOk: boolean; providerReason?: string | null;
   quoteError?: string | null; running: boolean; needsLastFrame?: boolean;
 }): string | null {
   if (!p.sessionId) return 'Сначала начните чат';
-  if (p.personal && p.r.provider?.key === LOCAL_PROVIDER) return PERSONAL_LOCAL_REASON;
   // Нечем снимать — это главная причина, кадры тут вторичны
   if (!p.providerOk) return p.providerReason || 'Поставщик недоступен';
   // Модель без кадра B, которой кадр A не нужен (Kandinsky): хватает текста
@@ -161,16 +158,15 @@ export function plural(n: number, one: string, few: string, many: string): strin
 const unitMark = (u: string) => (u === 'usd' ? '$' : u === 'credits' ? 'кредиты' : u === 'free' ? 'бесплатно' : u);
 
 // Строки «Исполнителя»: Авто, свои модели, облако. Модель, не снимающая в нужных пропорциях или не
-// знающая «кадр → кадр», серая с причиной; у личного чата local закрыт замком
+// знающая «кадр → кадр», серая с причиной
 // Пропорции не отсеивают модели: «Формат» сам переводит желание на ближайшую пропорцию модели
-export function executorRows(catalog: VideoCatalog, personal: boolean, autoSub: string): ExecutorRow[] {
+export function executorRows(catalog: VideoCatalog, autoSub: string): ExecutorRow[] {
   const rows: ExecutorRow[] = [{ id: 'auto', group: 'auto', name: 'Авто', sub: autoSub, price: 'по цене модели' }];
   for (const p of catalog.providers) {
     const local = p.key === LOCAL_PROVIDER;
     for (const m of p.models) {
       let reason: string | undefined;
-      if (local && personal) reason = PERSONAL_LOCAL_REASON;
-      else if (!p.available) reason = p.reason ?? 'Поставщик недоступен';
+      if (!p.available) reason = p.reason ?? 'Поставщик недоступен';
       else if (!m.lastFrame && !m.experimental) reason = 'Не умеет «кадр A → кадр B»';
       rows.push({
         id: `${p.key}|${m.id}`, group: local ? 'local' : 'cloud', name: m.label,
@@ -178,7 +174,6 @@ export function executorRows(catalog: VideoCatalog, personal: boolean, autoSub: 
         price: local ? 'бесплатно' : unitMark(p.priceUnit),
         ...(m.experimental ? { badges: [{ label: 'экспериментальная', tone: 'warn' as const }] } : {}),
         ...(reason ? { disabled: true, reason } : {}),
-        ...(local && personal ? { locked: true } : {}),
       });
     }
   }

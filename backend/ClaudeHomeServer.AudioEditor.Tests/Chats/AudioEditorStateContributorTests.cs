@@ -73,14 +73,17 @@ public sealed class AudioEditorStateContributorTests : IDisposable
             .And.Contain("только если человек явно попросил сделать напрямую, мимо редактора");
     }
 
-    // В личной области локального звука нет — правило не шлёт ни к provider local, ни к local_*
+    // Личная область пускает локальные модели редактора (ADR-021): правило шлёт к provider local, но не к прямым
+    // local_* (local-media здесь нет) и честно называет то, чего нет — голоса библиотеки, файлы проекта, сохранение
     [Fact]
-    public async Task Личный_чат_без_локальных_моделей()
+    public async Task Личный_чат_с_локальными_моделями_редактора_без_прямых_local()
     {
         var text = (await SectionAsync(Context(personal: true))).Text;
 
         text.Should().Contain(AudioEditorStateContributor.PriorityRuleFor(personal: true))
-            .And.NotContain("provider local").And.NotContain("local_speech");
+            .And.Contain("audio_generate с provider local")
+            .And.Contain("Голосов из библиотеки").And.Contain("сохранения в проект")
+            .And.NotContain("local_speech").And.NotContain("Локальных моделей для звука в этом чате нет");
     }
 
     // ── Строка контекста (ADR-023 §3.1, 2б-2): блок худеет до правила приоритета ──

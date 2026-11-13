@@ -97,7 +97,8 @@ public class LocalVideoEngineEnhanceTests
         engine.EnhanceEtaSeconds(2, 1344, 768, 5).Should().Be(37);
         engine.EnhanceEtaSeconds(2, null, null, 5).Should().BeNull("размер версии не известен — числа не выдумываем");
         engine.EnhanceRefusal(VideoEditScope.Of(new Project { Id = "p", RootPath = "/srv/p" })).Should().BeNull();
-        engine.EnhanceRefusal(VideoEditScope.Of(new Session { Id = "chat" })).Should().Be(LocalVideoEngine.PersonalScopeReason);
+        engine.EnhanceRefusal(VideoEditScope.Of(new Session { Id = "chat" })).Should().BeNull("в личном чате «Увеличить» работает");
+        engine.EnhanceRefusal(VideoEditScope.Of(new Project { Id = "d", RootPath = "C:/p", DeviceId = "dev-1" })).Should().Be(LocalVideoEngine.DeviceProjectReason);
         new LocalVideoEngine(null).EnhanceRefusal(VideoEditScope.Of(new Project { Id = "p", RootPath = "/srv/p" })).Should().NotBeNull();
     }
 }

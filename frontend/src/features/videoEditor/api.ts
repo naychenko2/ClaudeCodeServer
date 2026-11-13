@@ -379,7 +379,6 @@ export const ERR = {
   revisionConflict: 'revision_conflict',
   dspUnavailable: 'dsp_unavailable',
   personalNoFilms: 'personal_scope_no_films',
-  localPersonal: 'local_unavailable_personal',
   projectLocal: 'project_local_unsupported',
   outsideFolders: 'outside_allowed_folders',
   filmInvalid: 'film_invalid',

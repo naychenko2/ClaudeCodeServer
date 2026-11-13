@@ -2,7 +2,9 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Tasks;
 using FluentAssertions;
+using ClaudeHomeServer.Services.Access;
 using Microsoft.Extensions.Configuration;
+using Moq;
 using Xunit;
 
 namespace ClaudeHomeServer.Tasks.Tests;
@@ -118,6 +120,7 @@ public class StageSummaryTests : IDisposable
         row.Minutes.Should().BeGreaterThanOrEqualTo(0);
         s.Tasks.Single(t => t.StepRef == "B2").Verdict.Should().BeNull();
         s.Returns.Should().Be(1);
+        s.Kpi.TotalMinutes.Should().Be(s.Kpi.ExecMinutes + s.Kpi.ReviewMinutes + s.Kpi.WaitedHumanMinutes);
 
         s.ParallelNote.Should().NotBeNull();
         s.ParallelNote!.StageId.Should().Be("front");
@@ -128,14 +131,21 @@ public class StageSummaryTests : IDisposable
         _ = b;
     }
 
+    // Читатель видит задачу (доступ к проекту), но не чат исполнителя: sessionId не отдаётся
     [Fact]
-    public void Чат_исполнителя_закрыт_постороннему()
+    public void Чужой_чат_исполнителя_не_отдаётся_а_свой_отдаётся()
     {
         var epic = Epic(routed: true);
         var a = Step(epic, "B1", "back", _tim);
+        a.ProjectId = "p1";
         a.LinkedSessionId = "sess-1";
+        var access = new Mock<IProjectAccess>();
+        access.Setup(x => x.Resolve(Stranger, "p1", It.IsAny<ProjectRight>()))
+            .Returns(new RequestScope(Stranger, Owner, ProjectRole.Reader));
+        var sut = new StageScreenService(_tasks, access.Object, personas: new FakePersonas(_tim, _kira));
 
-        _sut.Build(a.Id, Stranger).Outcome.Should().Be(StageOutcome.NotFound);
+        sut.Build(a.Id, Stranger).Value!.StageSummary.ExecutorSessionId.Should().BeNull();
+        sut.Build(a.Id, Owner).Value!.StageSummary.ExecutorSessionId.Should().Be("sess-1");
     }
 
     [Fact]

@@ -219,14 +219,13 @@ public sealed class StageScreenService(
                 name is null ? null : new StageSummaryExecutorName(name), minutes, verdict, returns));
         }
 
-        var window = metrics.Count == 0 ? 0
-            : FeatureTimeMath.Minutes(metrics.Min(m => m.Window.From), metrics.Max(m => m.Window.To));
         var tokenParts = metrics.SelectMany(m => new[] { m.Executor.Tokens, m.Review?.Tokens }).Where(t => t is not null).Select(t => t!).ToList();
+        // totalMinutes — сумма трёх долей (работа, ревью, ожидание человека), а не длина окна
+        var execMinutes = metrics.Sum(m => m.Executor.Minutes ?? 0);
+        var reviewMinutes = metrics.Sum(m => m.Review?.Minutes ?? 0);
+        var waitedMinutes = metrics.Sum(m => m.Human.Minutes ?? 0);
         var kpi = new StageSummaryKpi(
-            window,
-            metrics.Sum(m => m.Executor.Minutes ?? 0),
-            metrics.Sum(m => m.Review?.Minutes ?? 0),
-            metrics.Sum(m => m.Human.Minutes ?? 0),
+            execMinutes + reviewMinutes + waitedMinutes, execMinutes, reviewMinutes, waitedMinutes,
             metrics.Sum(m => (m.Executor.Turns ?? 0) + (m.Review?.Turns ?? 0)),
             tokenParts.Count == 0 ? null : new StageSummaryTokens(
                 tokenParts.Sum(t => t.Input), tokenParts.Sum(t => t.Output),

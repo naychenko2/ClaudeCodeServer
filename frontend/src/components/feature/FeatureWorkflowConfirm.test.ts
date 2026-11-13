@@ -15,12 +15,18 @@ import type { ConfirmedRoute } from './FeatureWorkflowConfirmModel';
 import type { WorkflowProposal, WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from '../../features/workflowTemplates/types';
 
 // Каталог подменена: тест выставляет его перед рендером (vi.mock хойстится выше констант).
-const catalog = vi.hoisted(() => ({ entries: [] as WorkflowTemplateEntry[] }));
+const catalog = vi.hoisted(() => ({
+  entries: [] as WorkflowTemplateEntry[],
+  // Задержка каталога: не null — listTemplates ждёт её (тест держит загрузку «в полёте»).
+  listGate: null as Promise<void> | null,
+  // Ответ «Подобрать»: по умолчанию не завершается; тест подставляет управляемый промис.
+  recommend: (() => new Promise<never>(() => {})) as () => Promise<unknown>,
+}));
 vi.mock('../../features/workflowTemplates/api', () => ({
   workflowTemplatesApi: {
-    listTemplates: () => Promise.resolve(catalog.entries),
+    listTemplates: () => (catalog.listGate ?? Promise.resolve()).then(() => catalog.entries),
     confirmWorkflow: () => Promise.resolve(),
-    recommendWorkflow: () => new Promise<never>(() => {}),
+    recommendWorkflow: () => catalog.recommend(),
   },
 }));
 
@@ -210,7 +216,7 @@ describe('FeatureWorkflowConfirm: состояние «предложения н
     expect(text(c)).toContain('выбрано моделью — можно сменить');
   });
 
-  it('перерисовка с confirmed на none: строка подтверждённого, Select скрыт (тихий режим)', async () => {
+  it('перерисовка с none на confirmed: строка подтверждённого, Select скрыт (тихий режим)', async () => {
     catalog.entries = [entry(fullCycle(3))];
     const mk = (confirmed: ConfirmedRoute | null) => createElement(FeatureWorkflowConfirm, {
       featureId: 'f1', confirmed, routeRequired: true, quiet: true, isMobile: false,
@@ -221,5 +227,46 @@ describe('FeatureWorkflowConfirm: состояние «предложения н
     await act(async () => { root.render(mk(CONFIRMED)); });
     expect(selectOf(container)).toBeNull();
     expect(text(container)).toContain('подтверждён вами');
+  });
+});
+
+describe('FeatureWorkflowConfirm: гонки и загрузка каталога (хвосты R-M5)', () => {
+  beforeEach(() => { installFakeDom(); });
+  afterEach(() => { uninstallFakeDom(); catalog.listGate = null; catalog.recommend = () => new Promise<never>(() => {}); });
+
+  it('смена фичи во время подбора сбрасывает развёрнутый блок, поздний ответ не применяется', async () => {
+    catalog.entries = [entry(fullCycle(3)), entry(fastTrack())];
+    let resolveRecommend!: (p: WorkflowProposal) => void;
+    catalog.recommend = () => new Promise<WorkflowProposal>(r => { resolveRecommend = r; });
+    const mk = (featureId: string) => createElement(FeatureWorkflowConfirm, {
+      featureId, confirmed: CONFIRMED, quiet: true, isMobile: false,
+    });
+    const { container, root } = mount(mk('f1'));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    // Разворачиваем блок и запускаем подбор для f1.
+    await act(async () => { (reactProps(findNodeByAttr(container, 'data-testid', 'feature-workflow-confirm-change')!)!.onClick as () => void)(); });
+    expect(selectOf(container)).not.toBeNull();
+    await act(async () => { (reactProps(findNodeByAttr(container, 'data-testid', 'feature-workflow-confirm-recommend')!)!.onClick as () => void)(); });
+    // Человек перешёл на другую фичу; пока подбор f1 в полёте, busy держит блок на экране.
+    await act(async () => { root.render(mk('f2')); });
+    // Поздний ответ по f1 приходит уже в f2: предложение не применяется, а развёрнутость
+    // сброшена сменой фичи — после конца запроса блок снова свёрнут в строку.
+    await act(async () => { resolveRecommend(PROPOSED_FAST); await new Promise(r => setTimeout(r, 0)); });
+    expect(text(container)).not.toContain('Предложение модели');
+    expect(selectOf(container)).toBeNull();
+  });
+
+  it('пока каталог грузится, строка подтверждённого не рисуется (без мигания id → имя)', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    let release!: () => void;
+    catalog.listGate = new Promise<void>(r => { release = r; });
+    const { container } = mount(createElement(FeatureWorkflowConfirm, {
+      featureId: 'f1', confirmed: CONFIRMED, quiet: true, isMobile: false,
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(text(container)).not.toContain('full-cycle');
+    expect(findNodeByAttr(container, 'data-testid', 'feature-workflow-confirm-line')).toBeNull();
+    await act(async () => { release(); await new Promise(r => setTimeout(r, 0)); });
+    expect(text(container)).toContain('full-cycle · v3 · снято: qa · подтверждён вами');
   });
 });

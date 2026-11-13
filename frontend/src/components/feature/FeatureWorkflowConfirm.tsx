@@ -198,7 +198,8 @@ export function FeatureWorkflowConfirm({
   const blockState = routeBlockState(routeRequired, shownProposal, confirmed ?? null);
   const actionable = (!!shownProposal && !confirmed) || !!localProposal || !!updateText
     || blockState === 'none' || !!errorText || busyConfirm || busyRecommend;
-  const lineText = confirmed ? confirmedLineText(confirmed, confirmedTemplate) : null;
+  // Пока каталог не загружен, имя шаблона неизвестно: строку не рисуем, иначе она мигнёт id → имя.
+  const lineText = confirmed && !loading ? confirmedLineText(confirmed, confirmedTemplate) : null;
   if (quiet && !actionable) {
     if (!confirmed || !lineText) return <></>;
     if (!expanded) {

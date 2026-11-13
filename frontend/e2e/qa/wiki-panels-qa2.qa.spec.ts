@@ -31,7 +31,6 @@ let request: APIRequestContext;
 let token: string;
 let client: Api;
 let root = '';
-const sectionKey = 'personal';
 let projectId = '';
 let sessions: Array<{ id: string; name: string }> = [];
 
@@ -216,7 +215,7 @@ function probeStrip(p: Page) {
       const x = r.left + (r.width * pct) / 100;
       const el = document.elementFromPoint(x, midY) as HTMLElement | null;
       const label = el === btn ? 'сама кнопка'
-        : btn.contains(el) ? `внутри кнопки: ${el.tagName.toLowerCase()}`
+        : (el && btn.contains(el)) ? `внутри кнопки: ${el.tagName.toLowerCase()}`
         : `${el?.tagName.toLowerCase() ?? 'ничего'}${el?.getAttribute('data-testid') ? '[' + el.getAttribute('data-testid') + ']' : ''}${el?.getAttribute('class') ? '.' + String(el.getAttribute('class')).split(' ')[0] : ''}`;
       return { pct, label, covered: !(el === btn || btn.contains(el)) };
     });
@@ -349,7 +348,6 @@ async function desktopStrip(browser: Browser, rightWidth: number) {
   await expect(p.getByTestId('wiki-triage-list')).toBeVisible({ timeout: 20000 });
   const panelW = (await panel.boundingBox())!.width;
   const probe = await probeStrip(p);
-  const fabVar = await p.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--cc-fab-clear'));
   await ctx.close();
   return { panelW: Math.round(panelW), ...probe! };
 }

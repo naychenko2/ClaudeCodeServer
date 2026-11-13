@@ -11,7 +11,7 @@
 // у полей этапов.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Info, Plus, RotateCcw, Trash2, Workflow } from 'lucide-react';
+import { AlertTriangle, Plus, Workflow } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import {
@@ -24,12 +24,13 @@ import { showToast } from '../../lib/toast';
 import { workflowTemplatesApi } from './api';
 import { stageErrors } from './workflowTemplateModel';
 import {
-  BUILTIN_DELETE_HINT, BUILTIN_NOTICE, blankTemplate, normalizeForSave, showWriteButton, forkToProject, saveGuarded,
-  templateSnapshot, splitEntries, entryMetaMap, toolbarSubtitle, conflictTitle, errorsHeading, errorSummaryItems,
+  blankTemplate, normalizeForSave, forkToProject, saveGuarded,
+  templateSnapshot, splitEntries, entryMetaMap, toolbarSubtitle, errorSummaryItems,
   discardChanges, saveAsNew, canSave as canSaveDraft,
   type SaveFailure,
 } from './workflowEditorLogic';
 import { WorkflowStageStrip } from './WorkflowStageStrip';
+import { EditorFooter, EditorNotices } from './WorkflowEditorParts';
 import { WorkflowGraphPreview } from './WorkflowGraphPreview';
 import { normalizeStages, removeStageReconnect, renameStageId } from './workflowGraphModel';
 import type { WorkflowEntryMeta, WorkflowStage, WorkflowTemplate } from './types';
@@ -355,50 +356,12 @@ export function WorkflowTemplatesEditor({
             : 'Править шаблоны может только администратор.'}
         </Notice>
       )}
-      {isBuiltIn && !readOnly && (
-        <Notice tone="info" icon={Info}
-          action={isAdmin && !projectMode ? (
-            <Button size="sm" variant="secondary" onClick={() => setConfirm('reset')}
-              leftIcon={<RotateCcw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Сбросить к исходному</Button>
-          ) : undefined}
-        >{BUILTIN_NOTICE}</Notice>
-      )}
-      {failure?.kind === 'conflict' && (
-        <Notice tone="danger" icon={AlertTriangle} title={conflictTitle(conflictVersion)}
-          action={(
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm }}>
-              <Button size="sm" variant="secondary" onClick={() => void handleReload()}>
-                {conflictVersion ? `Загрузить v${conflictVersion} — мои правки пропадут` : 'Загрузить версию сервера — мои правки пропадут'}
-              </Button>
-              <Button size="sm" variant="secondary" onClick={handleSaveAsNew}>Сохранить мои правки новым шаблоном</Button>
-            </div>
-          )}
-        />
-      )}
-      {failure && failure.kind !== 'conflict' && failure.kind !== 'invalid' && (
-        <Notice tone="danger" icon={AlertTriangle} title={failure.message}>
-          {failure.generalErrors.map((e, i) => <div key={i}>{e}</div>)}
-        </Notice>
-      )}
-      {errorItems.length > 0 && (
-        <Notice tone="danger" icon={AlertTriangle} title={errorsHeading(errorItems.length)} data-testid="template-error-summary">
-          <ul style={{ margin: 0, paddingLeft: SP.lg }}>
-            {errorItems.map((it, i) => (
-              <li key={i}>
-                {it.stageIndex !== null ? (
-                  <button
-                    type="button" onClick={() => jumpToStage(it.stageIndex as number)}
-                    style={{
-                      background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit',
-                      color: 'inherit', textDecoration: 'underline', textAlign: 'left',
-                    }}
-                  >{it.text}</button>
-                ) : it.text}
-              </li>
-            ))}
-          </ul>
-        </Notice>
-      )}
+      <EditorNotices
+        isBuiltIn={isBuiltIn} readOnly={readOnly} canReset={isAdmin && !projectMode}
+        failure={failure} conflictVersion={conflictVersion} errorItems={errorItems}
+        onReset={() => setConfirm('reset')} onReload={() => void handleReload()}
+        onSaveAsNew={handleSaveAsNew} onJumpToStage={jumpToStage}
+      />
 
       <Field label="Название">
         <TextField value={draft.name} onChange={v => setDraft(d => (d ? { ...d, name: v } : d))} disabled={readOnly} />
@@ -429,34 +392,16 @@ export function WorkflowTemplatesEditor({
         />
       </div>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center' }}>
-        {!sel.isNew && canWrite && !readOnly && !isMobile && (
-          <Button
-            variant="ghost" size="sm"
-            disabled={isBuiltIn}
-            title={isBuiltIn ? BUILTIN_DELETE_HINT : undefined}
-            ariaLabel={isBuiltIn ? `Удалить — ${BUILTIN_DELETE_HINT}` : undefined}
-            onClick={() => setConfirm('delete')}
-            leftIcon={<Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-          >Удалить</Button>
-        )}
-        <div style={{ flex: 1 }} />
-        {dirty && !busy && !readOnly && <span style={{ fontSize: FS.xs, color: C.textMuted }}>Есть несохранённые изменения</span>}
-        {showWriteButton(canWrite, readOnly) && (
-          <>
-            <Button
-              variant="secondary" disabled={!dirty || busy}
-              onClick={() => {
-                if (sel.isNew || !savedTpl) { close(); return; }
-                setDraft(discardChanges(savedTpl)); setFailure(null); setConflictVersion(null);
-              }}
-            >Отменить</Button>
-            <Button onClick={() => void handleSave()} disabled={!canSave} loading={busy}>
-              {busy ? 'Сохраняю…' : 'Сохранить'}
-            </Button>
-          </>
-        )}
-      </div>
+      <EditorFooter
+        isNew={sel.isNew} isBuiltIn={isBuiltIn} isMobile={isMobile} canWrite={canWrite} readOnly={readOnly}
+        canSave={canSave} dirty={dirty} busy={busy}
+        onDelete={() => setConfirm('delete')}
+        onSave={() => void handleSave()}
+        onDiscard={() => {
+          if (sel.isNew || !savedTpl) { close(); return; }
+          setDraft(discardChanges(savedTpl)); setFailure(null); setConflictVersion(null);
+        }}
+      />
     </div>
   );
 

@@ -14,7 +14,6 @@ const PROPOSAL = { pid: '2e8a5e7d-3a45-4b13-a782-edee0a2a6eee', fid: '6f88115f-2
 const LONG = { pid: '6409776b-000b-4204-9768-b5a3eae396a6', fid: '6d5e5412-6624-4f3b-ad3d-26f85a33954b' };
 const PERSONA = '68665fdc-10eb-4f2d-a052-f79665f9e0ca';
 const STEP_BACK = 'e949e184-d216-4ad8-a355-4382fd378fe5';
-const STEP_BACK2 = 'c4cc286b-54c9-4d6f-9a9b-9fc1741b316a';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -105,7 +104,6 @@ test('подтверждение маршрута: предложение с о�
   // Возвращаем предложенный шаблон и снимаем необязательный этап (QA по выбору)
   await select.selectOption({ label: options.find(o => o.startsWith('Полный цикл'))! });
   await page.waitForTimeout(800);
-  const qaRow = block.locator('div').filter({ hasText: /^Проверка/ }).filter({ has: block.locator('input[type="checkbox"]') });
   const boxes = block.getByRole('checkbox');
   console.log('CHECKBOXES:', await boxes.count());
   // design снят предложением (skipped), qa включён — снимаем qa

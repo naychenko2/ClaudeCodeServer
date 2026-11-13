@@ -729,12 +729,16 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
 
     // Единственный писатель epic.Workflow (И7): подтверждение человека (B4b). Запись под замком маршрута —
     // параллельный Create шага видит старый или новый маршрут целиком.
-    public TaskItem? ConfirmWorkflow(string epicId, FeatureWorkflow workflow)
+    // M3: onlyIfUnconfirmed — путь авто-подтверждения: проверка «маршрута ещё нет» делается ВНУТРИ замка,
+    // иначе человек, подтвердивший между проверкой и записью, был бы затёрт. Маршрут уже есть — ничего
+    // не пишем и возвращаем null. И7 сохраняется: писатель Workflow по-прежнему один — этот метод.
+    public TaskItem? ConfirmWorkflow(string epicId, FeatureWorkflow workflow, bool onlyIfUnconfirmed = false)
     {
         var epic = GetById(epicId);
         if (epic is null || epic.Role != TaskRoles.Feature) return null;
         lock (_workflowLock)
         {
+            if (onlyIfUnconfirmed && epic.Workflow is not null) return null;
             epic.Workflow = workflow;
             epic.UpdatedAt = DateTime.UtcNow;
         }

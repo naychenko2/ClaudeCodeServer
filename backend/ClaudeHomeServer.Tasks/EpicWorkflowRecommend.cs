@@ -28,7 +28,9 @@ public static class EpicWorkflowRecommend
     {
         try
         {
-            if (await rec.RecommendAsync(epicId, ownerId, CancellationToken.None) is null) return;
+            if (await rec.RecommendAsync(epicId, ownerId, CancellationToken.None) is not { } proposal) return;
+            // M3: очевидный маршрут подтверждаем сразу, до рассылки — рассылка одна, с итоговым эпиком
+            rec.TryAutoConfirm(epicId, proposal);
             var epic = tasks.GetById(epicId);
             if (epic is null) return;
             await broadcaster.ToTaskBoard(ownerId, projectId, new TaskChangedMessage("updated", epic), sessions, projects);

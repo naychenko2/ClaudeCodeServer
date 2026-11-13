@@ -91,6 +91,40 @@ public sealed class WorkflowRecommender(
         return proposal;
     }
 
+    // M3 (правило Андрея: очевидный выбор модель подтверждает сама): авто-подтверждение предложения.
+    // «Очевидно» = человек не нужен, причины сомнения нет и ни один этап не снят. Шаблон берётся из
+    // каталога заново — его могли удалить, пока модель думала (тогда предложение остаётся человеку).
+    // Запись — тем же единственным писателем ConfirmWorkflow, с проверкой «маршрута нет» под его замком:
+    // маршрут, подтверждённый человеком, не затирается никогда. Возвращает эпик либо null.
+    public TaskItem? TryAutoConfirm(string epicId, WorkflowProposal proposal)
+    {
+        if (proposal.NeedsHuman || proposal.DoubtReason is not null || proposal.Skipped.Count != 0) return null;
+        var epic = tasks.GetById(epicId);
+        if (epic is null) return null;
+
+        var scope = proposal.Scope == "project" ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
+        var entry = templates.List(epic.ProjectId)
+            .FirstOrDefault(e => e.Template.Id == proposal.TemplateId && e.Scope == scope);
+        if (entry is null) return null;
+
+        var workflow = new FeatureWorkflow
+        {
+            TemplateId = entry.Template.Id,
+            Scope = proposal.Scope,
+            Stages = WorkflowGraph.Resolve(entry.Template, []),
+            Skipped = [],
+            ConfirmedVersion = entry.Template.Version,
+            ConfirmedAt = DateTime.UtcNow,
+            ConfirmedByUser = false,
+            AutoConfirmed = true,
+        };
+        var written = tasks.ConfirmWorkflow(epicId, workflow, onlyIfUnconfirmed: true);
+        if (written is not null)
+            log?.LogInformation("feature-workflow-recommend {Epic}: маршрут подтверждён автоматически, шаблон {Template}",
+                epicId, entry.Template.Id);
+        return written;
+    }
+
     private string BuildPrompt(TaskItem epic, IReadOnlyList<WorkflowTemplateEntry> catalog)
     {
         var sb = new StringBuilder();

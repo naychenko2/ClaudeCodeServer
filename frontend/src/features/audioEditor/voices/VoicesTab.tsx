@@ -158,7 +158,7 @@ function VoiceCard({ scope, voice: v, expanded, picked, contextSessionId, onTogg
         )}
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(expanded ? ChevronUp : ChevronDown, ICON_SIZE.sm)}</span>
       </button>
-      {contextSessionId && (
+      {contextSessionId && !isPersonalScope(scope) && (
         <ContextAddButton sessionId={contextSessionId} projectId={scope} candidate={{ kind: 'audio-voice', ref: { slug: v.slug } }} size="xs" toggle />
       )}
       </div>

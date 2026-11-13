@@ -8,6 +8,7 @@ import {
   Button, ContextAddButton, EmptyState, IconButton, refOf, useChatContext, C, FS, R, SP, ICON_SIZE, ICON_STROKE,
 } from 'aihome_shell/kit';
 import { imageEditorApi } from '../api';
+import { isPersonalScope } from '../scope';
 import { setPrefs, usePrefs } from '../thread/prefs';
 import { CharacterCard } from './CharacterCard';
 import { CharacterCreate } from './CharacterCreate';
@@ -85,7 +86,7 @@ export function CharactersPanel({ projectId, editing, onEditing, contextSessionI
                 <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
                 <span style={{ fontSize: FS.xs, color: C.textMuted }}>{listStatus(c.photos.length, c.local?.lora)}{on ? ' · в контексте · персонаж' : ''}</span>
               </span>
-              {contextSessionId && <ContextAddButton sessionId={contextSessionId} projectId={projectId} candidate={candidate} size="sm" toggle />}
+              {contextSessionId && !isPersonalScope(projectId) && <ContextAddButton sessionId={contextSessionId} projectId={projectId} candidate={candidate} size="sm" toggle />}
               <IconButton size="sm" title="Изменить" ariaLabel={`Изменить «${c.name}»`} onClick={() => setEditing({ kind: 'edit', slug: c.slug })}>
                 {ic(Pencil, ICON_SIZE.xs)}
               </IconButton>

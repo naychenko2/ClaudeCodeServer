@@ -16,7 +16,7 @@
 // Фронт ничего не сортирует и не считает: порядок и роль исходного чата даёт индекс фич.
 
 import { useSyncExternalStore } from 'react';
-import { getFeatureMainTab, toMainTab, type FeatureMainTab, type FeaturePageTab } from './featurePage';
+import { FEATURE_MAIN_TAB_LABEL, featureHasRoute, featureMainTabLabel, getFeatureMainTab, toMainTab, type FeatureMainTab, type FeaturePageTab } from './featurePage';
 
 // Куда перешли: в чат (id чата), на страницу фичи (id фичи) или в задачу (id задачи).
 export interface BackNavTarget {
@@ -41,6 +41,11 @@ export interface BackNav {
   // вкладку (Ф9b). Старый FeaturePageTab в указателе не хранится: аргумент tab переводится
   // через toMainTab при записи (вызывающие не меняются).
   fromTab?: FeatureMainTab;
+  // Отображаемое имя исходной вкладки, зафиксированное при записи (дефект 762b7c03):
+  // первая вкладка именуется по наличию маршрута («Процесс» / «Ход»), а указатель живёт
+  // в чате и страницу не видит — имя снимается с страницы в момент перехода.
+  // Нет поля (запись старого кода) — читатели фолбэком словарь FEATURE_MAIN_TAB_LABEL.
+  fromTabLabel?: string | null;
   // Показывать ли вкладку в чипе возврата (Ф9b, major 1): false — переход из попапа/
   // панели/шторки (не из вкладки страницы): чип «← к фиче», вкладки нет, но возврат
   // ведёт на последнюю использованную вкладку (fromTab). true (дефолт) — из вкладки.
@@ -152,9 +157,15 @@ export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'tas
   // Снимок вида — у поставщика этой фичи (registerFeatureViewProvider), если он есть;
   // вызывающие его не передают и не знают (GC-F11).
   const view = _viewProvider && _viewProvider.featureId === featureId ? _viewProvider.fn() : null;
+  // Имя вкладки — то же, что у страницы в момент перехода (дефект 762b7c03): первая
+  // вкладка именуется по наличию маршрута (featureMainTabLabel), признак маршрута —
+  // с открытой страницы (featureHasRoute). Запись делается, когда страница открыта, —
+  // имя фиксируется здесь, читатели его не восстанавливают по значению вкладки.
+  const fromTab = tab !== undefined ? toMainTab(tab) : getFeatureMainTab();
   _back = {
     from: featureId, fromKind: 'feature', to: { kind: to.kind, id: to.id },
-    fromTitle: title ?? null, fromTab: tab !== undefined ? toMainTab(tab) : getFeatureMainTab(),
+    fromTitle: title ?? null, fromTab,
+    fromTabLabel: featureMainTabLabel(fromTab, featureHasRoute(featureId)),
     showTab: showTab ?? true,
     view: view ?? null,
   };
@@ -323,7 +334,7 @@ export function useBackNavFrom(sessionId: string | null): string | null {
 // с fromKind='feature') и текущий чат — цель перехода (to.kind='chat', to.id=sessionId).
 // Возвращает id и название исходной фичи; null — перехода из фичи не было. Отличается от
 // backNavFrom (он — chat→chat): здесь дискриминатор fromKind='feature' обязателен.
-export interface FeatureBackNavInfo { featureId: string; title: string | null; tab: FeatureMainTab; showTab: boolean }
+export interface FeatureBackNavInfo { featureId: string; title: string | null; tab: FeatureMainTab; tabLabel: string; showTab: boolean }
 // Снимок кэшируем по ссылке на запись _back: useSyncExternalStore требует стабильного
 // значения между вызовами, иначе новый объект на каждый getSnapshot зациклит рендер.
 let _infoSrc: BackNav | null = null;
@@ -332,7 +343,9 @@ export function featureBackNavFrom(sessionId: string | null): FeatureBackNavInfo
   if (!sessionId || !_back || _back.fromKind !== 'feature' || _back.to.kind !== 'chat' || _back.to.id !== sessionId) return null;
   if (_infoSrc !== _back) {
     _infoSrc = _back;
-    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab: _back.fromTab ?? 'progress', showTab: _back.showTab ?? true };
+    const tab = _back.fromTab ?? 'progress';
+    // Имя — из записи (дефект 762b7c03); записи без поля (старый код) — фолбэк словарь.
+    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab, tabLabel: _back.fromTabLabel ?? FEATURE_MAIN_TAB_LABEL[tab], showTab: _back.showTab ?? true };
   }
   return _info;
 }
@@ -350,7 +363,9 @@ export function featureBackNavFromTask(taskId: string | null): FeatureBackNavInf
   if (!taskId || !_back || _back.fromKind !== 'feature' || _back.to.kind !== 'task' || _back.to.id !== taskId) return null;
   if (_infoSrc !== _back) {
     _infoSrc = _back;
-    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab: _back.fromTab ?? 'progress', showTab: _back.showTab ?? true };
+    const tab = _back.fromTab ?? 'progress';
+    // Имя — из записи (дефект 762b7c03); записи без поля (старый код) — фолбэк словарь.
+    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab, tabLabel: _back.fromTabLabel ?? FEATURE_MAIN_TAB_LABEL[tab], showTab: _back.showTab ?? true };
   }
   return _info;
 }
@@ -377,6 +392,8 @@ export const __test = {
   recordFeatureReturn,
   clearBackNav,
   getBackNav,
+  // Прямая установка указателя (тест фолбэка: запись старого кода без fromTabLabel).
+  setBack: (b: BackNav | null) => { _back = b; },
   backNavFrom,
   featureBackNavFrom,
   featureBackNavFromTask,

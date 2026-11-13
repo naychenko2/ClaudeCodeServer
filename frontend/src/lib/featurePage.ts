@@ -347,6 +347,16 @@ export function featureMainTabLabel(t: FeatureMainTab, hasRoute: boolean): strin
   return t === 'progress' && hasRoute ? 'Процесс' : FEATURE_MAIN_TAB_LABEL[t];
 }
 
+// Признак маршрута ОТКРЫТОЙ страницы фичи (дефект 762b7c03): тот же предикат, что
+// hasProcessGraph (FeatureStageArea.tsx:39) — по нему страница именует первую вкладку
+// (featureMainTabLabel), тем же именем канал возврата (featureBackNav) записывает вкладку
+// в момент перехода. false — страница не открыта, данных нет, страница другой фичи, легаси.
+export function featureHasRoute(featureId: string): boolean {
+  if (_fid !== featureId || _state.status !== 'ok') return false;
+  const run = _state.page.run;
+  return !!run.epic?.workflow || (run.stages ?? []).some(s => (s.after?.length ?? 0) > 0);
+}
+
 // Перевод старых значений в новые — строго по таблице FS-FTABS:
 // timeline/tasks → progress, plans → materials, chats/events/stats → review.
 // Полного покрытия union — нет: новая вкладка FeaturePageTab без строки здесь

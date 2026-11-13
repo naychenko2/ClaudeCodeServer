@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { FeatureBackChip, returnToFeature } from './FeatureBackChip';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from './__tests__/fakeDom';
 import { __test as backNav } from '../../lib/featureBackNav';
-import { __test as pageStore, setFeatureMainTab, setFeaturePageTab, type FeatureMainTab } from '../../lib/featurePage';
+import { __test as pageStore, setFeatureMainTab, setFeaturePageTab, type FeatureMainTab, type FeaturePageState } from '../../lib/featurePage';
 
 // Ожидаемые подписи — литералы (не из словаря кода), иначе подмена словаря не краснела бы.
 // FS-FBACK: вкладка возврата — FeatureMainTab («Ход · Материалы · Разбор», макет v4); имена
@@ -220,6 +220,50 @@ describe('FeatureBackChip: забор снимка вида (GC-F11)', () => {
     const btn = findNodeByAttr(c, 'role', 'button')!;
     act(() => { (reactProps(btn)!.onClick as () => void)(); });
     expect(backNav.pendingFeatureView('f1'), 'pending выдуман без снимка').toBeNull();
+  });
+});
+
+// Дефект 762b7c03 (после C3d): первая вкладка фичи с маршрутом называется «Процесс»,
+// и чип обязан называть её так же, как страница. Имя фиксируется при записи возврата
+// (recordFeatureReturn читает открытую страницу); чип его не восстанавливает по значению
+// вкладки. Мутации (в отчёте): (19) подменить tabName на словарь FEATURE_MAIN_TAB_LABEL →
+// «· Процесс» краснеет (легаси-строка остаётся зелёной — это и есть проверка мутацией).
+describe('FeatureBackChip: имя вкладки — как у страницы (дефект 762b7c03)', () => {
+  // Открытая страница 'f1' в сторе — признак маршрута (featureHasRoute) читает её run.
+  const openPage = (over: Record<string, unknown> = {}) => {
+    pageStore.setFid('f1');
+    pageStore.setState({
+      status: 'ok',
+      page: {
+        run: {
+          featureId: 'f1', state: 'in_progress', steps: [], reviews: [], qa: [], final: null, merge: null,
+          verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+          progress: 0, ready: false, ...over,
+        } as never,
+        events: [], eventsTotal: 0,
+      },
+    } as FeaturePageState);
+  };
+  const ROUTED = { epic: { id: 'f1', title: 'Моя фича', workflow: { templateId: 't', scope: 'global', stages: [], skipped: [], confirmedVersion: 1 } } };
+
+  it('фича с маршрутом, ушли с «Процесса»: чип «· Процесс» (не «Ход»)', () => {
+    openPage(ROUTED);
+    setFeatureMainTab('progress');
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    const c = render('c1');
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-back-chip');
+    expect(chip, 'чипа нет').not.toBeNull();
+    expect(textNodes(chip!).join('')).toBe('к фиче «Моя фича» · Процесс');
+  });
+
+  it('легаси (открытая страница без маршрута): «· Ход», как раньше', () => {
+    openPage();
+    setFeatureMainTab('progress');
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    const c = render('c1');
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-back-chip');
+    expect(chip, 'чипа нет').not.toBeNull();
+    expect(textNodes(chip!).join('')).toBe('к фиче «Моя фича» · Ход');
   });
 });
 

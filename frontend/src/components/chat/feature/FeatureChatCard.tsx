@@ -3,7 +3,7 @@ import { useFeaturesIndex, featureOf } from '../../../lib/featuresIndex';
 import { useFeatureRuns } from '../../../lib/featureRuns';
 import { openChatById } from '../../../lib/openChat';
 import { useFeatureBackNav } from '../../../lib/featureBackNav';
-import { FEATURE_MAIN_TAB_LABEL, setFeatureMainTab } from '../../../lib/featurePage';
+import { setFeatureMainTab } from '../../../lib/featurePage';
 import { returnToFeature } from '../FeatureBackChip';
 import { Button } from '../../ui';
 import { FeatureTrackerBar, trackerBarAria } from './FeatureTrackerBar';
@@ -83,7 +83,9 @@ export function FeatureChatCard({ sessionId, projectId, isMobile, onFocusCompose
 
   // «К фиче» = чип возврата: берём указатель, только если он на эту фичу.
   const backHere = featureBack != null && featureBack.featureId === feature.featureId ? featureBack : null;
-  const backTabName = backHere ? FEATURE_MAIN_TAB_LABEL[backHere.tab] : FEATURE_MAIN_TAB_LABEL.progress;
+  // Имя вкладки — из записи возврата (дефект 762b7c03): то же, что у страницы и чипа
+  // («Процесс» у фичи с маршрутом); без указателя имя не показывается вовсе.
+  const backTabName = backHere ? backHere.tabLabel : '';
 
   const openFeaturePage = () => {
     // Вкладка ставится явно: без возврата всегда ведём на «Ход».

@@ -4,3 +4,5 @@
 # id берётся из серверного состояния (задача обучения, событие фильма, область личного чата).
 # Бэкап: корни «Личного» для ValidateBackupPath (архив внутри {home}/Personal недопустим)
 backend/ClaudeHomeServer/Services/Backup/BackupService.cs|1
+# Ф2-4: доводчик LoRA — id и обход из серверного состояния обучения (задача шва, записи CharacterLoraRuns)
+backend/ClaudeHomeServer.ImageEditor/Characters/LoraTrainingFinisher.cs|2

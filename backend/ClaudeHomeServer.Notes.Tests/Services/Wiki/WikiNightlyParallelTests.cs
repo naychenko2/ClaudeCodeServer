@@ -91,8 +91,10 @@ public class WikiNightlyParallelTests : IDisposable
     }
 
     // ageMinutes — возраст UpdatedAt: очередь строится по нему убыв., тест задаёт порядок
-    // очереди явными возрастами (меньший возраст — раньше в очереди).
-    private void AddChat(string id, string project, int ageMinutes, int humans = 4, int len = 100)
+    // очереди явными возрастами (меньший возраст — раньше в очереди). important=false и
+    // своя history — серый чат (его судит ступень 2 на подходе очереди).
+    private void AddChat(string id, string project, int ageMinutes, int humans = 4, int len = 100,
+        bool important = true, List<StoredMessage>? history = null)
     {
         var s = new Session
         {
@@ -100,11 +102,11 @@ public class WikiNightlyParallelTests : IDisposable
             OwnerId = User,
             ProjectId = project,
             Name = id,
-            WikiMark = WikiMarks.Important,
+            WikiMark = important ? WikiMarks.Important : null,
             UpdatedAt = DateTime.UtcNow.AddMinutes(-ageMinutes),
         };
         _sessions.All.Add(s);
-        _sessions.History[id] = Hist(humans, len);
+        _sessions.History[id] = history ?? Hist(humans, len);
     }
 
     private WikiNightlyService Sut(
@@ -963,6 +965,181 @@ public class WikiNightlyParallelTests : IDisposable
         last.Rejected.Should().Be(0, "неготовый не сжёг ни одного чата");
     }
 
+    // ─── доработка W5 №2 (сверка Александра): конец выключателя, серый повтор, «слот занят» ──
+
+    [Fact]
+    public async Task ThreeRejectionsLastInQueue_AppliedBefore_Error()
+    {
+        // П.1, путь по умолчанию (пустой список — регрессия 2e13d45c): третий отказ подряд
+        // «модель недоступна» пришёлся последним чатом очереди — следующей выдачи нет, и
+        // CheckStop своего error не называет. До правки: итог completed с применённым
+        // пакетом — дата закрылась при мёртвом маршруте. Теперь: живых исполнителей к концу
+        // прохода нет — error, дату не закрывает. Мутация «убрать пост-проверку живых
+        // исполнителей» → последний assert красный.
+        Configure();
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+        AddChat("c3", SectionC, ageMinutes: 30);
+        AddChat("c4", SectionD, ageMinutes: 40);
+
+        await Tick(Sut((owner, chat, engine, ct) =>
+        {
+            lock (_calls) _calls.Add((chat, engine));
+            return chat == "c1"
+                ? Task.FromResult(new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeApplied, null, ["p1"]))
+                : Task.FromResult(DownReject());
+        }));
+
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeError, "третий отказ — последний чат: живых исполнителей к концу прохода нет");
+        last.Applied.Should().Be(1, "применённый раньше пакет не делает мёртвую ночь completed");
+        last.Analyzed.Should().Be(4);
+        last.Rejected.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task AllExecutorsDieOnLastChat_CoordinatorError()
+    {
+        // П.1, та же дыра в координаторе (stop ?? Completed): третий отказ подряд каждого
+        // исполнителя пришёлся на последний чат — очередь пуста, и следующей выдачи, которая
+        // назвала бы error, нет. Порядок держится гейтами: «gemma» держит свой Applied-чат,
+        // пока «local» сжигает очередь (c2, c3, c4 — три отказа, выбывание), и только потом
+        // берёт возвращённых сам — и тоже выбывает на последнем. Мутация «убрать пост-проверку
+        // живых исполнителей» → первый assert красный: completed при двух мёртвых движках.
+        Configure();
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1), new LocalEngineExecutor("gemma", "Gemma", 1)];
+        AddChat("c0", SectionA, ageMinutes: 5);
+        AddChat("c1", SectionB, ageMinutes: 10);
+        AddChat("c2", SectionC, ageMinutes: 20);
+        AddChat("c3", SectionD, ageMinutes: 30);
+        AddChat("c4", SectionE, ageMinutes: 40);
+        var g1 = NewGate();
+
+        var tick = Tick(Sut(async (owner, chat, engine, ct) =>
+        {
+            lock (_calls) _calls.Add((chat, engine));
+            EnteredOf(chat).TrySetResult();
+            if (chat == "c1" && engine == "gemma") await g1.Task.ConfigureAwait(false);
+            return engine == "local" && chat == "c0"
+                ? new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeApplied, null, ["p0"])
+                : engine == "gemma" && chat == "c1"
+                    ? new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeApplied, null, ["p1"])
+                    : new WikiChatIngestService.ChatResult(
+                        WikiChatIngestService.OutcomeRejected,
+                        "разбор окна m1-m8 не удался: синтез: " + WikiIngestService.ReasonLocalUnavailable, [],
+                        InputTokens: 0);
+        }));
+
+        await GateOpened(EnteredOf("c3")); // «local» отказал c2 и c3; c4 добьёт его до выбывания
+        g1.SetResult(); // «gemma» доигрывает свой и берёт возвращённых: оба движка мертвоют на последнем чате
+        await tick;
+
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeError, "к концу прохода живых исполнителей нет: дату не закрывает");
+        last.Applied.Should().Be(2, "применённое раньше — не причина звать мёртвую ночь completed");
+        last.Rejected.Should().Be(6, "c2, c3, c4 — по одному повтору на другом исполнителе");
+    }
+
+    // Чат с баллом в серой зоне (та же фикстура, что серые тесты WikiNightlyServiceTests):
+    // ступень 2 спрашивается на подходе очереди, вердикт пишется в стор — но снимок entries
+    // взят до прохода и его не видит.
+    private static List<StoredMessage> Gray()
+    {
+        var h = new List<StoredMessage>();
+        for (var i = 0; i < 3; i++)
+        {
+            h.Add(new StoredUserMessage($"Тут решили вариант {i}: " + new string('в', 600)));
+            h.Add(new StoredTextMessage("Принято, делаю."));
+        }
+        return h;
+    }
+
+    [Fact]
+    public async Task GrayChatRetriedOnOther_Stage2AskedOnce()
+    {
+        // П.2: серый чат судит ступень 2 («да»), «local» его отказывает, повтор идёт на
+        // «gemma». Без проверки repeat'а ступень 2 читала бы снимок entries (вердикта в нём
+        // нет) и звала бы модель второй раз — второе решение по одному чату и удвоенная
+        // оценка ступени 2 в est. Один чат в фикстуре: с двумя первый слот local успевал
+        // занять другой чат, и повтор строился бы не на сером. Мутации: «ступень 2 и при
+        // repeat» → второй assert красный (модель звана дважды), пятый красный (est удвоена).
+        Configure();
+        _llm.AnswerFor = a => a == LocalActionCatalog.WikiTriage
+            ? """{"hasKnowledge":true,"about":"a","reason":"r"}"""
+            : "{}";
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1), new LocalEngineExecutor("gemma", "Gemma", 1)];
+        AddChat("g1", SectionA, ageMinutes: 10, important: false, history: Gray());
+
+        await Tick(Sut(DownForChat(["g1|local"])));
+
+        _calls.Count(c => c.Chat == "g1").Should().Be(2, "испытание строит повтор: без него тест пустой");
+        _calls.Should().Contain(c => c.Chat == "g1" && c.Engine == "gemma");
+        _llm.ModelCalls.Count(c => c.ActionKey == LocalActionCatalog.WikiTriage)
+            .Should().Be(1, "повторный чат ступень 2 второй раз не спрашивает");
+        // Оценка ночи = оценка выбранного чата + одна оценка ступени 2. При повторном вызове
+        // ступени 2 (мутация) сумма была бы больше ровно на stage2Est.
+        static long chatEst(List<StoredMessage> h) =>
+            (WikiChatSlicer.Lines(h, 1, h.Count).Sum(l => (long)l.Text.Length) + 3) / 4;
+        var stage2Est = (WikiChatStage2.MaxInputChars + WikiChatStage2.PromptHeader.Length) / 4;
+        var last = Last();
+        last.EstTokens.Should().Be(chatEst(Gray()) + stage2Est, "оценка ступени 2 посчитана один раз");
+        last.Selected.Should().Be(1);
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+    }
+
+    [Fact]
+    public async Task NoPlaceRouteWithNamedExecutors_NightGoesOnList()
+    {
+        // П.4: маршрут места не настроен (HasRoute — false), но список исполнителей задан:
+        // ночь идёт по списку — отсутствие маршрута места не гасит живой именованный движок.
+        // До правки CheckStop требовал HasRoute при любом списке → error при живом движке,
+        // хотя UI говорит «ночь идёт по списку исполнителей». Мутация «проверять маршрут
+        // независимо от списка» → последний assert красный. Путь без исполнителей и без
+        // маршрута остаётся error — это существующий тест ОшибкаПрохода… в WikiNightlyNotifyTests.
+        Configure();
+        _llm.Route = false;
+        _llm.Executors = [new LocalEngineExecutor("gemma", "Gemma", 1)];
+        AddChat("c1", SectionA, ageMinutes: 10);
+
+        await Tick(Sut(DownFor()));
+
+        _calls.Should().ContainSingle(c => c.Chat == "c1" && c.Engine == "gemma");
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "живой именованный исполнитель, список задан — ночь идёт");
+    }
+
+    [Fact]
+    public async Task SlotRefusal_RetriedOnOtherOnce_ExecutorNotWithdrawn()
+    {
+        // П.3: «слот движка занят» (нулевой вход, причина LocalEngineSlotRefusalException):
+        // чат не сгорает на занятом движке — он отдаётся ровно один раз другому; отказавший
+        // не выбывает (ряда нет) и свой чат второй раз не берёт; повтор больше одного не
+        // повторяется. В итоге это обычный отказ. Мутации: «не повторять при отказе слота» →
+        // первый assert красный (c1 не добран); «включить в ряд выбывания» → предпоследний
+        // assert красный (error вместо completed).
+        Configure();
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1), new LocalEngineExecutor("gemma", "Gemma", 1)];
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+
+        await Tick(Sut(async (owner, chat, engine, ct) =>
+        {
+            lock (_calls) _calls.Add((chat, engine));
+            return engine == "local" && chat == "c1"
+                ? new WikiChatIngestService.ChatResult(
+                    WikiChatIngestService.OutcomeRejected,
+                    "разбор окна m1-m8 не удался: " + new LocalEngineSlotRefusalException("local", LocalTurnRefusal.QueueFull, 4, 4).Message,
+                    [], InputTokens: 0)
+                : new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []);
+        }));
+
+        _calls.Count(c => c.Chat == "c1").Should().Be(2, "чат занятого слота добирается другим — ровно один раз");
+        _calls.Should().Contain(c => c.Chat == "c1" && c.Engine == "gemma");
+        _calls.Count(c => c.Engine == "local").Should().Be(1, "отказавший исполнитель возвращённый чат не берёт");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "занятость — не смерть: ряд не растёт, ночь доиграна");
+        last.Rejected.Should().Be(1, "отказ занятости — обычный отказ строки итога");
+    }
+
     // ─── подмены ─────────────────────────────────────────────────────────────
 
     private sealed class Llm : ICheapTextRunner
@@ -980,6 +1157,9 @@ public class WikiNightlyParallelTests : IDisposable
         // Ответ судье: пустой список вердиктов — вызов состоялся, вердиктов нет (их разбор —
         // не предмет этого теста).
         public string JudgeAnswer = """{"verdicts":[]}""";
+        // Ответ по месту (серый тест ступени 2): null — прежний "{}"; иначе — что вернуть
+        // вызову этого actionKey.
+        public Func<string, string>? AnswerFor;
 
         public bool UsesLocal(string actionKey) => true;
         public bool HasFreeRoute(string actionKey) => true;
@@ -992,7 +1172,7 @@ public class WikiNightlyParallelTests : IDisposable
         }
 
         private string Answer(string actionKey) =>
-            actionKey == LocalActionCatalog.WikiJudge ? JudgeAnswer : "{}";
+            actionKey == LocalActionCatalog.WikiJudge ? JudgeAnswer : AnswerFor?.Invoke(actionKey) ?? "{}";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)

@@ -367,7 +367,16 @@ public sealed partial class WikiNightlyService : BackgroundService
     {
         // Часть о причине — только при отказах (хвост ревью R-J-O1, minor 4): «отказов 0 (первый: )»
         // читалось как недописанное поле.
-        var template = new StringBuilder("Ночь вики {OwnerId} {Date}: {Outcome}; чатов {Selected}/{Analyzed}, отказов {Rejected}");
+        // Хвост R-W6a (доработка W5 №2, п.5): при названных исполнителях analyzed — число ПОПЫТОК:
+        // чат, отказанный мёртвым движком, добирает другой — его разбор посчитан на обоих. Пара
+        // «чатов 4/7» читалась бы как семь чатов; здесь слово названо честно: «чатов {Selected},
+        // попыток {Analyzed}». Итог по чатам (Selected) от повтора не удваивается. Пути без
+        // названных исполнителей повтор не бывает — прежняя пара остаётся.
+        var hasExecutors = r.Executors is { Count: > 0 };
+        var template = new StringBuilder("Ночь вики {OwnerId} {Date}: {Outcome}; ");
+        template.Append(hasExecutors
+            ? "чатов {Selected}, попыток {Analyzed}, отказов {Rejected}"
+            : "чатов {Selected}/{Analyzed}, отказов {Rejected}");
         var args = new List<object?> { ownerId, r.Date, r.Outcome, r.Selected, r.Analyzed, r.Rejected };
         if (r.Rejected > 0)
         {
@@ -758,10 +767,12 @@ public sealed partial class WikiNightlyService : BackgroundService
         return string.Join(' ', parts);
     }
 
-    /// <summary>По одному предложению о каждом выбывшем исполнителе (W6a): «Модель {Title}
-    /// выбыла в HH:mm, разбор продолжила {Title}.» Имена — подписи движков из настроек места
-    /// (engineTitle даёт LocalEngineExecutor.Title, то же, что владелец видит в «Поставщиках
-    /// моделей»); технической ключ в тексте владельцу не звучит. Продолживших больше одного —
+    /// <summary>По одному предложению о каждом выбывшем исполнителе (W6a, хвост R-W6a — с числом
+    /// попыток): «Модель {Title} сделала N попыток, выбыла в HH:mm, разбор продолжила {Title}.»
+    /// analyzed по движку — попытки, а не чаты: отказанный им чат может быть добран другим, и
+    /// «выбыла» без числа читалось бы как «ничего не делала». Имена — подписи движков из настроек
+    /// места (engineTitle даёт LocalEngineExecutor.Title, то же, что владелец видит в «Поставщиках
+    /// моделей»); технический ключ в тексте владельцу не звучит. Продолживших больше одного —
     /// «разбор продолжили …, …»; живых не осталось — «разбор не продолжен». Выбывших нет —
     /// предложений нет.</summary>
     private static List<string> ExecutorSentences(IReadOnlyList<NightExecutorStat>? executors,
@@ -782,7 +793,8 @@ public sealed partial class WikiNightlyService : BackgroundService
                 1 => $"разбор продолжила {others[0]}",
                 _ => $"разбор продолжили {string.Join(", ", others)}",
             };
-            result.Add($"Модель {Name(e.Engine)} выбыла в {e.WithdrawnAt.Value:HH:mm}, {cont}.");
+            result.Add($"Модель {Name(e.Engine)} сделала {e.Analyzed} {Plural(e.Analyzed, "попытку", "попытки", "попыток")}, "
+                + $"выбыла в {e.WithdrawnAt.Value:HH:mm}, {cont}.");
         }
         return result;
     }

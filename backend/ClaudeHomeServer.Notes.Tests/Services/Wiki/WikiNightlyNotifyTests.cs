@@ -653,10 +653,12 @@ public class WikiNightlyNotifyTests : IDisposable
     [Fact]
     public async Task Notify_WithdrawnSentence()
     {
-        // Одно предложение о выбывшем исполнителе: «Модель {Title} выбыла в HH:mm, разбор
-        // продолжила {Title}» — Title из настроек места («Qwen 32B»), технического ключа «local»
-        // в тексте владельцу нет. Мутация «не передавать Executors в NotificationBody» — оба
-        // assert про предложение красные.
+        // Одно предложение о выбывшем исполнителе — с числом попыток (хвост R-W6a): «Модель
+        // {Title} сделала N попыток, выбыла в HH:mm, разбор продолжила {Title}» — Title из
+        // настроек места («Qwen 32B»), технического ключа «local» в тексте владельцу нет.
+        // Попытки названы явно: analyzed по движку с повтором — попытки, а не чаты.
+        // Мутация «не передавать Executors в NotificationBody» — оба assert про предложение
+        // красные; «не называть попытки» — первый assert красный.
         Configure();
         _now = AtLocal(4);
         TwoExecutorsDeadLocal();
@@ -674,8 +676,8 @@ public class WikiNightlyNotifyTests : IDisposable
 
         notifier.Sent.Should().HaveCount(1, "уведомление одно на проход: фраза о выбывшем — внутри него");
         var body = notifier.Sent[0].Body;
-        body.Should().Contain("Модель Qwen 32B выбыла в 04:00, разбор продолжила Gemma.",
-            "имена — подписи движков из настроек места");
+        body.Should().Contain("Модель Qwen 32B сделала 3 попытки, выбыла в 04:00, разбор продолжила Gemma.",
+            "имена — подписи движков из настроек места; число попыток названо явно");
         body.Should().NotContain("local", "технического ключа движка в тексте владельцу нет");
         System.Text.RegularExpressions.Regex.Matches(body, "выбыла в").Count.Should().Be(1,
             "одно предложение на каждого выбывшего, а не на каждый отказ");

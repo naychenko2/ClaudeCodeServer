@@ -168,7 +168,11 @@ public sealed partial class WikiNightlyService
 
                 // Серый чат — только с «да» ступени 2. Спрашиваем лениво: очередь дошла до чата.
                 // Ступень 2 остаётся в координаторе и идёт последовательно (W4a2).
-                if (!c.Important && c.Entry?.Stage1Zone == WikiChatScorer.ZoneGray)
+                // Повтор не спрашивает второй раз (доработка W5 №2, п.2): первую выдачу ступень 2
+                // уже спросила и вердикт вынесла — снимок c.Entry взят до ночи и его не видит.
+                // Второй вызов был бы вторым решением по одному чату за проход и удвоил бы
+                // оценку и вход ступени 2 в итоге.
+                if (!repeat && !c.Important && c.Entry?.Stage1Zone == WikiChatScorer.ZoneGray)
                 {
                     var verdict = c.Entry.Stage2Zone;
                     var humanTotal = lines.Count(l => l.IsHuman);
@@ -348,6 +352,16 @@ public sealed partial class WikiNightlyService
             {
                 outcome = await RunCoordinatedAsync(ownerId, queue, executors, down, PrepareAsync, ApplyResult, ct);
             }
+
+            // Граница выключателя мёртвого исполнителя (доработка W5 №2, п.1 — регрессия 2e13d45c):
+            // третий отказ подряд мог прийти последним чатом очереди — следующей выдачи нет, и
+            // CheckStop своего error не называет; в координаторе та же дыра, когда повторный чат
+            // был последним (stop ?? Completed). Итог completed закрыл бы дату при мёртвых
+            // исполнителях. Предохранитель назван здесь, после обоих драйверов: к концу прохода
+            // живых исполнителей не осталось — итог error (дату не закрывает, как любой error).
+            // Раньше названный упор (budget, open_limit, window_closed, disabled_midway) держит
+            // свой итог: он назван своей причиной, и до этой строки outcome уже не Completed.
+            if (outcome == OutcomeCompleted && !down.AnyLive(executors)) outcome = OutcomeError;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -555,16 +569,18 @@ public sealed partial class WikiNightlyService
                     continue;
                 }
                 var stopAfter = apply(o.Chat, o.Engine, o.Cfg, o.Result);
-                // Отказ «модель недоступна» без единого применённого окна (тот же признак, что у
-                // выключателя — IsLocalDownRejection): чат возвращается в голову очереди ОДИН раз
-                // на проход (п.3) — его добирает другой исполнитель. Курсор чата не двигался (его
-                // пишет только AnalyzeAsync при успехе), ряд отказов не рос: чат законен снова.
+                // Отказ «модель недоступна» или «слот движка занят» с нулевым входом и без единого
+                // применённого окна (доработка W5 №2, п.3): чат возвращается в голову очереди ОДИН
+                // раз на проход (п.3) — его добирает другой исполнитель, отказавший его не получает
+                // (retried). Курсор чата не двигался (его пишет только AnalyzeAsync при успехе),
+                // чат законен снова. Занятость — не выбывание: ряда она не касается, в строке
+                // итога это отказ (ApplyResult считает его rejected и обнуляет ряд).
                 // Отказ плана (плохой JSON, InputTokens > 0) и частичный исход (что-то применено)
                 // не повторяются: иначе чат пошёл бы по кругу, а его остаток и так ждёт следующей
                 // ночи. Повтор не резервирует бюджет второй раз: оценка чата уже зарезерирована
                 // его первой выдачей и остаётся зарезерированной.
-                if (stopAfter is null && IsLocalDownRejection(o.Result) && o.Result.PackageIds is not { Count: > 0 }
-                    && !retried.ContainsKey(o.Chat.Session.Id))
+                if (stopAfter is null && (IsLocalDownRejection(o.Result) || IsSlotRefusalRejection(o.Result))
+                    && o.Result.PackageIds is not { Count: > 0 } && !retried.ContainsKey(o.Chat.Session.Id))
                 {
                     retried[o.Chat.Session.Id] = o.Engine;
                     remaining.Insert(0, o.Chat);
@@ -610,11 +626,22 @@ public sealed partial class WikiNightlyService
     /// («разбор окна m1-m8 не удался: синтез: …»). Нулевой вход — обязательная половина
     /// признака: отказ, в котором модель отвечала (плохой план, пустой ответ, часть окон уже
     /// разобрана), даёт InputTokens больше нуля и по нулевому входу отсечён — ряд по нему не
-    /// растёт, чат не повторяется, исполнитель не выбывает. Отказ «слот движка занят» (LocalEngineSlotRefusal
-    /// в тексте причины, WN-4) — тоже нет: движок занят, а не мёртв, на это есть проба
-    /// готовности (W5, п.2); в ряд выбывания он не входит — по формулировке задачи.</summary>
+    /// растёт, чат не повторяется, исполнитель не выбывает. Отказ «слот движка занят»
+    /// (IsSlotRefusalRejection ниже) в ряд выбывания не входит — по формулировке задачи: движок
+    /// занят, а не мёртв; но чат с таким отказом не сгорает — он получает единственный повтор
+    /// на другом исполнителе (доработка W5 №2, п.3).</summary>
     private static bool IsLocalDownRejection(WikiChatIngestService.ChatResult r) =>
         r.InputTokens == 0 && r.Reason?.Contains(WikiIngestService.ReasonLocalUnavailable, StringComparison.Ordinal) == true;
+
+    /// <summary>Отказ «слот движка занят» (LocalEngineSlotRefusalException, WN-4): причина
+    /// доезжает до ночи дословно — «локальный движок «…»: занят: слота не дождались (…, занято N
+    /// из M)» (LocalEngineBusyTracker.cs:224, обёртка passName в WikiIngestService.cs:788), и
+    /// нулевой вход подтверждает, что модель не звалась. В ряд выбывания не входит: движок занят,
+    /// а не мёртв (ApplyResult обнуляет его ряд через NoteLive); но чат с таким отказом не
+    /// повторяет свою судьбу до следующей ночи — координатор отдаёт его один раз другому
+    /// исполнителю (тот же лимит повтора, что у мёртвого: не больше одного на чат).</summary>
+    private static bool IsSlotRefusalRejection(WikiChatIngestService.ChatResult r) =>
+        r.InputTokens == 0 && r.Reason?.Contains("занят: слота не дождались", StringComparison.Ordinal) == true;
 
     /// <summary>Имя исполнителя для журнала и итога: имя движка из списка стора; путь без
     /// названного исполнителя называется маршрутом места (имени движка там нет, J-W2).</summary>
@@ -640,11 +667,15 @@ public sealed partial class WikiNightlyService
             if (!InWindow(now.Hour, cfg.WindowStartHour, cfg.WindowEndHour)
                 || WindowDate(now, cfg.WindowStartHour, cfg.WindowEndHour) != date) return (OutcomeWindowClosed, null);
         }
-        if (!_llm.HasRoute(LocalActionCatalog.WikiNightly)) return (OutcomeError, null);
+        // Наличие маршрута места требуется только пути без названных исполнителей (доработка
+        // W5 №2, п.4): при заданном списке исполнителей ночь идёт по списку, и отсутствие
+        // маршрута места не гасит живой именованный движок — иначе ночь падала в error при
+        // живых исполнителях, а UI в это время говорит «ночь идёт по списку исполнителей».
+        var executors = _llm.LocalExecutorsFor(LocalActionCatalog.WikiNightly);
+        if (executors.Count == 0 && !_llm.HasRoute(LocalActionCatalog.WikiNightly)) return (OutcomeError, null);
         // Пустой список — путь без названных исполнителей: там «живой исполнитель» — сам маршрут
         // места, и его выбывание даёт прежний итог 2e13d45c. Список непустой — жив хоть один из
         // назначенных движков (не выбыл до конца прохода).
-        var executors = _llm.LocalExecutorsFor(LocalActionCatalog.WikiNightly);
         if (!down.AnyLive(executors))
         {
             LogInfoSafe("Ночной разбор {Owner}: живых исполнителей не осталось ({Withdrawn} выбыло), проход остановлен",

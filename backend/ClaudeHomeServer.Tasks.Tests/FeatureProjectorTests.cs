@@ -2727,6 +2727,47 @@ public class FeatureProjectorTests
         run.Stages.Should().OnlyContain(s => !s.Proposed);
     }
 
+    // B11: «по решению» у предложенного маршрута — optional → true, on → false; у легаси (нет
+    // предложения) и у подтверждённого маршрута признака нет (null), даже если резолвер Presence передан.
+    [Fact]
+    public void Build_ByDecision_Предложение_OptionalTrue_OnFalse()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem
+        {
+            Id = "e-b11-p", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-1) },
+        };
+        var s1 = new TaskItem { Id = "s1", FeatureId = epic.Id, Role = TaskRoles.Step, StepRef = "G1", Status = TaskItemStatus.Todo };
+        var qa = new TaskItem { Id = "q1", FeatureId = epic.Id, Role = TaskRoles.Qa, Status = TaskItemStatus.Todo };
+        IReadOnlyDictionary<string, string> presence = new Dictionary<string, string> { ["prod"] = "on", ["qa"] = "optional" };
+
+        var run = FeatureProjector.BuildCore(epic, [epic, s1, qa], t, proposalPresence: _ => presence);
+
+        run.Stages.Single(x => x.Key == "qa").ByDecision.Should().BeTrue();
+        run.Stages.Single(x => x.Key == "prod").ByDecision.Should().BeFalse();
+        // этап, которого нет в словаре (off/не в шаблоне), — признака нет
+        run.Stages.Where(x => x.Key is not ("qa" or "prod")).Should().OnlyContain(x => x.ByDecision == null);
+    }
+
+    [Fact]
+    public void Build_ByDecision_ЛегасиИПодтверждённый_ПризнакаНет()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        IReadOnlyDictionary<string, string> presence = new Dictionary<string, string> { ["prod"] = "optional" };
+        var legacy = new TaskItem { Id = "e-b11-l", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var confirmed = new TaskItem
+        {
+            Id = "e-b11-c", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8), Workflow = ParallelBranchesRoute(t),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-9) },
+        };
+
+        FeatureProjector.BuildCore(legacy, [legacy], t, proposalPresence: _ => presence)
+            .Stages.Should().OnlyContain(s => s.ByDecision == null);
+        FeatureProjector.BuildCore(confirmed, [confirmed], t, proposalPresence: _ => presence)
+            .Stages.Should().OnlyContain(s => s.ByDecision == null);
+    }
+
     // G7 (решение контракта a5d0c76e по возврату R-C3a): две стадии роли qa в «Параллельном
     // цикле» различаются именами. Маршрут построен Resolve'ом из пресета кода — проверяется
     // вся цепочка контракта: Title пресета → валидация → заморозка в RouteStage → проекция.

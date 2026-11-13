@@ -30,13 +30,15 @@ public sealed class FeatureProjector(TaskManager tasks)
     public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
         Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
-        Func<string, string?>? personaName = null)
-        => SlimRun(BuildCore(epic, featureTasks, now, sessions, modelResolver, personaName));
+        Func<string, string?>? personaName = null,
+        Func<TaskItem, IReadOnlyDictionary<string, string>?>? proposalPresence = null)
+        => SlimRun(BuildCore(epic, featureTasks, now, sessions, modelResolver, personaName, proposalPresence));
 
     internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
         Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
-        Func<string, string?>? personaName = null)
+        Func<string, string?>? personaName = null,
+        Func<TaskItem, IReadOnlyDictionary<string, string>?>? proposalPresence = null)
     {
         var nowUtc = now ?? DateTime.UtcNow;
         ArgumentNullException.ThrowIfNull(epic);
@@ -308,6 +310,11 @@ public sealed class FeatureProjector(TaskManager tasks)
                     && t.ExecutorStoppedAt >= epic.Hold!.Since)
                 .Select(t => t.Id)
                 .ToList();
+
+        // B11: «по решению» — только у предложенного (не подтверждённого) маршрута; Presence этапов
+        // берётся из шаблона предложения вызывающим (проектор шаблонов не видит), ключ — ключ стадии.
+        bool proposedRoute = epic.WorkflowProposal is not null && epic.Workflow is null;
+        var proposalPresenceByKey = proposedRoute ? proposalPresence?.Invoke(epic) : null;
 
         // Состояния стадий (G3): у фичи с маршрутом — WorkflowGraph.States по DAG графа
         // (done/active/pending/absent; активным этап делает ИДУЩАЯ по Status задача — держащая
@@ -602,6 +609,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 TaskSegments = taskSegments,
                 Line = routed && lane is "back" or "front" ? lane : null,
                 Proposed = epic.WorkflowProposal is not null && epic.Workflow is null,
+                ByDecision = ByDecisionOf(proposedRoute, proposalPresenceByKey, key),
                 Key = key,
                 // G3 (разрез 2 §1.7): id/роль/линия/предшественники/колонка — из графа маршрута;
                 // у легаси-стадии id = ключ, роль — роль её задач, After/Column пустые (графа нет).
@@ -886,6 +894,13 @@ public sealed class FeatureProjector(TaskManager tasks)
     // стор мог содержать. Неоднозначность или неудачный выбор (битый слепок этапа, снятого
     // маршрутом) — первый подходящий этап в порядке маршрута. Подходящих нет — null: задача
     // вне проекции (как раньше).
+    // B11: true — этап шаблона предложения optional («по решению»), false — on; null — признака
+    // нет (легаси/подтверждённый маршрут, шаблон не найден, этапа с таким ключом в шаблоне нет).
+    private static bool? ByDecisionOf(bool proposedRoute, IReadOnlyDictionary<string, string>? presenceByKey, string key)
+        => proposedRoute && presenceByKey is not null && presenceByKey.TryGetValue(key, out var presence)
+            ? presence == WorkflowStagePresence.Optional
+            : null;
+
     private static string? TaskStageId(IReadOnlyList<RouteStage> route, TaskItem t)
     {
         var role = TaskStageRole(t.Role);
@@ -1568,7 +1583,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner), null, sessions), owner);
+        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner), null, sessions, proposalPresence: tasks.ProposalPresence), owner);
     }
 
     // Одна фича по id эпика — ПОЛНЫЙ (необлегчённый) run: для страницы фичи (GetFeature).
@@ -1584,7 +1599,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : WithQueue(BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName), owner);
+        return epic is null ? null : WithQueue(BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence), owner);
     }
 
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.
@@ -1599,7 +1614,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var owner = tasks.GetByOwner(ownerId).ToList();
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature)
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence))
             .ToList();
         ApplyQueue(runs, owner);
         return runs;
@@ -1625,7 +1640,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             featureIds.UnionWith(links.Keys);
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature && featureIds.Contains(t.Id))
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence))
             .ToList();
         ApplyQueue(runs, owner);
         var ordered = OrderRuns(runs);

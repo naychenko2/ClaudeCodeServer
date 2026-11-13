@@ -283,6 +283,9 @@ export interface FeatureStage {
   line?: 'back' | 'front' | null;
   // B10: маршрут ещё не подтверждён человеком — узел показывает пометку «предложено».
   proposed?: boolean;
+  // B11: этап предложенного маршрута включён «по решению» (presence=optional): true — по решению,
+  // false — обязательный; null/отсутствует — признака нет (легаси, подтверждённый маршрут).
+  byDecision?: boolean | null;
 }
 
 // Полоска задач этапа (B01, бэк: FeatureStageSegments): закрытые / идущие / всего.

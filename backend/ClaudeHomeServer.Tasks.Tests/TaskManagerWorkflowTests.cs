@@ -33,6 +33,31 @@ public class TaskManagerWorkflowTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { /* уборка best-effort */ }
     }
 
+    // B11: Presence шаблона предложения по ключу стадии проекции: optional остаётся optional, on — on,
+    // off не входит; нет предложения или шаблона — null.
+    [Fact]
+    public void ProposalPresence_БыстрыйТрек_OffВыпадает_OptionalОстаётся()
+    {
+        var fast = _store.List(null).First(e => e.Template.BuiltInKey == WorkflowTemplateStore.FastTrackKey).Template;
+        var epic = new TaskItem
+        {
+            Id = "e", Role = TaskRoles.Feature,
+            WorkflowProposal = new WorkflowProposal { TemplateId = fast.Id, Scope = "global" },
+        };
+
+        var presence = _tasks.ProposalPresence(epic);
+
+        presence.Should().NotBeNull();
+        presence!["plan"].Should().Be(WorkflowStagePresence.Optional);
+        presence["prod"].Should().Be(WorkflowStagePresence.On);
+        presence.Should().NotContainKey("qa").And.NotContainKey("cut").And.NotContainKey("design");
+        _tasks.ProposalPresence(new TaskItem { Id = "e2", Role = TaskRoles.Feature }).Should().BeNull();
+        _tasks.ProposalPresence(new TaskItem
+        {
+            Id = "e3", Role = TaskRoles.Feature, WorkflowProposal = new WorkflowProposal { TemplateId = "нет-такого" },
+        }).Should().BeNull();
+    }
+
     private static WorkflowTemplate Template(string prompt = "p1") => new()
     {
         Name = "тест",

@@ -387,6 +387,9 @@ public sealed class FeatureStage
     // Маршрут предложен, но не подтверждён (epic.WorkflowProposal != null && epic.Workflow == null):
     // признак один на весь маршрут, одинаков у всех узлов; у подтверждённого и у легаси — false.
     public bool Proposed { get; init; }
+    // B11: этап предложенного маршрута включён «по решению» (Presence=optional в шаблоне предложения):
+    // true — optional, false — on; null — признака нет (легаси, подтверждённый маршрут, шаблон не найден).
+    public bool? ByDecision { get; init; }
 }
 
 // Полоска задач этапа (B01): закрытые / идущие / всего.

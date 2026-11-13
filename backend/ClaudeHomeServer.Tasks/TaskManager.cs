@@ -595,6 +595,28 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         }
     }
 
+    // B11: Presence этапов шаблона ПРЕДЛОЖЕНИЯ эпика по ключу стадии проекции (FeatureTimeMath.RoleToStage);
+    // off в маршрут не попадает и в словарь не входит. Несколько этапов одного ключа: on сильнее optional.
+    // null — предложения нет или шаблон не найден (признак «по решению» тогда не отдаётся).
+    public IReadOnlyDictionary<string, string>? ProposalPresence(TaskItem epic)
+    {
+        var proposal = epic.WorkflowProposal;
+        if (proposal is null || _workflows is null) return null;
+        var scope = string.Equals(proposal.Scope, "project", StringComparison.Ordinal)
+            ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
+        var template = _workflows.Get(proposal.TemplateId, scope, epic.ProjectId);
+        if (template is null) return null;
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var st in template.Stages)
+        {
+            if (st.Presence == WorkflowStagePresence.Off) continue;
+            var key = FeatureTimeMath.RoleToStage(st.Role);
+            if (!result.TryGetValue(key, out var prev) || prev == WorkflowStagePresence.Optional)
+                result[key] = st.Presence == WorkflowStagePresence.On ? WorkflowStagePresence.On : (prev ?? WorkflowStagePresence.Optional);
+        }
+        return result;
+    }
+
     // Слепок: StageId/Lane/After — из маршрута эпика (замороженный граф), поля этапа (промпт, матрица…) —
     // из ТЕКУЩЕЙ версии шаблона по id этапа. Шаблон удалён/этап убран — слепок без полей этапа (логируем).
     private StageSnapshot BuildStageSnapshot(FeatureWorkflow route, string stageId, string? projectId)

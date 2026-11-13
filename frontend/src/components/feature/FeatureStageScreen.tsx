@@ -45,10 +45,10 @@ type StageTab = 'review' | 'artifacts' | 'input' | 'metrics';
 const FIRST_TAB: StageTab = 'review';
 const TAB_LABEL: Record<StageTab, string> = { review: 'Ревью и вопросы', artifacts: 'Артефакты', input: 'Вход и транскрипт', metrics: 'Метрики' };
 
-// Счётчики вкладок: ревью + вопросы; коммиты артефактов. Нулевой счётчик не рисуется.
+// Счётчики вкладок: ревью + вопросы; файлы артефактов. Нулевой счётчик не рисуется.
 export function stageTabItems(s: StageScreen): { value: StageTab; label: string; count?: number; dot?: boolean }[] {
   const reviewN = (s.review?.own ? 1 : 0) + (s.review?.reviews?.length ?? 0) + (s.questions?.length ?? 0);
-  const artN = s.artifacts?.commits?.length ?? 0;
+  const artN = s.artifacts?.linkedFiles?.length ?? 0;
   const openQ = (s.questions ?? []).some(q => q.status === 'open');
   return [
     { value: 'review', label: TAB_LABEL.review, count: reviewN || undefined, dot: openQ || s.review?.awaitingHuman != null },

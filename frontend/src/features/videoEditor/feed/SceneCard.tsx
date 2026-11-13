@@ -33,6 +33,7 @@ import { SoundChooser } from '../sound/SoundChooser';
 // Потолки карточки в ленте: ширина читаемой колонки и высота плеера
 const CARD_MAX_W = 560;
 const PLAYER_MAX_H = 280;
+const LAUNCH_PLAYER_MAX_H = 180;
 
 // ── Модель карточки: чистая функция от сцены, записи ленты и хода задач ──
 
@@ -57,6 +58,8 @@ export function priceOfVersions(versions: VideoClipVersion[]): string | null {
   return cr > 0 ? `${cr} ${plural(cr, 'кредит', 'кредита', 'кредитов')}` : null;
 }
 
+export interface LaunchPreview { versionId: string; caption: string }
+
 export interface SceneCardView {
   kind: 'scene' | 'launch';
   sceneId: string;
@@ -72,7 +75,7 @@ export interface SceneCardView {
   upscaleFail: { text: string; tone: 'warning' | 'info'; actionLabel: string | null; jobId: string; versionId: string } | null;
   // «Версия 1 · 1440p · 2528×1440» под превью увеличенного клипа
   upscaledCaption: string | null;
-  // «Увеличить ×2/×4» (RelayVSR, локально): действие над готовой версией, отдельное от «Макс»; нет у личного чата и у версии, уже
+  // «Увеличить ×2/×4» (RelayVSR, локально): действие над готовой версией, отдельное от «Макс»; нет у версии, уже
   // полученной увеличением. enhanceRun — идёт именно оно (у него своя «Отменить увеличение» вне двухстадийной полосы «Макс»)
   canEnhance: boolean;
   enhanceRun: boolean;
@@ -84,6 +87,8 @@ export interface SceneCardView {
   // Итог запуска для компактной строки: «Отменено · деньги не списаны», «Готово: 2 варианта»
   outcome: string | null;
   versions: VideoClipVersion[];
+  // Строка запуска: готовые версии именно этого jobId для встроенного превью; пусто, пока идёт съёмка, и у сбоя без версий
+  previews: LaunchPreview[];
   index: number;
   version: VideoClipVersion | null;
   // Подпись модели версии — из каталога, не сырой id
@@ -96,6 +101,15 @@ export interface SceneCardView {
   stale: string[];
   emptyText: string | null;
   film: { path: string; name: string; position: number } | null;
+}
+
+function previewCaption(x: VideoClipVersion, catalog: VideoCatalog | null): string {
+  return [
+    modelLabel(catalog, x.provider, x.model),
+    x.width && x.height ? `${x.width}×${x.height}` : null,
+    `${x.durationSec} с`,
+    x.hasSound ? 'со звуком' : null,
+  ].filter(Boolean).join(' · ');
 }
 
 export function sceneCardView(p: {
@@ -131,7 +145,7 @@ export function sceneCardView(p: {
   if (!running && launch?.status === 'cancelled') {
     outcome = versions.length ? 'Отменено · готовые варианты сохранены' : 'Отменено · деньги не списаны';
   } else if (!running && launch?.status === 'done' && versions.length) {
-    outcome = `Готово: ${versions.length} ${plural(versions.length, 'вариант', 'варианта', 'вариантов')} — в карточке сцены`;
+    outcome = `Готово: ${versions.length} ${plural(versions.length, 'вариант', 'варианта', 'вариантов')}`;
   }
   return {
     kind: jobId ? 'launch' : 'scene',
@@ -146,7 +160,7 @@ export function sceneCardView(p: {
       ? (f => ({ text: f.text, tone: f.tone, actionLabel: f.action?.label ?? null, jobId: version.jobId, versionId: version.versionId }))(upscaleFailView(vInfo, versions, version))
       : null,
     upscaledCaption: !jobId && version ? upscaledCaption(vInfo, version) : null,
-    canEnhance: !jobId && !running && !!version && !personal && !version.enhanceScale && !version.upscaleError,
+    canEnhance: !jobId && !running && !!version && !version.enhanceScale && !version.upscaleError,
     enhanceRun: !jobId && !stages && !!jobs[0] && (runLaunch?.model ?? '').startsWith('relayvsr-x'),
     enhancedCaption: !jobId && version?.enhanceScale
       ? `Увеличено ×${version.enhanceScale}${version.width && version.height ? ` · ${version.width}×${version.height}` : ''}`
@@ -155,6 +169,7 @@ export function sceneCardView(p: {
     failure,
     outcome,
     versions,
+    previews: jobId && !running ? versions.map(x => ({ versionId: x.versionId, caption: previewCaption(x, p.catalog ?? null) })) : [],
     index,
     version,
     versionModel: version ? modelLabel(p.catalog ?? null, version.provider, version.model) : null,
@@ -336,9 +351,10 @@ export function SceneCardView({ v, src, busy, a, chooser, gpuBlock }: { v: Scene
   );
 }
 
-// Запуск в ленте — компактная строка под карточкой сцены: модель, число вариантов, цена, ход и итог.
-// Плеер и варианты живут в ОДНОЙ полной карточке сцены (якорь video_scene), поэтому съёмка не рисует двойника
-export function LaunchRowView({ v, a }: { v: SceneCardView; a: Pick<SceneCardActions, 'onPick'> }) {
+// Запуск в ленте — компактная строка: модель, число вариантов, цена, ход и итог. Готовые версии этого запуска
+// показываются тут же компактными плеерами (карточка сцены может стоять далеко вверху ленты); полная карточка
+// с версиями ‹ ›, «Сохранить», «В фильм» остаётся одна — якорь video_scene
+export function LaunchRowView({ v, a, srcOf }: { v: SceneCardView; a: Pick<SceneCardActions, 'onPick'>; srcOf?: (versionId: string) => string }) {
   // Тихая строка без рамки: карточка в ленте одна — сцена, запуск лишь подписывает, что и почём снимали
   return (
     <div data-video-card="launch" data-scene={v.sceneId} data-current={v.focused ? 'true' : 'false'}
@@ -353,6 +369,19 @@ export function LaunchRowView({ v, a }: { v: SceneCardView; a: Pick<SceneCardAct
       </div>
       {v.failure && <Line>{v.failure}</Line>}
       {v.outcome && <Line><span data-video-launch-outcome="">{v.outcome}</span></Line>}
+      {srcOf && v.previews.length > 0 && (
+        <div data-video-launch-previews="" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm }}>
+          {v.previews.map(pr => (
+            <div key={pr.versionId} data-video-launch-preview={pr.versionId}
+              style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: v.previews.length > 1 ? '1 1 180px' : '1 1 100%', minWidth: 0, maxWidth: v.previews.length > 1 ? 260 : 360 }}>
+              {/* #t=0.1 — браузер показывает первый кадр как постер до нажатия */}
+              <video controls preload="metadata" playsInline src={`${srcOf(pr.versionId)}#t=0.1`}
+                style={{ width: '100%', maxHeight: LAUNCH_PLAYER_MAX_H, borderRadius: R.md, background: C.bgInset, display: 'block' }} />
+              <span data-video-launch-preview-caption="" style={{ fontSize: FS.xs, color: C.textMuted }}>{pr.caption}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -429,7 +458,8 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
   const ver = v.version;
   if (jobId) {
-    return <LaunchRowView v={v} a={{ onPick: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId); } }} />;
+    return <LaunchRowView v={v} srcOf={vid => videoApi.versionFileUrl(scope, sessionId, scene.sceneId, vid)}
+      a={{ onPick: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId); } }} />;
   }
   // Папка — из открытого фильма; нет фильма и у сцены нет папки — человека спрашивают
   const act = (kind: 'save' | 'film', folder: string) => run(() => (kind === 'save'

@@ -91,4 +91,33 @@ public class VideoSceneSoundTests : IDisposable
         missing.VersionId.Should().BeNull();
         _w.Threads.Get(FilmWorld.Owner, FilmWorld.Session).Scenes.Single().Versions.Should().HaveCount(1);
     }
+
+    [Fact]
+    public async Task AddSoundVersion_ПишетКарточкуЗапускаВЛенту_ИнициаторИСтоимостьСохраняются()
+    {
+        var (scene, version) = _w.SceneWithClip();
+        var byAgent = Ref(scene.SceneId, version.VersionId) with { Initiator = "agent" };
+
+        var added = await Sound().AddSoundVersionAsync(byAgent, [1], ".wav", "hunyuanvideo-foley-xl", default);
+
+        var created = _w.Threads.Get(FilmWorld.Owner, FilmWorld.Session).Scenes.Single().Versions[1];
+        created.VersionId.Should().Be(added.VersionId);
+        created.Initiator.Should().Be("agent");
+        created.Cost.Should().Be(new ClaudeHomeServer.Services.VideoEditor.Contracts.VideoCostDto("local", 0));
+        var record = _w.Feed.Records.Should().ContainSingle(r => r.Record.RecordType == "video_launch_versions").Subject;
+        record.SessionId.Should().Be(FilmWorld.Session);
+        record.Record.Data!.Value.GetProperty("sceneId").GetString().Should().Be(scene.SceneId);
+        record.Record.Data!.Value.GetProperty("jobId").GetString().Should().Be(created.JobId);
+        record.Record.Data!.Value.GetProperty("initiator").GetString().Should().Be("agent");
+    }
+
+    [Fact]
+    public async Task AddSoundVersion_БезИнициатора_ЭтоЧеловек()
+    {
+        var (scene, version) = _w.SceneWithClip();
+
+        await Sound().AddSoundVersionAsync(Ref(scene.SceneId, version.VersionId), [1], ".wav", "m", default);
+
+        _w.Threads.Get(FilmWorld.Owner, FilmWorld.Session).Scenes.Single().Versions[1].Initiator.Should().Be("human");
+    }
 }

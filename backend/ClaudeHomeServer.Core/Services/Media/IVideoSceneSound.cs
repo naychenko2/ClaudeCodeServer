@@ -14,7 +14,9 @@ public interface IVideoSceneSound
 }
 
 // Сцена чата: SessionId — чат, в котором лежит нить сцены; ScopeKey — ключ области (проект или личный чат)
-public sealed record VideoSceneRef(string OwnerId, string ScopeKey, string SessionId, string SceneId, string? VersionId);
+// Initiator — кто озвучил: "agent" или "human" (не задан — человек)
+public sealed record VideoSceneRef(string OwnerId, string ScopeKey, string SessionId, string SceneId, string? VersionId,
+    string? Initiator = null);
 
 public sealed record VideoSceneClip(byte[] Bytes, string VersionId, double Seconds);
 

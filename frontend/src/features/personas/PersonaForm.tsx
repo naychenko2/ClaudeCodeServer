@@ -11,7 +11,7 @@ import { PersonaModelsGroup } from './PersonaModelsGroup';
 import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, claimTierReset, clearedTiers, ownTierCount, settleTierReset, takeReturn, tiersModeAction, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey, type TierResetOutcome } from './personaInheritModel';
 import { createVoicePayload } from './voicePayload';
 import { PersonaPromptTab, SECTIONS_RESET_TEXT, SECTIONS_RESET_TITLE, sectionsResetNeedsConfirm } from './PersonaPromptTab';
-import { applySections, emptyState, toOverrides, type PromptSectionsState } from './promptSectionsModel';
+import { applySections, emptyState, hasOverLimit, toOverrides, type PromptSectionsState } from './promptSectionsModel';
  import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Select, Menu, MenuItem, Notice, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
@@ -680,7 +680,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // Форма только для чтения не сохраняется: «Сохранить» родителя гасится этим сигналом
   // (в самой форме своей кнопки нет — она в тулбаре)
-  const canSave = name.trim().length > 0 && !(isProjectZone && !projectId) && !(isSphereZone && !sphereId) && !readOnlyForm;
+  const canSave = name.trim().length > 0 && !(isProjectZone && !projectId) && !(isSphereZone && !sphereId) && !readOnlyForm
+    && !(isEdit && !specialtyChanged && hasOverLimit(sectionsState));
 
   // Снимок редактируемых полей — для вычисления «есть несохранённые правки» (dirty)
   const snapshot = JSON.stringify({
@@ -1795,6 +1796,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             {characterSection}
           </PersonaPromptTab>
         )}
+            specialtyTitle={specialtyLabel(specialtyCatalog, specialty)}
+            changedByAdminSince={persona?.changedByAdminSince}
         {error && (
           <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
         )}

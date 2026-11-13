@@ -15,7 +15,8 @@ import type { PersonaPromptSectionOverride } from './types';
 // EffectivePromptSection единый для всех чтений). Источник 'persona' бывает только здесь:
 // собственный резолв specialty-слоёв (lib/specialties.effectivePromptSection) его не
 // производит, и своего слоя фронт не держит — только локальные переходы ниже.
-export type PersonaPromptSection = EffectivePromptSection;
+// updatedFromRole (B09) — секция унаследована и её текст обновился правкой админа.
+export type PersonaPromptSection = EffectivePromptSection & { updatedFromRole?: boolean };
 
 // ── Режим секции ───────────────────────────────────────────────────────────────────────
 
@@ -156,6 +157,37 @@ export function textCounter(text: string): string {
 
 export function overLimit(text: string): boolean {
   return text.length > TEXT_LIMIT;
+}
+
+// Жёлтый счётчик: от 90 % лимита, пока лимит ещё не превышен.
+export function nearLimit(text: string): boolean {
+  return !overLimit(text) && text.length >= TEXT_LIMIT * 0.9;
+}
+
+// Есть ли среди черновиков «своего» текст длиннее лимита — сохранение блокируется.
+export function hasOverLimit(state: PromptSectionsState): boolean {
+  return Object.values(state.overrides).some(o => o.mode === 'own' && overLimit(o.text));
+}
+
+// ── Подписи слоёв ──────────────────────────────────────────────────────────────────────
+
+const LAYER_LABEL: Record<PersonaPromptSection['textSource'], string> = {
+  code: 'код', global: 'глобально', user: 'пользователь', owner: 'владелец', persona: 'персона',
+};
+
+export function layerLabel(source: PersonaPromptSection['textSource']): string {
+  return LAYER_LABEL[source];
+}
+
+// Подпись источника у заголовка секции (макет P38–P55): режим 'own' и 'off' персоны — свои слои,
+// «выключено специальностью» называет слой, который выключил; иначе слой текста.
+export function sectionCaption(section: PersonaPromptSection, mode: SectionMode): string | null {
+  if (mode === 'own') return `своё · ${layerLabel('persona')}`;
+  if (mode === 'off') return null;
+  if (offBySpecialty(section)) return `выключено специальностью · ${layerLabel(section.enabledSource)}`;
+  return section.textSource === 'code'
+    ? `по умолчанию · ${layerLabel('code')}`
+    : `настроено админом · ${layerLabel(section.textSource)}`;
 }
 
 // ── Загрузка ответа ─────────────────────────────────────────────────────────────────────

@@ -92,6 +92,8 @@ export interface PersonaVoice {
 export interface Persona {
   id: string;
   ownerId: string;
+  // B09: админ менял секции специальности с момента, когда человек их видел; null/нет — база не отмечена
+  changedByAdminSince?: boolean | null;
   name: string;
   role?: string;              // роль персоны (главная подпись: «Роль (Имя)»)
   handle: string;             // машинное имя (@handle) — уникально в контексте (проект/глобально)

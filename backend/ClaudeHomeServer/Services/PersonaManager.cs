@@ -161,6 +161,11 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         return Convert.ToHexString(hash, 0, 6).ToLowerInvariant();
     }
 
+    // «Обновилось от специальности» (B09): набор менялся админом с момента отметки, и значение секции
+    // сейчас идёт от настройки специальности (Global), а не от своего слоя персоны
+    public static bool UpdatedFromRole(bool changedByAdminSince, EffectivePromptSection s) =>
+        changedByAdminSince && (s.EnabledSource == Llm.SectionSource.Global || s.TextSource == Llm.SectionSource.Global);
+
     // Текущая версия набора секций специальности персоны; без стора настроек или при сбое — null
     // (ChangedByAdminSince тогда не выставляется)
     public string? CurrentSectionsVersion(Persona p)

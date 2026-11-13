@@ -303,14 +303,10 @@ public class PersonasController(
     {
         var scope = HttpContext.GetRequestScope();
         if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
-        // B09: секция «обновилась от специальности» — набор менялся админом с момента, когда человек
-        // его видел (persona.ChangedByAdminSince), и значение секции сейчас идёт от настройки
-        // специальности (источник Global), а не от своего слоя персоны
+        // B09: updatedFromRole — см. PersonaManager.UpdatedFromRole
         var changed = persona.ChangedByAdminSince == true;
         return Ok(_promptSections.EffectiveSectionsFor(persona.OwnerId, persona)
-            .Select(s => new PersonaPromptSectionView(s,
-                changed && (s.EnabledSource == Services.Llm.SectionSource.Global
-                    || s.TextSource == Services.Llm.SectionSource.Global)))
+            .Select(s => new PersonaPromptSectionView(s, PersonaManager.UpdatedFromRole(changed, s)))
             .ToList());
     }
 

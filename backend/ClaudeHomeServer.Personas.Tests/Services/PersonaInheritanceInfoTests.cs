@@ -186,4 +186,68 @@ public class PersonaInheritanceInfoTests : IDisposable
         PersonaManager.SectionsVersion([S("a", true, "x"), S("b", false, "y")]).Should().NotBe(baseline);
         PersonaManager.SectionsVersion([S("b", true, "y"), S("a", true, "x")]).Should().NotBe(baseline);
     }
+
+    [Fact]
+    public void AccessDiffCount_ДваОтличия_Два()
+    {
+        SetTemplate(PersonaAccess.ReadOnly, ["tasks"], null);
+        var p = Create(inherits: true);
+        Update(p.Id, inheritsAccess: false, access: PersonaAccess.ReadOnly, tools: ["tasks"]);
+
+        SetTemplate(PersonaAccess.Custom, ["tasks"], ["Bash"]); // инструменты те же; профиль и запреты разошлись
+
+        var got = _sut.Get(p.Id, Owner)!;
+        got.AccessDiffCount.Should().Be(2);
+        got.AccessCopiedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void UpdatedFromRole_ТолькоПриИзменении_ИТолькоДляСекцийОтСпециальности()
+    {
+        var inheriting = Create("Наследует");
+        var own = Create("Своё");
+        _sut.MarkSectionsSeen(inheriting.Id, Owner);
+        var sectionId = SpecialtyPromptPresets.Sections[0].Id;
+        _sut.Update(own.Id, Owner, null, null, null, null, null, null, null, null, null, null, null,
+            null, null, null, null, promptSections: [new PromptSectionOverride(sectionId, true, "Своё")]);
+        _sut.MarkSectionsSeen(own.Id, Owner);
+        SetTemplate(PersonaAccess.Full, null, null, sectionText: "Новый текст от админа");
+
+        EffectivePromptSection Section(Persona p) => PromptSectionOverlay
+            .Apply(_specialty.EffectivePromptSectionStates(Owner, PersonaSpecialty.Reviewer),
+                _sut.Get(p.Id, Owner)!.PromptSections, ClaudeHomeServer.Services.Llm.SectionSource.Persona)
+            .Single(x => x.Id == sectionId);
+
+        var changed = _sut.Get(inheriting.Id, Owner)!.ChangedByAdminSince == true;
+        changed.Should().BeTrue();
+        PersonaManager.UpdatedFromRole(changed, Section(inheriting)).Should().BeTrue("секция идёт от специальности");
+        PersonaManager.UpdatedFromRole(true, Section(own)).Should().BeFalse("у персоны своё значение секции");
+        PersonaManager.UpdatedFromRole(false, Section(inheriting)).Should().BeFalse("набор не менялся");
+    }
+
+    [Fact]
+    public void СтарыйPersonasJson_БезНовыхПолей_ЧитаетсяБезОшибок()
+    {
+        var dir = Path.Combine(_tempDir, "old");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "personas.json");
+        File.WriteAllText(path, """
+            [{"id":"old1","ownerId":"owner-1","name":"Старая","handle":"staraya","specialty":"Reviewer","inheritsAccess":false}]
+            """);
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(dir, "projects.json"),
+            ["PersonasPath"] = path,
+            ["Ollama:Model"] = "",
+        });
+
+        var sut = new PersonaManager(config, NullLogger<PersonaManager>.Instance, specialty: _specialty);
+
+        var p = sut.Get("old1", Owner);
+        p.Should().NotBeNull();
+        p!.AccessCopiedAt.Should().BeNull();
+        p.AccessDiffCount.Should().BeNull();
+        p.SectionsSeenVersion.Should().BeNull();
+        p.ChangedByAdminSince.Should().BeNull();
+    }
 }

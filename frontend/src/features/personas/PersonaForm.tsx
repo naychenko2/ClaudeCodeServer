@@ -7,7 +7,7 @@ import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { PersonaVoicePicker } from './PersonaVoicePicker';
 import { ReturnInheritDialog, SwitchSpecialtyInheritDialog, SwitchSpecialtyOwnDialog } from './PersonaInheritDialogs';
 import { PersonaAccessGroup } from './PersonaAccessGroup';
-import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
+import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, takeReturn, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
 import { createVoicePayload } from './voicePayload';
 import { PersonaPromptTab, SECTIONS_RESET_TEXT, SECTIONS_RESET_TITLE, sectionsResetNeedsConfirm } from './PersonaPromptTab';
 import { applySections, emptyState, toOverrides, type PromptSectionsState } from './promptSectionsModel';
@@ -243,9 +243,13 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     ? describeAccessDiff(accessDiff(currentGroup, specialtyTemplate), currentGroup)
     : [];
   const [pendingReturn, setPendingReturn] = useState(false);
+  // Ref, а не state: два клика подряд до перерисовки видят одно и то же замкнутое состояние
+  const pendingReturnRef = useRef(false);
   const confirmReturn = () => {
     // Повторный клик «Вернуть» (диалог ещё не размонтирован) ничего не делает
-    if (!pendingReturn) return;
+    const t = takeReturn(pendingReturnRef.current);
+    pendingReturnRef.current = t.pending;
+    if (!t.apply) return;
     setPendingReturn(false);
     setInheritsAccess(toInherited().inheritsAccess);
   };
@@ -254,6 +258,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     if (own === !inheritsAccess) return;
     // Возврат к наследованию теряет свои значения — спрашиваем, если они отличаются
     if (!own && currentDiffs.length > 0) {
+      pendingReturnRef.current = true;
       setPendingReturn(true);
       return;
     }
@@ -1542,7 +1547,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         <ReturnInheritDialog
           specialtyTitle={specialtyLabel(specialtyCatalog, specialty)}
           diffs={currentDiffs}
-          onKeep={() => setPendingReturn(false)}
+          onKeep={() => { pendingReturnRef.current = false; setPendingReturn(false); }}
           onReturn={confirmReturn}
         />
       )}

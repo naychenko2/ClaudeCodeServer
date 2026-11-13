@@ -177,3 +177,9 @@ export function describeAccessGroup(group: AccessGroup | null | undefined): stri
   ];
   return parts.join(', ');
 }
+
+// Применение диалога возврата: срабатывает один раз — повторный клик по «Вернуть», пока
+// диалог не размонтирован, видит уже закрытое ожидание и ничего не меняет.
+export function takeReturn(pending: boolean): { pending: false; apply: boolean } {
+  return { pending: false, apply: pending };
+}

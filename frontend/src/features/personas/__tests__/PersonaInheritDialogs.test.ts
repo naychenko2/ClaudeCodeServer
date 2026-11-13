@@ -3,7 +3,7 @@
 import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ReturnInheritDialog, SwitchSpecialtyInheritDialog, SwitchSpecialtyOwnDialog } from '../PersonaInheritDialogs';
-import { accessDiff, describeAccessDiff, describeAccessGroup, type AccessGroup } from '../personaInheritModel';
+import { accessDiff, describeAccessDiff, describeAccessGroup, takeReturn, type AccessGroup } from '../personaInheritModel';
 
 type P = Record<string, any>;
 const props = (e: unknown) => (e as ReactElement<P>).props;
@@ -60,5 +60,13 @@ describe('диалоги перехода', () => {
     expect([onCancel, onKeep, onTemplate].map(f => f.mock.calls.length)).toEqual([1, 1, 1]);
     props(modal).onClose();
     expect(onCancel).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('takeReturn — двойное применение «Вернуть»', () => {
+  it('первый вызов применяет и закрывает ожидание, второй — ничего не меняет', () => {
+    const first = takeReturn(true);
+    expect(first).toEqual({ pending: false, apply: true });
+    expect(takeReturn(first.pending).apply).toBe(false);
   });
 });

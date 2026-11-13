@@ -209,3 +209,51 @@ describe('цена, «Чем» и параметры', () => {
     expect(started.map(x => x.style)).toEqual(['darkbrush', undefined]);
   });
 });
+
+describe('«Чем» в «Чате»: «Править» и «Создать»', () => {
+  const draft = () => {
+    __applyThreads(S, P, { focus: 'd1', revision: 2, threads: [thread({ id: 'd1', file: null, draftFolder: '' })] });
+    __applyChatContext(S, { ...context(9), primary: { ...context(9).primary!, ref: { threadId: 'd1' } } });
+  };
+  const other = (rows: readonly { id: string; group: string; disabled?: boolean }[]) =>
+    rows.find(r => r.id !== 'auto' && !r.disabled && r.group !== 'auto')!;
+
+  it('картинка с файлом: два раздела — правка этой и новая; та же модель на повторный вызов', () => {
+    const s = imageKindApi.chatExecutors!(CTX);
+    expect(s.map(x => [x.chip, x.head])).toEqual([['Править', 'Править эту картинку'], ['Создать', 'Новая картинка']]);
+    expect(s.every(x => x.value === 'auto')).toBe(true);
+    expect(imageKindApi.chatExecutors!(CTX)).toBe(s);
+  });
+
+  it('черновик: правки нет — только «Создать»', () => {
+    draft();
+    expect(imageKindApi.chatExecutors!(CTX).map(x => x.chip)).toEqual(['Создать']);
+  });
+
+  it('нить не найдена — разделов нет, «Чема» в «Чате» не будет', () => {
+    __applyChatContext(S, { ...context(10), primary: { ...context(10).primary!, ref: { threadId: 'нет' } } });
+    expect(imageKindApi.chatExecutors!(CTX)).toEqual([]);
+  });
+
+  it('выбор в «Новая картинка» пишет «Создать» и не трогает «Править»', () => {
+    const [, create] = imageKindApi.chatExecutors!(CTX);
+    const pick = other(create.rows);
+    create.onChange(pick.id);
+    expect(`${getPrefs(P).create?.provider}|${getPrefs(P).create?.model}`).toBe(pick.id);
+    expect(getPrefs(P).edit?.model ?? null).toBeNull();
+    const [edit2, create2] = imageKindApi.chatExecutors!(CTX);
+    expect(create2.value).toBe(pick.id);
+    expect(edit2.value).toBe('auto');
+  });
+
+  it('выбор в «Править эту картинку» пишет «Править» и не трогает «Создать»', () => {
+    const [edit] = imageKindApi.chatExecutors!(CTX);
+    const pick = other(edit.rows);
+    edit.onChange(pick.id);
+    expect(`${getPrefs(P).edit?.provider}|${getPrefs(P).edit?.model}`).toBe(pick.id);
+    expect(getPrefs(P).create?.model ?? null).toBeNull();
+    const [edit2, create2] = imageKindApi.chatExecutors!(CTX);
+    expect(edit2.value).toBe(pick.id);
+    expect(create2.value).toBe('auto');
+  });
+});

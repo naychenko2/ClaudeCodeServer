@@ -123,6 +123,10 @@ export interface ExecutorListModel {
   onChange: (id: string) => void;
 }
 
+// Раздел «Чем» в «Чате»: для какого запуска агента выбор. head — заголовок раздела меню,
+// chip — короткая подпись чипа вместо «Чем:»
+export interface ChatExecutorSection extends ExecutorListModel { head: string; chip: string }
+
 // Роль, под которой объект входит референсом в основной (подпись — для меню «В контекст ▾»)
 export interface ContextRole { role: string; label: string }
 
@@ -157,6 +161,9 @@ export interface ContextKindApi {
   // answer — выбранный ответ вопроса действия (question): у «Стемов» набор дорожек меняет, кого берёт «Авто»;
   // у действий без вопроса null
   executors?: (ctx: ContextKindCtx, actionId: string, answer?: string | null) => ExecutorListModel | null;
+  // «Чем» в «Чате» (action = null): с чем пойдут запуски агента по основному объекту. Первый раздел —
+  // чип строки, остальные — только в его меню. Пусто или нет метода — «Чема» в «Чате» нет (Р2)
+  chatExecutors?: (ctx: ContextKindCtx) => readonly ChatExecutorSection[];
   params?: (ctx: ContextKindCtx, actionId: string) => readonly LaunchParam[];
   // Чип «Формат» (ADR-025): модель под выбранное действие; actionId = null — «Чат», чип виден и там. Как и
   // `executors`, зовётся на каждый рендер: вид отдаёт дешёвую модель из кэшей, а не строит её заново.

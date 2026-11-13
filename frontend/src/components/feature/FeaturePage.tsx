@@ -173,6 +173,9 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
       });
     }
   };
+  // Шторку «Маршрут фичи» закрыли — снимаем флаг запроса (R-F05). Пока флаг не снят, он
+  // остаётся true, и повторное «Подтвердить» не открывает шторку снова (мёртвая кнопка).
+  const closeConfirmSheet = () => { setConfirmOpenFor(null); };
 
   // Регистрация страницы в канале окна возврата (GC-F11R4): окно снимка живёт ради этого
   // открытия страницы — закрытие гасит его (отложенная проверка в featureBackNav), а
@@ -365,7 +368,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     const selectedStageId = resolveSelectedStage(stageSel, featureId, okRun);
     body = (
       <>
-        <FeaturePageWorkflowConfirm run={okRun} featureId={featureId} projectId={okRun.epic?.projectId ?? projectId ?? undefined} isMobile={isMobile} open={confirmOpen} onOpen={openConfirm} />
+        <FeaturePageWorkflowConfirm run={okRun} featureId={featureId} projectId={okRun.epic?.projectId ?? projectId ?? undefined} isMobile={isMobile} open={confirmOpen} onOpen={openConfirm} onSheetClosed={closeConfirmSheet} />
         <FeatureFirstScreen
           status="ok"
           brief={page.page.brief ?? null}

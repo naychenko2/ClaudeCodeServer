@@ -58,6 +58,9 @@ export interface FeatureWorkflowConfirmProps {
   // Мобильный вид (F05): шапка страницы запросила открыть шторку («Подтвердить» из области
   // этапа). Работает при isMobile && quiet; иначе игнорируется.
   sheetOpenRequest?: boolean;
+  // Шторку закрыли — страница снимает свой флаг запроса (R-F05). Пока флаг не снят, он
+  // остаётся true, и повторное «Подтвердить» не открывает шторку снова (мёртвая кнопка).
+  onSheetClosed?: () => void;
 }
 
 interface SelectedKey { id: string; scope: WorkflowTemplateScope }
@@ -66,7 +69,7 @@ const errText = (e: unknown): string =>
   e instanceof Error && e.message ? e.message : 'Не получилось, попробуйте ещё раз';
 
 export function FeatureWorkflowConfirm({
-  featureId, projectId, proposal, confirmed, isMobile, quiet, routeRequired, sheetOpenRequest,
+  featureId, projectId, proposal, confirmed, isMobile, quiet, routeRequired, sheetOpenRequest, onSheetClosed,
 }: FeatureWorkflowConfirmProps): React.ReactElement {
   const [entries, setEntries] = useState<WorkflowTemplateEntry[] | null>(null);
   const [selKey, setSelKey] = useState<SelectedKey | null>(null);
@@ -110,6 +113,9 @@ export function FeatureWorkflowConfirm({
     setInfoOpen(false);
     abortRef.current?.abort();
   }
+  // Шторка открывается по ЗАПРОСУ страницы (уровень флага). Флаг снимает сама страница
+  // в onSheetClosed (R-F05): пока он не снят, он остаётся true, и повторное «Подтвердить»
+  // не открывает шторку снова (мёртвая кнопка).
   useEffect(() => { if (sheetOpenRequest) setSheetOpen(true); }, [sheetOpenRequest]);
 
   const load = useCallback(() => workflowTemplatesApi.listTemplates(projectId), [projectId]);
@@ -400,7 +406,9 @@ export function FeatureWorkflowConfirm({
     const rowText = searching ? 'Подбираем маршрут…'
       : noneState ? 'Модель не предложила маршрут'
         : `${rowName}${rowCount}`;
-    const closeSheet = () => { setSheetOpen(false); setInfoOpen(false); };
+    // Закрытие шторки снимает и запрос страницы (onSheetClosed): иначе флаг остаётся true,
+    // и повторное «Подтвердить» не открывает шторку снова (R-F05).
+    const closeSheet = () => { setSheetOpen(false); setInfoOpen(false); onSheetClosed?.(); };
     // Подвал по состоянию (R36–R38): подтвердить + подобрать заново / обновить + оставить /
     // закрыть; в «Подбираем» и «нет предложения» — «Подобрать заново» (на десктопе подпись другая).
     const fb = { fullWidth: true, style: { minHeight: 40 } } as const;

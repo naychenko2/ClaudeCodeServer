@@ -2871,6 +2871,28 @@ describe('FeaturePage: состояния без подтверждённого 
     expect(has(c, 'feature-workflow-confirm')).toBe(true);
   });
 
+  // R-F05: «Подтвердить» открывает шторку КАЖДЫЙ раз. Прежде флаг запроса оставался
+  // поднятым, и второе нажатие не открывало шторку снова (мёртвая кнопка).
+  // Тест — поведенческий (страница целиком), поэтому переживает любой способ починки.
+  it('мобила: «Подтвердить» открывает шторку, и после её закрытия — снова', async () => {
+    setRun({ workflowProposal: proposal }, proposedStages());
+    const c = render({ isMobile: true });
+    await settle();
+    const body = () => (globalThis as any).document.body;
+    const sheet = () => findNodeByAttr(body(), 'data-testid', 'workflow-route-sheet');
+    expect(sheet(), 'шторка закрыта').toBeNull();
+    await click(c, 'feature-page-unconfirmed-confirm');
+    expect(sheet(), 'шторка открылась').not.toBeNull();
+    // Закрываем шторку крестиком модалки.
+    const close = findNodeByAttr(body(), 'aria-label', 'Закрыть');
+    expect(close, 'крестик шторки').not.toBeNull();
+    await act(async () => { (reactProps(close!)!.onClick as () => void)(); });
+    expect(sheet(), 'шторка закрылась').toBeNull();
+    // Повторное «Подтвердить» открывает шторку снова.
+    await click(c, 'feature-page-unconfirmed-confirm');
+    expect(sheet(), 'шторка открылась снова').not.toBeNull();
+  });
+
   it('подтверждённый маршрут: Notice и граф предложения не рисуются, область этапа на месте', async () => {
     setRun({ workflow: { templateId: 't', scope: 'global', stages: [], skipped: [], confirmedVersion: 1 }, workflowProposal: proposal }, proposedStages().map(s => ({ ...s, proposed: false })));
     const c = render({});

@@ -1203,13 +1203,15 @@ function ProposalRow({ run, onOpen, isMobile }: { run: FeatureRun; onOpen: () =>
 // Подтверждение маршрута в шапке: предложение — компактная строка, «Посмотреть и подтвердить»
 // раскрывает блок F03 (open держит страница: «Подтвердить» из области этапа открывает то же);
 // легаси — строка «старая фича» с «Выбрать шаблон»; прочие состояния — блок в тихом режиме.
-export function FeaturePageWorkflowConfirm({ run, featureId, projectId, isMobile, open = false, onOpen }: {
+export function FeaturePageWorkflowConfirm({ run, featureId, projectId, isMobile, open = false, onOpen, onSheetClosed }: {
   run: FeatureRun | null;
   featureId: string;
   projectId?: string;
   isMobile: boolean;
   open?: boolean;
   onOpen?: () => void;
+  // Шторку «Маршрут фичи» закрыли — страница снимает флаг запроса на открытие (R-F05).
+  onSheetClosed?: () => void;
 }) {
   if (!run) return null;
   const block = (quiet: boolean) => (
@@ -1222,6 +1224,7 @@ export function FeaturePageWorkflowConfirm({ run, featureId, projectId, isMobile
       routeRequired={run.epic?.routeRequired ?? null}
       isMobile={isMobile}
       sheetOpenRequest={open}
+      onSheetClosed={onSheetClosed}
     />
   );
   // Мобила (F05): предложение — компактная строка блока и шторка «Маршрут фичи», а не ProposalRow.

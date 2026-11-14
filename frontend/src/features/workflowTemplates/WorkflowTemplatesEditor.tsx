@@ -202,6 +202,10 @@ export function WorkflowTemplatesEditor({
       try {
         const r = await load();
         if (formSeq.current !== sentSeq) return;
+        // Это же перечитывание обновляет список: «чужое содержимое цело» должно быть
+        // видно человеку (строка с v2 и её именем), а не известно только плашке (Ф-2.19).
+        // Черновик не трогаем: свои правки человека остаются до его решения.
+        setGlobals(r.globals); setLocals(r.locals); setMetas(r.metas);
         const fresh = (scope === 'global' ? r.globals : r.locals).find(t => t.id === draft.id);
         setConflictVersion(fresh?.version ?? null);
       } catch { setConflictVersion(null); }

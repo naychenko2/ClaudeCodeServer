@@ -27,13 +27,20 @@ public class DifyToolsetParityTests
     private record StdioTool(string Name, JsonElement Schema);
 
     // tools/list живого stdio-сервера: env-режим задаёт состав (DIFY_SEARCH_ONLY), в сеть
-    // сервер не ходит. null — node или dist недоступны (тест скипается).
+    // сервер не ходит. null — node, dist или node_modules недоступны (тест скипается).
     private static IReadOnlyList<StdioTool>? ListStdioTools(params (string Key, string Value)[] env)
     {
         var root = FindRepoRoot();
         var serverPath = root is null ? null : Path.Combine(root, "mcp-dify", "dist", "index.js");
         Skip.If(serverPath is null || !File.Exists(serverPath),
             "mcp-dify/dist/index.js не найден (сборка: cd mcp-dify; npm install; npm run build)");
+
+        // node_modules тоже вне git (.gitignore: «mcp-dify/node_modules/»): на машине, где dist
+        // остался от прошлой сборки, node доходит до импорта SDK и падает с ERR_MODULE_NOT_FOUND
+        // — это отсутствие окружения, а не расхождение состава. Скип ровно по этому каталогу:
+        // прочие сбои stdio-ветки (не ответила, разошёлся состав) по-прежнему красят тест.
+        Skip.If(!Directory.Exists(Path.Combine(root!, "mcp-dify", "node_modules")),
+            "mcp-dify/node_modules не установлен (зависимости: cd mcp-dify; npm ci)");
 
         var psi = new System.Diagnostics.ProcessStartInfo
         {

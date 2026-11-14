@@ -77,3 +77,33 @@ export function collectConsoleErrors(page: Page): string[] {
   page.on('pageerror', e => sink.push(`[pageerror] ${e}`));
   return sink;
 }
+
+// ── Маршрут фичи и шаблон «Полный цикл» (спеки приёмки g, g2) ─────────────────────────────
+// «Шаблон изменился» — про СОСТАВ маршрута, а не про версию шаблона: переименование этапа
+// предупреждения не даёт, добавленный этап — даёт.
+const FULL_CYCLE = 'builtin-full-cycle';
+
+export async function fullCycleTemplate(client: Api): Promise<any> {
+  const tpls = await client.get<any[]>('/api/workflow-templates');
+  return tpls.find(e => e.template.id === FULL_CYCLE)!.template;
+}
+
+// Правка шаблона по API с expectedVersion: mutate получает глубокую копию шаблона.
+export async function editFullCycleTemplate(client: Api, mutate: (t: any) => void): Promise<any> {
+  const cur = await fullCycleTemplate(client);
+  const next = JSON.parse(JSON.stringify(cur));
+  mutate(next);
+  return client.put<any>(`/api/workflow-templates/${FULL_CYCLE}`, { ...next, expectedVersion: cur.version });
+}
+
+// Привести маршрут эпика к текущему составу шаблона («Обновить» человеком), чтобы прогон
+// не зависел от того, чем закончил предыдущий: фикстура общая и мутируется.
+export async function alignEpicRoute(client: Api, epic: string): Promise<any> {
+  let wf = await client.get<any>(`/api/tasks/${epic}/workflow`);
+  if (wf.updateAvailable) {
+    await client.post(`/api/tasks/${epic}/workflow/confirm`, { templateId: FULL_CYCLE });
+    wf = await client.get<any>(`/api/tasks/${epic}/workflow`);
+  }
+  expect(wf.updateAvailable, 'исходный маршрут совпадает с составом шаблона').toBe(false);
+  return wf;
+}

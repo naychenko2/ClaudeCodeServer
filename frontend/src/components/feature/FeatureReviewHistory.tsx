@@ -169,7 +169,13 @@ export function FeatureReviewStageLanes({
             );
           })}
         </div>
-      ) : null}
+      ) : (
+        // Журнал есть, дорожек нет: ни одна стадия не даёт строки (этапов нет или все
+        // absent). Пустое состояние с причиной, а не тишина (постановка F18b).
+        <div data-testid="review-stage-lanes-empty" style={{ fontSize: FS.sm, color: C.textMuted, padding: `${SP.sm}px 0` }}>
+          Дорожек этапов пока нет
+        </div>
+      )}
     </div>
   );
 }

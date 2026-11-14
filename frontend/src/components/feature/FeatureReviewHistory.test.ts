@@ -165,6 +165,15 @@ describe('дорожки этапов (c2) — блок FeatureReviewStageLanes'
     expect(laneRows(h)).toEqual([]);
     expect(h).toContain('Шкала появится, когда у фичи будет журнал времени');
   });
+
+  it('журнал есть, этапов нет → 0 дорожек и «Дорожек этапов пока нет», а не тишина (F18b)', () => {
+    const h = lanesHtml({ run: mkRun({ stages: [] }) });
+    expect(laneRows(h)).toEqual([]);
+    expect(h).not.toContain('data-testid="lane-axis"');
+    expect(h).not.toContain('data-testid="review-stage-lanes-gantt"');
+    expect(h).not.toContain('Шкала появится');
+    expect(h).toContain('Дорожек этапов пока нет');
+  });
 });
 
 describe('ключевые события (c1)', () => {

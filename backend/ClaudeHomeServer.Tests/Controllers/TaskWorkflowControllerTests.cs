@@ -24,6 +24,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Ключ: чужой/несуществующий/не-эпик — один 404, несъёмный или чужой id пропуска — 400.
 // Конкурентность: два confirm — в эпике последний целиком; подбор, пришедший во время
 // подтверждения, маршрут не меняет; сбой фонового подбора не роняет создание эпика.
+// Ф-2.16 (решение Ф-2.14): «шаблон изменился» — по составу маршрута (наборы id из
+// Resolve(текущий шаблон, прежние пропуски) против замороженного графа), а не по версии:
+// переименование/промпт/модель/права этапа — не обновление; добавленный или ставший
+// обязательным этап — обновление.
 //
 // Мутация «убрать проверку владения в confirm» (EpicOfCaller в TaskWorkflowController) краснит
 // ровно тесты чужого: Confirm_ЧужойЭпик_404 и Confirm_ЭпикОбщегоПроекта_Участник404_Владелец200.
@@ -451,6 +455,15 @@ public class TaskWorkflowControllerTests : IClassFixture<TaskWorkflowControllerT
         Templates.Save(t, WorkflowTemplateScope.Global);
     }
 
+    /// <summary>Правка состава: этап «cut» из off становится optional — текущий шаблон включил бы
+    /// его в маршрут (Ф-2.16: рост версии без смены состава обновлением не считается).</summary>
+    private void BumpComposition(string id)
+    {
+        var t = Templates.Get(id, WorkflowTemplateScope.Global)!;
+        t.Stages.First(s => s.Role == TaskRoles.Cut).Presence = WorkflowStagePresence.Optional;
+        Templates.Save(t, WorkflowTemplateScope.Global);
+    }
+
     private async Task<JsonElement> PostJsonAsync(string url, object? body = null)
     {
         var resp = body is null ? await _owner.PostAsync(url, null) : await _owner.PostAsJsonAsync(url, body);
@@ -470,7 +483,7 @@ public class TaskWorkflowControllerTests : IClassFixture<TaskWorkflowControllerT
         await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl });
         (await GetWorkflowAsync(epic.Id)).GetProperty("templateUpdate").ValueKind.Should().Be(JsonValueKind.Null);
 
-        BumpTemplate(tpl); // v2
+        BumpComposition(tpl); // v2 — смена состава (этап «cut» становится optional): есть обновление
         var upd = (await GetWorkflowAsync(epic.Id)).GetProperty("templateUpdate");
         upd.GetProperty("fromVersion").GetInt32().Should().Be(1);
         upd.GetProperty("toVersion").GetInt32().Should().Be(2);
@@ -483,7 +496,7 @@ public class TaskWorkflowControllerTests : IClassFixture<TaskWorkflowControllerT
         Tasks.GetById(epic.Id)!.Workflow!.ConfirmedVersion.Should().Be(1, "маршрут «Оставить v1» не меняет");
         (await GetWorkflowAsync(epic.Id)).GetProperty("templateUpdate").ValueKind.Should().Be(JsonValueKind.Null);
 
-        BumpTemplate(tpl); // v3 — шаблон вырос дальше отклонённой версии
+        BumpTemplate(tpl); // v3 — шаблон вырос дальше отклонённой версии, состав по-прежнему другой
         (await GetWorkflowAsync(epic.Id)).GetProperty("templateUpdate").GetProperty("toVersion").GetInt32().Should().Be(3);
         (await GetWorkflowAsync(epic.Id)).GetProperty("updateAvailable").GetBoolean().Should().BeTrue();
     }
@@ -523,6 +536,87 @@ public class TaskWorkflowControllerTests : IClassFixture<TaskWorkflowControllerT
 
         await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl, skipped = Array.Empty<string>() });
         Tasks.GetById(epic.Id)!.Workflow!.Skipped.Should().BeEmpty("явный [] — решение человека");
+    }
+
+    // ─── Ф-2.16: обновление — по составу маршрута, а не по версии шаблона ─────────────────
+
+    /// <summary>Переименование этапа (Title): версия выше, состав тот же — обновления нет (Ф-2.14):
+    /// новые задачи берут текущее имя шаблона сами, подтверждённый маршрут заморожен (G7/И7).
+    /// Мутация «убрать сравнение составов в TemplateUpdate» краснит этот тест.</summary>
+    [Fact]
+    public async Task TemplateUpdate_ПереименованиеЭтапа_НеОбновление()
+    {
+        var tpl = OwnTemplate();
+        var epic = Epic();
+        await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl });
+
+        var t = Templates.Get(tpl, WorkflowTemplateScope.Global)!;
+        t.Stages.First(s => s.Role == TaskRoles.Step).Title = "Рабочий шаг";
+        Templates.Save(t, WorkflowTemplateScope.Global); // v2: версия выше, состав тот же
+
+        var body = await GetWorkflowAsync(epic.Id);
+        body.GetProperty("templateUpdate").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("updateAvailable").GetBoolean().Should().BeFalse();
+    }
+
+    /// <summary>Добавленный этап (off-этап стал optional): текущий шаблон при том же снятии включил бы
+    /// его в маршрут — состав другой, обновление с версиями from/to.</summary>
+    [Fact]
+    public async Task TemplateUpdate_ДобавленныйЭтап_ОбновлениеСВерсиями()
+    {
+        var tpl = OwnTemplate();
+        var epic = Epic();
+        await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl });
+        // без снятых — optional-этапы в маршруте: «plan» здесь есть, off-этапов (cut/design/qa) нет
+        Ids(Tasks.GetById(epic.Id)!.Workflow!).Should().Equal("plan", "step", "review", "final", "merge");
+
+        BumpComposition(tpl); // v2: «cut» становится optional — он вошёл бы в маршрут
+
+        var body = await GetWorkflowAsync(epic.Id);
+        body.GetProperty("updateAvailable").GetBoolean().Should().BeTrue();
+        body.GetProperty("templateUpdate").GetProperty("fromVersion").GetInt32().Should().Be(1);
+        body.GetProperty("templateUpdate").GetProperty("toVersion").GetInt32().Should().Be(2);
+    }
+
+    /// <summary>Снятый этап стал обязательным: Resolve(текущий шаблон, прежние пропуски) его уже не
+    /// снимает — состав отличается от подтверждённого, обновление.</summary>
+    [Fact]
+    public async Task TemplateUpdate_СнятыйЭтапСталОбязательным_Обновление()
+    {
+        var tpl = OwnTemplate();
+        var epic = Epic();
+        await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl, skipped = new[] { "plan" } });
+        Ids(Tasks.GetById(epic.Id)!.Workflow!).Should().Equal("step", "review", "final", "merge");
+
+        var t = Templates.Get(tpl, WorkflowTemplateScope.Global)!;
+        t.Stages.First(s => s.Role == TaskRoles.Plan).Presence = WorkflowStagePresence.On; // v2: «plan» больше не съёмный
+        Templates.Save(t, WorkflowTemplateScope.Global);
+
+        var body = await GetWorkflowAsync(epic.Id);
+        body.GetProperty("updateAvailable").GetBoolean().Should().BeTrue();
+        body.GetProperty("templateUpdate").GetProperty("fromVersion").GetInt32().Should().Be(1);
+        body.GetProperty("templateUpdate").GetProperty("toVersion").GetInt32().Should().Be(2);
+    }
+
+    /// <summary>Промпт, модель и права этапа — не поля состава: версия выше, состав тот же —
+    /// обновления нет (тот же исход, что у переименования).</summary>
+    [Fact]
+    public async Task TemplateUpdate_ПравкаПромптаИМоделиЭтапа_НеОбновление()
+    {
+        var tpl = OwnTemplate();
+        var epic = Epic();
+        await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl });
+
+        var t = Templates.Get(tpl, WorkflowTemplateScope.Global)!;
+        var step = t.Stages.First(s => s.Role == TaskRoles.Step);
+        step.Prompt = "держать отчёт в три строки";
+        step.DefaultTier = ModelTier.Strong;
+        step.DisallowedTools = ["web_search"];
+        Templates.Save(t, WorkflowTemplateScope.Global); // v2: версия выше, состав тот же
+
+        var body = await GetWorkflowAsync(epic.Id);
+        body.GetProperty("templateUpdate").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("updateAvailable").GetBoolean().Should().BeFalse();
     }
 
     [Fact]

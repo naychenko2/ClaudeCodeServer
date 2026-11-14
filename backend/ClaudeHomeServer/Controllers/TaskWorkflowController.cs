@@ -150,7 +150,7 @@ public class TaskWorkflowController(
         if (epic.Workflow is not { } wf) return Conflict(new { error = "Маршрут фичи ещё не подтверждён" });
 
         var version = req?.TemplateVersion ?? 0;
-        var current = CurrentTemplateVersion(epic, wf);
+        var current = CurrentTemplateEntry(epic, wf)?.Template.Version;
         if (version <= wf.ConfirmedVersion || current is null || version > current)
             return BadRequest(new { error = "templateVersion должна быть новее подтверждённой и не новее текущей версии шаблона." });
 
@@ -202,21 +202,29 @@ public class TaskWorkflowController(
         };
     }
 
-    // Текущая версия шаблона подтверждённого маршрута в каталоге эпика (та же область, что при
+    // Текущая запись шаблона подтверждённого маршрута в каталоге эпика (та же область, что при
     // подтверждении); null — шаблон удалён.
-    private int? CurrentTemplateVersion(TaskItem epic, FeatureWorkflow wf)
+    private WorkflowTemplateEntry? CurrentTemplateEntry(TaskItem epic, FeatureWorkflow wf)
     {
         var scope = wf.Scope == "project" ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
         return templates.List(epic.ProjectId)
-            .FirstOrDefault(e => e.Template.Id == wf.TemplateId && e.Scope == scope)?.Template.Version;
+            .FirstOrDefault(e => e.Template.Id == wf.TemplateId && e.Scope == scope);
     }
 
-    // «Шаблон изменился»: версия в каталоге выше подтверждённой И выше отклонённой («Оставить v1»).
+    // «Шаблон изменился» (Ф-2.14/Ф-2.16): версия в каталоге выше подтверждённой И выше отклонённой
+    // («Оставить v1») И состав маршрута правда другой — наборы id из Resolve(текущий шаблон,
+    // прежние пропуски) и замороженного графа не совпадают. Переименование этапа, правка его
+    // промпта, модели или прав состава не касаются: такие правки и так действуют со следующего
+    // шага (новые задачи берут текущую версию шаблона), и предупреждения быть не должно.
+    // Та же семантика, что у templateChanged на фронте: сравнение наборов id, не порядка.
     private object? TemplateUpdate(TaskItem epic)
     {
         var wf = epic.Workflow!;
-        if (CurrentTemplateVersion(epic, wf) is not { } now) return null;
+        if (CurrentTemplateEntry(epic, wf) is not { } entry) return null;
+        var now = entry.Template.Version;
         if (now <= wf.ConfirmedVersion || now <= (wf.DismissedUpdateVersion ?? 0)) return null;
+        var currentIds = new HashSet<string>(WorkflowGraph.Resolve(entry.Template, wf.Skipped).Select(s => s.Id), StringComparer.Ordinal);
+        if (currentIds.SetEquals(wf.Stages.Select(s => s.Id))) return null;
         return new { fromVersion = wf.ConfirmedVersion, toVersion = now };
     }
 

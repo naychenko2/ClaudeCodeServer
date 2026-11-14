@@ -22,7 +22,10 @@ public class LocalAudioEngineTests
     // Strict-мок без настроек: любое обращение к шву роняет тест
     private static Mock<ILocalAudioMedia> Untouchable() => new(MockBehavior.Strict);
 
-    public static TheoryData<string> RefusedScopes => new() { "personal", "personal-with-project", "device" };
+    public static TheoryData<string> RefusedScopes => new() { "device" };
+
+    // Личная область пускает: результат уходит байтами в версию нити, проект не нужен (ADR-021)
+    public static TheoryData<string> AdmittedPersonalScopes => new() { "personal", "personal-with-project" };
 
     private static AudioEditScope ScopeOf(string kind) => kind switch
     {
@@ -43,7 +46,7 @@ public class LocalAudioEngineTests
         var result = await engine.RunAsync(Speak(ScopeOf(kind)), NoProgress, CancellationToken.None);
 
         result.Outcome.Should().Be(AudioOutcome.Rejected);
-        result.Error.Should().Be(kind == "device" ? LocalAudioEngine.DeviceProjectReason : LocalAudioEngine.PersonalScopeReason);
+        result.Error.Should().Be(LocalAudioEngine.DeviceProjectReason);
         result.Charged.Should().BeFalse();
         media.Invocations.Should().BeEmpty();
     }
@@ -70,7 +73,25 @@ public class LocalAudioEngineTests
 
         engine.ScopeRefusal(AudioEditScope.Of(ServerProject)).Should().BeNull();
         engine.ScopeRefusal(AudioEditScope.Of(DeviceProject)).Should().Be(LocalAudioEngine.DeviceProjectReason);
-        engine.ScopeRefusal(new AudioEditScope(AudioEditScope.Personal, null)).Should().Be(LocalAudioEngine.PersonalScopeReason);
+        engine.ScopeRefusal(new AudioEditScope(AudioEditScope.Personal, null)).Should().BeNull("личная область пускает локальный звук");
+        // «Личное» с папкой (ADR-040): ключ personal, Project есть — движок по-прежнему пускает
+        engine.ScopeRefusal(new AudioEditScope(AudioEditScope.Personal, ServerProject)).Should().BeNull("личная область с папкой пускает локальный звук");
+    }
+
+    [Theory]
+    [MemberData(nameof(AdmittedPersonalScopes))]
+    public async Task Estimate_PersonalScope_GoesToSeamAndIsFree(string kind)
+    {
+        var media = new Mock<ILocalAudioMedia>();
+        media.SetupGet(m => m.Available).Returns(true);
+        media.Setup(m => m.QueueLengthAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        var engine = new LocalAudioEngine(media.Object);
+        var model = engine.Models.First(m => m.Id == AudioCatalog.QwenTts);
+
+        var estimate = await engine.EstimateAsync(model, Speak(ScopeOf(kind)), CancellationToken.None);
+
+        estimate.Amount.Should().Be(0);
+        media.Verify(m => m.QueueLengthAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

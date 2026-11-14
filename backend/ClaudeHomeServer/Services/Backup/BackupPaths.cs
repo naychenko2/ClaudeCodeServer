@@ -10,6 +10,9 @@ public static class BackupPaths
     public const string PostRestoreMarker = ".post-restore";
     public const string DefaultBackupDirName = "backups";
     public const string DefaultSecretsDirName = "backups-secrets";
+    // Инкрементальные снимки перед выкаткой: {data}/backups/snapshots. Лежат внутри
+    // дефолтной папки backups, которую ShouldInclude исключает целиком
+    public const string SnapshotsDirName = "snapshots";
 
     // Профили claude CLI: внутри них бэкапим ТОЛЬКО подпапку projects (транскрипты для
     // --resume; они невосстановимы). Всё остальное — `.credentials.json` с OAuth-токенами,
@@ -133,18 +136,23 @@ public static class BackupPaths
         if (root.Equals("local-media-history", StringComparison.OrdinalIgnoreCase)) return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 
-        // Встроенный Forgejo (forgejo/**): репозитории и gitea.db едут, но три подпапки нет.
+        // Встроенный Forgejo (forgejo/**): репозитории и gitea.db едут, но четыре подпапки нет.
         // ssh — ключи хоста (приватные; контейнер создаёт их от root с правами 600, сервер
         // их даже прочитать не может). gitea/queues (LevelDB) и gitea/indexers (bleve/bolt)
         // живой контейнер держит под блокировкой, и копирование обрывало весь бэкап. Все три
         // Forgejo пересоздаёт сам: ключи — при старте (сменится лишь отпечаток хоста),
-        // очередь и поисковый индекс — пересборкой.
+        // очередь и поисковый индекс — пересборкой. gitea/actions_artifacts — артефакты
+        // CI-прогонов (тысячи мелких файлов, ~5 ГБ за неделю): восстанавливать их незачем,
+        // у них свой срок жизни (ARTIFACT_RETENTION_DAYS); без файлов Forgejo просто
+        // отдаст 404 на скачивание старого артефакта. attachments и packages — данные
+        // пользователей, они в архив едут.
         if (root.Equals("forgejo", StringComparison.OrdinalIgnoreCase) && segments.Length >= 2)
         {
             if (segments[1].Equals("ssh", StringComparison.OrdinalIgnoreCase)) return false;
             if (segments.Length >= 3 && segments[1].Equals("gitea", StringComparison.OrdinalIgnoreCase)
                 && (segments[2].Equals("queues", StringComparison.OrdinalIgnoreCase)
-                    || segments[2].Equals("indexers", StringComparison.OrdinalIgnoreCase)))
+                    || segments[2].Equals("indexers", StringComparison.OrdinalIgnoreCase)
+                    || segments[2].Equals("actions_artifacts", StringComparison.OrdinalIgnoreCase)))
                 return false;
         }
 

@@ -14,7 +14,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Собеседник чата проекта (W3-B4b, разрез docs/research/shared-projects-personas-cut-2026-11.md §3.2,
 /// И-1/И-2). Инвариант: участник никогда не получает чат в общем проекте с глобальной персоной
 /// (своей или владельца). Создание без personaId: руководитель резолвится по ключу арендатора;
-/// нет руководителя — 400 no_project_persona (провижн личного ассистента — право владельца).
+/// нет руководителя — 400 no_project_persona всем, включая владельца (провижн личного
+/// ассистента — право личного проекта, W4-B1a доработка 2, финал ed64271c).
 /// Создание с personaId: одна точка правды ResolvePersona + сверка «проектная персона — только
 /// своего проекта»; персона другого проекта и чужая глобальная — 404, неотличимы от несуществующей.
 /// Смена собеседника: участник — только в чате, автор которого он; владелец — в любом (иначе 403
@@ -111,6 +112,10 @@ public class SharedProjectPersonaSessionTests : IClassFixture<TestWebApplication
         (await BodyAsync(await Member().GetAsync("/api/personas")))
             .EnumerateArray().Select(p => p.GetProperty("id").GetString()!).ToList();
 
+    private async Task<List<string>> OwnerPersonaIdsAsync() =>
+        (await BodyAsync(await Owner().GetAsync("/api/personas")))
+            .EnumerateArray().Select(p => p.GetProperty("id").GetString()!).ToList();
+
     // ── создание без personaId: руководитель по ключу арендатора ─────────────────────
 
     [Fact]
@@ -149,6 +154,55 @@ public class SharedProjectPersonaSessionTests : IClassFixture<TestWebApplication
         (await ChatIdsAsync(Owner(), projectId)).Should().BeEmpty("отказ не оставил в проекте нового чата");
         (await MemberPersonaIdsAsync()).Should().BeEquivalentTo(before,
             "провижн не запущен: у участника не появилось новой глобальной персоны");
+    }
+
+    [Fact]
+    public async Task ВладелецСоздаётЧатБезРуководителяВОбщемПроекте_400NoProjectPersonaИПровижаНеБыло()
+    {
+        var projectId = await ProjectWithMemberAsync("editor");
+
+        // Штатный ассистент владельца удалён (он заведён провижном при старте хоста): «провижа
+        // не было» проверяется отсутствием новой персоны в сторе, а не идемпотентностью EnsureAsync.
+        var assistantId = _factory.Services.GetRequiredService<UserStore>().GetById(OwnerId())!.DefaultPersonaId;
+        if (assistantId is not null)
+            (await Owner().DeleteAsync($"/api/personas/{assistantId}")).EnsureSuccessStatusCode();
+        var before = await OwnerPersonaIdsAsync();
+
+        var r = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+
+        r.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "общий проект без руководителя: личный ассистент — не собеседник общего чата (S2a-8), " +
+            "провижн не запускается и владельцу (W4-B1a доработка 2, финал ed64271c)");
+        var body = await BodyAsync(r);
+        body.GetProperty("code").GetString().Should().Be("no_project_persona",
+            "тот же машинный код, что у участника: фронт отдаёт текст отказа вызывающему как есть");
+        body.GetProperty("error").GetString().Should().Be("В проекте нет руководителя — назначьте его в команде проекта",
+            "текст — владелецский: руководителя назначает он");
+        (await ChatIdsAsync(Owner(), projectId)).Should().BeEmpty("отказ не оставил в проекте нового чата");
+        (await OwnerPersonaIdsAsync()).Should().BeEquivalentTo(before,
+            "отказанный провижн не оставил в сторе новой персоны");
+    }
+
+    [Fact]
+    public async Task ВладелецСоздаётЧатБезРуководителяВЛичномПроекте_201СЛичнымАссистентом()
+    {
+        var owner = Owner();
+        await SetFlagAsync(owner);
+        var dir = Path.Combine(_factory.TempDir, "sps_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var created = await owner.PostAsJsonAsync("/api/projects",
+            new { name = "Личный" + Guid.NewGuid().ToString("N")[..6], rootPath = dir });
+        created.EnsureSuccessStatusCode();
+        var projectId = IdOf(await created.Content.ReadAsStringAsync()); // участников нет — проект личный
+
+        var r = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+
+        r.StatusCode.Should().Be(HttpStatusCode.Created,
+            "фолбэк на личного ассистента — право личного проекта: здесь он остался (W4-B1a доработка 2)");
+        var chatId = IdOf(await r.Content.ReadAsStringAsync());
+        var defaultId = _factory.Services.GetRequiredService<UserStore>().GetById(OwnerId())!.DefaultPersonaId;
+        defaultId.Should().NotBeNull("ассистент владельца провижен");
+        Stored(chatId).PersonaId.Should().Be(defaultId, "чат личного проекта ведёт личный ассистент");
     }
 
     // ── создание с personaId: одна точка правды и сверка проекта ──────────────────────

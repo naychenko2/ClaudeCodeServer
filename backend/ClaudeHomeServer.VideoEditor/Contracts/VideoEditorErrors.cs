@@ -10,10 +10,8 @@ public static class VideoEditorErrors
     public const string RevisionConflict = "revision_conflict";
     // 503: нет ffmpeg на хосте или выключена подсистема images
     public const string DspUnavailable = "dsp_unavailable";
-    // 400: фильмы — только в чате проекта
+    // 400: у личной области нет папки «Личного» — фильмы и сохранение недоступны (ADR-040)
     public const string PersonalScopeNoFilms = "personal_scope_no_films";
-    // 400: локальная съёмка в личном чате закрыта (в v1)
-    public const string LocalUnavailablePersonal = "local_unavailable_personal";
     // 400: локальный проект (ADR-016): файлы на устройстве, сервер файлы и сборку не трогает
     public const string ProjectLocalUnsupported = "project_local_unsupported";
     // 400: путь вне video/** и music/**
@@ -43,6 +41,16 @@ public static class VideoEditorErrors
     public const string UpscaleRetryUnavailable = "upscale_retry_unavailable";
     // 409: ревизия контекста чата устарела (ADR-023 §Д2.1); тело — свежий ChatContextDto
     public const string ContextChanged = "context_changed";
+}
+
+// Тексты отказов «Увеличить ×2/×4» (RelayVSR, local): показываются как есть
+public static class VideoEnhanceTexts
+{
+    public const string NotSupported = "Увеличение ×2/×4 есть только у локальных моделей";
+    public const string ClipGone = "Файл версии уже убран из рабочей папки — увеличить нечего";
+    public const string BadScale = "Увеличение — ×2 или ×4";
+    public const string OutOfRange = "Ролик вне замеренных пределов увеличения: кадр до 1344×768 и длина до 10 секунд";
+    public const string AlreadyEnhanced = "Эта версия уже получена увеличением — увеличивайте исходную";
 }
 
 // Тексты отказов «Повторить увеличение»: показываются как есть (ADR-022, «Повторить увеличение»)

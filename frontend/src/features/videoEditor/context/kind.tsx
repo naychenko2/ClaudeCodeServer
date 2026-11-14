@@ -5,14 +5,14 @@
 
 import { Clapperboard, Film } from 'lucide-react';
 import {
-  C, ICON_SIZE, ICON_STROKE, R, SP, showToast,
+  C, ICON_SIZE, ICON_STROKE, R, SP, getChatContextState, showToast,
   type ChatContextItem, type ContextKindApi, type ContextKindCtx,
 } from 'aihome_shell/kit';
 import { videoApi } from '../api';
 import { createScene, currentResolved } from '../scene/actions';
-import { isPersonalScope, videoScope } from '../scope';
+import { videoScope } from '../scope';
 import { getCatalog, openVideoEditor, useVideoStoreVersion } from '../store/videoStore';
-import { NO_AI_MODEL, shootExecutors } from './executors';
+import { chatShootSections, NO_AI_MODEL, shootExecutors } from './executors';
 import { videoFormat } from './format';
 import { paramsFor, quoteAction, launchAction } from './run';
 import { videoRefRoles } from './roles';
@@ -64,7 +64,16 @@ export const videoKindApi: ContextKindApi = {
     if (!found || !scene) return null;
     return shootExecutors({
       scope: found.scope, sessionId: ctx.sessionId, catalog: getCatalog(found.scope),
-      personal: isPersonalScope(found.scope), r: currentResolved(ctx.sessionId, found.scope, scene),
+      r: currentResolved(ctx.sessionId, found.scope, scene), sceneId: scene.sceneId,
+    });
+  },
+  // «Чем» в «Чате»: модель, которой агент снимет эту сцену (video_shoot берёт настройки сцены)
+  chatExecutors: ctx => {
+    const scene = sceneOfPrimary(ctx.sessionId, getChatContextState(ctx.sessionId).primary);
+    if (!scene) return [];
+    const scope = videoScope(ctx.projectId);
+    return chatShootSections({
+      scope, sessionId: ctx.sessionId, catalog: getCatalog(scope), r: currentResolved(ctx.sessionId, scope, scene), sceneId: scene.sceneId,
     });
   },
   params: (ctx, actionId) => {

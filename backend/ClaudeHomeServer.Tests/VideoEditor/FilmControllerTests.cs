@@ -200,22 +200,26 @@ public class FilmControllerTests : IClassFixture<FilmControllerTests.Host>
     }
 
     [Fact]
-    public async Task Личный_чат_получает_personal_scope_no_films_а_чужие_ручки_404()
+    public async Task Личный_чат_без_папки_Личного_видит_пустой_список_и_404_на_фильм_а_папку_GET_не_создаёт()
     {
         var personal = await Sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный");
         var url = $"/api/video-editor/chats/{personal.Id}";
+        var store = _factory.Services.GetRequiredService<IPersonalProjects>();
 
+        var list = await _client.GetAsync($"{url}/films");
+        list.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(list)).GetArrayLength().Should().Be(0);
         foreach (var response in new[]
                  {
-                     await _client.GetAsync($"{url}/films"),
                      await _client.GetAsync($"{url}/films/state?path=video/a/a.film"),
                      await _client.PostAsync($"{url}/films/build?path=video/a/a.film", null),
+                     await _client.GetAsync($"{url}/films/build?path=video/a/a.film"),
                      await _client.PostAsJsonAsync($"{url}/scenes/s1/save", new { sessionId = personal.Id, sceneId = "s1" }),
                  })
         {
-            response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-            (await Json(response)).GetProperty("code").GetString().Should().Be(VideoEditorErrors.PersonalScopeNoFilms);
+            response.StatusCode.Should().Be(HttpStatusCode.NotFound);
         }
+        store.GetPersonalOf(_ownerId).Should().BeNull("GET и отказы «Личное» не создают");
 
         var secondId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
         var strangers = await Sessions.CreateChatAsync(secondId, ClaudeMode.AcceptEdits, name: "Чужой личный");

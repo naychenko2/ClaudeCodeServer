@@ -12,7 +12,7 @@
 import { lazy } from 'react';
 
 // ─── design ──────────────────────────────────────────────────────────────────
-export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W, MODAL_W, FAB_CLEAR_PAD } from '../design';
+export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W, MODAL_W, LIST_MAX_H, FAB_CLEAR_PAD } from '../design';
 
 // ─── api ─────────────────────────────────────────────────────────────────────
 export { api } from '../api';
@@ -41,11 +41,13 @@ export {
   getWikiTreeSnapshot, initializeWiki, adoptWikiPage, deleteWikiSection,
   listWikiPackages, decideWikiPackage, acceptAllWikiPackage,
   loadWikiJournal, retractWikiSource, getWikiHealth, runWikiLint,
+  loadWikiNightDecisions, revertWikiPackage,
   analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, setWikiChatMark, ingestWikiNote, transferWikiNote,
   adoptWikiPageMine,
   useWikiTree, useWikiCatalog, useWikiPage, useWikiPageGone,
   requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
   loadWikiSettings, useWikiSettings, putWikiNightly, runWikiNightlyNow, putWikiAutoApply, resumeWikiApplyClass,
+  previewWikiPurge, runWikiPurge,
   wikiAuthorshipOf, editWikiPage, wikiFootnoteLabel, loadWikiSourceCard,
   restoreWikiPage, wikiOverridesOf, wikiHasReplacement, normWikiStatement, wikiActiveLines, useWikiReplacementDot,
 } from '../wiki';
@@ -59,6 +61,8 @@ export type {
   WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto, WikiSourceCardInfo, WikiPageEditableDto, WikiConflictPage, WikiFootnoteDto,
   WikiOverrideDto, WikiOverrideOp, WikiPageOverriddenDto, WikiOverrodeKind, WikiJournalEntryOverrideDto,
   WikiAdoptMineResult,
+  WikiPurgeDto, WikiPurgePageDto,
+  WikiNightDecisionDto, WikiNightDecisionsDto, WikiRevertDto,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────
@@ -71,7 +75,7 @@ export type { SubsystemManifest, RevealPanelDetail, RevealPanelOptions } from '.
 // ─── chatContext (ADR-023): контракты вида контекста хода ────────────────────
 export type {
   ChatContextDto, ChatContextItem, ChatContextPrimary, ChatContextRef, ContextKindApi, ContextKindCtx, KindState,
-  ContextAction, ActionKind, LaunchParam, ExecutorListModel, ActionResult, ContextReturn, ActionPreset, ActionRun, ActionQuote, LaunchRequest, LaunchHandle,
+  ContextAction, ActionKind, LaunchParam, ExecutorListModel, ChatExecutorSection, ActionResult, ContextReturn, ActionPreset, ActionRun, ActionQuote, LaunchRequest, LaunchHandle,
 } from '../chatContext/types';
 
 export {
@@ -102,7 +106,7 @@ export { autoRevealGenerationPanel, isGenPanelKey, markGenPanelDismissed } from 
 // Панель генерации следует за выбором: клик по карточке, подсказка выбора агентом,
 // черновики полей по ключу элемента
 export { followSelection, isCardPick } from '../genPanelFollow';
-export { noteGenDraft, clearGenDraft, useGenDraft } from '../genDrafts';
+export { noteGenDraft, clearGenDraft, useGenDraft, getGenDraftText } from '../genDrafts';
 export { followPeeked } from '../genPanelOpen';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
@@ -125,6 +129,9 @@ export { useMe } from '../defaultPersona';
 // в remote вторую копию lib/offline (стор ядра)
 export { useSphereOf } from '../useSphereOf';
 export { useAllProjects } from '../../features/projects/useAllProjects';
+
+// ─── сброс при выходе из аккаунта ───────────────────────────────────────────
+export { onLogoutReset } from '../logoutReset';
 
 // ─── toast ───────────────────────────────────────────────────────────────────
 export { showToast } from '../toast';

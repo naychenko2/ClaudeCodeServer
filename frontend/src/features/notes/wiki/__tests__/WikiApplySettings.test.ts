@@ -42,7 +42,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
-import { WikiApplySettings } from '../WikiApplySettings';
+import { C, LIST_MAX_H } from 'aihome_shell/kit';
+import { WikiApplySettings, classesHeaderText, disabledFirst } from '../WikiApplySettings';
 
 vi.mock('../../../../lib/signalr', async (orig) => ({
   ...await orig<typeof import('../../../../lib/signalr')>(),
@@ -84,6 +85,8 @@ const CLS_OFF = {
   disabledAt: '2026-10-25T12:00:00Z', resumedAt: null,
   applied7: 0, retracted7: 3, share7: 0, applied30: 38, retracted30: 4, share30: 10.5,
 };
+// второй выключенный класс — для проверки порядка внутри группы выключенных (M4)
+const OFF_NOTE = { ...CLS_OFF, class: 'note×create' };
 const SETTINGS = { autoApplyEnabled: true, classes: [CLS_ON, CLS_OFF], nightly: NIGHTLY };
 // Нулевой замер — как бэк сериализует класс без строки оценки (WikiClassDto по умолчанию):
 // именно таким приходит каждый класс ответа PUT («Замер не возвращается», :94; BuildDto(next,
@@ -381,7 +384,10 @@ describe('блок «Применение» (S7d-1)', () => {
     await settle();
     const sw = findNodeByAttr(c, 'data-testid', 'wiki-apply-switch')!;
     const toggle = findNodeByAttr(sw, 'role', 'switch')!;
-    click(toggle, 'тумблер «Применять без ревью»');
+    // J-F1 (QA b0065470): имя тумблера для скринридера равно видимой подписи — экран и
+    // доступное имя не расходятся
+    expect(toggle.getAttribute('aria-label'), 'aria-label = видимая подпись').toBe('Применять неспорное само');
+    click(toggle, 'тумблер «Применять неспорное само»');
     // до ответа: новое значение уже в сторе — UI тумблера не ждёт сети (мутация 4)
     expect(getWikiSettingsSnapshot()!.autoApplyEnabled).toBe(false);
     await settle();
@@ -554,15 +560,17 @@ describe('класс «Замена ваших формулировок» (F6c)'
     expect(findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')).toBeNull();
   });
 
-  it('шум human×… (без «@») не показан: список только из таких записей — пустое состояние', async () => {
+  it('шум human×… (без «@») не показан: список только из таких записей — пустое состояние (и рамки нет)', async () => {
     server = { ...SETTINGS, classes: [NOISE_HUMAN_EDIT] };
     const c = render();
     await settle();
     expect(has(c, 'human × edit')).toBe(false);
     expect(has(c, 'Классов правок ещё нет')).toBe(true);
+    // M4: пустое состояние — без рамки и её шапки: считать и ограничивать нечего
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-apply-classes')).toBeNull();
   });
 
-  it('строка агрегата на 320 px не переполняется горизонтально: перенос строки заголовка и переносимый текст', async () => {
+  it('строка агрегата на 320 px не переполняется горизонтально: перенос строки заголовка и переносимый текст (M4: и шапка рамки над ней)', async () => {
     server = { ...SETTINGS, classes: [HUMAN_OFF_CONFLICT] };
     const c = render();
     await settle();
@@ -570,6 +578,10 @@ describe('класс «Замена ваших формулировок» (F6c)'
     // шапка строки — переносной flex-ряд (как в ClassRow): бейдж не вылезает за 320 px
     const header = row.childNodes[0];
     expect(styleOf(header).flexWrap).toBe('wrap');
+    // M4: закреплённая шапка рамки над агрегатом — фон непрозрачный: строки списка под
+    // ней при прокрутке не просвечивают
+    const hdr = findNodeByAttr(c, 'data-testid', 'wiki-apply-classes-header')!;
+    expect(styleOf(hdr).background).toBe(C.bgInset);
     // ищем элемент с прямой текстовой дочерней строкой (textNodes рекурсивен: по нему
     // внешние контейнеры тоже «содержат» строку, а стиль нужен у того, кто её рендерит)
     const hasOwnText = (n: AnyNode, needle: string) =>
@@ -587,5 +599,85 @@ describe('класс «Замена ваших формулировок» (F6c)'
     const desc = allNodes(c2).find(n => n.nodeName === 'DIV' && hasOwnText(n, 'ИИ меняет ваше сам'));
     expect(desc).not.toBeUndefined();
     expect(styleOf(desc!).overflowWrap).toBe('break-word');
+  });
+});
+
+// M4 (wiki-panels-v1-proposal, «Применение» (А4) и П2): выключенные классы — наверху списка
+// (внутри групп порядок — как пришёл с бэка), список — в рамке с пределом высоты LIST_MAX_H
+// и своей прокруткой, в рамке — закреплённая шапка со счётом и бейджем выключенных.
+// Мутации этих тестов (каждая прогнана в копии дерева, вывод — в отчёте задачи):
+// (11) disabledFirst → вернуть исходный порядок (return classes) → краснеют «disabledFirst:
+//      выключенные наверх» ([A,B,C,D] вместо [B,D,A,C]) и «выключенные классы поднимаются
+//      выше включённых» (append остаётся первым);
+// (12) не поднимать выключенные в месте вызова (disabledFirst(snapshot.classes) →
+//      snapshot.classes) → «выключенные классы поднимаются выше включённых» краснеет,
+//      чистый тест зелёный: порядок проверяется именно вызовом;
+// (13) снять maxHeight рамки → «рамка списка» краснеет (expected undefined to be 420);
+// (14) в classesHeaderText всегда добавлять «· выключено: K» → «без выключенных — только
+//      счёт» и «бейджа нет» краснеют: при нуле шапка сообщает «выключено: 0».
+describe('рамка и порядок списка классов (M4)', () => {
+  it('disabledFirst: выключенные наверх, внутри групп — порядок как пришёл', () => {
+    const cls = (name: string, off: boolean) => ({ ...(off ? CLS_OFF : CLS_ON), class: name, disabled: off });
+    const got = disabledFirst([cls('A', false), cls('B', true), cls('C', false), cls('D', true)]).map(c => c.class);
+    expect(got).toEqual(['B', 'D', 'A', 'C']);
+  });
+
+  it('classesHeaderText: «Классов: N · выключено: K»; без выключенных — только счёт', () => {
+    expect(classesHeaderText(20, 3)).toBe('Классов: 20 · выключено: 3');
+    expect(classesHeaderText(20, 0)).toBe('Классов: 20');
+  });
+
+  it('рамка списка: предел высоты LIST_MAX_H, своя прокрутка; шапка закреплена, со счётом и бейджем', async () => {
+    const c = render();
+    await settle();
+    const frame = findNodeByAttr(c, 'data-testid', 'wiki-apply-classes')!;
+    const st = styleOf(frame);
+    expect(st.maxHeight).toBe(LIST_MAX_H);
+    expect(st.overflowY).toBe('auto');
+    expect(st.overscrollBehavior).toBe('contain');
+    const hdr = findNodeByAttr(frame, 'data-testid', 'wiki-apply-classes-header')!;
+    const hs = styleOf(hdr);
+    expect(hs.position).toBe('sticky');
+    expect(hs.top).toBe(0);
+    // 1 выключенный из 2 классов: счёт и бейдж — как их видит человек в списке
+    expect(has(hdr, 'Классов: 2 · выключено: 1')).toBe(true);
+    expect(has(hdr, 'выключено 1')).toBe(true);
+  });
+
+  it('нет выключенных классов: в шапке только счёт, бейджа нет', async () => {
+    server = { ...SETTINGS, classes: [CLS_ON] };
+    const c = render();
+    await settle();
+    const hdr = findNodeByAttr(c, 'data-testid', 'wiki-apply-classes-header')!;
+    expect(has(hdr, 'Классов: 1')).toBe(true);
+    expect(has(hdr, 'выключено')).toBe(false);
+  });
+
+  it('выключенные классы поднимаются выше включённых; внутри группы — порядок как пришёл с бэка', async () => {
+    // бэковый порядок: сначала включённый append, потом два выключенных — список обязан
+    // поднять выключенных наверх, сохранив их взаимный порядок (без disabledFirst append
+    // остался бы первым: мутации 11–12)
+    server = { ...SETTINGS, classes: [CLS_ON, OFF_NOTE, CLS_OFF] };
+    const c = render();
+    await settle();
+    const ts = texts(c);
+    const iNote = ts.indexOf('note × create');
+    const iCreate = ts.indexOf('session × create');
+    const iAppend = ts.indexOf('session × append');
+    expect(iNote).toBeGreaterThanOrEqual(0);
+    expect(iNote).toBeLessThan(iCreate);
+    expect(iCreate).toBeLessThan(iAppend);
+    // счёт шапки — по строкам: 3 класса, 2 выключено
+    const hdr = findNodeByAttr(c, 'data-testid', 'wiki-apply-classes-header')!;
+    expect(has(hdr, 'Классов: 3 · выключено: 2')).toBe(true);
+  });
+
+  it('агрегат считается одним классом: его состояние «выключен» — когда выключена любая запись', async () => {
+    server = { ...SETTINGS, classes: [HUMAN_OFF_CONFLICT, HUMAN_ON_NOTE] };
+    const c = render();
+    await settle();
+    const hdr = findNodeByAttr(c, 'data-testid', 'wiki-apply-classes-header')!;
+    expect(has(hdr, 'Классов: 1 · выключено: 1')).toBe(true);
+    expect(has(hdr, 'выключено 1')).toBe(true);
   });
 });

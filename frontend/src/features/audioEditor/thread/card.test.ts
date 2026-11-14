@@ -19,7 +19,7 @@ import { lruGet, lruSet, normalizeJoint } from '../player/peaks';
 import { dropNode } from '../player/StemMixer';
 import { mixStems, saveVersion } from './actions';
 import {
-  abSides, doneText, extraFiles, launchEndNote, licenseBadge, midiFileOf, orderedVersions, priceText, saveKind,
+  abSides, doneText, extraFiles, launchEndNote, licenseBadge, midiFileOf, orderedVersions, priceText, saveLabel,
   splitSuggestion, stemsFolder, versionStems, versionTag,
 } from './model';
 import { __peaksCacheSize, __resetPeaksCache, CACHE_MAX, loadPeaks } from './serverPeaks';
@@ -200,12 +200,14 @@ describe('карточка: сохранение', () => {
     expect(await saveVersion('p1', 's1', t, 'v2', { folder: '', fileName: 'a' })).toMatchObject({ ok: false, suggestion: null });
   });
 
-  it('личный чат: кнопка — «Скачать», сохранение в проект не уходит на сервер', async () => {
-    expect(saveKind(true)).toBe('download');
-    expect(saveKind(false)).toBe('project');
-    const save = vi.spyOn(audioApi, 'save');
-    expect(await saveVersion('personal', 's1', t, 'v2')).toMatchObject({ ok: false });
-    expect(save).not.toHaveBeenCalled();
+  it('личный чат: «Сохранить» уходит на личную ручку нити, подпись — «в Личное»', async () => {
+    vi.stubGlobal('window', { dispatchEvent: () => true });
+    const save = vi.spyOn(audioApi, 'save').mockResolvedValue({ path: 'audio/intro.mp3', files: ['audio/intro.mp3'] });
+    expect(await saveVersion('personal', 's1', t, 'v2')).toEqual({ ok: true, path: 'audio/intro.mp3' });
+    expect(save).toHaveBeenCalledWith('personal', 's1', t.id, expect.objectContaining({ versionId: 'v2' }));
+    expect(saveLabel(true)).toBe('Сохранить в Личное');
+    expect(saveLabel(false)).toBe('Сохранить в проект');
+    vi.unstubAllGlobals();
   });
 });
 

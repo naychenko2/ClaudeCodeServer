@@ -31,8 +31,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// DenyContentWrite в TurnRightExtensions); доработка QA-P1 (возврат Глеба a21170f7): тот же PUT
 /// в сессии открывает WriteContent только на name и tags — срок жизни, мьют уведомлений, озвучка
 /// и opt-out «Не сохранять решения» остаются настройками владельца (403 owner_settings);
-/// удаление (DELETE /api/projects/{p}/sessions/{id}) —
-/// автор чата (CreatedByUserId; nil — автор неизвестен и автором не считается) или владелец проекта.
+/// удаление (DELETE /api/projects/{p}/sessions/{id}) — W4-C1 (решение Андрея, 12.11): общий чат
+/// удаляет только владелец проекта; автор своего приватного (PrivateToUserId == CreatedByUserId) — по-прежнему.
 /// Читатель — ничего (403 project_scope), посторонний и чужой приватный — 404: существование
 /// не раскрываем, решение о праве идёт ПОСЛЕ проверки видимости.
 /// Стенд — как у ChatVisibilityEndpointTests: контроллеры напрямую, стор сессий сидируется
@@ -99,8 +99,8 @@ public sealed class ChatWriteRightsEndpointTests : IDisposable
             new ProjectMember { UserId = _readerId, Role = ProjectRole.Reader, AddedBy = _ownerId },
         ]);
 
-        // Авторские сиды — с CreatedByUserId: право удаления решается по нему (nil — fail-closed,
-        // чат без автора удаляет только владелец). Приватные — с флагом opt-out true (инвариант
+        // Авторские сиды — с CreatedByUserId: по нему решается право автора удалить свой приватный
+        // (nil — fail-closed; общий чат удаляет только владелец — W4-C1). Приватные — с флагом opt-out true (инвариант
         // PrivateToUserId != null ⇒ ExcludeFromDossiers == true, S2d-7a)
         WriteSessions(sessionsJsonPath, [
             new Session { Id = OwnerChatId, ProjectId = _projectId, CreatedByUserId = _ownerId, Status = SessionStatus.Finished },
@@ -386,18 +386,31 @@ public sealed class ChatWriteRightsEndpointTests : IDisposable
         s.Tags.Should().Equal("метка");
     }
 
-    // ── удаление: автор чата или владелец проекта ─────────────────────────────────
+    // ── удаление: общий — только владельцу проекта, свой приватный — автору (W4-C1, 12.11) ──
 
     [Fact]
-    public async Task АвторУдаляетСвойОбщийИПриватныйЧат_204()
+    public async Task РедакторНеУдаляетСвойОбщийЧат_403notChatAuthor_ЧатЖив_СвойПриватный_204()
     {
         var c = SessionsAs(_editorId);
 
-        Read(await c.Delete(_projectId, EditorChatId)).Status.Should().Be(204);
-        _sessions.GetById(EditorChatId).Should().BeNull();
+        // W4-C1 (решение Андрея, 12.11): общий чат удаляет только владелец проекта, даже если
+        // создал его редактор; отказанный отказ не трогает чат — GET остаётся 200
+        Read(await c.Delete(_projectId, EditorChatId)).Should().Be((403, "not_chat_author"));
+        Read(ChatsAs(_editorId).Get(EditorChatId)).Status.Should().Be(200, "чат жив после отказанного удаления");
 
+        // Автор своего приватного чата удаляет его по-прежнему: владелец чужой приватный не видит
         Read(await c.Delete(_projectId, EditorPrivateId)).Status.Should().Be(204);
         _sessions.GetById(EditorPrivateId).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task РедакторНеУдаляетСвойОбщийЧатПоApiChats_403notChatAuthor_ЧатЖив()
+    {
+        // Вторая дверь (ChatsController.Delete, DELETE /api/chats/{id}) — не правится W4-C1: она
+        // пускает только владельца чата вне проекта (OwnedChat); проектную — участнику прежний
+        // 403 not_chat_author. Контрольный случай: обе двери об одном чате согласны
+        Read(await ChatsAs(_editorId).Delete(EditorChatId)).Should().Be((403, "not_chat_author"));
+        _sessions.GetById(EditorChatId).Should().NotBeNull("отказ второй двери не трогает чат");
     }
 
     [Fact]

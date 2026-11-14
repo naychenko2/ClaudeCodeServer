@@ -8,7 +8,7 @@
 
 import { useState, type ReactNode } from 'react';
 import {
-  AlertTriangle, ChevronDown, ChevronUp, Download, Expand, MoreHorizontal, RotateCcw, Save, ScanFace, Sparkles, Target, X,
+  AlertTriangle, ChevronDown, ChevronUp, Download, Expand, MoreHorizontal, RotateCcw, Save, ScanFace, SlidersHorizontal, Sparkles, Target, X,
 } from 'lucide-react';
 import {
   Badge, Button, Dot, IconButton, Menu, MenuItem, Notice, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
@@ -18,7 +18,7 @@ import {
   faceResultRows, facePairsCaption, launchFaces, partialNotice, passStage, versionSimilarityShown,
   type FaceResultRow, type PassSegment,
 } from './faceSwap';
-import { modelLabel } from '../faceSwapView';
+import { launchModelText, modelLabel, variantProgressText } from '../faceSwapView';
 import type { ImageThreadFaceTarget } from './threadsApi';
 import { useCharacters } from '../characters/useCharacters';
 import { useCatalog } from './catalog';
@@ -26,20 +26,21 @@ import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { enterScope, isPersonalScope } from '../scope';
 import { saveToProject, versionSaved } from './actions';
-import { download, PERSONAL_DOWNLOAD_HINT } from './download';
+import { download } from './download';
 import {
   downloadName, findVersion, fromVersion, launchEndNote, launchOf, launchVersions, ORIGIN,
-  threadName, versionDone, versionHasImage, versionMeta, versionName, versionPrimary, versionStep,
+  threadName, versionDone, versionHasImage, versionMeta, saveLabel, versionName, versionPrimary, versionStep,
 } from './model';
 import { recordOf } from './records';
 import { CharacterPhotosStrip } from './CharacterPhotosStrip';
+import { RefinePanel } from './RefinePanel';
 import { TouchHit } from '../TouchHit';
 import { openEditor, useThreads } from './threadStore';
 import type { ImageThread, ImageThreadVersion } from './threadsApi';
 import { launchThread, versionSrc } from './useThreadLaunch';
 import { CardContextActions, primaryVersion, useCardFill, useFocusedThreadId } from '../context/CardFill';
 import { queueText, useJobStatus, useProgress } from './useJobStatus';
-import { GpuQueueBlock } from './gpuCard';
+import { GpuQueueBlock, showQueueLine } from './gpuCard';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -162,7 +163,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const character = stripVisible({ versionId: version.id, cropNote: cropNote ?? null, character: launch?.character ?? null })
     ? (launch?.character ?? null) : null;
   const personal = isPersonalScope(projectId);
-  const primary = versionPrimary(thread, version, focused, saved, personal);
+  const primary = versionPrimary(thread, version, focused, saved);
   const save = () => { if (src) void download(src, mime => downloadName(thread, version, mime)); };
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); await fn(); setBusy(false); };
   const open = () => openEditor(sessionId, thread.id, version.id);
@@ -180,8 +181,10 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const metaTitle = sim === 'лицо не найдено' ? `${meta} — сходство не посчитано` : meta;
   const faceCatalog = useCatalog(projectId);
   const faceLocal = faceCatalog ? (faceCatalog.providers.find(p => p.key === 'local')?.available ?? true) : false;
-  const faceEntryVisible = !personal && (faceChars?.length ?? 0) > 0 && faceLocal;
+  const faceEntryVisible = (faceChars?.length ?? 0) > 0 && faceLocal;
   const [faceMenu, setFaceMenu] = useState(false);
+  // «Доводка» (Ш8): только у версии, нарисованной Fibo 2.0 с JSON-описанием сцены
+  const [refine, setRefine] = useState(false);
 
   return (
     <Shell current={current} testId={String(version.number)}
@@ -198,7 +201,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           </Badge>
         )}
         {current && <Badge size="xs" tone="accent" icon={ic(Target)}>{fill.byAgent ? 'В работе ✦' : 'В работе'}</Badge>}
-        {!personal && <Badge size="xs" tone={saved ? 'success' : 'warning'}>{saved ? 'в проекте' : 'черновик'}</Badge>}
+        <Badge size="xs" tone={saved ? 'success' : 'warning'}>{saved ? (personal ? 'в «Личном»' : 'в проекте') : 'черновик'}</Badge>
       </div>
       {done && <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{done}</div>}
       <Picture src={src} onOpen={open} />
@@ -221,17 +224,19 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
         {primary === 'save' && (
           <Button size="xs" variant="secondary" leftIcon={ic(Save)} disabled={busy}
             onClick={() => { void run(() => saveToProject(projectId, sessionId, thread, versionStep(thread, version))); }}>
-            Сохранить в проект
-          </Button>
-        )}
-        {primary === 'download' && src && (
-          <Button size="xs" variant="secondary" leftIcon={ic(Download)} title={personal ? PERSONAL_DOWNLOAD_HINT : undefined} onClick={save}>
-            Скачать
+            {saveLabel(personal)}
           </Button>
         )}
         <CardContextActions sessionId={sessionId} projectId={projectId} thread={thread} versionId={version.id} fill={fill} />
+        {version.vgl && (
+          <Button size="xs" variant={refine ? 'primary' : 'secondary'} leftIcon={ic(SlidersHorizontal)}
+            title="Поменять одно: свет, ракурс, одежду или цвет, фон, стиль — остальная сцена останется"
+            onClick={() => setRefine(v => !v)}>
+            Доводка
+          </Button>
+        )}
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
-          {src && primary !== 'download' && (
+          {src && (
             <IconButton size="xs" title="Скачать" ariaLabel="Скачать" onClick={save}>
               {ic(Download)}
             </IconButton>
@@ -251,6 +256,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           )}
         </span>
       </div>
+      {refine && version.vgl && <RefinePanel projectId={projectId} sessionId={sessionId} thread={thread} version={version} />}
     </Shell>
   );
 }
@@ -284,8 +290,10 @@ function estimateText(e: unknown): string | null {
   return `${x.approx ? '≈ ' : ''}${money(x.amount, x.unit)}`;
 }
 
-function RunningLine({ projectId, sessionId, thread, jobId, model, faces, count }: {
-  projectId: string; sessionId: string; thread: ImageThread; jobId: string; model: string | null;
+function RunningLine({ projectId, sessionId, thread, jobId, liveModel, faces, count }: {
+  projectId: string; sessionId: string; thread: ImageThread; jobId: string;
+  // «идёт на …»: живая модель задачи разошлась с записью запуска; совпала — null
+  liveModel: (live: string | null) => string | null;
   faces: ImageThreadFaceTarget[]; count: number;
 }) {
   const { status, cancel } = useJobStatus(projectId, jobId);
@@ -294,18 +302,22 @@ function RunningLine({ projectId, sessionId, thread, jobId, model, faces, count 
   const progress = useProgress(status, running);
   // Несколько лиц (ADR-028): «Проход k из N · лицо n» по run/runs из событий задачи; их нет — «Рисуем…»
   const stage = passStage(faces, status?.run, status?.runs);
+  // Несколько вариантов — один общий прогресс: номер варианта текстом, а не полосой на вариант
+  const head = ['Рисуем…', variantProgressText(status?.run, status?.runs), liveModel(status?.model ?? null)]
+    .filter(Boolean).join(' · ');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textSecondary, flexWrap: 'wrap' }}>
-        <Dot color={C.accent} />{stage ? stage.text : `Рисуем…${model ? ` · ${model}` : ''}`}{queueText(progress.queuePosition)}
+        <Dot color={C.accent} />{stage ? stage.text : head}{queueText(progress.queuePosition)}
         {/* Мобила: зона касания 44 — невидимым слоем, рамка кнопки xs остаётся 24 и не наезжает на полосу проходов (n1) */}
         <TouchHit on={mobile} onTap={() => { void cancel(); }}>
           <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
         </TouchHit>
       </div>
+      {/* Одна полоса на запуск: у локальной задачи полосу несёт строка очереди GPU ниже — своя была бы второй */}
       {stage
         ? <PassBar segments={stage.segments} run={status?.run ?? 0} />
-        : <ProgressBar value={progress.percent} transition="width .5s linear" />}
+        : !showQueueLine(status?.gpu ?? null) && <ProgressBar value={progress.percent} transition="width .5s linear" />}
       {stage?.hint && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{stage.hint}</div>}
       <GpuQueueBlock projectId={projectId} sessionId={sessionId} thread={thread} status={status}
         count={count} />
@@ -337,8 +349,13 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const launch = launchOf(thread, jobId);
   const versions = launchVersions(thread, jobId);
   const focused = focusId === thread.id;
-  // Подпись модели: человекочитаемая из каталога (локальные — «локальные модели»), не id (v2)
-  const model = modelLabel(catalog, str(data.model));
+  // Подпись модели: та, что отработала (запись запуска; запасная — «вместо …»), имя из каталога и причина «Авто»
+  const quoted = str(data.model);
+  const model = launchModelText(catalog, launch?.model, quoted, launch?.routeReason);
+  // Драйвер ушёл на запасную раньше первого варианта: запись запуска ещё о модели котировки, статус — уже о фактической
+  const recorded = launch?.model ?? quoted;
+  const liveModel = (live: string | null) =>
+    live && recorded && live !== recorded ? `идёт на ${modelLabel(catalog, live)}` : null;
   const count = typeof data.count === 'number' && data.count > 0 ? data.count : 1;
   const prompt = str(data.prompt) ?? launch?.prompt ?? null;
   const base = findVersion(thread, str(data.baseVersionId) ?? launch?.baseVersionId);
@@ -353,7 +370,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const status = launch?.status ?? (versions.length ? 'done' : 'running');
   const endNote = launchEndNote(status, versions.length, count, faces.length);
   // Обрезка без ИИ (ADR-025): та же карточка версии, над ней строка «Вы обрезали…» / «✦ Claude обрезал…» из записи
-  const crop = model === 'crop' ? data.crop as { aspect?: string; width?: number; height?: number } | undefined : undefined;
+  const crop = quoted === 'crop' ? data.crop as { aspect?: string; width?: number; height?: number } | undefined : undefined;
   const cropNote = crop ? `${crop.width}×${crop.height} · ${crop.aspect} · обрезано без ИИ${agent ? ' · ✦ Claude' : ''}` : null;
 
   const workingId = thread.id === focusId && primary ? primaryVersion(primary, thread) : null;
@@ -386,7 +403,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
             <span>{threadName(thread)}{faceCap ? ` · ${faceCap}` : ''} · {info}</span>
             {prompt && <span style={{ color: C.textMuted, fontStyle: 'italic', overflowWrap: 'anywhere' }}>«{prompt}»</span>}
           </div>
-          <RunningLine projectId={projectId} sessionId={sessionId} thread={thread} jobId={jobId} model={model} faces={faces}
+          <RunningLine projectId={projectId} sessionId={sessionId} thread={thread} jobId={jobId} liveModel={liveModel} faces={faces}
             count={count} />
           <div className="cc-skel" style={{ aspectRatio: PREVIEW_RATIO, maxHeight: PREVIEW_MAX_HEIGHT, borderRadius: R.md }} />
         </Shell>

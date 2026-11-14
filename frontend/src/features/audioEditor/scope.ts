@@ -20,3 +20,19 @@ export const chatBase = (scope: string, sessionId: string) =>
   isPersonalScope(scope)
     ? audioBase(scope, sessionId)
     : `${audioBase(scope, sessionId)}/sessions/${encodeURIComponent(sessionId)}`;
+
+// Ручки библиотеки голосов без sessionId в сигнатуре (создание, правка, образцы) в личной области висят
+// на чате: «Личное» одно на владельца, любой его личный чат подходит. Точка входа вкладки «Голоса»
+// запоминает свой чат синхронно в рендере, до эффектов с запросами
+let _personalChat: string | null = null;
+
+export function enterVoicesScope(scope: string, sessionId: string | null): void {
+  if (isPersonalScope(scope) && sessionId) _personalChat = sessionId;
+}
+
+export const voicesScopeBase = (scope: string) => audioBase(scope, isPersonalScope(scope) ? _personalChat : null);
+
+// Сброс — только для тестов
+export function __resetVoicesScope() {
+  _personalChat = null;
+}

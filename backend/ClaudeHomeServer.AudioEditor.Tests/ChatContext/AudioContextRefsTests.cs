@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.AudioEditor.Prefs;
 using ClaudeHomeServer.Services.AudioEditor.Threads;
 using ClaudeHomeServer.Services.AudioEditor.Voices;
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.Composition;
 using FluentAssertions;
 using Moq;
 
@@ -54,6 +55,31 @@ public sealed class AudioContextRefsTests : IDisposable
 
     private string NewVoice(string name = "Аня") =>
         VoiceStore.CreateFromSamples(_project, name, null, [new VoiceSampleUpload(Wav)], DateTime.UtcNow).Value!.Manifest.Slug;
+
+    private PersonalFolderResolver PersonalFolder(bool withFolder)
+    {
+        var store = new Mock<IPersonalProjects>();
+        store.Setup(s => s.GetPersonalOf(Owner)).Returns(withFolder
+            ? new Project { Id = "personal-id", OwnerId = Owner, RootPath = _project, Kind = ProjectKind.Personal }
+            : null);
+        return new PersonalFolderResolver(store.Object);
+    }
+
+    [Fact]
+    public void Голос_личного_чата_с_папкой_Личное_принимается_а_без_папки_прежний_отказ()
+    {
+        var slug = NewVoice();
+        var withFolder = new AudioContextKind(_threads, null, null, PersonalFolder(true));
+        var withoutFolder = new AudioContextKind(_threads, null, null, PersonalFolder(false));
+        var item = new ContextItem("v", "audio-voice", Slug(slug), null, ContextActor.Human, DateTime.UtcNow);
+
+        withFolder.Validate(Personal, "audio-voice", Slug(slug)).Should().BeNull();
+        withFolder.Validate(Personal, "audio-voice", Slug("net-takogo")).Should().Contain("не найден");
+        withFolder.Describe(Personal, item).Missing.Should().BeFalse();
+        withoutFolder.Validate(Personal, "audio-voice", Slug(slug)).Should().Contain("личном чате");
+        var projectChat = new ContextScope(Owner, new Session { Id = Chat, OwnerId = Owner, ProjectId = "p-2" }, null);
+        withFolder.Validate(projectChat, "audio-voice", Slug(slug)).Should().Contain("личном чате");
+    }
 
     [Fact]
     public void Validate_голоса_принимает_свой_и_отказывает_пропавшему_битому_и_личному_чату()

@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,7 +15,8 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize(Roles = "admin")]
 public class UsersController(UserStore users, SessionManager sessions,
     UserKnowledgeCascade knowledgeCascade, DefaultAssistantProvisioner provisioner,
-    ProjectMembershipService membership, ILogger<UsersController> logger) : ControllerBase
+    ProjectMembershipService membership, IPersonalProjects personalProjects,
+    ILogger<UsersController> logger) : ControllerBase
 {
     private static readonly Regex UsernameRegex = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
 
@@ -125,6 +127,10 @@ public class UsersController(UserStore users, SessionManager sessions,
         if (user is not null)
             try { await knowledgeCascade.CleanupAsync(user.Id, user.Username); }
             catch (Exception ex) { logger.LogWarning(ex, "Каскад знаний при удалении пользователя {User}", id); }
+
+        // «Личное»: запись стора удаляется, папка на диске остаётся (ADR-040 §3)
+        try { personalProjects.DeleteOf(id); }
+        catch (Exception ex) { logger.LogWarning(ex, "Удаление записи «Личного» пользователя {User}", id); }
 
         return NoContent();
     }

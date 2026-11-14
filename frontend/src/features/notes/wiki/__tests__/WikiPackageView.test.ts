@@ -8,12 +8,14 @@
 //  (1) quotes.map → quotes.slice(0, 1) → «цитаты — по порядку» краснеет;
 //  (2) убрать условие kind === 'state' у asOf → «kind=decision без даты» краснеет;
 //  (3) печатать op.text всегда (убрать text !== claim) → «утверждение один раз» краснеет;
-//  (4) вернуть поиск PAGE_TYPE без lower-case op.kind → «kind='State'» краснеет.
+//  (4) вернуть поиск PAGE_TYPE без lower-case op.kind → «kind='State'» краснеет;
+//  (5) снять метку ожидания в бейдже режима судьи (последняя ветка decidedBadge → null) →
+//      «допустительная — «вердикта ещё нет» без кнопок» краснеет (доработка J-F1, финал 9c305f19).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mount, installFakeDom, uninstallFakeDom, textNodes, findNodeByAttr } from '../../../../components/chat/__tests__/fakeDom';
+import { mount, installFakeDom, uninstallFakeDom, textNodes, findNodeByAttr, reactProps } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiPackageView } from '../WikiPackageView';
 
 vi.mock('../../../../lib/signalr', async (orig) => ({
@@ -27,6 +29,9 @@ vi.mock('../../../../lib/offline', async (orig) => ({
   request: vi.fn(() => Promise.resolve(null)),
   readStoredUserId: vi.fn(() => 'u1'),
 }));
+
+import { request } from '../../../../lib/offline';
+const req = request as unknown as ReturnType<typeof vi.fn>;
 
 const op = (over: Record<string, unknown>) => ({
   index: 0, op: 'supersede', page: 'projects/p1/gleb', target: 'Глеб ревьюит только бэкенд.',
@@ -147,5 +152,107 @@ describe('карточка операции: доказательства (Ш6b)
     expect(findNodeByAttr(c, 'data-testid', 'wiki-op-evidence')).toBeNull();
     expect(all(c)).not.toContain('Утверждение:');
     expect(all(c)).not.toContain('Цитаты:');
+  });
+});
+
+// ─── Режим судьи (доработка J-F1, финал 9c305f19) ───
+// Экран открывается и в режиме судьи — когда в пакете есть операции вне его допуска
+// (autoapply_off, без кода): кнопки получают только они; допустительные нерешённые ждут
+// прохода («вердикта ещё нет»), вердикт — без кнопок (И1). «Принять всё» решает все
+// нерешённые разом — в режиме судьи только когда всё нерешённое вне допуска.
+
+const opRowNodes = (c: Node) => {
+  const out: Node[] = [];
+  const walk = (x: Node) => {
+    if (x.getAttribute?.('data-testid') === 'wiki-op-row') out.push(x);
+    for (const ch of x.childNodes) walk(ch);
+  };
+  walk(c);
+  return out;
+};
+const rowText = (n: Node) => textNodes(n).map(t => t.trim()).filter(Boolean).join(' ');
+
+function renderOps(ops: Record<string, unknown>[], judgeMode?: boolean) {
+  installFakeDom();
+  const p = {
+    id: 'p1', section: 'projects/p1', status: 'proposed', statusReason: null,
+    createdAt: '2026-10-30T03:10:00Z', updatedAt: '2026-10-30T03:10:00Z',
+    sources: [{ origin: 'session', ref: 's1' }], operations: ops,
+  };
+  const { root, container } = mount(createElement(WikiPackageView, { pkg: p as never, judgeMode, onBack: () => {} }));
+  roots.push(root);
+  return container;
+}
+
+describe('режим судьи: кнопки только у операций вне допуска (доработка J-F1)', () => {
+  // op0 — autoapply_off (вне допуска), op1 — допущена и ещё не решена, op2 — вердикт судьи
+  const MIXED = [
+    op({ reasonCode: 'autoapply_off' }),
+    op({ index: 1, reasonCode: 'overrides_human' }),
+    op({ index: 2, reasonCode: 'overrides_human', judgeDecision: 'rejected', judgeModel: 'claude-x', judgeReason: 'числа не подтверждены цитатой' }),
+  ];
+
+  it('режим судьи: вне допуска — с кнопками; допустительная — «вердикта ещё нет» без кнопок; вердикт — без кнопок', () => {
+    const c = renderOps(MIXED, true);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-accept-0')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-reject-0')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-accept-1')).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-reject-1')).toBeNull();
+    const rows = opRowNodes(c);
+    expect(rows).toHaveLength(3);
+    expect(rowText(rows[1])).toContain('вердикта ещё нет');
+    expect(rowText(rows[2])).toContain('отклонена судьёй');
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-accept-2')).toBeNull();
+  });
+
+  it('без режима судьи (регресс): тот же пакет — кнопки у всех нерешённых, метки ожидания нет', () => {
+    const c = renderOps(MIXED);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-accept-0')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-accept-1')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-accept-2')).toBeNull();
+    expect(all(c)).not.toContain('вердикта ещё нет');
+  });
+
+  it('режим судьи: «Принять всё» — нет для смешанного пакета, да когда всё нерешённое вне допуска', () => {
+    const out1 = op({ reasonCode: 'autoapply_off' });
+    const out2 = op({ index: 1, op: 'append', page: 'projects/p1/vera', target: null, text: 'Вера ведёт QA.', class: 'session×append', reasonCode: 'autoapply_off' });
+    const admitted = op({ index: 2, reasonCode: 'overrides_human' });
+    // смешанный: две человеческие + одна судьи — оптом забрать судью нельзя
+    const c1 = renderOps([out1, out2, admitted], true);
+    expect(findNodeByAttr(c1, 'data-testid', 'wiki-pkg-accept-all')).toBeNull();
+    // тот же пакет без допустительной — «Принять всё» на прежнем месте
+    const c2 = renderOps([out1, out2], true);
+    expect(findNodeByAttr(c2, 'data-testid', 'wiki-pkg-accept-all')).not.toBeNull();
+  });
+});
+
+// ─── Плашка смешанного пакета (T2): часть решена — остальные ещё ждут человека ───
+// apply=null ровно когда применять нечего: статус остался proposed. Плашка подтверждает,
+// что решение записано, и называет оставшуюся долю: заголовок «Решение записано. Ещё N
+// спорных ждут вас», текст «Они ниже — решите их, и пакет применится целиком.»
+// (формулировки — из карточки T2; условие показа плашки не менялось).
+
+async function settle(times = 10) {
+  for (let i = 0; i < times; i++) await act(async () => { await Promise.resolve(); });
+}
+
+describe('плашка смешанного пакета: решение записано, остальные ждут (T2)', () => {
+  it('решение одной из трёх (apply=null): «Решение записано. Ещё 2 спорных ждут вас»', async () => {
+    const three = [op({}), op({ index: 1 }), op({ index: 2 })];
+    // ответ бэка на «Принять» по op0: op0 решена человеком, op1–op2 остались,
+    // apply=null (применять нечего — статус остался proposed)
+    const afterFirst = { ...pkg({}), operations: [op({ humanDecision: 'accepted' }), op({ index: 1 }), op({ index: 2 })] };
+    req.mockImplementation((_url: string, init?: { method?: string }) =>
+      init?.method === 'POST' ? Promise.resolve({ package: afterFirst, apply: null }) : Promise.resolve(null));
+    const c = renderOps(three);
+    await settle();
+    const accept = findNodeByAttr(c, 'data-testid', 'wiki-op-accept-0');
+    expect(accept).not.toBeNull();
+    act(() => { (reactProps(accept!) as { onClick: (e: unknown) => void }).onClick(undefined); });
+    await settle();
+    expect(all(c)).toContain('Решение записано. Ещё 2 спорных ждут вас');
+    expect(all(c)).toContain('Они ниже — решите их, и пакет применится целиком.');
+    // транспорт возвращаем к прежнему поведению файла — следующий тест не наследует мок
+    req.mockImplementation(() => Promise.resolve(null));
   });
 });

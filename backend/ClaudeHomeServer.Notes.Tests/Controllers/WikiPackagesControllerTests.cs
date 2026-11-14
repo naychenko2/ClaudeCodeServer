@@ -271,6 +271,107 @@ public class WikiPackagesControllerTests : IDisposable
         }
     }
 
+    // ─── 4c. Список пакетов отдаёт поля вердикта судьи (дефект 67cd64d0) ────
+
+    [Fact]
+    public void СписокПакетов_ОтдаётПоляСудьи_БезВердиктаNull()
+    {
+        // Фронт читает вердикт из списка пакетов (lib/wiki.ts: judgeDecision/judgeReason/
+        // judgeModel/judgeAt/judgeCostUsd), вкладка «Решения» опирается ровно на эти имена.
+        // Дефект 67cd64d0: DTO списка не нёс полей судьи — вкладка писала «вердикта ещё нет»
+        // у каждой операции, хотя вердикт в файле пакета был (вид journal?view=night их
+        // отдавал). Мутация «Dto() не несёт o.JudgeDecision» (подставить null) — проверка
+        // judgeDecision ниже краснеет.
+        var judgeAt = new DateTimeOffset(2026, 11, 11, 3, 40, 0, TimeSpan.Zero);
+        var judged = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpSupersede,
+            Page = Page,
+            Text = Claim,
+            Target = OldClaim,
+            Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede),
+            Decision = WikiPackage.DecisionInbox,
+            Reason = "замещает действующее утверждение",
+            ReasonCode = WikiApplyPolicy.CodeOverridesHuman,
+            BaseHashes = new Dictionary<string, string> { [Page] = Hash },
+            JudgeDecision = WikiPackage.HumanRejected,
+            JudgeReason = "утверждение противоречит источнику",
+            JudgeModel = "claude-sonnet-4.5",
+            JudgeAt = judgeAt,
+            JudgeCostUsd = 0.0042m,
+        };
+        var judgedId = NewPackage(WikiPackage.StatusProposed, "common", judged);
+        var plainId = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox));
+
+        // Тот же контракт транспорта, что у MVC-ответа (JsonSerializerDefaults.Web):
+        // проверяется форма ответа списка, а не C#-объект маппинга (образец — 4b выше).
+        var dto = ((OkObjectResult)Controller().List(true)).Value
+            .Should().BeAssignableTo<WikiPackagesDto>().Which;
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(dto, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        // Имена полей — camelCase от имён свойств: по этим строкам их читает фронт.
+        var op = OperationOf(doc, judgedId);
+        op.GetProperty("judgeDecision").GetString().Should().Be(WikiPackage.HumanRejected);
+        op.GetProperty("judgeReason").GetString().Should().Be("утверждение противоречит источнику");
+        op.GetProperty("judgeModel").GetString().Should().Be("claude-sonnet-4.5");
+        DateTimeOffset.Parse(op.GetProperty("judgeAt").GetString()!).ToUniversalTime().Should().Be(judgeAt);
+        op.GetProperty("judgeCostUsd").GetDecimal().Should().Be(0.0042m);
+
+        // Операция без вердикта: все пять полей есть в JSON как null — не отсутствие поля
+        // (та же форма, что у claim/quotes в 4b: фронт различает «вердикта нет» и «ответа нет»).
+        var plain = OperationOf(doc, plainId);
+        foreach (var name in new[] { "judgeDecision", "judgeReason", "judgeModel", "judgeAt", "judgeCostUsd" })
+        {
+            plain.TryGetProperty(name, out var field).Should().BeTrue($"поле «{name}» есть в JSON");
+            field.ValueKind.Should().Be(JsonValueKind.Null, $"«{name}» — null, а не отсутствие поля");
+        }
+    }
+
+    // ─── 4d. Список пакетов отдаёт код причины операции (доработка J-F1) ────
+
+    [Fact]
+    public void СписокПакетов_ОтдаётReasonCode_БезКодаNull()
+    {
+        // Фронт (доработка 856f45e4) читает reasonCode и сравнивает его с перечнем
+        // JudgeAdmitted (WikiApplyPolicy.cs:62-64), чтобы отличить «ждёт человека» от
+        // «вне допуска». Дефект из ревью a92a9550: Dto() не нёс o.ReasonCode — в проде
+        // reasonCode undefined → любая нерешённая спорная считалась вне допуска.
+        // Мутация «Dto() не несёт o.ReasonCode» (подставить null) — проверка ниже краснеет.
+        var coded = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpSupersede,
+            Page = Page,
+            Text = Claim,
+            Target = OldClaim,
+            Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede),
+            Decision = WikiPackage.DecisionInbox,
+            Reason = "возможный дубль существующей страницы",
+            ReasonCode = WikiApplyPolicy.CodePageDuplicate,
+            BaseHashes = new Dictionary<string, string> { [Page] = Hash },
+        };
+        var codedId = NewPackage(WikiPackage.StatusProposed, "common", coded);
+        var plainId = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox));
+
+        // Тот же контракт транспорта, что у MVC-ответа (JsonSerializerDefaults.Web):
+        // проверяется форма ответа списка, а не C#-объект маппинга (образец — 4c выше).
+        var dto = ((OkObjectResult)Controller().List(true)).Value
+            .Should().BeAssignableTo<WikiPackagesDto>().Which;
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(dto, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        // Имя поля — camelCase от имени свойства: по этой строке его читает фронт, и литерал
+        // кода должен дойти ровно тем же — на нём держится сравнение с JudgeAdmitted.
+        var op = OperationOf(doc, codedId);
+        op.GetProperty("reasonCode").GetString().Should().Be(WikiApplyPolicy.CodePageDuplicate);
+
+        // Операция без кода (старый пакет): поле есть в JSON как null — не отсутствие поля
+        // (та же форма, что у judge* в 4c: фронт различает «кода нет» и «ответа нет»).
+        var plain = OperationOf(doc, plainId);
+        plain.TryGetProperty("reasonCode", out var field).Should().BeTrue("поле «reasonCode» есть в JSON");
+        field.ValueKind.Should().Be(JsonValueKind.Null, "«reasonCode» — null, а не отсутствие поля");
+    }
+
     // ─── 5. Нет пакета и нечитаемый файл — разные исходы ────────────────────
 
     [Fact]
@@ -488,8 +589,9 @@ public class WikiPackagesControllerTests : IDisposable
     [Fact]
     public async Task ПоследнееРешениеПринято_СтраницаЗаписана_ПакетApplied_ПричинаПуста()
     {
-        // Мутация «не вызывать ApplyAsync после решения» (снять вызов в AfterDecision):
-        // краснеет Applied/Status/файл страницы/журнал этого теста.
+        // Мутация «не вызывать ApplyAsync после решения» (снять вызов в
+        // WikiApplyService.ApplyDecidedAsync): краснеет Applied/Status/файл страницы/журнал
+        // этого теста.
         var id = await NewRealPackage([RealOp()]);
 
         var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
@@ -796,7 +898,8 @@ public class WikiPackagesControllerTests : IDisposable
         // Сбой, вышедший из ApplyAsync наружу (здесь — чужой формат владельца: Root бросает
         // ArgumentException до заявки), не даёт 500: «Входящие» отвечают результатом-отказом с
         // причиной, решения человека целы, пакет не двинут (ревью S4g, M3). Мутация «снять
-        // try/catch» в ApplyOutcomeAsync: тест падает с исключением, а не с ответом.
+        // try/catch» в WikiApplyService.ApplyGuardedAsync: тест падает с исключением, а не
+        // с ответом.
         var id = await NewRealPackage([RealOp()]);
         var root = WikiPaths.Root(_dir, User);
         var decided = WikiPackageStore.DecideOperation(root, id, 0, true, "подтверждаю");
@@ -817,12 +920,12 @@ public class WikiPackagesControllerTests : IDisposable
     {
         // «applying» без закрытия доводит только сторож старта; здесь сбой закрывается
         // переходом сразу (ревью S4g, M3). Мутация «не закрывать переходом» (убрать Transition
-        // в CrashedApply): StatusOnDisk краснеет — пакет остался бы в «applying».
+        // в WikiApplyService.CrashedApply): StatusOnDisk краснеет — пакет остался бы в «applying».
         var id = NewPackage(WikiPackage.StatusProposed, "common", Op(WikiPackage.OpAppend, WikiPackage.DecisionAuto));
         var root = WikiPaths.Root(_dir, User);
         WikiPackageStore.Transition(root, id, WikiPackage.StatusApplying).Ok.Should().BeTrue();
 
-        var r = WikiPackagesController.CrashedApply(root, id, new IOException("диск отказал"));
+        var r = WikiApplyService.CrashedApply(root, id, new IOException("диск отказал"));
 
         r.Applied.Should().BeFalse();
         r.Code.Should().Be(WikiApplyService.CodeInternal);
@@ -1278,6 +1381,70 @@ public class WikiPackagesControllerTests : IDisposable
         ((OkObjectResult)Controller(serviceToken: true).Get(id)).StatusCode.Should().Be(200);
     }
 
+    // ─── 14. Вердикт судьи через REST (J-J2b): он решение операции, а не её правка ──────
+    //
+    // И1: у спорной операции ровно одно решение. Человек не переворачивает вердикт вторым
+    // решением (409 с его путём), «принять всё» меняет только то, что ещё не решено, — а
+    // применяет после этого весь принятый пакет, включая принятые судьёй операции.
+
+    [Fact]
+    public async Task РешённуюСудьейОперациюНеРешаютВторично_409СПутемОтката()
+    {
+        // Мутация «не давать подсказку» (убрать ветку JudgeDecision в Refusal): Contain
+        // краснеет — человек читал бы «решение не меняется» без своего пути.
+        var id = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox),
+            Op(WikiPackage.OpConflict, WikiPackage.DecisionInbox, "Общее/Z.md"));
+        var root = WikiPaths.Root(_dir, User);
+        WikiPackageStore.JudgeOperations(root, id,
+            [new WikiPackageStore.JudgeOutcome(0, true, null, "judge-model", null)]).Ok.Should().BeTrue();
+        // Пакет ещё proposed: вторая спорная не решена никем.
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusProposed);
+
+        var obj = ((ObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, false, "не согласен")));
+        obj.StatusCode.Should().Be(409);
+        var body = JsonDocument.Parse(JsonSerializer.Serialize(obj.Value)).RootElement;
+        body.GetProperty("code").GetString().Should().Be(WikiPackageStore.CodeAlreadyDecided);
+        body.GetProperty("message").GetString().Should()
+            .Contain("решил судья; путь человека — откат пакета", "отказ по вердикту называет человеку его путь");
+
+        // Отказ ничего не меняет: вердикт цел, второго решения нет.
+        var after = WikiPackageStore.TryRead(root, id).Package!;
+        after.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanAccepted);
+        after.Operations[0].HumanDecision.Should().BeNull();
+        after.Operations[1].HumanDecision.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ПринятьВсёМеняетТолькоОткрытую_ВердиктСудьиНеТронут_ПакетПринятЦеликом()
+    {
+        // Мутация «accept-all решает и решённые судьёй» (убрать `o.JudgeDecision is null` из
+        // выборки AcceptAllContested): HumanDecision[0] краснеет — вердикт был бы перекрыт
+        // решением человека, т.е. у операции стало бы два решения (И1).
+        var id = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox),
+            Op(WikiPackage.OpConflict, WikiPackage.DecisionInbox, "Общее/Z.md"));
+        var root = WikiPaths.Root(_dir, User);
+        WikiPackageStore.JudgeOperations(root, id,
+            [new WikiPackageStore.JudgeOutcome(0, true, null, "judge-model", null)]).Ok.Should().BeTrue();
+
+        var dto = ((OkObjectResult)await Controller().AcceptAll(id)).Value
+            .Should().BeAssignableTo<WikiDecisionDto>().Which;
+        // Меняется только открытое: вердикт остаётся вердиктом (его полей в контракте фронта
+        // нет — J-J2a их туда не выносил, человек видит исход по статусу пакета).
+        dto.Package.Operations[0].HumanDecision.Should().BeNull();
+        dto.Package.Operations[1].HumanDecision.Should().Be(WikiPackage.HumanAccepted);
+        // Обе спорные решены → пакет принят: applying зовётся тем же запросом (здесь —
+        // отказан: вики этого владельца не заведена, решения целы на диске).
+        dto.Package.Status.Should().Be(WikiPackage.StatusAccepted);
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeOff);
+        var after = WikiPackageStore.TryRead(root, id).Package!;
+        after.Status.Should().Be(WikiPackage.StatusAccepted);
+        after.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanAccepted);
+        after.Operations[1].HumanDecision.Should().Be(WikiPackage.HumanAccepted);
+    }
+
     // Пакет боевой пробы: карточка и страница записаны Хранителем (манифест согласован —
     // применения без дрейфа нет), сам в proposed с одной спорной операцией. sourceRef —
     // карточка, которую называет пакет: с другой на диске это «нет карточки источника».
@@ -1435,6 +1602,13 @@ public class WikiPackagesControllerTests : IDisposable
 
     private static IReadOnlyList<WikiPackageDto> ListOf(IActionResult result) =>
         ((OkObjectResult)result).Value.Should().BeAssignableTo<WikiPackagesDto>().Which.Packages;
+
+    // Операция пакета в JSON ответа списка: поиск по id, а не по позиции — порядок ответа
+    // строится по CreatedAt, тест не должен зависеть от него.
+    private static JsonElement OperationOf(JsonDocument doc, string packageId) =>
+        doc.RootElement.GetProperty("packages").EnumerateArray()
+            .First(p => p.GetProperty("id").GetString() == packageId)
+            .GetProperty("operations")[0];
 
     private static void AssertCode(IActionResult result, int status, string code)
     {

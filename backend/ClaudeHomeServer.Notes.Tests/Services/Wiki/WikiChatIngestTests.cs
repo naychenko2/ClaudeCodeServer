@@ -1085,6 +1085,70 @@ public class WikiChatIngestTests : IDisposable
         llm.Calls.Should().BeEmpty("заявка с неведомым местом не доходит до модели");
     }
 
+    // ── W3 (И3 путь 2 + одно решение): исполнитель назван аргументом ────────────────────
+
+    [Fact]
+    public async Task Analyze_ИсполнительНеОтветил_ОтказСПричинойМаршрута_КурсорНеДвинут()
+    {
+        // engine проброшен по цепочке до CallModelAsync: null от RunOnLocalEngineDetailedAsync
+        // — отказ окна с причиной маршрута (ReasonLocalUnavailable + InputTokens == 0: по ним
+        // W5 отличает отказ движка от отказа плана), путь с выбором исполнителя и облако не
+        // званы, курсор чата не двинут.
+        // Мутация «engine никуда не доходит» (убрать проброс): заявка пошла бы путём ночи
+        // (RunLocalOrChosenAsync) и дала applied — EngineCalls пуст и исход красный.
+        AddSession("chat-engine");
+        SetShortHistory("chat-engine");
+        var llm = new FakeLlm(("S", Synth(Claim1)))
+        {
+            ExpectedActionKey = LocalActionCatalog.WikiNightly,
+            EngineDown = true,
+        };
+
+        var res = await Sut(llm).AnalyzeAsync(User, "chat-engine",
+            actionKey: LocalActionCatalog.WikiNightly, engine: "gemma");
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain(WikiIngestService.ReasonLocalUnavailable)
+            .And.NotContain("gemma", "имени движка в причине нет: их несколько (J-W2)");
+        res.InputTokens.Should().Be(0, "модель не ответила — понесённого расхода нет");
+        llm.EngineCalls.Should().ContainSingle(c => c.Engine == "gemma",
+            "путь к движку был, ответа не было — это отказ маршрута, не ответ модели");
+        llm.NoCloudKeys.Should().BeEmpty("пути с выбором исполнителя маршрутом здесь нет");
+        llm.CloudKeys.Should().BeEmpty("и в облако отказ не уходит");
+        WikiChatTriageStore.Get(Root).Entries
+            .Where(e => e.SessionId == "chat-engine")
+            .Should().NotContain(e => e.Cursor > 0, "курсор не двинут");
+    }
+
+    [Fact]
+    public async Task Гонка_ДвеЗаявкиРазнымиEngine_ОдинПрогон()
+    {
+        // Кнопка начала разбор (своего движка у неё нет); в середине её прогона приходит ночь
+        // с названным исполнителем. In-flight-ключ owner|chat|home ни места, ни исполнителя не
+        // содержит (шапка сервиса): одна задача на двоих, движок — того, кто пришёл первым.
+        // Мутация «engine входит в in-flight-ключ» → ReferenceEquals краснеет: тот же чат
+        // получил бы второй разбор и вторую модель.
+        AddSession();
+        SetShortHistory();
+
+        var gate = new TaskCompletionSource();
+        var llm = new FakeLlm(("S", Synth(Claim1))) { GateA = gate };
+        var sut = Sut(llm);
+
+        var t1 = sut.AnalyzeAsync(User, ChatId);
+        SpinWait.SpinUntil(() => llm.Calls.Count > 0, 5000).Should().BeTrue("первая заявка в прогоне");
+        var t2 = sut.AnalyzeAsync(User, ChatId, actionKey: LocalActionCatalog.WikiNightly, engine: "gemma");
+        ReferenceEquals(t1, t2).Should().BeTrue("один чат — та же задача: исполнитель в ключ не входит");
+
+        gate.SetResult();
+        var r1 = await t1;
+        var r2 = await t2;
+        r1.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, r1.Reason);
+        r2.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, r2.Reason);
+        llm.Calls.Should().HaveCount(1, "один прогон: модель ровно один раз");
+        llm.EngineCalls.Should().BeEmpty("присоединившаяся заявка своей моделью не оборачивается");
+    }
+
     // ── W3-6 F1: чужой и несуществующий чат — один message на двоих ──
 
     [Fact]
@@ -1275,6 +1339,22 @@ public class WikiChatIngestTests : IDisposable
         return windows[0].Lines[^1].Index;
     }
 
+    // Дельта из пяти окон: та же фикстура, что TwoWindowHistory, только длиннее — 63
+    // служебные реплики по 6000 знаков. Границы окон считает слайсер (WindowTokens 35k
+    // с перекрытием в 2 реплики), тест лишь проверяет число окон и берёт конец первого
+    // из них — как EndOfFirstWindow для двух.
+    private List<StoredMessage> FiveWindowHistory()
+    {
+        var history = new List<StoredMessage>
+        {
+            new StoredSessionStartedMessage("claude", "default"),
+            new StoredUserMessage($"{Claim1}. Хронология: {Marker1}."),
+        };
+        for (var i = 0; i < 63; i++) history.Add(new StoredTextMessage(new string('x', 6_000)));
+        history.Add(new StoredUserMessage("Хватит. Итога нет."));
+        return history;
+    }
+
     // Вне шага WC-3: только «нечего добавить» до отказа — по-старому отказ всего разбора:
     // курсор на месте, половины хроники нет.
     [Fact]
@@ -1332,6 +1412,40 @@ public class WikiChatIngestTests : IDisposable
             .Should().Be(1, "хроника по применённому написана");
         File.ReadAllText(PathOf(PagePath)).Should().Contain(Claim1, "применённое окно осталось на странице");
         llm.CountOf("S").Should().Be(2, "первое окно разобрано, второе отказано, дальше цикл не идёт");
+    }
+
+    // J-P1c (разрез §5): чат из пяти окон, вызов модели второго окна отказан — так выглядит
+    // «входной бюджет кончился» на этом пути (движок отказывает вызов, а не окно как таковое).
+    // Первое окно применено. Курсор — на конце последнего применённого окна: не на 0
+    // (применённое окно не стирается) и не на конце чата (отказанное окно и три за ним не
+    // разбирались). Тот же механизм, что у двухоконного WC-3, но на длинной дельте:
+    // проверка именно в том, что курсор не прыгает к history.Count.
+    [Fact]
+    public async Task ПятьОкон_БюджетОборвалсяНаВтором_КурсорНаКонцеПервого()
+    {
+        AddSession();
+        var history = FiveWindowHistory();
+        SetHistory(ChatId, history);
+        var windows = WikiChatSlicer.Windows(history, 1, history.Count);
+        windows.Should().HaveCount(5, "дельта — ровно пять окон");
+        var endOfFirst = windows[0].Lines[^1].Index;
+
+        var llm = new FakeLlm(
+            ("S", Synth(Claim1)),
+            ("S", "модель ответила прозой вместо JSON"));
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
+        res.Partial.Should().BeTrue("разбор оборвался на втором окне — применённое осталось");
+        res.Reason.Should().Contain("окна m", "причина отказанного окна остаётся в результате");
+
+        var entry = WikiChatTriageStore.Get(Root).Entries.Single();
+        entry.Cursor.Should().Be(endOfFirst, "курсор на конце последнего применённого окна");
+        entry.Cursor.Should().NotBe(0, "применённое окно не возвращает курсор в 0");
+        entry.Cursor.Should().NotBe(history.Count, "курсор не прыгает за отказанное окно к концу чата");
+        entry.CursorHash.Should().NotBeNullOrEmpty("хэш записи, на которой стоит курсор");
+
+        llm.CountOf("S").Should().Be(2, "окна 3—5 после отказа не разбираются");
     }
 
     // c3 (WC-3): хроника частичного исхода не записана — исход refused, курсор на месте
@@ -1742,6 +1856,11 @@ public class WikiChatIngestTests : IDisposable
         // значения — тогда «не прибавить окно» видно числом, а не только фактом «не ноль».
         // Не задан — прежние 10 на каждый вызов (существующие тесты метрик не проверяют).
         public List<long>? InputTokensByCall;
+        // W3 (И3 путь 2): исполнитель назван аргументом — путь только на нём, без выбора
+        // маршрута и без облака. EngineCalls — что ушло на движок; EngineDown — движок не
+        // ответил (null без исключения): вызов раннером зарегистрирован, модели нет.
+        public List<(string Engine, string ActionKey, string Prompt)> EngineCalls { get; } = [];
+        public bool EngineDown;
 
         private readonly Dictionary<string, Queue<string>> _answers = new();
         private readonly List<Action> _beforeNextCall = [];
@@ -1792,6 +1911,18 @@ public class WikiChatIngestTests : IDisposable
             // Answer уже записал этот вызов в Calls: его позиция — индекс метрик теста (WC-4a).
             var input = InputTokensByCall is { } t && Calls.Count <= t.Count ? t[Calls.Count - 1] : 10L;
             return new OneShotResult(text, new OneShotUsage(input, 0, 0, 5, 0.0, "fake"), 1);
+        }
+
+        public Task<OneShotResult?> RunOnLocalEngineDetailedAsync(string engine, string actionKey,
+            string prompt, string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            EngineCalls.Add((engine, actionKey, prompt));
+            if (EngineDown)
+                return Task.FromResult<OneShotResult?>(null);
+            // Ответ и usage — как у локального шага цепочки (вход 1 000, CostUsd 0): расход
+            // новой ветки считается так же (WC-4c).
+            return Task.FromResult<OneShotResult?>(new OneShotResult(
+                Answer(actionKey, prompt, ct), new OneShotUsage(1_000, 0, 0, 50, 0.0, engine), 1));
         }
 
         private string Answer(string actionKey, string prompt, CancellationToken ct)

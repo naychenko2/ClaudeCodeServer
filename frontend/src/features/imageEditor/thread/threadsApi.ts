@@ -33,7 +33,11 @@ export interface ImageThreadVersion {
   similarity?: number | null;
   // Самая похожая среди версий своего запуска
   mostSimilar?: boolean;
+  // JSON-описание сцены, по которому Fibo 2.0 нарисовала версию (Ш8), с сидом и холстом; нет — доводки нет
+  vgl?: ImageVglScene | null;
 }
+
+export interface ImageVglScene { json: string; seed: number; width: number; height: number }
 
 export type ImageThreadLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
 
@@ -67,6 +71,10 @@ export interface ImageThreadLaunch {
   // similarity — сходство лица (null — не считалось), status — итог прохода (нет — запуск идёт).
   // Старый одиночный faceTarget читается рядом — на случай ответа старого сервера
   faceTargets?: ImageThreadFaceTarget[] | null;
+  // Модель, которая отработала (id каталога): фактическая, если драйвер ушёл на запасную; нет — старые нити
+  model?: string | null;
+  // Почему «Авто» выбрало модель («Авто → MOSS: …»); нет — модель названа явно
+  routeReason?: string | null;
 }
 
 export interface ImageThreadFaceTarget {

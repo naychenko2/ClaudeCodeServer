@@ -366,7 +366,7 @@ describe('Меню «Вики» в чате (S7b → WM-2)', () => {
 
   it('awaiting_human и nothing_new/up_to_date — человеческие тексты', async () => {
     serve({ analyze: { outcome: 'awaiting_human', reason: null, packageIds: ['p'] } });
-    expect(await menuHas(await analyzeOnce(sessionA), 'Есть спорное — во «Входящих»')).toBe(true);
+    expect(await menuHas(await analyzeOnce(sessionA), 'Есть спорное — в «Решениях»')).toBe(true);
     serve({ analyze: { outcome: 'nothing_new', reason: null, packageIds: [] } });
     expect(await menuHas(await analyzeOnce(sessionB), 'Нового нет')).toBe(true);
     serve({ analyze: { outcome: 'up_to_date', reason: null, packageIds: [] } });
@@ -704,12 +704,12 @@ describe('«Разобрать в базу» у заметки (S7b, логик�
     expect(calls).toHaveLength(1);
     expect(String(calls[0][0])).toBe('/wiki/ingest/note');
     expect(JSON.parse(String((calls[0][1] as { body: string }).body)).noteId).toBe('note-1');
-    expect(text).toBe('пакет во «Входящих»: ждёт твоего решения');
+    expect(text).toBe('пакет в «Решениях»: ждёт твоего решения');
   });
 
   it('409 packages_limit — текстом; 404 — текстом, функция не бросает (экран не падает)', async () => {
     req.mockImplementation(() => Promise.reject({ status: 409, body: { code: 'packages_limit', message: 'open packages limit reached' } }));
-    expect(await requestNoteIngest('note-1')).toContain('Открытых пакетов слишком много');
+    expect(await requestNoteIngest('note-1')).toContain('Открытых пакетов уже 20');
 
     req.mockImplementation(() => Promise.reject({ status: 404 }));
     expect(await requestNoteIngest('note-1')).toBe('Не найдено');

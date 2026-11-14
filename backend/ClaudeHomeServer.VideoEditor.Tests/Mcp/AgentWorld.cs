@@ -48,12 +48,14 @@ internal sealed class AgentWorld : IDisposable
     public string Chat => FilmWorld.Session;
 
     public AgentWorld(bool blocking = false, bool agentLaunch = true, bool delegatedDenied = false, bool withGate = true,
-        bool withContext = false)
+        bool withContext = false, IVideoEngine? extraEngine = null, IVideoSceneVoice? voice = null,
+        Func<FilmWorld, PersonalSceneSaver>? personalSaver = null,
+        ClaudeHomeServer.Services.Composition.PersonalFolderResolver? personalFolder = null)
     {
         F = new FilmWorld(new ToolDsp(), withContext);
         Engine = new FakeEngine("fal", blocking);
         Prefs = new VideoPrefsService(new VideoPrefsStore(Path.Combine(F.Dir, "prefs")), F.Broadcaster);
-        Jobs = new VideoEditJobService([Engine], F.Workspace, F.JobThreads, NullLogger<VideoEditJobService>.Instance,
+        Jobs = new VideoEditJobService(extraEngine is null ? [Engine] : [Engine, extraEngine], F.Workspace, F.JobThreads, NullLogger<VideoEditJobService>.Instance,
             Prefs, Spend, F.Broadcaster);
         Scenes = new VideoSceneService(F.JobThreads, Prefs);
         Saver = new FilmSceneSaver(F.Service, F.Workspace, NullLogger<FilmSceneSaver>.Instance);
@@ -74,7 +76,8 @@ internal sealed class AgentWorld : IDisposable
             .Returns((string _, string _, string action) => delegatedDenied ? $"{action}: делегированный ход — отказ" : null);
 
         Toolset = new VideoEditorToolset(accessor.Object, projects.Object, [Engine], F.JobThreads, Jobs, Prefs,
-            Scenes, F.Service, Saver, Assembler, withGate ? Gate.Object : null, config);
+            Scenes, F.Service, Saver, Assembler, withGate ? Gate.Object : null, config, voice: voice,
+            personalSaver: personalSaver?.Invoke(F), personalFolder: personalFolder);
 
         // Ручки человека поверх тех же сервисов: гейт — настоящий, поверх подставных справочников
         var access = new Mock<ClaudeHomeServer.Services.Access.IProjectAccess>();

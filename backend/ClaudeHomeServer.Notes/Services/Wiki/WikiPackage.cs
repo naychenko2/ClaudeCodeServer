@@ -70,9 +70,14 @@ public sealed record WikiPackage
     public const string StatusReverted = "reverted";
 
     /// <summary>Решение человека по операции `inbox` (REST, S4a): ставится только поверх
-    /// решения политики и только в статусе `proposed`.</summary>
+    /// решения политики и только в статусе `proposed`. Те же значения несёт решение судьи
+    /// (JudgeDecision): автор решения — в имени поля, не в значении.</summary>
     public const string HumanAccepted = "accepted";
     public const string HumanRejected = "rejected";
+
+    /// <summary>Метка `JudgeModel` для отказа, вынесенного кодом без вызова модели (И4′:
+    /// вердикт по коду отказа — не вердикт судьи).</summary>
+    public const string JudgeModelCode = "code";
 
     /// <summary>Допустимые переходы статуса. poza таблицей переходов нет: «недопустимый
     /// переход — отказ» (S4a).
@@ -239,6 +244,10 @@ public sealed record WikiPackage
         /// <summary>Почему операция спорная (обязательна для `inbox`: «Входящие» приходят
         /// к человеку с причиной, а не без объяснения).</summary>
         public string? Reason { get; init; }
+        /// <summary>Машинный код причины `inbox` (решение 12.11): допуск к облачному судье
+        /// решает код, а не текст Reason. Ставит код (WikiApplyPolicy / WikiPlanValidator);
+        /// старые пакеты без поля читаются как null — к судье не допускаются (И4′).</summary>
+        public string? ReasonCode { get; init; }
         /// <summary>Хэши базового состояния страниц, на которые опирается намерение
         /// (та же форма, что в манифесте — WikiManifest.Sha256Hex). Пусто для create.</summary>
         public IReadOnlyDictionary<string, string> BaseHashes { get; init; } = new Dictionary<string, string>();
@@ -249,6 +258,27 @@ public sealed record WikiPackage
         /// (не решено). Только для `inbox` и только в `proposed`.</summary>
         public string? HumanDecision { get; init; }
         public string? HumanReason { get; init; }
+        /// <summary>Решение облачного судьи по спорной операции (J-J2a): те же значения, что
+        /// у решения человека. Хранится ОТДЕЛЬНО от HumanDecision: на том поле стоят обучение
+        /// классов автоприменению (WikiClassHealth.WasApplied) и журнал «правка человека» —
+        /// решение модели туда не пишется, иначе классы переводились бы в auto по одобрению
+        /// модели, а журнал врал бы про автора. И1: у спорной операции ровно одно решение —
+        /// человека или судьи. Пакет без поля в JSON читается как null (старые пакеты).</summary>
+        public string? JudgeDecision { get; init; }
+        /// <summary>Почему судья отказал (обязателен для `rejected`: «Входящие» приходят
+        /// к человеку с причиной, а не без объяснения).</summary>
+        public string? JudgeReason { get; init; }
+        /// <summary>Что вынесло вердикт: имя модели или метка JudgeModelCode («отклонено
+        /// кодом, без модели»). Ставит код (стор), не модель.</summary>
+        public string? JudgeModel { get; init; }
+        /// <summary>Когда вынесен вердикт — время сервера в момент записи (значение из
+        /// входа игнорируется, как CreatedAt у Create).</summary>
+        public DateTimeOffset? JudgeAt { get; init; }
+        /// <summary>Стоимость вердикта в долларах (учёт облачного вызова); null — вердикта нет.</summary>
+        public decimal? JudgeCostUsd { get; init; }
+        /// <summary>Сколько раз судья пробовал по этой операции без вердикта (счётчик
+        /// повторных попыток, J-J3a). Вердикт его не двигает: попытка с исходом — решение.</summary>
+        public int JudgeAttempts { get; init; }
     }
 
     /// <summary>Безопасный id: GUID. Имя файла пакета строится из id без обхода пути,
@@ -334,6 +364,10 @@ public sealed record WikiPackage
                     errors.Add($"решение политики «{op.Decision}» не из перечня");
                 if (op.Decision == DecisionInbox && string.IsNullOrWhiteSpace(op.Reason))
                     errors.Add($"операция «{op.Op}» во «Входящих» без причины");
+                // Код причины — только из перечня политики (старые пакеты без кода допустимы:
+                // null здесь не ошибка, отсутствие кода — отсутствие допуска к судье).
+                if (op.ReasonCode is not null && !WikiApplyPolicy.ReasonCodes.Contains(op.ReasonCode))
+                    errors.Add($"код причины «{op.ReasonCode}» операции «{op.Op}» не из перечня");
                 // Класс ставится из источника пакета и op: своя строка класса невозможна.
                 // Для нераспознанной op про класс молчим — про неё уже сказано выше.
                 if (!knownOp)
@@ -393,6 +427,14 @@ public sealed record WikiPackage
                     errors.Add($"решение человека «{op.HumanDecision}» не из перечня");
                 if (op.HumanDecision == HumanRejected && string.IsNullOrWhiteSpace(op.HumanReason))
                     errors.Add("отказ человека без причины");
+                // Решение судьи — то же перечное и та же мера на отказ без объяснения:
+                // «Входящие» показывают человеку и то и другой вердикт с причиной.
+                if (op.JudgeDecision is not null && op.JudgeDecision is not (HumanAccepted or HumanRejected))
+                    errors.Add($"решение судьи «{op.JudgeDecision}» не из перечня");
+                if (op.JudgeDecision == HumanRejected && string.IsNullOrWhiteSpace(op.JudgeReason))
+                    errors.Add("отказ судьи без причины");
+                if (op.JudgeAttempts < 0)
+                    errors.Add("отрицательный счёт попыток судьи");
             }
         }
         if (!StatusValues.Contains(p.Status))

@@ -5,11 +5,12 @@
 import { useState, type DragEvent } from 'react';
 import { AlertTriangle, ArrowDown, ArrowUp, Clapperboard, FolderTree, GripVertical, MoreHorizontal, Scissors, Trash2 } from 'lucide-react';
 import {
-  api, Badge, Button, ByClaude, C, Dot, FS, IconButton, Menu, MenuItem, MenuSep, R, SegmentedControl, SHADOW, SP,
+  Badge, Button, ByClaude, C, Dot, FS, IconButton, Menu, MenuItem, MenuSep, R, SegmentedControl, SHADOW, SP,
 } from 'aihome_shell/kit';
 import type { FilmCut, FilmCutType, FilmItem, FilmItemMark } from '../../api';
 import { ic } from '../primitives';
 import { TOUCH } from '../../useBoxWidth';
+import { filmClipUrl } from '../../film/clipUrl';
 import { clampTrim, clipLength, CUT_LABEL, CUT_SECS, cutLabel, fileName, TRIM_STEP, trimLabel, trimmedLength } from '../../film/model';
 
 export interface RowActions {
@@ -71,7 +72,7 @@ function Row({ scope, it, i, mark, last, highlight, dragging, over, isMobile, tr
 }) {
   const [menuAt, setMenuAt] = useState<DOMRect | null>(null);
   // Без флага «Формат» строка фильма выглядит как раньше: ни пометки, ни «Привести к …»
-  const src = api.files.fileUrl(scope, it.file);
+  const src = filmClipUrl(scope, it.file);
   const prevent = (e: DragEvent) => { e.preventDefault(); };
   return (
     <div data-video-film-row={i} data-highlight={highlight ? 'true' : undefined}
@@ -167,7 +168,7 @@ function Trim({ scope, it, isMobile, onDone }: { scope: string; it: FilmItem; is
   const full = clipLength(it) || 1;
   const [t, setT] = useState<[number, number]>([it.trim[0] ?? 0, it.trim[1] ?? full]);
   const set = (n: [number, number]) => setT(clampTrim(n, full));
-  const src = api.files.fileUrl(scope, it.file);
+  const src = filmClipUrl(scope, it.file);
   const left = (t[0] / full) * 100;
   const right = 100 - (t[1] / full) * 100;
   const box = isMobile ? TOUCH : THUMB.stepBtn;

@@ -182,6 +182,99 @@ public sealed class WikiApplyService
         return await WriteAsync(ownerId, package!.Id, prepared, context!).ConfigureAwait(false);
     }
 
+    // ─── После решения: применение решённого пакета (J-J2b) ────────────────────
+    //
+    // «После решения» жило в контроллере (AfterDecision), и проход судьи его не позвал бы:
+    // вердикт доводил пакет до «accepted», а применение оставалось делом REST-человека. Здесь
+    // правило ADR-035 §5 («решение замкнуто применением») — один метод на обоих вызывающих:
+    // решение судьи применяется тем же путём и со всеми теми же гейтами кода.
+
+    /// <summary>Что стало с карточкой пакета после применения (J-J2b): не HTTP-код, а исход,
+    /// из которого вызывающий собирает свой ответ (коды REST сохранены как на master).</summary>
+    public enum DecidedOutcome
+    {
+        /// <summary>Карточка прочитана с диска после применения — её и отдаём.</summary>
+        Ok,
+        /// <summary>Файла пакета нет на перечитывании (гонка с удалением): Package — последняя
+        /// прочитанная карточка, со статусом «applied», если применение удалось (W3-1).</summary>
+        PackageMissing,
+        /// <summary>Файл пакета не читается как пакет v:1.</summary>
+        PackageUnreadable,
+    }
+
+    /// <summary>Исход «после решения»: код + финальная карточка пакета + текст отказа;
+    /// отдельно — исход применения (null ровно когда применять было нечего: пакет не принят
+    /// или его решили отклонить).</summary>
+    public readonly record struct DecidedResult(
+        DecidedOutcome Outcome,
+        WikiPackage? Package,
+        ApplyResult? Apply,
+        string? Reason);
+
+    /// <summary>Применить пакет, решение по которому уже вынесено — человеком или судьёй
+    /// (J-J2b). Правило то же, что у решения через REST (S4g): applying идёт, только если
+    /// пакет принят (accepted | partially_accepted); applying читает пакет с диска под своей
+    /// блокировкой (ApplyAsync), поэтому решения берутся из дисковой копии, а не из карточки
+    /// вызывающего. Сбой любой фазы — результат-отказ, исключения наружу нет (ревью S4g, M3):
+    /// ни «Входящие», ни проход судьи не падают там, где решения уже записаны. Финальная
+    /// карточка — прочитанная с диска после применения, а не предположение (ревью S4g, M2,
+    /// W3-1).</summary>
+    public async Task<DecidedResult> ApplyDecidedAsync(string userId, string root, WikiPackage decided)
+    {
+        ApplyResult? apply = null;
+        if (decided.Status is WikiPackage.StatusAccepted or WikiPackage.StatusPartiallyAccepted)
+            apply = await ApplyGuardedAsync(root, userId, decided).ConfigureAwait(false);
+
+        var after = WikiPackageStore.TryRead(root, decided.Id);
+        if (after.State == WikiPackageFileState.Missing)
+            // Файла пакета нет на перечитывании: не отказ — решение только что вынесено и оно
+            // есть. Отдаём последнюю прочитанную карточку; если применение удалось, статус в
+            // ответе реальный: «applied» («accepted» рядом с applied=true читалось бы как
+            // «ждёт применения» о пакете, который применился и был удалён — W3-1).
+            return new DecidedResult(DecidedOutcome.PackageMissing,
+                apply?.Applied == true ? decided with { Status = WikiPackage.StatusApplied } : decided,
+                apply, null);
+        if (after.State != WikiPackageFileState.Valid || after.Package is null)
+            return new DecidedResult(DecidedOutcome.PackageUnreadable, null, apply, "файл пакета не читается");
+        return new DecidedResult(DecidedOutcome.Ok, after.Package, apply, null);
+    }
+
+    /// <summary>Исход применения на любой исход, включая исключение (ревью S4g, M3): обхват
+    /// перенесён сюда вместе с правилом — вызывающий не должен держать его копию. Наружу из
+    /// обхватов не выходит ничего; за обхватами остаётся только разбор карточки. root — корень
+    /// вызывающего: при чужом формате владельца бросает сам Root(), поэтому закрывать сбой
+    /// принято там, где корень уже назван.</summary>
+    private async Task<ApplyResult> ApplyGuardedAsync(string root, string userId, WikiPackage decided)
+    {
+        try
+        {
+            return await ApplyAsync(userId, decided).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return CrashedApply(root, decided.Id, ex);
+        }
+    }
+
+    /// <summary>Сбой применения вне контракта сервиса (исключение): тот же результат-отказ
+    /// с причиной, что у любого отказа, и «applying» не зависает: он закрывается переходом
+    /// там, где он ещё возможен (ревью S4g, M3) — иначе его доводит только сторож старта.
+    /// Где статус на диске уже не «applying» (заявка не состоялась) — пакета не трогать.
+    /// internal — граница для теста: файловый сбой ДО заявки детерминированно не поставить,
+    /// поэтому форма отказа проверяется здесь, на диске с нужным статусом.</summary>
+    internal static ApplyResult CrashedApply(string root, string packageId, Exception ex)
+    {
+        var reason = $"внутренний сбой применения: {ex.Message}";
+        var onDisk = WikiPackageStore.TryRead(root, packageId);
+        if (onDisk.State == WikiPackageFileState.Valid && onDisk.Package!.Status == WikiPackage.StatusApplying)
+        {
+            var t = WikiPackageStore.Transition(root, packageId, WikiPackage.StatusApplyFailed, reason);
+            if (!t.Ok)
+                reason = $"{reason} (статус «apply_failed» не записан: {t.Reason ?? t.Code})";
+        }
+        return new ApplyResult(false, CodeInternal, reason, [reason]);
+    }
+
     internal async Task<PrepareResult> PrepareAsync(string ownerId, WikiPackage? package, ApplyContext? context)
     {
         // Fail-closed входа: null и пустой владелец — отказ с причиной, не NRE и не исключение
@@ -341,20 +434,21 @@ public sealed class WikiApplyService
 
         WikiManifest.RecordApplied(root, section, applied);
 
-        // Строка журнала (мера 6): политика пакета, его источник, изменённые страницы.
-        // Политика — «inbox», если хоть одна применённая операция пришла из «Входящих» (её
-        // решил человек), иначе «auto»: журнал обязан показывать, что человека спросили, а не
-        // только то, что он принял. Диффа в строке нет: он собирается из прообразов и
-        // текущего файла (тот же источник, чем держится откат) — на фронте (S7a).
+        // Строка журнала (мера 6): политика пакета, его источник, изменённые страницы и автор
+        // решения (actor). Политика — «inbox», если хоть одна применённая операция пришла из
+        // «Входящих» (её решил человек или судья), иначе «auto»: журнал обязан показывать, что
+        // спорное спрашивали, а не только то, что его приняли. Диффа в строке нет: он собирается
+        // из прообразов и текущего файла (тот же источник, чем держится откат) — на фронте (S7a).
         var policy = package.Operations.Any(o => Applies(o) && o.Decision == WikiPackage.DecisionInbox)
             ? WikiPackage.DecisionInbox
             : WikiPackage.DecisionAuto;
         // Правка человека — своя строка журнала: op edit|restore и actor «user» (ADR-038, решение 4):
         // на этом стоит «Журнал» с фильтром «ИИ поменял моё» и условие «источник новее правки».
+        // Строка применения несёт автора решения (ActorOf): «user» | «judge» | «keeper» (J-J2b).
         if (package.Author == WikiPackage.AuthorHuman)
             WikiManifest.AppendLog(root, package.Action!, section, written, SourceOf(package), "user");
         else
-            WikiManifest.AppendLog(root, LogOpApply, section, written, SourceOf(package), "keeper", policy,
+            WikiManifest.AppendLog(root, LogOpApply, section, written, SourceOf(package), ActorOf(package), policy,
                 packages: [packageId], overrodeHuman: package.Operations.Any(WikiPackage.IsAutoOverrideOfHuman));
 
         // Проекции — после журнала: _log.md — производная от log.jsonl и без этой строки
@@ -375,6 +469,9 @@ public sealed class WikiApplyService
 
         // Граф обязан видеть запись сразу (шаг 6 транзакции). Событие — только раздела
         // проекта: у «Общего» и «Личного» нет адресата (тот же порядок, что у Хранителя).
+        // Лента событий проекта — про автора байтов, а не про автора решения (J-J2b): вердикт
+        // судьи страницу не «правит», её писал Хранитель, поэтому здесь остаётся «keeper» —
+        // в отличие от actor строки журнала, который называет решение.
         _notes.Invalidate(ownerId);
         foreach (var p in written)
             AppendEvent(ownerId, section, p, package.Author == WikiPackage.AuthorHuman);
@@ -382,12 +479,28 @@ public sealed class WikiApplyService
     }
 
     /// <summary>Берётся ли операция в рендер и на диск: «auto» — всегда, «inbox» — только с
-    /// принятым решением человека (решение читается из HumanDecision дисковой копии, не из
-    /// тела пакета). Одно правило на шаг 3 (рендер) и на шаг 6 (политика журнала): «что
-    /// применилось» в них не может разойтись.</summary>
-    private static bool Applies(WikiPackage.Operation op) =>
+    /// принятым решением: человека (HumanDecision), а если человека нет — судьи (JudgeDecision):
+    /// вердикт судьи применяется тем же путём и со всеми теми же гейтами кода (J-J2b, И1).
+    /// Решение человека старше: если оба решения легли рядом (в бою невозможно — и то и другое
+    /// ставится только в нерешённую операцию), вердикт не действует.
+    /// Одно правило на шаг 3 (рендер) и на шаг 6 (политика журнала): «что применилось» в них не
+    /// может разойтись. internal — таблица правила проверяется тестом напрямую.</summary>
+    internal static bool Applies(WikiPackage.Operation op) =>
         op.Decision == WikiPackage.DecisionAuto ||
-        (op.Decision == WikiPackage.DecisionInbox && op.HumanDecision == WikiPackage.HumanAccepted);
+        (op.Decision == WikiPackage.DecisionInbox && op.HumanDecision == WikiPackage.HumanAccepted) ||
+        (op.Decision == WikiPackage.DecisionInbox && op.HumanDecision is null
+            && op.JudgeDecision == WikiPackage.HumanAccepted);
+
+    /// <summary>Кто вынес решение, по которому применился пакет (J-J2b): есть решения человека
+    /// → «user» (как было); иначе есть решения судьи → «judge»; иначе — «keeper» (авто-путь:
+    /// ни по одной операции решения нет, их применил код). Поле называет автора РЕШЕНИЯ, а не
+    /// автора байтов: байты всегда писал Хранитель. Правкой человека строка op=apply от этого
+    /// не становится: «Журнал» держит их на op edit|restore (WikiJournalReader.IsHumanEdit),
+    /// а анти-петлю отката — на op revert|retract (ReadRecentHumanReverts).</summary>
+    private static string ActorOf(WikiPackage package) =>
+        package.Operations.Any(o => o.HumanDecision is not null) ? "user"
+        : package.Operations.Any(o => o.JudgeDecision is not null) ? "judge"
+        : "keeper";
 
     /// <summary>Карточка источника строки журнала — карточки всех источников пакета: по ним
     /// же человек откатывает «всё из этого источника» (мера 5).</summary>
@@ -659,8 +772,8 @@ public sealed class WikiApplyService
 
         foreach (var op in package.Operations)
         {
-            // «inbox» без решения человека или отклонённое человеком из рендера не берётся:
-            // решение читается только из HumanDecision, не из тела пакета.
+            // «inbox» без принятого решения или с отклонённым из рендера не берётся: то же
+            // Applies, что и для политики журнала, — рендер и журнал судят по одному правилу.
             if (!Applies(op))
                 continue;
 

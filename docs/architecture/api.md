@@ -12,7 +12,8 @@
 ```
 POST /api/auth/login            { username, password } → { token, expiresAt, username, displayName } | 400 | 401 | 429
 GET/POST/PUT/DELETE /api/projects
-GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId?, model? }
+GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId?, model?, private? }
+    private=true — чат приватный с рождения (виден только автору); не общий проект → 409 { code: "not_shared_project" }, чат не создаётся
 PUT                 /api/projects/{id}/sessions/{sid} body: { name?, model? } → обновлённая сессия
 GET                 /api/projects/{id}/sessions/{sid}/history  ?limit=&before=  → [msg…] | { messages, hasMore, cursor }
     без параметров — полный плоский массив (прежний контракт); с limit и/или before — страница:
@@ -52,7 +53,8 @@ POST                /api/push/subscribe|unsubscribe   { endpoint, p256dh?, auth?
 GET/POST/PUT/DELETE /api/personas                     (CRUD персон; ?scope=context&projectId= — доступные в контексте)  [флаг personas]
 GET                 /api/personas/pantheon             → { templates[] } (каталог пантеона OmO + connectedPersonaId)
 POST                /api/personas/pantheon/connect     { keys? } → Persona[]  (идемпотентно подключить команду глобально)
-GET/POST            /api/personas/{id}/chats          POST body { mode?, resumeSessionId?, name?, projectId? } → Session (чат от лица персоны; projectId — контекст проекта: глобальная персона получает чат В нём)
+GET/POST            /api/personas/{id}/chats          POST body { mode?, resumeSessionId?, name?, projectId?, private? } → Session (чат от лица персоны; projectId — контекст проекта: глобальная персона получает чат В нём)
+    private=true — чат приватный с рождения (проектная персона — её проект, иначе projectId); не общий проект → 409 { code: "not_shared_project" }, чат не создаётся
 GET/POST            /api/personas/{id}/memory         ?type=  / body { type, text, tags? } → записи памяти
 GET                 /api/personas/{id}/memory/search  ?q=&topK=  → hits (relevance×recency×type)
 DELETE              /api/personas/{id}/memory/{entryId}
@@ -151,7 +153,11 @@ POST                …/threads/{threadId}/rollback      { stepId | null, revisi
 нет. У нити: `versions[]` — `{ id, number, jobId, variant, baseVersionId, baseStepId, steps[],
 currentStepId, createdAt }` по порядку, первая всегда исходник (`id: "origin"`, `number: 0`, `jobId:
 null`); `currentVersionId` — версия «в работе»; `launches[]` — `{ jobId, baseVersionId, baseStepId, at,
-status: running | done | failed | cancelled | interrupted, initiator: human | agent, prompt }`.
+status: running | done | failed | cancelled | interrupted, initiator: human | agent, prompt, model?, routeReason? }`.
+`model` — модель, которая отработала (id каталога): при запуске — модель котировки, с первым отчётом
+драйвера — фактическая (local: `LocalImageModels.Effective`, запасная Qwen вместо Krea/MOSS/Klein);
+`routeReason` — причина «Авто» из котировки («Авто → MOSS: …»), у явной модели нет. Задача
+(`GET …/jobs/{id}`) и событие `image_edit_progress` несут ту же фактическую модель в `actualModel`.
 Картинка версии — шаг `currentStepId` (`GET …/steps/{id}`); у исходника без правок — файл нити, а у
 старой нити — её текущий шаг стопки (`currentStepId` нити). Старые поля (`stacks`, `currentStackId`,
 `currentStepId`, `pendingJobId`, `interruptedJobId`) остаются у нитей до 27.09.
@@ -178,8 +184,9 @@ initiator, baseVersionId } }` — один на запуск; его верси�
 
 Области две, тела ручек общие (`AudioEditorEndpoints`): проект — база
 `/api/projects/{id}/audio-editor`, чат проекта — `…/sessions/{sid}`; личный чат вне проекта — база
-`/api/audio-editor/chats/{sid}` с теми же хвостами. У личной области нет сохранения в проект, «Голосов»,
-local и путей файлов проекта — отказ до диска.
+`/api/audio-editor/chats/{sid}` с теми же хвостами. У личной области нет «Голосов» и файлов проектов — отказ до
+диска; `POST …/threads/{tid}/save` пишет версию в «Личное» (`Personal/audio/`, ADR-040), пути входов и кусков
+склейки — файлы «Личного».
 
 ```
 GET                 …/catalog                          → поставщики, модели, caps, причины серых
@@ -247,8 +254,8 @@ GET                 …/voices/{slug}/files/{file}       образец или �
 
 Области две, тела ручек общие (`VideoEditorEndpoints`): проект — база `/api/projects/{id}/video-editor`, чат проекта —
 `…/sessions/{sid}`; личный чат вне проекта — база `/api/video-editor/chats/{sid}` с теми же хвостами. У личной области
-нет фильмов, сохранения в проект, local и путей проекта — отказ до диска; ручки фильмов у неё отвечают
-`personal_scope_no_films`.
+нет фильмов и файлов проектов — отказ до диска; ручки фильмов у неё отвечают `personal_scope_no_films`;
+`POST …/scenes/{id}/save` пишет клип в «Личное» (`Personal/video/`, ADR-040), кадр A/B — файл «Личного».
 
 ```
 GET                 …/catalog                          → поставщики, модели, caps, причины серых, порядок «Авто»

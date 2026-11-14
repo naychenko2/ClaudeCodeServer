@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Media;
 using System.Diagnostics.CodeAnalysis;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.AudioEditor.Prefs;
@@ -25,12 +26,10 @@ public class AudioEditorController(
     Engines.DspAudioEngine dsp,
     AudioConcatService concat,
     IProjectFiles? files = null,
-    ChatContext.AudioContextLaunch? context = null)
-    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace, dsp, concat, context)
+    ChatContext.AudioContextLaunch? context = null,
+    IVideoSceneSound? videoScenes = null)
+    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace, dsp, concat, context, videoScenes)
 {
-    private readonly AudioJobThreads _threads = threads;
-    private readonly AudioEditWorkspace _workspace = workspace;
-
     [HttpGet("catalog")]
     public IActionResult Catalog(string projectId) =>
         Gate(projectId, out var scope, out var denied) ? CatalogIn(scope) : denied;
@@ -129,43 +128,10 @@ public class AudioEditorController(
     // Сохранить версию в проект: следующая версия рядом с исходником или «Сохранить как». Только
     // человек и только новыми файлами; занятое имя «Сохранить как» — 409 name_taken с подсказкой
     [HttpPost("sessions/{sessionId}/threads/{threadId}/save")]
-    public async Task<IActionResult> Save(string projectId, string sessionId, string threadId, [FromBody] AudioSaveRequest req)
-    {
-        if (!ChatGate(projectId, sessionId, out var scope, out var denied)) return denied;
-        var project = scope.Project!;
-        var mode = string.IsNullOrWhiteSpace(req.Mode) ? AudioProjectSaver.NextVersion : req.Mode.Trim();
-        if (mode is not (AudioProjectSaver.NextVersion or AudioProjectSaver.As))
-            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, $"Неизвестный режим сохранения «{mode}»");
-
-        var thread = _threads.Store.Get(Owner(scope), sessionId).Threads.FirstOrDefault(t => t.Id == threadId);
-        if (thread is null) return ThreadNotFound();
-        var version = string.IsNullOrWhiteSpace(req.VersionId) ? thread.CurrentVersion : thread.Version(req.VersionId.Trim());
-        if (version is null) return VersionNotFound();
-        if (version.IsOrigin)
-            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Исходник уже лежит в проекте");
-
-        var items = new List<AudioProjectSaver.Item>();
-        foreach (var file in version.Files)
-        {
-            if (AudioVersionFiles.Resolve(_workspace, Owner(scope), UserId, scope, version, file) is not { } path || !System.IO.File.Exists(path))
-                return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.FileNotFound,
-                    "Файлы версии больше не найдены — рабочая папка очищена");
-            items.Add(new AudioProjectSaver.Item(file.Role, path));
-        }
-
-        var saved = AudioProjectSaver.Save(project.RootPath, thread, items, mode, req.Folder, req.FileName);
-        if (saved.ErrorCode == AudioEditErrorCodes.NameTaken)
-            return StatusCode(StatusCodes.Status409Conflict, new { error = saved.Error, code = saved.ErrorCode, suggestion = saved.Suggestion });
-        if (saved.Value is not { } result)
-            return Error(saved.ErrorCode == AudioEditErrorCodes.FileNotFound ? StatusCodes.Status404NotFound : StatusCodes.Status400BadRequest,
-                saved.ErrorCode ?? AudioEditErrorCodes.InvalidRequest, saved.Error ?? "Не сохранено");
-        // Новые файлы — обычная запись в проект: синк знаний и ватчеры узнают о них сразу
-        foreach (var rel in result.Files) files?.NotifyMutated(project.RootPath, rel, FileMutationKind.Create);
-        // Нить помнит, что звук уже в проекте; версия из одних стемов звука не даёт — нить остаётся при своём
-        await _threads.OnSavedAsync(Owner(scope), scope.Key, sessionId, threadId, result.Path,
-            result.HasAudio ? null : result.Name);
-        return Ok(result);
-    }
+    public async Task<IActionResult> Save(string projectId, string sessionId, string threadId, [FromBody] AudioSaveRequest req) =>
+        ChatGate(projectId, sessionId, out var scope, out var denied)
+            ? await SaveIn(scope, sessionId, threadId, req, files)
+            : denied;
 
     // Задача по id (находка 4.3): привязка к чату проекта — зритель обязан его видеть
     private bool JobVisible(AudioEditScope scope, string jobId)

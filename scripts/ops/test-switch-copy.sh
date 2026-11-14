@@ -19,8 +19,8 @@ echo LOG-B > $T/staging/logs/b.log; echo DATA-B > $T/staging/data/e.json; echo N
 printf '#!/bin/sh\nexit 0\n' > $T/shim/systemctl; chmod +x $T/shim/systemctl; echo ok > $T/srv/api/health
 # Шим docker: записывает вызовы (rm -f <имя>) в $T/docker-calls, не трогая боевой/дев-контейнер.
 printf '#!/bin/sh\necho "$@" >> %s/docker-calls\nexit 0\n' "$T" > $T/shim/docker; chmod +x $T/shim/docker
-# Шим dotnet: режим --backup (бэкап данных) — ставит маркер и exit 0; иначе no-op.
-printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = "--backup" ] && { touch %s/backup-ran; exit 0; }; done\nexit 0\n' "$T" > $T/shim/dotnet; chmod +x $T/shim/dotnet
+# Шим dotnet: режимы --snapshot / --backup (бэкап данных) — пишет, какой вызван (backup-flag), и exit 0; иначе no-op.
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in --backup|--snapshot) echo "$a" > %s/backup-flag; exit 0;; esac; done\nexit 0\n' "$T" > $T/shim/dotnet; chmod +x $T/shim/dotnet
 PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
 python3 -m http.server $PORT --bind 127.0.0.1 --directory $T/srv >/dev/null 2>&1 & SPID=$!
 sleep 1
@@ -68,15 +68,15 @@ if [ "$(grep -c '^start' $T/calls3)" = 1 ]; then echo "OK   start только �
 # полный (гейт staging). Журнал активен: проверяем, что снимок попал в releases.
 mkdir -p $T/app4 $T/staging4/{wwwroot,modules/notes,modules/spend} $T/releases4
 echo '{"Sandbox":{"ContainerName":"cc-sandbox-test"}}' > $T/app4/appsettings.Local.json
-echo OLD4 > $T/app4/ClaudeHomeServer.dll; printf '20261014-888887\nsha=abcd1234\nref=main\ndirty=False\n' > $T/app4/build-id.txt
+echo OLD4 > $T/app4/ClaudeHomeServer.dll; printf -- '-\0-\0s\0n\0a\0p\0s\0h\0o\0t\0' >> $T/app4/ClaudeHomeServer.dll; printf '20261014-888887\nsha=abcd1234\nref=main\ndirty=False\n' > $T/app4/build-id.txt
 echo NEW4 > $T/staging4/ClaudeHomeServer.dll; printf '20261014-888888\nsha=ef567890\nref=main\ndirty=False\n' > $T/staging4/build-id.txt
 cp "$(dirname "$(readlink -f "$S")")/deploy-journal.py" $T/releases4/deploy-journal.py
 printf '{"current":{"id":"case4","phase":"queued"},"history":[],"releases":[]}\n' > $T/releases4/deploy-state.json
 CCS_SWITCH_DETACHED=1 PATH="$T/shim:$PATH" APP=$T/app4 STAGING=$T/staging4 RELEASES=$T/releases4 LOG=$T/deploy4.log STAMP=20261014-888888 \
  CCS_SYSTEMCTL="$T/shim/systemctl" CCS_DEPLOY_JOURNAL=$T/releases4/deploy-journal.py CCS_DEPLOY_STATE_PATH=$T/releases4/deploy-state.json \
  HEALTH_URL=http://127.0.0.1:1/h HEALTH_TRIES=1 HEALTH_SLEEP=1 bash "$S" >/dev/null; echo "case4 rc=$?"
-# Бэкап данных отработал (шим dotnet --backup поставил маркер)
-if [ -e $T/backup-ran ]; then echo "OK   data-backup: dotnet --backup вызван"; else echo "FAIL data-backup: маркера нет"; bad=1; fi
+# Бэкап данных отработал; по умолчанию (BACKUP_MODE не задан) — инкрементальный снимок
+if [ "$(cat $T/backup-flag 2>/dev/null)" = "--snapshot" ]; then echo "OK   data-backup: по умолчанию вызван dotnet --snapshot"; else echo "FAIL data-backup: ждали --snapshot, получили '$(cat $T/backup-flag 2>/dev/null)'"; bad=1; fi
 # Контейнер песочницы снесён по имени из конфига, ДВАЖДЫ (stop-sandbox до снимка + sandbox-container после swap)
 docker_calls=$(grep -c "rm -f cc-sandbox-test" $T/docker-calls 2>/dev/null || echo 0)
 if [ "$docker_calls" = "2" ]; then echo "OK   песочница: docker rm -f cc-sandbox-test ×2 (stop-sandbox + sandbox-container)"; else echo "FAIL песочница: docker rm -f cc-sandbox-test вызван $docker_calls раз(а), ждали 2"; bad=1; fi
@@ -95,6 +95,30 @@ case "$rel_check" in
   OK) echo "OK   releases: снимок записан (id=20261014-888888, sha=abcd1234, path=каталог снимка)";;
   *) echo "FAIL releases: $rel_check"; bad=1;;
 esac
+
+# --- Кейс 4б: прод БЕЗ поддержки --snapshot (первая выкатка с фичей) — молча падаем на zip, а не гоним неизвестный флаг ---
+rm -f $T/backup-flag
+mkdir -p $T/app4b $T/staging4b/{wwwroot,modules/notes,modules/spend} $T/releases4b
+echo OLD4B > $T/app4b/ClaudeHomeServer.dll; echo NEW4B > $T/staging4b/ClaudeHomeServer.dll
+CCS_SWITCH_DETACHED=1 PATH="$T/shim:$PATH" APP=$T/app4b STAGING=$T/staging4b RELEASES=$T/releases4b LOG=$T/deploy4b.log STAMP=20261014-555555 \
+ CCS_SYSTEMCTL="$T/shim/systemctl" HEALTH_URL=http://127.0.0.1:1/h HEALTH_TRIES=1 HEALTH_SLEEP=1 bash "$S" >/dev/null; echo "case4b rc=$?"
+if [ "$(cat $T/backup-flag 2>/dev/null)" = "--backup" ] && grep -q "не знает --snapshot" $T/deploy4b.log; then echo "OK   старый прод без --snapshot: бэкап ушёл через --backup, причина в логе"; else echo "FAIL старый прод: флаг '$(cat $T/backup-flag 2>/dev/null)'"; bad=1; fi
+
+# --- Кейс 5: BACKUP_MODE=zip — откат к прежнему полному архиву (--backup) ---
+rm -f $T/backup-flag
+mkdir -p $T/app5 $T/staging5/{wwwroot,modules/notes,modules/spend} $T/releases5
+echo OLD5 > $T/app5/ClaudeHomeServer.dll; echo NEW5 > $T/staging5/ClaudeHomeServer.dll
+CCS_SWITCH_DETACHED=1 BACKUP_MODE=zip PATH="$T/shim:$PATH" APP=$T/app5 STAGING=$T/staging5 RELEASES=$T/releases5 LOG=$T/deploy5.log STAMP=20261014-777777 \
+ CCS_SYSTEMCTL="$T/shim/systemctl" HEALTH_URL=http://127.0.0.1:1/h HEALTH_TRIES=1 HEALTH_SLEEP=1 bash "$S" >/dev/null; echo "case5 rc=$?"
+if [ "$(cat $T/backup-flag 2>/dev/null)" = "--backup" ]; then echo "OK   BACKUP_MODE=zip: вызван dotnet --backup"; else echo "FAIL BACKUP_MODE=zip: получили '$(cat $T/backup-flag 2>/dev/null)'"; bad=1; fi
+
+# --- Кейс 6: неизвестный BACKUP_MODE — отказ кодом 3 ДО остановки, бэкап не вызван, прод не тронут ---
+rm -f $T/backup-flag
+mkdir -p $T/app6 $T/staging6/{wwwroot,modules/notes,modules/spend} $T/releases6
+echo OLD6 > $T/app6/ClaudeHomeServer.dll; echo NEW6 > $T/staging6/ClaudeHomeServer.dll
+CCS_SWITCH_DETACHED=1 BACKUP_MODE=zpi PATH="$T/shim:$PATH" APP=$T/app6 STAGING=$T/staging6 RELEASES=$T/releases6 LOG=$T/deploy6.log STAMP=20261014-666666 \
+ CCS_SYSTEMCTL="$T/shim/systemctl" HEALTH_URL=http://127.0.0.1:1/h HEALTH_TRIES=1 HEALTH_SLEEP=1 bash "$S" >/dev/null; rc6=$?
+if [ "$rc6" = 3 ] && [ ! -e $T/backup-flag ] && [ "$(cat $T/app6/ClaudeHomeServer.dll)" = OLD6 ]; then echo "OK   BACKUP_MODE=zpi: отказ кодом 3, прод не тронут"; else echo "FAIL BACKUP_MODE=zpi: rc=$rc6"; bad=1; fi
 
 [ $bad = 0 ] && echo "ИТОГ: ЗЕЛЁНО" || echo "ИТОГ: КРАСНО"
 rm -rf "$T"

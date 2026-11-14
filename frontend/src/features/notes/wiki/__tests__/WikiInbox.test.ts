@@ -17,7 +17,16 @@
 //  (4) убрать !o.humanDecision из pendingContested → «0 на решение» краснеет;
 //  (5) убрать проверку loadSeq в загрузке списка → «гонка поколений» краснеет;
 //  (6) игнорировать sectionScope (scope = null при любом пропe) → «область раздела» и
-//      «смена пропa без перезапроса» краснеют (W9a).
+//      «смена пропa без перезапроса» краснеют (W9a);
+//  (7) игнорировать тумблер (judgeMode = const) → «тумблер включён» или «тумблер выключен»
+//      краснеет (J-F1);
+//  (8) снять !o.judgeDecision из pendingContested → «1 на решение» и «нет кнопок по решённой
+//      судьёй» краснеют (хвост R-J-J2a);
+//  (9) убрать проверку humanDecision из judgeVerdict → «решённая человеком в виде судьи»
+//      краснеет (доработка J-F1, ревью 4a5a06f8);
+//  (10) вернуть в режиме судьи всё только для чтения (убрать условие outsideJudgeScope в
+//       рендере списка) → «пакет с операцией autoapply_off» краснеет (доработка J-F1,
+//       финал 9c305f19).
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -26,7 +35,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
-import { WikiInbox } from '../WikiInbox';
+import { WikiInbox, readNoticeCollapsed, writeNoticeCollapsed } from '../WikiInbox';
 
 // Мок с сохранением остальных экспортов: цепочка мокованного доходит до кита хоста
 // (WikiInbox → kit) — full-replacement мок рвётся на первом недостающем
@@ -46,7 +55,7 @@ vi.mock('../../../../lib/offline', async (orig) => ({
 import { request } from '../../../../lib/offline';
 // Стор дерева — он же, что читает компонент через кит: тесту нужен снимок tree.sections
 // для имени раздела (тот же шов, что в WikiNightlyBlock.test)
-import { __test as wikiStore, loadWikiTree } from '../../../../lib/wiki';
+import { __test as wikiStore, consumeOpenWikiPage, loadWikiTree } from '../../../../lib/wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
 const req = request as unknown as MockFn;
@@ -133,6 +142,10 @@ function opRows(container: Cont): AnyNode[] {
   return allNodes(container).filter(n => n.getAttribute('data-testid') === 'wiki-op-row');
 }
 
+function judgeOpRows(container: Cont): AnyNode[] {
+  return allNodes(container).filter(n => n.getAttribute('data-testid') === 'wiki-judge-op');
+}
+
 function buttonByTestId(container: Cont, testId: string): AnyNode | null {
   return findNodeByAttr(container, 'data-testid', testId);
 }
@@ -181,6 +194,12 @@ afterEach(() => {
   uninstallFakeDom();
   // снимок дерева, засеянный тестом области, не должен течь в следующие тесты файла
   wikiStore.reset();
+  // M5: fakeDom-«localStorage» и подвешенный clientWidth — только внутри теста,
+  // чем они засветились — гаснем здесь же
+  const w = (globalThis as { window?: { localStorage?: unknown } }).window;
+  if (w) delete w.localStorage;
+  const d = (globalThis as { document?: { createElement(t: string): unknown } }).document;
+  if (d) delete (Object.getPrototypeOf(d.createElement('div')) as Record<string, unknown>).clientWidth;
 });
 
 describe('«Входящие» (S7a)', () => {
@@ -297,6 +316,8 @@ describe('«Входящие» (S7a)', () => {
     const c = render();
     await settle();
     expect(has(c, 'Спорного нет')).toBe(true);
+    // текст (T2): журнал есть — обещания «он придёт следующим шагом» в нём нет
+    expect(has(c, 'Всё, что Хранитель сделал, применилось само. Что именно — в «Журнале».')).toBe(true);
     expect(opRows(c)).toHaveLength(0);
   });
 
@@ -307,7 +328,7 @@ describe('«Входящие» (S7a)', () => {
     expect(has(c, 'Нечитаемых файлов пакета: 2')).toBe(true);
   });
 
-  it('частичное решение (apply=null, статус proposed): плашка «Решение записано, осталось N спорных»', async () => {
+  it('частичное решение (apply=null, статус proposed): плашка «Решение записано. Ещё N спорных ждут вас»', async () => {
     // пакет с двумя спорными: решение по первой оставляет вторую нерешённой — бэк отвечает
     // {package: proposed с нерешённой операцией, apply: null} (применять нечего)
     const two = {
@@ -327,7 +348,7 @@ describe('«Входящие» (S7a)', () => {
     click(buttonByTestId(c, 'wiki-op-accept-0'), 'Принять');
     await settle();
     expect(has(c, 'Решение записано')).toBe(true);
-    expect(has(c, 'осталось 1 спорных')).toBe(true);
+    expect(has(c, 'Ещё 1 спорных ждут вас')).toBe(true);
     // решённая операция больше не на решение (бейдж «принята»), нерешённая осталась с кнопками
     expect(has(c, 'принята')).toBe(true);
     expect(buttonByTestId(c, 'wiki-op-accept-1')).not.toBeNull();
@@ -524,5 +545,405 @@ describe('область раздела (W9a)', () => {
     await settle();
     expect(has(c, 'Разобрано')).toBe(true);
     expect(has(c, 'Всё, что ИИ предлагал по разделу «projects/unknown», применено или отклонено.')).toBe(true);
+  });
+});
+
+// ─── «Решения» (J-F1): режим — тумблером «Применять без ревью» (ADR-039, решение 9) ───
+// Включён → «Решения судьи»: список только для чтения (вердикт, причина, ссылка на страницу),
+// кнопок решения нет; кнопки отката в строке очереди тоже нет (дефект 24c61d60: очередь
+// несёт непринятые пакеты, откатывают применённый — кнопка всегда получала 409; откат —
+// в «Журнале» → «Решения за ночь»). Выключен → прежние «Входящие» (поведение без изменений).
+// Снимка настроек нет → ручная очередь: отказ чтения настроек не отказ списка (этим живут все
+// тесты выше: они не сечат /wiki/settings).
+
+// Форма ответа настроек, читаемая loadWikiSettings: без nightly — не снимок (бросается), поэтому
+// фикстура несёт пустой блок; режим меряет только autoApplyEnabled.
+const SETTINGS_ON = { autoApplyEnabled: true, classes: [], nightly: { enabled: true }, lastNight: null, nightlyRunning: false };
+const SETTINGS_OFF = { ...SETTINGS_ON, autoApplyEnabled: false };
+
+function seedBoth(data: { packages: unknown[]; invalidCount: number }, settings: unknown) {
+  req.mockImplementation((url: string) => {
+    if (url.startsWith('/wiki/packages')) return Promise.resolve(data);
+    if (url.startsWith('/wiki/settings')) return Promise.resolve(settings);
+    return Promise.resolve(null);
+  });
+}
+
+// Пакет с вердиктами судьи, ещё в очереди: проход решил op0 (отказ с причиной) и op1 (принятие),
+// op2 отложил (вердикта нет) — пакет остаётся proposed (StatusAfterDecisions: есть нерешённые).
+// У всех — допущенный код причины: без кода или с autoapply_off операция в очереди судьи
+// открыта человеку (J-F1 доработка), а здесь — очередь целиком судье.
+const JPKG = {
+  ...PKG,
+  operations: [
+    op({
+      reasonCode: 'overrides_human',
+      judgeDecision: 'rejected', judgeReason: 'числа в утверждении не подтверждены цитатой',
+      judgeModel: 'claude-x', judgeAt: '2026-11-12T03:40:00Z', judgeCostUsd: 0.01, judgeAttempts: 1,
+    }),
+    op({
+      index: 1, op: 'append', page: 'projects/p1/vera', target: null, text: 'Вера ведёт QA.',
+      class: 'session×append', decision: 'inbox', reason: 'Дополняет страницу',
+      reasonCode: 'class_disabled',
+      judgeDecision: 'accepted', judgeModel: 'claude-x', judgeAt: '2026-11-12T03:41:00Z', judgeCostUsd: 0.01, judgeAttempts: 1,
+    }),
+    op({
+      index: 2, op: 'link', page: 'projects/p1/gleb', target: 'projects/p1/vera', text: null,
+      class: 'session×link', decision: 'inbox', reason: 'Новая связь',
+      // допущена и отложена проходом (попыток < 3): «вердикта ещё нет» — ожидание судьи, не человек
+      reasonCode: 'target_disputed',
+    }),
+    PKG.operations[1],
+  ],
+};
+
+// Пакет после частичного решения человека: в ручном режиме op0 принята, op1 отклонена,
+// потом включено автоприменение; op2 (index 2) ещё не решена никем — пакет в очереди
+// (proposed). В строке «Решений судьи» решённые человеком показывают решение человека,
+// а не «вердикта ещё нет» (доработка J-F1, ревью 4a5a06f8).
+const JPKG_HUMAN = {
+  ...PKG,
+  operations: [
+    op({ humanDecision: 'accepted' }),
+    op({
+      index: 1, op: 'append', page: 'projects/p1/vera', target: null, text: 'Вера ведёт QA.',
+      class: 'session×append', decision: 'inbox', reason: 'Дополняет страницу',
+      humanDecision: 'rejected', humanReason: 'это уже не верно',
+    }),
+    op({
+      index: 2, op: 'link', page: 'projects/p1/gleb', target: 'projects/p1/vera', text: null,
+      class: 'session×link', decision: 'inbox', reason: 'Новая связь',
+      // допущенная и нерешённая: в очереди судьи она остаётся только для чтения (J-F1 доработка)
+      reasonCode: 'overrides_human',
+    }),
+    PKG.operations[1],
+  ],
+};
+
+describe('«Решения судьи» (J-F1)', () => {
+  it('тумблер включён: «Решения судьи», вердикты и «почему», кнопок «Принять»/«Отклонить» нет', async () => {
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    expect(has(c, 'Решения судьи')).toBe(true);
+    // вердикт по каждой спорной операции, с именем агента решения (И1: видно, чьё решение);
+    // недоделанное — честно «вердикта ещё нет», а не пустая строка
+    expect(has(c, 'отклонена судьёй')).toBe(true);
+    expect(has(c, 'принята судьёй')).toBe(true);
+    expect(has(c, 'вердикта ещё нет')).toBe(true);
+    // «почему» — judgeReason из фикстуры
+    expect(has(c, 'числа в утверждении не подтверждены цитатой')).toBe(true);
+    // список только для чтения: экрана пакета и кнопок решения нет вовсе
+    expect(buttonByText(c, 'Принять')).toBeNull();
+    expect(buttonByText(c, 'Отклонить')).toBeNull();
+    expect(opRows(c)).toHaveLength(0);
+    // auto-операций нет и здесь (тот же контракт S4a)
+    expect(has(c, 'Вера ведёт QA редактора видео.')).toBe(false);
+  });
+
+  it('ссылка на страницу — существующим каналом requestOpenWikiPage (тот же, что в «Журнале»)', async () => {
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    click(buttonByTestId(c, 'wiki-judge-open-page-0'), 'Открыть страницу');
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: 'projects/p1/gleb' });
+  });
+
+  it('в строке очереди вида судьи нет кнопки «Откатить пакет» (дефект 24c61d60)', async () => {
+    // очередь несёт непринятые пакеты, откатывают применённый — кнопка строки всегда
+    // получала 409; откат живёт в «Журнале» → «Решения за ночь»
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    expect(buttonByTestId(c, 'wiki-pkg-revert')).toBeNull();
+    expect(buttonByText(c, 'Откатить пакет')).toBeNull();
+  });
+
+  it('решённая человеком операция в виде судьи: бейдж решения человека, не «вердикта ещё нет» (доработка J-F1)', async () => {
+    seedBoth({ packages: [JPKG_HUMAN], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    const rows = judgeOpRows(c);
+    expect(rows).toHaveLength(3);
+    const rowText = (n: AnyNode) => textNodes(n).map(t => t.trim()).join(' ');
+    // op0/op1 решил человек: бейдж — решение человека, тем же текстом, что в экране пакета
+    expect(rowText(rows[0])).toContain('принята');
+    expect(rowText(rows[0])).not.toContain('вердикта ещё нет');
+    expect(rowText(rows[1])).toContain('отклонена');
+    expect(rowText(rows[1])).not.toContain('вердикта ещё нет');
+    // op2 не решил никто — прежнее честное «вердикта ещё нет»
+    expect(rowText(rows[2])).toContain('вердикта ещё нет');
+  });
+
+  it('тумблер выключен: прежние «Входящие» с кнопками, поведение без изменений', async () => {
+    seedBoth(LIST, SETTINGS_OFF);
+    const c = render();
+    await settle();
+    expect(has(c, 'Решения судьи')).toBe(false);
+    expect(has(c, 'Здесь только то, где нужен человек')).toBe(true);
+    openPackage(c);
+    await settle();
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-0')).not.toBeNull();
+  });
+
+  it('решённая судьёй операция в ручном режиме: не «на решение», без кнопок «Принять»/«Отклонить» (хвост R-J-J2a)', async () => {
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_OFF);
+    const c = render();
+    await settle();
+    // в счётчике строки — только то, что не решил ни человек, ни судья (op2)
+    expect(has(c, '1 на решение')).toBe(true);
+    openPackage(c);
+    await settle();
+    // по вердикту судья кнопок решения нет: человек его вторым решением не переворачивает (И1)
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-0')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-accept-1')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-1')).toBeNull();
+    // решённое видно и называется чьим оно
+    expect(has(c, 'отклонена судьёй')).toBe(true);
+    expect(has(c, 'принята судьёй')).toBe(true);
+    // не решённая никем — прежняя, с кнопками
+    expect(buttonByTestId(c, 'wiki-op-accept-2')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-2')).not.toBeNull();
+  });
+});
+
+// ─── Доработка J-F1 (финал 9c305f19, вариант (а)): пакет с операциями вне судьи — человеку ───
+// Судья не трогает операции с autoapply_off и пакеты без кода причины (WikiJudgeSweep.cs:23-24,
+// И4′): они висят без срока и занимают лимит 20 (ночь встаёт на open_limit). В режиме судьи
+// такой пакет — ручная строка и экран пакета: нерешённая операция вне допуска получает кнопки;
+// допустительная без вердикта — без кнопок («вердикта ещё нет» — ожидание прохода), вердикт
+// судьи — без кнопок (И1). Пакет, где всё нерешённое допущено, остаётся строкой судьи.
+
+// op0 — autoapply_off (создана в ручном режиме, потом тумблер включили): судья её не зовёт.
+// op1 — допущена и ещё не решена. op2 — вердикт судьи.
+const JPKG_OUT = {
+  ...PKG,
+  operations: [
+    op({ reasonCode: 'autoapply_off', reason: 'выключатель «Применять без ревью» выключен — каждая правка через «Входящие»' }),
+    op({ index: 1, reasonCode: 'overrides_human' }),
+    op({ index: 2, judgeDecision: 'rejected', judgeReason: 'числа не подтверждены цитатой', judgeModel: 'claude-x' }),
+  ],
+};
+
+describe('режим судьи: пакет с операциями вне допуска открыт человеку (доработка J-F1)', () => {
+  it('пакет с операцией autoapply_off: ручная строка, экран пакета, кнопки у неё', async () => {
+    seedBoth({ packages: [JPKG_OUT], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    // строка ручная (кликабельная), не строка судьи
+    expect(buttonByTestId(c, 'wiki-pkg-row')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-judge-row')).toBeNull();
+    openPackage(c);
+    await settle();
+    // операция вне допуска — с кнопками, как в ручном режиме (c1)
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-0')).not.toBeNull();
+    const rows = opRows(c);
+    expect(rows).toHaveLength(3);
+    const rowText = (n: AnyNode) => textNodes(n).map(t => t.trim()).join(' ');
+    // допустительная без вердикта — без кнопок, метка ожидания прохода (c2)
+    expect(buttonByTestId(c, 'wiki-op-accept-1')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-1')).toBeNull();
+    expect(rowText(rows[1])).toContain('вердикта ещё нет');
+    // вердикт судьи — без кнопок (И1) и называется своим
+    expect(buttonByTestId(c, 'wiki-op-accept-2')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-2')).toBeNull();
+    expect(rowText(rows[2])).toContain('отклонена судьёй');
+  });
+
+  it('пакет без кода причины (старый, хвост master): открыт человеку так же', async () => {
+    // PKG: op0 без reasonCode — «кода нет вовсе» = не допущена (И4′)
+    seedBoth({ packages: [PKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    expect(buttonByTestId(c, 'wiki-pkg-row')).not.toBeNull();
+    openPackage(c);
+    await settle();
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-0')).not.toBeNull();
+  });
+
+  it('пакет, где всё нерешённое допущено к судье, остаётся строкой только для чтения', async () => {
+    // JPKG: op0/op1 с вердиктами, op2 допущена и отложена — ни одной человеческой операции
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-judge-row')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-pkg-row')).toBeNull();
+    expect(buttonByText(c, 'Принять')).toBeNull();
+    expect(buttonByText(c, 'Отклонить')).toBeNull();
+  });
+
+  it('ручной режим не меняется: пакет без кода — с кнопками, как прежде', async () => {
+    // тот же JPKG_OUT при выключенном тумблере — прежнее поведение (кнопки у всех нерешённых)
+    seedBoth({ packages: [JPKG_OUT], invalidCount: 0 }, SETTINGS_OFF);
+    const c = render();
+    await settle();
+    openPackage(c);
+    await settle();
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-accept-1')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-accept-2')).toBeNull();
+  });
+});
+
+// ─── M5 · свёртка info-плашки и возраст в строку меты ───
+// Чистые read/writeNoticeCollapsed (конкурентность): localStorage недоступен или бросает —
+// read false, write молча; ключи обычного режима и режима судьи независимы; мусор в ключе
+// читается как false. Свёртка в компоненте: «Понятно» сворачивает до одной строки заголовка,
+// «Подробнее» разворачивает; состояние переживает перемонтирование через storage.
+// Узко (useWikiNarrow, М0): возраст — в строке меты, отдельной колонки справа нет.
+
+const KEY = 'wiki.inbox.noticeCollapsed';
+const KEY_JUDGE = 'wiki.inbox.noticeCollapsed.judge';
+
+function fakeStorage(init: Record<string, string> = {}): Storage {
+  const map = new Map(Object.entries(init));
+  return {
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => { map.set(k, v); },
+    removeItem: (k: string) => { map.delete(k); },
+    clear: () => { map.clear(); },
+    key: (i: number) => [...map.keys()][i] ?? null,
+    length: map.size,
+  } as unknown as Storage;
+}
+
+// fakeDom-«localStorage» для пути компонента (default — window.localStorage): тот же
+// Storage-контракт; гасится в afterEach
+function attachStorage(st: Storage) {
+  (globalThis as { window?: { localStorage?: Storage } }).window!.localStorage = st;
+}
+
+describe('M5: читалка/писалка свёртки — конкурентность', () => {
+  it('write и read по обоим ключам; ключи обычного режима и режима судьи независимы', () => {
+    const st = fakeStorage();
+    writeNoticeCollapsed(false, true, st);
+    expect(readNoticeCollapsed(false, st)).toBe(true);
+    expect(readNoticeCollapsed(true, st)).toBe(false); // чужой ключ не затронут
+    writeNoticeCollapsed(true, true, st);
+    expect(readNoticeCollapsed(true, st)).toBe(true);
+    expect(readNoticeCollapsed(false, st)).toBe(true);
+    writeNoticeCollapsed(false, false, st);
+    expect(readNoticeCollapsed(false, st)).toBe(false);
+    expect(readNoticeCollapsed(true, st)).toBe(true);
+  });
+
+  it('storage, чей getItem/setItem бросает: read — false, write — не бросает', () => {
+    const boom = {
+      getItem: () => { throw new Error('приватный режим'); },
+      setItem: () => { throw new Error('квота'); },
+    } as unknown as Storage;
+    expect(readNoticeCollapsed(false, boom)).toBe(false);
+    expect(readNoticeCollapsed(true, boom)).toBe(false);
+    expect(() => writeNoticeCollapsed(false, true, boom)).not.toThrow();
+    expect(() => writeNoticeCollapsed(true, false, boom)).not.toThrow();
+  });
+
+  it('мусор в ключе (не "1"/"0") читается как false', () => {
+    expect(readNoticeCollapsed(false, fakeStorage({ [KEY]: 'может быть' }))).toBe(false);
+    expect(readNoticeCollapsed(false, fakeStorage({ [KEY]: '0' }))).toBe(false);
+    expect(readNoticeCollapsed(true, fakeStorage({ [KEY_JUDGE]: '1' }))).toBe(true);
+  });
+
+  it('localStorage недоступен (в тестовой среде его нет): read — false, write — не бросает', () => {
+    expect(readNoticeCollapsed(false)).toBe(false);
+    expect(() => writeNoticeCollapsed(false, true)).not.toThrow();
+  });
+});
+
+describe('M5: свёртка плашки в компоненте', () => {
+  it('«Понятно» сворачивает до одной строки заголовка, «Подробнее» разворачивает', async () => {
+    seedList(LIST);
+    const c = render();
+    await settle();
+    expect(has(c, 'Остальное, включая замену ваших формулировок')).toBe(true);
+    click(buttonByTestId(c, 'wiki-inbox-notice-collapse'), 'Понятно');
+    await settle();
+    // свёрнуто: заголовок остался, описания нет, есть «Подробнее»
+    expect(has(c, 'Здесь только то, где нужен человек')).toBe(true);
+    expect(has(c, 'Остальное, включая замену ваших формулировок')).toBe(false);
+    click(buttonByTestId(c, 'wiki-inbox-notice-expand'), 'Подробнее');
+    await settle();
+    expect(has(c, 'Остальное, включая замену ваших формулировок')).toBe(true);
+  });
+
+  it('свёртка переживает перемонтирование (storage)', async () => {
+    seedList(LIST);
+    const c1 = render();
+    // storage цепляется ПОСЛЕ render: installFakeDom создаёт новый объект window,
+    // повешенный до него localStorage он не несёт
+    attachStorage(fakeStorage());
+    await settle();
+    click(buttonByTestId(c1, 'wiki-inbox-notice-collapse'), 'Понятно');
+    await settle();
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'Остальное, включая замену ваших формулировок')).toBe(false);
+    expect(has(c2, 'Здесь только то, где нужен человек')).toBe(true);
+  });
+
+  it('режим судьи: свой ключ и своя плашка; свёртка судьи не трогает обычный режим', async () => {
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c1 = render();
+    attachStorage(fakeStorage());
+    await settle();
+    click(buttonByTestId(c1, 'wiki-inbox-notice-collapse'), 'Понятно');
+    await settle();
+    // свёрнуто: заголовок режима судьи остался, описания нет
+    expect(has(c1, 'Решения судьи')).toBe(true);
+    expect(has(c1, 'Спорные правки решает облачный судья')).toBe(false);
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'Спорные правки решает облачный судья')).toBe(false);
+    // обычный режим при этом не свёрнут: ключи независимы. Снимок настроек в общем
+    // сторе переживает render внутри теста — перед сменой режима его гасим (__test.reset)
+    wikiStore.reset();
+    seedBoth(LIST, SETTINGS_OFF);
+    const c3 = render();
+    await settle();
+    expect(has(c3, 'Остальное, включая замену ваших формулировок')).toBe(true);
+  });
+
+  it('component: ключи независимы — запись одного режима не меняет другой', async () => {
+    const st = fakeStorage();
+    seedList(LIST);
+    const c1 = render();
+    attachStorage(st);
+    await settle();
+    click(buttonByTestId(c1, 'wiki-inbox-notice-collapse'), 'Понятно');
+    await settle();
+    expect(st.getItem(KEY)).toBe('1');
+    expect(st.getItem(KEY_JUDGE)).toBeNull();
+  });
+});
+
+describe('M5: узкая раскладка — возраст в строке меты', () => {
+  // «узко» задаём замером контейнера: подвешиваем clientWidth (< MOBILE_MAX) на прототип
+  // фейк-DOM-узлов (тот же путь, что у observeWidth); решение «узко/широко» — у М0
+  function forceNarrow(width: number) {
+    const proto = Object.getPrototypeOf((globalThis as { document: { createElement(t: string): unknown } }).document.createElement('div'));
+    Object.defineProperty(proto, 'clientWidth', { get: () => width, configurable: true });
+  }
+
+  it('узко: возраст в мете строки, отдельной колонки возраста нет', async () => {
+    installFakeDom();
+    forceNarrow(300);
+    seedList(LIST);
+    const c = render();
+    await settle();
+    // ageText(PKG.createdAt): старше суток — дата '30.10'; ORIGIN_META.session.label — «чат»
+    expect(has(c, '· чат · 30.10')).toBe(true);
+  });
+
+  it('широко (без замера контейнера): возраст — отдельной колонкой, в мету не входит', async () => {
+    seedList(LIST);
+    const c = render();
+    await settle();
+    // возраст на месте (колонка), но не в мете: между «чат» и возрастом стоит заголовок
+    expect(texts(c)).toContain('30.10');
+    expect(has(c, '· чат · 30.10')).toBe(false);
   });
 });

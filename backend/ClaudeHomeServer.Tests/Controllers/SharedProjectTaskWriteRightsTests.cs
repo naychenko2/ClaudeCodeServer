@@ -113,8 +113,20 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
         var projectId = IdOf(await created.Content.ReadAsStringAsync());
 
         if (role is Editor or Reader)
+        {
             (await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
                 new { username = TestWebApplicationFactory.SecondUsername, role })).EnsureSuccessStatusCode();
+            // Руководитель общего проекта: после W4-B1a (доработка 2, финал ed64271c) новый чат
+            // в осиротевшем общем проекте не создаётся никому, а фикстуре нужны два чата одного
+            // проекта (SharedWithChatAsync + ChatInProjectAsync) — порядок «чат до участников»
+            // здесь не подходит. Общий проект с руководителем — то состояние, которое даёт продукт.
+            var leadResp = await owner.PostAsJsonAsync("/api/personas",
+                new { name = "Руководитель-" + Guid.NewGuid().ToString("N")[..6], scope = "project", projectId });
+            leadResp.EnsureSuccessStatusCode();
+            (await owner.PostAsJsonAsync(
+                $"/api/personas/{IdOf(await leadResp.Content.ReadAsStringAsync())}/make-default", new { }))
+                .EnsureSuccessStatusCode();
+        }
 
         var task = await owner.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new { title = "Задача проекта" });
         task.EnsureSuccessStatusCode();

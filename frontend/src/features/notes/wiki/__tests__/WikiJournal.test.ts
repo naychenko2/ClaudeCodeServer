@@ -8,6 +8,17 @@
 // 'all'/null — без section; снятие пропа — прежняя раскладка со своим Select; смена пропа —
 // перезапрос и гонка поколений; отказ с пропом — текстом, как без пропа.
 //
+// Вид «Решения за ночь» (J-F2): переключатель вида и запрос view=night с окном последней
+// ночи [вчера, завтра); группы 2/1/1/0 — ровно 3 заголовка и 4 строки операций, пустая группа
+// не показывается; все пусты — «За ночь решений нет»; содержимое строки (claim, «почему»
+// судьи, причина спора) и ссылка на страницу — раздел берётся из ключа страницы по границе
+// «/»; «Откатить пакет» — только у строки с packageStatus === 'applied' (доработка b0065470):
+// в «Принято судьёй» строки reverted/apply_failed остаются в группе с пометкой «откачен» /
+// «не применён» без кнопки; у «Ждут решения» (прежний заголовок «Ждут судью») кнопки нет
+// вовсе; один POST с id пакета строки; отказ — текстом; гонка поколений между видами; отказ
+// вида ночи — тот же один Notice с «Повторить», но с переключателем над ним: «Все записи»
+// запрашивает обычный журнал (доработка ревью bb48be19).
+//
 // Мокан только транспорт (offline.request) и signalr — тот же приём, что в WikiInbox.test.
 // Модалка ConfirmDialog рендерится порталом в document.body — её узлы ищутся от body.
 // Нативный <select> в fakeDom не живёт (react-dom при рендере читает select.options, чего у
@@ -37,6 +48,32 @@
 // (14) не вести «Вернуть мою» на страницу (убрать requestOpenWikiPage) → ««Вернуть мою» ведёт
 //     на страницу» краснеет (F6b).
 // (16) снять проверку поколения в .then (loadSeq) → «смена пропа a → b» краснеет (W9b).
+// (17) строка ночи не рендерит judgeReason/reason → «содержимое строки» краснеет (J-F2);
+// (18) «Откатить пакет» во всех группах → «у „Ждут решения“ нет „Откатить пакет“» краснеет (J-F2);
+// (19) не отфильтровывать пустые группы → «ровно 3 заголовка» краснеет (J-F2);
+// (20) снять проверку поколения в .then вида ночи → «гонка видов» краснеет (J-F2);
+// (21) pageSectionKey — startsWith без границы «/» → «с похожим префиксом» краснеет (J-F2).
+// (22) убрать viewRow из ветки ошибки → «отказ загрузки вида ночи» краснеет (доработка bb48be19).
+// (23) показывать «Откатить пакет» при любой группе/статусе → «кнопка только у applied»
+//     краснеет (3 кнопки вместо 1) (доработка b0065470);
+// (24) не рендерить пометку статуса (PACKAGE_STATUS_BADGE пуст) → «пометка „откачен“ /
+//     „не применён“» краснеет (доработка b0065470).
+//
+// М6 (макет wiki-panels-v1, «Журнал» A6, П1/П2/П3): раскладка строки — от ширины контейнера
+// (узкость решает useWikiNarrow, М0; здесь мок даёт состояние, проверяется отображение
+// narrow → раскладка, паттерн — SaveConflictDialog.test); действия — под текстом с отступом
+// на ширину иконки; ряды вида и фильтров — один закреплённый sticky-блок; окно вердиктов —
+// короткая строка shortVerdictWindow, полный текст — в title.
+// Мутации М6 (вывод — в отчёте задачи):
+// (25) убрать narrow-ветку меты → «узко — время в мете» краснеет;
+// (26) рендерить колонку времени безусловно (снять !narrow) → «узко — время в мете»
+//     краснеет (время в строке дважды);
+// (27) убрать колонку времени вовсе → «широко — время отдельной колонкой» краснеет;
+// (28) снять отступ-обёртку действий (рендерить кнопку без div) → «отступ на ширину иконки»
+//     краснеет;
+// (29) выбросить из shortVerdictWindow хвост «· очередь — ${queueText}» → чистый тест и
+//     «вид ночи — короткая строка» краснеют;
+// (30) снять sticky-стили бара → «закреплённый блок управления» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -44,7 +81,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
-import { WikiJournal } from '../WikiJournal';
+import { C, SP } from '../../../../lib/design';
+import { ICON_SIZE } from '../../../../components/ui/icons';
+import { shortVerdictWindow, WikiJournal } from '../WikiJournal';
 import { WIKI_SUBTABS } from '../wikiTabs';
 
 // Тост отката уходит событием 'cc-local-toast' (lib/toast): шпион на showToast читает, что
@@ -73,10 +112,14 @@ vi.mock('../../../../components/ui/Select', () => ({
   Select: ({ placeholder, onChange }: { placeholder?: string; onChange?: (v: string) => void }) =>
     createElement('button', { 'data-testid': `mock-select-${placeholder ?? ''}`, onClick: () => onChange?.(sel.value) }, placeholder ?? ''),
 }));
+// М6: узкость контейнера даёт мок (решение «узко» проверяет useWikiNarrow.test, М0; здесь —
+// отображение narrow → раскладка). Дефолт — широко: существующие тесты не затронуты.
+const narrowFlag = vi.hoisted(() => ({ value: false }));
+vi.mock('../useWikiNarrow', () => ({ useWikiNarrow: () => [() => {}, narrowFlag.value] }));
 
 import { request } from '../../../../lib/offline';
 import {
-  __test as wikiStore, consumeOpenWikiPage, getWikiPageSnapshot, loadWikiPage, useWikiPage,
+  __test as wikiStore, consumeOpenWikiPage, getWikiPageSnapshot, loadWikiPage, loadWikiTree, useWikiPage,
 } from '../../../../lib/wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -240,6 +283,7 @@ beforeEach(() => {
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
   sel.value = '';
+  narrowFlag.value = false;
   toast.calls.length = 0;
   // стор вики — модульный (тот же транспорт, что мокается здесь): каждый тест с чистого
   // состояния, открытые страницы и поколения — из прошлого теста не переносятся
@@ -284,14 +328,14 @@ describe('«Журнал» (S7c-2)', () => {
     expect(String(third[2][0])).toBe('/wiki/journal?section=projects%2Fp1&origin=note');
   });
 
-  it('политика по записи: applied+auto — «применилось само», applied+inbox — «через Входящие»; системный relink показан событием без источника', async () => {
+  it('политика по записи: applied+auto — «применилось само», applied+inbox — «через Решения»; системный relink показан событием без источника', async () => {
     seedJournal(RESP);
     const c = render();
     await settle();
     // журнал — все события окна, ничего не отфильтровывается локально
     expect(rows(c)).toHaveLength(5);
     expect(has(c, 'применилось само')).toBe(true);
-    expect(has(c, 'через Входящие')).toBe(true);
+    expect(has(c, 'через Решения')).toBe(true);
     expect(has(c, 'отбит проверками')).toBe(true);
     expect(has(c, 'откат по источнику')).toBe(true);
     expect(has(c, 'перелинкованы связи')).toBe(true);
@@ -942,5 +986,444 @@ describe('«Журнал»: раздел из пропа sectionScope (W9b)', ()
     const { container } = renderScoped('projects/p1');
     await settle();
     expect(has(container, 'Нет доступа')).toBe(true);
+  });
+});
+
+// ─── Вид «Решения за ночь» (J-F2) ───
+// Строка ночи — операция пакета с вердиктом (контракт J-F0): раздела в ней нет — только ключ
+// страницы, поэтому ссылка проверяет и derivation раздела из дерева по границе «/». Дерево
+// поднимается до рендера: без него ссылка на страницу не строится (и это тоже проверяется).
+// Окно запроса — локальные [вчера, завтра): asserted не точными датами (полночь посреди
+// теста сдвинула бы их), а границей: from ≤ сегодня ≤ to и ровно 2 дня между ними.
+
+// packageStatus — фактические статусы этих групп (RowOf несёт p.Status, WikiJournalReader.cs:328-330):
+// judgeAccepted — применённый (applied) либо с другой судьбой (см. ND_ACCEPTED_REVERTED/FAILED);
+// judgeRejected — rejected; codeRejected — отказ кодов; waiting — только открытый пакет (IsOpen)
+const ND_ACCEPTED_A = {
+  packageId: 'pkg-a1', page: 'projects/p1/page-a', claim: 'Утверждение А',
+  reasonCode: 'source_not_newer', judgeDecision: 'accepted', judgeReason: 'подтверждено источником',
+  judgeAt: '2026-11-12T02:10:00Z', judgeCostUsd: 0.0012, judgeModel: 'claude-x',
+  reason: 'заменить мою формулировку', packageStatus: 'applied',
+};
+const ND_ACCEPTED_B = { ...ND_ACCEPTED_A, packageId: 'pkg-a2', page: 'projects/p1/page-b', claim: 'Утверждение Б', judgeAt: '2026-11-12T02:14:00Z' };
+// Принятый судьёй, но с другой судьбой пакета: откатан человеком / не применился (дефекты b58d81c0, 76f4c7d6)
+const ND_ACCEPTED_REVERTED = { ...ND_ACCEPTED_A, packageId: 'pkg-a3', page: 'projects/p1/page-f', claim: 'Утверждение Ж', judgeAt: '2026-11-12T02:16:00Z', packageStatus: 'reverted' };
+const ND_ACCEPTED_FAILED = { ...ND_ACCEPTED_A, packageId: 'pkg-a4', page: 'projects/p1/page-g', claim: 'Утверждение И', judgeAt: '2026-11-12T02:18:00Z', packageStatus: 'apply_failed' };
+const ND_REJECTED = { ...ND_ACCEPTED_A, packageId: 'pkg-r1', page: 'common/page-c', claim: 'Утверждение В', judgeDecision: 'rejected', judgeReason: 'противоречит странице', packageStatus: 'rejected' };
+// Отказ кода (в т.ч. «судья не вынес решения за 3 попытки»): judgeModel='code', не вердикт модели
+const ND_CODE = { ...ND_ACCEPTED_A, packageId: 'pkg-c1', page: 'common/page-d', claim: null, judgeReason: 'судья не вынес решения за 3 попытки', judgeModel: 'code', packageStatus: 'rejected_by_checks' };
+const ND_WAITING = {
+  ...ND_ACCEPTED_A, packageId: 'pkg-w1', page: 'projects/p1/page-e', claim: 'Утверждение Г',
+  judgeDecision: null, judgeReason: null, judgeAt: null, judgeCostUsd: null, judgeModel: null,
+  reason: 'ждёт решения', packageStatus: 'proposed',
+};
+
+// Фикстура c1: группы 2/1/1/0
+const NIGHT_2110 = { judgeAccepted: [ND_ACCEPTED_A, ND_ACCEPTED_B], judgeRejected: [ND_REJECTED], codeRejected: [ND_CODE], waiting: [] };
+const NIGHT_EMPTY = { judgeAccepted: [], judgeRejected: [], codeRejected: [], waiting: [] };
+const NIGHT_ONLY_WAITING = { ...NIGHT_EMPTY, waiting: [ND_WAITING] };
+
+// Дерево для ссылки на страницу: 'projects/p10' — раздел с похожим префиксом: граница
+// ключа («/»), а не начало строки
+const TREE_NIGHT = {
+  initialized: true,
+  sections: [
+    { key: 'projects/p1', name: 'AI Home' },
+    { key: 'projects/p10', name: 'Другой проект' },
+    { key: 'common', name: null },
+  ],
+};
+
+function serveNight(data: unknown) {
+  req.mockImplementation((url: string) => {
+    if (url === '/wiki/tree') return Promise.resolve(TREE_NIGHT);
+    if (String(url).includes('view=night')) return Promise.resolve(data);
+    if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+    return Promise.resolve(null);
+  });
+}
+
+// Данные вида + поднятое дерево — до рендера (тот же порядок, что openPage выше)
+async function seedNight(data: unknown) {
+  serveNight(data);
+  await act(async () => { await loadWikiTree(); });
+}
+
+function nightRows(container: AnyNode): AnyNode[] {
+  return allNodes(container).filter(n => n.getAttribute('data-testid') === 'wiki-night-row');
+}
+function nightGroupCount(container: AnyNode): number {
+  return allNodes(container).filter(n => n.getAttribute('data-testid') === 'wiki-night-group').length;
+}
+function segmentBtn(container: AnyNode, label: string): AnyNode | null {
+  return allNodes(container).find(n => n.nodeName === 'BUTTON' && textNodes(n).join('').trim() === label) ?? null;
+}
+async function toNightView(c: AnyNode) {
+  click(segmentBtn(c, 'Решения за ночь'), 'сегмент «Решения за ночь»');
+  await settle();
+}
+
+describe('«Журнал»: вид «Решения за ночь» (J-F2)', () => {
+  it('переключатель вида: «Решения за ночь» просит view=night с окном последней ночи; «Все записи» — обычный журнал', async () => {
+    await seedNight(NIGHT_2110);
+    const c = render();
+    await settle();
+    // дефолтный вид — прежний журнал: свои строки, ночных нет
+    expect(rows(c)).toHaveLength(5);
+    expect(nightRows(c)).toHaveLength(0);
+    click(segmentBtn(c, 'Решения за ночь'), 'сегмент «Решения за ночь»');
+    await settle();
+    const calls = getCalls('/wiki/journal');
+    expect(calls).toHaveLength(2);
+    const m = /^\/wiki\/journal\?view=night&from=(\d{4}-\d{2}-\d{2})&to=(\d{4}-\d{2}-\d{2})$/.exec(String(calls[1][0]));
+    expect(m).not.toBeNull();
+    // окно накрывает ночь через полночь: from ≤ сегодня ≤ to, ровно 2 дня между ними
+    const from = Date.parse(`${m![1]}T00:00:00Z`);
+    const to = Date.parse(`${m![2]}T00:00:00Z`);
+    const DAY = 86_400_000;
+    const now = new Date();
+    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    expect(from).toBeLessThanOrEqual(today);
+    expect(to).toBeGreaterThanOrEqual(today);
+    expect(to - from).toBe(2 * DAY);
+    expect(nightRows(c)).toHaveLength(4);
+    // возврат к журналу — обычный запрос без view, его строки на месте
+    click(segmentBtn(c, 'Все записи'), 'сегмент «Все записи»');
+    await settle();
+    expect(String(getCalls('/wiki/journal')[2][0])).toBe('/wiki/journal');
+    expect(rows(c)).toHaveLength(5);
+    expect(nightRows(c)).toHaveLength(0);
+  });
+
+  it('группы 2/1/1/0: ровно 3 заголовка групп и 4 строки операций; «Ждут решения» не показана', async () => {
+    await seedNight(NIGHT_2110);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // мутация (19): не отфильтровывать пустые группы — «Ждут решения» добавилась бы четвёртой
+    expect(nightGroupCount(c)).toBe(3);
+    expect(nightRows(c)).toHaveLength(4);
+    expect(has(c, 'Принято судьёй')).toBe(true);
+    expect(has(c, 'Отклонено судьёй')).toBe(true);
+    expect(has(c, 'Отклонено кодом')).toBe(true);
+    expect(has(c, 'Ждут решения')).toBe(false);
+  });
+
+  it('все группы пусты — «За ночь решений нет», а не пустой экран', async () => {
+    await seedNight(NIGHT_EMPTY);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    expect(has(c, 'За ночь решений нет')).toBe(true);
+    expect(nightGroupCount(c)).toBe(0);
+    expect(nightRows(c)).toHaveLength(0);
+  });
+
+  it('содержимое строки: claim, «почему» судьи и причина спора; ссылка открывает страницу', async () => {
+    await seedNight(NIGHT_2110);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // мутация (17): строка не рендерит judgeReason/reason — эти два assert краснеют
+    expect(has(c, 'Утверждение А')).toBe(true);
+    expect(has(c, 'почему: подтверждено источником')).toBe(true);
+    expect(has(c, 'причина спора: заменить мою формулировку')).toBe(true);
+    // раздела в строке нет — он берётся из ключа страницы; открытие — существующий канал
+    click(buttonByTestId(c, 'wiki-night-open'), 'ссылка на страницу');
+    expect(consumeOpenWikiPage()).toMatchObject({ section: 'projects/p1', path: 'projects/p1/page-a' });
+  });
+
+  it('страница раздела с похожим префиктом: раздел берётся по границе ключа, а не по началу строки', async () => {
+    // 'projects/p1x' — не раздел: 'projects/p1' — начало его ключа, но не граница.
+    // Без границы «/» строка получила бы ссылку в чужой раздел.
+    const P1X = { ...ND_ACCEPTED_A, page: 'projects/p1x/y.md' };
+    await seedNight({ ...NIGHT_EMPTY, judgeAccepted: [P1X] });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // мутация (21): startsWith без границы «/» — 'projects/p1' совпал бы, и этот assert краснеет
+    expect(buttonByTestId(c, 'wiki-night-open')).toBeNull();
+    expect(has(c, 'projects/p1x/y.md')).toBe(true);
+  });
+
+  it('граница пропускает похожий префикс раздела: «projects/p10» открывается в своём разделе', async () => {
+    const P10 = { ...ND_ACCEPTED_A, page: 'projects/p10/x.md' };
+    await seedNight({ ...NIGHT_EMPTY, judgeAccepted: [P10] });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    click(buttonByTestId(c, 'wiki-night-open'), 'ссылка на страницу p10');
+    expect(consumeOpenWikiPage()).toMatchObject({ section: 'projects/p10', path: 'projects/p10/x.md' });
+  });
+
+  it('страница раздела, которого нет в дереве: без ссылки, ключ показан текстом', async () => {
+    const GHOST = { ...ND_ACCEPTED_A, page: 'projects/p9/ghost.md' };
+    await seedNight({ ...NIGHT_EMPTY, judgeAccepted: [GHOST] });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    expect(nightRows(c)).toHaveLength(1);
+    expect(buttonByTestId(c, 'wiki-night-open')).toBeNull();
+    expect(has(c, 'projects/p9/ghost.md')).toBe(true);
+  });
+
+  it('«Откатить пакет»: один POST с id пакета строки; кнопка — только у применённых (applied)', async () => {
+    serveNight(NIGHT_2110);
+    await act(async () => { await loadWikiTree(); });
+    // откат отвечает успехом: список перечитывается после него
+    req.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') return Promise.resolve({ restoredPages: ['projects/p1/page-a'] });
+      if (url === '/wiki/tree') return Promise.resolve(TREE_NIGHT);
+      if (String(url).includes('view=night')) return Promise.resolve(NIGHT_2110);
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+      return Promise.resolve(null);
+    });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // 2 принятые строки — 2 кнопки; в отклонённых и отбитых кодом кнопки нет (откатывать нечего)
+    const revertBtns = allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-night-revert');
+    expect(revertBtns).toHaveLength(2);
+    click(revertBtns[0], 'Откатить пакет');
+    await settle();
+    const posts = postCalls();
+    expect(posts).toHaveLength(1);
+    expect(String(posts[0][0])).toBe('/wiki/packages/pkg-a1/revert');
+    // тост — согласованный итог по возвращённым страницам
+    expect(toast.calls).toHaveLength(1);
+    expect(toast.calls[0][1]).toBe('1 страница возвращена');
+  });
+
+  // Доработка приёмки b0065470 (дефекты b58d81c0, 76f4c7d6): вердикт судьи и судьба пакета —
+  // разные вещи. Строки принятой группы с другой судьбой остаются в группе: без кнопки,
+  // с пометкой статуса.
+  it('«Принято судьёй» с другой судьбой пакета: кнопка только у applied, reverted/apply_failed — пометка в своей группе', async () => {
+    const NIGHT_MIXED = {
+      ...NIGHT_EMPTY,
+      judgeAccepted: [ND_ACCEPTED_A, ND_ACCEPTED_REVERTED, ND_ACCEPTED_FAILED],
+    };
+    await seedNight(NIGHT_MIXED);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // 3 строки остаются в одной группе («Принято судьёй» — единственный заголовок)
+    expect(nightGroupCount(c)).toBe(1);
+    expect(nightRows(c)).toHaveLength(3);
+    expect(has(c, 'Принято судьёй')).toBe(true);
+    // мутация (23): показывать кнопку при любой группе/статусе — 4 кнопки, этот assert краснеет
+    const revertBtns = allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-night-revert');
+    expect(revertBtns).toHaveLength(1);
+    // мутация (24): не рендерить пометку статуса — эти два assert краснеют
+    expect(has(c, 'откачен')).toBe(true);
+    expect(has(c, 'не применён')).toBe(true);
+    // пометка — у своей строки: «откачен» у pkg-a3, «не применён» у pkg-a4; у applied — ни той, ни другой
+    const rowText = (row: AnyNode) => textNodes(row).join(' ');
+    const rowsByPage = ['page-f', 'page-g', 'page-a'].map(p =>
+      nightRows(c).find(r => rowText(r).includes(`projects/p1/${p}`)));
+    expect(rowsByPage.every(Boolean)).toBe(true);
+    expect(rowText(rowsByPage[0]!)).toContain('откачен');
+    expect(rowText(rowsByPage[1]!)).toContain('не применён');
+    expect(rowText(rowsByPage[2]!)).not.toContain('откачен');
+    expect(rowText(rowsByPage[2]!)).not.toContain('не применён');
+    // группа «принято» остаётся и у помеченных строк: их вердикт никуда не делся
+    expect(has(c, 'подтверждено источником')).toBe(true);
+  });
+
+  it('у «Ждут решения» нет «Откатить пакет»: их ещё не применили', async () => {
+    await seedNight(NIGHT_ONLY_WAITING);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    expect(has(c, 'Ждут решения')).toBe(true);
+    expect(nightRows(c)).toHaveLength(1);
+    // мутация (18): «Откатить пакет» во всех группах — этот assert краснеет
+    expect(buttonByTestId(c, 'wiki-night-revert')).toBeNull();
+  });
+
+  it('отказ отката показан текстом, не кодом', async () => {
+    serveNight(NIGHT_2110);
+    await act(async () => { await loadWikiTree(); });
+    req.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') {
+        return Promise.reject({ status: 400, body: { code: 'wiki_revert_status', message: 'пакет в «open»: откатывают только применённый пакет' } });
+      }
+      if (url === '/wiki/tree') return Promise.resolve(TREE_NIGHT);
+      if (String(url).includes('view=night')) return Promise.resolve(NIGHT_2110);
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+      return Promise.resolve(null);
+    });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    click(buttonByTestId(c, 'wiki-night-revert'), 'Откатить пакет');
+    await settle();
+    expect(has(c, 'Пакет в этом состоянии откатать нельзя')).toBe(true);
+    expect(has(c, 'wiki_revert_status')).toBe(false);
+  });
+
+  it('гонка видов: запоздалый ответ прежней ночи не перезатрёт свежие данные', async () => {
+    let resolveLate: (v: unknown) => void = () => {};
+    let n = 0;
+    req.mockImplementation((url: string) => {
+      if (url === '/wiki/tree') return Promise.resolve(TREE_NIGHT);
+      if (String(url).includes('view=night')) {
+        n++;
+        // первая ночь — задержана; вторая (после возврата к журналу и обратно) отвечает сразу
+        if (n === 1) return new Promise(res => { resolveLate = res; });
+        return Promise.resolve(NIGHT_EMPTY);
+      }
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+      return Promise.resolve(null);
+    });
+    await act(async () => { await loadWikiTree(); });
+    const c = render();
+    await settle();
+    click(segmentBtn(c, 'Решения за ночь'), 'сегмент «Решения за ночь»');
+    await settle();
+    expect(nightRows(c)).toHaveLength(0); // первый ещё не ответил
+    click(segmentBtn(c, 'Все записи'), 'сегмент «Все записи»');
+    await settle();
+    expect(rows(c)).toHaveLength(5);
+    click(segmentBtn(c, 'Решения за ночь'), 'сегмент ещё раз');
+    await settle();
+    expect(nightRows(c)).toHaveLength(0); // свежий ответ — пустое окно
+    // мутация (20): снять проверку поколения в .then — запоздалый ответ дорисует 4 строки
+    resolveLate(NIGHT_2110);
+    await settle();
+    expect(nightRows(c)).toHaveLength(0);
+  });
+
+  it('отказ загрузки вида ночи: ошибка с переключателем вида; «Все записи» запрашивает обычный журнал', async () => {
+    // Обрыв сети ночного запроса (без status — не отказ контракта): журнал и дерево живы
+    req.mockImplementation((url: string) => {
+      if (url === '/wiki/tree') return Promise.resolve(TREE_NIGHT);
+      if (String(url).includes('view=night')) return Promise.reject(new Error('обрыв сети'));
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+      return Promise.resolve(null);
+    });
+    await act(async () => { await loadWikiTree(); });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // Состояние ошибки — тот же один Notice с «Повторить» (ревью bb48be19): добавлен только
+    // переключатель над ним (мутация (22): убрать viewRow из ветки ошибки — эти два assert
+    // и клик ниже краснеют)
+    expect(has(c, 'Не удалось прочитать «Решения за ночь»')).toBe(true);
+    const retryBtns = allNodes(c).filter(n => n.nodeName === 'BUTTON' && textNodes(n).join('').trim() === 'Повторить');
+    expect(retryBtns).toHaveLength(1);
+    expect(segmentBtn(c, 'Все записи')).not.toBeNull();
+    // Возврат к журналу: новый обычный запрос без view, его строки на экране.
+    // Ряд вызовов: монтирование — журнал, смена вида — ночной (отказал), возврат — журнал
+    click(segmentBtn(c, 'Все записи'), 'сегмент «Все записи»');
+    await settle();
+    const calls = getCalls('/wiki/journal');
+    expect(calls).toHaveLength(3);
+    expect(String(calls[2][0])).toBe('/wiki/journal');
+    expect(rows(c)).toHaveLength(5);
+    expect(nightRows(c)).toHaveLength(0);
+  });
+});
+
+// ─── М6: раскладка «Журнала» от ширины панели (A6, П1/П2/П3) ───
+
+// HH:MM для ts-фикстуры — та же локальная вычислка, что timeText: тест не зависит от
+// часового пояса машины
+function localTime(iso: string): string {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+describe('M6: shortVerdictWindow (чистая функция, П3)', () => {
+  it('короткая строка окна — «Окно: dd.MM–dd.MM · очередь — сейчас», даты — date part без сдвига поясом', () => {
+    // фактические поля вызова — локальные даты окна (localDay, «YYYY-MM-DD»)
+    expect(shortVerdictWindow('2026-11-12', '2026-11-13', 'сейчас')).toBe('Окно: 12.11–13.11 · очередь — сейчас');
+    // полная ISO-дата даёт ту же дату: берётся date part строки, Date здесь не нужен
+    expect(shortVerdictWindow('2026-11-12T01:00:00', '2026-11-13T05:00:00', 'сейчас')).toBe('Окно: 12.11–13.11 · очередь — сейчас');
+  });
+});
+
+describe('M6: узкая раскладка строки журнала (П1)', () => {
+  it('узко — время в первой строке меты («раздел · источник · HH:MM»), колонки времени справа нет', async () => {
+    narrowFlag.value = true;
+    seedJournal(RESP);
+    const c = render();
+    await settle();
+    const row = rows(c)[0];
+    const hhmm = localTime(ENTRY_AUTO.ts);
+    // мутация (25): убрать narrow-ветку меты — этот assert краснеет
+    expect(has(row, `projects/p1 · чат · ${hhmm}`)).toBe(true);
+    // время в строке ровно одно: отдельной колонки справа в узкой раскладке нет
+    // (мутация (26): рендерить колонку безусловно — этот assert краснеет, «03:12» станет дважды)
+    expect(textNodes(row).filter(t => t.includes(hhmm))).toHaveLength(1);
+  });
+
+  it('широко — время отдельной колонкой справа, мета без времени', async () => {
+    seedJournal(RESP);
+    const c = render();
+    await settle();
+    const row = rows(c)[0];
+    const hhmm = localTime(ENTRY_AUTO.ts);
+    // мутация (26): рендерить колонку безусловно — первый assert краснеет
+    expect(has(row, `· ${hhmm}`)).toBe(false);
+    expect(has(row, hhmm)).toBe(true);
+  });
+});
+
+describe('M6: действия строки — под текстом с отступом на ширину иконки (A6)', () => {
+  it('обёртки «Вернуть мою» и «Открыть страницу» — paddingLeft = SP.md + ICON_SIZE.sm + SP.sm', async () => {
+    seedMixed();
+    const c = render();
+    await settle();
+    click(chipNode(c), 'чип «ИИ поменял моё»');
+    await settle();
+    const indent = SP.md + ICON_SIZE.sm + SP.sm;
+    for (const testId of ['wiki-journal-restore', 'wiki-journal-open-page']) {
+      const btn = buttonByTestId(c, testId);
+      expect(btn, testId).not.toBeNull();
+      // мутация (27): снять div-обёртку (рендерить кнопку без отступа) — этот assert краснеет
+      const wrap = (btn as unknown as { parentNode: AnyNode }).parentNode;
+      const style = (reactProps(wrap)?.style ?? {}) as Record<string, unknown>;
+      expect(style.paddingLeft, testId).toBe(indent);
+    }
+  });
+});
+
+describe('M6: закреплённый блок управления (П2)', () => {
+  it('ряды вида и фильтров — один sticky-блок с непрозрачным фоном и нижней границей', async () => {
+    seedJournal(RESP);
+    const c = render();
+    await settle();
+    const bar = findNodeByAttr(c, 'data-testid', 'wiki-journal-bar');
+    expect(bar).not.toBeNull();
+    // мутация (29): снять sticky-стили бара — эти четыре assert краснеют
+    const st = (reactProps(bar!)?.style ?? {}) as Record<string, unknown>;
+    expect(st.position).toBe('sticky');
+    expect(st.top).toBe(0);
+    expect(st.background).toBe(C.bgWhite);
+    expect(st.borderBottom).toBe(`1px solid ${C.borderLight}`);
+    // один блок, а не два ряда по отдельности: и переключатель вида, и фильтры — внутри
+    expect(findNodeByAttr(bar!, 'data-testid', 'mock-select-Все разделы')).not.toBeNull();
+    expect(findNodeByAttr(bar!, 'data-testid', 'mock-select-Все источники')).not.toBeNull();
+  });
+});
+
+describe('M6: короткое окно вердиктов в виде ночи (П3)', () => {
+  it('вид ночи — короткая строка окна без mono, полный текст — в title', async () => {
+    await seedNight(NIGHT_2110);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    const win = findNodeByAttr(c, 'data-testid', 'wiki-night-window');
+    expect(win).not.toBeNull();
+    // мутация (28): вернуть прежний длинный текст — этот assert краснеет
+    expect(textNodes(win!).join(' ')).toMatch(/^Окно: \d{2}\.\d{2}–\d{2}\.\d{2} · очередь — сейчас$/);
+    // полный прежний текст — в title: границы окна («включая / не включая») остаются человеку
+    const title = String(reactProps(win!)?.title ?? '');
+    expect(title).toContain('включая');
+    expect(title).toContain('не включая');
+    // без mono: это подпись, не данные
+    const st = (reactProps(win!)?.style ?? {}) as Record<string, unknown>;
+    expect(st.fontFamily).toBeUndefined();
   });
 });

@@ -61,8 +61,16 @@ ffmpeg без ИИ) и швы к «Картинкам» и «Звуку» — б
   сбой и отмена версий не добавляют, траты и «соседа» у повтора нет. Контекст (тикет съёмки) — в памяти исполнителя, `ILocalVideoMedia.ShotTtl` = 12 ч, как у
   латента в адаптере: после рестарта или срока — `409 upscale_retry_unavailable`. Файлы съёмки в ComfyUI (латенты, первый кадр, копии латентов апскейла)
   адаптер убирает сам (`LocalVideoMediaAdapter.Sweep`, по таймеру `LocalMediaCollector`): только свои имена по точному имени, масок нет.
+- **«Увеличить ×2/×4»** (`VideoEditJobService.EnhanceAsync`/`EnhanceQuote`, ручка `…/versions/{versionId}/enhance`, GET — варианты и время, POST `{scale}` — запуск):
+  RelayVSR на локальной видеокарте над клипом ЛЮБОЙ версии проекта, не часть «Макс». Отдельная задача (стадия `upscaling`, отмена — «Отменить увеличение»), тот же потолок
+  «одна тяжёлая на карту», без трат и «соседа» (флаг `UpscaleRetry`). Удача — НОВАЯ версия `provider=local`, `model=relayvsr-x2|x4`, `enhanceScale`, размер результата; исходная
+  не трогается; сбой и отмена версий не добавляют; повторно увеличить увеличенную нельзя. Подробности адаптера — [local-media.md](../../docs/features/local-media.md).
 
 **Формат (ADR-025).** Инварианты, которые по коду не восстановить:
+- **Агент: `video_enhance` и `video_voice`** (те же кнопки «Увеличить ×2/×4» и «Озвучить сцену», локально и бесплатно, в проекте и в личном чате; гейт `AgentLaunch`, делегированный ход — отказ).
+  `video_enhance {sceneId, versionId?, scale 2|4}` зовёт `EnhanceAsync` (те же отказы: уже увеличенная версия, вне замеров, `EnhanceRefusal`); отмена — `video_cancel`, ожидание — `video_wait`.
+  `video_voice {sceneId, versionId?, text?, model?}` — шов `IVideoSceneVoice` (Core, реализация `AudioEditor.VideoSceneVoice`: черновик нити звука → котировка local `videoToAudio` → задача с вклейкой через `IVideoSceneSound`);
+  `model` по умолчанию — «Авто» каталога звука (Foley XL). Задача озвучки живёт в модуле звука: `video_cancel` и `video_wait` берут её `jobId` (в `video_wait` — только явным списком `jobIds`). Нет шва — отказ `provider_unavailable`.
 - **Подрезка кадров A/B — только по явному желанию «Формата»** (`format` в запросе, сцене или префах; в котировке — `Quote.FormatExplicit`). Желание, собранное из прежнего поля `aspect`, кадр не трогает и растр (`dsp_unavailable`) не требует: старый UI всегда шлёт `aspect`, и портретный кадр иначе молча резался бы до 16:9.
 - **Хранится желание, а не подмена**; арифметика ступеней и «ближайшего» — только `MediaFormatResolver`. Размер в частных `params` (`resolution`, `size`) отказ: его задаёт только `quality`. Ступень без размера модели серая с причиной (у fal H3 «Макс» — 2K/4K это увеличение, не родной размер); умолчание без желания — `VideoFormatCatalog.DefaultTier`.
 - **Фильм собирается в формате первой сцены**; замок пропорций фильма держит сервер (`VideoSceneService.SettingsAsync` → `409 film_format_locked`, `force`), одинаково для ручки и агента. `video_shoot` с `aspect`/`quality` пишет формат в сцену тем же путём, что `video_scene_set`.

@@ -276,6 +276,12 @@ public sealed class LlmSubsystem : IAppSubsystem
         // где маршрут дал движок.
         services.AddSingleton<EngineCallLedger>();
         services.AddSingleton<LocalActionOverridesStore>();
+        // Стор исполнителей-движков места (разрез «ночь вики на нескольких локальных
+        // исполнителях» §2, шаг W2a): настройки админа для мест с ParallelExecutors —
+        // список локальных движков, их параллельность и потолок слотов одного владельца.
+        // Рядом с оверрайдами маршрутов: это второй слой той же настройки места (кем идти),
+        // и тот же круг зависимостей — имена и потолки берёт из NamedLocalEngines/реестра.
+        services.AddSingleton<LocalActionExecutorsStore>();
         services.AddSingleton<LocalActionRouter>();
         services.AddSingleton<ICheapTextRunner, CheapTextRunner>();
         // Шов разметки картинок моделью со зрением (ADR-027 §4): ImageEditor видит только интерфейс.

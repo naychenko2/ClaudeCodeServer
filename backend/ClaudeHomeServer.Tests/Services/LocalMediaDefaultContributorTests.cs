@@ -197,7 +197,7 @@ public class LocalMediaDefaultContributorTests
         personal.Should().NotContain("локальных моделей для них нет");
 
         project.Should().Contain("local_speech").And.Contain("local_music_generate");
-        personal.Should().Contain("локальных моделей в этом чате нет");
+        personal.Should().Contain("локальных моделей в этом чате нет", "без модуля «Звук» инструмента звука у хода нет");
     }
 
     // ADR-021 §5, вопрос 1: модуль «Звук» доехал до хода — звук идёт через audio_* с provider local,
@@ -216,13 +216,14 @@ public class LocalMediaDefaultContributorTests
     }
 
     [Fact]
-    public async Task Личный_чат_с_модулем_звука_облако_через_audio_generate()
+    public async Task Личный_чат_с_модулем_звука_локально_через_audio_generate()
     {
         var text = (await Contributor().BuildAsync(Personal(hasAudioEditorMcp: true), "озвучь"))!.Sections[0].Text;
 
         text.Should().Be(LocalMediaDefaultContributor.PersonalRuleWithAudioEditor)
-            .And.Contain("локальных моделей в этом чате нет").And.Contain("audio_generate")
-            .And.NotContain("Прямые local_*", "в личной области локального звука нет вовсе");
+            .And.Contain("audio_generate передавай с provider local")
+            .And.NotContain("локальных моделей в этом чате нет")
+            .And.NotContain("Прямые local_*", "прямых local_* для звука в личной области нет");
     }
 
     // Без доставленного сервера, без флага модуля или без audio_generate — прежние варианты
@@ -260,12 +261,15 @@ public class LocalMediaDefaultContributorTests
     }
 
     [Fact]
-    public async Task Личный_чат_с_модулем_видео_облако_через_video_shoot()
+    public async Task Личный_чат_с_модулем_видео_локально_через_video_shoot()
     {
         var text = (await Contributor().BuildAsync(Personal(hasVideoEditorMcp: true), "сними"))!.Sections[0].Text;
 
         text.Should().Contain(LocalMediaDefaultContributor.PersonalVideoEditorRule)
-            .And.NotContain(LocalMediaDefaultContributor.PersonalNoVideoRule);
+            .And.Contain("video_shoot передавай с provider local")
+            .And.Contain("Сцену можно сохранить в «Личное»").And.Contain("video_film_build")
+            .And.NotContain(LocalMediaDefaultContributor.PersonalNoVideoRule)
+            .And.NotContain("local_text_to_video");
     }
 
     [Fact]

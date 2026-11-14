@@ -24,7 +24,7 @@
    (`video/<фильм>/кадры/`) и сочинённый трек (`music/`). Перезаписи нет, кроме `.film` под ревизией.
 4. `.film` хранит снимок сцен (текст, кадры, модель) в формате §2.
 5. Новый файл сцены сам встаёт в фильм с точкой «обновлена». Музыкой фильма становится первый готовый вариант.
-   local в личном чате в v1 закрыт.
+   ~~local в личном чате в v1 закрыт.~~ **С 13.11 открыт** (см. «Снятие запрета на local в личной области»).
 6. Тихие строки ленты: у человека «Вы сохранили/собрали/поправили …», у агента — тот же глагол без слова «Claude»
    («Сохранил/Собрал/Поправил …»): лицо даёт метка «✦ Claude» на фронте. Тексты — `VideoFeedTexts`.
 
@@ -224,7 +224,7 @@ Higgsfield, 0 local), с `Initiator`. Сбой после принятия — �
 | Модуль ссылается только на Core | строка `VideoEditor` в `Boundaries` без дубля (число тестов растёт); `typeof(VideoEditorSubsystem).Assembly` в статических конструкторах трёх сторожей |
 | Своих пакетов нет | `DynamicModulePackagesGuardTests` |
 | Отключаемость: `DynamicModules[videoeditor].Enabled=false` и `Subsystems:VideoEditor:Enabled=false` — 404, не 500 | `VideoEditorDisabledTests` |
-| Личная область: нет фильмов, нет local, нет проектных путей — отказ до `RootPath` | тесты гейта |
+| Личная область: нет фильмов, нет проектных путей — отказ до `RootPath`; local с 13.11 пускается | тесты гейта |
 | Локальный проект (ADR-016) отказывает через `ProjectCapabilities` | тест гейта, инлайнового `IsLocal` нет |
 | Трата при принятии, на владельца, своя валюта, `Initiator` | тесты исполнителя |
 | После рестарта бегущий запуск → `interrupted`, готовые версии на месте | `VideoThreadRecovery` + тест |
@@ -257,7 +257,7 @@ JSON ниже — единственное описание формы для ф
 (`POST` multipart, поле `file`: png/jpg/webp по сигнатуре, до 20 МБ → `FrameRef` вида `file` с путём `frames/<id>.<ext>` и `fileName` — человеческим именем исходного файла
 (лежит рядом с кадром, превью — `GET frames/<id>.<ext>`) в рабочей папке владельца; 404 — чужой чат, 400 — не картинка, 413 — больше лимита). В проектном чате кадр кладёт
 фронт через `files/upload` в `video/<фильм>/кадры/`. Коды ошибок (`VideoEditorErrors`): `name_taken`,
-`revision_conflict`, `dsp_unavailable`, `personal_scope_no_films`, `local_unavailable_personal`,
+`revision_conflict`, `dsp_unavailable`, `personal_scope_no_films`, ~~`local_unavailable_personal`~~ (убран 13.11),
 `project_local_unsupported`, `outside_allowed_folders`, `film_invalid`, `film_schema_unsupported`, а также общие
 `invalid_request`, `provider_unavailable`, `quote_not_found`, `too_many_jobs`, `heavy_busy`, `chat_not_found`,
 `scene_not_found`, `version_not_found`, `job_not_found`, `file_not_found`, `frame_unavailable`.
@@ -781,6 +781,26 @@ JSON ниже — единственное описание формы для ф
 
 `stage` — `queued | running | upscaling | downloading` (`VideoProgressStages`). `upscaling` — латентный апскейл «Макс» local H3 после съёмки, отдельные `etaSeconds` и `percent`;
 во время съёмки того же запуска `upscaleEtaSeconds` говорит, сколько займёт увеличение следом.
+
+## Снятие запрета на local в личной области (2026-11-13, Ф1)
+
+**Было.** `LocalVideoEngine.ScopeRefusal` отказывал личной области («в личном чате им некуда положить ролик»), а
+«Увеличить ×2/×4» (`EnhanceRefusal`) отвечал кодом `local_unavailable_personal`.
+
+**Причина снятия.** Причина устарела: локальный движок возвращает клип байтами (`VideoFile`) в версию нити, как облако;
+клип живёт в рабочей папке `VideoEditWorkspace` под своим `jobId`, проект ему не нужен. История таких прогонов идёт через
+`VideoEditorHistorySource` (источник `video-editor`, данные в `data/`). Задачи без проекта у `LocalMediaHistorySource`
+(источник `local-media`, файлы в проекте) теперь получают `missing`, а не ложный `project_gone`.
+
+**Стало.** `ScopeRefusal` и `EnhanceRefusal` отказывают только локальному проекту (ADR-016, код `project_local_unsupported`);
+код `local_unavailable_personal` и `VideoEditorErrors.LocalUnavailablePersonal` удалены. В личном чате работают съёмка
+MiniMax H3 и Kandinsky 6 Lite, «Увеличить ×2/×4», «Макс» и «Озвучить сцену» (локальный звук по видео + `IVideoSceneSound`
+работают по ключу области, а не по проекту). Фронт: замок и `PERSONAL_LOCAL_REASON` убраны из строк «Исполнителя» и
+причин «Снять». Блок «Видео в этом чате» говорит агенту `video_shoot` с `provider local`.
+
+**Остаётся на Ф2 (в личной области по-прежнему отказ, агенту это так и описано):** кадры из файлов проекта (первый кадр
+берётся только из «Картинок» чата или загрузки), фильмы и «сохранить сцену» в проект (`personal_scope_no_films`),
+персонажи, прямые инструменты `local_*_to_video`.
 
 ## Отвергнуто
 

@@ -237,6 +237,46 @@ describe('B2: место вызова — карточка сцены', () => {
   });
 });
 
+describe('Ф2-6/Ф2-7: личный чат — «Сохранить сцену» и фильмы «Личного»', () => {
+  const saved = { path: 'video/scene-01.mp4', framePaths: [], addedToFilm: false };
+
+  it('нет открытого фильма и папки — плоский клип без folder/filmPath, спрашивать нечего', async () => {
+    __applyThreads('c1', 'personal', threads(1, [scene('s1')], { sceneId: 's1' }));
+    const spy = vi.spyOn(videoApi, 'save').mockResolvedValue(saved);
+    expect(startSceneSave('personal', 'c1', scene('s1', { folder: '' }), 'ver-1', 'save')).toBe(true);
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0][0]).toBe('personal');
+    expect(spy.mock.calls[0][3]).toEqual({ versionId: 'ver-1' });
+  });
+
+  it('«В фильм →» без фильма — человека спросят (список фильмов «Личного»)', () => {
+    __applyThreads('c1', 'personal', threads(1, [scene('s1')], { sceneId: 's1' }));
+    const spy = vi.spyOn(videoApi, 'save').mockResolvedValue(saved);
+    expect(startSceneSave('personal', 'c1', scene('s1', { folder: '' }), 'ver-1', 'film')).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('открыт фильм «Личного» — уходит filmPath', async () => {
+    __applyThreads('c1', 'personal', threads(1, [scene('s1')], { sceneId: 's1', filmPath: FILM_PATH }));
+    const spy = vi.spyOn(videoApi, 'save').mockResolvedValue({ ...saved, addedToFilm: true });
+    vi.spyOn(videoApi, 'films').mockResolvedValue([]);
+    expect(startSceneSave('personal', 'c1', scene('s1', { folder: '' }), 'ver-1', 'save')).toBe(true);
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0][3]).toEqual({ versionId: 'ver-1', filmPath: FILM_PATH });
+  });
+
+  it('список фильмов и состояние фильма личной области грузятся с сервера, а не отсекаются', async () => {
+    const films = vi.spyOn(videoApi, 'films').mockResolvedValue([]);
+    const state = vi.spyOn(videoApi, 'filmState').mockResolvedValue(film());
+    await loadFilm('personal', 'c1', FILM_PATH);
+    expect(state).toHaveBeenCalledWith('personal', 'c1', FILM_PATH);
+    expect(getFilm('c1', FILM_PATH).state).not.toBeNull();
+    const { loadFilmList } = await import('./videoStore');
+    await loadFilmList('personal', 'c1');
+    expect(films).toHaveBeenCalledWith('personal', 'c1');
+  });
+});
+
 describe('B21: кадр, поставленный агентом, — метка «✦ Claude»', () => {
   const withFrame = (path: string) => scene('s1', { settings: { ...scene('s1').settings, frameA: { kind: 'file', path } } });
   it('событие без своей мутации, сменившее кадр, ставит метку; человек её снимает', () => {

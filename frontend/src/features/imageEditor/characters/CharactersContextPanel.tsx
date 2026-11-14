@@ -4,7 +4,7 @@
 
 import { useState } from 'react';
 import { Contact, Plus, Users } from 'lucide-react';
-import { Button, EmptyState, GenerationPanel, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
+import { Button, GenerationPanel, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
 import { enterScope, isPersonalScope } from '../scope';
 import { CharactersPanel, type CharacterEditing } from './CharactersPanel';
@@ -17,13 +17,14 @@ const ic = (I: typeof Users, size: number = ICON_SIZE.sm) => <I size={size} stro
 export function CharactersContextPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDefCtx; layout?: 'column' | 'sheet' }) {
   const { sessionId } = ctx;
   const projectId = enterScope(ctx.projectId, sessionId);
-  const personal = isPersonalScope(projectId);
-  const { list } = useCharacters(personal ? null : projectId);
+  const { list } = useCharacters(projectId);
   const [editing, setEditing] = useState<CharacterEditing>(null);
 
-  const foot = !personal && !editing ? (
+  const foot = !editing ? (
     <div data-characters-foot="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.sm, color: C.textSecondary }}>
-      <span style={{ flex: 1, minWidth: 0 }}>Папка <code>characters/</code> проекта · «В контекст» кладёт лицо в запрос</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        {isPersonalScope(projectId) ? <>Папка <code>characters/</code> в «Личном»</> : <>Папка <code>characters/</code> проекта</>} · «В контекст» кладёт лицо в запрос
+      </span>
       <Button size="xs" variant="secondary" leftIcon={ic(Plus, ICON_SIZE.xs)} onClick={() => setEditing({ kind: 'new' })} style={{ flexShrink: 0 }}>
         Персонаж
       </Button>
@@ -39,10 +40,7 @@ export function CharactersContextPanel({ ctx, layout = 'column' }: { ctx: Worksp
       onClose={ctx.onClose}
       layout={layout}
     >
-      {personal
-        ? <EmptyState compact icon={ic(Users)} title="Персонажи живут в проекте"
-            subtitle="Персонажи хранятся в папке characters/ проекта. В личном чате лицо можно передать образцом с ролью «Лицо»." />
-        : <CharactersPanel projectId={projectId} editing={editing} onEditing={setEditing} contextSessionId={sessionId} />}
+      <CharactersPanel projectId={projectId} editing={editing} onEditing={setEditing} contextSessionId={sessionId} />
     </GenerationPanel>
   );
 }

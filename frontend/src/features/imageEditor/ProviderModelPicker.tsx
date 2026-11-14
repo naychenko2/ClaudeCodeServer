@@ -17,6 +17,8 @@ interface Props {
   hasImage: boolean;
   hasMask: boolean;
   priceLabel: string;
+  // Почему «Авто» выбрало модель; показывается под ценой
+  routeReason?: string | null;
   mobile: boolean;
 }
 
@@ -134,6 +136,7 @@ export function ProviderModelPicker(p: Props) {
                 <ModelItems provider={pv} value={m.id} hasImage={p.hasImage} hasMask={p.hasMask} onPick={p.onModel} />
               </div>
               <PriceLine text={p.priceLabel} />
+              {p.routeReason && <span style={{ fontSize: FS.sm, color: C.textMuted }}>{p.routeReason}</span>}
             </div>
           </Modal>
         )}

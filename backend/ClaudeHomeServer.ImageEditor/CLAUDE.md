@@ -42,8 +42,14 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
 - **Сопоставление «чат ↔ область» — только `ImageEditScope.Of`** (`OwnChat`, `RunningLaunch`,
   восстановление после перезапуска). Инлайновый `?? "personal"` разойдётся, и варианты личного
   запуска молча не станут версиями.
-- У личной области `Project == null`: всё, что читает диск проекта (образцы путями, персонаж,
-  `SourcePath`, `transform` от файла, нить по файлу), отказывает ДО `RootPath`, а не падает.
+- У личной области `Project == null`, пока нет папки «Личного» (ADR-040): всё, что читает диск проекта
+  (образцы путями, персонаж, `SourcePath`, `transform` от файла, нить по файлу), отказывает ДО `RootPath`,
+  а не падает. Персонажи личной области лежат в `{home}/Personal/characters/`: ручки `characters*`, `loras`,
+  `training-photos`, `lora-train`, `lora-versions` и `…/faces` — второй маршрут `api/image-editor/chats/{sessionId}/…`
+  (общее тело — `ImageEditorCharacterEndpoints`; обучение и версии — те же контроллеры с двумя `[Route]`,
+  проект берёт `ImageEditScopeGate.TryCharacterProject`). Читающие ручки папку не создают, первый персонаж
+  (`POST characters`) создаёт её через `EnsurePersonalFolderAsync`. Ключ области остаётся `personal`, а id «Личного»
+  идёт только в ключи обучения LoRA (`LoraTrainingFinisher` находит его через `IPersonalProjects`).
 - Трата личного запуска пишет `ProjectId = null` (`ImageEditScope.ProjectIdOf`), иначе «Расход»
   получит несуществующий проект.
 - **Агент с тулсетом есть и в личном чате** (ADR-019, «Изменение 29.09», агент): сервер
@@ -173,6 +179,13 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   доступного по `ProviderOrder` (local последним намеренно — доступность мигает; порядок не
   трогать). Как на этом стоит умолчание агента — [local-media.md](../../docs/features/local-media.md),
   «Умолчание».
+- **«Авто» у локальных моделей — таблица, а не код.** `LocalImageRouting.Table` — единственное место
+  правил (операции + признаки → модели + причина); `LocalImageEditor.Route` отдаёт модель с причиной
+  («Авто → Klein: в запросе надпись»), `PickModel` — только модель. Котировка зовёт `IImageEditRouter`
+  лишь при `model = auto` (ручной выбор главнее), причина едет в `ImageEditQuoteDto.RouteReason`.
+  Fibo Dev и H3 в таблицу не вносить — только ручной выбор; Fibo Turbo — только при известном размере
+  исходника ≤ 1,3 Мп. «Персонаж → Klein» не включён: Klein роняет LoRA. Подробности и
+  таблица — [local-media.md](../../docs/features/local-media.md), «Авто-выбор модели в редакторе».
 - **Трата пишется всегда при принятии задачи, на владельца**, в общий `ISpendCollector`; запуск
   агентом помечен `Initiator = Agent`. У «Локальных моделей» трата пишется с нулевой суммой, а не
   пропускается. Сбой после принятия компенсируется минусом.
@@ -294,10 +307,23 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   Qwen «качественно» (`LocalImageModels.Effective`), котировка считает так же (`EtaVariant`). У Turbo нет
   `Generate`. Формат ~1 Мп (`ComfyWorkflows.Fibo2Sizes` ↔ `LocalImageEditor.Fibo2Sizes`); холст правки
   выбирает узел `TextEncodeFibo2` по пропорции исходника. Веса CC BY-NC — в подписи модели «некоммерч.».
+  **Доводка Fibo 2.0 (Ш8)**: генерация `fibo2` без образцов пишет JSON-описание сцены — оно идёт
+  `LocalImageFile.Vgl` → `EditedImage.Scene` (с сидом прогона и холстом) → `Job.Scenes` → `ImageThreadVersion.Vgl`,
+  тем же путём, что сходство лица. Сид таких прогонов выбирает драйвер, а не адаптер: иначе версия не знала
+  бы своего сида. Запуск доводки — поля `refineField`/`refineValue` ручки jobs при котировке генерации
+  `local`/`fibo2`; сборщик берёт описание из версии-основы и отказывает до запуска (версия без описания,
+  неизвестное поле, пустое значение, чужая котировка, образцы или персонаж). Агенту описание не уходит:
+  `image_state` собирает версии поштучно.
   **Krea 2 Turbo (`krea2-turbo`) и MOSS-Image (`moss-image`), с 2026-11-12** — только `Generate`
   (`TextOnlyModel`: без образцов, масок и персонажа, формат ~1 Мп). Любая картинка на входе, LoRA или
   не-генерация уводят запуск на Qwen «качественно» (`LocalImageModels.TextOnly` в `Effective`), котировку —
-  так же (`EtaVariant`).
+  так же (`EtaVariant`). **Стили Krea (Ш4)**: исключение — один образец с ролью «стиль» остаётся на Krea
+  («стиль по образцу», `IsKreaStyleReference`), поэтому каталог заявляет `MaxReferences: 15` и `caps.Styles`.
+  Стиль — только ручной выбор Krea 2 Turbo: при «Авто» плашек нет, автовыбор Krea со стилем не выбирает.
+  Стиль с персонажем, образцом другой роли или 2+ образцами `ImageEditLaunchAssembler` отвергает
+  («Стиль Krea работает без образцов или с одним образцом-стилем»), а не запускает Qwen без стиля.
+  Котировка роли не видит: одиночный образец любой роли считает стилем по образцу и занижает время,
+  если роль другая, — известный компромисс.
   **LoRA персонажа и режим B.** LoRA — блок `providers.local` манифеста (`lora`, `trigger`,
   `strength`, по умолчанию 0,8); читается в `CharacterStore.ForRequest` — **единственной точке**
   создания `CharacterRef`; `CharacterRef.Lora` под `JsonIgnore`, наружу не уходит. **Режим B =

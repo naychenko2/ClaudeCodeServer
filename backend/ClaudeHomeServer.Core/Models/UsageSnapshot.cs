@@ -59,7 +59,32 @@ public record OllamaUsageInfo(bool Enabled, string? Model, string? BaseUrl,
     IReadOnlyList<OllamaActionInfo> Actions,
     // "ollama" | "llama-server" — какой движок сейчас активен. Имя DTO не переименовываем:
     // контракт публичный, фронт под него правят отдельно (Kira).
-    string Provider = "ollama");
+    string Provider = "ollama",
+    // LocalEngines — локальные движки, которые UI «Исполнители ночи» может предложить (разрез
+    // «ночь вики на нескольких локальных исполнителях» §2, шаг W2c): «local» (основной LocalLlm)
+    // первым, затем зарегистрированные и включённые LocalEngines:* в порядке регистрации.
+    // Облачных вариантов в списке нет по построению (И3): исполнителем ночи становится только
+    // локальный движок. null — список не построен (лёгкий ответ scope=limits не строит блок ollama).
+    IReadOnlyList<OllamaLocalEngineInfo>? LocalEngines = null);
+
+// Одна строка списка локальных движков для выбора (W2c): name — ключ исполнителя, то же значение,
+// которым админ зовёт движок в PUT списка (LocalActionExecutorsStore): «local» или имя LocalEngines:*;
+// title — подпись той же логики, что Engine у OllamaActionInfo (Title, иначе модель, иначе имя);
+// maxConcurrency — потолок параллельности движка: ТОТ ЖЕ число, что держит его счётчик слотов и по
+// которому валидатор списка проверяет parallel (у именованного — LocalEngines:<имя>:MaxConcurrency,
+// у основной локали — MaxConcurrentTurns провайдера по LocalLlm:EngineKey), иначе UI разрешал бы
+// то, что физика не выдержит.
+public sealed record OllamaLocalEngineInfo(string Name, string Title, int MaxConcurrency);
+
+// Список исполнителей места с флагом каталога ParallelExecutors (OllamaActionInfo.Executors):
+// maxTotal — потолок одновременных слотов одного владельца (1..4), items — движки в порядке стора:
+// порядок списка = приоритет, свободный слот первого получает чат раньше. null — списка нет:
+// место идёт по своему маршруту, как до фичи.
+public sealed record OllamaExecutorsInfo(int MaxTotal, IReadOnlyList<OllamaExecutorInfo> Items);
+
+// Один исполнитель: имя движка («local» или LocalEngines:*) и сколько работ на нём одновременно
+// (1..maxConcurrency, см. OllamaLocalEngineInfo).
+public sealed record OllamaExecutorInfo(string Engine, int Parallel);
 
 // Route — исполнитель первого шага: "local", "tier:strong|medium|weak" (слот тира),
 // легаси "claude"/"default" (≙ tier:medium) или id конкретной модели провайдера (дальше
@@ -75,7 +100,14 @@ public record OllamaActionInfo(string Key, string Title, string Group, bool Rout
     bool Agentic = false, object? Preset = null, string Input = "text", bool FacePose = false,
     // Engine — подпись именованного локального движка (LocalEngines:<имя>:Title, иначе модель), когда
     // Route="local" ведёт на него, а не на основной LocalLlm; null — основной движок или не локаль.
-    string? Engine = null);
+    string? Engine = null,
+    // ParallelExecutors — флаг каталога места (LocalAction.ParallelExecutors): место умеет вести
+    // несколько работ на локальных движках одновременно и смотрит список своих исполнителей.
+    // Сейчас это одно wiki-nightly; UI рисует блок «Исполнители ночи» только при этом флаге.
+    bool ParallelExecutors = false,
+    // Executors — список исполнителей места из LocalActionExecutorsStore (что админ дал месту);
+    // null — список не задан: место идёт по своему маршруту, как до фичи (пустой список = снятие ключа).
+    OllamaExecutorsInfo? Executors = null);
 
 // Utilisation одной подписки: снимки + опциональное имя + статус роутинга.
 // InRotation — берёт ли пул этот аккаунт для новых чатов; Utilization — эффективная

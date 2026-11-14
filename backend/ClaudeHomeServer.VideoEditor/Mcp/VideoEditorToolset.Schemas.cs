@@ -8,7 +8,7 @@ namespace ClaudeHomeServer.Services.VideoEditor.Mcp;
 /// Схемы инструментов сервера video-editor (ADR-022 §5). Вызовы — VideoEditorToolset.cs. Состав и описания
 /// фиксированы: не зависят от хода, фокуса, поставщика, вида чата и сцен; частные параметры модели едут в
 /// <c>params</c> и проверяются на бэкенде по схеме модели. Схемы одни для чата проекта и личного: фильмовые
-/// инструменты в личном чате есть, но отвечают отказом на вызове.
+/// инструменты в личном чате работают с фильмами «Личного» (до первого сохранения сцены фильмов нет — отказ).
 ///
 /// Инструменты «сохранить» и «собрать» здесь есть (в отличие от звука): сохранение агентом — отдельное право,
 /// только в video/** и music/**, только CreateNew; .film правится только под ревизией. Имена не однокоренные:
@@ -24,6 +24,8 @@ public sealed partial class VideoEditorToolset
     public const string ToolSceneSet = "video_scene_set";
     public const string ToolSuggestPrompt = "video_suggest_prompt";
     public const string ToolShoot = "video_shoot";
+    public const string ToolEnhance = "video_enhance";
+    public const string ToolVoice = "video_voice";
     public const string ToolCancel = "video_cancel";
     public const string ToolWait = "video_wait";
     public const string ToolSaveScene = "video_save_scene";
@@ -151,7 +153,7 @@ public sealed partial class VideoEditorToolset
             {
                 ["sceneId"] = Str("Сцена этого чата (sceneId из video_state)"),
                 ["versionId"] = Str("Версия сцены sceneId, от которой работать дальше"),
-                ["filmPath"] = Str("Фильм проекта: путь к .film от корня; только в чате проекта"),
+                ["filmPath"] = Str("Фильм: путь к .film от корня проекта (в личном чате — от корня «Личного»)"),
             })),
 
         new(ToolNew,
@@ -161,7 +163,7 @@ public sealed partial class VideoEditorToolset
             Obj(MergeProps(SettingsProperties(), new JsonObject
             {
                 ["name"] = Str("Имя сцены; не указано — «Сцена N»"),
-                ["folder"] = Str("Папка сцены в video/** проекта, например video/утро; пусто — не задана. Только в чате проекта"),
+                ["folder"] = Str("Папка сцены в video/** проекта или «Личного», например video/утро; пусто — не задана."),
             }))),
 
         new(ToolSceneSet,
@@ -218,9 +220,40 @@ public sealed partial class VideoEditorToolset
                     + "Если съёмка уже недоступна (рестарт сервера или прошло больше 12 ч) — отказ «переснимите сцену». " + NotWithoutAsk),
             }, "sceneId")),
 
+        new(ToolEnhance,
+            "«Увеличить ×2/×4»: увеличивает версию сцены (RelayVSR) на локальной видеокарте — бесплатно, в личных чатах и в "
+            + "проектах. Итог — новая версия сцены со звуком исходника, исходная остаётся; идёт отдельно от хода (отмена — "
+            + "video_cancel, ожидание — video_wait). Отказ: версия уже увеличена, кадр или длина вне замеренных пределов "
+            + "(до 1344×768 и 10 с), локальные модели недоступны. Возвращает { jobId, sceneId, quote }.",
+            Obj(new JsonObject
+            {
+                ["sceneId"] = Str("Сцена этого чата (sceneId из video_state)"),
+                ["versionId"] = Str("Версия сцены; не указана — текущая"),
+                ["scale"] = new JsonObject
+                {
+                    ["type"] = "integer", ["enum"] = new JsonArray(2, 4),
+                    ["description"] = "Во сколько раз увеличить: 2 или 4 (по умолчанию 2)",
+                },
+            }, "sceneId")),
+
+        new(ToolVoice,
+            "«Озвучить сцену»: звук по видео версии сцены (локальные HunyuanVideo-Foley XL/XXL и MMAudio) — бесплатно, в личных "
+            + "чатах и в проектах. Итог — новая версия сцены со вклеенным звуком (исходная остаётся) и дорожка в нити звука; "
+            + "идёт отдельно от хода (отмена — video_cancel, ожидание — video_wait с jobId явным списком). "
+            + "model не передавай без просьбы человека — берётся «Авто» каталога звука, то есть Foley XL. "
+            + "Клип длиннее предела модели озвучить нельзя. Возвращает { jobId, sceneId, threadId, quote }.",
+            Obj(new JsonObject
+            {
+                ["sceneId"] = Str("Сцена этого чата (sceneId из video_state)"),
+                ["versionId"] = Str("Версия сцены; не указана — текущая"),
+                ["text"] = Str("Подсказка, какой звук нужен (необязательно)"),
+                ["model"] = Str("Модель звука по видео: foley-xl, foley-xxl или mmaudio (id из каталога звука). "
+                    + "Не указывай без просьбы человека — по умолчанию «Авто» (Foley XL)"),
+            }, "sceneId")),
+
         new(ToolCancel,
-            "Отменяет съёмку этого чата. Готовые варианты остаются версиями; остановленное до принятия поставщиком не списывается.",
-            Obj(new JsonObject { ["jobId"] = Str("jobId из результата video_shoot") }, "jobId")),
+            "Отменяет съёмку, увеличение или озвучку этого чата. Готовые варианты остаются версиями; остановленное до принятия поставщиком не списывается.",
+            Obj(new JsonObject { ["jobId"] = Str("jobId из результата video_shoot, video_enhance или video_voice") }, "jobId")),
 
         new(ToolWait,
             "Ждёт конца съёмок до timeoutSeconds (не больше 15 с) и возвращает их состояние. allDone=false — вызови ещё "
@@ -232,7 +265,7 @@ public sealed partial class VideoEditorToolset
                 ["jobIds"] = new JsonObject
                 {
                     ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["maxItems"] = 12,
-                    ["description"] = "jobId из video_shoot; не указаны — все идущие съёмки этого чата",
+                    ["description"] = "jobId из video_shoot, video_enhance, video_voice; не указаны — все идущие съёмки и увеличения этого чата (озвучку — только явным jobId)",
                 },
                 ["timeoutSeconds"] = new JsonObject
                 {
@@ -243,7 +276,8 @@ public sealed partial class VideoEditorToolset
 
         new(ToolSaveScene,
             "Сохраняет версию сцены в проект: клип video/<папка>/scene-NN.mp4 (занято — .v2, перезаписи нет) и кадры в "
-            + "кадры/; сцена сама встаёт в фильм этой папки. Пишет только в video/** и music/**. Только в чате проекта. "
+            + "кадры/; сцена сама встаёт в фильм этой папки. Пишет только в video/** и music/**. В личном чате — то же в «Личное» "
+            + "(Personal/video/): без filmPath и папки video/<фильм> — один клип в Personal/video/. "
             + "В ленте — тихая строка с пометкой «✦ Claude».",
             Obj(new JsonObject
             {

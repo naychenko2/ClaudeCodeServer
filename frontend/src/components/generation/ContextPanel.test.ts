@@ -134,6 +134,16 @@ describe('параметры запуска — закрытый набор', ()
     expect(html).toContain('9:16 · выбирается под чипами');
   });
 
+  it('style — плашки: выбранная отмечена, «Без стиля» первой', () => {
+    const html = panel({
+      primary, action: edit,
+      params: [{ kind: 'style', options: [{ value: '', label: 'Без стиля' }, { value: 'darkbrush', label: 'Тёмная кисть' }], value: 'darkbrush' }],
+    });
+    expect(html).toContain('data-ctx-param="style"');
+    expect(html).toMatch(/data-ctx-style="none"[^>]*aria-checked="false"|aria-checked="false"[^>]*data-ctx-style="none"/);
+    expect(html).toMatch(/data-ctx-style="darkbrush"[^>]*aria-checked="true"|aria-checked="true"[^>]*data-ctx-style="darkbrush"/);
+  });
+
   it('до 4 значений — сегмент, больше — кнопка с меню; «Вариантов» и «Длительность» в одной строке', () => {
     const few = panel({ primary, action: edit, params: [{ kind: 'variants', min: 1, max: 4, value: 1 }, { kind: 'duration', options: [4, 6, 8, 10], value: 8 }] });
     expect(few).not.toContain('data-ctx-options');

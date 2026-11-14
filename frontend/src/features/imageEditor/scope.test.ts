@@ -32,9 +32,10 @@ describe('область редактора', () => {
     expect(scopeBase('p1')).toBe('/projects/p1/image-editor');
   });
 
-  it('проектные ручки (save, characters) у личной области — отказ до запроса', () => {
-    enterScope(null, 's1');
+  it('ручки с диском (save, characters) у личной области — те же пути на чате, без чата — отказ', () => {
     expect(() => projectBase(PERSONAL_SCOPE)).toThrow();
+    enterScope(null, 's1');
+    expect(projectBase(PERSONAL_SCOPE)).toBe('/image-editor/chats/s1');
     expect(projectBase('p1')).toBe('/projects/p1/image-editor');
   });
 });

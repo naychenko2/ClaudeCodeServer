@@ -102,6 +102,10 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<WikiApplyService>();
         // Очередь заявок разбора: два прохода модели → проверки → пакет → применение (S6b-3).
         services.AddSingleton<WikiIngestService>();
+        // Проход облачного судьи «Входящих» (J-J3a): вердикты по допущенным спорным
+        // операциям ИИ-пакетов. Vertical-внутренний тип, как остальные Services/Wiki:
+        // точки запуска — J-J4; сам по себе ничего не зовёт (проход зовёт вызывающий).
+        services.AddSingleton<WikiJudgeSweep>();
         // Захват источников (S6h) и разбор чатов «сейчас» (S6e-2): vertical-внутренние типы,
         // как Хранитель; захват раньше в DI не стоял — без него не резолвится его потребитель.
         services.AddSingleton<WikiSourceCapture>();

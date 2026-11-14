@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Services;
@@ -13,11 +14,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 [Trait("Category", "Host")]
 public class LocalActionsAdminControllerTests : IClassFixture<TestWebApplicationFactory>
 {
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _admin;
     private readonly HttpClient _user;
 
     public LocalActionsAdminControllerTests(TestWebApplicationFactory factory)
     {
+        _factory = factory;
         _admin = factory.CreateAuthenticatedClient();
         _user = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
@@ -413,5 +416,133 @@ public class LocalActionsAdminControllerTests : IClassFixture<TestWebApplication
             .Should().BeNull();
         LocalActionsAdminController.DescribePreset(null, Array.Empty<ModelRoutePreset>())
             .Should().BeNull();
+    }
+
+    // --- Исполнители-движки места (W2b, PUT {key}/executors). Стор и его валидатор —
+    //     LocalActionExecutorsStore (W2a); здесь — HTTP-контракт ручки: форма отказа и его
+    //     текст, неизменность файла при 400, «пресеты список не трогают» (И3, путь 7) и
+    //     сброс пустым списком. Живой движок в тестовом хосте один: «local» — LocalEngines:*
+    //     в Testing не заданы, и любая чужая форма отвергается как чужая. ---
+
+    // Файл стора — тот же путь, что строит LocalActionExecutorsStore от DataPath фабрики
+    // (TestWebApplicationFactory.cs:115). null — файла нет.
+    private string? ExecutorsFileContent()
+    {
+        var path = Path.Combine(_factory.TempDir, "local-action-executors.json");
+        return File.Exists(path) ? File.ReadAllText(path) : null;
+    }
+
+    private Task<HttpResponseMessage> PutExecutors(HttpClient client, string key, object body) =>
+        client.PutAsJsonAsync($"/api/admin/local-actions/{key}/executors", body);
+
+    [Theory]
+    // И3, путь 5 на HTTP: каждая чужая форма называется своей причиной. «haiku» — та же
+    // строка, которую соседняя ручка маршрута принимает как обычную модель: здесь она
+    // отвергается как неизвестный движок, а не молча подменяется локалью.
+    [InlineData("direct:minimax-m2")]
+    [InlineData("tier:strong")]
+    [InlineData("preset:11111111-1111-1111-1111-111111111111")]
+    [InlineData("haiku")]
+    public async Task ИсполнительНеЛокальныйДвижок_400_ФайлНеИзменён(string engine)
+    {
+        var before = ExecutorsFileContent();
+        var put = await PutExecutors(_admin, LocalActionCatalog.WikiNightly,
+            new { maxTotal = 2, executors = new[] { new { engine } } });
+        put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        // Админ видит, ЧТО именно не принято, а не «запрос отклонён»
+        body.GetProperty("errors").EnumerateArray().Select(e => e.GetString()!)
+            .Should().Contain(e => e.Contains(engine));
+        ExecutorsFileContent().Should().Be(before);
+    }
+
+    [Fact]
+    public async Task МестоБезParallelExecutors_400()
+    {
+        // Список разрешён только месту с флагом каталога; «wiki-triage» — из того же
+        // каталога, без флага (LocalActionCatalog.cs:262).
+        var before = ExecutorsFileContent();
+        var put = await PutExecutors(_admin, LocalActionCatalog.WikiTriage,
+            new { maxTotal = 2, executors = new[] { new { engine = "local" } } });
+        put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("errors").EnumerateArray().Select(e => e.GetString()!)
+            .Should().Contain(e => e.Contains("ParallelExecutors"));
+        ExecutorsFileContent().Should().Be(before);
+    }
+
+    [Fact]
+    public async Task НеАдминНеМожетМенятьИсполнителей()
+    {
+        var put = await PutExecutors(_user, LocalActionCatalog.WikiNightly,
+            new { maxTotal = 2, executors = new[] { new { engine = "local" } } });
+        put.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Theory]
+    // Тело правят и руками: null вместо списка или null-элемент в нём доходит до ручки
+    // (десериализация ставит null поверх инициализаторов) — 400 с текстом, не 500, и файл
+    // остаётся тем, что в нём было (дельта-ревью W2a).
+    [InlineData("""{"maxTotal":2,"executors":null}""")]
+    [InlineData("""{"maxTotal":2,"executors":[null]}""")]
+    public async Task NullВСпискеИсполнителей_400СТекстом(string rawBody)
+    {
+        var before = ExecutorsFileContent();
+        var put = await _admin.PutAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.WikiNightly}/executors",
+            new StringContent(rawBody, Encoding.UTF8, "application/json"));
+        put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        var errors = body.GetProperty("errors").EnumerateArray()
+            .Select(e => e.GetString()).ToList();
+        errors.Should().NotBeEmpty();
+        foreach (var e in errors) e.Should().NotBeNullOrWhiteSpace();
+        ExecutorsFileContent().Should().Be(before);
+    }
+
+    [Fact]
+    public async Task ПустойСписокСбрасываетККлючу_УспешныйОтвет_СохранённоеСостояние()
+    {
+        var put = await PutExecutors(_admin, LocalActionCatalog.WikiNightly,
+            new { maxTotal = 2, executors = new[] { new { engine = "local", parallel = 1 } } });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        // 200 — то, что после записи отдаёт стор: ключ, потолок и список с parallel
+        body.GetProperty("key").GetString().Should().Be(LocalActionCatalog.WikiNightly);
+        body.GetProperty("maxTotal").GetInt32().Should().Be(2);
+        var saved = body.GetProperty("executors").EnumerateArray().ToList();
+        saved.Should().HaveCount(1);
+        saved[0].GetProperty("engine").GetString().Should().Be("local");
+        saved[0].GetProperty("parallel").GetInt32().Should().Be(1);
+
+        // Пустой список = снять ключ: место идёт по своему маршруту, как до фичи (миграции нет)
+        var reset = await PutExecutors(_admin, LocalActionCatalog.WikiNightly,
+            new { maxTotal = 0, executors = Array.Empty<object>() });
+        reset.StatusCode.Should().Be(HttpStatusCode.OK);
+        var after = await reset.Content.ReadFromJsonAsync<JsonElement>();
+        after.GetProperty("maxTotal").GetInt32().Should().Be(0);
+        after.GetProperty("executors").GetArrayLength().Should().Be(0);
+        (ExecutorsFileContent() ?? "").Should().NotContain(LocalActionCatalog.WikiNightly);
+    }
+
+    [Fact]
+    public async Task МассовыйПресетНеТрогаетСписокИсполнителей()
+    {
+        // И3, путь 7: массовый пресет меняет маршрут места (оверрайды), но не список
+        // движков — это разные слои одной настройки.
+        var put = await PutExecutors(_admin, LocalActionCatalog.WikiNightly,
+            new { maxTotal = 2, executors = new[] { new { engine = "local", parallel = 1 } } });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var saved = ExecutorsFileContent();
+        saved.Should().NotBeNull().And.Contain(LocalActionCatalog.WikiNightly);
+
+        (await _admin.PostAsJsonAsync("/api/admin/local-actions/preset", new { preset = "tiers" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        ExecutorsFileContent().Should().Be(saved);
+
+        // Сброс: тест не оставляет состояния для следующих
+        (await PutExecutors(_admin, LocalActionCatalog.WikiNightly,
+            new { maxTotal = 0, executors = Array.Empty<object>() }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
     }
 }

@@ -18,6 +18,7 @@ internal static class FilmRegistration
         services.AddSingleton<FilmPatchFeed>();
         services.AddSingleton<FilmService>();
         services.AddSingleton<FilmSceneSaver>();
+        services.AddSingleton<PersonalSceneSaver>();
         // Сборка: реестр заявок — потолок модуля поверх слота общего BuildConcurrencyGate (шов IVideoDsp)
         services.AddSingleton<FilmBuildRegistry>();
         services.AddSingleton<FilmAssembler>();

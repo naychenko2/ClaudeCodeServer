@@ -86,14 +86,14 @@ describe('ProjectPersonasPanel: гейт по роли (W3-F1c)', () => {
     expect(countOf(renderSidebar(projectWith('reader')), NEW_PERSONA), 'создание персоны (createPersona) читателю').toBe(0);
   });
 
-  it('редактор: «Поговорить» и «Редактировать» есть, создание есть; ⋯-меню закрыто', () => {
+  it('редактор: «Поговорить» есть; «Редактировать», «Новой персоны» и ⋯-меню нет', () => {
     personasRef.current = [PERSONA];
     const html = renderPane(projectWith('editor'));
     expect(countOf(html, CHAT), 'чат с персоной редактору (RunTurn открыт)').toBe(1);
-    expect(countOf(html, EDIT), 'правка карточки редактору (editCard открыт)').toBe(1);
+    expect(countOf(html, EDIT), 'правка карточки редактору (editCard — Configure)').toBe(0);
     // makeLead и delete — оба Configure: редактору закрыты, меню пустое → скрыт весь триггер
     expect(countOf(html, LEAD_MENU), '⋯-меню (makeLead/delete — Configure) редактору').toBe(0);
-    expect(countOf(renderSidebar(projectWith('editor')), NEW_PERSONA), 'создание персоны редактору (И-7: OwnerId=T)').toBe(1);
+    expect(countOf(renderSidebar(projectWith('editor')), NEW_PERSONA), 'создание персоны редактору (createPersona — Configure)').toBe(0);
   });
 
   it('владелец: «Поговорить», «Редактировать», ⋯-меню и «Новая персона» — всё есть', () => {
@@ -136,11 +136,11 @@ describe('ProjectPersonasPanel: вкладка «Память» по роли (W
     expect(countOf(html, ADD_BTN), '«Запомнить» читателю').toBe(0);
   });
 
-  it('редактор: карточка добавления на месте (memoryWrite открыт)', () => {
+  it('редактор: как читатель — нет карточки добавления и «Запомнить» (memoryWrite закрыт)', () => {
     personasRef.current = [PERSONA];
     const html = renderPaneMemory(projectWith('editor'));
-    expect(countOf(html, ADD_CARD), 'карточка ручного добавления редактору').toBe(1);
-    expect(countOf(html, ADD_BTN), '«Запомнить» редактору').toBe(1);
+    expect(countOf(html, ADD_CARD), 'карточка ручного добавления редактору').toBe(0);
+    expect(countOf(html, ADD_BTN), '«Запомнить» редактору').toBe(0);
   });
 
   it('владелец и без myRole: карточка добавления на месте, как раньше', () => {

@@ -8,7 +8,7 @@
 // написания живого сервера у них нет: фронт ходит в них через videoApi, а тесты и e2e — на моках.
 
 import { onMessage, readStoredToken, request, type MediaFormatCaps, type MediaFormatWish, type ResolvedFormat } from 'aihome_shell/kit';
-import { chatBase, isPersonalScope, PERSONAL_SCOPE, videoBase } from './scope';
+import { chatBase, PERSONAL_SCOPE, videoBase } from './scope';
 import type { LocalGpuQueueInfo } from '../../types/localGpuQueue';
 
 // ── Кадры и настройки сцены ──
@@ -67,6 +67,8 @@ export interface VideoClipVersion {
   upscaleError?: string;
   // Увеличение отменил человек (у сбоя поля нет): отличать по тексту upscaleError нельзя
   upscaleCancelled?: boolean;
+  // Версия получена действием «Увеличить» (RelayVSR, локально): 2 или 4; у обычной съёмки поля нет. width×height — уже увеличенные
+  enhanceScale?: number;
 }
 
 export type VideoLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
@@ -130,6 +132,12 @@ export interface VideoModelInfo {
   license?: string;
   // Ступени и пропорции «Формата»; нет — «Как у модели»
   format?: MediaFormatCaps;
+  // Экспериментальная: «Авто» и умолчания её не берут, только ручной выбор
+  experimental?: boolean;
+  // Снимает и по одному тексту, и по кадру A (кадра B нет)
+  firstFrameOptional?: boolean;
+  // Что модель даёт и чем хуже соседей
+  hint?: string;
 }
 
 export interface VideoProvider {
@@ -370,8 +378,8 @@ export const ERR = {
   nameTaken: 'name_taken',
   revisionConflict: 'revision_conflict',
   dspUnavailable: 'dsp_unavailable',
-  personalNoFilms: 'personal_scope_no_films',
-  localPersonal: 'local_unavailable_personal',
+  // Личная область: папку «Личного» создать нельзя (нет домашней папки, нет места)
+  personalFolderUnavailable: 'personal_scope_no_films',
   projectLocal: 'project_local_unsupported',
   outsideFolders: 'outside_allowed_folders',
   filmInvalid: 'film_invalid',
@@ -405,6 +413,12 @@ export interface VideoFramesPreview { aspect: string; anchor: FrameAnchor; frame
 
 // «Повторить увеличение»: новая задача `jobId` со стадией upscaling; прежняя версия 768p остаётся как была
 export interface VideoUpscaleRetryResult { jobId: string; sourceVersionId: string }
+
+// «Увеличить ×2/×4» версии (RelayVSR, local): варианты до запуска — время по замеру (нет числа — «не замерено»), размер результата
+export interface VideoEnhanceOption { scale: 2 | 4; available: boolean; reason?: string; etaSeconds?: number; width?: number; height?: number }
+export interface VideoEnhanceQuote { versionId: string; options: VideoEnhanceOption[] }
+// 202: новая задача `jobId` со стадией upscaling; итог — новая версия с enhanceScale, исходная остаётся
+export interface VideoEnhanceResult { jobId: string; sourceVersionId: string; scale: number; etaSeconds?: number }
 
 // Тело 409 film_format_locked: замок держит сервер, «Всё равно» — повтор с force
 export interface VideoFormatLocked { error: string; code: 'film_format_locked'; lockedBy: VideoFilmLock }
@@ -464,6 +478,11 @@ export const videoApi = {
   // Повторить увеличение версии с upscaleError (ADR-022): 202 с новым jobId; 409 upscale_retry_unavailable — переснимите сцену
   retryUpscale: (scope: string, sessionId: string, sceneId: string, versionId: string) =>
     json<VideoUpscaleRetryResult>(`${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/upscale`, {}),
+  // «Увеличить ×2/×4»: GET — варианты и время до запуска, POST — запуск (202 с jobId; отказы 400/409/429 с текстом в теле)
+  enhanceQuote: (scope: string, sessionId: string, sceneId: string, versionId: string) =>
+    request<VideoEnhanceQuote>(`${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/enhance`),
+  enhance: (scope: string, sessionId: string, sceneId: string, versionId: string, scale: 2 | 4) =>
+    json<VideoEnhanceResult>(`${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/enhance`, { scale }),
   // Отменить только увеличение «Макс» local H3: съёмка 768p остаётся версией с пометкой
   cancelUpscale: (scope: string, sessionId: string | null, jobId: string) =>
     request<VideoJob>(`${videoBase(scope, sessionId)}/jobs/${encodeURIComponent(jobId)}/upscale`, { method: 'DELETE' }),
@@ -472,13 +491,13 @@ export const videoApi = {
   // URL клипа для <video src>: токен через ?access_token=, тег заголовков не шлёт
   versionFileUrl: (scope: string, sessionId: string, sceneId: string, versionId: string, download = false) =>
     withToken(`/api${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/file`, download ? { download: 'true' } : {}),
-  // Сохранить в проект — только у проекта: у личного чата ручки нет, отказ до запроса (блок 2)
-  save: (scope: string, sessionId: string, sceneId: string, req: Omit<SaveSceneRequest, 'sessionId' | 'sceneId'>) => {
-    if (isPersonalScope(scope)) throw new Error('У личного чата нет проекта — клип можно только скачать');
-    return json<SaveSceneResult>(`${sceneUrl(scope, sessionId, sceneId)}/save`, { ...req, sessionId, sceneId });
-  },
+  // Сохранить в проект; у личного чата — в «Личное»: без filmPath/folder плоский клип Personal/video/,
+  // с filmPath или folder = video/<фильм> — в фильм (ADR-040 Ф2-3/Ф2-6)
+  save: (scope: string, sessionId: string, sceneId: string, req: Omit<SaveSceneRequest, 'sessionId' | 'sceneId'>) =>
+    json<SaveSceneResult>(`${sceneUrl(scope, sessionId, sceneId)}/save`, { ...req, sessionId, sceneId }),
 
-  // Фильмы — ручки проекта, не чата (FilmController); личный чат — personal_scope_no_films
+  // Фильмы: проект — ручки проекта (FilmController), личный чат — те же ручки на чате (PersonalFilmController).
+  // У личного чата без «Личного» список пуст (200), состояние/правка/сборка — 404 file_not_found, статус сборки — 404 job_not_found
   films: (scope: string, sessionId: string) =>
     request<FilmSummary[]>(`${videoBase(scope, sessionId)}/films`, { live: true }),
   filmState: (scope: string, sessionId: string, path: string) =>
@@ -502,7 +521,7 @@ export const videoApi = {
     form.append('file', file);
     return request<FrameRef>(`${videoBase(PERSONAL_SCOPE, sessionId)}/frames/upload`, { method: 'POST', body: form, timeoutMs: 120_000 });
   },
-  // «Новый фильм»: пустой .film, занятое имя — 409 name_taken. Только проектные
+  // «Новый фильм»: пустой .film, занятое имя — 409 name_taken. У личной области создаёт папку «Личного»
   createFilm: (scope: string, sessionId: string, path: string, aspect?: string) =>
     json<FilmState>(`${videoBase(scope, sessionId)}/films`, { path, ...(aspect ? { aspect } : {}) }),
   // Превью кадра личного чата: байты из рабочей папки (путь кадра — frames/<id>.<ext>)

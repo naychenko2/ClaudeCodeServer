@@ -100,11 +100,14 @@ public class PersonasCreateTurnInitiatorTests : IClassFixture<SharedChatAvatarSp
         var project = await _owner.PostAsJsonAsync("/api/projects", new { name = pathName });
         project.EnsureSuccessStatusCode();
         var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
-        (await _owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
-            new { username = TestWebApplicationFactory.SecondUsername, role = "editor" })).EnsureSuccessStatusCode();
+        // Чат до участников: пока проект личный, провижна владельца нет; в общем проекта без
+        // руководителя она не запускается никому (W4-B1a доработка 2, финал ed64271c)
         var session = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
         session.EnsureSuccessStatusCode();
-        return (await session.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var sessionId = (await session.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        (await _owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
+            new { username = TestWebApplicationFactory.SecondUsername, role = "editor" })).EnsureSuccessStatusCode();
+        return sessionId;
     }
 
     // Живой ход подтверждён состоянием чата, а не фактом вызова подачи: иначе «страховка»

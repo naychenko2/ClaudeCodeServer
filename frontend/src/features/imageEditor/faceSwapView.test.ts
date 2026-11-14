@@ -5,6 +5,7 @@ import {
   clearFailures, clearFaceChange,
   assignCharacter, emptyAssignments, faceTargetFromAssignments, hasAssignments, isCharacterTaken,
   MAX_FACE_PASSES, parseFacesChangedBody, removeAssignment, searchFailureText, tapFace, modelLabel,
+  routeReasonText, variantProgressText,
   type FaceSwapViewInput, type FaceUi,
 } from './faceSwapView';
 
@@ -35,10 +36,9 @@ describe('faceRect: bbox в пикселях → доли', () => {
 
 // ── Видимость входа ───────────────────────────────────────────────────────────
 describe('faceSwapEntryVisible: вход скрыт', () => {
-  const on = { personal: false, flag: true, hasCharacters: true, localAvailable: true };
+  const on = { flag: true, hasCharacters: true, localAvailable: true };
   it('все условия — вход есть', () => expect(faceSwapEntryVisible(on)).toBe(true));
   it('флаг off — нет', () => expect(faceSwapEntryVisible({ ...on, flag: false })).toBe(false));
-  it('личная область — нет', () => expect(faceSwapEntryVisible({ ...on, personal: true })).toBe(false));
   it('нет персонажей — нет', () => expect(faceSwapEntryVisible({ ...on, hasCharacters: false })).toBe(false));
   it('локальные модели недоступны — нет', () => expect(faceSwapEntryVisible({ ...on, localAvailable: false })).toBe(false));
 });
@@ -456,15 +456,15 @@ describe('тексты режима: номер лица не отрываетс
   });
 });
 
-// ── Подпись модели в строке запуска (v2): локальные — «локальные модели», облачные — label ──
+// ── Подпись модели в строке запуска и карточке версии: конкретная модель, имя без пояснения ──
 describe('modelLabel: подпись модели', () => {
   const catalog = { providers: [
     { key: 'local', models: [{ id: 'flux3-klein', label: 'FLUX 3 Klein — текст и точная правка' }, { id: 'qwen-image-2.1', label: 'Qwen-Image 2.1 — качественно' }] },
     { key: 'fal', models: [{ id: 'fal-ai/flux-pro/kontext', label: 'FLUX Kontext' }] },
   ] };
-  it('локальная модель — «локальные модели», не id (мутация: вернуть id → краснеет)', () => {
-    expect(modelLabel(catalog, 'qwen-image-2.1')).toBe('локальные модели');
-    expect(modelLabel(catalog, 'flux3-klein')).toBe('локальные модели');
+  it('локальная модель — её имя из каталога без пояснения, не «локальные модели» и не id', () => {
+    expect(modelLabel(catalog, 'qwen-image-2.1')).toBe('Qwen-Image 2.1');
+    expect(modelLabel(catalog, 'flux3-klein')).toBe('FLUX 3 Klein');
   });
   it('облачная модель — label из каталога', () => {
     expect(modelLabel(catalog, 'fal-ai/flux-pro/kontext')).toBe('FLUX Kontext');
@@ -477,5 +477,26 @@ describe('modelLabel: подпись модели', () => {
   });
   it('id null — null', () => {
     expect(modelLabel(catalog, null)).toBeNull();
+  });
+});
+
+describe('routeReasonText: причина «Авто» без повтора модели', () => {
+  it('«Авто → MOSS: фото людей» → «авто: фото людей»', () => {
+    expect(routeReasonText('Авто → MOSS: фото людей')).toBe('авто: фото людей');
+  });
+  it('другой вид причины — как есть; пусто — null', () => {
+    expect(routeReasonText('по правилам')).toBe('по правилам');
+    expect(routeReasonText(null)).toBeNull();
+    expect(routeReasonText('  ')).toBeNull();
+  });
+});
+
+describe('variantProgressText: номер варианта текстом', () => {
+  it('прогон на вариант — «вариант k из N»', () => {
+    expect(variantProgressText(1, 2)).toBe('вариант 1 из 2');
+  });
+  it('один прогон или прогонов нет — null', () => {
+    expect(variantProgressText(1, 1)).toBeNull();
+    expect(variantProgressText(null, null)).toBeNull();
   });
 });

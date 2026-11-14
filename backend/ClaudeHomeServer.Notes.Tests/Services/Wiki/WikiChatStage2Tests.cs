@@ -156,6 +156,26 @@ public class WikiChatStage2Tests : IDisposable
         WikiChatsController.ShownZone(StoredEntry()).Should().Be(WikiChatScorer.ZoneGray);
     }
 
+    // И3 (J-W0): нелокальный маршрут места (админ или массовый пресет) — ступень 2 отказывает
+    // до чтения истории и до вызова модели, валидный ответ модели при этом не доходит.
+    // Мутация «убрать страж UsesLocal в JudgeCoreAsync» (WikiChatStage2.cs): модель звана
+    // (Calls не пуст), вердикт записан, показанная зона triage — тест красный.
+    [Fact]
+    public async Task Отказ_МаршрутНелокальный_МодельНеЗвана_ЧатСерый()
+    {
+        SeedGrayChat();
+        _llm.Local = false;
+        _llm.Answer = """{"hasKnowledge":true,"about":"a","reason":"r"}""";
+
+        var res = await Judge();
+
+        res.Outcome.Should().Be(WikiChatStage2.Outcome.Refused, res.Detail);
+        _llm.Calls.Should().BeEmpty("нелокальный маршрут: до модели не дошли");
+        _llm.CloudCalls.Should().Be(0, "ступень 2 в облако не уходит");
+        StoredEntry().Stage2Zone.Should().BeNull("вердикт не пишется");
+        WikiChatsController.ShownZone(StoredEntry()).Should().Be(WikiChatScorer.ZoneGray);
+    }
+
     // ─── 3. c4: живая пометка сильнее отстающей stage1Zone — модель не зовётся ─────────
 
     [Fact]
@@ -448,6 +468,7 @@ public class WikiChatStage2Tests : IDisposable
         public List<(string ActionKey, string Prompt)> Calls { get; } = [];
         public string Answer = "";
         public bool Route = true;
+        public bool Local = true;
         public Exception? Throw;
         public Action? OnCall;
         // Решение 02.11: облачные входы (RunDetailedAsync/RunAsync) не должны зваться.
@@ -455,7 +476,7 @@ public class WikiChatStage2Tests : IDisposable
         // Облако «спасло бы»: облачные входы игнорируют Throw — видно, что до него не дошли.
         public bool CloudRescues;
 
-        public bool UsesLocal(string actionKey) => true;
+        public bool UsesLocal(string actionKey) => Local;
         public bool HasFreeRoute(string actionKey) => Route;
         public bool HasRoute(string actionKey) => Route;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";

@@ -23,6 +23,12 @@
 // (WikiLintService.cs:251,274,281 → WikiKeeper.cs:391) — в пути применения его не пишет никто.
 // Поэтому после принятия строка «дрейфа» остаётся в отчёте до следующей проверки; тексты
 // плашки ведут к «Проверить сейчас», а не обещают снятие строки.
+//
+// M7 (записка wiki-panels-v1, П3 и П5): находка — вертикальная карточка на всех ширинах
+// (путь → сообщение → мета одной строкой через « · » → действие своим рядом), группа
+// показывает первые FINDINGS_PREVIEW находок, остальные — по кнопке «Показать ещё»
+// (локальное состояние группы). Сетка счётчиков — от narrow из useWikiNarrow (М0), не от
+// ширины окна: узко — 2 колонки, широко — 4.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -40,6 +46,7 @@ import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { sectionPrefix, wikiErrorText } from './wikiLabels';
 import { refreshWikiRailCounts } from './useWikiRailCounts';
+import { useWikiNarrow } from './useWikiNarrow';
 
 // ─── Разбор _health.md (зеркало бэкового RenderHealth/FindingLine) ───
 
@@ -230,6 +237,15 @@ function groupsOf(findings: HealthFinding[]): Group[] {
   return groups;
 }
 
+// M7 (П5): предел группы — первые FINDINGS_PREVIEW находок, остальные по кнопке.
+// Чистая функция, вынесена из компонента: проверяется тестом без DOM.
+export const FINDINGS_PREVIEW = 5;
+
+export function visibleFindings<T>(list: T[], expanded: boolean): { shown: T[]; rest: number } {
+  if (expanded || list.length <= FINDINGS_PREVIEW) return { shown: list, rest: 0 };
+  return { shown: list.slice(0, FINDINGS_PREVIEW), rest: list.length - FINDINGS_PREVIEW };
+}
+
 // Время проверки — коротко и по-человечески; нераспознанную строку показываем как есть,
 // выдуманного времени у нас нет
 function checkedText(iso: string | null): string | null {
@@ -274,40 +290,84 @@ function mineErrorNotice(e: unknown): MineNotice {
 
 // adopt — действие над этой страницей (для «дрейфа» — «Принять как мою правку», F5c);
 // для прочих видов его нет
+//
+// M7 (П3): вертикальная карточка на всех ширинах: путь страницы → сообщение → мета одной
+// строкой через « · » → действие своим рядом. Путь — одна строка с многоточием, полный —
+// в title (в узкой панели он не должен резать карточку). Мета: «связанные: …», «ключ: …»,
+// счёт; значения путей и ключей — по-прежнему mono: это данные файла, а не проза.
 function FindingRow({ f, adopt }: { f: HealthFinding; adopt?: ReactNode }) {
   const meta = f.kind === 'unknown' ? null : KIND_META[f.kind];
   const countLabel = f.count !== null ? countText(f.kind, f.count) : null;
+  const metaParts: ReactNode[] = [];
+  if (f.related.length > 0) {
+    metaParts.push(
+      <span key="rel">
+        связанные:{' '}
+        {f.related.map((r, i) => (
+          <span key={i} style={{ fontFamily: FONT.mono }}>{i ? ', ' : ''}{r}</span>
+        ))}
+      </span>,
+    );
+  }
+  if (f.key) {
+    metaParts.push(<span key="key">ключ: <span style={{ fontFamily: FONT.mono }}>{f.key}</span></span>);
+  }
+  if (countLabel) metaParts.push(<span key="cnt">{countLabel}</span>);
   return (
     <div
       data-testid="wiki-health-row"
       style={{
-        display: 'flex', gap: SP.sm, alignItems: 'baseline', flexWrap: 'wrap',
+        display: 'flex', flexDirection: 'column', gap: SP.xs,
         padding: `${SP.sm}px ${SP.md}px`, borderTop: `1px solid ${C.borderLight}`,
       }}
     >
       {f.page && (
-        <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, wordBreak: 'break-all' }}>
+        <span
+          data-testid="wiki-health-row-path"
+          title={f.page}
+          style={{
+            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}
+        >
           {f.page}
         </span>
       )}
-      {f.message && <span style={{ fontSize: FS.base, color: C.textPrimary, minWidth: 0, flex: '1 1 200px' }}>{f.message}</span>}
-      {f.related.length > 0 && (
-        <span style={{ fontSize: FS.sm, color: C.textMuted }}>
-          связанные:{' '}{f.related.map((r, i) => (
-            <span key={i} style={{ fontFamily: FONT.mono, wordBreak: 'break-all' }}>{i ? ', ' : ''}{r}</span>
-          ))}
+      {f.message && <span style={{ fontSize: FS.base, color: C.textPrimary }}>{f.message}</span>}
+      {metaParts.length > 0 && (
+        <span data-testid="wiki-health-row-meta" style={{ fontSize: FS.xs, color: C.textMuted }}>
+          {metaParts.map((p, i) => <span key={i}>{i ? ' · ' : ''}{p}</span>)}
         </span>
-      )}
-      {f.key && (
-        <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textMuted, wordBreak: 'break-all' }}>
-          ключ: {f.key}
-        </span>
-      )}
-      {countLabel && (
-        <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textMuted }}>{countLabel}</span>
       )}
       {meta?.title && !f.message && <span style={{ fontSize: FS.sm, color: C.textMuted }}>{meta.title}</span>}
       {adopt}
+    </div>
+  );
+}
+
+// M7 (П5): тело группы находок: первые FINDINGS_PREVIEW строк, остальные — по кнопке
+// «Показать ещё N». Расширение — локальное состояние группы: живёт, пока открыта панель
+// (смена раздела снимает группы вместе с отчётом — раскрытое не переходит в новый раздел)
+function FindingsGroup({ items, testId, renderRow }: {
+  items: HealthFinding[];
+  testId: string;
+  renderRow: (f: HealthFinding) => ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { shown, rest } = visibleFindings(items, expanded);
+  return (
+    <div>
+      {shown.map((f, i) => <div key={i}>{renderRow(f)}</div>)}
+      {rest > 0 && (
+        <div style={{ padding: `0 ${SP.md}px` }}>
+          <Button
+            variant="ghost" size="sm" dataTestId={`wiki-health-expand-${testId}`}
+            onClick={() => setExpanded(true)}
+          >
+            Показать ещё {rest}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -323,6 +383,9 @@ function LoadingSkeleton() {
 
 export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
   const isMobile = useIsMobile();
+  // М7: узкость панели (М0, П1) решает только сетку счётчиков (2/4 колонки). Тач-размеры
+  // кнопок остаются на isMobile: узкая панель на десктопе — это всё ещё мышь
+  const [panelRef, narrow] = useWikiNarrow<HTMLDivElement>();
   const tree = useWikiTree();
   const hasHeader = useHasPanelHeader(); // место кнопки: шапка панели или тело (W11)
   const [report, setReport] = useState<HealthReport | null>(null);
@@ -524,7 +587,7 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, paddingBottom: SP.md }}>
+    <div ref={panelRef} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, paddingBottom: SP.md }}>
       {runPlacement}
       <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
@@ -622,7 +685,7 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
                   Метрик прогона здесь нет: их отдельной ручкой бэк не отдаёт */}
               <div
                 data-testid="wiki-health-counters"
-                style={{ display: 'grid', gridTemplateColumns: `repeat(${isMobile ? 2 : 4}, minmax(0, 1fr))`, gap: SP.sm, padding: `0 ${SP.md}px` }}
+                style={{ display: 'grid', gridTemplateColumns: `repeat(${narrow ? 2 : 4}, minmax(0, 1fr))`, gap: SP.sm, padding: `0 ${SP.md}px` }}
               >
                 {plain.map(g => (
                   <div key={g.kind} data-testid={`wiki-health-count-${g.kind}`} style={{ background: C.bgInset, borderRadius: R.md, padding: SP.sm }}>
@@ -641,9 +704,10 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
                     <Badge tone={g.tone} size="xs" title={g.title}>{g.label}</Badge>
                     <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{g.items.length}</span>
                   </div>
-                  <div>
-                    {g.items.map((f, i) => <div key={i}><FindingRow f={f} adopt={adoptForFinding(g.kind, f)} /></div>)}
-                  </div>
+                  <FindingsGroup
+                    items={g.items} testId={g.kind}
+                    renderRow={f => <FindingRow f={f} adopt={adoptForFinding(g.kind, f)} />}
+                  />
                 </div>
               ))}
 
@@ -661,9 +725,7 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
                       Код предлагает поднять эти страницы в раздел выше. Само повышение — следующей фичей (Ф2), здесь только предложение.
                     </Notice>
                   </div>
-                  <div>
-                    {promotes.items.map((f, i) => <div key={i}><FindingRow f={f} /></div>)}
-                  </div>
+                  <FindingsGroup items={promotes.items} testId="promote" renderRow={f => <FindingRow f={f} />} />
                 </div>
               )}
             </>

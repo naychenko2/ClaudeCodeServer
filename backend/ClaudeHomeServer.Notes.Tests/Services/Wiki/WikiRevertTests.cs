@@ -634,6 +634,59 @@ public class WikiRevertTests : IDisposable
         File.ReadAllBytes(PageFull(PagePath)).Should().Equal(File.ReadAllBytes(PreimageOf(pkg.Id, PagePath)));
     }
 
+    // ─── 4d. И7 (J-P1a): чистка снесла страницу применённого пакета — откат не воскрешает ────
+
+    [Fact]
+    public async Task ЧисткаСнеслаСтраницуПрименённогоПакета_ОткатОтказанКодом_ФайлСтраницыНеПоявился()
+    {
+        // Мутация «считать отсутствующий файл совпавшим» (в фазе 1 при disk == null брать
+        // diskHash = appliedHash): откат вышел бы по прообразу и вернул страницу из-под чистки
+        // — Reverted/Code и «файла нет» краснеют все три.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+        var applied = await _sut.ApplyAsync(User, pkg, Ctx);
+        applied.Applied.Should().BeTrue(applied.Reason);
+
+        var purge = await _keeper.PurgeAiPagesAsync(User, dryRun: false);
+        purge.Ok.Should().BeTrue(purge.Reason);
+        // Страница «ai» и осиротевшая карточка — классы чистки; применённый пакет — не трогается (п.7).
+        purge.Items.Select(i => i.PageKey).Should().Contain(PagePath);
+        File.Exists(PageFull(PagePath)).Should().BeFalse();
+        ReadStatus(pkg.Id).Item1.Should().Be(WikiPackage.StatusApplied);
+
+        var r = await _revert.RevertAsync(User, pkg.Id);
+
+        r.Reverted.Should().BeFalse();
+        r.Code.Should().Be(WikiPackageRevert.CodeChanged,
+            "файла нет — хэш диска не равен записи состояния применения: та же сверка, что у чужой правки");
+        r.ChangedPages.Should().Equal(new[] { PagePath });
+        File.Exists(PageFull(PagePath)).Should().BeFalse(
+            "И7: откат не воскрешает удалённое; прообраз живёт в архиве чистки и в keeper/preimages, не в pages/");
+        LogLines().Should().NotContain(l => l.Contains("\"op\":\"revert\""), "несостоявшийся откат журнал не пишет");
+    }
+
+    [Fact]
+    public async Task ЧисткаСнеслаСтраницу_ОткатПоИсточникуНеВоскрешаетЕёИсходНазванПоПакету()
+    {
+        // Та же сверка хэша в общем механизме (Retract зовёт RevertUnderLock): удалённая
+        // страница — отказ по пакету в Outcomes, а не молчание и не возврат по прообразу.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Op(WikiPackage.OpAppend, PagePath, "Контенер собран на второй машине"));
+        var applied = await _sut.ApplyAsync(User, pkg, Ctx);
+        applied.Applied.Should().BeTrue(applied.Reason);
+
+        var purge = await _keeper.PurgeAiPagesAsync(User, dryRun: false);
+        purge.Ok.Should().BeTrue(purge.Reason);
+
+        var r = await _retract.RetractAsync(User, "session:chat-1");
+
+        r.Ok.Should().BeTrue("операция дошла до конца: исход по пакету — в Outcomes, а не в Ok=false");
+        var outcome = r.Outcomes.Single(o => o.PackageId == pkg.Id);
+        outcome.Reverted.Should().BeFalse();
+        outcome.Code.Should().Be(WikiPackageRevert.CodeChanged);
+        File.Exists(PageFull(PagePath)).Should().BeFalse("И7: откат по источнику тоже не воскрешает удалённое");
+    }
+
     // ─── 5. REST (c3): чужой пакет — 404, чужой раздел — 403, отказ по хэшам — 409 с перечнем ─
 
     [Fact]

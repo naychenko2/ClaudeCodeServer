@@ -32,6 +32,15 @@ public sealed partial class LocalMediaService
     public static readonly IReadOnlyList<string> StemFormats = ["mp3", "wav", "flac"];
     public static readonly IReadOnlyList<string> SeedVcModes = ["speech", "singing"];
     public static readonly IReadOnlyList<string> UpsampleModels = ["basic", "speech"];
+    public static readonly IReadOnlyList<string> SfxEngines = ["moss", "mmaudio"];
+    public static readonly IReadOnlyList<string> VideoToAudioEngines = ["foley-xl", "foley-xxl", "mmaudio"];
+
+    // Пределы эффектов и звука по видео — по замерам стенда 13.11.2026: MOSS-SFX держит клипы до 10 с,
+    // MMAudio — до ≈8 с, Foley — проверен на клипах до 10 с
+    public const int SfxMinSeconds = 1;
+    public const int SfxMossMaxSeconds = 10;
+    public const int MmAudioMaxSeconds = 8;
+    public const int FoleyMaxSeconds = 10;
 
     // Числовые аргументы аудио-операций: умолчание и границы. Те же значения показывает схема
     // «Дополнительно» модуля «Звук» (AudioCatalog.LocalParams) — расхождение ловит сторож
@@ -71,13 +80,16 @@ public sealed partial class LocalMediaService
         "ru", "sv", "sw", "tr", "zh",
     };
 
-    // Тяжёлые аудио-операции держат GPU десятки минут: обучение голоса и правка трека моделью
-    // xl-base (20 ГБ весов fp32)
+    // Тяжёлые аудио-операции держат GPU десятки минут: обучение голоса, правка трека моделью
+    // xl-base (20 ГБ весов fp32), эффекты MOSS-SFX (18 ГБ видеопамяти) и Foley XXL. Тяжесть — у модели
+    // (движка), а не у операции: MMAudio и Foley XL лёгкие
     public static bool IsHeavyAudio(LocalMediaRequest request) => IsHeavyAudio(request.Op, request.Args);
 
     public static bool IsHeavyAudio(string op, JsonObject? args) =>
         op == LocalMediaOps.VoiceTrain
-        || (op == LocalMediaOps.MusicEdit && Str(args, "task") is "extract" or "lego" or "complete");
+        || (op == LocalMediaOps.MusicEdit && Str(args, "task") is "extract" or "lego" or "complete")
+        || (op == LocalMediaOps.AudioSfx && (Str(args, "engine") ?? "moss") == "moss")
+        || (op == LocalMediaOps.VideoToAudio && Str(args, "engine") == "foley-xxl");
 
     // Источник входов аудио-сборки: у инструментов local-media — файлы проекта и job_id прошлых
     // задач, у шва ILocalAudioMedia — байты запроса. Ссылка на вход — значение аргумента (audio,
@@ -270,6 +282,50 @@ public sealed partial class LocalMediaService
                         return (ComfyWorkflows.AudioWorker("master", new JsonObject(), [name, reference], job.Id, 15),
                             seconds is { } m ? 18 + (int)Math.Ceiling(m * 0.02) : null);
                 }
+            }
+
+            case LocalMediaOps.AudioSfx:
+            {
+                var engine = OneOf(a, "engine", "moss", SfxEngines);
+                if (prompt.Length == 0)
+                    throw new LocalMediaInputException("Нужен prompt — какой звук сделать (на английском точнее).");
+                if (prompt.Length > ComfyWorkflows.MaxSfxPromptLength)
+                    throw new LocalMediaInputException($"Описание звука — не длиннее {ComfyWorkflows.MaxSfxPromptLength} символов.");
+                var max = engine == "mmaudio" ? MmAudioMaxSeconds : SfxMossMaxSeconds;
+                var seconds = Range(a, "duration_seconds", 5, SfxMinSeconds, max);
+                job.Engine = engine;
+                job.DurationSeconds = (int)Math.Ceiling(seconds);
+                return engine == "mmaudio"
+                    ? (ComfyWorkflows.MmAudio(null, prompt, seconds, seed, prefix), MmAudioTextEta(seconds))
+                    : (ComfyWorkflows.AudioWorker("sfx_moss",
+                        new JsonObject { ["prompt"] = prompt, ["duration"] = seconds, ["seed"] = seed }, [], job.Id, 15),
+                        MossSfxEta(seconds));
+            }
+
+            case LocalMediaOps.VideoToAudio:
+            {
+                var engine = OneOf(a, "engine", "foley-xl", VideoToAudioEngines);
+                if (prompt.Length > ComfyWorkflows.MaxSfxPromptLength)
+                    throw new LocalMediaInputException($"Подсказка — не длиннее {ComfyWorkflows.MaxSfxPromptLength} символов.");
+                var input = inputs.Read(Required(a, "video"), MediaKind.Video);
+                var length = input.Video!.Seconds;
+                var max = engine == "mmaudio" ? MmAudioMaxSeconds : FoleyMaxSeconds;
+                if (length > max + 0.25)
+                    throw new LocalMediaInputException($"Видео — ≈{length:0.#} с, а {(engine == "mmaudio" ? "MMAudio" : "Foley")} "
+                        + $"озвучивает клипы до {max} с. Возьми более короткую сцену или другую модель.");
+                var name = await inputs.UploadAsync(input.Bytes, $"{job.Id}-src{input.Extension}", ct);
+                job.Engine = engine;
+                job.InputSeconds = Math.Round(length, 1);
+                job.DurationSeconds = (int)Math.Ceiling(length);
+                var seconds = Math.Round(Math.Min(length, max), 2);
+                return engine switch
+                {
+                    "mmaudio" => (ComfyWorkflows.MmAudio(name, prompt, seconds, seed, prefix), MmAudioVideoEta(seconds)),
+                    "foley-xxl" => (ComfyWorkflows.FoleyVideoToAudio(ComfyWorkflows.FoleyXxl, name, prompt, seconds, seed, prefix),
+                        FoleyEta(true, seconds)),
+                    _ => (ComfyWorkflows.FoleyVideoToAudio(ComfyWorkflows.FoleyXl, name, prompt, seconds, seed, prefix),
+                        FoleyEta(false, seconds)),
+                };
             }
 
             case LocalMediaOps.Transcribe:
@@ -514,6 +570,36 @@ public sealed partial class LocalMediaService
 
     // AudioSR кусками по 20 с: 30 с — 53 с, 120 с — 85 с (загрузка ≈15 с)
     public static int? UpsampleEta(double? seconds) => seconds is { } s ? 20 + (int)Math.Ceiling(s * 0.6) : null;
+
+    // Эффекты и звук по видео, замеры 13.11.2026 на RTX 3090 через прод-ComfyUI, холодный старт процесса:
+    // MOSS-SFX 5 с — 44 с (загрузка 18 с + 26 с; без отключения torch.compile было 110 с),
+    // MMAudio по тексту 5 с — 6 с (модель в памяти) / ≈15 с холодно, по видео 5 с — 24 с,
+    // Foley XL 5 с — 38 с. Foley XXL и зависимость от длины сверх 5 с — оценка по ночному замеру (25–29 с против 14 с)
+    public static int MossSfxEta(double seconds) => 22 + (int)Math.Ceiling(seconds * 4.5);
+
+    public static int MmAudioTextEta(double seconds) => 14 + (int)Math.Ceiling(seconds * 0.6);
+
+    public static int MmAudioVideoEta(double seconds) => 14 + (int)Math.Ceiling(seconds * 2.0);
+
+    public static int FoleyEta(bool xxl, double seconds) => xxl
+        ? 45 + (int)Math.Ceiling(seconds * 5.0)
+        : 25 + (int)Math.Ceiling(seconds * 2.6);
+
+    // ETA звука по видео без самого клипа (котировка): модель — по engine, длина — как у клипа версии, не больше
+    // предела модели; нет длины или модель неизвестна — null
+    public static int? VideoToAudioEta(JsonObject? args, double? videoSeconds)
+    {
+        if (videoSeconds is not { } length || length <= 0) return null;
+        var engine = Str(args, "engine") ?? "foley-xl";
+        if (!VideoToAudioEngines.Contains(engine)) return null;
+        var seconds = Math.Round(Math.Min(length, engine == "mmaudio" ? MmAudioMaxSeconds : FoleyMaxSeconds), 2);
+        return engine switch
+        {
+            "mmaudio" => MmAudioVideoEta(seconds),
+            "foley-xxl" => FoleyEta(true, seconds),
+            _ => FoleyEta(false, seconds),
+        };
+    }
 
     // Whisper large-v3-turbo на GPU: 180 с вокала — 6,5 с, 101 с речи — 4,8 с
     public static int? TranscribeEta(double? seconds) => seconds is { } s ? 3 + (int)Math.Ceiling(s * 0.02) : null;

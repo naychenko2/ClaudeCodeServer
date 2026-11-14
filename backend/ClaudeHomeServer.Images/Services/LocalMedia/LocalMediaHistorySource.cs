@@ -6,7 +6,8 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 // в проекте: .cc-attachments/local-media/{дата}/{jobId}-… (LocalMediaService.CollectAsync). Задача
 // берётся из стора по владельцу записи; путь результата — из job.Outputs (относительный, через
 // SafePath.Join от корня проекта). Проект проверяем на каждом вызове: переехал на устройство —
-// local_project, удалён — project_gone, не касаясь диска (дух сторожа G10).
+// local_project, удалён — project_gone, не касаясь диска (дух сторожа G10). Задача без проекта
+// (личный чат) — missing: результаты редакторов личных чатов читают свои источники из data/.
 public sealed class LocalMediaHistorySource(
     LocalMediaJobStore store,
     ILocalMediaProjectAccess projects,
@@ -37,9 +38,13 @@ public sealed class LocalMediaHistorySource(
         if (variantCount == 0 && (LocalMediaStatuses.IsTerminal(job.Status) || job.Cancelled))
             return Task.FromResult<MediaHistoryResolution?>(new(0, null, null, MediaHistoryGoneReason.NoResult));
 
-        // Проект: удалён / на устройстве / на сервере. null — записи без проекта (не ждём, но
-        // локальная генерация проект всегда имеет)
-        var probe = projects.ProbeProject(reference.OwnerId ?? "", reference.ProjectId ?? "");
+        // Задача без проекта (личный чат): рабочих файлов в папке проекта у неё нет, а проект не «удалён» —
+        // его и не было. Честная причина — файла нет, а не project_gone
+        if (string.IsNullOrEmpty(reference.ProjectId))
+            return Task.FromResult<MediaHistoryResolution?>(new(variantCount, null, null, MediaHistoryGoneReason.Missing));
+
+        // Проект: удалён / на устройстве / на сервере
+        var probe = projects.ProbeProject(reference.OwnerId ?? "", reference.ProjectId);
         if (probe is null || probe.State == MediaHistoryProjectState.Gone)
             return Task.FromResult<MediaHistoryResolution?>(new(variantCount, null, null, MediaHistoryGoneReason.ProjectGone));
         if (probe.State == MediaHistoryProjectState.Local)

@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/image-editor/characters/{slug}/lora-versions")]
+[Route("api/image-editor/chats/{sessionId}/characters/{slug}/lora-versions")]
 public class CharacterLoraVersionsController(
     ImageEditScopeGate gate,
     CharacterLoraRuns runs,
@@ -25,9 +26,9 @@ public class CharacterLoraVersionsController(
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     [HttpGet]
-    public IActionResult List(string projectId, string slug)
+    public IActionResult List(string? projectId, string? sessionId, string slug)
     {
-        if (!Character(projectId, slug, out var project, out var manifest, out var denied)) return denied;
+        if (!Character(projectId, sessionId, slug, out var project, out var manifest, out var denied)) return denied;
         var all = runs.List(project.RootPath, slug);
         var active = manifest.ReadLora()?.Name;
         // Своя LoRA, обученная у другого персонажа проекта, несёт дату обучения (аддитивно: поле trainedAt внутри own)
@@ -45,9 +46,9 @@ public class CharacterLoraVersionsController(
     }
 
     [HttpPost("{runId}/connect")]
-    public async Task<IActionResult> Connect(string projectId, string slug, string runId, CancellationToken ct)
+    public async Task<IActionResult> Connect(string? projectId, string? sessionId, string slug, string runId, CancellationToken ct)
     {
-        if (!Character(projectId, slug, out var project, out var manifest, out var denied)) return denied;
+        if (!Character(projectId, sessionId, slug, out var project, out var manifest, out var denied)) return denied;
         if (Run(project, slug, runId) is not { } run) return VersionNotFound();
         if (run.Status != CharacterLoraRuns.Status.Ready || run.LoraFile is not { Length: > 0 } loraFile)
             return Error(StatusCodes.Status409Conflict, "version_not_ready", "Версия ещё не обучена");
@@ -73,9 +74,9 @@ public class CharacterLoraVersionsController(
     }
 
     [HttpPatch("{runId}")]
-    public IActionResult Rename(string projectId, string slug, string runId, [FromBody] RenameRequest? req)
+    public IActionResult Rename(string? projectId, string? sessionId, string slug, string runId, [FromBody] RenameRequest? req)
     {
-        if (!Character(projectId, slug, out var project, out var manifest, out var denied)) return denied;
+        if (!Character(projectId, sessionId, slug, out var project, out var manifest, out var denied)) return denied;
         if (Run(project, slug, runId) is not { } run) return VersionNotFound();
         if (run.Status == CharacterLoraRuns.Status.Training) return VersionTraining();
         var title = req?.Title?.Trim();
@@ -87,9 +88,9 @@ public class CharacterLoraVersionsController(
     }
 
     [HttpDelete("{runId}")]
-    public async Task<IActionResult> Delete(string projectId, string slug, string runId, CancellationToken ct)
+    public async Task<IActionResult> Delete(string? projectId, string? sessionId, string slug, string runId, CancellationToken ct)
     {
-        if (!Character(projectId, slug, out var project, out var manifest, out var denied)) return denied;
+        if (!Character(projectId, sessionId, slug, out var project, out var manifest, out var denied)) return denied;
         if (Run(project, slug, runId) is not { } run) return VersionNotFound();
         if (run.Status == CharacterLoraRuns.Status.Training) return VersionTraining();
 
@@ -128,12 +129,18 @@ public class CharacterLoraVersionsController(
         foreach (var rel in change.Deleted) files.NotifyMutated(root, rel, FileMutationKind.Delete);
     }
 
-    private bool Character(string projectId, string slug, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Project? project,
+    private string? RouteValue(string key) => RouteData.Values.TryGetValue(key, out var value) ? value as string : null;
+
+    private bool Character(string? projectId, string? sessionId, string slug, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Project? project,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CharacterManifest? manifest,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out IActionResult? denied)
     {
         manifest = null;
-        if (!gate.TryProject(UserId, projectId, out project, out denied)) return false;
+        // string? в параметрах action биндится и из query: значимы только значения маршрута, иначе
+        // ?sessionId=… на проектном маршруте (и ?projectId=… на чатовом) подменил бы область
+        projectId = RouteValue("projectId");
+        sessionId = RouteValue("sessionId");
+        if (!gate.TryCharacterProject(UserId, projectId, sessionId, out project, out denied)) return false;
         manifest = CharacterStore.IsValidSlug(slug) ? CharacterStore.Get(project.RootPath, slug) : null;
         if (manifest is null)
         {

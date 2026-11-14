@@ -10,10 +10,16 @@
 //
 // selectedKey не читается: настройки и отбор относятся ко всей базе, не к выбранному разделу —
 // ни у настроек, ни у отбора раздела в запросе нет (GET /api/wiki/settings, /api/wiki/chats).
+//
+// «Начать вики заново» (WikiPurgeBlock) — последней строкой стопки намеренно (М2/П4): блок сам
+// есть закреплённая полоса `position: sticky; bottom: 0` и прижимается к нижней кромке тела
+// панели только оставаясь последним элементом прокручиваемого контейнера. Поднять его в стопку
+// или обернуть в отдельный скролл-контейнер — полоса отклеится от низа и уедет за списки (А2).
 
 import { WikiNightlyBlock } from './WikiNightlyBlock';
 import { WikiApplySettings } from './WikiApplySettings';
 import { WikiChatTriageList } from './WikiChatTriageList';
+import { WikiPurgeBlock } from './WikiPurgeBlock';
 
 export function WikiSettings() {
   return (
@@ -21,6 +27,7 @@ export function WikiSettings() {
       <WikiNightlyBlock />
       <WikiApplySettings />
       <WikiChatTriageList />
+      <WikiPurgeBlock />
     </div>
   );
 }

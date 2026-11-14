@@ -1,5 +1,4 @@
-// «Скачать» картинку нити: карточки версий, карточка-стопка и попап «Редактор». В личном
-// чате вне проекта это единственный способ забрать картинку — сохранять некуда
+// «Скачать» картинку нити: карточки версий, карточка-стопка и попап «Редактор»
 
 function clickLink(href: string, name: string) {
   const a = document.createElement('a');
@@ -22,5 +21,3 @@ export async function download(src: string, name: (mime: string) => string) {
     clickLink(src, name(''));
   }
 }
-
-export const PERSONAL_DOWNLOAD_HINT = 'В личном чате картинка хранится только в этом чате — скачайте файл, чтобы забрать её';

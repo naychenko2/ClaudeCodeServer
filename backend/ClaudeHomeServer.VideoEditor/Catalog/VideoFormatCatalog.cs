@@ -86,6 +86,18 @@ public static class VideoFormatCatalog
         Exact: null,
         WireParam: "size");
 
+    // ── local Kandinsky 6 Lite ───────────────────────────────────────────────────
+
+    // Одна ступень — 480p (864×480, 16:9): на 24 ГБ проверен только он. Увеличитель Kandinsky (VSR) удалён — падал по
+    // памяти; крупнее — отдельным «Увеличить» после съёмки (RelayVSR), поэтому «Высокого» и «Макс» у модели нет
+    public static MediaFormatCaps LocalKandinsky6(IReadOnlyList<string> aspects) => new(
+        "Kandinsky 6 Lite",
+        aspects,
+        [new FormatTierSpec(FormatTier.Standard, "480p", Sizes(aspects, 864, 480), "480p")],
+        Exact: null,
+        WireParam: null,
+        NativeNote: "только 480p (864×480)");
+
     private static IReadOnlyDictionary<string, FormatSize> Sizes(IReadOnlyList<string> aspects, int w, int h)
     {
         var sizes = new Dictionary<string, FormatSize>(StringComparer.Ordinal);

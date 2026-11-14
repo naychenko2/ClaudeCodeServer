@@ -124,7 +124,7 @@ public class GitCommitAuthorRestTests : IDisposable
     // Общий проект с участником-редактором: рубильник включён у обоих (без него участник
     // проекта не видит — ProjectAccessService.cs:22), участник добавлен. Возвращает
     // клиентов владельца и редактора, id проекта и их записи в UserStore.
-    private async Task<(HttpClient Owner, HttpClient Editor, string ProjectId, User OwnerUser, User EditorUser)>
+    private async Task<(HttpClient Owner, HttpClient Editor, string ProjectId, User OwnerUser, User EditorUser, string ChatId)>
         SetupSharedWithEditorAsync()
     {
         foreach (var c in new[] { _factory.CreateAuthenticatedClient(),
@@ -132,6 +132,12 @@ public class GitCommitAuthorRestTests : IDisposable
             (await c.PutAsJsonAsync("/api/feature-flags/shared-projects", new { enabled = true })).EnsureSuccessStatusCode();
 
         var (owner, projectId) = await CreateSharedProjectAsync();
+        // Чат до участников: пока проект личный, провижна владельца нет; в общем проекта без
+        // руководителя она не запускается никому (W4-B1a доработка 2, финал ed64271c)
+        var chat = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        chat.EnsureSuccessStatusCode();
+        var chatId = IdOf(await chat.Content.ReadAsStringAsync());
+
         var editorUser = _factory.Services.GetRequiredService<UserStore>()
             .FindByUsername(TestWebApplicationFactory.SecondUsername)!;
         var ownerUser = _factory.Services.GetRequiredService<UserStore>()
@@ -140,18 +146,14 @@ public class GitCommitAuthorRestTests : IDisposable
             [new ProjectMember { UserId = editorUser.Id, Role = ProjectRole.Editor, AddedBy = ownerUser.Id }]);
         return (owner,
             _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword),
-            projectId, ownerUser, editorUser);
+            projectId, ownerUser, editorUser, chatId);
     }
 
     [Fact]
     public async Task КоммитВладельцаОбщегоПроекта_АвторВладелец_ТрейлерыОднимБлоком()
     {
         await SetupRepoAsync();
-        var (owner, _, projectId, ownerUser, _) = await SetupSharedWithEditorAsync();
-
-        var chat = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
-        chat.EnsureSuccessStatusCode();
-        var chatId = IdOf(await chat.Content.ReadAsStringAsync());
+        var (owner, _, projectId, ownerUser, _, chatId) = await SetupSharedWithEditorAsync();
 
         await StageChangeAsync("b.txt");
 
@@ -186,7 +188,7 @@ public class GitCommitAuthorRestTests : IDisposable
     public async Task КоммитРедактораОбщегоПроекта_Отказ403_КоммитаНет()
     {
         await SetupRepoAsync();
-        var (_, editor, projectId, _, editorUser) = await SetupSharedWithEditorAsync();
+        var (_, editor, projectId, _, editorUser, _) = await SetupSharedWithEditorAsync();
         // Правка в индексе обязательна и здесь: без неё отказ неотличим от «git нечего
         // коммитить», а с ней отказанное действие — то, которое коммит бы сделало.
         await StageChangeAsync("b.txt");

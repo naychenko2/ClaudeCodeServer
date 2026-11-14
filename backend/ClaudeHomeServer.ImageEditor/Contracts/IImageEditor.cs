@@ -66,7 +66,24 @@ public enum EditStage { Queued, Running, Downloading }
 // HasAnnotations — на холсте есть стрелка, рамка или подпись: их видно только на размеченной
 // копии, поэтому модели нужен канал образцов. Removal — запрос просит стереть отмеченное:
 // чистый инпейнт по маске дорисовывает, а не стирает
-public record EditTraits(bool HasMask, int References, bool HasCharacter, bool HasAnnotations = false, bool Removal = false);
+// Prompt, SourceMegapixels и FaceSwap нужны только авто-выбору локальных моделей (LocalImageRouting):
+// текст запроса (надпись в кавычках, люди, фото, вывеска), размер исходника правки в Мп (null —
+// неизвестен или это генерация) и подстановка персонажа на лицо. Остальные поставщики их не читают
+public record EditTraits(bool HasMask, int References, bool HasCharacter, bool HasAnnotations = false, bool Removal = false,
+    string? Prompt = null, double? SourceMegapixels = null, bool FaceSwap = false);
+
+// Выбор «Авто» с причиной для котировки и интерфейса («Авто → Klein: в запросе надпись»)
+public record ImageRoute(ImageEditModelInfo Model, string Reason);
+
+// Поставщик, умеющий объяснить выбор «Авто»; PickModel его Model и возвращает
+public interface IImageEditRouter
+{
+    // category — ответ классификатора неоднозначных запросов (ImageRouteClassifier); null — только правила
+    ImageRoute? Route(ImageEditOp op, EditMode mode, EditTraits traits, string? category = null);
+
+    // Правила дошли до умолчания, а текст запроса есть — стоит спросить классификатор
+    bool NeedsClassifier(ImageEditOp op, EditMode mode, EditTraits traits);
+}
 
 // Возможности МОДЕЛИ, а не поставщика: недоступные операции UI показывает серыми.
 // SeparateMaskPass — кисть вместе со стрелками, рамками и подписями модель в одном запросе не
@@ -96,7 +113,12 @@ public record ImageEditCaps(
     int? MaxFaceCropPhotos = null,
     // Выходные пропорции, ступени и «Точно…» модели (ADR-025); null — модель размеров не сообщает:
     // «Как у модели», текущее поведение
-    ClaudeHomeServer.Services.Media.MediaFormatCaps? Format = null);
+    ClaudeHomeServer.Services.Media.MediaFormatCaps? Format = null,
+    // Стили модели (Krea 2 Turbo, Ш4): плашки выбора в редакторе; id уходит в запуск как ImageEditRequest.Style.
+    // null — у модели стилей нет
+    IReadOnlyList<ImageEditStyle>? Styles = null);
+
+public record ImageEditStyle(string Id, string Label);
 
 // Ориентир цены для каталога; точная сумма — только в котировке
 public record ImageEditPriceHint(double Amount, string Unit, string Per);
@@ -185,10 +207,22 @@ public record ImageEditRequest(
     bool Heavy = false,
     // Связь с источником (шаг 2, журнал истории): проект и job_id задачи редактора — для LocalJobOrigin
     string? ProjectId = null,
-    string? SourceJobId = null);
+    string? SourceJobId = null,
+    // Стиль Krea 2 Turbo (id из Krea2Styles); null — без стиля. Остальные драйверы поле не читают
+    string? Style = null,
+    // Доводка версии Fibo 2.0 по JSON-описанию (Ш8): только Generate драйвера local; null — обычный запуск
+    ImageVglRefine? Refine = null);
 
-// Similarity — сходство лица с образцом персонажа (0..1); null — не считалось
-public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null);
+// Similarity — сходство лица с образцом персонажа (0..1); null — не считалось. Scene — JSON-описание,
+// по которому Fibo 2.0 нарисовала вариант (Ш8); null — у модели его нет
+public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null, ImageVglScene? Scene = null);
+
+// JSON-описание сцены Fibo 2.0 (VGL, Ш8), по которому нарисована версия. Seed и размер холста — чтобы
+// доводка перерисовала её тем же сидом на том же холсте
+public sealed record ImageVglScene(string Json, long Seed, int Width, int Height);
+
+// Доводка: сцена версии-основы и одно изменение (Field — ключ Fibo2VglFields, Value — новое значение)
+public sealed record ImageVglRefine(ImageVglScene Scene, string Field, string Value);
 
 // Сумма в единицах поставщика (ImageEditPriceUnits.*)
 public record EditCost(double Amount, string Unit);
@@ -199,10 +233,12 @@ public record EditCost(double Amount, string Unit);
 // остальных. Итоговый ImageEditResult.Images всё равно несёт ВСЕ варианты по порядку.
 // Gpu — живой снимок очереди GPU ComfyUI (шаг 28): только отображение, в статус запуска, траты
 // и журналы не идёт; null — поставщик не знает или задача вне локальных моделей, заполняет
-// драйвер, который его знает (local)
+// драйвер, который его знает (local).
+// Model — id модели, на которой прогон идёт на самом деле (local: LocalImageModels.Effective — запуск мог
+// уйти на запасную Qwen); null — драйвер не подменяет модель котировки
 public record EditProgress(EditStage Stage, int? QueuePosition = null, int? Run = null, int? Runs = null,
     int? EtaSeconds = null, IReadOnlyList<EditedImage>? Ready = null,
-    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null, string? Model = null);
 
 // Charged: true — списано, false — точно не списано, null — неизвестно («Списание
 // уточняется у сервиса»)

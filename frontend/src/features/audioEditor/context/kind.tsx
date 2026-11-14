@@ -4,7 +4,7 @@
 
 import { AudioLines, Mic } from 'lucide-react';
 import {
-  C, ICON_SIZE, ICON_STROKE, R, SP, notifyKindChanged,
+  C, ICON_SIZE, ICON_STROKE, R, SP, getChatContextState, notifyKindChanged,
   type ChatContextItem, type ContextKindApi, type ContextKindCtx,
 } from 'aihome_shell/kit';
 import type { AudioOp } from '../api';
@@ -12,9 +12,9 @@ import { AudioWave } from '../player/AudioWave';
 import { audioScope, isPersonalScope } from '../scope';
 import { createDraft } from '../thread/actions';
 import { useServerPeaks } from '../thread/serverPeaks';
-import { ensureAudioThreads, openEditor, subscribeAudioStore, getCatalog, getThreadsState, useAudioStoreVersion } from '../thread/threadStore';
+import { ensureAudioThreads, openEditor, subscribeAudioStore, getCatalog, getPrefs, getThreadsState, useAudioStoreVersion } from '../thread/threadStore';
 import { hasMain, threadName } from '../thread/model';
-import { executorModel, getChoice } from './executors';
+import { chatModeSections, executorModel, getChoice } from './executors';
 import { launchAction, paramsFor, quoteAction } from './run';
 import { migrateLegacyVoice } from './legacyInputs';
 import { audioRefRoles } from './roles';
@@ -113,6 +113,15 @@ export const audioKindApi: ContextKindApi = {
     return executorModel({
       sessionId: ctx.sessionId, op: found.action.op as AudioOp, catalog: getCatalog(found.scope),
       personal: isPersonalScope(found.scope), notify: notifyKindChanged, stemSet: answer,
+    });
+  },
+  // «Чем» в «Чате»: модель, с которой агент запустит звук в режиме нити («Голос», «Музыка», «Обработка»)
+  chatExecutors: ctx => {
+    const thread = threadOfPrimary(ctx.sessionId, getChatContextState(ctx.sessionId).primary);
+    if (!thread) return [];
+    const scope = audioScope(ctx.projectId);
+    return chatModeSections({
+      scope, sessionId: ctx.sessionId, thread, catalog: getCatalog(scope), prefs: getPrefs(scope)[thread.settings?.mode ?? 'voice'],
     });
   },
   params: (ctx, actionId) => {

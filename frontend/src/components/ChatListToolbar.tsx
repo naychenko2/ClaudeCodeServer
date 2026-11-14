@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import {
   Plus, CalendarDays, Tags, Layers, List, Check, Sparkles,
   ArrowDownWideNarrow, ArrowUpNarrowWide, CalendarArrowDown, CalendarArrowUp,
-  SlidersHorizontal, Archive,
+  SlidersHorizontal, Archive, MessageSquarePlus, Lock,
 } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, FONT, FS, SP } from '../lib/design';
@@ -22,6 +23,9 @@ import type { FeatureIndexFeature } from '../types/featureIndex';
 //   cozy 260–399: «+» квадрат 32, IconButton sm
 //   compact <260: PillSwitch → IconButton с иконкой текущего режима + ui/Menu
 //   mobile: «+ Новый чат» flex, IconButton lg; оси — шторкой «Вид» (ui/Modal)
+// Кнопка «Новый» во всех ступенях — одна реализация (NewButton): без onNewPrivate это
+// прежний один клик создания чата, с ним (общий проект, W4-FB2) — меню «Обычный /
+// Приватный» из ui/Menu, одинаковое во всех трёх ветках.
 // Группировка на десктопе — всегда PillSwitch iconsOnly (иконки + title-подсказки):
 // строка узкая, текст сегментов не влезает даже на comfort.
 
@@ -59,6 +63,9 @@ type Tier = 'comfort' | 'cozy' | 'compact';
 
 interface ChatListToolbarProps {
   onNew: () => void;
+  // Выбор «Приватный чат» при создании (W4-FB2): передаёт только список общего
+  // проекта (W4-FB3). Без него кнопка «Новый» работает как раньше — один клик, один чат.
+  onNewPrivate?: () => void;
   creating?: boolean;
   // Оффлайн — кнопка создания не рисуется (создать чат без сети нельзя), тулбар остаётся
   hideNew?: boolean;
@@ -152,8 +159,72 @@ function GroupByMenuButton({ size, value, options, onChange }: {
   );
 }
 
+// Кнопка «Новый» — главное действие списка. Без onNewPrivate ведёт себя как раньше:
+// один клик → onNew. С onNewPrivate (общий проект, W4-FB2) клик открывает меню вида
+// чата, и пункт зовёт свой колбэк: «Обычный» → onNew, «Приватный» → onNewPrivate.
+// Три ступени тулбара (мобильная / шапка панели / десктоп) различаются только
+// триггером — пункты общие, поэтому реализация одна, а не три копии кнопки.
+function NewButton({ creating, onNew, onNewPrivate, size, label, icon, title, glow, fullWidth, style, isMobile }: {
+  creating?: boolean;
+  onNew: () => void;
+  onNewPrivate?: () => void;
+  size: 'xs' | 'sm' | 'md';
+  // Подпись кнопки; нет подписи — только иконка (cozy/compact-ступень)
+  label?: string;
+  // Иконка: leftIcon при подписи, содержимое кнопки без неё
+  icon: ReactNode;
+  title?: string;
+  glow?: boolean;
+  fullWidth?: boolean;
+  style?: CSSProperties;
+  // Мобильная ступень: меню во всю ширину экрана (триггер там во всю колонку)
+  isMobile?: boolean;
+}) {
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  // Рамка карточки: меню кнопки из закреплённого слота шапки иначе свисало за её кромку
+  const [boundary, setBoundary] = useState<DOMRect | null>(null);
+  const panel = usePanelElement();
+  // Меню живёт порталом в body: курсор уходит с карточки, и шапка гасила бы кнопку,
+  // которой его открыли
+  usePanelHeaderHold(!!anchor);
+  return (
+    <>
+      <Button variant="primary" size={size} glow={glow} fullWidth={fullWidth} loading={creating}
+        title={title} dataTestId="chat-new-button" style={style}
+        // Кнопка, у которой есть меню выбора, — disclosure: скринридер должен знать,
+        // открыто оно. Без приватного варианта атрибута нет вовсе — кнопка не раскрывает
+        ariaExpanded={onNewPrivate ? !!anchor : undefined}
+        leftIcon={label ? icon : undefined}
+        onClick={e => {
+          // Без приватного варианта — прежний путь: клик сразу создаёт обычный чат
+          if (!onNewPrivate) { onNew(); return; }
+          setBoundary(panel?.getBoundingClientRect() ?? null);
+          setAnchor(e.currentTarget.getBoundingClientRect());
+        }}>
+        {label ?? icon}
+      </Button>
+      {anchor && (
+        // Два пункта с второй строкой-пояснением: строка ~50 px, потолок — с запасом
+        <Menu anchor={anchor} boundary={boundary} minWidth={240} maxHeight={130}
+          fullWidth={isMobile} onClose={() => setAnchor(null)}>
+          <MenuItem
+            icon={<MessageSquarePlus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            label="Обычный чат" hint="Видят участники проекта"
+            onClick={() => { setAnchor(null); onNew(); }}
+          />
+          <MenuItem
+            icon={<Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            label="Приватный чат" hint="Видите только вы"
+            onClick={() => { setAnchor(null); onNewPrivate?.(); }}
+          />
+        </Menu>
+      )}
+    </>
+  );
+}
+
 export function ChatListToolbar({
-  onNew, creating, hideNew, sessions, filters, patch, allPersonas, hiddenCount,
+  onNew, onNewPrivate, creating, hideNew, sessions, filters, patch, allPersonas, hiddenCount,
   isMobile = false, groupByOptions = ['days', 'tags', 'none'], features,
 }: ChatListToolbarProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -204,10 +275,8 @@ export function ChatListToolbar({
       }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           {!hideNew && (
-            <Button variant="primary" size="md" glow fullWidth loading={creating}
-              onClick={onNew} leftIcon={newIcon}>
-              Новый чат
-            </Button>
+            <NewButton creating={creating} onNew={onNew} onNewPrivate={onNewPrivate}
+              size="md" glow fullWidth isMobile label="Новый чат" icon={newIcon} />
           )}
         </div>
         <FilterBar
@@ -310,13 +379,9 @@ export function ChatListToolbar({
       </PanelHeaderSlot>
       {!hideNew && (
         <PanelHeaderSlot pinned>
-          <Button
-            variant="primary" size="xs" title="Новый чат" loading={creating}
-            leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
-            onClick={onNew}
-          >
-            Чат
-          </Button>
+          <NewButton creating={creating} onNew={onNew} onNewPrivate={onNewPrivate}
+            size="xs" title="Новый чат" label="Чат"
+            icon={<Plus size={13} strokeWidth={ICON_STROKE} />} />
         </PanelHeaderSlot>
       )}
       </>
@@ -332,14 +397,12 @@ export function ChatListToolbar({
     }}>
       {/* Главное действие — единственный залитый элемент строки */}
       {!hideNew && (tier === 'comfort' ? (
-        <Button variant="primary" size="sm" glow loading={creating} onClick={onNew} leftIcon={newIcon}>
-          Новый
-        </Button>
+        <NewButton creating={creating} onNew={onNew} onNewPrivate={onNewPrivate}
+          size="sm" glow label="Новый" icon={newIcon} />
       ) : (
-        <Button variant="primary" size="sm" glow loading={creating} onClick={onNew}
-          title="Новый чат" style={{ width: 32, padding: 0, flexShrink: 0 }}>
-          {newIcon}
-        </Button>
+        <NewButton creating={creating} onNew={onNew} onNewPrivate={onNewPrivate}
+          size="sm" glow title="Новый чат" icon={newIcon}
+          style={{ width: 32, padding: 0, flexShrink: 0 }} />
       ))}
 
       {/* Группировка: PillSwitch только иконками (comfort/cozy) или кнопка-меню на compact */}

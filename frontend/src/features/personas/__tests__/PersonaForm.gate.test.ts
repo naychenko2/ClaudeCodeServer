@@ -1,11 +1,11 @@
 // W3-F1e: гейт по роли в форме персоны (матрица §2 разреза
 // docs/research/shared-projects-personas-cut-2026-11.md §3.4). Читатель — форма только для
-// чтения: поля disabled, «Удалить» нет (для читателя форма сообщает canSave=false).
-// Редактор — карточка правится; поля зоны и денег (зона, профиль доступа,
-// модель/уровень/усилие, специальность — доработка ревью fd328e70 п.3) выключены,
-// с F29 (макет P3) — объясняются одной плашкой «Права, модели и специальность меняет
-// владелец проекта» в начале секции, а не hint у каждого поля; «Удалить» нет.
-// Владелец и обычный проект (myRole нет) — всё, как раньше.
+// чтения: поля disabled, «Удалить» нет (своей «Сохранить» у формы нет никогда — она в
+// тулбаре родителя, для читателя и редактора форма сообщает canSave=false; состояние
+// кнопки проверяется в PersonaToolbar.gate.test.ts, W4-T4). Редактор — карточка
+// правится; поля зоны и денег (зона, профиль доступа, модель/уровень/усилие, специальность —
+// доработка ревью fd328e70 п.3) выключены с видимым текстом «Меняет только владелец
+// проекта», «Удалить» нет. Владелец и обычный проект (myRole нет) — всё, как раньше.
 //
 // Окружение node (без jsdom), SSR renderToStaticMarkup — образец ProjectPersonasPanel.gate.test.ts
 // и components/SessionList.test.ts: effects не идут (аватар-caps, память, фокус, превью
@@ -18,7 +18,7 @@
 // Зона — главный путь (PersonaZoneSelect): флаг spheres включён setAllFlags.
 // Маркеры: поле имени — input с placeholder="Например, Ассистент"; выбор зоны — select
 // с title="Зона персоны" (его ставит только PersonaZoneSelect); модельные контролы —
-// переключатель группы «Модели» и «Сбросить» (рисуются только при заполненной ячейке —
+// кнопки «Вернуть наследование»/«Сбросить» (рисуются только при заполненной ячейке —
 // в фикстуре задан tierStrong).
 
 import { createElement } from 'react';
@@ -41,7 +41,7 @@ vi.mock('../../../lib/aiJobStore', async (importOriginal) => {
 });
 
 // Проектная персона проекта 'proj1'. Заполненная ячейка уровня: контролы модельного поля
-// «Сбросить» рисуется только при значении — они маркеры состояния
+// «Вернуть наследование»/«Сбросить» рисуются только при значении — они маркеры состояния
 // модельного поля (ячейка сильной модели у персоны задана)
 const PERSONA: Persona = {
   id: 'per-1', ownerId: 'o1', name: 'Светлана', role: 'Дизайнер', handle: 'designer',
@@ -98,7 +98,7 @@ const SPEC_MARK = 'aria-label="Специальность"';
 const HINT_TEXT = 'Меняет только владелец проекта';
 
 describe('PersonaForm: гейт по роли (W3-F1e)', () => {
-  it('читатель: имя и зона выключены, модельные контролы выключены, «Сохранить»/«Удалить» нет', () => {
+  it('читатель: имя и зона выключены, модельные контролы выключены, «Удалить» нет', () => {
     const html = renderForm('reader');
     const nameTag = openTagWith(html, '<input', NAME_MARK);
     expect(nameTag, 'поля имени нет').not.toBeNull();
@@ -112,26 +112,23 @@ describe('PersonaForm: гейт по роли (W3-F1e)', () => {
     const specTag = openTagWith(html, '<select', SPEC_MARK);
     expect(specTag, 'выбора специальности нет').not.toBeNull();
     expect(specTag!, 'выбор специальности читателю не выключен').toContain('disabled');
-    expect(countOf(html, 'Сохранить'), '«Сохранить» в форме читателю').toBe(0);
     expect(countOf(html, 'Удалить'), '«Удалить» в форме читателю').toBe(0);
   });
 
-  it('редактор: имя открыто; зона и модель выключены; «Удалить» нет', () => {
+  it('редактор: как читатель — имя, зона, модель выключены; «Удалить» нет', () => {
     const html = renderForm('editor');
     const nameTag = openTagWith(html, '<input', NAME_MARK);
     expect(nameTag, 'поля имени нет').not.toBeNull();
-    expect(nameTag!, 'поле имени редактору выключено').not.toContain('disabled');
+    expect(nameTag!, 'поле имени редактору не выключено (editCard — Configure)').toContain('disabled');
     const zoneTag = openTagWith(html, '<select', ZONE_MARK);
     expect(zoneTag, 'выбора зоны нет').not.toBeNull();
     expect(zoneTag!, 'выбор зоны редактору не выключен').toContain('disabled');
     const resetTag = buttonTagWithText(html, 'Сбросить');
     expect(resetTag, 'контрола модели («Сбросить» ячейки) нет').not.toBeNull();
     expect(resetTag!, 'контроль модели редактору не выключен').toContain('disabled');
-    // «Вернуть наследование» заменён переключателем группы «Модели» (F28): его сегменты выключены
-    const modelsHtml = html.slice(html.indexOf('data-testid="models-group"'));
-    const segTag = buttonTagWithText(modelsHtml, 'Как у специальности');
-    expect(segTag, 'переключателя «Как у специальности» в группе моделей нет').not.toBeNull();
-    expect(segTag!, 'переключатель моделей редактору не выключен').toContain('disabled');
+    const inheritTag = buttonTagWithText(html, 'Вернуть наследование');
+    expect(inheritTag, 'кнопки «Вернуть наследование» нет').not.toBeNull();
+    expect(inheritTag!, '«Вернуть наследование» редактору не выключена').toContain('disabled');
     // доработка ревью fd328e70 п.3: бэк (01ebbf0ed) 403-ит участнику смену специальности —
     // фронт выключает её тем же гейтом, что зону и модель
     const specTag = openTagWith(html, '<select', SPEC_MARK);
@@ -172,11 +169,9 @@ describe('PersonaForm: гейт по роли (W3-F1e)', () => {
     expect(countOf(html, 'Удалить персону'), '«Удалить персону» без роли').toBe(1);
   });
 
-  // F29 (макет P3): вместо hint под каждым выключенным полем — одна плашка Notice
-  // в начале секции «Поведение и контекст»; полевых подсказок в разметке больше нет
-  it('редактор: одна плашка «Права, модели и специальность меняет владелец проекта», полевых hint нет', () => {
+  // c2: подсказка — видимым текстом под полем (Field рисует hint span-ом), а не только title
+  it('редактор: «Меняет только владелец проекта» — текст в разметке', () => {
     const html = renderForm('editor');
-    expect(html, 'плашки в начале секции нет').toContain('Права, модели и специальность меняет владелец проекта');
-    expect(html, 'прежняя полевая подсказка осталась в разметке').not.toContain(`>${HINT_TEXT}<`);
+    expect(html, 'текста подсказки под выключенными полями нет').toContain(`>${HINT_TEXT}<`);
   });
 });

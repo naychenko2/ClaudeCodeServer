@@ -46,11 +46,11 @@ public static class PersonaAccessPolicy
         // отклоняет их и сам; соответствие ArchitectureToolset.WriteTools держит тест)
         "mcp__architecture__arch_create_element", "mcp__architecture__arch_update_element",
         "mcp__architecture__arch_delete_element", "mcp__architecture__arch_set_connection",
-        // Видео-редактор: сохранение в проект, правка и сборка фильма, съёмка (тратит деньги) и
-        // отмена; в автодопуске ходов, поэтому без этой строки «Только чтение» писало бы без карточки
+        // Видео-редактор: сохранение в проект, правка и сборка фильма, съёмка (тратит деньги),
+        // увеличение и озвучка сцены (локальная GPU) и отмена; в автодопуске ходов, поэтому без этой строки «Только чтение» писало бы без карточки
         "mcp__video-editor__video_save_scene", "mcp__video-editor__video_film_edit",
         "mcp__video-editor__video_film_build", "mcp__video-editor__video_shoot",
-        "mcp__video-editor__video_cancel",
+        "mcp__video-editor__video_cancel", "mcp__video-editor__video_enhance", "mcp__video-editor__video_voice",
     ];
 
     // Может ли персона запускать произвольный код (Bash не запрещён целиком). Инструменты,

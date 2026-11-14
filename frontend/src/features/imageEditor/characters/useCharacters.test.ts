@@ -1,14 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Регрессия (личный чат вне проекта, дефект naychenko.me): useCharacters('personal') дёргал
-// проектную ручку персонажей — projectBase('personal') бросает синхронно и рвёт весь чат.
-// Точка одна — в самом хуке: область (включая 'personal') нормализуется в null, и любой
-// вызывающий (LaunchAnchor, VersionCard, EditorModal, панель) безопасен по построению.
+// Личный чат вне проекта (ADR-040 Ф2-4): useCharacters('personal') ходит на личные ручки
+// персонажей чата (/image-editor/chats/{sessionId}/characters), как проект — на ручки проекта.
+// Без чата в области (enterScope не звали) синхронный отказ projectBase уходит в .catch, а не
+// из эффекта и не рвёт чат.
 //
 // Хук — mini-прогонщик (node, без рендерера): useEffect реально выполняется, как в
-// useCharacterTrain.test.ts. listCharacters — реальный (projectBase('personal') бросает
-// синхронно), request/onMessage — заглушки (liveApi не ходит в сеть). На старом коде (без
-// нормализации и без Promise-обёртки) эффект бросает — тест краснеет.
+// useCharacterTrain.test.ts. request/onMessage — заглушки (liveApi не ходит в сеть).
 
 const h = vi.hoisted(() => ({
   request: vi.fn((_url: string, _opts?: unknown) => Promise.resolve([])),
@@ -30,22 +28,28 @@ vi.mock('aihome_shell/kit', async (importOriginal) => {
   return { ...actual, request: h.request, onMessage: h.onMessage };
 });
 
-const { useCharacters, reloadCharacters } = await import('./useCharacters');
+const { useCharacters, reloadCharacters, resetCharactersCache } = await import('./useCharacters');
+const { runLogoutResets } = await import('../../../lib/logoutReset');
+const { enterScope, __resetScope } = await import('../scope');
 
 const marina = { slug: 'marina', name: 'Марина', path: 'characters/marina', photos: [], createdAt: '2026-09-29T00:00:00Z' };
 const settle = () => new Promise<void>(r => setTimeout(r, 0));
 
 beforeEach(() => {
+  __resetScope();
   h.request.mockReset();
   vi.restoreAllMocks();
 });
 
 describe('useCharacters: личный чат вне проекта', () => {
-  it("'personal' → пустой список, error: false, listCharacters (projectBase) не бросает", async () => {
-    const res = useCharacters('personal');
-    expect(res).toEqual({ list: [], error: false });
-    await settle(); // эффект отработал — и проектную ручку персонажей не тронул
-    expect(h.request).not.toHaveBeenCalled();
+  it("'personal' → список с личной ручки чата", async () => {
+    enterScope(null, 's1');
+    h.request.mockReturnValue(Promise.resolve([marina]));
+    expect(useCharacters('personal').list).toBeNull(); // ещё не загружено
+    await settle();
+    expect(h.request).toHaveBeenCalledTimes(1);
+    expect(h.request.mock.calls[0][0]).toBe('/image-editor/chats/s1/characters');
+    expect(useCharacters('personal').list).toEqual([marina]);
   });
 
   it('null → пустой список, request не зовётся (как раньше)', async () => {
@@ -65,10 +69,34 @@ describe('useCharacters: личный чат вне проекта', () => {
   });
 });
 
-// Страховка load(): даже если проектную ручку персонажей дёрнули областью напрямую
-// (reloadCharacters), синхронный projectBase('personal') падает в .catch, а не из вызывающего
+// Страховка load(): синхронный отказ (личная область без чата) падает в .catch, а не из вызывающего
 describe('load(): страховка от синхронного отказа', () => {
-  it('reloadCharacters(personal) резолвится, а не бросает', async () => {
+  it('reloadCharacters(personal) без чата резолвится, а не бросает', async () => {
     await expect(reloadCharacters('personal')).resolves.toBeUndefined();
+  });
+});
+
+describe('useCharacters: выход из аккаунта', () => {
+  it("кэш 'personal' и проектов сбрасывается при runLogoutResets", async () => {
+    enterScope(null, 's1');
+    h.request.mockReturnValue(Promise.resolve([marina]));
+    useCharacters('personal');
+    await settle();
+    expect(useCharacters('personal').list).toEqual([marina]);
+
+    runLogoutResets();
+
+    expect(useCharacters('personal').list).toBeNull();
+  });
+
+  it('resetCharactersCache чистит кэш и напрямую', async () => {
+    enterScope(null, 's1');
+    h.request.mockReturnValue(Promise.resolve([marina]));
+    useCharacters('personal');
+    await settle();
+
+    resetCharactersCache();
+
+    expect(useCharacters('personal').list).toBeNull();
   });
 });

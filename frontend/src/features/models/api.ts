@@ -70,5 +70,18 @@ export const modelsApi = {
     applyPreset: (preset: 'tiers' | 'tiers-local') =>
       request<{ preset: string; count: number }>(`/admin/local-actions/preset`,
         { method: 'POST', body: JSON.stringify({ preset }) }),
+    // «Исполнители ночи» (W7a): список локальных движков места с флагом parallelExecutors
+    // (ключ — wiki-nightly). Тело — ровно форма записи стора: maxTotal + executors, порядок
+    // списка = приоритет (не сортировать); пустой executors — снять ключ, место по своему
+    // маршруту. Ответ — сохранённое состояние стора; актуальный блок UI затем перечитывает
+    // /usage. 400 несёт список текстов валидатора ({ errors }) — request() бросает его как есть,
+    // здесь не глотать: админ обязан видеть, ЧТО именно не принято.
+    putLocalActionExecutors: (
+      key: string,
+      body: { maxTotal: number; executors: { engine: string; parallel: number }[] },
+    ) =>
+      request<{ key: string; maxTotal: number; executors: { engine: string; parallel: number }[] }>(
+        `/admin/local-actions/${key}/executors`,
+        { method: 'PUT', body: JSON.stringify(body) }),
   },
 };

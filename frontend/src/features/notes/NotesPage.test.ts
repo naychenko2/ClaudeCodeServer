@@ -77,6 +77,8 @@ const { wikiMock } = vi.hoisted(() => ({
   wikiMock: {
     tree: null as unknown, catalog: null as unknown, page: null as unknown,
     packages: [] as unknown[], healthCalls: [] as string[],
+    // снимок настроек для подсказки «Решений» (J-F1): null — ещё не читали
+    settings: null as { autoApplyEnabled: boolean } | null,
   },
 }));
 vi.mock('../../lib/wiki', async (importOriginal) => {
@@ -94,6 +96,8 @@ vi.mock('../../lib/wiki', async (importOriginal) => {
     useWikiTree: () => wikiMock.tree,
     useWikiCatalog: () => wikiMock.catalog,
     useWikiPage: () => wikiMock.page,
+    // J-F1: режим очереди («Решений» подсказка) — снимок настроек; здесь он подменный
+    useWikiSettings: () => wikiMock.settings,
   };
 });
 // S5d-доработка: NoteView читает заметку через офлайн-слой (getNoteForView) — подменяем
@@ -463,7 +467,7 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
     const drawer = findNodeByAttr(container, 'data-testid', 'wiki-drawer-right')!;
     // заголовок шторки — название раздела, а не общее «Панель вики»
     expect(findNodeByAttr(drawer, 'data-testid', 'wiki-panel-close'), 'шапка шторки есть').not.toBeNull();
-    expect(hasText(drawer, 'Входящие'), 'заголовок — выбранный раздел').toBe(true);
+    expect(hasText(drawer, 'Решения'), 'заголовок — выбранный раздел').toBe(true);
     root.unmount();
   });
 
@@ -504,6 +508,7 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     wikiMock.packages = [];
     wikiMock.tree = null;
     wikiMock.catalog = null;
+    wikiMock.settings = null;
     noteMock.detail = null;
     notesMock.length = 0;
     delete (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
@@ -575,7 +580,7 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     await settle();
     expect(rails(container as unknown as AnyNode).length, 'самодельной рельсы нет').toBe(0);
     expect(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages'), 'кнопки «Страницы» нет').toBeNull();
-    for (const label of ['Входящие', 'Журнал', 'Здоровье', 'Настройки'])
+    for (const label of ['Решения', 'Журнал', 'Здоровье', 'Настройки'])
       expect(railButtons(container as unknown as AnyNode, label).length, `кнопка «${label}» ровно одна`).toBe(1);
     root.unmount();
   });
@@ -624,7 +629,7 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     const { root, container } = mountNotes();
     await settle();
     expect(findNodeByAttr(container, 'data-testid', 'wiki-empty'), 'пустое состояние в центре').not.toBeNull();
-    expect(railButtons(container as unknown as AnyNode, 'Входящие').length, 'кнопка есть, числа и подсказки нет').toBe(1);
+    expect(railButtons(container as unknown as AnyNode, 'Решения').length, 'кнопка есть, числа и подсказки нет').toBe(1);
     wikiMock.packages = [];
     expect(findButtonByText(container, 'Завести вики'), 'кнопки «Завести вики» нет').toBeNull();
     openWikiPanel('wikiInbox');
@@ -633,13 +638,35 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     root.unmount();
   });
 
-  it('W3: число «Входящих» на рельсе — с подсказкой «N ждут вашего решения»', async () => {
+  // J-F1 (QA b0065470): в режиме судьи очередь решает не человек — «вашего» в подсказке нет.
+  const railInboxAria = (container: AnyNode) =>
+    (railButtons(container as unknown as AnyNode, 'Решения')[0] as unknown as { getAttribute(n: string): string }).getAttribute('aria-label');
+
+  it('W3: подсказка «Решений» — режим судьи или снимка настроек нет: «N ждут решения», без «вашего»', async () => {
     setAllFlags({ 'llm-wiki': true });
     wikiMock.packages = [{ id: 'p1' }, { id: 'p2' }];
+    // снимка ещё нет: страница только что открыта, панелей настроек не касались — нейтральная форма
+    {
+      const { root, container } = mountNotes();
+      await settle();
+      expect(railInboxAria(container as unknown as AnyNode), 'без снимка — без «вашего»').toBe('Решения: 2 ждут решения');
+      root.unmount();
+    }
+    // режим судьи включён («Применять неспорное само») — та же форма
+    wikiMock.settings = { autoApplyEnabled: true };
     const { root, container } = mountNotes();
     await settle();
-    const al = (railButtons(container as unknown as AnyNode, 'Входящие')[0] as unknown as { getAttribute(n: string): string }).getAttribute('aria-label');
-    expect(al).toBe('Входящие: 2 ждут вашего решения');
+    expect(railInboxAria(container as unknown as AnyNode), 'режим судьи — без «вашего»').toBe('Решения: 2 ждут решения');
+    root.unmount();
+  });
+
+  it('W3: ручная очередь (тумблер выключен) — подсказка прежняя: «N ждут вашего решения»', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    wikiMock.packages = [{ id: 'p1' }, { id: 'p2' }];
+    wikiMock.settings = { autoApplyEnabled: false };
+    const { root, container } = mountNotes();
+    await settle();
+    expect(railInboxAria(container as unknown as AnyNode)).toBe('Решения: 2 ждут вашего решения');
     root.unmount();
   });
 

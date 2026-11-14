@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ImageEditorApi, ImageEditQuote, ImageEditQuoteRequest } from './api';
-import { __resetSharedQuotes, sharedQuote, staleEstimate } from './useQuote';
+import { AUTO_MODEL } from './api';
+import { __resetSharedQuotes, autoQuotePrompt, QUOTE_PROMPT_MAX, sharedQuote, staleEstimate } from './useQuote';
 
 const req = (patch: Partial<ImageEditQuoteRequest> = {}): ImageEditQuoteRequest => ({
   provider: 'higgsfield', model: 'auto', mode: 'auto', op: 'generate', count: 2,
@@ -58,5 +59,18 @@ describe('одинаковая котировка у нескольких хоз
     await expect(sharedQuote(a, 'p1', req())).rejects.toThrow('сеть');
     await expect(sharedQuote(a, 'p1', req())).resolves.toMatchObject({ quoteId: 'q1' });
     expect(n).toBe(2);
+  });
+});
+
+describe('промпт в котировке автовыбора', () => {
+  it('у «Авто» текст уходит обрезанным до потолка, пустой — не уходит', () => {
+    expect(autoQuotePrompt(AUTO_MODEL, '  кот на крыше  ')).toBe('кот на крыше');
+    expect(autoQuotePrompt(AUTO_MODEL, 'я'.repeat(QUOTE_PROMPT_MAX + 50))).toHaveLength(QUOTE_PROMPT_MAX);
+    expect(autoQuotePrompt(AUTO_MODEL, '   ')).toBeNull();
+    expect(autoQuotePrompt(AUTO_MODEL, null)).toBeNull();
+  });
+
+  it('у явной модели текст в котировку не идёт', () => {
+    expect(autoQuotePrompt('qwen-image', 'кот на крыше')).toBeNull();
   });
 });

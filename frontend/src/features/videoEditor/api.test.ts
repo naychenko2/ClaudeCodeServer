@@ -24,6 +24,30 @@ describe('ручки фильма: чат-вызыватель', () => {
   });
 });
 
+describe('личный чат: «Сохранить сцену» и фильмы «Личного» (ADR-040 Ф2-3/Ф2-6)', () => {
+  it('сохранение сцены — ручка сцены на чате, filmPath/folder уходят как есть', async () => {
+    await videoApi.save('personal', 'c 1', 's1', { versionId: 'v1' });
+    await videoApi.save('personal', 'c 1', 's1', { filmPath: FILM_PATH });
+    await videoApi.save('personal', 'c 1', 's1', { folder: 'video/утро' });
+    expect(urlOf(0)).toBe('/video-editor/chats/c%201/scenes/s1/save');
+    expect(JSON.parse(String(requestMock.mock.calls[1][1].body))).toMatchObject({ filmPath: FILM_PATH, sessionId: 'c 1', sceneId: 's1' });
+    expect(JSON.parse(String(requestMock.mock.calls[2][1].body))).toMatchObject({ folder: 'video/утро' });
+  });
+
+  it('фильмы: список, состояние, создание, правка, сборка и статус — те же ручки на чате', async () => {
+    await videoApi.films('personal', 'c1');
+    await videoApi.filmState('personal', 'c1', FILM_PATH);
+    await videoApi.createFilm('personal', 'c1', FILM_PATH);
+    await videoApi.patchFilm('personal', 'c1', FILM_PATH, { expectedRevision: 'r', ops: [] });
+    await videoApi.buildFilm('personal', 'c1', FILM_PATH);
+    await videoApi.buildStatus('personal', 'c1', FILM_PATH);
+    for (let i = 0; i < 6; i++) expect(urlOf(i), urlOf(i)).toMatch(/^\/video-editor\/chats\/c1\/films/);
+    expect(urlOf(0)).toBe('/video-editor/chats/c1/films');
+    expect(urlOf(1)).toContain('/films/state?path=');
+    expect(requestMock.mock.calls[2][1].method).toBe('POST');
+  });
+});
+
 describe('загрузка кадра в личном чате', () => {
   it('идёт на ручку чата multipart-полем file', async () => {
     const file = new File(['x'], 'a.png', { type: 'image/png' });
@@ -43,5 +67,17 @@ describe('«Повторить увеличение»: понятный текс
     expect(upscaleRetryError(err(400, { error: 'Версия не 768p' }))).toBe('Версия не 768p');
     expect(upscaleRetryError(err(409, { code: 'other' }))).toBe('Не удалось повторить увеличение');
     expect(upscaleRetryError(err(500))).toBe('Не удалось повторить увеличение');
+  });
+});
+
+describe('«Увеличить ×2/×4»: ручки версии', () => {
+  it('котировка — GET, запуск — POST с масштабом в теле, версия кодируется в пути', async () => {
+    await videoApi.enhanceQuote('p1', 'c1', 's1', 'v/1');
+    await videoApi.enhance('p1', 'c1', 's1', 'v/1', 4);
+    expect(urlOf(0)).toBe('/projects/p1/video-editor/sessions/c1/scenes/s1/versions/v%2F1/enhance');
+    expect(urlOf(1)).toBe(urlOf(0));
+    const opts = requestMock.mock.calls[1][1] as { method: string; body: string };
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body)).toEqual({ scale: 4 });
   });
 });

@@ -66,12 +66,21 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   присоединяется к незавершённой задаче (in-flight) и получает её результат — двух
 //   пакетов на одну версию источника и двойной оплаты модели нет; разные версии одного
 //   окна — разные заявки: переписанный источник не должен получать чужой разбор (InFlightKey);
-// - in-flight-ключ места разбора (actionKey, N7a) не содержит: присоединившаяся заявка
-//   получает движок того, кто пришёл первым, — своей модели нет ни на уровне чата
-//   (single-flight WikiChatIngestService), ни здесь;
+// - in-flight-ключ места разбора (actionKey, N7a) и названного исполнителя (engine, W3) не
+//   содержит: присоединившаяся заявка получает движок того, кто пришёл первым, — своей модели
+//   нет ни на уровне чата (single-flight WikiChatIngestService), ни здесь;
 // - заявки одного раздела стоят в очереди (semaphore по ключу раздела): вторая читает
 //   состояние раздела после того, как первая завершила свой цикл, а не посреди её записи;
 // - применение под теми же блокировками, что у остальной вики (внутри ApplyAsync);
+// - после заявки с исходом awaiting_human (пакет со спорными операциями, «Входящие») в том же
+//   обработчике очереди идёт проход облачного судьи (J-J4, точка «б»): спорное не обязано ждать
+//   следующей ночи. Отдельного фона для этого нет — только тот же прогон заявки, уже после
+//   освобождения очереди раздела (судья не держит раздел моделью). Замок прохода судьи (J-J3a)
+//   сериализует этот вызов с вызовом ночного прохода (точка «а» в WikiNightlyService): двух
+//   одновременных проходов одной вики и двух вызовов модели на одну операцию нет. Исход заявки
+//   от этого не меняется: пакет остаётся awaiting_human (судья может решить его операции, а может
+//   и не решить — решает человек); отмена вызова судьи не меняет исхода заявки и наружу
+//   исключением не выходит;
 // - необработанных исключений наружу нет: сбой внутри прогона — исход rejected с причиной;
 // - сбой вне контракта ApplyAsync на авто-пути — тот же результат-отказ с кодом, и «applying»
 //   закрывается переходом в «apply_failed», а не висит до сторожа старта (W3-1, как CrashedApply
@@ -89,6 +98,14 @@ public sealed class WikiIngestService
     /// <summary>Кандидатов-страниц, чей текст показывается модели в промпте синтеза, не больше
     /// пяти: промпт не должен разрастись до половины раздела.</summary>
     public const int MaxCandidatePages = 5;
+
+    /// <summary>Причина отказа окна, когда локальный маршрут места не дал ответа (дефект 2e13d45c,
+    /// J-O1): «модель дала пустой ответ» лжёт, когда модель не звалась вовсе (движок не настроен,
+    /// не готов или оборвался). Доезжает до журнала ночи через ChatResult.Reason и служит
+    /// выключателю WikiNightlyService: три подряд таких отказа — локального маршрута нет,
+    /// дальше по очереди будет то же самое. Имени движка в ней нет намеренно: к ночи может
+    /// добавиться второй локальный исполнитель (J-W2).</summary>
+    public const string ReasonLocalUnavailable = "локальная модель недоступна";
 
     /// <summary>Заявка: результат захвата источника (S6h) плюс его дом. Origin — из
     /// закрытого перечня (WikiGate.OriginValues); Ref — ссылка карточки («note:{id}»,
@@ -121,6 +138,10 @@ public sealed class WikiIngestService
     private readonly ICheapTextRunner _llm;
     private readonly ISphereDirectory _spheres;
     private readonly WikiApplyService _apply;
+    // Точка (б) J-J4: проход судьи после заявки, вернувшей awaiting_human. Форма — та же, что у
+    // точки (а) в WikiNightlyService: точка запуска проверяется без настоящей облачной модели.
+    // null (тест без судьи) — судья не зовётся, поведение заявки прежнее.
+    private readonly Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? _judge;
     private readonly string _dataDir;
     private readonly TimeProvider _time;
 
@@ -129,16 +150,30 @@ public sealed class WikiIngestService
     private readonly Dictionary<string, Task<IngestResult>> _inFlight = new();
 
     public WikiIngestService(ICheapTextRunner llm, ISphereDirectory spheres, WikiApplyService apply,
-        IConfiguration config, TimeProvider? time = null)
+        IConfiguration config, TimeProvider? time = null, WikiJudgeSweep? judge = null)
+        : this(llm, spheres, apply, config, time, ToJudgeSweep(judge))
+    {
+    }
+
+    // Шов теста: точка (б) подменяется — её вызывают без облачной модели (тот же приём, что у
+    // точки (а) в WikiNightlyService). null — судья не зовётся, поведение заявки прежнее.
+    internal WikiIngestService(ICheapTextRunner llm, ISphereDirectory spheres, WikiApplyService apply,
+        IConfiguration config, TimeProvider? time,
+        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge)
     {
         _time = time ?? TimeProvider.System;
         _llm = llm;
         _spheres = spheres;
         _apply = apply;
+        _judge = judge;
         // Каталог данных — как у всех сервисов вертикали (тот же корень, что у Хранителя).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
+
+    private static Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? ToJudgeSweep(
+        WikiJudgeSweep? judge) =>
+        judge is null ? null : (owner, root, ct) => judge.RunAsync(owner, root, ct);
 
     /// <summary>Поставить заявку в очередь и дождаться её исхода. Две одновременные заявки
     /// одного источника — один прогон (вторая получает результат первой). Отказ любой
@@ -147,9 +182,15 @@ public sealed class WikiIngestService
     /// вызывающий (разбор чата ночью) подаёт своё место из LocalActionCatalog. Не-null ключ
     /// вне каталога — отказ на входе, до очереди и модели: опечатка в месте не должна
     /// молча переносить разбор в облако (LocalActionRouter у неведомого ключа берёт
-    /// Tier/Medium).</summary>
+    /// Tier/Medium). engine (W3, И3 путь 2) — названный локальный исполнитель: «local» или имя
+    /// из LocalEngines:*, его даёт только ночь. Не-null — модель зовётся ровно на этом движке
+    /// (RunOnLocalEngineDetailedAsync: ни выбора исполнителя маршрутом, ни его страховки, ни
+    /// облачного шага); его отказ — отказ окна с причиной маршрута, подмены другим исполнителем
+    /// нет. Пустая или пробельная строка — тоже ветка исполнителя: пустое имя не резолвится
+    /// ни в какой движок, окно отказано без вызова модели (W5b). null — прежний путь.
+    /// В in-flight-ключ не входит (см. шапку).</summary>
     public Task<IngestResult> IngestAsync(string ownerId, Request? request, CancellationToken ct = default,
-        string? actionKey = null)
+        string? actionKey = null, string? engine = null)
     {
         // Fail-closed входа: кривая заявка не доходит ни до очереди, ни до модели.
         if (string.IsNullOrWhiteSpace(ownerId))
@@ -174,7 +215,7 @@ public sealed class WikiIngestService
         {
             if (_inFlight.TryGetValue(key, out var running))
                 return running;
-            task = RunProtectedAsync(ownerId, request, ct, actionKey);
+            task = RunProtectedAsync(ownerId, request, ct, actionKey, engine);
             _inFlight[key] = task;
         }
         // Снятие — после завершения: опоздавшая заявка, пришедшая в окно между концом
@@ -206,11 +247,12 @@ public sealed class WikiIngestService
         ownerId + "|" + r.Origin + "|" + r.Ref + "|" + r.CardRelPath + "|" + (r.Target ?? "");
 
     private async Task<IngestResult> RunProtectedAsync(string ownerId, Request request, CancellationToken ct,
-        string? actionKey)
+        string? actionKey, string? engine)
     {
+        IngestResult res;
         try
         {
-            return await RunAsync(ownerId, request, ct, actionKey);
+            res = await RunAsync(ownerId, request, ct, actionKey, engine);
         }
         catch (OperationCanceledException)
         {
@@ -222,10 +264,36 @@ public sealed class WikiIngestService
             // ни «половины пакета» на диске без объяснения (урок ревью S4b-1, MAJOR 2).
             return Rejected($"внутренний сбой разбора: {e.Message}");
         }
+
+        // Точка (б) J-J4: дневная заявка оставила спорные операции в «Входящих» — проход судьи
+        // идёт здесь же, в этом же обработчике очереди, отдельного фона нет. Он после finally
+        // RunAsync: очередь раздела уже отпущена, судья не держит раздел своей моделью и не
+        // спорит с её замком; вызов сериализует замок самого прохода судьи (J-J3a) с его точкой
+        // (а) в ночи. Пакет для судья — свой, только что записанный: корень тот же, что выбрал
+        // RunAsync. Ночь — исключение (доработка финала J-J4, пункт 1): её окна идут через этот
+        // же метод, но судья у неё один — полный проход в конце RunPassAsync (точка (а)
+        // WikiNightlyService). Посреди ночи тот проход выбрасывал свой итог (в нём и цены:
+        // сводка, строка журнала и уведомление ночи читали бы почти ноль), финальная точка (а)
+        // видела бы уже решённое им, и шёл он без ct ночи — остановка ночи его не прерывала.
+        if (_judge is not null && res.Outcome == OutcomeAwaitingHuman && res.PackageId is { Length: > 0 }
+            && actionKey != LocalActionCatalog.WikiNightly)
+        {
+            try
+            {
+                await _judge(ownerId, WikiPaths.Root(_dataDir, ownerId), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Остановка вызывающего (закрытое окно, остановка службы): судья не начинался —
+                // исход заявки не меняется, пакета это не касается.
+            }
+            // Прочего сам проход судьи не бросает: он называет свой сбой в FirstFailure (J-J3a).
+        }
+        return res;
     }
 
     private async Task<IngestResult> RunAsync(string ownerId, Request request, CancellationToken ct,
-        string? actionKey)
+        string? actionKey, string? engine)
     {
         // 1. Раздел назначения — дом источника (код, не модель).
         var decision = WikiSourceHome.Decide(request.Home, request.Target);
@@ -306,7 +374,7 @@ public sealed class WikiIngestService
             var promptS = WikiKeeperPrompts.Synth(
                 request.SourceText, sectionIndex, WikiKeeperPrompts.NewNonce(), existingPages,
                 WikiPage.MinQuoteLength, WikiPage.MaxQuoteLength);
-            var answerS = await CallModelAsync(promptS, ownerId, "синтез", usage, ct, actionKey);
+            var answerS = await CallModelAsync(promptS, ownerId, "синтез", usage, ct, actionKey, engine);
             if (answerS.Reason is not null)
                 return RejectedUsed(answerS.Reason);
             var plan = ParseSynthPlan(answerS.Text!, out var nothingS, out var modelReasonS, out var parseErrorS);
@@ -337,7 +405,8 @@ public sealed class WikiIngestService
                     + "target section. Produce a plan with a create operation, or answer the no-op "
                     + "outcome again.\n\n"
                     + promptS;
-                var answerE = await CallModelAsync(emptySectionPrompt, ownerId, "пустой раздел", usage, ct, actionKey);
+                var answerE = await CallModelAsync(
+                    emptySectionPrompt, ownerId, "пустой раздел", usage, ct, actionKey, engine);
                 if (answerE.Reason is not null)
                     // Сбой самого повторного вызова — не отказ модели: она могла не зваться ни
                     // разу (тот же инвариант WN-4, catch в CallModelAsync). Причина сбоя
@@ -385,6 +454,11 @@ public sealed class WikiIngestService
                 // Правка человека (ADR-038) — отдельное от отката условие правила замены.
                 LastHumanEditAt = WikiJournalReader.ReadLastHumanEdits(root),
                 NewSourceTime = sourceWrittenAt,
+                // Флаг бэклога (разрез 2026-11-12, J-P1c): после чистки старой вики разбор
+                // идёт с нуля и лимит новых страниц на раздел поднят до конца флага. Сегодня —
+                // по тем же часам, что уже берёт сервис (_time): политика не заводит свой clock.
+                IsBacklogPass = WikiBacklogFlag.IsActive(
+                    root, DateOnly.FromDateTime(_time.GetUtcNow().UtcDateTime)),
             };
             // Инвариант: ни одна операция синтеза не попадает в пакет мимо ValidateSynth.
             var verdict = WikiPlanValidator.ValidateSynth(
@@ -401,7 +475,7 @@ public sealed class WikiIngestService
                     + "outcome if the window leaves nothing worth writing.\nISSUES:\n"
                     + string.Join("\n", issues.Select(r => "- " + r)) + "\n\n"
                     + promptS;
-                var answerR = await CallModelAsync(repairPrompt, ownerId, "ремонт плана", usage, ct, actionKey);
+                var answerR = await CallModelAsync(repairPrompt, ownerId, "ремонт плана", usage, ct, actionKey, engine);
                 if (answerR.Reason is not null)
                     return WithSectionIssues(RejectedUsed(answerR.Reason), verdict);
                 var planR = ParseSynthPlan(answerR.Text!, out var nothingR, out var modelReasonR, out var parseErrorR);
@@ -620,12 +694,15 @@ public sealed class WikiIngestService
     /// <summary>Один one-shot вызов места разбора (без инструментов; формат — «json»):
     /// actionKey — место заявки (N7a), null — прежний wiki-ingest; все вызовы передают его
     /// явно (default снят, чтобы вызов не мог остаться без места). Ключ проверен каталогом
-    /// на входе IngestAsync. Сбой/пустой ответ — ModelAnswer с причиной: вызывающий
-    /// отказывает заявку, а не ловит исключение.
+    /// на входе IngestAsync. engine (W3) — названный локальный исполнитель: при не-null engine
+    /// (W5b) вызов идёт только через RunOnLocalEngineDetailedAsync (путь без выбора
+    /// исполнителя и без облака); пустое/пробельное имя — отказ окна без вызова модели;
+    /// при null — прежние две ветки. Сбой/пустой ответ — ModelAnswer с причиной:
+    /// вызывающий отказывает заявку, а не ловит исключение.
     /// Токены вызова — в аккумулятор разбора (usage=null — нераспознанный
     /// формат метрик — переживаем: это разрешено контрактом шва).</summary>
     private async Task<ModelAnswer> CallModelAsync(string prompt, string ownerId, string passName,
-        UsageAccumulator usage, CancellationToken ct, string? actionKey)
+        UsageAccumulator usage, CancellationToken ct, string? actionKey, string? engine)
     {
         // Решение Андрея 02.11: ночной разбор не уходит в облако. Ночь идёт через цепочку без
         // финального claude-шага при локальном маршруте (RunLocalOrChosenDetailedAsync):
@@ -635,22 +712,63 @@ public sealed class WikiIngestService
         // Кнопка «Разобрать» и агент wiki_ingest (actionKey не задан) — человеческие места,
         // облако там допустимо: прежний путь с учётом расхода.
         var noCloud = actionKey == LocalActionCatalog.WikiNightly;
+        // Исполнитель назван аргументом заявки (W3, И3 путь 2): страж места его не касается —
+        // RunOnLocalEngineDetailedAsync не знает ни шага «выбранная модель», ни страховки
+        // FallbackRoute, ни облачного шага, то есть до облака не доходит ни при каком маршруте
+        // места. Исполнителя даёт только ночь (её обёртка в WikiNightlyService:217 зовёт
+        // AnalyzeAsync с местом ночи), поэтому без места заявки берётся она.
+        // W5b: назван — значит не-null. Прежнее ветвление (Length > 0) отдавало пустую строку
+        // маршруту места молча: вызывающий просил этот движок, а модель звалась на другом.
+        // Пустое или пробельное имя ни в какой движок не резолвится — отказ окна ниже.
+        var viaEngine = engine is not null;
         // Решение 6 ADR-039 (поправляет ADR-035 §12ж): ночь не уходит в облако ни на одном
         // шаге цепочки. Финальный claude-шаг гасит RunLocalOrChosenDetailedAsync, но шаг 1
         // цепочки зовёт выбранную админом облачную модель — поэтому облачный маршрут места
         // отказывает окно целиком, до вызова.
-        if (noCloud && !_llm.UsesLocal(LocalActionCatalog.WikiNightly))
+        if (!viaEngine && noCloud && !_llm.UsesLocal(LocalActionCatalog.WikiNightly))
             return new ModelAnswer(null, $"{passName}: ночной разбор только локальной моделью");
         string? text;
         OneShotUsage? used = null;
         try
         {
-            if (noCloud)
+            if (viaEngine)
+            {
+                if (string.IsNullOrWhiteSpace(engine))
+                    // Пустой/пробельный engine (W5b): по такому имени движок не резолвится ни в
+                    // какой — звать модель не на чём, и решать это должен не шов. Отказ окна той
+                    // же формулировкой и с InputTokens 0, что мёртвый движок: по ним ночь отличает
+                    // отказ движка от отказа плана (IsLocalDownRejection, WikiNightlyService:1158).
+                    // Ни одного вызова: по пустой строке прежний путь звал модель маршрута места.
+                    return new ModelAnswer(null, $"{passName}: {ReasonLocalUnavailable}");
+                var onEngine = await _llm.RunOnLocalEngineDetailedAsync(
+                    engine!, actionKey ?? LocalActionCatalog.WikiNightly, prompt, ownerId,
+                    jsonFormat: "json", ct: ct);
+                if (onEngine is null)
+                    // Движок неизвестен, выключен, не готов или не ответил — и всё это null без
+                    // исключения (CheapTextRunner.RunOnLocalEngineDetailedAsync): подмены другим
+                    // исполнителем нет, решение за вызывающим. Причина — та же формулировка
+                    // маршрута, что у мёртвой локали ниже: без имени движка (их несколько, J-W2),
+                    // по ней и InputTokens == 0 ночь отличает отказ движка от отказа плана
+                    // (IsLocalDownRejection) и выключает исполнителя (W5).
+                    return new ModelAnswer(null, $"{passName}: {ReasonLocalUnavailable}");
+                text = onEngine.Text;
+                used = onEngine.Usage;
+            }
+            else if (noCloud)
             {
                 var viaLocal = await _llm.RunLocalOrChosenDetailedAsync(
                     LocalActionCatalog.WikiNightly, prompt, ownerId, jsonFormat: "json", ct: ct);
-                text = viaLocal?.Text;
-                used = viaLocal?.Usage;
+                if (viaLocal is null)
+                    // Мёртвый локальный движок даёт null БЕЗ исключения (CheapTextRunner: движок
+                    // не готов или не ответил → (null, null), облачного шага нет) — ниже это
+                    // читалось как «модель дала пустой ответ», и ночь 12.11 сожгла 41 отказа с
+                    // ложной причиной (дефект 2e13d45c). Здесь — честная причина маршрута.
+                    // Текст последней ошибки движка шов не отдаёт: RunLocalOrChosenDetailedAsync
+                    // возвращает null без деталей (ICheapTextRunner.cs:90), поэтому формулировка
+                    // общая, без имени движка и порта.
+                    return new ModelAnswer(null, $"{passName}: {ReasonLocalUnavailable}");
+                text = viaLocal.Text;
+                used = viaLocal.Usage;
             }
             else
             {

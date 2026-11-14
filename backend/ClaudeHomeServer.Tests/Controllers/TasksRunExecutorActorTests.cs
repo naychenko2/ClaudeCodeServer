@@ -67,14 +67,16 @@ public class TasksRunExecutorActorTests : IDisposable
         project.EnsureSuccessStatusCode();
         var projectId = IdOf(await project.Content.ReadFromJsonAsync<JsonElement>());
 
+        // Чат до участников: пока проект личный, провижна владельца нет; в общем проекта без
+        // руководителя она не запускается никому (W4-B1a доработка 2, финал ed64271c)
+        var chat = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        chat.EnsureSuccessStatusCode();
+        var chatId = IdOf(await chat.Content.ReadFromJsonAsync<JsonElement>());
+
         var ownerUser = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!;
         var editorUser = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.SecondUsername)!;
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(projectId,
             [new ProjectMember { UserId = editorUser.Id, Role = ProjectRole.Editor, AddedBy = ownerUser.Id }]);
-
-        var chat = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
-        chat.EnsureSuccessStatusCode();
-        var chatId = IdOf(await chat.Content.ReadFromJsonAsync<JsonElement>());
 
         var task = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new { title = $"Задача общего проекта {tag}" });
         task.EnsureSuccessStatusCode();

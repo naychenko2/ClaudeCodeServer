@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using FluentAssertions;
 using Xunit;
@@ -414,6 +415,8 @@ public class WikiApplyPolicyTests
         var future = WikiApplyPolicy.Auto(Op("promote"), Ctx());
         future.Decision.Should().Be(WikiPackage.DecisionInbox);
         future.Reason.Should().Contain("вне известных").And.NotBeNullOrWhiteSpace();
+        // Та же ветка, что и «операция вне перечня» в Decide: общий код unknown_op.
+        future.ReasonCode.Should().Be(WikiApplyPolicy.CodeUnknownOp);
 
         var link = WikiApplyPolicy.Auto(Op(WikiPackage.OpLink), Ctx());
         link.Decision.Should().Be(WikiPackage.DecisionAuto);
@@ -550,5 +553,211 @@ public class WikiApplyPolicyTests
     public void N7d_БезОткатов_ПоведениеПрежнее()
     {
         WikiApplyPolicy.Decide(Op(WikiPackage.OpAppend), Ctx()).IsAuto.Should().BeTrue();
+    }
+
+    // ─── J-J0: машинный код причины и допуск к судье (решение 12.11, И4′) ────────
+
+    // По кейсу на каждую из 15 веток «Входящих» Decide — с ожидаемым кодом. Ветка `_`
+    // Auto (тот же unknown_op) проверена в Auto_НеизвестнойОперацииНеДаётСамо_Link_Даёт.
+    public static IEnumerable<object[]> InboxCodeCases() =>
+    [
+        new object[] { WikiApplyPolicy.CodeAutoApplyOff, Op(WikiPackage.OpAppend), Ctx(autoApply: false) },
+        new object[] { WikiApplyPolicy.CodeUnknownOp, Op("retract"), Ctx() },
+        new object[] { WikiApplyPolicy.CodeNoClass, Op(WikiPackage.OpAppend) with { Class = "" }, Ctx() },
+        new object[] { WikiApplyPolicy.CodeBadClass, Op(WikiPackage.OpAppend, "vkazke"), Ctx() },
+        new object[] { WikiApplyPolicy.CodeNoPage, Op(WikiPackage.OpAppend) with { Page = "" }, Ctx() },
+        new object[] { WikiApplyPolicy.CodeClassDisabled, Op(WikiPackage.OpAppend), Ctx(disabledClasses: [WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpAppend)]) },
+        new object[] { WikiApplyPolicy.CodeRevertQuarantine, Op(WikiPackage.OpAppend), CtxReverted(ProjectPage) },
+        new object[] { WikiApplyPolicy.CodeNoHistorySection, ReplOp(WikiPackage.OpSupersede, true), ReplCtx(author: WikiPackage.AuthorHuman) with { TargetHasNoHistory = true } },
+        new object[] { WikiApplyPolicy.CodeOverridesHuman, ReplOp(WikiPackage.OpSupersede), ReplCtx() with { NewSourceTime = null } },
+        new object[] { WikiApplyPolicy.CodePageDuplicate, Op(WikiPackage.OpCreate), Ctx(duplicate: new WikiDedup.Duplicate("Общее/Сущность.md", "алиас", "заголовок")) },
+        new object[] { WikiApplyPolicy.CodeSectionNewPagesLimit, Op(WikiPackage.OpCreate), Ctx(counters: new(6, 1, 1)) },
+        new object[] { WikiApplyPolicy.CodeOriginUrl, Op(WikiPackage.OpAppend, WikiGate.OriginUrl), Ctx() },
+        new object[] { WikiApplyPolicy.CodePersonalToCommon, Op(WikiPackage.OpAppend, page: CommonPage), Ctx(personalHome: true) },
+        new object[] { WikiApplyPolicy.CodeTargetDisputed, Op(WikiPackage.OpAppend), Ctx(pageStatus: WikiFrontmatter.StatusDisputed) },
+        new object[] { WikiApplyPolicy.CodeAfterModelRepair, Op(WikiPackage.OpAppend), Ctx(repaired: true) },
+    ];
+
+    [Theory]
+    [MemberData(nameof(InboxCodeCases))]
+    public void Decide_КаждаяВеткаВходящих_СвойМашинныйКод(string code, WikiPackage.Operation op, WikiApplyPolicy.ApplyContext ctx)
+    {
+        var v = WikiApplyPolicy.Decide(op, ctx);
+
+        v.Decision.Should().Be(WikiPackage.DecisionInbox);
+        v.ReasonCode.Should().Be(code);
+    }
+
+    // Ожидаемые перечни — в тесте, не выведенные из ReasonCodes. number_unconfirmed здесь
+    // обязателен: его ставит валидатор (WikiPlanValidator.cs:443), а форма пакета сверяет
+    // код причины по ReasonCodes (WikiPackage.cs:369) — без него в перечне пакет с
+    // неподтверждённым числом отвергался бы по форме, и разбор уходил в отказ.
+    private static readonly string[] PolicyCodesExpected =
+        [WikiApplyPolicy.CodeAutoApplyOff, WikiApplyPolicy.CodeUnknownOp, WikiApplyPolicy.CodeNoClass,
+         WikiApplyPolicy.CodeBadClass, WikiApplyPolicy.CodeNoPage, WikiApplyPolicy.CodeClassDisabled,
+         WikiApplyPolicy.CodeRevertQuarantine, WikiApplyPolicy.CodeNoHistorySection,
+         WikiApplyPolicy.CodeOverridesHuman, WikiApplyPolicy.CodePageDuplicate,
+         WikiApplyPolicy.CodeSectionNewPagesLimit, WikiApplyPolicy.CodeOriginUrl,
+         WikiApplyPolicy.CodePersonalToCommon, WikiApplyPolicy.CodeTargetDisputed,
+         WikiApplyPolicy.CodeAfterModelRepair];
+    private static readonly string[] ReasonCodesExpected =
+        [.. PolicyCodesExpected, WikiApplyPolicy.CodeNumberUnconfirmed];
+
+    [Fact]
+    public void ReasonCodes_КаждыйКодПолитикиПолученСвоейВеткой_ПереченьПолный()
+    {
+        var covered = InboxCodeCases().Select(c => (string)c[0]).ToList();
+
+        // Полный перечень формы пакета — против ожидаемого списка: выпадение любого кода
+        // (в т. ч. number_unconfirmed, которого Decide не рождает) — красным.
+        WikiApplyPolicy.ReasonCodes.Should().BeEquivalentTo(ReasonCodesExpected);
+        // Каждый код политики обязан иметь свою ветку в InboxCodeCases — и наоборот.
+        covered.Distinct().Should().BeEquivalentTo(PolicyCodesExpected);
+    }
+
+    // Ожидаемые множества — в тесте, не выведенные из кода: убрать origin_url из CodeRejected
+    // или любой код из JudgeAdmitted — этот тест красный.
+    private static readonly string[] JudgeAdmittedExpected =
+        [WikiApplyPolicy.CodeClassDisabled, WikiApplyPolicy.CodeRevertQuarantine, WikiApplyPolicy.CodeNoHistorySection,
+         WikiApplyPolicy.CodeOverridesHuman, WikiApplyPolicy.CodePageDuplicate, WikiApplyPolicy.CodeSectionNewPagesLimit,
+         WikiApplyPolicy.CodePersonalToCommon, WikiApplyPolicy.CodeTargetDisputed, WikiApplyPolicy.CodeAfterModelRepair,
+         WikiApplyPolicy.CodeNumberUnconfirmed];
+
+    private static readonly string[] CodeRejectedExpected =
+        [WikiApplyPolicy.CodeUnknownOp, WikiApplyPolicy.CodeNoClass, WikiApplyPolicy.CodeBadClass,
+         WikiApplyPolicy.CodeNoPage, WikiApplyPolicy.CodeOriginUrl];
+
+    [Fact]
+    public void ДопускКСудье_РовноСвоиКоды_БезКодаИВыключателяНикогда()
+    {
+        foreach (var code in WikiApplyPolicy.ReasonCodes.Append((string?)null))
+        {
+            var inAdmitted = code is not null && JudgeAdmittedExpected.Contains(code);
+            var inRejected = code is not null && CodeRejectedExpected.Contains(code);
+
+            WikiApplyPolicy.JudgeAdmitted(code).Should().Be(inAdmitted, $"код «{code}»");
+            WikiApplyPolicy.CodeRejected(code).Should().Be(inRejected, $"код «{code}»");
+            (WikiApplyPolicy.JudgeAdmitted(code) && WikiApplyPolicy.CodeRejected(code)).Should().BeFalse(
+                $"код «{code}» не может быть и допущен, и отвергнут");
+        }
+
+        // autoapply_off и отсутствие кода (старые пакеты) — ни туда, ни туда: ручной режим
+        // судью не зовёт вовсе, операция без кода к судье не допущена (И4′).
+        WikiApplyPolicy.JudgeAdmitted(null).Should().BeFalse();
+        WikiApplyPolicy.CodeRejected(null).Should().BeFalse();
+        WikiApplyPolicy.JudgeAdmitted(WikiApplyPolicy.CodeAutoApplyOff).Should().BeFalse();
+        WikiApplyPolicy.CodeRejected(WikiApplyPolicy.CodeAutoApplyOff).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ВердикAuto_БезКода_InboxКаждойВетки_СКодом()
+    {
+        // У «auto» кода нет — он не несёт риска; код есть ровно у «inbox».
+        var auto = WikiApplyPolicy.Decide(Op(WikiPackage.OpAppend), Ctx());
+        auto.IsAuto.Should().BeTrue();
+        auto.ReasonCode.Should().BeNull();
+
+        foreach (var (_, op, ctx) in InboxCodeCases().Select(c => ((string)c[0], (WikiPackage.Operation)c[1], (WikiApplyPolicy.ApplyContext)c[2])))
+            WikiApplyPolicy.Decide(op, ctx).ReasonCode.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Операция_БезКодаВJSON_ЧитаетсяИПроверяется_СЧужимКодом_ОшибкаФормы()
+    {
+        // Старый пакет на диске: поля reasonCode нет вовсе — оно опционально (обратная
+        // совместимость): читается и проходит форму без кода.
+        var json = """
+            {"v":1,"id":"11111111-1111-1111-1111-111111111111","author":"ai","section":"common",
+             "sources":[{"origin":"session","ref":"session:s1#m1-9"}],
+             "operations":[{"op":"append","page":"Общее/Сущность.md","text":"утверждение разбора",
+               "class":"session×append","decision":"inbox","reason":"старый пакет без кода",
+               "baseHashes":{}}],
+             "status":"proposed","createdAt":"2026-11-01T00:00:00+00:00","updatedAt":"2026-11-01T00:00:00+00:00"}
+            """;
+        var pkg = JsonSerializer.Deserialize<WikiPackage>(json, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        })!;
+
+        pkg.Operations[0].ReasonCode.Should().BeNull();
+        WikiPackage.ShapeErrors(pkg).Should().BeEmpty();
+
+        var bad = pkg with { Operations = [pkg.Operations[0] with { ReasonCode = "xyz" }] };
+        WikiPackage.ShapeErrors(bad).Should().Contain(e => e.Contains("xyz"));
+    }
+
+    // ─── J-J0: числа (валидатор) — код сохраняется за вердиктом политики ─────────
+
+    // Основа — та же, что в WikiPlanValidatorSynthTests: карточка, страница и текст источника.
+    private const string SectionKey = "projects/p1";
+    private const string CardTitle = "Карточка чата";
+    private const string CardPath = "Проекты/p1/Карточка-чата.md";
+    private const string SourceText =
+        "Решение: перенести сборку на Linux. Прежний план был остаться на Windows. Сборка занимает 12 минут.";
+    private const string QMinutes = "Сборка занимает 12 минут";
+
+    private static readonly string CardFile = $$"""
+        ---
+        type: source
+        origin: session
+        ref: session:s1#m1-9
+        hash: 0123456789012345678901234567890123456789012345678901234567890123
+        captured: 2026-10-27
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {{CardTitle}}
+        """;
+
+    private static readonly string PageFile = """
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Сущность
+
+        ## Сводка
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+        """;
+
+    private static WikiPlanValidator.Result RunSynth(WikiApplyPolicy.ApplyContext ctx, params WikiPlanValidator.SynthOp[] ops) =>
+        WikiPlanValidator.ValidateSynth(
+            new([.. ops]),
+            new(WikiGate.OriginSession, CardTitle, SourceText),
+            SectionKey,
+            [WikiSections.Common],
+            [new(CardPath, CardFile), new(ProjectPage, PageFile)],
+            ctx);
+
+    [Fact]
+    public void Числа_ПолитикаAuto_КодЧисел_ВердикПолитикиСохраняетСвойКод()
+    {
+        // auto + неподтверждённое число → код числа (автопричина снимается, и её код тоже).
+        var auto = RunSynth(new(),
+            new WikiPlanValidator.SynthOp(WikiPackage.OpAppend, null, "Сущность", "Сборка занимает 15 минут", [QMinutes], null, null));
+        var autoOp = auto.Accepted.Should().ContainSingle().Subject;
+        autoOp.Decision.Should().Be(WikiPackage.DecisionInbox);
+        autoOp.ReasonCode.Should().Be(WikiApplyPolicy.CodeNumberUnconfirmed);
+
+        // политики уже «Входящие» (дубль страницы) + число → код политики: главный риск —
+        // риск политики, по нему судья решает допуск.
+        var dup = RunSynth(new(),
+            new WikiPlanValidator.SynthOp(WikiPackage.OpCreate, "decision", "Сущность", "Сборка занимает 15 минут", [QMinutes], null, null));
+        var dupOp = dup.Accepted.Should().ContainSingle().Subject;
+        dupOp.Decision.Should().Be(WikiPackage.DecisionInbox);
+        dupOp.Reason.Should().Contain("дубль").And.Contain("число не подтверждено");
+        dupOp.ReasonCode.Should().Be(WikiApplyPolicy.CodePageDuplicate);
     }
 }

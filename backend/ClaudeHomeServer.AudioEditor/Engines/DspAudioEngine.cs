@@ -209,7 +209,7 @@ public sealed class DspAudioEngine(
     {
         if (AudioVersionFiles.Resolve(workspace, ownerId, actorId, scope, version, file) is not { } path || !File.Exists(path))
             return (null, null, Fail(AudioEditErrorCodes.FileNotFound,
-                scope.IsPersonal && version.IsOrigin
+                !scope.HasFolder && version.IsOrigin
                     ? "В личном чате файлов проекта нет"
                     : "Файл версии не найден — рабочая папка очищена"));
         if (new FileInfo(path).Length > MaxInputBytes)

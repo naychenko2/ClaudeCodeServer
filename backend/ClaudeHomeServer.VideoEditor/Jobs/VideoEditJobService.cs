@@ -127,6 +127,8 @@ public sealed class VideoEditJobService : IDisposable
         public string SpendSource { get; init; } = "";
         // «Повторить увеличение»: вторая стадия уже снятой версии; денег и «соседнего поставщика» у неё нет
         public bool UpscaleRetry { get; init; }
+        // «Увеличить» версию ×2/×4 (RelayVSR): масштаб у такой задачи; денег, траты и «соседа» нет, как у повтора увеличения
+        public int? EnhanceScale { get; init; }
         public VideoInputsSnapshotDto Inputs { get; set; } = new("", null, null);
         public VideoEditJobStatus Status { get; set; } = VideoEditJobStatus.Queued;
         public int Variant { get; set; } = 1;
@@ -206,7 +208,7 @@ public sealed class VideoEditJobService : IDisposable
             if (!SafeEnabled(engine))
                 return Fail<VideoQuoteResponse>(VideoEditorErrors.ProviderUnavailable, $"Поставщик «{engine.Label}» сейчас недоступен");
             if (engine.ScopeRefusal(scope) is { } refusal)
-                return Fail<VideoQuoteResponse>(ScopeRefusalCode(scope), refusal);
+                return Fail<VideoQuoteResponse>(VideoEditorErrors.ProjectLocalUnsupported, refusal);
             await RefreshModelsQuietly(engine, ct);
             model = VideoCatalog.Pick(engine, modelId, need);
             if (model is null)
@@ -344,7 +346,7 @@ public sealed class VideoEditJobService : IDisposable
         if (engine is null)
             return Fail<VideoJobCreated>(VideoEditorErrors.ProviderUnavailable, $"Поставщик «{quote.Provider}» больше недоступен");
         if (engine.ScopeRefusal(scope) is { } refusal)
-            return Fail<VideoJobCreated>(ScopeRefusalCode(scope), refusal);
+            return Fail<VideoJobCreated>(VideoEditorErrors.ProjectLocalUnsupported, refusal);
 
         var parameters = input.Params?.DeepClone().AsObject() ?? new JsonObject();
         // При ревизии текст поля ввода едет в params.request — просьба поверх текста сцены, не частный параметр модели
@@ -441,7 +443,7 @@ public sealed class VideoEditJobService : IDisposable
         var request = new VideoRequest(quote.Model.Id, scope, prompt, frameA.Bytes, frameB.Bytes, quote.DurationSec,
             quote.Aspect, quote.Sound, parameters, input.Seed, quote.Format,
             OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: IsLocalHeavy(job.Quote),
-            ProjectId: job.Scope.Project?.Id, SourceJobId: job.Id);
+            ProjectId: VideoEditScope.ProjectIdOf(job.Scope.Key), SourceJobId: job.Id);
         job.Completion = Task.Run(() => RunAsync(job, engine, (variant, progress, token) =>
             engine.RunAsync(request.Seed is { } seed ? request with { Seed = seed + variant - 1 } : request, progress, token)));
 
@@ -525,7 +527,7 @@ public sealed class VideoEditJobService : IDisposable
         if (result.File is not { Bytes.Length: > 0 } file) return null;
         _workspace.SaveClip(job.OwnerId, job.Id, variant, file.Bytes, file.Extension);
         return new VideoVariantResult(variant, file.DurationSec ?? job.Quote.DurationSec, file.Bytes.LongLength,
-            file.HasSound ?? job.Quote.Sound, null, file.Width, file.Height, file.UpscaleError, file.UpscaleCancelled);
+            file.HasSound ?? job.Quote.Sound, null, file.Width, file.Height, file.UpscaleError, file.UpscaleCancelled, job.EnhanceScale);
     }
 
     private async Task CompleteAsync(Job job, IReadOnlyList<VideoCost?> costs, string? partialError)
@@ -795,7 +797,7 @@ public sealed class VideoEditJobService : IDisposable
         if (engine is null)
             return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.ProviderUnavailable, $"Поставщик «{version.Provider}» больше недоступен");
         if (engine.ScopeRefusal(scope) is { } refusal)
-            return Fail<VideoUpscaleRetryResult>(ScopeRefusalCode(scope), refusal);
+            return Fail<VideoUpscaleRetryResult>(VideoEditorErrors.ProjectLocalUnsupported, refusal);
 
         PruneRetryContexts();
         _retryContexts.TryGetValue(RetryKey(version.JobId, version.Variant), out var context);
@@ -850,6 +852,101 @@ public sealed class VideoEditJobService : IDisposable
             if (succeeded) _retryContexts.TryRemove(retryKey, out _);
         });
         return VideoEditCallResult<VideoUpscaleRetryResult>.Ok(new VideoUpscaleRetryResult(job.Id, versionId));
+    }
+
+    // «Увеличить ×2/×4»: варианты и время до запуска. Время — по таблице замеров local-media, размер версии нужен ей:
+    // нет размера (версия не local) или ролик вне замеренных пределов — число не выдумываем
+    public VideoEditCallResult<VideoEnhanceQuoteDto> EnhanceQuote(string ownerId, VideoEditScope scope, string sessionId,
+        string sceneId, string versionId)
+    {
+        var found = FindEnhanceSource(ownerId, scope, sessionId, sceneId, versionId, out var version, out var engine);
+        if (found is not null) return Fail<VideoEnhanceQuoteDto>(found.Value.Code, found.Value.Error);
+        var options = new[] { 2, 4 }.Select(scale =>
+        {
+            var eta = engine!.EnhanceEtaSeconds(scale, version!.Width, version.Height, version.DurationSec);
+            var tooBig = version.Width is not null && eta is null;
+            return new VideoEnhanceOptionDto(scale, !tooBig, tooBig ? VideoEnhanceTexts.OutOfRange : null, eta,
+                version.Width * scale, version.Height * scale);
+        }).ToList();
+        return VideoEditCallResult<VideoEnhanceQuoteDto>.Ok(new VideoEnhanceQuoteDto(versionId, options));
+    }
+
+    // «Увеличить ×2/×4»: новая задача над клипом версии (RelayVSR на локальной видеокарте), стадия upscaling — отмена та же,
+    // что у «Макс». Удача — НОВАЯ версия с пометкой масштаба, исходная не трогается; сбой и отмена версий не добавляют.
+    // Тяжёлая задача GPU: потолок «одна на карту» тот же, что у съёмки. Денег и траты нет
+    public async Task<VideoEditCallResult<VideoEnhanceResult>> EnhanceAsync(string ownerId, VideoEditScope scope, string sessionId,
+        string sceneId, string versionId, int scale, string initiator, CancellationToken ct)
+    {
+        if (scale is not (2 or 4)) return Fail<VideoEnhanceResult>(VideoEditorErrors.InvalidRequest, VideoEnhanceTexts.BadScale);
+        var found = FindEnhanceSource(ownerId, scope, sessionId, sceneId, versionId, out var version, out var engine);
+        if (found is not null) return Fail<VideoEnhanceResult>(found.Value.Code, found.Value.Error);
+        var clipPath = _workspace.FindClip(ownerId, version!.JobId, version.Variant);
+        if (clipPath is null) return Fail<VideoEnhanceResult>(VideoEditorErrors.FileNotFound, VideoEnhanceTexts.ClipGone);
+        var eta = engine!.EnhanceEtaSeconds(scale, version.Width, version.Height, version.DurationSec);
+        if (version.Width is not null && eta is null)
+            return Fail<VideoEnhanceResult>(VideoEditorErrors.InvalidRequest, VideoEnhanceTexts.OutOfRange);
+
+        byte[] bytes;
+        try { bytes = await File.ReadAllBytesAsync(clipPath, ct); }
+        catch (IOException) { return Fail<VideoEnhanceResult>(VideoEditorErrors.FileNotFound, VideoEnhanceTexts.ClipGone); }
+
+        var model = new VideoModelInfo($"relayvsr-x{scale}", $"RelayVSR ×{scale}",
+            new VideoCaps([Math.Max(1, (int)Math.Round(version.DurationSec))], [], version.HasSound, false,
+                VideoLicense.NotStated, VideoPriceUnits.Free, FirstFrame: false, Heavy: true));
+        var quote = new Quote(NewId(), ownerId, scope.Key, sessionId, sceneId, engine.Key, model, 1,
+            Math.Max(1, (int)Math.Round(version.DurationSec)), null, version.HasSound,
+            new VideoPriceDto(0, VideoPriceUnits.Free, false, VideoEstimateSources.Provider, eta, null), Now());
+        Job job;
+        lock (_startLock)
+        {
+            var active = _jobs.Values.Where(j => j.IsActive).ToList();
+            if (active.Count(j => j.OwnerId == ownerId) >= MaxJobsPerOwner)
+                return Fail<VideoEnhanceResult>(VideoEditorErrors.TooManyJobs, OwnerLimitText);
+            if (active.Count >= MaxJobsPerInstance)
+                return Fail<VideoEnhanceResult>(VideoEditorErrors.TooManyJobs, InstanceLimitText);
+            if (IsLocalHeavy(quote) && active.Any(j => IsLocalHeavy(j.Quote)))
+                return Fail<VideoEnhanceResult>(VideoEditorErrors.HeavyBusy, HeavyBusyText);
+            job = new Job(NewId(), ownerId, scope, quote, CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token))
+            {
+                CreatedAt = Now(),
+                Initiator = initiator == VideoInitiators.Agent ? VideoInitiators.Agent : VideoInitiators.Human,
+                SpendLabel = SpendLabelOf(quote),
+                SpendSource = engine.SpendSource,
+                ChatSessionId = sessionId,
+                SceneId = sceneId,
+                Inputs = version.Inputs,
+                UpscaleRetry = true,
+                EnhanceScale = scale,
+                UpscaleEtaSeconds = eta,
+            };
+            _jobs[job.Id] = job;
+        }
+
+        var current = _threads.Store.Get(ownerId, sessionId).Scenes.First(s => s.SceneId == sceneId);
+        await _threads.OnLaunchedAsync(ownerId, scope.Key, sessionId, sceneId, job.Id, ToDto(quote),
+            $"Увеличение ×{scale}", job.Initiator, current.Settings, ct, current.FramesCropped);
+
+        var request = new EnhanceRequest(bytes, scale, ownerId, sessionId, VideoEditScope.ProjectIdOf(scope.Key), job.Id);
+        job.Completion = Task.Run(() => RunAsync(job, engine, (_, progress, token) => engine.EnhanceAsync(request, progress, token)));
+        return VideoEditCallResult<VideoEnhanceResult>.Ok(new VideoEnhanceResult(job.Id, versionId, scale, eta));
+    }
+
+    // Общая проверка «версию можно увеличить»: сцена, версия, локальный движок и его область, ещё не увеличенная версия
+    private (string Code, string Error)? FindEnhanceSource(string ownerId, VideoEditScope scope, string sessionId, string sceneId,
+        string versionId, out VideoClipVersionDto? version, out IVideoEngine? engine)
+    {
+        version = null;
+        engine = null;
+        if (!_threads.OwnScene(ownerId, scope.Key, sessionId, sceneId))
+            return (VideoEditorErrors.SceneNotFound, "Сцена не найдена");
+        var scene = _threads.Store.Get(ownerId, sessionId).Scenes.First(s => s.SceneId == sceneId);
+        version = scene.Versions.FirstOrDefault(v => v.VersionId == versionId);
+        if (version is null) return (VideoEditorErrors.VersionNotFound, "Версия не найдена");
+        if (version.EnhanceScale is not null) return (VideoEditorErrors.InvalidRequest, VideoEnhanceTexts.AlreadyEnhanced);
+        engine = VideoCatalog.Available(_engines).FirstOrDefault(e => string.Equals(e.Key, VideoCatalog.LocalKey, StringComparison.OrdinalIgnoreCase));
+        if (engine is null) return (VideoEditorErrors.ProviderUnavailable, "Локальные модели сейчас недоступны");
+        if (engine.EnhanceRefusal(scope) is { } refusal) return (VideoEditorErrors.ProjectLocalUnsupported, refusal);
+        return null;
     }
 
     private void PruneRetryContexts()
@@ -947,10 +1044,6 @@ public sealed class VideoEditJobService : IDisposable
     private static string NoModelText(IVideoEngine engine, VideoCatalog.Need need) =>
         $"У поставщика «{engine.Label}» нет модели для этой сцены ({(need.FrameA ? "кадр A" : "без кадров")}"
         + (need.FrameB ? " → кадр B" : "") + $", {need.DurationSec} с)";
-
-    // Отказ области (личный чат, локальный проект) — свой код; прочие отказы — «поставщик недоступен»
-    private static string ScopeRefusalCode(VideoEditScope scope) =>
-        scope.IsPersonal ? VideoEditorErrors.LocalUnavailablePersonal : VideoEditorErrors.ProjectLocalUnsupported;
 
     private async Task RefreshModelsQuietly(IVideoEngine engine, CancellationToken ct)
     {

@@ -79,6 +79,13 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     }
 
     [Fact]
+    public void Правило_называет_увеличение_и_озвучку_одной_строкой()
+    {
+        foreach (var rule in new[] { VideoEditorStateContributor.PriorityRule, VideoEditorStateContributor.PersonalPriorityRule })
+            rule.Should().Contain("Увеличить версию — video_enhance, озвучить сцену — video_voice");
+    }
+
+    [Fact]
     public async Task Блок_несёт_правило_приоритета_и_правило_после_сцены_спроси()
     {
         var contributor = new VideoEditorStateContributor(new VideoThreadStore(_dir));
@@ -107,13 +114,18 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     }
 
     [Fact]
-    public async Task Личный_чат_получает_правило_без_локальных_моделей()
+    public async Task Личный_чат_получает_правило_с_локальными_моделями_и_фильмами_Личного()
     {
         var contributor = new VideoEditorStateContributor(new VideoThreadStore(_dir));
 
         var text = (await contributor.BuildAsync(Ctx(projectId: null), null))!.Sections.Single().Text;
 
-        text.Should().Contain(VideoEditorStateContributor.PersonalPriorityRule).And.NotContain("provider local");
+        text.Should().Contain(VideoEditorStateContributor.PersonalPriorityRule)
+            .And.Contain("video_shoot с provider local")
+            .And.Contain("файлов проектов здесь нет").And.Contain("video_save_scene")
+            .And.Contain("video_film_build").And.NotContain("фильмов здесь нет")
+            .And.NotContain("Локальных моделей для видео");
+        text.Should().NotContain("а не local_image_to_video", "прямых local_* в личном чате нет");
     }
 
     [Fact]

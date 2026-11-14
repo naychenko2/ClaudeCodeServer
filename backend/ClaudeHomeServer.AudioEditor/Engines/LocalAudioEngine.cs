@@ -11,16 +11,12 @@ namespace ClaudeHomeServer.Services.AudioEditor.Engines;
 // таблице замеров и длина общей очереди ComfyUI. Нет шва (Images выключена) или тумблеров — поставщик
 // не заведён и Enabled=false, а не исключение.
 //
-// Только серверный проект: результат local-media — файлы на диске сервера, а в личной области проекта
-// нет, у локального проекта (ADR-016) файлы живут на устройстве. Отказ — ScopeRefusal до чтения входов и
-// до обращения к шву; локальность — только через ProjectCapabilities.
+// Личная область пускается (ADR-021): результат движок отдаёт байтами в версию нити, как облако, проект не
+// нужен. Закрыт только локальный проект (ADR-016): его файлы живут на устройстве. Отказ — ScopeRefusal до
+// чтения входов и до обращения к шву; локальность — только через ProjectCapabilities.
 public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IAudioQuoter, IAudioParamSchemas
 {
     public const string ProviderKey = "local";
-
-    public const string PersonalScopeReason =
-        "Локальные модели работают только в чате проекта: в личном чате им некуда положить файлы. " +
-        "Откройте чат проекта или выберите облачного поставщика";
 
     public const string DeviceProjectReason =
         "Локальные модели работают только с проектом на сервере, а файлы этого проекта лежат на его устройстве. " +
@@ -43,7 +39,8 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
 
     public string? ScopeRefusal(AudioEditScope scope)
     {
-        if (scope.IsPersonal || scope.Project is not { } project) return PersonalScopeReason;
+        if (!scope.HasFolder) return null;
+        var project = scope.Project!;
         return ProjectCapabilities.FilesOnServer(project) ? null : DeviceProjectReason;
     }
 
@@ -209,7 +206,8 @@ public sealed class LocalAudioEngine(ILocalAudioMedia? media) : IAudioEngine, IA
             VoiceModel: req.VoiceModel ?? req.Voice?.RvcModel,
             VoiceIndex: req.VoiceIndex ?? req.Voice?.RvcIndex,
             Seed: req.Seed,
-            Origin: origin);
+            Origin: origin,
+            Video: req.Video?.Bytes);
     }
 
     private static readonly AudioCost Free = new(0, AudioPriceUnits.Free);

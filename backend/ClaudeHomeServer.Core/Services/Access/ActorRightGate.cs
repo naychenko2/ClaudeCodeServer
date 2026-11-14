@@ -115,8 +115,8 @@ public static class ActorToolRights
         Server("image-editor", ["image_state", "image_find_faces", "image_suggest_prompt"],
             ["image_cancel", "image_focus", "image_generate", "image_new"]);
         Server("video-editor", ["video_state", "video_suggest_prompt", "video_wait"],
-            ["video_cancel", "video_film_build", "video_film_edit", "video_focus", "video_new",
-             "video_save_scene", "video_scene_set", "video_shoot"]);
+            ["video_cancel", "video_enhance", "video_film_build", "video_film_edit", "video_focus", "video_new",
+             "video_save_scene", "video_scene_set", "video_shoot", "video_voice"]);
         Server("codegraph", ["codegraph_find", "codegraph_hubs", "codegraph_neighbors"], []);
         Server("dev", [], ["build", "start_stand", "stop_stand"]);
         Server("tests", [], ["pregate", "run_tests", "ui_probe"]);
@@ -137,11 +137,13 @@ public static class ActorToolRights
              "team_memory_forget", "team_memory_remember", "team_memory_update"]);
         Server("notifications", ["notifications_list"],
             ["notifications_create", "notifications_delete", "notifications_mark_read"]);
-        // persona_ask запускает ход другой персоны (деньги арендатора) — закрыт; спорно
+        // persona_ask запускает ход другой персоны (деньги арендатора) — закрыт; спорно.
+        // personas_suggest_bindings — с 12.11 тоже OwnerOnly: подбор привязок проектной персоны
+        // ИИ-ходом редактор не видит (правка привязок — Configure, решение Андрея)
         Server("personas",
             ["personas_list", "personas_get", "personas_bindings_list", "personas_automation_list",
-             "personas_mcp_list", "personas_suggest_bindings"],
-            ["persona_ask", "personas_ai_team", "personas_automation_create", "personas_automation_delete",
+             "personas_mcp_list"],
+            ["persona_ask", "personas_suggest_bindings", "personas_ai_team", "personas_automation_create", "personas_automation_delete",
              "personas_automation_test", "personas_automation_update", "personas_bindings_set",
              "personas_create", "personas_delete", "personas_generate_avatar", "personas_mcp_grant",
              "personas_set_default", "personas_update"]);

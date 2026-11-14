@@ -11,7 +11,7 @@ import {
   Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE, Chip,
   PanelZone, notesPanels, zoneOf, NOTES_KEYS, useIsMobile, useWindowWidth, useListAutoFocus,
   FLAGS, useFeature, useWikiOpenRequest, consumeOpenWikiPage, requestOpenWikiPage, useWikiTree,
-  useWikiReplacementDot,
+  useWikiSettings, useWikiReplacementDot,
 } from 'aihome_shell/kit';
 import type { NavSnapshot, WikiSectionDto } from 'aihome_shell/kit';
 import type { HubTabValue } from 'aihome_shell/kit';
@@ -145,14 +145,20 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const healthScoped = resolveWikiScope(healthScope, { followKey: wikiFollowKey, sectionKeys: wikiSections.map(x => x.key) });
   const railCounts = useWikiRailCounts(healthScoped === 'all' ? null : healthScoped, wikiPanelsOn && wikiStarted);
   const replacementDot = useWikiReplacementDot();
+  // Подсказка «Решений» на рельсе (J-F1, QA b0065470): при включённом «Применять неспорное
+  // само» очередь решает судья — «вашего» убираем; при явной ручной очереди — прежний текст.
+  // Снимка настроек ещё нет — режим неизвестен: нейтральная форма, лишнего запроса ради
+  // подсказки рельса не поднимаем (тот же приём, что у панели «Входящих»).
+  const wikiSettings = useWikiSettings();
+  const inboxWaitText = wikiSettings?.autoApplyEnabled === false ? 'ждут вашего решения' : 'ждут решения';
   const railBadges = useMemo<ComponentProps<typeof PanelZone>['railBadges']>(() => {
     if (!wikiPanelsOn || !wikiStarted) return undefined;
     return {
-      ...(railCounts.inbox ? { wikiInbox: { primary: railCounts.inbox, primaryTone: 'accent' as const, hint: `${railCounts.inbox} ждут вашего решения` } } : null),
+      ...(railCounts.inbox ? { wikiInbox: { primary: railCounts.inbox, primaryTone: 'accent' as const, hint: `${railCounts.inbox} ${inboxWaitText}` } } : null),
       ...(railCounts.health ? { wikiHealth: { primary: railCounts.health, primaryTone: 'warning' as const, hint: `${railCounts.health} проблемы` } } : null),
       ...(replacementDot ? { wikiJournal: { dot: 'info' as const, hint: OVERRIDE_TEXT.dotTitle } } : null),
     };
-  }, [wikiPanelsOn, wikiStarted, railCounts.inbox, railCounts.health, replacementDot]);
+  }, [wikiPanelsOn, wikiStarted, railCounts.inbox, railCounts.health, replacementDot, inboxWaitText]);
 
   // Вернуться к заметкам из любого режима: снять панель графа, вкладку «Вики» и мобильный
   // режим. Ссылка стабильна — функцию слушает эффект AI-хаба, и пересоздание

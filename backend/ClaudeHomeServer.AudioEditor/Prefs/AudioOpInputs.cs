@@ -113,7 +113,7 @@ public static class AudioOpInputs
     private static string? ProjectPath(JsonNode? value, AudioEditScope scope)
     {
         if (Str(value, MaxPathLength) is not { } path || path.Trim().Length == 0) return "путь — непустая строка";
-        if (scope.IsPersonal || scope.Project is not { } project) return "у личного чата путей проекта нет";
+        if (!scope.HasFolder || scope.Project is not { } project) return "у личного чата путей проекта нет";
         return ProjectLinkGuard.ResolveInsideAs(project.RootPath, path.Trim(), scope.TenantOwnerId) is null ? "путь вне проекта" : null;
     }
 

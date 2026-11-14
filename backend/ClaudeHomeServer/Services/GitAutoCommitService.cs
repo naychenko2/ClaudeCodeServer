@@ -48,7 +48,7 @@ public sealed class GitAutoCommitService(
             // Внутри хода актор ещё жив: обновляем запомненного на каждом сообщении.
             // Ранний выход для проекта, где автора не бывает по построению: личный
             // (участников нет — тот же признак, что в AuthorOfTurn) и без владельца.
-            if (project is null || project.OwnerId is null || project.Members is not { Count: > 0 })
+            if (project is null || project.OwnerId is null || !ProjectAccess.IsShared(project))
                 return Task.CompletedTask;
             if (turnActors.Actor(session.Id, project.OwnerId) is { } live)
                 _rememberedActors[session.Id] = live;
@@ -81,7 +81,7 @@ public sealed class GitAutoCommitService(
     // личный проект — автора нет: git-конфиг репозитория и есть владелец, поведение прежнее.
     private GitCommitAuthor? AuthorOfTurn(Project project, Session session, string? rememberedActor)
     {
-        if (project.Members is not { Count: > 0 }) return null;
+        if (!ProjectAccess.IsShared(project)) return null;
         var ownerId = project.OwnerId;
         if (ownerId is null) return null;
         var actorId = string.IsNullOrEmpty(rememberedActor) ? turnActors.Actor(session.Id, ownerId) : rememberedActor;

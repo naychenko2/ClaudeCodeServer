@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using Microsoft.AspNetCore.Authorization;
@@ -34,6 +35,13 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // PUT итога не несёт: он меняет настройки, а не читает прошлые проходы (стор фронта
 // сохраняет lastNight от последнего GET).
 //
+// С W6b GET несёт и список исполнителей ночного разбора (nightly.executors — из шва
+// LocalExecutorsFor, тот же, чем пользуется журнал службы) и разбивку итога по ним
+// (lastNight.executors — счётчики из файла итога, W6a). Оба — только имена, подписи и
+// числа: текста знаний и причин по исполнителю в DTO нет, их адресат — журнал процесса.
+// PUT их не принимает и не меняет: список принадлежит инстансу (запись — W2b, только
+// админ), а счётчики — проходу; PUT отдаёт тот же список, что и GET.
+
 // «Только своя вики»: у ручки нет другого способа назвать чужую — явно названный в запросе
 // чужой владелец отвергается 403 (тот же контракт, что у чужого ключа раздела в WikiController).
 [ApiController]
@@ -48,15 +56,20 @@ public class WikiSettingsController : ControllerBase
     // синглтоном — NotesSubsystem.cs:134). Необязательна: состав без службы (тест/сборка без шва)
     // отвечает на POST 503, GET/PUT работают как раньше.
     private readonly WikiNightlyService? _nightly;
+    // W6b: список исполнителей места для блока «Ночной разбор» — тот же шов (LocalExecutorsFor),
+    // чем пользуется журнал службы. Необязателен: состав без шва отвечает пустым списком —
+    // «исполнителей не вижу», тот же смысл, что у тела по умолчанию в ICheapTextRunner.
+    private readonly ICheapTextRunner? _llm;
     private readonly string _dataDir;
 
     public WikiSettingsController(WikiClassHealth health, IFeatureFlagGate? flags, WikiKeeper keeper, IConfiguration config,
-        WikiNightlyService? nightly = null)
+        WikiNightlyService? nightly = null, ICheapTextRunner? llm = null)
     {
         _health = health;
         _flags = flags;
         _keeper = keeper;
         _nightly = nightly;
+        _llm = llm;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -108,7 +121,8 @@ public class WikiSettingsController : ControllerBase
         var stats = outcome.State == WikiClassHealth.RunState.Ran ? outcome.Stats : [];
         // Итог последней ночи — из того же файла, что читает служба (ReadLast): без файла или
         // битый — null, тот же reading, что у её собственной проверки даты прохода.
-        return Ok(BuildDto(settings, stats, WikiNightlyService.ReadLast(root), WikiNightlyService.IsRunning(root)));
+        return Ok(BuildDto(settings, stats, WikiNightlyService.ReadLast(root), WikiNightlyService.IsRunning(root),
+            _llm?.LocalExecutorsFor(LocalActionCatalog.WikiNightly) ?? []));
     }
 
     /// <summary>PUT /api/wiki/settings — общий выключатель «Применять без ревью», состояние
@@ -223,7 +237,8 @@ public class WikiSettingsController : ControllerBase
             await _keeper.EnsureInitializedAsync(userId);
 
         // PUT итога ночи не несёт: он меняет настройки, а не читает прошлые проходы (шапка).
-        return Ok(BuildDto(next, [], null, WikiNightlyService.IsRunning(WikiPaths.Root(_dataDir, userId))));
+        return Ok(BuildDto(next, [], null, WikiNightlyService.IsRunning(WikiPaths.Root(_dataDir, userId)),
+            _llm?.LocalExecutorsFor(LocalActionCatalog.WikiNightly) ?? []));
     }
 
     /// <summary>POST /api/wiki/settings/nightly/run — ручной запуск ночного разбора (WN-5,
@@ -270,8 +285,10 @@ public class WikiSettingsController : ControllerBase
     // (выключен давно, активности нет) остаётся видимым; активный без записи — тоже.
     // lastNight — прочитанный итог ночи (GET) или null (PUT, и GET без читаемого файла).
     // nightlyRunning (WN-5) — идёт ли сейчас проход этой вики (состояние процесса, не файла).
+    // executors (W6b) — текущий список исполнителей места из шва (тот же для GET и PUT:
+    // он принадлежит инстансу, а не владельцу и не меняется PUT'ом).
     private static WikiSettingsDto BuildDto(WikiSettingsStore.Settings settings, IReadOnlyList<WikiClassHealth.ClassStat> stats,
-        WikiNightlyService.NightResult? lastNight, bool nightlyRunning)
+        WikiNightlyService.NightResult? lastNight, bool nightlyRunning, IReadOnlyList<LocalEngineExecutor> executors)
     {
         var night = settings.NightlyOrDefaults();
         var byClass = new Dictionary<string, WikiClassDto>(StringComparer.Ordinal);
@@ -307,6 +324,11 @@ public class WikiSettingsController : ControllerBase
                 MaxPackagesPerSection = night.MaxPackagesPerSection,
                 MaxChatsPerSection = night.MaxChatsPerSection,
                 InputTokenBudget = night.InputTokenBudget,
+                // Список исполнителей места (W6b): то, что назначено ночи по текущему
+                // конфигу, — только имена и подписи, без чисел и слотов. Пустой список —
+                // пустой массив: «исполнителей нет» — состояние, а не отсутствие блока.
+                // Порядок — тот, по которому работу стоит вести (тот же, что у списка стора).
+                Executors = [.. executors.Select(e => new WikiNightlyExecutorDto { Engine = e.Engine, Title = e.Title })],
             },
             // Идёт ли сейчас проход этой вики — состояние процесса (static-замок службы), не файла.
             NightlyRunning = nightlyRunning,
@@ -324,8 +346,41 @@ public class WikiSettingsController : ControllerBase
                 Rejected = lastNight.Rejected,
                 FirstRejectReason = lastNight.FirstRejectReason,
                 Manual = lastNight.Manual,
+                // Судья (J-J4): те же числа, что в файле и в строке журнала. Поля отброшенных
+                // операций (Dropped) и отказов ступени 2 в DTO не идут по прежнему правилу этого
+                // блока: их адресат — журнал процесса, не карточка настроек.
+                JudgeCalls = lastNight.JudgeCalls,
+                JudgeCostUsd = lastNight.JudgeCostUsd,
+                JudgeApplied = lastNight.JudgeApplied,
+                JudgeRejected = lastNight.JudgeRejected,
+                JudgeDeferred = lastNight.JudgeDeferred,
+                CodeRejected = lastNight.CodeRejected,
+                // Разбивка итога по названным исполнителям (W6a → W6b): те же счётчики, что в
+                // файле, плюс подпись движка из текущего списка (тот же приём, что EngineTitle
+                // в журнале службы). null — «не измерено» (старый файл без поля), пустой
+                // массив — путь без названных исполнителей: разные состояния (W6a, шапка).
+                Executors = lastNight.Executors is null ? null : [.. lastNight.Executors.Select(e => new WikiLastNightExecutorDto
+                {
+                    Engine = e.Engine,
+                    Title = TitleOf(executors, e.Engine),
+                    Analyzed = e.Analyzed,
+                    Rejected = e.Rejected,
+                    InputTokens = e.InputTokens,
+                    WithdrawnAt = e.WithdrawnAt,
+                })],
             },
         };
+    }
+
+    // Подпись движка для строки итога (W6b): Title из текущего списка исполнителя — тот же
+    // приём, что EngineTitle в журнале службы (WikiNightlyService): настройки могли
+    // измениться посреди ночи, и строка называет то, что владелец видит сейчас. Движка в
+    // списке нет — техническое имя (назвать надо чем-то).
+    private static string TitleOf(IReadOnlyList<LocalEngineExecutor> executors, string engine)
+    {
+        foreach (var e in executors)
+            if (e.Engine == engine) return e.Title;
+        return engine;
     }
 }
 
@@ -348,7 +403,9 @@ public sealed class WikiSettingsDto
 /// <summary>Итог последней ночи (N7c) — поле в точности файла keeper/nightly-last.json
 /// (план N7b): дата прохода, счётчики и исход. Значения outcome — константы службы
 /// (completed/budget/open_limit/window_closed/disabled_midway/error); неизвестное будущее
-/// значение проходит как есть (тот же приём, что у фронта).</summary>
+/// значение проходит как есть (тот же приём, что у фронта). Executors (W6b) — разбивка по
+/// названным исполнителям из того же файла (W6a): имена, подписи и числа, без текста и
+/// причин; null — «не измерено» (старый файл), пустой массив — путь без исполнителей.</summary>
 public sealed class WikiLastNightDto
 {
     public string Date { get; set; } = "";
@@ -365,10 +422,39 @@ public sealed class WikiLastNightDto
     // WN-5: проход был запущен кнопкой вручную (не ночным тиком); старый файл без поля
     // читается false (та же аддитивность).
     public bool Manual { get; set; }
+    // J-J4: итог прохода облачного судья, запущенного в конце этого же прохода. Счётчики — по
+    // операциям, не по пакетам; JudgeCostUsd — стоимость его вызовов (единственные деньги в
+    // итоге). Старый файл без этих полей читается нулями (та же аддитивность).
+    public int JudgeCalls { get; set; }
+    public decimal JudgeCostUsd { get; set; }
+    public int JudgeApplied { get; set; }
+    public int JudgeRejected { get; set; }
+    public int JudgeDeferred { get; set; }
+    public int CodeRejected { get; set; }
+    // W6b: разбивка прохода по названным исполнителям — те же счётчики, что в файле итога
+    // (NightExecutorStat), плюс подпись движка из текущего списка. Старый файл без поля
+    // читается null («не измерено»), а не пустым списком (W6a: разные состояния).
+    public List<WikiLastNightExecutorDto>? Executors { get; set; }
+}
+
+/// <summary>Строка разбивки итога по исполнителю (W6b): только engine/title и числа
+/// (инвариант блока: текста знаний и причин по исполнителю здесь нет — их адресат, как и
+/// прежде, журнал процесса). Порядок строк — порядок списка исполнителей из файла.</summary>
+public sealed class WikiLastNightExecutorDto
+{
+    public string Engine { get; set; } = "";
+    public string Title { get; set; } = "";
+    public int Analyzed { get; set; }
+    public int Rejected { get; set; }
+    public long InputTokens { get; set; }
+    public DateTimeOffset? WithdrawnAt { get; set; }
 }
 
 /// <summary>Блок «Ночной разбор» (макет Ф2): тумблер, окно [WindowStartHour, WindowEndHour),
-/// лимиты прохода и бюджет входных токенов — всегда целые, с умолчаниями вместо «блока нет».</summary>
+/// лимиты прохода и бюджет входных токенов — всегда целые, с умолчаниями вместо «блока нет».
+/// Executors (W6b) — список исполнителей, назначенных ночи текущим конфигом места: только
+/// чтение (PUT его не принимает и не меняет; запись — W2b, только админ). Пустой список —
+/// пустой массив; он одинаков для всех владельцев.</summary>
 public sealed class WikiNightlyDto
 {
     public bool Enabled { get; set; }
@@ -378,6 +464,16 @@ public sealed class WikiNightlyDto
     public int MaxPackagesPerSection { get; set; }
     public int MaxChatsPerSection { get; set; }
     public int InputTokenBudget { get; set; }
+    public List<WikiNightlyExecutorDto> Executors { get; set; } = [];
+}
+
+/// <summary>Исполнитель, назначенный ночи (W6b): имя движка и его подпись из списка
+/// стора (тот же Title, что в «Поставщиках моделей»). Чисел здесь нет — это список
+/// назначения, а не итог прохода (счётчики — в строке lastNight.executors).</summary>
+public sealed class WikiNightlyExecutorDto
+{
+    public string Engine { get; set; } = "";
+    public string Title { get; set; } = "";
 }
 
 public sealed class WikiClassDto

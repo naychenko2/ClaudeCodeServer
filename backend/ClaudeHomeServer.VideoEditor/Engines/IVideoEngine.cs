@@ -49,6 +49,15 @@ public interface IVideoEngine
 
     // «Повторить увеличение» (только «Макс» local H3): причина, по которой повтор по тикету съёмки невозможен, или null.
     // По умолчанию — у поставщика увеличения нет
+    // «Увеличить» версию ×2 / ×4: по умолчанию поставщик не умеет. Отказ области или недоступность — текст для человека
+    string? EnhanceRefusal(VideoEditScope scope) => VideoEnhanceTexts.NotSupported;
+
+    // Время по таблице замеров; null — размер или длина не замерены (размер версии не известен — тоже null)
+    int? EnhanceEtaSeconds(int scale, int? width, int? height, double seconds) => null;
+
+    Task<VideoResult> EnhanceAsync(EnhanceRequest request, IProgress<VideoProgress> progress, CancellationToken ct) =>
+        Task.FromResult(VideoResult.Fail(VideoOutcome.Rejected, VideoEnhanceTexts.NotSupported));
+
     string? UpscaleRetryRefusal(string shotTicket) => VideoUpscaleRetryTexts.NoUpscale;
 
     // Повторный апскейл по живому тикету съёмки, без пересъёмки. Удача — клип увеличенного размера без UpscaleError;
@@ -59,6 +68,11 @@ public interface IVideoEngine
 
 // ShotTicket — тикет съёмки у драйвера (только в памяти сервера); Format — формат запуска, из которого взята съёмка:
 // по нему результат получает размер ступени
+// «Увеличить» готовую версию ×2 / ×4 (RelayVSR, local): отдельное действие над mp4 версии, не часть «Макс». Video — байты
+// клипа версии; Width/Height версии, если известны; OwnerId, SessionId, ProjectId, SourceJobId — метка происхождения прогона
+public sealed record EnhanceRequest(byte[] Video, int Scale, string? OwnerId = null, string? SessionId = null,
+    string? ProjectId = null, string? SourceJobId = null);
+
 public sealed record UpscaleRetryRequest(string ShotTicket, ResolvedFormat? Format, int? UpscaleEtaSeconds = null);
 
 // Котировка драйвера: сумма в единицах поставщика, время и очередь. Драйвер без этого шва котируется
@@ -123,7 +137,9 @@ public static class VideoPriceUnits
 // звук в ролике; LastFrame — берёт и последний кадр («кадр A → кадр B»); FirstFrame — берёт ли первый
 // (false — только текст); MaxFrameBytes — потолок входного кадра; LastFrameRequired — без последнего
 // кадра модель не работает (подбор «Авто» не берёт её для сцены с одним кадром).
-// Format — возможности по формату (ADR-025): пропорции и ступени модели; null — «Как у модели», размеров не сообщает
+// Format — возможности по формату (ADR-025): пропорции и ступени модели; null — «Как у модели», размеров не сообщает.
+// FirstFrameOptional — первый кадр можно не давать (съёмка по тексту) или дать (по кадру): модель сцены без кадров
+// «Авто» не берёт, но по ручному выбору Fits её пропускает
 public sealed record VideoCaps(
     IReadOnlyList<int> Durations,
     IReadOnlyList<string> Aspects,
@@ -135,14 +151,17 @@ public sealed record VideoCaps(
     long? MaxFrameBytes = null,
     bool Heavy = false,
     bool LastFrameRequired = false,
-    MediaFormatCaps? Format = null);
+    MediaFormatCaps? Format = null,
+    bool FirstFrameOptional = false);
 
 // Ориентир цены для каталога; точная сумма — только в котировке. Per — "sec" | "run"
 public sealed record VideoPriceHint(double Amount, string Unit, string Per);
 
-// DisabledReason — модель видна в каталоге серой с этой причиной, но не подбирается и не запускается
+// DisabledReason — модель видна в каталоге серой с этой причиной, но не подбирается и не запускается.
+// ManualOnly — «Авто» и умолчания модель не подставляют, только явный выбор человека или агента (экспериментальные модели).
+// Hint — подсказка человеку: что модель даёт и чем хуже соседей
 public sealed record VideoModelInfo(string Id, string Label, VideoCaps Caps, VideoPriceHint? PriceHint = null,
-    string? DisabledReason = null);
+    string? DisabledReason = null, bool ManualOnly = false, string? Hint = null);
 
 public sealed record VideoFrameBytes(byte[] Bytes, string ContentType);
 

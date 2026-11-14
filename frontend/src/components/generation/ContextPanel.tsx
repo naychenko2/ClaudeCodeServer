@@ -354,6 +354,23 @@ function ParamControl({ param, onChange, isMobile, inline }: { param: LaunchPara
         <OptionsControl ariaLabel="Пропорции" isMobile={isMobile} value={param.value} onChange={onChange}
           options={param.options.map(o => ({ value: o, label: o }))} />
       ));
+    case 'style':
+      return (
+        <div data-ctx-param="style" role="radiogroup" aria-label="Стиль" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+          {param.options.map(o => {
+            const on = o.value === param.value;
+            return (
+              <button key={o.value} type="button" role="radio" aria-checked={on} data-ctx-style={o.value || 'none'}
+                onClick={() => onChange(o.value)}
+                style={{
+                  fontSize: FS.sm, padding: `2px ${SP.sm}px`, borderRadius: R.max, cursor: 'pointer',
+                  border: `1px solid ${on ? C.accent : C.border}`, background: on ? C.accentLight : 'transparent',
+                  color: on ? C.textPrimary : C.textSecondary,
+                }}>{o.label}</button>
+            );
+          })}
+        </div>
+      );
     case 'fromQuestion':
       return <div data-ctx-param="fromQuestion" style={{ fontSize: FS.sm, color: C.textSecondary }}>{param.label}</div>;
     default:
@@ -362,7 +379,7 @@ function ParamControl({ param, onChange, isMobile, inline }: { param: LaunchPara
 }
 
 export const isKnownParam = (p: { kind: string }): p is LaunchParam =>
-  p.kind === 'variants' || p.kind === 'duration' || p.kind === 'aspect' || p.kind === 'fromQuestion';
+  p.kind === 'variants' || p.kind === 'duration' || p.kind === 'aspect' || p.kind === 'style' || p.kind === 'fromQuestion';
 
 function ParamsSection({ p }: { p: ContextPanelProps }) {
   const known = p.params.filter(isKnownParam);

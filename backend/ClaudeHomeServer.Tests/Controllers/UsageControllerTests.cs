@@ -317,6 +317,185 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
         return client;
     }
 
+    // === W2c · блок «Исполнители ночи» (разрез «ночь вики на нескольких локальных
+    // исполнителях» §2) ===
+
+    // Стор с двумя исполнителями места — ответ обязан отдать тот же список в том же порядке
+    // (порядок списка = приоритет: свободный слот первого получает чат раньше) и флаг каталога:
+    // UI рисует блок только при нём. Места без флага — false и null: они идут по своему маршруту.
+    [Fact]
+    public async Task GetUsage_ИсполнителиМеста_СписокПорядкомСтора_ИФлагКаталога()
+    {
+        using var host = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LocalEngines:gemma:BaseUrl"] = "http://127.0.0.1:1",
+                    ["LocalEngines:gemma:Model"] = "gemma-4-26b-a4b",
+                    ["LocalEngines:gemma:Title"] = "Gemma 4",
+                });
+            });
+        });
+        // Заполняем стор тем же синглтоном, который читает контроллер: Save калирует через
+        // Validate (gemma — живой движок из LocalEngines, «local» — основная локаль) и пишет на диск.
+        var store = host.Services.GetRequiredService<LocalActionExecutorsStore>();
+        store.Save(LocalActionCatalog.WikiNightly, new LocalActionExecutorsConfig
+        {
+            MaxTotal = 2,
+            // Порядок стора — «local» первым: он отличается и от алфавитного, и от порядка
+            // реестра движков, поэтому любая сортировка в контроллере попадается тестом.
+            Executors =
+            [
+                new() { Engine = LocalActionOverridesStore.LocalRoute, Parallel = 2 },
+                new() { Engine = "gemma", Parallel = 1 },
+            ],
+        }).Should().BeTrue("место с ParallelExecutors принимает список локальных движков");
+
+        var client = await AuthenticateAsync(host);
+        var usage = await client.GetFromJsonAsync<JsonElement>("/api/usage");
+        var actions = usage.GetProperty("ollama").GetProperty("actions").EnumerateArray().ToList();
+
+        var nightly = actions.First(a => a.GetProperty("key").GetString() == LocalActionCatalog.WikiNightly);
+        nightly.GetProperty("parallelExecutors").GetBoolean().Should().BeTrue();
+        var exec = nightly.GetProperty("executors");
+        exec.GetProperty("maxTotal").GetInt32().Should().Be(2);
+        var items = exec.GetProperty("items").EnumerateArray().ToList();
+        // Порядок items — порядок стора (здесь — не алфавитный), а не сортировка контроллера.
+        items.Select(i => i.GetProperty("engine").GetString())
+            .Should().Equal(LocalActionOverridesStore.LocalRoute, "gemma");
+        items.Select(i => i.GetProperty("parallel").GetInt32()).Should().Equal(2, 1);
+
+        var triage = actions.First(a => a.GetProperty("key").GetString() == LocalActionCatalog.WikiTriage);
+        triage.GetProperty("parallelExecutors").GetBoolean().Should().BeFalse();
+        triage.GetProperty("executors").ValueKind.Should().Be(JsonValueKind.Null,
+            "без списка место идёт по своему маршруту, как до фичи");
+    }
+
+    // MAJOR по сверке W2a: файл стора правят руками, и в нём бывает «[null]» или строка без
+    // имени движка. Путь GET /api/usage (TryGet → DescribeExecutors) обязан на таком файле не
+    // падать: его читает экран «Использование» при каждой загрузке. Стор подменяю своим:
+    // он Load'ит файл при создании, а синглтон тестового хоста был бы прочитан раньше,
+    // чем я успел бы его записать.
+    [Fact]
+    public async Task GetUsage_ИсполнителиМеста_БитыйФайлНеРоняетОтвет_ЧислаУрезаны()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cc-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "local-action-executors.json"),
+            """{"wiki-nightly":{"maxTotal":9,"executors":[{"engine":"local","parallel":9},null,{"engine":""}]}}""");
+        var storeConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var store = new LocalActionExecutorsStore(storeConfig);
+
+        using var host = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                foreach (var d in services.Where(d => d.ServiceType == typeof(LocalActionExecutorsStore)).ToList())
+                    services.Remove(d);
+                services.AddSingleton(store);
+            });
+        });
+
+        var client = await AuthenticateAsync(host);
+        var usage = await client.GetFromJsonAsync<JsonElement>("/api/usage");
+        var actions = usage.GetProperty("ollama").GetProperty("actions").EnumerateArray().ToList();
+
+        var nightly = actions.First(a => a.GetProperty("key").GetString() == LocalActionCatalog.WikiNightly);
+        var exec = nightly.GetProperty("executors");
+        // Ответ живой, а не 500, и числа в нём уже внутри границ стора: 9 → 4; parallel 9 у
+        // «local» → потолок той же основной локали (без реестра провайдеров — DefaultLimit).
+        exec.GetProperty("maxTotal").GetInt32().Should().Be(LocalActionExecutorsStore.MaxTotalLimit);
+        var items = exec.GetProperty("items").EnumerateArray().ToList();
+        items.Should().ContainSingle("null-элемент и строка без имени не доходят до ответа");
+        items[0].GetProperty("engine").GetString().Should().Be(LocalActionOverridesStore.LocalRoute);
+        items[0].GetProperty("parallel").GetInt32().Should().Be(TrackedLocalLlmClient.DefaultLimit);
+    }
+
+    // Список движков для выбора (И3): только «local» и имена включённых LocalEngines:*.
+    // В тестовом хосте облачные провайдеры настроены базовым appsettings.json (deepseek, glm, …) —
+    // ни одного их ключа в списке быть не может. Имя = значение engine в PUT (контракт W2b);
+    // подпись — цепочка EngineLabel (Title, иначе модель, иначе имя); потолок — свой у движка.
+    [Fact]
+    public async Task GetUsage_СписокЛокальныхДвижков_ТолькоЛокальные_БезОблачныхПровайдеров()
+    {
+        using var host = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LocalEngines:gemma:BaseUrl"] = "http://127.0.0.1:1",
+                    ["LocalEngines:gemma:Model"] = "gemma-4-26b-a4b",
+                    ["LocalEngines:gemma:Title"] = "Gemma 4",
+                    ["LocalEngines:gemma:MaxConcurrency"] = "2",
+                });
+            });
+        });
+        // Облачные провайдеры тестового хоста — ровно то, чего в списке быть не может.
+        var providerKeys = host.Services.GetRequiredService<LlmProviderRegistry>().All
+            .Select(p => p.Key).ToList();
+        providerKeys.Should().NotBeEmpty("тест проверяет исключение именно при настроенных облачных провайдерах");
+
+        var client = await AuthenticateAsync(host);
+        var usage = await client.GetFromJsonAsync<JsonElement>("/api/usage");
+        var engines = usage.GetProperty("ollama").GetProperty("localEngines").EnumerateArray().ToList();
+        var names = engines.Select(e => e.GetProperty("name").GetString()).ToList();
+
+        names.Should().Equal(new[] { LocalActionOverridesStore.LocalRoute, "gemma" },
+            "только основная локаль и именованные движки, в порядке: local первым");
+        foreach (var key in providerKeys)
+            names.Should().NotContain(key, "облачный провайдер не может быть исполнителем ночи (И3)");
+        // Подпись именованного — Title (та же цепочка, что Engine в actions); потолок — его MaxConcurrency.
+        engines[1].GetProperty("title").GetString().Should().Be("Gemma 4");
+        engines[1].GetProperty("maxConcurrency").GetInt32().Should().Be(2);
+        // Основная локаль тестового хоста не настроена (Ollama:Model="") — запасная подпись и
+        // дефолтный потолок: то же число, по которому валидатор стора мерил бы parallel.
+        engines[0].GetProperty("maxConcurrency").GetInt32().Should().Be(TrackedLocalLlmClient.DefaultLimit);
+    }
+
+    // Подпись основной локали в списке «Исполнителей ночи» — то же значение, чем зовёт её
+    // панель «Локальные модели» (LlmProviders:<ключ>:Stats:Title): под алиасом qwen3.8-27b с
+    // октября работает Flash-Next, и экран не имеет права показывать старое имя. Мутация:
+    // убрать ветку MainLocalTitle в UsageController.BuildLocalEngineOptions — краснеет первый
+    // assert; убрать её в CheapTextRunner.EngineTitle — краснеет
+    // LocalExecutorsFor_MainLocalTitleFromStats… в Llm.Tests.
+    [Fact]
+    public async Task GetUsage_ОсновнаяЛокаль_ПодписьИзStatsTitle_БезНего_ПрежнийЗапасныйВариант()
+    {
+        using var host = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlmProviders:local-qwen:IsLocal"] = "true",
+                    ["LlmProviders:local-qwen:Stats:Title"] = "Flash-Next",
+                });
+            });
+        });
+
+        var client = await AuthenticateAsync(host);
+        var engines = (await client.GetFromJsonAsync<JsonElement>("/api/usage"))
+            .GetProperty("ollama").GetProperty("localEngines").EnumerateArray().ToList();
+        engines[0].GetProperty("name").GetString().Should().Be(LocalActionOverridesStore.LocalRoute,
+            "ключ исполнителя не меняется: подпись — только то, что видит человек");
+        engines[0].GetProperty("title").GetString().Should().Be("Flash-Next");
+
+        // Без явной подписи — прежнее поведение. В базовом тестовом хосте основная локаль
+        // не настроена (Ollama:Model="") → запасный «Основная», как и раньше.
+        var plain = _factory.CreateAuthenticatedClient();
+        var plainEngines = (await plain.GetFromJsonAsync<JsonElement>("/api/usage"))
+            .GetProperty("ollama").GetProperty("localEngines").EnumerateArray().ToList();
+        plainEngines[0].GetProperty("title").GetString().Should().Be("Основная");
+    }
+
     [Fact]
     public async Task GetUsage_МестоСПресетом_ОтдаётPresetИдентичноОписателю()
     {

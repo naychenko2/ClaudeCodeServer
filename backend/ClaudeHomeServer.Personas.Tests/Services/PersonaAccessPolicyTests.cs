@@ -143,7 +143,7 @@ public class PersonaAccessPolicyTests
         result.Should().Contain([
             "mcp__video-editor__video_save_scene", "mcp__video-editor__video_film_edit",
             "mcp__video-editor__video_film_build", "mcp__video-editor__video_shoot",
-            "mcp__video-editor__video_cancel"]);
+            "mcp__video-editor__video_cancel", "mcp__video-editor__video_enhance", "mcp__video-editor__video_voice"]);
         result.Should().NotContain(["mcp__video-editor__video_state", "mcp__video-editor__video_wait"]);
     }
 

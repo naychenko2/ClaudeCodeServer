@@ -46,6 +46,44 @@
 // (9) не ставить disabled при nightlyRunning → «nightlyRunning:…» и «клик…:…» краснеют
 //     (в «клике» — строка «кнопка выключена после успеха»);
 // (10) не добавлять ячейку rejected в итог → «rejected=2:…» краснеет.
+//
+// J-F3 (итог судья и цена в карточке ночи; доработка по приёмке Веры b0065470): две
+// независимые строки — «Отклонено кодом: C» (только при codeRejected>0; код отклоняет сам,
+// без судья) и «Судья: принял K, отклонил L; вызовов N, $X» (только при judgeCalls>0);
+// цена — два знака, положительная и меньше цента — «<$0.01», ноль — «$0.00»;
+// judgeDeferred>0 — предупреждение «Судья недоступен — ждут решения: M» (форма Софьи 12.11,
+// как в бэковом уведомлении) — без изменений.
+// (11) не рендерить строку сводки судья → «судья работал…» и «цена…» краснеют;
+// (12) не рендерить предупреждение judgeDeferred → «judgeDeferred=3…» краснеет;
+// (13) вернуть codeRejected в строку судья (старая форма) → «судья работал…» и
+//     «codeRejected=3…» краснеют (точная строка судья не совпадёт, «отклонено кодом» вернётся);
+// (14) убрать в fmtUsd ветку «<$0.01» (всегда toFixed) → «цена…» краснеет (0.0065 → $0.01).
+//
+// W8b (список исполнителей только для чтения и разбивка последней ночи): при непустом
+// nightly.executors строка «Исполнители: … (назначает администратор)» заменяет общую
+// подсказку «Назначает…» (та же мысль, дважды — нет); при пустом списке и отсутствии
+// поля — прежняя подсказка. В карточке итога по строке на исполнителя: «Qwen 27B: 7
+// попыток» (analyzed — попытки, не чаты: доработка бэка W5 №2, повтор на другом
+// исполнителе считается у обоих), у выбывшего — «…, выбыл в 00:41» (локальное время);
+// null («не измерено», старый файл), [] и отсутствие поля — блока нет.
+// (15) убрать суффикс «, выбыл в …» в executorLine → «Qwen 27B: 7 попыток, выбыл в 00:41»
+//     краснеет;
+// (16) не склонять через plural (всегда «попытка») → тест склонения краснеет;
+// (17) оставить общую подсказку и при непустом списке → «подсказки нет» краснеет.
+//
+// T3 (хвост R-W8b п.1 и п.3): ключ строки разбивки — engine + индекс: в файле стора до
+// дедупа (T1) возможны два элемента с одним engine, один engine дал бы равные ключи —
+// warning React и возможный сбой перерисовки; нечитаемый withdrawnAt — без суффикса.
+// (18) вернуть key={e.engine} → тест «дубль имени движка…» краснеет (console.error
+//     «same key»);
+// (19) убрать ветку isNaN в localClockText → тест «withdrawnAt нечитаемый…» краснеет
+//     («выбыл в NaN:NaN»).
+//
+// М3 (узкие сетки, принцип П1): сетки полей и итога ночи берут «узкость» из useWikiNarrow
+// (ширина контейнера), а не из ширины окна; сами чистые функции nightlyFieldCols/lastNightCols
+// проверяются без DOM (решение «узко» — у теста useWikiNarrow, M0).
+// (20) lastNightCols всегда возвращает широкую ветку → «сетка итога» краснеет
+//     (проверено мутацией, вывод — в отчёте задачи).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -53,7 +91,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
-import { WikiNightlyBlock } from '../WikiNightlyBlock';
+import { WikiNightlyBlock, lastNightCols, nightlyFieldCols } from '../WikiNightlyBlock';
 
 vi.mock('../../../../lib/signalr', async (orig) => ({
   ...await orig<typeof import('../../../../lib/signalr')>(),
@@ -84,7 +122,9 @@ const NIGHTLY = {
   inputTokenBudget: 700000,
 };
 
-function settings(over: { nightly?: Partial<typeof NIGHTLY>; lastNight?: unknown; nightlyRunning?: boolean } = {}): Record<string, unknown> {
+// nightly — произвольные поля: тесты добавляют и те, что не входят в умолчания
+// (список исполнителей W8b), как их отдаёт GET
+function settings(over: { nightly?: Record<string, unknown>; lastNight?: unknown; nightlyRunning?: boolean } = {}): Record<string, unknown> {
   const s: Record<string, unknown> = {
     autoApplyEnabled: false,
     classes: [],
@@ -205,7 +245,7 @@ describe('блок «Ночной разбор» (F2)', () => {
     expect(has(c, '· 26 → 27.10')).toBe(true);
     expect(has(c, '7 чатов отобрано')).toBe(true);
     expect(has(c, '11 пакетов применено само')).toBe(true);
-    expect(has(c, '2 ждут вас во «Входящих»')).toBe(true);
+    expect(has(c, '2 ждут вас в «Решениях»')).toBe(true);
     expect(has(c, '≈ 512 000 из 700 000')).toBe(true);
     expect(has(c, 'Разобрано всё отобранное.')).toBe(true);
     expect(has(c, 'Не хватило бюджета')).toBe(false);
@@ -246,15 +286,16 @@ describe('блок «Ночной разбор» (F2)', () => {
     expect(has(c, '13 пакетов применено само')).toBe(true);
   });
 
-  it('open_limit: предупреждение с потолком и кнопка «Открыть «Входящие»» зовёт контейнер', async () => {
+  it('open_limit: предупреждение с потолком и кнопка «Открыть «Решения»» зовёт контейнер', async () => {
     server = settings({ lastNight: LAST({ selected: 12, analyzed: 4, applied: 5, toInbox: 6, estTokens: 218000, outcome: 'open_limit' }) });
     let inbox = 0;
     const c = render({ onOpenInbox: () => { inbox += 1; }, onOpenJournal: () => {} });
     await settle();
-    expect(has(c, 'Остановились: во «Входящих» 20 пакетов ждут вашего решения')).toBe(true);
+    expect(has(c, 'Остановились: в «Решениях» 20 пакетов ждут вашего решения')).toBe(true);
     expect(has(c, 'Больше 20 спорных пакетов сразу Хранитель не копит — иначе их не разобрать. Решите часть, и следующая ночь продолжит с того же места.')).toBe(true);
     expect(has(c, '≈ 218 000 из 700 000')).toBe(true);
-    click(findNodeByAttr(c, 'data-testid', 'wiki-nightly-open-inbox')!, 'Открыть «Входящие»');
+    expect(has(c, 'Открыть «Решения»')).toBe(true);
+    click(findNodeByAttr(c, 'data-testid', 'wiki-nightly-open-inbox')!, 'Открыть «Решения»');
     expect(inbox).toBe(1);
     click(findNodeByAttr(c, 'data-testid', 'wiki-nightly-open-journal')!, 'Открыть «Журнал»');
   });
@@ -348,7 +389,7 @@ describe('блок «Ночной разбор» (F2)', () => {
     callProp(input, 'onFocus');
     callProp(input, 'onChange', { target: { value: '25' } });
     await settle();
-    expect(has(c, 'Не больше 20 — иначе ночь упрётся в лимит «Входящих»')).toBe(true);
+    expect(has(c, 'Не больше 20 — иначе ночь упрётся в лимит «Решений»')).toBe(true);
     callProp(input, 'onBlur');
     await settle();
     expect(putCalls().length).toBe(0);
@@ -609,5 +650,267 @@ describe('«Запустить сейчас» (WN-6b)', () => {
     // отказ — не старт: стор не ставит проход, кнопка возвращается в активное состояние
     expect(getWikiSettingsSnapshot()!.nightlyRunning).toBe(false);
     expect(isDisabled(runBtn(c))).toBe(false);
+  });
+});
+
+// ─── J-F3: итог судья и цена в карточке ночи (доработка по приёмке Веры b0065470) ───
+// Две независимые строки: «Отклонено кодом: C» — только при codeRejected>0, «Судья: …» —
+// только при judgeCalls>0; кодовые отказы в строку судья не входят. Предупреждение об
+// отложенных — независимо от обеих. Поля в ответе бэка всегда (J-J4), старый файл
+// читается нулями — и при нулевых, и при отсутствующих полях строк нет.
+describe('итог судья и цена ночи (J-F3)', () => {
+  it('судья работал и код отказывал: «Отклонено кодом: 2» отдельной строкой, строка судья без него', async () => {
+    server = settings({ lastNight: LAST({ judgeApplied: 1, judgeRejected: 1, codeRejected: 2, judgeCalls: 1, judgeCostUsd: 0.04 }) });
+    const c = render();
+    await settle();
+    // мутации (11)/(13): без строки судья или с codeRejected, возвращённым в неё,
+    // эти проверки краснеют (в первом случае строки нет, во втором — точная строка не совпадёт)
+    expect(has(c, 'Судья: принял 1, отклонил 1; вызовов 1, $0.04')).toBe(true);
+    expect(has(c, 'Отклонено кодом: 2')).toBe(true);
+    // старой формы («…отклонил L, отклонено кодом C…») в карточке быть не должно
+    expect(has(c, 'отклонено кодом 2')).toBe(false);
+  });
+
+  it('codeRejected=3, judgeCalls=0: только «Отклонено кодом: 3», строки «Судья:» нет', async () => {
+    server = settings({ lastNight: LAST({ judgeApplied: 0, judgeRejected: 0, codeRejected: 3, judgeCalls: 0, judgeCostUsd: 0 }) });
+    const c = render();
+    await settle();
+    // мутация (13): при старой форме здесь краснеет обе строки
+    expect(has(c, 'Отклонено кодом: 3')).toBe(true);
+    expect(has(c, 'Судья:')).toBe(false);
+  });
+
+  it('judgeCalls=2, codeRejected=0: строка судья без «отклонено кодом»', async () => {
+    server = settings({ lastNight: LAST({ judgeApplied: 1, judgeRejected: 1, codeRejected: 0, judgeCalls: 2, judgeCostUsd: 1.234 }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'Судья: принял 1, отклонил 1; вызовов 2, $1.23')).toBe(true);
+    expect(has(c, 'Отклонено кодом')).toBe(false);
+  });
+
+  it('цена: 0.04 → «$0.04», 0.1 → «$0.10», 1.234 → «$1.23», 0.0065 → «<$0.01», 0 → «$0.00»', async () => {
+    // два знака: 0.1 → $0.10, 1.234 → $1.23
+    server = settings({ lastNight: LAST({ judgeApplied: 1, judgeRejected: 0, codeRejected: 0, judgeCalls: 1, judgeCostUsd: 0.1 }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'Судья: принял 1, отклонил 0; вызовов 1, $0.10')).toBe(true);
+
+    server = settings({ lastNight: LAST({ judgeApplied: 1, judgeRejected: 1, codeRejected: 0, judgeCalls: 2, judgeCostUsd: 1.234 }) });
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'Судья: принял 1, отклонил 1; вызовов 2, $1.23')).toBe(true);
+
+    // меньше цента, но больше нуля: округление toFixed дало бы «$0.01» — карточка
+    // приписала бы ночи несуществующий цент (дефект приёмки Веры: $0.0065 показывалась как $0.01)
+    // мутация (14): без ветки «<$0.01» в fmtUsd эта проверка краснеет
+    server = settings({ lastNight: LAST({ judgeApplied: 1, judgeRejected: 0, codeRejected: 0, judgeCalls: 1, judgeCostUsd: 0.0065 }) });
+    const c3 = render();
+    await settle();
+    expect(has(c3, 'Судья: принял 1, отклонил 0; вызовов 1, <$0.01')).toBe(true);
+
+    // ровно ноль — «$0.00», не «<$0.01»
+    server = settings({ lastNight: LAST({ judgeApplied: 0, judgeRejected: 0, codeRejected: 0, judgeCalls: 1, judgeCostUsd: 0 }) });
+    const c4 = render();
+    await settle();
+    expect(has(c4, 'Судья: принял 0, отклонил 0; вызовов 1, $0.00')).toBe(true);
+  });
+
+  it('нет вызовов и нет кодовых отказов: обеих строк нет (и у старого итога без полей)', async () => {
+    server = settings({ lastNight: LAST({ judgeApplied: 0, judgeRejected: 0, codeRejected: 0, judgeCalls: 0, judgeCostUsd: 0 }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'Судья:')).toBe(false);
+    expect(has(c, 'Отклонено кодом')).toBe(false);
+
+    // старый keeper/nightly-last.json без judge-полей (аддитивность J-J4): строк тоже нет
+    server = settings({ lastNight: LAST({}) });
+    const cOld = render();
+    await settle();
+    expect(has(cOld, 'Судья:')).toBe(false);
+    expect(has(cOld, 'Отклонено кодом')).toBe(false);
+  });
+
+  it('judgeDeferred=3: «Судья недоступен — ждут решения: 3»; =0 и без поля — нет', async () => {
+    server = settings({ lastNight: LAST({ judgeDeferred: 3 }) });
+    const c = render();
+    await settle();
+    // мутация (12): без предупреждения об отложенных эти строки краснеют
+    expect(has(c, 'Судья недоступен — ждут решения: 3')).toBe(true);
+    // предупреждение независимо от сводки: при нулевых вызовах сводки нет
+    expect(has(c, 'Судья:')).toBe(false);
+
+    server = settings({ lastNight: LAST({ judgeDeferred: 0 }) });
+    const c0 = render();
+    await settle();
+    expect(has(c0, 'Судья недоступен')).toBe(false);
+
+    // старая карточка без поля — того же не показываем
+    server = settings({ lastNight: LAST({}) });
+    const cN = render();
+    await settle();
+    expect(has(cN, 'Судья недоступен')).toBe(false);
+  });
+});
+
+// ─── W8b: список исполнителей только для чтения и разбивка последней ночи ───
+// Те же снимки стора, новых запросов нет: nightly.executors (список места) и
+// lastNight.executors (разбивка итога). Только текст, без контролов. Порядок — порядок
+// списка, не сортировать. analyzed — попытки, не чаты (доработка бэка W5 №2).
+describe('исполнители ночи и разбивка итога (W8b)', () => {
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  // ISO со смещением машины теста: бэк отдаёт DateTimeOffset со смещением, карточка
+  // обязана показать локальное время — «00:41» на любой машине прогона
+  const localIso = (h: number, m: number): string => {
+    const off = -new Date(2026, 10, 12, h, m).getTimezoneOffset();
+    const sign = off >= 0 ? '+' : '-';
+    const a = Math.abs(off);
+    return `2026-11-12T${pad2(h)}:${pad2(m)}:00${sign}${pad2(Math.floor(a / 60))}:${pad2(a % 60)}`;
+  };
+
+  it('непустой список: точная строка «Исполнители: Strata, Qwen 27B (назначает администратор)», в порядке списка', async () => {
+    server = settings({ nightly: { executors: [{ engine: 'local', title: 'Strata' }, { engine: 'gml', title: 'Qwen 27B' }] } });
+    const c = render();
+    await settle();
+    expect(has(c, 'Исполнители: Strata, Qwen 27B (назначает администратор)')).toBe(true);
+    // общая подсказка при названных исполнителях не показывается: скобка строки говорит
+    // то же самое (мутация 17: с живой подсказкой эта проверка краснеет)
+    expect(has(c, 'Назначает администратор в «Поставщиках моделей».')).toBe(false);
+    // только текст, без контролов
+    const note = findNodeByAttr(c, 'data-testid', 'wiki-nightly-executors-note')!;
+    expect(note.querySelectorAll('select,button,input').length).toBe(0);
+
+    // порядок — списка стора: обратный список даёт обратную строку
+    server = settings({ nightly: { executors: [{ engine: 'gml', title: 'Qwen 27B' }, { engine: 'local', title: 'Strata' }] } });
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'Исполнители: Qwen 27B, Strata (назначает администратор)')).toBe(true);
+    expect(has(c2, 'Исполнители: Strata, Qwen 27B')).toBe(false);
+  });
+
+  it('пустой список или поля нет (старый бэк): строки «Исполнители:» нет, подсказка прежняя', async () => {
+    server = settings({ nightly: { executors: [] } });
+    const c = render();
+    await settle();
+    expect(has(c, 'Исполнители:')).toBe(false);
+    expect(has(c, 'Назначает администратор в «Поставщиках моделей».')).toBe(true);
+
+    server = settings(); // старый бэк без поля — то же «списка нет»
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'Исполнители:')).toBe(false);
+    expect(has(c2, 'Назначает администратор в «Поставщиках моделей».')).toBe(true);
+  });
+
+  it('разбивка: «Qwen 27B: 7 попыток» и «…, выбыл в 00:41» у выбывшего; доживший — без суффикса', async () => {
+    server = settings({ lastNight: LAST({ executors: [
+      { engine: 'local', title: 'Strata', analyzed: 9, rejected: 0, inputTokens: 123000, withdrawnAt: null },
+      { engine: 'gml', title: 'Qwen 27B', analyzed: 7, rejected: 1, inputTokens: 80000, withdrawnAt: localIso(0, 41) },
+    ] }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'Strata: 9 попыток')).toBe(true);
+    // мутация (15): без суффикса «, выбыл в …» эта строка краснеет
+    expect(has(c, 'Qwen 27B: 7 попыток, выбыл в 00:41')).toBe(true);
+    expect(has(c, 'Strata: 9 попыток, выбыл')).toBe(false);
+    // порядок строк — порядок списка
+    const t = texts(c).join(' ');
+    expect(t.indexOf('Strata: 9 попыток')).toBeGreaterThanOrEqual(0);
+    expect(t.indexOf('Strata: 9 попыток') < t.indexOf('Qwen 27B: 7 попыток')).toBe(true);
+    // только текст, без контролов
+    const block = findNodeByAttr(c, 'data-testid', 'wiki-nightly-executors')!;
+    expect(block.querySelectorAll('select,button,input').length).toBe(0);
+  });
+
+  it('дубль имени движка: обе строки на месте, warning React о ключах не идёт', async () => {
+    // правленный руками файл стора до дедупа (T1): два элемента с одним engine. Ключ
+    // строки — engine + индекс (хвост R-W8b п.1): один engine дал бы равные ключи.
+    // Мутация (18): вернуть key={e.engine} → проверка warning краснеет (React 19 печатает
+    // «Encountered two children with the same key» в console.error, dev-сборка).
+    server = settings({ lastNight: LAST({ executors: [
+      { engine: 'local', title: 'Strata', analyzed: 9, rejected: 0, inputTokens: 123000, withdrawnAt: null },
+      { engine: 'local', title: 'Strata', analyzed: 4, rejected: 0, inputTokens: 50000, withdrawnAt: null },
+    ] }) });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const c = render();
+      await settle();
+      expect(has(c, 'Strata: 9 попыток')).toBe(true);
+      expect(has(c, 'Strata: 4 попытки')).toBe(true);
+      const block = findNodeByAttr(c, 'data-testid', 'wiki-nightly-executors')!;
+      expect(block.children.length).toBe(2); // обе строки — элементы, не «одна вместо двух»
+      const keyWarn = errSpy.mock.calls.some((args) => String(args[0] ?? '').includes('same key'));
+      expect(keyWarn).toBe(false);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('withdrawnAt нечитаемый («not-a-date»): без суффикса «выбыл в», без «NaN», рендер не падает', async () => {
+    // хвост R-W8b п.3: время строится только из читаемой даты (localClockText, тот же
+    // приём, что у nightRangeText). Мутация (19): убрать ветку isNaN в localClockText →
+    // суффикс «выбыл в NaN:NaN» вернулся бы.
+    server = settings({ lastNight: LAST({ executors: [
+      { engine: 'e1', title: 'M1', analyzed: 3, rejected: 0, inputTokens: 100, withdrawnAt: 'not-a-date' },
+    ] }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'M1: 3 попытки')).toBe(true);
+    expect(has(c, 'выбыл в')).toBe(false);
+    expect(has(c, 'NaN')).toBe(false);
+  });
+
+  it('склонение через plural: 1 попытка / 2 попытки / 5 попыток / 11 попыток', async () => {
+    // мутация (16): без plural (всегда «попытка») эти проверки краснеют
+    server = settings({ lastNight: LAST({ executors: [
+      { engine: 'e1', title: 'M1', analyzed: 1, rejected: 0, inputTokens: 1 },
+      { engine: 'e2', title: 'M2', analyzed: 2, rejected: 0, inputTokens: 1 },
+      { engine: 'e3', title: 'M3', analyzed: 5, rejected: 0, inputTokens: 1 },
+      { engine: 'e4', title: 'M4', analyzed: 11, rejected: 0, inputTokens: 1 },
+    ] }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'M1: 1 попытка')).toBe(true);
+    expect(has(c, 'M2: 2 попытки')).toBe(true);
+    expect(has(c, 'M3: 5 попыток')).toBe(true);
+    expect(has(c, 'M4: 11 попыток')).toBe(true);
+  });
+
+  it('null «не измерено», пустой список, поля нет: блока нет, ошибки нет, итог читается как обычно', async () => {
+    server = settings({ lastNight: LAST({ executors: null }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'попытк')).toBe(false);
+    expect(has(c, '7 чатов отобрано')).toBe(true);
+
+    server = settings({ lastNight: LAST({ executors: [] }) }); // путь без названных исполнителей
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'попытк')).toBe(false);
+    expect(has(c2, '7 чатов отобрано')).toBe(true);
+
+    server = settings({ lastNight: LAST({}) }); // старый файл итога без поля
+    const c3 = render();
+    await settle();
+    expect(has(c3, 'попытк')).toBe(false);
+    expect(has(c3, '7 чатов отобрано')).toBe(true);
+  });
+});
+
+// ─── М3: сетки полей и итога ночи от узкости контейнера (П1) ───
+// Чистые функции, без DOM: решение «узко» проверяет тест useWikiNarrow (M0), здесь —
+// только отображение narrow → сетка. Узко: поля в одну колонку (в панели 340 px две
+// колонки по ~145 px), итог 2×N (пять клеток по ~60 px ломают подписи по слогам).
+describe('узкие сетки полей и итога (М3)', () => {
+  it('сетка полей: узко — 1fr, широко — 1fr 1fr', () => {
+    expect(nightlyFieldCols(true)).toBe('1fr');
+    expect(nightlyFieldCols(false)).toBe('1fr 1fr');
+  });
+
+  it('сетка итога: узко — 1fr 1fr при любом числе клеток, широко — repeat(N, 1fr)', () => {
+    // 5 клеток — с «отказано», 4 — без него: число передаёт вызывающий, функция его не придумывает
+    expect(lastNightCols(true, 5)).toBe('1fr 1fr');
+    expect(lastNightCols(true, 4)).toBe('1fr 1fr');
+    expect(lastNightCols(false, 5)).toBe('repeat(5, 1fr)');
+    expect(lastNightCols(false, 4)).toBe('repeat(4, 1fr)');
   });
 });

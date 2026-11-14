@@ -26,7 +26,8 @@ public abstract class AudioEditorEndpoints(
     AudioEditWorkspace workspace,
     Engines.DspAudioEngine dsp,
     AudioConcatService concat,
-    ChatContext.AudioContextLaunch? context = null) : ControllerBase
+    ChatContext.AudioContextLaunch? context = null,
+    IVideoSceneSound? videoScenes = null) : ControllerBase
 {
     // Владелец — claim sub сервисного JWT. Константой, а не JwtRegisteredClaimNames: своих пакетов у
     // модуля нет (DynamicModulePackagesGuardTests)
@@ -190,6 +191,36 @@ public abstract class AudioEditorEndpoints(
             clips.Add(new AudioBytes(bytes!, AudioVersionFiles.ContentTypeOf(path!)));
         }
 
+        AudioBytes? video = null;
+        AudioVideoLink? videoLink = null;
+        if (quote.Op == AudioOp.VideoToAudio)
+        {
+            if (!string.IsNullOrWhiteSpace(form.VideoSceneId))
+            {
+                if (videoScenes is null)
+                    return Error(StatusCodes.Status503ServiceUnavailable, AudioEditErrorCodes.Unavailable,
+                        "Модуль «Видео» на этом сервере не подключён: сцену озвучить нельзя");
+                if (string.IsNullOrWhiteSpace(form.SessionId))
+                    return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Для сцены нужен чат (sessionId)");
+                var clip = await videoScenes.GetClipAsync(new VideoSceneRef(Owner(scope), scope.Key, form.SessionId.Trim(),
+                    form.VideoSceneId.Trim(), string.IsNullOrWhiteSpace(form.VideoVersionId) ? null : form.VideoVersionId.Trim()), ct);
+                if (clip is null)
+                    return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
+                        "Клип версии сцены не найден (сцена удалена или файл убрала чистка)");
+                video = new AudioBytes(clip.Bytes, "video/mp4");
+                videoLink = new AudioVideoLink(form.VideoSceneId.Trim(), clip.VersionId, form.PasteIntoScene == true);
+            }
+            else if (!string.IsNullOrWhiteSpace(form.VideoPath))
+            {
+                var (bytes, path, denied) = await ProjectFileAsync(scope, form.VideoPath, ct);
+                if (denied is not null) return denied;
+                video = new AudioBytes(bytes!, AudioVersionFiles.ContentTypeOf(path!));
+            }
+            else
+                return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
+                    "Для этой операции нужно видео: версия сцены или файл проекта");
+        }
+
         byte[]? voiceModel = null, voiceIndex = null;
         if (!string.IsNullOrWhiteSpace(form.VoiceModelPath))
         {
@@ -225,7 +256,9 @@ public abstract class AudioEditorEndpoints(
             VoiceIndex: voiceIndex,
             Seed: form.Seed,
             Voice: form.Voice,
-            ContextRevision: form.ContextRevision);
+            ContextRevision: form.ContextRevision,
+            Video: video,
+            VideoLink: videoLink);
         return Map(await jobs.StartAsync(Owner(scope), scope, input, ct, UserId), created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
@@ -444,6 +477,65 @@ public abstract class AudioEditorEndpoints(
 
     private IActionResult UnknownJoint() =>
         Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Стык — butt, pause или crossfade");
+
+    // Сохранить версию на диск: у проекта — следующая версия рядом с исходником или «Сохранить как»; у личной
+    // области — только в Personal/audio/ (ADR-040 §5), папка создаётся здесь, на пишущем пути. Только новыми
+    // файлами; занятое имя «Сохранить как» — 409 name_taken с подсказкой. files — уведомление проекта о новых файлах
+    protected async Task<IActionResult> SaveIn(AudioEditScope scope, string sessionId, string threadId, AudioSaveRequest req,
+        IProjectFiles? files = null)
+    {
+        var mode = string.IsNullOrWhiteSpace(req.Mode) ? AudioProjectSaver.NextVersion : req.Mode.Trim();
+        if (mode is not (AudioProjectSaver.NextVersion or AudioProjectSaver.As))
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, $"Неизвестный режим сохранения «{mode}»");
+
+        string? folder = req.Folder, defaultFolder = null;
+        if (scope.IsPersonal)
+        {
+            if (PersonalMediaFolders.Resolve(PersonalMediaFolders.Audio, req.Folder, out var personalFolder) is { } folderError)
+                return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, folderError);
+            folder = string.IsNullOrWhiteSpace(req.Folder) ? null : personalFolder;
+            defaultFolder = personalFolder;
+        }
+
+        var thread = threads.Store.Get(Owner(scope), sessionId).Threads.FirstOrDefault(t => t.Id == threadId);
+        if (thread is null) return ThreadNotFound();
+        var version = string.IsNullOrWhiteSpace(req.VersionId) ? thread.CurrentVersion : thread.Version(req.VersionId.Trim());
+        if (version is null) return VersionNotFound();
+        if (version.IsOrigin)
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Исходник уже лежит в проекте");
+
+        var items = new List<AudioProjectSaver.Item>();
+        foreach (var file in version.Files)
+        {
+            if (AudioVersionFiles.Resolve(workspace, Owner(scope), UserId, scope, version, file) is not { } path || !System.IO.File.Exists(path))
+                return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.FileNotFound,
+                    "Файлы версии больше не найдены — рабочая папка очищена");
+            items.Add(new AudioProjectSaver.Item(file.Role, path));
+        }
+
+        // Версия «Личного» читается из рабочей папки (Resolve выше), а запись идёт в папку «Личного»:
+        // создаём её только теперь, когда есть что сохранять
+        if (scope.IsPersonal && scope.Project is null)
+            return Error(StatusCodes.Status503ServiceUnavailable, PersonalFolderResolver.UnavailableCode, PersonalFolderResolver.UnavailableText);
+        var project = scope.Project!;
+        if (scope.IsPersonal && PersonalMediaFolders.EnsureDirectory(project.RootPath, defaultFolder!) is null)
+            return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Путь вне папки проекта");
+
+        // Нить по файлу сохраняется рядом с файлом, а черновик «Личного» — в audio/
+        var saved = AudioProjectSaver.Save(project.RootPath, thread, items, mode, folder, req.FileName,
+            thread.File is null ? defaultFolder : null);
+        if (saved.ErrorCode == AudioEditErrorCodes.NameTaken)
+            return StatusCode(StatusCodes.Status409Conflict, new { error = saved.Error, code = saved.ErrorCode, suggestion = saved.Suggestion });
+        if (saved.Value is not { } result)
+            return Error(saved.ErrorCode == AudioEditErrorCodes.FileNotFound ? StatusCodes.Status404NotFound : StatusCodes.Status400BadRequest,
+                saved.ErrorCode ?? AudioEditErrorCodes.InvalidRequest, saved.Error ?? "Не сохранено");
+        // Новые файлы проекта — обычная запись: синк знаний и ватчеры узнают о них сразу
+        foreach (var rel in result.Files) files?.NotifyMutated(project.RootPath, rel, FileMutationKind.Create);
+        // Нить помнит, что звук уже сохранён; версия из одних стемов звука не даёт — нить остаётся при своём
+        await threads.OnSavedAsync(Owner(scope), scope.Key, sessionId, threadId, result.Path,
+            result.HasAudio ? null : result.Name);
+        return Ok(result);
+    }
 
     // ── Помощники ────────────────────────────────────────────────────────────────
 

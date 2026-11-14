@@ -9,7 +9,6 @@ import {
   type FilmBuildStatus, type FilmPatchOp, type FrameRef, type FilmState, type FilmSummary, type RetryQuote, type VideoCatalog, type VideoEvent,
   type VideoPrefs, type VideoScene, type VideoSceneSettings, type VideoThreadsState,
 } from '../api';
-import { isPersonalScope } from '../scope';
 import type { LocalGpuQueueInfo } from '../../../types/localGpuQueue';
 
 export const VIDEO_PANEL = 'videoEditor';
@@ -249,7 +248,10 @@ function ensureLive() {
   _unsub = () => { offEvents(); offRe(); };
 }
 
-async function load(scope: string, sessionId: string, force = false) {
+// Сбой чтения состояния (сеть, перезапуск сервера) не должен навсегда оставлять ленту без карточек: повторяем
+// несколько раз с нарастающей паузой. «Нет доступа / модуль выключен» (4xx) — окончательно, пусто
+const LOAD_RETRY_MS = [2_000, 5_000, 15_000];
+async function load(scope: string, sessionId: string, force = false, attempt = 0) {
   const e = _entries.get(sessionId);
   if (e && (e.loading || (e.loaded && !force))) return;
   _entries.set(sessionId, { scope, state: e?.state ?? EMPTY_THREADS, loaded: e?.loaded ?? false, loading: true });
@@ -258,9 +260,12 @@ async function load(scope: string, sessionId: string, force = false) {
     _catalogs.set(scope, st.catalog);
     _prefs.set(scope, st.prefs);
     apply(sessionId, scope, st.threads);
-  } catch {
-    // Модуль выключен или чат не свой — сцен просто нет
-    _entries.set(sessionId, { scope, state: EMPTY_THREADS, loaded: true, loading: false });
+  } catch (err) {
+    const status = (err as { status?: unknown } | null)?.status;
+    const transient = typeof status !== 'number' || status >= 500 || status === 408 || status === 429;
+    const retry = transient && attempt < LOAD_RETRY_MS.length;
+    _entries.set(sessionId, { scope, state: e?.state ?? EMPTY_THREADS, loaded: !retry, loading: false });
+    if (retry) setTimeout(() => { void load(scope, sessionId, false, attempt + 1); }, LOAD_RETRY_MS[attempt]);
     emit();
   }
 }
@@ -403,7 +408,6 @@ const isPermanentFailure = (e: unknown) => {
 };
 
 export async function loadFilm(scope: string, sessionId: string, path: string, force = false) {
-  if (isPersonalScope(scope)) return;
   const k = filmKey(sessionId, path);
   const cur = _films.get(k);
   if (cur && (cur.loading || (cur.state && !force))) return;
@@ -440,7 +444,7 @@ export function useFilm(scope: string, sessionId: string | null, path: string | 
 export const getFilmList = (sessionId: string | null): FilmSummary[] => (sessionId && _filmLists.get(sessionId)) || [];
 
 export async function loadFilmList(scope: string, sessionId: string, force = false) {
-  if (isPersonalScope(scope) || (!force && _filmLists.has(sessionId))) return;
+  if (!force && _filmLists.has(sessionId)) return;
   try {
     _filmLists.set(sessionId, await videoApi.films(scope, sessionId));
     emit();

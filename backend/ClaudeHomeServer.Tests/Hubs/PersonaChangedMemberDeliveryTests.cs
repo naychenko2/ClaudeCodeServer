@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Tests.Hubs;
 /// <summary>
 /// W3-B6 (разрез shared-projects-personas-cut-2026-11.md §3.1, И-8): событие проектной персоны
 /// (personas_changed) идёт группе проекта И её владельцу — участник после JoinProject получает
-/// создание и правку владельца, владелец — правку редактора, не состоя в группе проекта;
+/// создание и правку владельца, владелец и без группы проекта получает события своих правок;
 /// событие личной (глобальной) персоны не получает ни один участник. Покрыты обе точки
 /// рассылки: сервис (создание и PUT) и контроллер (добавление привязки, запись памяти). Полезная нагрузка —
 /// тот же PersonasChangedMessage: type, action, personaId, без новых полей. Отрицательные
@@ -195,8 +195,23 @@ public class PersonaChangedMemberDeliveryTests : IClassFixture<TestWebApplicatio
         updated.GetProperty("personaId").GetString().Should().Be(id);
     }
 
+    // С 12.11 правка проектной персоны — только владелец (Configure): редактор получает 403,
+    // события правки от него быть не может (раньше этот тест ловил событие владельцу).
     [Fact]
-    public async Task Владелец_ПолучаетСобыниеПравкиСвоейПроектнойПерсоны_ПравкаРедактором_НеСостояВГруппеПроекта()
+    public async Task ПравкаПроектнойПерсоныРедактором_403()
+    {
+        var projectId = await CreateProjectAsync("editor");
+        var id = await CreatePersonaAsync(Owner(), projectId, "Персона проекта");
+
+        (await Member().PutAsJsonAsync($"/api/personas/{id}", new { description = "правка редактора" }))
+            .StatusCode.Should().Be(System.Net.HttpStatusCode.Forbidden);
+    }
+
+    // Владелец правит свою проектную персону, не состоя в группе проекта: ToOwner доносит
+    // событие вкладкам владельца (раздел «Персоны» вне проекта). Проба: убрать ToOwner из
+    // PersonasCrudService.Broadcast — тест краснеет (событие не приходит).
+    [Fact]
+    public async Task Владелец_ПолучаетСобытиеПравкиСвоейПроектнойПерсоны_НеСостояВГруппеПроекта()
     {
         var projectId = await CreateProjectAsync("editor");
         var id = await CreatePersonaAsync(Owner(), projectId, "Персона проекта");
@@ -204,12 +219,11 @@ public class PersonaChangedMemberDeliveryTests : IClassFixture<TestWebApplicatio
         var conn = await ConnectAsync(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
         var sink = new Sink();
         sink.Attach(conn);
-        // Только своя группа, без JoinProject: ToOwner доносит событие вкладкам владельца,
-        // даже когда группы проекта нет (тот же приём, что в тесте заметок S2c-4)
+        // Только своя группа, без JoinProject
         await conn.InvokeAsync("JoinUser", OwnerId);
 
-        (await Member().PutAsJsonAsync($"/api/personas/{id}",
-            new { description = "правка редактора" })).EnsureSuccessStatusCode();
+        (await Owner().PutAsJsonAsync($"/api/personas/{id}", new { description = "правка владельца" }))
+            .EnsureSuccessStatusCode();
 
         var updated = await sink.Await("updated").WaitAsync(Wait);
         updated.GetProperty("personaId").GetString().Should().Be(id);

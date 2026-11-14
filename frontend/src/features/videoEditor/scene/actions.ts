@@ -21,7 +21,7 @@ import {
   type PendingSettings,
 } from '../store/videoStore';
 import type { SaveTarget } from '../film/model';
-import { PERSONAL_LOCAL_REASON, resolveScene, settingsOf, type ResolvedScene } from './model';
+import { resolveScene, settingsOf, type ResolvedScene } from './model';
 
 const SAVE_DELAY = 500;
 const CONTENT_KEYS = ['frameA', 'frameB', 'text'];
@@ -222,9 +222,7 @@ export interface RunInput { scope: string; sessionId: string; scene: VideoScene;
 
 // Запуск строго по котировке: настройки уходят в сцену ДО запуска (сервер берёт текст и кадры из нити).
 // Просьба из поля ввода добавляется к тексту сцены строкой (в запуске для неё поля нет)
-// Съёмка: код local_unavailable_personal — человеку понятная причина, а не общий текст бэкенда
-export const runErrorText = (e: unknown) =>
-  errorCode(e) === ERR.localPersonal ? PERSONAL_LOCAL_REASON : errorText(e, 'Съёмка не запустилась');
+export const runErrorText = (e: unknown) => errorText(e, 'Съёмка не запустилась');
 
 export async function runScene(i: RunInput, extraText = ''): Promise<boolean> {
   const { scope, sessionId, scene, quote } = i;
@@ -265,6 +263,17 @@ export async function retryUpscale(scope: string, sessionId: string, sceneId: st
   }
 }
 
+// «Увеличить ×2/×4»: новая задача на локальной видеокарте, ход виден как у любой задачи, итог — новая версия
+export async function enhanceVersion(scope: string, sessionId: string, sceneId: string, versionId: string, scale: 2 | 4): Promise<boolean> {
+  try {
+    await videoApi.enhance(scope, sessionId, sceneId, versionId, scale);
+    return true;
+  } catch (e) {
+    showToast((e as { status?: number } | null)?.status === 429 ? 'Видеокарта занята' : errorText(e, 'Не удалось запустить увеличение'), '', 'error');
+    return false;
+  }
+}
+
 // «Продолжить от версии»
 export const takeVersion = (scope: string, sessionId: string, sceneId: string, versionId: string) =>
   mutate(scope, sessionId, rev => videoApi.current(scope, sessionId, sceneId, versionId, rev), true);
@@ -273,7 +282,7 @@ export const takeVersion = (scope: string, sessionId: string, sceneId: string, v
 export async function saveScene(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, target: SaveTarget | null): Promise<SaveSceneResult | null> {
   try {
     const res = await videoApi.save(scope, sessionId, scene.sceneId, { ...(versionId ? { versionId } : {}), ...(target ?? {}) });
-    showToast(`Сохранено: ${res.path}`, '', 'info');
+    showToast(`${isPersonalScope(scope) ? 'Сохранено в Личное' : 'Сохранено'}: ${res.path}`, '', 'info');
     return res;
   } catch (e) {
     showToast(errorText(e, 'Не удалось сохранить сцену'), '', 'error');

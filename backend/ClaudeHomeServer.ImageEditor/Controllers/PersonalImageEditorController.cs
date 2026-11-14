@@ -4,6 +4,7 @@ using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.Media;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,8 +13,8 @@ namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 // Редактор картинок в личном чате вне проекта (разрез
 // docs/research/image-editor-personal-chats-cut-2026-09.md, «Бэкенд» п.3). Тело ручек — общее с
 // проектом (ImageEditorEndpoints, ImageThreadEndpoints), здесь только личный гейт и выбор человека.
-// save, save/check и characters* здесь нет намеренно: записи в проект и персонажей у личного чата
-// нет по построению, эти пути — 404 маршрутизации, а не 500.
+// save и save/check пишут в «Личное» (Personal/images/, ADR-040 §5).
+// Персонажи — в папке «Личного» (ADR-040): читающие ручки её не создают, первый персонаж создаёт лениво.
 [ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
@@ -28,8 +29,15 @@ public class PersonalImageEditorController(
     ImageEditSteps? steps = null,
     IConfiguration? config = null,
     IImageRaster? raster = null,
-    ImageContextLaunch? context = null)
-    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
+    ImageContextLaunch? context = null,
+    IProjectFiles? files = null,
+    ILocalImageMedia? localMedia = null,
+    CharacterTrainingPhotos? trainingPhotos = null,
+    CharacterPhotoLabeling? labeling = null,
+    CharacterLoraRuns? loraRuns = null,
+    IImageEditSaver? saver = null)
+    : ImageEditorCharacterEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context,
+        files, localMedia, trainingPhotos, labeling, loraRuns)
 {
     [HttpGet("catalog")]
     public IActionResult Catalog(string sessionId) =>
@@ -37,8 +45,8 @@ public class PersonalImageEditorController(
 
     [HttpGet("format")]
     public async Task<IActionResult> Format(string sessionId, [FromQuery] string? provider, [FromQuery] string? model,
-        [FromQuery] string? op, CancellationToken ct) =>
-        Gate(sessionId, out var scope, out var denied) ? await FormatIn(scope, provider, model, op, ct) : denied;
+        [FromQuery] string? op, [FromQuery] string? prompt, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await FormatIn(scope, provider, model, op, prompt, ct) : denied;
 
     [HttpPost("quote")]
     public async Task<IActionResult> Quote(string sessionId, [FromBody] ImageEditQuoteRequest req, CancellationToken ct) =>
@@ -47,8 +55,14 @@ public class PersonalImageEditorController(
     [HttpPost("jobs")]
     [RequestSizeLimit(MaxJobBodyBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxJobBodyBytes)]
-    public async Task<IActionResult> Start(string sessionId, [FromForm] StartJobForm form, CancellationToken ct) =>
-        Gate(sessionId, out var scope, out var denied) ? await StartIn(scope, form, ct) : denied;
+    public async Task<IActionResult> Start(string sessionId, [FromForm] StartJobForm form, CancellationToken ct)
+    {
+        if (!Gate(sessionId, out var scope, out var denied)) return denied;
+        // Образцы и исходник из файлов — вход, которому нужен диск: «Личное» создаём здесь, а не на GET
+        if (form.ReferencePaths is { Count: > 0 } || !string.IsNullOrWhiteSpace(form.SourcePath))
+            scope = await gate.WithFolderAsync(scope, ct);
+        return await StartIn(scope, form, ct);
+    }
 
     [HttpPost("uploads")]
     [RequestSizeLimit(MaxUploadBodyBytes)]
@@ -68,11 +82,15 @@ public class PersonalImageEditorController(
     public IActionResult Variant(string sessionId, string jobId, int variant) =>
         Gate(sessionId, out var scope, out var denied) ? VariantIn(scope, jobId, variant) : denied;
 
-    // Только от шага (Base.StepId): Base.Path — 400, файлов проекта у личного чата нет
+    // От шага (Base.StepId) или от файла в «Личном» (Base.Path)
     [HttpPost("transform")]
     public async Task<IActionResult> Transform(string sessionId, [FromBody] ImageTransformRequest req,
-        [FromQuery] bool dryRun, CancellationToken ct) =>
-        Gate(sessionId, out var scope, out var denied) ? await TransformIn(scope, req, dryRun, ct) : denied;
+        [FromQuery] bool dryRun, CancellationToken ct)
+    {
+        if (!Gate(sessionId, out var scope, out var denied)) return denied;
+        if (req.Base?.Path is { Length: > 0 }) scope = await gate.WithFolderAsync(scope, ct);
+        return await TransformIn(scope, req, dryRun, ct);
+    }
 
     [HttpGet("steps/{stepId}")]
     public IActionResult Step(string sessionId, string stepId) =>
@@ -83,7 +101,7 @@ public class PersonalImageEditorController(
     public IActionResult GetPrefs(string sessionId) =>
         Gate(sessionId, out var scope, out var denied) ? Ok(prefs.Get(scope.Tenant, scope)) : denied;
 
-    // characterSlug принудительно null: персонажей у личной области нет
+    // characterSlug принудительно null: персонаж берётся из контекста хода, а не из префов (как и у проекта)
     [HttpPut("prefs")]
     public async Task<IActionResult> PutPrefs(string sessionId, [FromBody] ImageProjectPrefs? req)
     {
@@ -93,13 +111,161 @@ public class PersonalImageEditorController(
         return Ok(await prefs.SetAsync(scope.Tenant, scope, req!));
     }
 
+    // ── Персонажи личной области (ADR-040, Ф2-4) ───────────────────────────────────
+    // Папка — «Личное» владельца. Нет папки — персонажей нет: список пуст, остальное 404
+
+    [HttpGet("characters")]
+    public IActionResult Characters(string sessionId) =>
+        Gate(sessionId, out var scope, out var denied)
+            ? (scope.Project is { } project ? CharactersIn(project) : Ok(Array.Empty<CharacterDto>()))
+            : denied;
+
+    [HttpGet("loras")]
+    public async Task<IActionResult> Loras(string sessionId, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await LorasIn(scope.Tenant, scope.Project, ct) : denied;
+
+    [HttpGet("characters/{slug}")]
+    public IActionResult Character(string sessionId, string slug) =>
+        Gate(sessionId, out var scope, out var denied)
+            ? (scope.Project is { } project ? CharacterIn(project, slug) : CharacterNotFound())
+            : denied;
+
+    [HttpPost("characters")]
+    [RequestSizeLimit(MaxCharacterBodyBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxCharacterBodyBytes)]
+    public async Task<IActionResult> CreateCharacter(string sessionId, [FromForm] CharacterForm form, CancellationToken ct)
+    {
+        if (!Gate(sessionId, out var scope, out var denied)) return denied;
+        var (project, folderDenied) = await gate.EnsurePersonalFolderAsync(scope, ct);
+        return project is null ? folderDenied! : await CreateCharacterIn(project, form, ct);
+    }
+
+    [HttpPut("characters/{slug}")]
+    [RequestSizeLimit(MaxCharacterBodyBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxCharacterBodyBytes)]
+    public async Task<IActionResult> UpdateCharacter(string sessionId, string slug, [FromForm] CharacterForm form, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied)
+            ? (scope.Project is { } project ? await UpdateCharacterIn(project, slug, form, ct) : CharacterNotFound())
+            : denied;
+
+    [HttpDelete("characters/{slug}")]
+    public IActionResult DeleteCharacter(string sessionId, string slug) =>
+        Gate(sessionId, out var scope, out var denied)
+            ? (scope.Project is { } project ? DeleteCharacterIn(project, slug) : CharacterNotFound())
+            : denied;
+
+    [HttpGet("characters/{slug}/photos/{file}")]
+    public IActionResult CharacterPhoto(string sessionId, string slug, string file) =>
+        Gate(sessionId, out var scope, out var denied)
+            ? (scope.Project is { } project ? CharacterPhotoIn(project, slug, file) : CharacterNotFound())
+            : denied;
+
+    // Сохранить в «Личное»: Personal/images/ (ADR-040 §5). Источник — вариант задачи или шаг истории, в том
+    // числе старой личной нити: байты копируются в папку новым файлом (CreateNew), перезаписи нет.
+    // Нить за сохранённым файлом не идёт: нити по файлу в личной области — отдельный путь (ThreadsController).
+    [HttpPost("save")]
+    public async Task<IActionResult> Save(string sessionId, [FromBody] ImageEditSaveRequest req, CancellationToken ct)
+    {
+        if (!Gate(sessionId, out var scope, out var denied)) return denied;
+        if (saver is null) return JobsUnavailable();
+        if (Raster is null) return RasterUnavailable();
+
+        var mode = string.IsNullOrWhiteSpace(req.Mode) ? ImageEditSaveModes.NextVersion : req.Mode.Trim();
+        if (mode is not (ImageEditSaveModes.NextVersion or ImageEditSaveModes.As))
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                $"Неизвестный режим сохранения «{mode}»");
+        if (PersonalMediaFolders.Resolve(PersonalMediaFolders.Images, req.Folder, out var folder) is { } folderError)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, folderError);
+        if (!string.IsNullOrWhiteSpace(req.SourcePath) && !PersonalMediaFolders.Allows(PersonalMediaFolders.Images, req.SourcePath))
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Путь вне папки проекта");
+
+        var hasJob = !string.IsNullOrWhiteSpace(req.JobId);
+        var hasStep = !string.IsNullOrWhiteSpace(req.StepId);
+        if (hasJob == hasStep)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                "Источник сохранения — ровно одно: вариант задачи или шаг истории");
+
+        EditedImage? image;
+        if (hasStep)
+        {
+            if (Steps is null) return JobsUnavailable();
+            image = Steps.Open(scope.Tenant, scope.Key, req.StepId!.Trim())?.Image;
+            if (image is null)
+                return Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден");
+        }
+        else
+        {
+            if (Jobs is null) return JobsUnavailable();
+            image = Jobs.OpenVariant(scope.Tenant, scope.Key, req.JobId!.Trim(), req.Variant);
+            if (image is null) return JobNotFound();
+        }
+
+        if (req.Encode is { } encode)
+        {
+            var encoded = Raster.Encode(image.Bytes, encode);
+            if (!encoded.Ok)
+                return Error(encoded.StatusCode,
+                    encoded.Error == RasterError.Busy ? ImageEditErrorCodes.TooManyJobs : ImageEditErrorCodes.InvalidRequest,
+                    encoded.Message ?? "Перекодирование не выполнено");
+            image = new EditedImage(encoded.Image!.Bytes, InputFitter.ContentTypeOf(encoded.Image.Format));
+        }
+
+        // Папку «Личного» создаём только здесь, на пишущем пути
+        scope = await gate.WithFolderAsync(scope, ct);
+        if (scope.Project is not { } project)
+            return Error(StatusCodes.Status503ServiceUnavailable, PersonalFolderResolver.UnavailableCode,
+                PersonalFolderResolver.UnavailableText);
+        if (PersonalMediaFolders.EnsureDirectory(project.RootPath, folder) is null)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Путь вне папки проекта");
+
+        var saved = mode == ImageEditSaveModes.As
+            ? saver.SaveAs(project.RootPath, folder, req.FileName, image)
+            : saver.Save(project.RootPath, req with { Folder = folder }, image);
+        if (saved.ErrorCode == ImageEditErrorCodes.NameTaken)
+        {
+            var check = saver.Check(project.RootPath, folder, req.FileName, ImageEditSaver.ExtensionOf(image.Bytes));
+            return StatusCode(StatusCodes.Status409Conflict,
+                new { error = saved.Error, code = saved.ErrorCode, suggestion = check.Value?.Suggestion });
+        }
+        return Map(saved, Ok);
+    }
+
+    // Проверка имени «Сохранить как…» на лету: ничего не пишет и папку «Личного» не создаёт (GET)
+    [HttpGet("save/check")]
+    public IActionResult SaveCheck(string sessionId, [FromQuery] string? folder, [FromQuery] string? name,
+        [FromQuery] string? format)
+    {
+        if (!Gate(sessionId, out var scope, out var denied)) return denied;
+        if (saver is null) return JobsUnavailable();
+        if (ExtensionFor(format) is not { } ext)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                "Формат — png, jpeg, webp или gif");
+        if (PersonalMediaFolders.Resolve(PersonalMediaFolders.Images, folder, out var target) is { } folderError)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, folderError);
+        // Нет папки (ещё не сохраняли): имя свободно, настоящая проверка — при сохранении
+        if (scope.Project is not { } project || ProjectLinkGuard.ResolveInside(project.RootPath, target) is not { } full
+            || !Directory.Exists(full))
+            return Ok(new SaveCheckResponse($"{target}/{(string.IsNullOrWhiteSpace(name) ? "image" : name.Trim())}{ext}", false, null));
+        return Map(saver.Check(project.RootPath, target, name, ext), Ok);
+    }
+
+    private static string? ExtensionFor(string? format) =>
+        (format ?? "").Trim().TrimStart('.').ToLowerInvariant() switch
+        {
+            "png" => ".png",
+            "jpg" or "jpeg" => ".jpg",
+            "webp" => ".webp",
+            "gif" => ".gif",
+            _ => null,
+        };
+
     private bool Gate(string sessionId, [NotNullWhen(true)] out ImageEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>
         gate.TryPersonalChat(UserId, sessionId, out scope, out denied);
 }
 
 // Нити картинок личного чата вне проекта: тело — ImageThreadEndpoints, взять в работу можно только
-// черновик в корне (draftFolder: ""), нить по файлу и черновик в папке — 400.
+// черновик в корне (draftFolder: ""), нить по файлу и черновик в папке — 400. Поиск лиц (faces) — как у проекта.
 [ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
@@ -107,7 +273,10 @@ public class PersonalImageEditorController(
 public class PersonalThreadsController(
     ImageEditScopeGate gate,
     ImageThreadService threads,
-    IImageEditJobs? jobs = null) : ImageThreadEndpoints(threads, jobs)
+    IImageEditJobs? jobs = null,
+    ImageEditSteps? steps = null,
+    ILocalImageMedia? localMedia = null,
+    Faces.FaceDetectionCache? faces = null) : ImageThreadEndpoints(threads, jobs, steps, null, localMedia, faces)
 {
     [HttpGet]
     public IActionResult Get(string sessionId) =>
@@ -154,6 +323,11 @@ public class PersonalThreadsController(
     [HttpPut("{threadId}/settings")]
     public async Task<IActionResult> Settings(string sessionId, string threadId, [FromBody] ImageThreadSettingsRequest req) =>
         Gate(sessionId, out var scope, out var denied) ? await SettingsIn(scope, sessionId, threadId, req) : denied;
+
+    // «Найти лица на версии» для подстановки персонажа на лицо в личной области (ADR-028, ADR-040 Ф2-4)
+    [HttpPost("{threadId}/versions/{versionId}/faces")]
+    public async Task<IActionResult> Faces(string sessionId, string threadId, string versionId, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await FacesIn(scope, sessionId, threadId, versionId, ct) : denied;
 
     private bool Gate(string sessionId, [NotNullWhen(true)] out ImageEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>

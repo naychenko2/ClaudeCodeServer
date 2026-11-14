@@ -52,6 +52,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
 
     private readonly IMcpSessionAccessor _sessions;
     private readonly IProjectManager _projects;
+    private readonly ClaudeHomeServer.Services.Composition.PersonalFolderResolver? _personalFolder;
     private readonly IEnumerable<IVideoEngine> _engines;
     private readonly VideoJobThreads _threads;
     private readonly VideoEditJobService _jobs;
@@ -59,10 +60,12 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
     private readonly VideoSceneService _scenes;
     private readonly FilmService _films;
     private readonly FilmSceneSaver _saver;
+    private readonly PersonalSceneSaver? _personalSaver;
     private readonly ITurnActorRegistry? _turnActors;
     private readonly FilmAssembler _assembler;
     private readonly IDelegatedTurnGate? _turnGate;
     private readonly bool _agentLaunch;
+    private readonly IVideoSceneVoice? _voice;
 
     public VideoEditorToolset(
         IMcpSessionAccessor sessions,
@@ -77,9 +80,15 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         FilmAssembler assembler,
         IDelegatedTurnGate? turnGate = null,
         IConfiguration? config = null,
-        ITurnActorRegistry? turnActors = null)
+        ITurnActorRegistry? turnActors = null,
+        IVideoSceneVoice? voice = null,
+        ClaudeHomeServer.Services.Composition.PersonalFolderResolver? personalFolder = null,
+        PersonalSceneSaver? personalSaver = null)
     {
+        _personalSaver = personalSaver;
+        _voice = voice;
         _turnActors = turnActors;
+        _personalFolder = personalFolder;
         _sessions = sessions;
         _projects = projects;
         _engines = engines;
@@ -128,6 +137,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             ToolSceneSet => await SceneSetAsync(arguments, owner, session, scope),
             ToolSuggestPrompt => SuggestPrompt(arguments),
             ToolShoot => await ShootAsync(arguments, owner, session, scope, ct),
+            ToolEnhance => await EnhanceAsync(arguments, owner, session, scope, ct),
+            ToolVoice => await VoiceAsync(arguments, owner, session, scope, ct),
             ToolCancel => await CancelAsync(arguments, owner, session, scope, ct),
             ToolWait => await WaitAsync(arguments, owner, session, scope, ct),
             ToolSaveScene => await SaveSceneAsync(arguments, owner, session, scope, ct),
@@ -173,8 +184,6 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         CancellationToken ct)
     {
         var folder = Str(args, "folder");
-        if (folder is not null && scope.Project is null)
-            return Deny("В чате вне проекта папок нет: вызови video_new без folder.");
         if (ApplySettings(args, _prefs.ForNewScene(owner, scope), out var settings) is { } bad) return Deny(bad);
 
         var call = await _scenes.AddAsync(owner, scope, session.Id, folder, settings, Str(args, "name"), null, ct, ContextActor.Agent);
@@ -434,6 +443,70 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         });
     }
 
+    // ── video_enhance и video_voice ────────────────────────────────────────────
+
+    // «Увеличить ×2/×4» — тот же сервисный метод, что у кнопки человека (те же отказы); локально и бесплатно.
+    // Итог — новая версия сцены local/relayvsr-x2|x4 со звуком исходника
+    private async Task<McpToolCallResult> EnhanceAsync(JsonObject args, string owner, Session session, VideoEditScope scope,
+        CancellationToken ct)
+    {
+        if (Str(args, "sceneId") is not { } sceneId)
+            return Deny("Не указан sceneId: увеличение идёт только в конкретную сцену чата. Возьми id из video_state.");
+        if (GateTurn(owner, session, "Увеличение видео") is { } denied) return denied;
+        if (!TryInt(args, "scale", out var scaleArg) || scaleArg is not (null or 2 or 4))
+            return Deny("scale — 2 или 4.");
+        var scale = scaleArg ?? 2;
+        if (Store.Get(owner, session.Id).Scenes.FirstOrDefault(s => s.SceneId == sceneId) is not { } scene)
+            return Deny($"Сцены {sceneId} нет в этом чате. Список — video_state.");
+        var versionId = Str(args, "versionId") ?? scene.CurrentVersionId;
+        if (versionId is null) return Deny("У сцены ещё нет версий: сначала сними её (video_shoot).");
+
+        var started = await _jobs.EnhanceAsync(owner, scope, session.Id, sceneId, versionId, scale, VideoInitiators.Agent, ct);
+        if (started.Value is not { } created) return Fail(started.ErrorCode, started.Error);
+        return Json(new
+        {
+            jobId = created.JobId,
+            sceneId,
+            quote = new { sourceVersionId = created.SourceVersionId, scale = created.Scale, model = $"relayvsr-x{created.Scale}",
+                provider = "local", price = 0, etaSeconds = created.EtaSeconds },
+            note = "Увеличение идёт отдельно от хода на локальной видеокарте (бесплатно): остановка разговора его не отменяет, отмена — video_cancel. "
+                + "Итог — НОВАЯ версия сцены (relayvsr), исходная остаётся; ждать — video_wait.",
+        });
+    }
+
+    // «Озвучить сцену» — звук по видео версии сцены (локальные Foley XL/XXL, MMAudio, бесплатно): шов IVideoSceneVoice
+    // запускает ту же цепочку, что кнопка человека. Итог — новая версия сцены со вклеенным звуком и дорожка в нити звука
+    private async Task<McpToolCallResult> VoiceAsync(JsonObject args, string owner, Session session, VideoEditScope scope,
+        CancellationToken ct)
+    {
+        if (Str(args, "sceneId") is not { } sceneId)
+            return Deny("Не указан sceneId: озвучка идёт только по конкретной сцене чата. Возьми id из video_state.");
+        if (GateTurn(owner, session, "Озвучка сцены") is { } denied) return denied;
+        if (Store.Get(owner, session.Id).Scenes.FirstOrDefault(s => s.SceneId == sceneId) is not { } scene)
+            return Deny($"Сцены {sceneId} нет в этом чате. Список — video_state.");
+        var versionId = Str(args, "versionId");
+        if (versionId is not null && scene.Versions.All(v => v.VersionId != versionId))
+            return Deny($"У сцены {sceneId} нет версии {versionId}. Список — video_state.");
+        if (versionId is null && scene.CurrentVersionId is null)
+            return Deny("У сцены ещё нет версий: сначала сними её (video_shoot).");
+        if (_voice is null)
+            return Fail(VideoEditorErrors.ProviderUnavailable, "Модуль «Звук» на этом сервере не подключён: сцену озвучить нельзя");
+
+        var started = await _voice.StartAsync(new VideoVoiceRequest(owner, Actor(owner, session), VideoEditScope.ProjectIdOf(scope.Key), session.Id,
+            sceneId, versionId, Str(args, "text"), Str(args, "model")), ct);
+        if (started.Value is not { } created) return Fail(started.Code, started.Error);
+        return Json(new
+        {
+            jobId = created.JobId,
+            sceneId,
+            threadId = created.ThreadId,
+            quote = new { created.Provider, created.Model, created.License, price = 0, etaSeconds = created.EtaSeconds },
+            note = "Озвучка идёт отдельно от хода на локальной видеокарте (бесплатно): отмена — video_cancel. "
+                + "Итог — НОВАЯ версия сцены со вклеенным звуком (исходная остаётся) и звук в нити «Звука»; ждать — video_wait "
+                + "с этим jobId (явным списком jobIds).",
+        });
+    }
+
     private async Task<McpToolCallResult> CancelAsync(JsonObject args, string owner, Session session, VideoEditScope scope,
         CancellationToken ct)
     {
@@ -441,6 +514,13 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         var jobId = Str(args, "jobId") ?? "";
         // Задача другого чата (или чужая) неотличима от несуществующей
         var job = _jobs.Get(owner, scope.Key, jobId);
+        if (job is null && _voice?.Get(owner, scope.Key, jobId) is { } voiceJob && voiceJob.ChatSessionId == session.Id)
+        {
+            var stopped = await _voice.CancelAsync(owner, scope.Key, jobId, ct);
+            return stopped is null
+                ? Deny("Задача не найдена.")
+                : Json(new { stopped.JobId, stopped.Status, variants = stopped.Variants });
+        }
         if (job is null || job.ChatSessionId != session.Id) return Deny("Задача не найдена.");
         var cancelled = await _jobs.CancelAsync(owner, scope.Key, jobId, ct);
         return cancelled is null
@@ -468,15 +548,17 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         else
             return Deny("jobIds — массив jobId из video_shoot.");
 
+        // Задача озвучки (video_voice) живёт в модуле звука: её jobId ждётся тем же video_wait, но только явным списком
         foreach (var id in ids)
-            if (_jobs.Get(owner, scope.Key, id) is not { } known || known.ChatSessionId != session.Id)
+            if (!(_jobs.Get(owner, scope.Key, id) is { } known && known.ChatSessionId == session.Id)
+                && !(_voice?.Get(owner, scope.Key, id) is { } voiced && voiced.ChatSessionId == session.Id))
                 return Deny($"Задача {id} не найдена.");
 
         var deadline = DateTime.UtcNow + budget;
         List<VideoJobDto> jobs;
         while (true)
         {
-            jobs = [.. ids.Select(id => _jobs.Get(owner, scope.Key, id)).OfType<VideoJobDto>()];
+            jobs = [.. ids.Select(id => _jobs.Get(owner, scope.Key, id) is { } j ? j : VoiceAsJob(owner, scope.Key, id)).OfType<VideoJobDto>()];
             if (jobs.All(IsJobTerminal) || DateTime.UtcNow >= deadline) break;
             var left = deadline - DateTime.UtcNow;
             await Task.Delay(left < WaitPoll ? left : WaitPoll, ct);
@@ -493,6 +575,13 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         });
     }
 
+    // Задача озвучки в форме задачи видео — для общего ожидания; сцена получает версию со звуком, когда задача completed
+    private VideoJobDto? VoiceAsJob(string owner, string scopeKey, string id) =>
+        _voice?.Get(owner, scopeKey, id) is { } v
+            ? new VideoJobDto(v.JobId, v.ScopeKey, v.Status, v.Provider, v.Model, 1, [.. Enumerable.Range(1, v.Variants)], null, null,
+                null, v.Error, v.QueuePosition, v.EtaSeconds, DateTime.UtcNow, v.ChatSessionId, null, VideoInitiators.Agent, "")
+            : null;
+
     private static bool IsJobTerminal(VideoJobDto job) =>
         job.Status is VideoJobStatuses.Completed or VideoJobStatuses.Failed or VideoJobStatuses.Cancelled;
 
@@ -502,6 +591,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         CancellationToken ct)
     {
         if (GateTurn(owner, session, "Сохранение сцены в проект") is { } denied) return denied;
+        if (scope.IsPersonal) return await SavePersonalSceneAsync(args, owner, session, scope, ct);
         if (FilmsRefusal(scope) is { } refusal) return refusal;
         if (Str(args, "sceneId") is not { } sceneId) return Deny("Не указан sceneId: возьми его из video_state.");
 
@@ -517,6 +607,29 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             done.AddedToFilm,
             note = "Сцена сохранена в проект (перезаписи нет); человек видит тихую строку «✦ Claude» в ленте. "
                 + "Собрать фильм — video_film_build.",
+        });
+    }
+
+    // Личная область: клип в Personal/video/ либо, с filmPath/папкой video/<фильм>, сцена в фильм «Личного» (Ф2-6).
+    // Папку «Личного» создаёт сам сохранитель
+    private async Task<McpToolCallResult> SavePersonalSceneAsync(JsonObject args, string owner, Session session, VideoEditScope scope,
+        CancellationToken ct)
+    {
+        if (_personalSaver is null) return Deny("Сохранение в «Личное» недоступно на этом сервере.");
+        if (Str(args, "sceneId") is not { } sceneId) return Deny("Не указан sceneId: возьми его из video_state.");
+        var saved = await _personalSaver.SaveAsync(owner, scope,
+            new SaveSceneRequest(session.Id, sceneId, Str(args, "versionId"), Str(args, "folder"), Str(args, "fileName"), Str(args, "filmPath")),
+            VideoInitiators.Agent, ct, Actor(owner, session));
+        if (saved.Value is not { } done) return FilmFail(saved.ErrorCode, saved.Error, saved.Conflict);
+        return Json(new
+        {
+            done.Path,
+            done.FramePaths,
+            done.AddedToFilm,
+            note = "Сцена сохранена в «Личное» (перезаписи нет); человек видит тихую строку «✦ Claude» в ленте. "
+                + (done.AddedToFilm
+                    ? "Сцена встала в фильм; собрать его — video_film_build."
+                    : "Это клип в папке video без фильма: чтобы собрать фильм, сохраняй сцены с filmPath или folder video/<фильм>."),
         });
     }
 
@@ -654,15 +767,17 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             {
                 prefs = _prefs.Get(owner, scope),
                 rule = "Это выбор человека: настройки сцены, затем префы области, затем умолчание. Не передавай provider, "
-                    + "model, durationSec, count, aspect и quality без его просьбы — video_shoot возьмёт выбор сам.",
+                    + "model, durationSec, count, aspect и quality без его просьбы — video_shoot возьмёт выбор сам. "
+                    + "Увеличить версию — video_enhance, озвучить сцену — video_voice (локально, бесплатно, итог — новая версия).",
                 format = DescribeFormat(owner, scope),
             },
             agentLaunch = _agentLaunch,
             note = (state.Scenes.Count, scope.IsPersonal) switch
             {
-                (0, true) => "В этом чате ещё нет сцен. Заведи новую (video_new): это чат вне проекта, фильмов и файлов проекта тут нет.",
+                (0, true) => "В этом чате ещё нет сцен. Заведи новую (video_new): это чат вне проекта, файлы и фильмы здесь — в «Личном».",
                 (0, false) => "В этом чате ещё нет сцен. Заведи новую (video_new), настрой (video_scene_set) и сними (video_shoot).",
-                (_, true) => "Каждый вариант съёмки — версия сцены. Фильмы и сохранение в проект — только в чате проекта.",
+                (_, true) => "Каждый вариант съёмки — версия сцены. Сохранить версию в «Личное» — video_save_scene (с filmPath или "
+                    + "folder video/<фильм> — сцена встаёт в фильм «Личного»), править и собирать фильм — video_film_edit и video_film_build.",
                 _ => "Каждый вариант съёмки — версия сцены. Сохранить версию в проект — video_save_scene, править и собирать фильм — "
                     + "video_film_edit и video_film_build.",
             },
@@ -731,12 +846,13 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         return denied is null ? null : Deny(denied);
     }
 
-    // Фильмы и сохранение в проект: у личной области диска проекта нет, у локального проекта (ADR-016) файлы на
-    // устройстве — отказ до обращения к диску
+    // Фильмы и сохранение в проект: у личной области без папки «Личного» фильмов ещё нет (её создаёт сохранение сцены),
+    // у локального проекта (ADR-016) файлы на устройстве — отказ до обращения к диску
     private static McpToolCallResult? FilmsRefusal(VideoEditScope scope)
     {
         if (scope.Project is not { } project)
-            return Fail(VideoEditorErrors.PersonalScopeNoFilms, "Фильмы — только в чате проекта");
+            return Fail(VideoEditorErrors.PersonalScopeNoFilms,
+                "В «Личном» ещё нет фильмов: сохрани сцену с filmPath или folder video/<фильм> (video_save_scene) — фильм появится");
         return ClaudeHomeServer.Models.ProjectCapabilities.FilesOnServer(project)
             ? null
             : Fail(VideoEditorErrors.ProjectLocalUnsupported, "Файлы локального проекта лежат на устройстве: сервер их не трогает");
@@ -759,7 +875,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             scope = VideoEditScope.Of(found);
         }
         else
-            scope = VideoEditScope.Of(owned);
+            // Личная область: «Личное» — только если папка уже есть (инструменты её не создают), ключ остаётся personal
+            scope = VideoEditScope.Of(owned) with { Project = _personalFolder?.Find(context.OwnerId) };
         session = owned;
         return true;
     }

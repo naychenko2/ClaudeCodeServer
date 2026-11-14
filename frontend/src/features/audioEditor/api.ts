@@ -7,7 +7,7 @@
 
 import { onMessage, readStoredToken, request } from 'aihome_shell/kit';
 import type { LocalGpuQueueInfo } from '../../types/localGpuQueue';
-import { audioBase, chatBase, isPersonalScope } from './scope';
+import { audioBase, chatBase } from './scope';
 
 export type AudioMode = 'voice' | 'music' | 'process';
 
@@ -15,7 +15,7 @@ export type AudioOp =
   | 'speak' | 'designVoice' | 'cloneVoice' | 'convertVoice' | 'trainVoice' | 'dialogue'
   | 'song' | 'cover' | 'repaint' | 'outpaint' | 'extract' | 'lego' | 'complete' | 'sfx'
   | 'separate' | 'denoise' | 'upsample' | 'master' | 'transcribe' | 'toMidi' | 'align'
-  | 'trim' | 'gainFade' | 'normalize' | 'mixStems' | 'concat';
+  | 'trim' | 'gainFade' | 'normalize' | 'mixStems' | 'concat' | 'videoToAudio';
 
 export type AudioVoiceKind = 'preset' | 'description' | 'clone' | 'element' | 'rvc';
 export type AudioOutcome = 'ok' | 'failed' | 'insufficientCredits' | 'rejected' | 'cancelled' | 'unavailable';
@@ -232,6 +232,12 @@ export interface AudioJobInput {
   voice?: string | null;
   // Ревизия контекста чата (ADR-023): сервер берёт нить, версию, голос и образец из стора
   contextRevision?: number | null;
+  // Звук по видео: версия сцены чата (videoSceneId + videoVersionId, пусто — текущая) или файл проекта;
+  // pasteIntoScene — по готовности добавить в сцену версию со вклеенным звуком
+  videoSceneId?: string | null;
+  videoVersionId?: string | null;
+  videoPath?: string | null;
+  pasteIntoScene?: boolean | null;
 }
 
 export interface AudioCost { amount: number; unit: string }
@@ -444,6 +450,10 @@ export function jobForm(input: AudioJobInput): FormData {
   put('voiceIndexPath', input.voiceIndexPath);
   put('voice', input.voice);
   put('contextRevision', input.contextRevision);
+  put('videoSceneId', input.videoSceneId);
+  put('videoVersionId', input.videoVersionId);
+  put('videoPath', input.videoPath);
+  if (input.pasteIntoScene != null) form.append('pasteIntoScene', String(input.pasteIntoScene));
   return form;
 }
 
@@ -486,11 +496,9 @@ export const audioApi = {
     json<AudioDspVersion>(`${threadUrl(scope, sessionId, threadId)}/edit`, req, 'POST', 120_000),
   concat: (scope: string, sessionId: string, req: AudioConcatRequest) =>
     json<AudioConcatResult>(`${chatBase(scope, sessionId)}/concat`, req, 'POST', 300_000),
-  // Сохранить в проект — только у проекта: у личного чата ручки нет, отказ до запроса
-  save: (scope: string, sessionId: string, threadId: string, req: AudioSaveRequest) => {
-    if (isPersonalScope(scope)) throw new Error('У личного чата нет проекта — версию можно только скачать');
-    return json<AudioSaveResult>(`${threadUrl(scope, sessionId, threadId)}/save`, req);
-  },
+  // Сохранить в проект; у личного чата — в audio/ «Личного» (ADR-040 Ф2-3), тот же маршрут нити
+  save: (scope: string, sessionId: string, threadId: string, req: AudioSaveRequest) =>
+    json<AudioSaveResult>(`${threadUrl(scope, sessionId, threadId)}/save`, req),
   // URL файла версии для <audio src>: токен через ?access_token=, тег заголовков не шлёт
   versionFileUrl: (scope: string, sessionId: string, threadId: string, versionId: string, role = 'main', download = false) => {
     const url = `/api${threadUrl(scope, sessionId, threadId)}/versions/${encodeURIComponent(versionId)}/files/${encodeURIComponent(role)}`;

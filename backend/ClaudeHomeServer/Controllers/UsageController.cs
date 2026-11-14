@@ -17,6 +17,10 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
     LlmProviderRegistry providers, LocalActionRouter localRouter,
     SubscriptionOAuthUsageService oauthUsage,
     LocalActionOverridesStore localActions, SpecialtySettingsStore specialty,
+    // Исполнители места и именованные движки — блок «Исполнители ночи» (разрез §2, W2c):
+    // список места читается из стора как есть (порядок = приоритет), список движков для выбора
+    // строится из реестра LocalEngines (только локальные, И3). Оба — синглтоны Llm (LlmSubsystem.cs:227, 284).
+    LocalActionExecutorsStore executors, NamedLocalEngines namedEngines,
     UsageResponseCache cache) : ControllerBase
 {
     // История снимков использования лимитов подписки + тариф + per-subscription (для экрана usage).
@@ -163,10 +167,53 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     // Та же логика, что в LocalActionsAdminController.Describe — без дубля:
                     // preset раскрывается по сырому значению стора и общим пресетам.
                     Preset: LocalActionsAdminController.DescribePreset(localActions.TryGet(a.Key), globalPresets),
-                    Engine: localRouter.EngineLabel(route));
+                    Engine: localRouter.EngineLabel(route),
+                    // Флаг каталога и список исполнителей — блок «Исполнители ночи» (W2c):
+                    // TryGet уже отфильтровал мёртвые имена (не живой движок), порядок — как в сторе.
+                    ParallelExecutors: a.ParallelExecutors,
+                    Executors: DescribeExecutors(executors.TryGet(a.Key)));
             })
             .ToList();
         return new OllamaUsageInfo(enabled, enabled ? localRouter.LocalModel : null,
-            enabled ? localRouter.LocalBaseUrl : null, actions, Provider: localRouter.LocalProviderKey);
+            enabled ? localRouter.LocalBaseUrl : null, actions, Provider: localRouter.LocalProviderKey,
+            LocalEngines: BuildLocalEngineOptions());
+    }
+
+    // Конфиг стора → wire-запись: items вместо executors (контракт W2c/W7a), порядок сохраняется —
+    // он и есть приоритет (свободный слот первого получает чат раньше).
+    private static OllamaExecutorsInfo? DescribeExecutors(LocalActionExecutorsConfig? cfg) =>
+        cfg is null ? null : new OllamaExecutorsInfo(cfg.MaxTotal,
+            [.. cfg.Executors.Select(e => new OllamaExecutorInfo(e.Engine, e.Parallel))]);
+
+    // Список локальных движков для UI «Исполнители ночи» (И3: только локальные — облачных здесь нет
+    // по построению, имя = значение engine в PUT). Основная локаль — всегда первой («local», как в
+    // сторе и в маршруте), затем включённые именованные движки в порядке регистрации.
+    private List<OllamaLocalEngineInfo> BuildLocalEngineOptions()
+    {
+        var options = new List<OllamaLocalEngineInfo>
+        {
+            new(LocalActionOverridesStore.LocalRoute,
+                // Подпись той же цепочки, что Engine (EngineLabel: Title → модель → имя). Роль Title
+                // у основной локали играет явная подпись реестра (MainLocalTitle — то же значение,
+                // что читает вкладка панели «Локальные модели»): список исполнителей и панель не
+                // имеют права звать одну модель по-разному. Без неё — прежнее: модель, на которую
+                // она ходит; без неё — «Основная» (тот же запасный вариант, что у панели,
+                // LocalModelStatsController:177).
+                providers.MainLocalTitle
+                    ?? (localRouter.LocalModel is { Length: > 0 } mainModel ? mainModel : "Основная"),
+                executors.MaxConcurrencyOf(LocalActionOverridesStore.LocalRoute)),
+        };
+        foreach (var engine in namedEngines.Engines)
+        {
+            // Выключенный движок (нет BaseUrl/Model у клиента) не исполнитель: UI предлагал бы то,
+            // что не может ответить.
+            if (!engine.Enabled) continue;
+            options.Add(new(engine.Name,
+                // Та же цепочка подписи, что у localRouter.EngineLabel (LocalActionRouter.cs:151):
+                // Title, иначе модель, иначе имя движка.
+                engine.Spec.Title ?? engine.Spec.Model ?? engine.Name,
+                engine.Spec.MaxConcurrency));
+        }
+        return options;
     }
 }

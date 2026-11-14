@@ -10,10 +10,12 @@
 // lastNight есть — карточка итога и предупреждение по исходу (тексты — wikiLabels).
 //
 // Чего в блоке нет намеренно:
-// — имени модели: контракту настроек его поля нет (снимок WikiSettingsSnapshot), блок
-//   называет только места и кто их назначает («Qwen3.8-27B» в макете — пример макета);
-//   вторая фраза подсказки записки («локальная модель…») — только когда модель локальная,
-//   фронт этого не знает;
+// — имени модели и движка при пустом списке исполнителей: контракту настроек имени поля нет
+//   (снимок WikiSettingsSnapshot), блок называет только места и кто их назначает («Qwen3.8-27B»
+//   в макете — пример макета); вторая фраза подсказки записки («локальная модель…») — только
+//   когда модель локальная, фронт этого не знает. При непустом списке исполнителей (W8b)
+//   имена — подписи из админского списка: «Чем разбирать» показывает их строкой только для
+//   чтения, карточка итога — разбивку попыток;
 // — времён остановки («Закончилась в 05:12»): date в контракте — DateOnly без времени
 //   (WikiNightlyService.FormatDate), поля времени остановки нет — придумывать нечем.
 //
@@ -31,7 +33,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { AlertTriangle, Clock, Inbox, Lock } from 'lucide-react';
 import {
-  C, FONT, FS, R, SHADOW, SP, useIsMobile,
+  C, FONT, FS, R, SHADOW, SP,
   WikiError,
   loadWikiSettings, loadWikiTree, putWikiNightly, runWikiNightlyNow, useWikiSettings, useWikiTree,
   type WikiLastNight, type WikiNightlyOutcome, type WikiNightlyPatch, type WikiSettingsSnapshot,
@@ -50,6 +52,8 @@ import {
   NIGHTLY_RUN_OFF_HINT, nightlyRejectedLine, nightlyRunAskText, nightlyRunRefusalText,
   nightOutcomeNotice, nightlyNoneText,
 } from './wikiLabels';
+import { plural } from '../../../lib/plural';
+import { useWikiNarrow } from './useWikiNarrow';
 
 // ─── Формат и разбор чисел ───
 
@@ -76,6 +80,21 @@ function nightRangeText(date: string): string {
   return ` · ${prev.getUTCDate()} → ${d.getUTCDate()}.${pad2(d.getUTCMonth() + 1)}`;
 }
 
+// ─── Сетки (М3, принцип П1): узко = ширина контейнера, не окна ───
+
+// Сетка полей: узко — одна колонка (в панели 340 px две колонки по ~145 px: единицы
+// прилипают к полю, тексты ошибок переносятся в 3–4 строки); широко — как было.
+// Та же сетка держит блок «Чем разбирать».
+export function nightlyFieldCols(narrow: boolean): string {
+  return narrow ? '1fr' : '1fr 1fr';
+}
+
+// Сетка итога ночи: узко — две колонки (в панели 340 px пять клеток по ~60 px, подписи
+// «ждут вас во «Входящих»» ломаются по слогам); широко — как было, все клетки в ряд.
+export function lastNightCols(narrow: boolean, cells: number): string {
+  return narrow ? '1fr 1fr' : `repeat(${cells}, 1fr)`;
+}
+
 // ─── Валидация числовых полей (зеркало бэкового IsValidNightly) ───
 
 type NumKey = 'maxPackagesPerNight' | 'maxPackagesPerSection' | 'inputTokenBudget';
@@ -89,8 +108,8 @@ const NUM_MAX: Record<NumKey, number> = {
 // Тексты — по записке («Срез Ф2 02.11»); «на раздел» бэк мерит тем же потолком, что и
 // «на всю вики» (IsValidNightly), поэтому и причина та же
 const OVER_MAX_TEXT: Record<NumKey, string> = {
-  maxPackagesPerNight: `Не больше ${NIGHTLY_MAX_PACKAGES} — иначе ночь упрётся в лимит «Входящих»`,
-  maxPackagesPerSection: `Не больше ${NIGHTLY_MAX_PACKAGES} — иначе ночь упрётся в лимит «Входящих»`,
+  maxPackagesPerNight: `Не больше ${NIGHTLY_MAX_PACKAGES} — иначе ночь упрётся в лимит «Решений»`,
+  maxPackagesPerSection: `Не больше ${NIGHTLY_MAX_PACKAGES} — иначе ночь упрётся в лимит «Решений»`,
   inputTokenBudget: `Не больше ${fmtNum(NIGHTLY_MAX_TOKENS)}`,
 };
 
@@ -130,6 +149,53 @@ function kvCell(v: number, label: string) {
   );
 }
 
+// Цена вызовов судья (J-F3, доработка по приёмке Веры b0065470): два знака после точки;
+// сумма больше нуля, но меньше цента — «<$0.01» (0.0065 показывать как «$0.01» — неправда:
+// toFixed округляет вверх и карточка приписывает ночи несуществующий цент); ровно ноль —
+// «$0.00». Та же форма — в бэковом уведомлении (правит Денис, та же постановка J-F3).
+const fmtUsd = (v: number): string => {
+  if (v <= 0) return '$0.00';
+  if (v < 0.01) return '<$0.01';
+  return `$${v.toFixed(2)}`;
+};
+
+// Сводка облачного судья этой ночи (J-F3, форма по доработке 12.11): «Судья: принял K,
+// отклонил L; вызовов N, $X» — по полям J-F0 (WikiLastNight, J-J4). Показывается только
+// при judgeCalls>0: без вызова модели судья ничего не делал — строки о нём нет. Кодовые
+// отказы в неё не входят — их отдельная строка ниже. Та же сводка в бэковом уведомлении
+// собрана в Title (WikiNightlyService.cs:999-1000) — здесь она той же мысли, но по форме
+// этой карточки.
+const judgeSummaryLine = (l: WikiLastNight): string =>
+  `Судья: принял ${l.judgeApplied}, отклонил ${l.judgeRejected}; вызовов ${l.judgeCalls}, ${fmtUsd(l.judgeCostUsd)}`;
+
+// «Отклонено кодом: C» — отдельная строка (доработка J-F3 по приёмке Веры): код отклоняет
+// операции сам, без судья, — в его сводку эти числа не входят. Показывается при
+// codeRejected>0; при нуле сказать нечего (тот же приём, что с «отказано N»).
+const codeRejectedLine = (c: number): string => `Отклонено кодом: ${c}`;
+
+// «Судья недоступен — ждут решения: M» — форма Софьи 12.11, как в бэковом уведомлении
+// (NotificationBody, WikiNightlyService.cs:959): «M операций ждут» читается обрывком
+// фразы; здесь — та же строка с заглавной, как отдельная строка карточки.
+const judgeDeferredLine = (m: number): string => `Судья недоступен — ждут решения: ${m}`;
+
+// «00:41» из DateTimeOffset-строки бэка (ISO со смещением): локальное время машины, ЧЧ:ММ.
+// Пустая или нечитаемая строка — суффикса нет (тот же приём, что у nightRangeText: нечем)
+const localClockText = (iso: string | null | undefined): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};
+
+// Строка одного исполнителя в разбивке итога (W8b): «Qwen 27B: 7 попыток»; у выбывшего —
+// «…, выбыл в 00:41». analyzed — число ПОПЫТОК, не чатов (доработка бэка W5 №2): чат,
+// отказанный мёртвым движком, добирает другой — его разбор посчитан на обоих. Склонение —
+// через общий plural (в wikiLabels своего хелпера склонений нет).
+const executorLine = (e: { title: string; analyzed: number; withdrawnAt?: string | null }): string => {
+  const clock = localClockText(e.withdrawnAt);
+  return `${e.title}: ${e.analyzed} ${plural(e.analyzed, 'попытка', 'попытки', 'попыток')}${clock ? `, выбыл в ${clock}` : ''}`;
+};
+
 // «отказано N» — пятая метрика итога (WN-6b): отказанные разборы среди analyzed
 // (WikiNightlyService.cs:117-119). Не голое число, как остальные: слово с числом одной строкой,
 // подпись называет связь с соседней метрикой («из разобранного» — ровно то, что считает бэк)
@@ -144,10 +210,11 @@ function rejectedCell(n: number) {
 
 // Итог прошлой ночи: предупреждение по исходу (тексты — wikiLabels), карточка четырёх
 // чисел и оценочный расход («≈»: оценка, не факт — ProgressBar estimate: пунктир).
-function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }: {
+function LastNightBlock({ last, snapshot, narrow, onOpenInbox, onOpenJournal }: {
   last: WikiLastNight;
   snapshot: WikiSettingsSnapshot;
-  isMobile: boolean;
+  /** Узкость контейнера блока (М3, П1): из useWikiNarrow, не из ширины окна */
+  narrow: boolean;
   onOpenInbox?: () => void;
   onOpenJournal?: () => void;
 }) {
@@ -164,7 +231,7 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
     kvCell(last.selected, 'чатов отобрано'),
     kvCell(last.analyzed, 'разобрано'),
     kvCell(last.applied, 'пакетов применено само'),
-    kvCell(last.toInbox, 'ждут вас во «Входящих»'),
+    kvCell(last.toInbox, 'ждут вас в «Решениях»'),
     ...(rejected > 0 ? [rejectedCell(rejected)] : []),
   ];
   return (
@@ -176,7 +243,7 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
             icon={OUTCOME_ICON[last.outcome] ?? AlertTriangle}
             title={notice.title ?? undefined}
             action={last.outcome === 'open_limit' && onOpenInbox
-              ? <Button variant="secondary" size="sm" dataTestId="wiki-nightly-open-inbox" onClick={onOpenInbox}>Открыть «Входящие»</Button>
+              ? <Button variant="secondary" size="sm" dataTestId="wiki-nightly-open-inbox" onClick={onOpenInbox}>Открыть «Решения»</Button>
               : undefined}
           >
             {notice.text}
@@ -184,7 +251,7 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
         </div>
       )}
       <div data-testid="wiki-nightly-card" style={{ ...CARD, marginTop: SP.md }}>
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : `repeat(${cells.length}, 1fr)`, gap: SP.md }}>
+        <div style={{ display: 'grid', gridTemplateColumns: lastNightCols(narrow, cells.length), gap: SP.md }}>
           {cells}
         </div>
         <div
@@ -196,6 +263,43 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
             ≈ {fmtNum(last.estTokens)} из {fmtNum(snapshot.nightly.inputTokenBudget)}
           </span>
         </div>
+        {/* Разбивка по названным исполнителям (W8b): по строке на исполнителя, в порядке
+            списка стора (не сортировать). По ходу ночи — раньше судья: это о том, кто делал
+            разбор. null («не измерено», старый файл итога), [] (путь без названных
+            исполнителей) и отсутствие поля — блока нет (тот же приём, что с judge-строками:
+            нечего сказать — строки нет). Длинный список на мобиле переносится: ни фиксированных
+            ширин, ни nowrap здесь нет. Ключ строки — engine + индекс: в файле стора до дедупа
+            возможны два элемента с одним engine (хвост R-W8b п.1), один engine дал бы равные
+            ключи — warning React и возможный сбой перерисовки. */}
+        {last.executors && last.executors.length > 0 ? (
+          <div data-testid="wiki-nightly-executors" style={{ marginTop: SP.md }}>
+            {last.executors.map((e, i) => (
+              <div key={`${e.engine}:${i}`} style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: i === 0 ? 0 : SP.xs }}>
+                {executorLine(e)}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {/* J-F3: предупреждение об отложенных операциях — над сводкой: оно о том, чего
+            судья не сделал; цвет — warning-токен дизайн-системы */}
+        {last.judgeDeferred > 0 && (
+          <div data-testid="wiki-nightly-judge-deferred" style={{ fontSize: FS.sm, color: C.warningText, marginTop: SP.md }}>
+            {judgeDeferredLine(last.judgeDeferred)}
+          </div>
+        )}
+        {/* J-F3 (доработка по приёмке Веры): сводка судья и кодовые отказы — две независимые
+            строки: код отклоняет операции сам, без судья. Порядок — по ходу ночи: сначала
+            то, что код отверг без вызова модели, затем — что сделал судья. */}
+        {last.codeRejected > 0 ? (
+          <div data-testid="wiki-nightly-code-rejected" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.md }}>
+            {codeRejectedLine(last.codeRejected)}
+          </div>
+        ) : null}
+        {last.judgeCalls > 0 ? (
+          <div data-testid="wiki-nightly-judge-line" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
+            {judgeSummaryLine(last)}
+          </div>
+        ) : null}
         <div style={{ fontSize: FS.sm, color: C.textMuted, marginTop: SP.xs }}>
           {last.outcome === 'completed' ? NIGHTLY_COMPLETED_LINE : ''}
           {onOpenJournal && (
@@ -220,7 +324,10 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
   // настроек нет, и второго источника здесь быть не должно; null — дерево ещё не читали,
   // состояния не знаем, подписи нет
   const tree = useWikiTree();
-  const isMobile = useIsMobile();
+  // М3 (П1): раскладка — по ширине контейнера блока, а не окна: блок живёт и в боковой
+  // зоне воркспейса (340–420 px), и на окне 1280 она остаётся той же. Тач-размеры и size
+  // кнопок здесь от ширины не зависят (всегда «sm») — менять нечем.
+  const [panelRef, narrow] = useWikiNarrow<HTMLDivElement>();
   const [loadError, setLoadError] = useState<unknown>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   // Одна идущая правка (тумблер, окно или поле): слот стора один, вторая правка до
@@ -327,7 +434,10 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
   if (!snapshot) return <LoadingSkeleton />;
 
   const nightly = snapshot.nightly;
-  const gridCols = isMobile ? '1fr' : '1fr 1fr';
+  const gridCols = nightlyFieldCols(narrow);
+  // Подписи исполнителей ночи (W8b): порядок списка стора, не сортировать; пустой список
+  // и отсутствие поля (старый бэк) — одинаково «списка нет», остаётся общая подсказка
+  const execTitles = (nightly.executors ?? []).map((e) => e.title);
 
   const numInput = (k: NumKey, unit: string) => (
     <span
@@ -362,13 +472,13 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
   );
 
   return (
-    <div style={{ padding: `${SP.sm}px ${SP.md}px ${SP.md}px` }}>
+    <div ref={panelRef} style={{ padding: `${SP.sm}px ${SP.md}px ${SP.md}px` }}>
       <h2 style={{ margin: `${SP.xs}px 0 0`, fontFamily: FONT.serif, fontSize: FS.lg, color: C.textHeading }}>
         Ночной разбор
       </h2>
       <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
         Раз в ночь Хранитель разбирает новое в ваших разговорах. Неспорное применяется само,
-        спорное ждёт вас во «Входящих». Утром — уведомление с итогом.
+        спорное ждёт вас в «Решениях». Утром — уведомление с итогом.
       </div>
 
       <div
@@ -467,9 +577,12 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
       </div>
 
       <h3 style={SECTION_H3}>Чем разбирать</h3>
-      {/* Только текст, без контролов: имени модели в контракте настроек нет — плашки
-          называют места, кто их назначает — строкой ниже (решение среза: смена модели
-          — в «Поставщиках моделей») */}
+      {/* Только текст, без контролов (решение среза: смена модели — в «Поставщиках
+          моделей»). Строка под плашками — про то, кто это делает: при непустом списке
+          исполнителей (W8b) она называет их — подписи из админского списка, в порядке
+          списка стора, и то, кто его назначает; общая подсказка о «Поставщиках моделей»
+          в этом случае говорит то же самое и её нет. Пустой список или отсутствие поля
+          (старый бэк) — прежняя общая подсказка. */}
       <div data-testid="wiki-nightly-engine" style={{ display: 'grid', gridTemplateColumns: gridCols, gap: SP.sm }}>
         {['Разбор', 'Отбор спорных чатов'].map((t) => (
           <div key={t} style={{ display: 'flex', gap: SP.sm, alignItems: 'center', padding: `${SP.sm}px ${SP.md}px`, background: C.bgInset, borderRadius: R.md, border: `1px solid ${C.borderLight}` }}>
@@ -478,9 +591,9 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
           </div>
         ))}
       </div>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs }}>
+      <div data-testid={execTitles.length > 0 ? 'wiki-nightly-executors-note' : undefined} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs }}>
         <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
-        <span>Назначает администратор в «Поставщиках моделей».</span>
+        <span>{execTitles.length > 0 ? `Исполнители: ${execTitles.join(', ')} (назначает администратор)` : 'Назначает администратор в «Поставщиках моделей».'}</span>
       </div>
 
       {/* «Запустить сейчас» (WN-6b) — рядом с заголовком итога. flexWrap: на 360 px заголовок и
@@ -506,7 +619,7 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
         )}
       </div>
       {snapshot.lastNight ? (
-        <LastNightBlock last={snapshot.lastNight} snapshot={snapshot} isMobile={isMobile} onOpenInbox={onOpenInbox} onOpenJournal={onOpenJournal} />
+        <LastNightBlock last={snapshot.lastNight} snapshot={snapshot} narrow={narrow} onOpenInbox={onOpenInbox} onOpenJournal={onOpenJournal} />
       ) : (
         <div data-testid="wiki-nightly-none" style={{ ...CARD, marginTop: SP.md }}>
           <div style={{ fontSize: FS.base, fontWeight: 500, color: C.textHeading }}>{NIGHTLY_NONE_TITLE}</div>

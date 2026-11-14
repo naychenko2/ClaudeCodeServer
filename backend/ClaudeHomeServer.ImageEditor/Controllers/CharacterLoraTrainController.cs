@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/image-editor/characters/{slug}")]
+[Route("api/image-editor/chats/{sessionId}/characters/{slug}")]
 public class CharacterLoraTrainController(
     ImageEditScopeGate gate,
     CharacterTrainingPhotos photos,
@@ -31,15 +32,15 @@ public class CharacterLoraTrainController(
     // ── Обучающие фото ─────────────────────────────────────────────────────────────
 
     [HttpGet("training-photos")]
-    public IActionResult Photos(string projectId, string slug) =>
-        Character(projectId, slug, out var project, out var denied) ? Ok(PhotosDto(ImageEditScope.TenantOf(project), projectId, slug)) : denied;
+    public IActionResult Photos(string? projectId, string? sessionId, string slug) =>
+        Character(projectId, sessionId, slug, out var project, out var denied) ? Ok(PhotosDto(ImageEditScope.TenantOf(project), project.Id, slug)) : denied;
 
     [HttpPost("training-photos")]
     [RequestSizeLimit(MaxBodyBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxBodyBytes)]
-    public async Task<IActionResult> AddPhotos(string projectId, string slug, CancellationToken ct)
+    public async Task<IActionResult> AddPhotos(string? projectId, string? sessionId, string slug, CancellationToken ct)
     {
-        if (!Character(projectId, slug, out var project, out var denied)) return denied;
+        if (!Character(projectId, sessionId, slug, out var project, out var denied)) return denied;
         // Файлы берём из формы вручную: пустое тело — наш 400 invalid_request, а не ProblemDetails биндера
         IReadOnlyList<IFormFile> files = [];
         try
@@ -64,19 +65,19 @@ public class CharacterLoraTrainController(
             await file.CopyToAsync(ms, ct);
             uploads.Add(new PhotoUpload(file.FileName, ms.ToArray()));
         }
-        var result = uploads.Count > 0 ? photos.Add(ImageEditScope.TenantOf(project), projectId, slug, uploads) : null;
+        var result = uploads.Count > 0 ? photos.Add(ImageEditScope.TenantOf(project), project.Id, slug, uploads) : null;
         return Ok(new
         {
-            photos = PhotosDto(ImageEditScope.TenantOf(project), projectId, slug),
+            photos = PhotosDto(ImageEditScope.TenantOf(project), project.Id, slug),
             rejected = tooBig.Concat(result?.Rejected ?? []).Select(r => new { r.FileName, r.Reason }),
         });
     }
 
     [HttpGet("training-photos/{name}")]
-    public IActionResult Photo(string projectId, string slug, string name)
+    public IActionResult Photo(string? projectId, string? sessionId, string slug, string name)
     {
-        if (!Character(projectId, slug, out var project, out var denied)) return denied;
-        if (photos.PathOf(ImageEditScope.TenantOf(project), projectId, slug, name) is not { } path) return PhotoNotFound();
+        if (!Character(projectId, sessionId, slug, out var project, out var denied)) return denied;
+        if (photos.PathOf(ImageEditScope.TenantOf(project), project.Id, slug, name) is not { } path) return PhotoNotFound();
         var type = Path.GetExtension(path).ToLowerInvariant() switch
         {
             ".png" => "image/png",
@@ -87,21 +88,21 @@ public class CharacterLoraTrainController(
     }
 
     [HttpDelete("training-photos/{name}")]
-    public IActionResult DeletePhoto(string projectId, string slug, string name)
+    public IActionResult DeletePhoto(string? projectId, string? sessionId, string slug, string name)
     {
-        if (!Character(projectId, slug, out var project, out var denied)) return denied;
-        return photos.Remove(ImageEditScope.TenantOf(project), projectId, slug, name) ? NoContent() : PhotoNotFound();
+        if (!Character(projectId, sessionId, slug, out var project, out var denied)) return denied;
+        return photos.Remove(ImageEditScope.TenantOf(project), project.Id, slug, name) ? NoContent() : PhotoNotFound();
     }
 
     // ── Обучение ───────────────────────────────────────────────────────────────────
 
     [HttpGet("lora-train")]
-    public async Task<IActionResult> TrainState(string projectId, string slug, CancellationToken ct)
+    public async Task<IActionResult> TrainState(string? projectId, string? sessionId, string slug, CancellationToken ct)
     {
-        if (!Character(projectId, slug, out var project, out var denied)) return denied;
+        if (!Character(projectId, sessionId, slug, out var project, out var denied)) return denied;
         if (trainer is null) return NoSeam();
         // Итог обучения, завершившегося между кругами доводчика, подбираем до ответа
-        if (finisher is not null) await finisher.SettleAsync(ImageEditScope.TenantOf(project), projectId, slug, ct);
+        if (finisher is not null) await finisher.SettleAsync(ImageEditScope.TenantOf(project), project.Id, slug, ct);
         var busy = trainer.Busy(ImageEditScope.TenantOf(project));
         var all = runs.List(project.RootPath, slug);
         var training = all.FirstOrDefault(r => r.Status == CharacterLoraRuns.Status.Training);
@@ -123,7 +124,7 @@ public class CharacterLoraTrainController(
         }
         var active = CharacterStore.Get(project.RootPath, slug)?.ReadLora()?.Name;
         var connected = all.FirstOrDefault(r => CharacterLoraRuns.IsConnected(r, active));
-        var changed = connected is not null && connected.PhotosHash != CurrentHash(ImageEditScope.TenantOf(project), projectId, slug);
+        var changed = connected is not null && connected.PhotosHash != CurrentHash(ImageEditScope.TenantOf(project), project.Id, slug);
         return Ok(new
         {
             enabled = trainer.Enabled,
@@ -137,9 +138,9 @@ public class CharacterLoraTrainController(
     }
 
     [HttpPost("lora-train")]
-    public async Task<IActionResult> StartTrain(string projectId, string slug, [FromBody] LoraTrainRequest? req, CancellationToken ct)
+    public async Task<IActionResult> StartTrain(string? projectId, string? sessionId, string slug, [FromBody] LoraTrainRequest? req, CancellationToken ct)
     {
-        if (!Character(projectId, slug, out var project, out var denied)) return denied;
+        if (!Character(projectId, sessionId, slug, out var project, out var denied)) return denied;
         if (trainer is null) return NoSeam();
         if (!trainer.Enabled)
             return Error(StatusCodes.Status403Forbidden, "disabled", "Обучение LoRA выключено на этом сервере");
@@ -151,14 +152,14 @@ public class CharacterLoraTrainController(
         var trigger = string.IsNullOrWhiteSpace(req.Trigger) ? DefaultTrigger(slug) : req.Trigger.Trim();
         if (!LoraTrigger.IsValid(trigger))
             return Error(StatusCodes.Status400BadRequest, "bad_trigger", "Триггерное слово: латиница, цифры и «_», 3–24 символа, первая буква");
-        using var startLock = await runs.LockKeyAsync($"{ImageEditScope.TenantOf(project)}|{projectId}|{slug}", ct);
+        using var startLock = await runs.LockKeyAsync($"{ImageEditScope.TenantOf(project)}|{project.Id}|{slug}", ct);
         // Идущее обучение этого персонажа видно по записи training — не полагаемся на ответ сервиса
         if (runs.List(project.RootPath, slug).Any(r => r.Status == CharacterLoraRuns.Status.Training))
             return Error(StatusCodes.Status409Conflict, "owner_busy", "У вас уже идёт обучение");
         if (runs.CountTowardsLimit(project.RootPath, slug) >= CharacterLoraRuns.MaxVersions)
             return Error(StatusCodes.Status409Conflict, "version_limit",
                 $"У персонажа уже {CharacterLoraRuns.MaxVersions} версий LoRA — удалите лишнюю");
-        var list = photos.List(ImageEditScope.TenantOf(project), projectId, slug);
+        var list = photos.List(ImageEditScope.TenantOf(project), project.Id, slug);
         if (list.Count < CharacterTrainingPhotos.MinPhotos)
             return Error(StatusCodes.Status400BadRequest, "too_few_photos",
                 $"Для обучения нужно не меньше {CharacterTrainingPhotos.MinPhotos} фото");
@@ -166,12 +167,12 @@ public class CharacterLoraTrainController(
         var trainPhotos = new List<LoraTrainPhoto>(list.Count);
         foreach (var p in list)
         {
-            if (photos.PathOf(ImageEditScope.TenantOf(project), projectId, slug, p.Name) is not { } path) continue;
+            if (photos.PathOf(ImageEditScope.TenantOf(project), project.Id, slug, p.Name) is not { } path) continue;
             trainPhotos.Add(new LoraTrainPhoto(p.Name, path));
         }
         var runId = Guid.NewGuid().ToString("N")[..12];
         var started = await trainer.StartAsync(
-            new LoraTrainStart(ImageEditScope.TenantOf(project), projectId, slug, runId, preset, trigger, trainPhotos), ct);
+            new LoraTrainStart(ImageEditScope.TenantOf(project), project.Id, slug, runId, preset, trigger, trainPhotos), ct);
         if (started.Error is { } error) return MapStartError(error, started);
 
         var run = new CharacterLoraRun(1, runId, started.JobId, CharacterLoraRuns.Status.Training, null, preset, trigger,
@@ -182,9 +183,9 @@ public class CharacterLoraTrainController(
     }
 
     [HttpDelete("lora-train")]
-    public async Task<IActionResult> CancelTrain(string projectId, string slug, CancellationToken ct)
+    public async Task<IActionResult> CancelTrain(string? projectId, string? sessionId, string slug, CancellationToken ct)
     {
-        if (!Character(projectId, slug, out var project, out var denied)) return denied;
+        if (!Character(projectId, sessionId, slug, out var project, out var denied)) return denied;
         if (trainer is null) return NoSeam();
         var training = runs.List(project.RootPath, slug)
             .FirstOrDefault(r => r.Status == CharacterLoraRuns.Status.Training && r.JobId is not null);
@@ -239,10 +240,16 @@ public class CharacterLoraTrainController(
     private int PresetEta() =>
         LoraTrainPresets.Eta(LoraTrainPresets.Standard, config.GetValue("LocalMedia:LoraTrainStartSeconds", DefaultStartSeconds))!.Value;
 
-    private bool Character(string projectId, string slug, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Project? project,
+    private string? RouteValue(string key) => RouteData.Values.TryGetValue(key, out var value) ? value as string : null;
+
+    private bool Character(string? projectId, string? sessionId, string slug, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Project? project,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out IActionResult? denied)
     {
-        if (!gate.TryProject(UserId, projectId, out project, out denied)) return false;
+        // string? в параметрах action биндится и из query: значимы только значения маршрута, иначе
+        // ?sessionId=… на проектном маршруте (и ?projectId=… на чатовом) подменил бы область
+        projectId = RouteValue("projectId");
+        sessionId = RouteValue("sessionId");
+        if (!gate.TryCharacterProject(UserId, projectId, sessionId, out project, out denied)) return false;
         if (!CharacterStore.IsValidSlug(slug) || CharacterStore.Get(project.RootPath, slug) is null)
         {
             denied = Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.CharacterNotFound, "Персонаж не найден");

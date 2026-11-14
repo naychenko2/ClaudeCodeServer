@@ -16,7 +16,7 @@ import { CardContextActions, useCardFill, useFocusedThreadId } from '../context/
 import { audioScope, isPersonalScope } from '../scope';
 import { downloadFile, saveVersion } from './actions';
 import {
-  doneText, hasMain, launchEndNote, launchOf, launchVersions, licenseBadge, licenseBadgeOf, priceText, saveKind,
+  doneText, hasMain, launchEndNote, launchOf, launchVersions, licenseBadge, licenseBadgeOf, priceText, saveLabel,
   threadName, versionTag, type LicenseBadge,
 } from './model';
 import { recordOf, str } from './records';
@@ -27,7 +27,6 @@ import { VersionBody } from './VersionBody';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
-const PERSONAL_DOWNLOAD_HINT = 'В личном чате звук хранится только в этом чате — скачайте файл, чтобы забрать его';
 
 function Note({ children }: { children: ReactNode }) {
   return <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{children}</div>;
@@ -58,21 +57,13 @@ function License({ badge }: { badge: LicenseBadge | null }) {
 const modeIcon = (thread: AudioThread) =>
   thread.settings?.mode === 'voice' ? Mic : thread.settings?.mode === 'music' ? Music : AudioLines;
 
-// Сохранение версии: в проекте — «Сохранить в проект» и «Сохранить как…», в личном чате — «Скачать»
+// Сохранение версии: «Сохранить в проект» и «Сохранить как…»; в личном чате — то же в «Личное»
 function SaveActions({ scope, sessionId, thread, version }: {
   scope: string; sessionId: string; thread: AudioThread; version: AudioThreadVersion;
 }) {
   const [busy, setBusy] = useState(false);
   const [asOpen, setAsOpen] = useState(false);
-  if (saveKind(isPersonalScope(scope)) === 'download') {
-    if (!hasMain(version)) return null;
-    return (
-      <Button size="sm" variant="secondary" leftIcon={ic(Download)} title={PERSONAL_DOWNLOAD_HINT}
-        onClick={() => downloadFile(scope, sessionId, thread, version.id)}>
-        Скачать
-      </Button>
-    );
-  }
+  const personal = isPersonalScope(scope);
   // Исходник уже лежит в проекте
   if (version.id === 'origin') return null;
   const save = async () => {
@@ -83,9 +74,14 @@ function SaveActions({ scope, sessionId, thread, version }: {
   return (
     <>
       <Button size="sm" variant="secondary" leftIcon={ic(Save)} loading={busy} onClick={() => { void save(); }}>
-        Сохранить в проект
+        {saveLabel(personal)}
       </Button>
       <Button size="sm" variant="ghost" onClick={() => setAsOpen(true)}>Сохранить как…</Button>
+      {personal && hasMain(version) && (
+        <Button size="sm" variant="ghost" leftIcon={ic(Download)} onClick={() => downloadFile(scope, sessionId, thread, version.id)}>
+          Скачать
+        </Button>
+      )}
       {asOpen && <SaveAsDialog scope={scope} sessionId={sessionId} thread={thread} version={version} onClose={() => setAsOpen(false)} />}
     </>
   );

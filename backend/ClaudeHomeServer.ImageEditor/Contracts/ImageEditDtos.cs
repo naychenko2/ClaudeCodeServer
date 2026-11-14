@@ -88,7 +88,9 @@ public record ImageEditQuoteRequest(
     // обычную локальную правку (бесплатно, ETA правки). Персонаж задаётся внутри FaceTarget.Faces;
     // верхний CharacterSlug при FaceTarget не требуется — прислан вместе с FaceTarget, это двусмысленный вход
     FaceTarget? FaceTarget = null,
-    string? CharacterSlug = null);
+    string? CharacterSlug = null,
+    // Текст запроса для авто-выбора локальных моделей (надпись, люди, фото); без него выбор идёт по операции
+    string? Prompt = null);
 
 // Source: ImageEditEstimateSources.*; Amount = null — «цена станет известна после запуска».
 // EtaSeconds и QueueLength — у поставщика без цены (локальные модели, Unit = free): время
@@ -113,7 +115,11 @@ public record ImageEditQuoteDto(
     // UI показывает «N прохода» (шаг 16); для N > 1 вариантов ровно 1.
     // null (обычная правка) не пишется в JSON: без атрибута клиент видел бы «facePasses: null»
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    int? FacePasses = null);
+    int? FacePasses = null,
+    // Почему «Авто» выбрало эту модель («Авто → Klein: в запросе надпись»); null — модель названа явно
+    // или поставщик выбор не объясняет
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? RouteReason = null);
 
 public static class ImageEditEstimateSources
 {
@@ -181,7 +187,11 @@ public record ImageEditJobInput(
     ImageBytes? KeepMask = null,
     // Проходы подстановки (ADR-028, этап 3): N = число лиц. N = 1 — один элемент (те же данные,
     // что в FaceCrop/KeepMask/Character/References/FaceTarget); N > 1 — цепочка. null — обычная правка
-    IReadOnlyList<FacePass>? FacePasses = null)
+    IReadOnlyList<FacePass>? FacePasses = null,
+    // Стиль Krea 2 Turbo (Krea2Styles.Id); null — без стиля. Проверяет сборщик запуска
+    string? Style = null,
+    // Доводка версии Fibo 2.0 по JSON-описанию (Ш8); null — обычный запуск. Проверяет сборщик запуска
+    ImageVglRefine? Refine = null)
 {
     // Вход прохода подстановки (ADR-028, этап 3): поля прохода поверх базового входа. Единственная
     // точка подстановки — и для верхних полей N = 1 (сборщик), и для каждого прохода цепочки, —
@@ -255,7 +265,17 @@ public record ImageEditJobDto(
     // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
     // или задача вне локальных моделей. camelCase как соседние поля, null не пишется
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null,
+    // JSON-описания Fibo 2.0 по номеру варианта (Ш8): только нитям — версия хранит своё; клиенту не уходят
+    [property: JsonIgnore]
+    IReadOnlyDictionary<int, ImageVglScene>? Scenes = null,
+    // Модель, на которой задача идёт на самом деле (local: запасная Qwen вместо модели котировки);
+    // null — драйвер ещё не сообщил или не подменяет модель, тогда верна Model
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ActualModel = null,
+    // Почему «Авто» выбрало модель котировки («Авто → MOSS: …»); null — модель названа явно
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? RouteReason = null);
 
 public static class ImageEditSizeNotes
 {

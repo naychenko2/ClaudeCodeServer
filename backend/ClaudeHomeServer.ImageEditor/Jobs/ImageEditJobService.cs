@@ -51,6 +51,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     // Фактическая цена запроса fal по request_id (Core-шов, шаг S-SPEND-7): null — опроса нет,
     // трата остаётся такой, какой её сказал поставщик
     private readonly IFalRequestCost? _falCost;
+    private readonly ImageRouteClassifier? _routeClassifier;
     private readonly ImageEditWorkspace _workspace;
     private readonly ILogger<ImageEditJobService> _log;
     private readonly TimeProvider _time;
@@ -70,8 +71,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         TimeProvider? time = null,
         IImageRaster? raster = null,
         ISessionDirectory? sessions = null,
-        IFalRequestCost? falCost = null)
+        IFalRequestCost? falCost = null,
+        ImageRouteClassifier? routeClassifier = null)
     {
+        _routeClassifier = routeClassifier;
         _sessions = sessions;
         _fitter = raster is null ? null : new InputFitter(raster);
         _editors = editors;
@@ -102,7 +105,9 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         ImageEditOp Op, int Count, ImageEditEstimateDto Estimate, DateTime ExpiresAt, int? ExpectedSeconds,
         long? ContextRevision = null, ResolvedFormat? Format = null,
         // Число проходов (ADR-028, этап 3): N = число лиц в faceTarget; null — обычная правка
-        int? FacePasses = null);
+        int? FacePasses = null,
+        // Причина выбора «Авто» («Авто → Klein: в запросе надпись»); null — модель названа явно
+        string? RouteReason = null);
 
     private sealed class Job(string id, string ownerId, string projectId, Quote quote, CancellationTokenSource cts)
     {
@@ -131,12 +136,16 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public int? EtaSeconds { get; set; }
         // Снимок очереди GPU ComfyUI (шаг 28): живой, обновляется каждым отчётом прогресса
         public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; set; }
+        // Модель, на которой прогон идёт на самом деле (EditProgress.Model); null — как в котировке
+        public string? ActualModel { get; set; }
         public DateTime? RunStartedAt { get; set; }
         public List<int> Variants { get; } = [];
         // Итоги проходов подстановки (ADR-028, §9): статус и сходство каждого лица; пусто — не цепочка
         public List<FacePassChain.FacePassResult> FaceResults { get; } = [];
         // Сходство лица по номеру варианта; записи нет, если драйвер его не посчитал
         public Dictionary<int, double> Similarities { get; } = [];
+        // JSON-описание Fibo 2.0 по номеру варианта (Ш8); записи нет, если модель его не дала
+        public Dictionary<int, ImageVglScene> Scenes { get; } = [];
         public EditCost? Cost { get; set; }
         public EditOutcome? Outcome { get; set; }
         public bool? Charged { get; set; }
@@ -181,11 +190,30 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         if (request.FaceTarget is not null)
             request = request with { References = 0, HasMask = false, HasCharacter = true, HasAnnotations = false };
 
-        var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter, request.HasAnnotations, request.Removal);
+        // Размер исходника — только у правки (у генерации Width/Height — желаемый размер результата)
+        double? sourceMp = request.Op != ImageEditOp.Generate && request.Width is > 0 && request.Height is > 0
+            ? request.Width.Value * (double)request.Height.Value / 1_000_000 : null;
+        var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter, request.HasAnnotations, request.Removal,
+            request.Prompt, sourceMp, FaceSwap: request.FaceTarget is not null);
         var op = request.HasMask && request.Op == ImageEditOp.Edit ? ImageEditOp.Inpaint : request.Op;
-        var model = string.Equals(request.Model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase)
-            ? editor.PickModel(op, request.Mode, traits)
-            : editor.Models.FirstOrDefault(m => string.Equals(m.Id, request.Model?.Trim(), StringComparison.OrdinalIgnoreCase));
+        var auto = string.Equals(request.Model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase);
+        // Ручной выбор модели главнее «Авто»: таблица зовётся только когда выбрано «auto»
+        string? routeReason = null;
+        ImageEditModelInfo? model;
+        if (auto && editor is IImageEditRouter router)
+        {
+            // Правила по словам молчат — спрашиваем локальную LLM (потолок 2 с, не успела — правила)
+            var category = _routeClassifier is not null && router.NeedsClassifier(op, request.Mode, traits)
+                ? await _routeClassifier.ClassifyAsync(op, traits.Prompt!, ct)
+                : null;
+            var route = router.Route(op, request.Mode, traits, category);
+            model = route?.Model;
+            routeReason = route?.Reason;
+        }
+        else
+            model = auto
+                ? editor.PickModel(op, request.Mode, traits)
+                : editor.Models.FirstOrDefault(m => string.Equals(m.Id, request.Model?.Trim(), StringComparison.OrdinalIgnoreCase));
         if (model is null)
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.InvalidRequest,
                 $"У поставщика {editor.Label} нет модели для этой операции");
@@ -226,7 +254,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
         var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, count,
             estimate, Now() + QuoteTtl, estimate.EtaSeconds ?? (editor as IImageEditQuoter)?.ExpectedSeconds(model),
-            request.ContextRevision, format, facePasses);
+            request.ContextRevision, format, facePasses, routeReason);
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return ImageEditCallResult<ImageEditQuoteDto>.Ok(ToDto(quote));
@@ -235,7 +263,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     public ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId) =>
         _quotes.TryGetValue(quoteId, out var q) && q.OwnerId == ownerId && q.ProjectId == projectId && q.ExpiresAt >= Now()
             ? new ImageEditQuoteInfo(q.Op, q.ContextRevision, q.Provider, q.FacePasses,
-                ImageEditCatalog.WithInputLimits(q.Model).Caps)
+                ImageEditCatalog.WithInputLimits(q.Model).Caps, q.Model.Id)
             : null;
 
     // Пропорции, которые человек выбрал явно в старом интерфейсе (поле aspectRatio запуска генерации), стоят выше
@@ -571,6 +599,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 {
                     job.Variants.Add(n);
                     if (ready[i].Similarity is { } similarity) job.Similarities[n] = similarity;
+                    if (ready[i].Scene is { } scene) job.Scenes[n] = scene;
                     if (mismatch) job.SizeNote = ImageEditSizeNotes.AspectMismatch;
                 }
             }
@@ -603,7 +632,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         {
             job.Variants.AddRange(tail);
             foreach (var n in tail)
+            {
                 if (result.Images[n - 1].Similarity is { } similarity) job.Similarities[n] = similarity;
+                if (result.Images[n - 1].Scene is { } scene) job.Scenes[n] = scene;
+            }
             job.Cost = cost;
             job.Outcome = EditOutcome.Ok;
             job.Charged = result.Charged ?? true;
@@ -871,6 +903,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             int? elapsed;
             lock (job.Gate)
             {
+                // Фактическая модель — до готовых вариантов: их событие несёт её нити
+                if (value.Model is { } actual) job.ActualModel = actual;
                 if (value.Ready is { Count: > 0 } ready)
                 {
                     job.Pipeline = owner.DeliverReadyAsync(job.Pipeline, job, job.ReadyCount + 1, ready);
@@ -898,7 +932,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             _ = owner.Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId,
                 new ImageEditProgressMessage(job.Id, job.ProjectId, value.Stage, value.QueuePosition,
                     job.ChatSessionId, job.Initiator, job.ThreadId, value.Run, value.Runs, value.EtaSeconds,
-                    elapsed, value.Gpu));
+                    elapsed, value.Gpu, job.ActualModel));
         }
     }
 
@@ -928,7 +962,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         q.Estimate.Amount is { } a ? new EditCost(a, q.Estimate.Unit) : null;
 
     private ImageEditQuoteDto ToDto(Quote q) =>
-        new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds, Format: q.Format, FacePasses: q.FacePasses);
+        new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds, Format: q.Format, FacePasses: q.FacePasses, RouteReason: q.RouteReason);
 
     private ImageEditJobDto ToDto(Job j)
     {
@@ -944,7 +978,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 j.Quote.FacePasses is { } n && n > 1 ? null : (j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null),
                 Op: ImageEditOpNames.OpName(j.Quote.Op),
                 FaceResults: j.FaceResults.Count > 0 ? [.. j.FaceResults] : null,
-                Gpu: j.Gpu);
+                Gpu: j.Gpu,
+                ActualModel: j.ActualModel,
+                RouteReason: j.Quote.RouteReason,
+                Scenes: j.Scenes.Count > 0 ? new Dictionary<int, ImageVglScene>(j.Scenes) : null);
     }
 
     // Тяжёлый ли прогон (шаг 28): у локальных картинок прогоны короткие (секунды–десятки секунд),

@@ -2,7 +2,7 @@ namespace ClaudeHomeServer.Services.VideoEditor.Contracts;
 
 // Маршруты модуля. Проектные — api/projects/{projectId}/video-editor/*, личные (чат вне проекта) —
 // api/video-editor/chats/{sessionId}/*. Хвосты у обоих одинаковые, у проектных перед сценами стоит
-// sessions/{sessionId}/. Фильмы и сохранение в проект — только проектные (личные: personal_scope_no_films)
+// sessions/{sessionId}/. Фильмы и сохранение сцены есть и у личных (фильмы — в Personal/video/, ADR-040)
 public static class VideoEditorRoutes
 {
     public const string ProjectBase = "api/projects/{projectId}/video-editor";
@@ -17,6 +17,7 @@ public static class VideoEditorRoutes
     public const string Job = "jobs/{jobId}";                                             // GET статус / DELETE отмена
     public const string JobUpscale = "jobs/{jobId}/upscale";                              // DELETE: отменить только увеличение «Макс» local H3 → VideoJobDto; съёмка 768p останется версией
     public const string SceneVersionUpscaleRetry = "scenes/{sceneId}/versions/{versionId}/upscale"; // POST без тела → 202 VideoUpscaleRetryResult: повторить увеличение «Макс» версии с upscaleError; новая версия 1440p, прежняя остаётся
+    public const string SceneVersionEnhance = "scenes/{sceneId}/versions/{versionId}/enhance";    // GET → VideoEnhanceQuoteDto (время ×2/×4 до запуска) / POST VideoEnhanceRequest → 202 VideoEnhanceResult: «Увеличить» версию (RelayVSR, local); итог — новая версия
     public const string FramesPreview = "frames/preview";                                 // POST VideoFramesPreviewRequest → VideoFramesPreviewDto (dryRun подрезки кадров A/B)
     public const string Scenes = "scenes";                                                // GET → VideoThreadsStateDto / POST новая сцена
     public const string ScenesFocus = "scenes/focus";                                     // PUT VideoFocusDto + revision

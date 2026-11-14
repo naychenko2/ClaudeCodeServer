@@ -28,6 +28,16 @@ ENGINE_UNIT = os.environ.get("ARBITER_ENGINE_UNIT", "local-llm.service")
 ENGINE_HEALTH = os.environ.get("ARBITER_ENGINE_HEALTH", "http://127.0.0.1:18030/health")
 PORT = int(os.environ.get("ARBITER_PORT", "18031"))
 POLL_S = float(os.environ.get("ARBITER_POLL_S", "0.5"))
+START_WAIT_S = float(os.environ.get("ARBITER_START_WAIT_S", "60"))
+# Не дождались готовности за START_WAIT_S — останавливаем и пробуем снова; после START_RETRIES
+# неудач подряд — пауза START_BACKOFF_S (состояние failed), потом ещё попытка.
+START_RETRIES = int(os.environ.get("ARBITER_START_RETRIES", "3"))
+START_BACKOFF_S = float(os.environ.get("ARBITER_START_BACKOFF_S", "600"))
+# hyperqwen останавливается через docker compose stop -t 30 при TimeoutStopSec=60: 12.11.2026
+# прежние 30 с на systemctl stop не хватило на 2 с.
+STOP_TIMEOUT_S = float(os.environ.get("ARBITER_STOP_TIMEOUT_S", "90"))
+# Как часто проверять, что ComfyUI жив по CUDA (/system_stats), перед уступкой ему карты.
+COMFY_ALIVE_EVERY_S = float(os.environ.get("ARBITER_COMFY_ALIVE_EVERY_S", "5"))
 RETURN_QUIET_S = float(os.environ.get("ARBITER_RETURN_QUIET_S", "10"))
 # Пауза возврата после заданий ComfyUI — больше обычной: серия картинок идёт с перерывами на
 # просмотр, и возврат LLM между кадрами заставил бы ComfyUI грузить модели заново на каждом.
@@ -47,6 +57,9 @@ HEAVY_MARKERS = [s.lower() for s in os.environ.get(
 OWN_PROCS = [s for s in os.environ.get("ARBITER_OWN_PROCS", "ComfyUI-h3,llama-server").split(",") if s]
 # Под systemd у root в PATH нет /usr/lib/wsl/lib, где в WSL лежит nvidia-smi.
 NVSMI = shutil.which("nvidia-smi") or "/usr/lib/wsl/lib/nvidia-smi"
+# nvidia-smi в WSL идёт в драйвер WDDM той же 3090, что выводит рабочий стол; под нагрузкой
+# запрос висит секундами. Поэтому не чаще раза в NVSMI_EVERY_S (до 02.11.2026 — каждые POLL_S).
+NVSMI_EVERY_S = float(os.environ.get("ARBITER_NVSMI_EVERY_S", "5"))
 _warned: set[str] = set()
 
 
@@ -87,6 +100,16 @@ def gpu_foreign_procs() -> list[str]:
             continue
         found.append(f"{pid}:{cmd[:60]}")
     return found
+
+
+_gpu_cache = {"t": 0.0, "procs": []}
+
+
+def gpu_foreign_procs_throttled() -> list[str]:
+    if time.time() - _gpu_cache["t"] >= NVSMI_EVERY_S:
+        _gpu_cache["procs"] = gpu_foreign_procs()
+        _gpu_cache["t"] = time.time()
+    return _gpu_cache["procs"]
 
 
 def _graph_heavy(prompt: dict) -> bool:
@@ -152,8 +175,36 @@ def vram_room_for_engine() -> bool:
     return used is None or total is None or total - used >= VRAM_NEEDED_MB
 
 
-def systemctl(*args) -> bool:
-    return subprocess.run(["systemctl", *args], capture_output=True, timeout=30).returncode == 0
+def _log(msg: str):
+    print(msg, file=sys.stderr, flush=True)
+
+
+def systemctl(*args, timeout: float = 30) -> bool:
+    try:
+        return subprocess.run(["systemctl", *args], capture_output=True, timeout=timeout).returncode == 0
+    except subprocess.TimeoutExpired:
+        # Снят только клиент: задание в systemd идёт дальше, его итог видно на следующем круге.
+        _log(f"systemctl {' '.join(args)} не уложился в {timeout:.0f} с — задание systemd продолжается")
+        return False
+
+
+_comfy = {"t": 0.0, "alive": True}
+
+
+def comfy_alive() -> bool:
+    """ComfyUI отвечает на /system_stats — там CUDA-вызов. После TDR 13.11.2026 /queue отвечал,
+    а /system_stats — 500: процесс жив, CUDA мёртв, отдавать ему карту бессмысленно."""
+    if time.time() - _comfy["t"] >= COMFY_ALIVE_EVERY_S:
+        try:
+            with urllib.request.urlopen(COMFY + "/system_stats", timeout=5) as r:
+                alive = r.status == 200
+        except Exception:
+            alive = False
+        if alive != _comfy["alive"]:
+            _log("ComfyUI снова отвечает на /system_stats" if alive else
+                 "ComfyUI не отвечает на /system_stats (CUDA мёртв?) — дежурную LLM ради него не останавливаю")
+        _comfy.update(t=time.time(), alive=alive)
+    return _comfy["alive"]
 
 
 def engine_active() -> bool:
@@ -169,55 +220,105 @@ def engine_healthy() -> bool:
 
 
 def loop():
-    quiet_since = None
-    last_reason_comfy = False
+    # Поток арбитра не должен умирать: 12.11.2026 TimeoutExpired на systemctl stop убил его,
+    # HTTP продолжал отдавать застывшее «starting», а LLM не возвращалась до перезапуска арбитра.
+    ctx = {"quiet_since": None, "last_reason_comfy": False}
     while True:
-        reasons = [f"lease:{r}" for r in active_leases()]
-        reasons += [f"gpu:{p}" for p in gpu_foreign_procs()]
-        reasons += [f"comfy:{j}" for j in comfy_heavy_jobs()]
-        active = engine_active()
-        if reasons:
-            quiet_since = None
-            last_reason_comfy = any(r.startswith("comfy:") for r in reasons)
-            _state["quiet_left_s"] = None
-            if active:
-                t0 = time.time()
-                systemctl("stop", ENGINE_UNIT)
-                _state["last_yield_s"] = round(time.time() - t0, 2)
-                _state["yields"] += 1
-                _state["since"] = time.time()
-            _state["engine"] = "yielded"
-        else:
-            quiet_since = quiet_since or time.time()
-            need_quiet = RETURN_QUIET_AFTER_COMFY_S if last_reason_comfy else RETURN_QUIET_S
-            left = need_quiet - (time.time() - quiet_since)
-            _state["quiet_left_s"] = round(max(0.0, left), 1) if not active else None
-            if not active and left <= 0:
-                t0 = time.time()
-                # exclusive: освободить кэш моделей ComfyUI и убедиться, что место есть
-                if MODE == "exclusive" and not vram_room_for_engine():
-                    comfy_free()
-                    for _ in range(20):
-                        if vram_room_for_engine():
-                            break
-                        time.sleep(0.25)
-                if not vram_room_for_engine():
-                    _warn_once("vram", f"для LLM нет {VRAM_NEEDED_MB} МБ VRAM даже после /free — жду")
-                    _state["engine"] = "waiting-vram"
-                    time.sleep(POLL_S)
-                    continue
-                last_reason_comfy = False
-                systemctl("start", ENGINE_UNIT)
-                _state["returns"] += 1
-                _state["since"] = time.time()
-                _state["engine"] = "starting"
-                # ждём готовности, но не дольше 60 с — иначе юнит сам перезапустится
-                while time.time() - t0 < 60 and not engine_healthy():
+        try:
+            _tick(ctx)
+        except Exception as ex:
+            _log(f"ошибка в цикле арбитра: {ex!r} — продолжаю")
+            time.sleep(max(POLL_S, 2.0))
+
+
+_start = {"attempts": 0, "backoff_until": 0.0}
+
+
+def _tick(ctx: dict):
+    reasons = [f"lease:{r}" for r in active_leases()]
+    active = engine_active()
+    comfy_jobs = comfy_heavy_jobs()
+    # Уступать карту ComfyUI, у которого мёртв CUDA, — значит остановить LLM ради задания,
+    # которое всё равно упадёт (13.11.2026, 08:30). Проверяем только когда LLM работает:
+    # уже уступленную карту не отбираем — занятый генерацией ComfyUI может отвечать медленно.
+    if comfy_jobs and active and not comfy_alive():
+        comfy_jobs = []
+    _state["comfy_alive"] = _comfy["alive"]
+    reasons += [f"comfy:{j}" for j in comfy_jobs]
+    if not reasons:
+        # аренда или задание ComfyUI уже держат карту — драйвер не опрашиваем
+        reasons += [f"gpu:{p}" for p in gpu_foreign_procs_throttled()]
+    if reasons:
+        ctx["quiet_since"] = None
+        ctx["last_reason_comfy"] = any(r.startswith("comfy:") for r in reasons)
+        _state["quiet_left_s"] = None
+        if active:
+            t0 = time.time()
+            systemctl("stop", ENGINE_UNIT, timeout=STOP_TIMEOUT_S)
+            _state["last_yield_s"] = round(time.time() - t0, 2)
+            _state["yields"] += 1
+            _state["since"] = time.time()
+        _state["engine"] = "yielded"
+    else:
+        ctx["quiet_since"] = ctx["quiet_since"] or time.time()
+        need_quiet = RETURN_QUIET_AFTER_COMFY_S if ctx["last_reason_comfy"] else RETURN_QUIET_S
+        left = need_quiet - (time.time() - ctx["quiet_since"])
+        _state["quiet_left_s"] = round(max(0.0, left), 1) if not active else None
+        if not active and left <= 0 and time.time() < _start["backoff_until"]:
+            _state["engine"] = "failed"
+            _state["reasons"] = reasons
+            time.sleep(POLL_S)
+            return
+        if not active and left <= 0:
+            t0 = time.time()
+            # exclusive: освободить кэш моделей ComfyUI и убедиться, что место есть
+            if MODE == "exclusive" and not vram_room_for_engine():
+                comfy_free()
+                for _ in range(20):
+                    if vram_room_for_engine():
+                        break
                     time.sleep(0.25)
-                _state["last_return_s"] = round(time.time() - t0, 2)
-            _state["engine"] = "ready" if active or engine_healthy() else ("starting" if engine_active() else "yielded")
-        _state["reasons"] = reasons
-        time.sleep(POLL_S)
+            if not vram_room_for_engine():
+                _warn_once("vram", f"для LLM нет {VRAM_NEEDED_MB} МБ VRAM даже после /free — жду")
+                _state["engine"] = "waiting-vram"
+                time.sleep(max(POLL_S, NVSMI_EVERY_S))
+                return
+            ctx["last_reason_comfy"] = False
+            systemctl("start", ENGINE_UNIT)
+            _state["returns"] += 1
+            _state["since"] = time.time()
+            _state["engine"] = "starting"
+            # ждём готовности, но не дольше START_WAIT_S (по умолчанию 60 с) — иначе юнит сам перезапустится
+            while time.time() - t0 < START_WAIT_S and not engine_healthy():
+                time.sleep(0.25)
+            _state["last_return_s"] = round(time.time() - t0, 2)
+            if engine_healthy():
+                _start["attempts"] = 0
+            else:
+                _start_timed_out()
+                _state["reasons"] = reasons
+                time.sleep(POLL_S)
+                return
+        _state["engine"] = "ready" if active or engine_healthy() else ("starting" if engine_active() else "yielded")
+    _state["reasons"] = reasons
+    time.sleep(POLL_S)
+
+
+def _start_timed_out():
+    """LLM не ответила за START_WAIT_S: остановить и пробовать снова, а не висеть в starting."""
+    _start["attempts"] += 1
+    systemctl("stop", ENGINE_UNIT, timeout=STOP_TIMEOUT_S)
+    if _start["attempts"] >= START_RETRIES:
+        _start["backoff_until"] = time.time() + START_BACKOFF_S
+        _start["attempts"] = 0
+        _state["engine"] = "failed"
+        _log(f"{ENGINE_UNIT} не поднялся за {START_WAIT_S:.0f} с {START_RETRIES} раза подряд — "
+             f"пауза {START_BACKOFF_S:.0f} с, потом снова")
+    else:
+        _state["engine"] = "yielded"
+        _log(f"{ENGINE_UNIT} не ответил на health за {START_WAIT_S:.0f} с — остановил, "
+             f"попытка {_start['attempts']}/{START_RETRIES} на следующем круге")
+    _state["since"] = time.time()
 
 
 class Handler(BaseHTTPRequestHandler):

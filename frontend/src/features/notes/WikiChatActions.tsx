@@ -60,7 +60,7 @@ const PERSONAL_SECTION_REASON = 'личный раздел — с Ф2';
 export function analyzeResultText(r: WikiChatAnalyzeOk): string {
   switch (r.outcome) {
     case 'applied': return 'Разобрано — записано в вики';
-    case 'awaiting_human': return 'Есть спорное — во «Входящих»';
+    case 'awaiting_human': return 'Есть спорное — в «Решениях»';
     case 'nothing_new':
     case 'up_to_date': return 'Нового нет';
     default: return analyzeRefusalText(r.reason);
@@ -87,7 +87,7 @@ function writeSeen(sessionId: string, finishedAt: string) {
 function noteIngestText(r: WikiNoteIngestDto): string {
   switch (r.outcome) {
     case 'applied': return 'пакет собран и применён';
-    case 'awaiting_human': return 'пакет во «Входящих»: ждёт твоего решения';
+    case 'awaiting_human': return 'пакет в «Решениях»: ждёт твоего решения';
     case 'nothing_new': return 'нечего добавить';
     default:
       if (r.reason === PERSONAL_SECTION_REASON) return personalSectionRefusalText;

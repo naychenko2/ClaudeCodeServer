@@ -81,7 +81,8 @@ public sealed class VideoFrameReader(IImageFrameSource? images = null, VideoEdit
         if (frame.Kind == FrameRef.KindImage) return await ReadImageAsync(ownerId, actorId, frame, ct);
         if (frame.Kind != FrameRef.KindFile || string.IsNullOrWhiteSpace(frame.Path))
             return Frame.Fail("Неизвестный вид кадра");
-        if (scope.Project is not { } project)
+        // Загруженный «С компьютера» кадр личного чата — рабочая папка загрузок; остальное — файл проекта или «Личного»
+        if ((scope.IsPersonal && VideoEditWorkspace.IsFrameRef(frame.Path)) || scope.Project is not { } project)
             return await ReadPersonalFileAsync(ownerId, frame.Path, ct);
 
         if (ProjectLinkGuard.ResolveInsideAs(project.RootPath, frame.Path, actorId) is not { } full || !File.Exists(full))

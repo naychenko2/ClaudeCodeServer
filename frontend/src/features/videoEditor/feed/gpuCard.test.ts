@@ -129,7 +129,7 @@ describe('SceneCardView: gpu есть → без собственной поло
   const makeView = (p: number | undefined): SceneCardViewData => ({
     kind: 'scene', sceneId: 'sc1', name: 'Сцена', focused: false, byClaude: false,
     progress: { label: 'Идёт', p }, stages: null, upscaleFail: null, upscaledCaption: null,
-    launchLine: null, failure: null, outcome: null, versions: [], index: 0, version: null,
+    launchLine: null, failure: null, outcome: null, versions: [], previews: [], index: 0, version: null,
     versionModel: null, isCurrent: true, savedPath: null, canSave: false, canDownload: false,
     canAddToFilm: false, stale: [], emptyText: null, film: null,
   });

@@ -71,7 +71,7 @@ import { useExternalPreviewLinksState, ensureExternalPreviewLinks } from '../hoo
 import { plural } from '../lib/plural';
 import { applyContextUpdated, loadChatContext, setActiveChatForContext } from '../lib/chatContext';
 import { ensurePersonasLoaded } from '../lib/personas';
-import { createChatWithContextPersona } from '../lib/defaultPersona';
+import { createChatWithContextPersona, type ProjectChatContext } from '../lib/defaultPersona';
 import { chatToRestore, createLatestGuard, encodePendingChat, parsePendingChat } from '../lib/pendingProjectChat';
 import { afterChatSwitcherClosed } from '../features/home/chatSwitcherHistory';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
@@ -322,6 +322,23 @@ function histReducer(s: FileHistoryState, a: FileHistoryAction): FileHistoryStat
     case 'forward':
       return s.cursor < s.entries.length - 1 ? { ...s, cursor: s.cursor + 1 } : s;
   }
+}
+
+// Контекст проекта для хелпера создания чата (W4-FB1, дефект b505fa3d): литерал ОБЯЗАН нести myRole —
+// без него резолвер не видит, что проект общий, и чат общего проекта молча падает на личную
+// персону (бэк отказывает личную персону в общем чате — global_persona_in_shared).
+// liveDefaultPersonaId — значение из ref: project из localStorage может не знать свежего дефолта
+// (см. блок projectDefaultId в компоненте). Оба колбэка создания чата собирают контекст здесь.
+export function projectChatContextFor(
+  project: Project,
+  liveDefaultPersonaId?: string | null,
+): ProjectChatContext {
+  return {
+    id: project.id,
+    defaultPersonaId: liveDefaultPersonaId ?? null,
+    ownerId: project.ownerId ?? null,
+    myRole: project.myRole,
+  };
 }
 
 export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
@@ -1799,10 +1816,10 @@ const windowWidth = useWindowWidth();
     if (creatingSession) return;
     setCreatingSession(true);
     try {
-      // Чат создаётся от лица дефолт-персоны проекта; ownerId обязателен: без него
-      // участник общего проекта молча получил бы личный чат вне проекта (W3-F2a)
+      // Чат создаётся от лица дефолт-персоны проекта; ownerId и myRole обязательны: без них
+      // участник общего проекта молча получил бы личный чат вне проекта (W3-F2a, W4-FB1)
       const s = await createChatWithContextPersona(
-        { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null, ownerId: project.ownerId ?? null }, { mode: 'auto' });
+        projectChatContextFor(project, projectDefaultIdRef.current), { mode: 'auto' });
       handleSelectSession(s);
     } catch (e) {
       showToast('Чат', e instanceof Error ? e.message : 'Не удалось создать чат');
@@ -1818,9 +1835,9 @@ const windowWidth = useWindowWidth();
     void (async () => {
       try {
         if (where === 'chat' && activeSession) { handleSelectSession(activeSession, msg); return; }
-        // Чат создаётся от лица дефолт-персоны проекта; ownerId обязателен — см. handleCreateSession
+        // Чат создаётся от лица дефолт-персоны проекта; ownerId и myRole обязательны — см. handleCreateSession
         const s = await createChatWithContextPersona(
-          { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null, ownerId: project.ownerId ?? null }, { mode: 'auto' });
+          projectChatContextFor(project, projectDefaultIdRef.current), { mode: 'auto' });
         handleSelectSession(s, msg);
       } catch (e) {
         showToast('Чат', e instanceof Error ? e.message : 'Не удалось открыть чат');

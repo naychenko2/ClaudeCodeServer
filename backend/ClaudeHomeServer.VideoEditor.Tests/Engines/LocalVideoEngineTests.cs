@@ -34,7 +34,10 @@ public class LocalVideoEngineTests
 
     private static LocalVideoEngine Fast(ILocalVideoMedia media) => new(media) { PollInterval = TimeSpan.FromMilliseconds(1) };
 
-    public static TheoryData<string> RefusedScopes => new() { "personal", "personal-with-project", "device" };
+    public static TheoryData<string> RefusedScopes => new() { "device" };
+
+    // Личная область пускает: результат уходит байтами в версию нити, проект не нужен (ADR-022)
+    public static TheoryData<string> AdmittedPersonalScopes => new() { "personal", "personal-with-project" };
 
     private static VideoEditScope ScopeOf(string kind) => kind switch
     {
@@ -55,7 +58,7 @@ public class LocalVideoEngineTests
         var result = await engine.RunAsync(Scene(ScopeOf(kind)), new Recorder(), CancellationToken.None);
 
         result.Outcome.Should().Be(VideoOutcome.Rejected);
-        result.Error.Should().Be(kind == "device" ? LocalVideoEngine.DeviceProjectReason : LocalVideoEngine.PersonalScopeReason);
+        result.Error.Should().Be(LocalVideoEngine.DeviceProjectReason);
         result.Charged.Should().BeFalse();
         media.Invocations.Should().BeEmpty();
     }
@@ -81,7 +84,25 @@ public class LocalVideoEngineTests
 
         engine.ScopeRefusal(VideoEditScope.Of(ServerProject)).Should().BeNull();
         engine.ScopeRefusal(VideoEditScope.Of(DeviceProject)).Should().Be(LocalVideoEngine.DeviceProjectReason);
-        engine.ScopeRefusal(new VideoEditScope(VideoEditScope.Personal, null)).Should().Be(LocalVideoEngine.PersonalScopeReason);
+        engine.ScopeRefusal(new VideoEditScope(VideoEditScope.Personal, null)).Should().BeNull("личная область пускает локальное видео");
+        // «Личное» с папкой (ADR-040): ключ personal, Project есть — движок по-прежнему пускает
+        engine.ScopeRefusal(new VideoEditScope(VideoEditScope.Personal, ServerProject)).Should().BeNull("личная область с папкой пускает локальное видео");
+    }
+
+    [Theory]
+    [MemberData(nameof(AdmittedPersonalScopes))]
+    public async Task Estimate_PersonalScope_GoesToSeamAndIsFree(string kind)
+    {
+        var media = new Mock<ILocalVideoMedia>();
+        media.SetupGet(m => m.Available).Returns(true);
+        media.Setup(m => m.QueueLengthAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        var engine = new LocalVideoEngine(media.Object);
+
+        var estimate = await engine.EstimateAsync(H3(engine), Scene(ScopeOf(kind)), CancellationToken.None);
+
+        estimate.Amount.Should().Be(0);
+        estimate.QueueLength.Should().Be(1);
+        media.Verify(m => m.QueueLengthAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

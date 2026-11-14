@@ -15,6 +15,8 @@ public static class VideoEditorAgentTools
         "mcp__video-editor__video_scene_set",
         "mcp__video-editor__video_suggest_prompt",
         "mcp__video-editor__video_shoot",
+        "mcp__video-editor__video_enhance",
+        "mcp__video-editor__video_voice",
         "mcp__video-editor__video_cancel",
         "mcp__video-editor__video_wait",
         "mcp__video-editor__video_save_scene",

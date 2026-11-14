@@ -7,8 +7,9 @@ vi.mock('aihome_shell/kit', () => ({
 }));
 
 const { voicesApi } = await import('./api');
+const { __resetVoicesScope } = await import('../scope');
 const {
-  EMPTY_TITLE, PERSONAL_TITLE, isStale, newVoiceProblem, quotePrice, recreateAction,
+  EMPTY_TITLE, isStale, newVoiceProblem, quotePrice, recreateAction,
   sampleRemoval, samplesProblem, voicesView, voiceSubtitle, whereWorks,
 } = await import('./model');
 type AudioVoice = import('./api').AudioVoice;
@@ -31,11 +32,11 @@ function voice(over: Partial<AudioVoice> = {}): AudioVoice {
   };
 }
 
-beforeEach(() => { calls.length = 0; });
+beforeEach(() => { calls.length = 0; __resetVoicesScope(); });
 
 describe('список голосов', () => {
   it('проект: список по имени, тип и число образцов в подписи', () => {
-    const view = voicesView(false, { available: true, voices: [voice({ slug: 'ya', name: 'Яна' }), voice()] }, null);
+    const view = voicesView({ available: true, voices: [voice({ slug: 'ya', name: 'Яна' }), voice()] }, null);
     expect(view.kind).toBe('list');
     expect(view.kind === 'list' && view.voices.map(v => v.name)).toEqual(['Аня', 'Яна']);
     expect(voiceSubtitle(voice())).toBe('По записям · 2 образца');
@@ -43,9 +44,9 @@ describe('список голосов', () => {
   });
 
   it('пустой проект, загрузка и ошибка различаются', () => {
-    expect(voicesView(false, { available: true, voices: [] }, null).kind).toBe('empty');
-    expect(voicesView(false, null, null).kind).toBe('loading');
-    expect(voicesView(false, null, 'сеть')).toEqual({ kind: 'error', message: 'сеть' });
+    expect(voicesView({ available: true, voices: [] }, null).kind).toBe('empty');
+    expect(voicesView(null, null).kind).toBe('loading');
+    expect(voicesView(null, 'сеть')).toEqual({ kind: 'error', message: 'сеть' });
     expect(EMPTY_TITLE).toBe('Голосов пока нет');
   });
 
@@ -137,18 +138,31 @@ describe('протухший клон MiniMax', () => {
   });
 });
 
-describe('личный чат', () => {
-  it('честный пустой экран и по области, и по ответу available:false', () => {
-    expect(voicesView(true, null, null)).toEqual({ kind: 'personal' });
-    expect(voicesView(false, { available: false, voices: [] }, null)).toEqual({ kind: 'personal' });
-    expect(PERSONAL_TITLE).toBe('«Голоса» живут в проекте');
+describe('личный чат: «Личное» владельца (ADR-040 Ф2-5)', () => {
+  it('нет «Личного» — пустой список без недоступности: пустой экран с кнопкой «Голос», а не заглушка', () => {
+    expect(voicesView({ available: true, voices: [] }, null).kind).toBe('empty');
   });
 
-  it('список — без сети (сервер всё равно ответил бы available:false), мутации отказывают до запроса', async () => {
-    expect(await voicesApi.list('personal', 's1')).toEqual({ available: false, voices: [] });
-    expect(() => voicesApi.recreateQuote('personal', 'anya')).toThrow();
-    expect(() => voicesApi.create('personal', { name: 'Аня' })).toThrow('Библиотека «Голоса» живёт в проекте');
-    expect(() => voicesApi.remove('personal', 'anya')).toThrow();
+  it('список и мутации ходят на личные ручки чата', async () => {
+    await voicesApi.list('personal', 's 1');
+    await voicesApi.create('personal', { name: 'Аня' });
+    await voicesApi.update('personal', 'anya', { name: 'Яна' });
+    await voicesApi.remove('personal', 'anya');
+    await voicesApi.addSamples('personal', 'anya', { files: [] });
+    await voicesApi.recreateQuote('personal', 'anya');
+    expect(calls.map(c => [c.url, c.options?.method ?? 'GET'])).toEqual([
+      ['/audio-editor/chats/s%201/voices', 'GET'],
+      ['/audio-editor/chats/s%201/voices', 'POST'],
+      ['/audio-editor/chats/s%201/voices/anya', 'PATCH'],
+      ['/audio-editor/chats/s%201/voices/anya', 'DELETE'],
+      ['/audio-editor/chats/s%201/voices/anya/samples', 'POST'],
+      ['/audio-editor/chats/s%201/voices/anya/recreate?provider=minimax', 'POST'],
+    ]);
+    expect(voicesApi.fileUrl('personal', 'anya', 'a b.wav')).toBe('/api/audio-editor/chats/s%201/voices/anya/files/a%20b.wav?access_token=tok');
+  });
+
+  it('без чата в области мутация отказывает до запроса', () => {
+    expect(() => voicesApi.create('personal', { name: 'Аня' })).toThrow('Личная область звука без чата');
     expect(calls).toHaveLength(0);
   });
 });

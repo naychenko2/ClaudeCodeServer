@@ -1,11 +1,11 @@
 // Какое действие выбрано у основного объекта и есть ли у строки контекста чип «Чем».
-// «Чем» рисуется только при выбранном run-действии (Р2): в «Чате» сообщение уходит Claude,
-// исполнитель не нужен, и чипа в строке нет вовсе.
+// «Чем» рисуется при выбранном run-действии (Р2). В «Чате» сообщение уходит Claude, и чип есть, только
+// если вид отдаёт `chatExecutors` — с чем пойдут запуски агента (картинка: «Править» и «Создать»).
 import { withThumb } from './thumbs';
 import { objectKey, resolveAction } from './actionMemory';
 import { questionValue, runEntry } from './actionRun';
 import type {
-  ChatContextPrimary, ChatContextRef, ContextAction, ContextKindApi, ContextKindCtx, ExecutorListModel,
+  ChatContextPrimary, ChatContextRef, ChatExecutorSection, ContextAction, ContextKindApi, ContextKindCtx, ExecutorListModel,
 } from './types';
 
 export interface RowAction {
@@ -29,3 +29,20 @@ export function selectRowAction(
 // Заголовок меню «Чем» по макету: «Чем выполнить «Стемы»»
 export const execMenuTitle = (action: ContextAction | null): string =>
   action ? `Чем выполнить «${action.label}»` : 'Чем выполнить';
+
+// Модель чипа «Чем»: у run-действия — его исполнители; в «Чате» — разделы вида (чип — первый, меню — все);
+// нет ни того, ни другого — чипа нет
+export interface RowExecModel extends ExecutorListModel {
+  title: string;
+  sections?: readonly ChatExecutorSection[];
+}
+
+export function rowExecOf(api: ContextKindApi | null, ctx: ContextKindCtx, sel: RowAction | null): RowExecModel | null {
+  if (!sel) return null;
+  const { action, executors } = sel;
+  if (executors) return { rows: executors.rows, value: executors.value, onChange: executors.onChange, title: execMenuTitle(action) };
+  const chat = action ? [] : api?.chatExecutors?.(ctx) ?? [];
+  return chat.length
+    ? { rows: chat[0].rows, value: chat[0].value, onChange: chat[0].onChange, title: execMenuTitle(null), sections: chat }
+    : null;
+}

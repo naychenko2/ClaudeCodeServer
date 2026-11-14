@@ -7,17 +7,18 @@
 // Клик по карточке, а не по её кнопке, — выбор человеком: панель следует за ним, только если открыта.
 
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Info, Save, Target, TriangleAlert, Zap } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Info, Maximize2, Save, Target, TriangleAlert, Zap } from 'lucide-react';
 import {
   Badge, Button, ByClaude, C, FS, IconButton, Notice, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useChatContext,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
-import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
+import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoEnhanceQuote, type VideoLaunch, type VideoScene } from '../api';
 import { filmFolder, filmPathOf, newFilmPath, saveTargetFor, snapshotOf, type SaveTarget } from '../film/model';
 import { progressLabel } from '../editor/useScene';
-import { currentResolved, downloadClip, openFilmPanel, openScenePanel, retryUpscale, saveScene, selectFilmByHuman, selectSceneByHuman, stopJob, stopUpscale, takeVersion } from '../scene/actions';
+import { currentResolved, downloadClip, enhanceVersion, openFilmPanel, openScenePanel, retryUpscale, saveScene, selectFilmByHuman, selectSceneByHuman, stopJob, stopUpscale, takeVersion } from '../scene/actions';
 import { GpuQueueBlock } from './gpuCard';
 import { currentVersion, modelLabel, plural, staleNotes } from '../scene/model';
+import { etaText } from '../context/format';
 import { isPersonalScope, videoScope } from '../scope';
 import {
   filmName, getCatalog, getFilm, getFocusedFilmPath, getJobsOf, loadFilm, loadFilmList, patchFilm, useFilmList, useJobTick, useVideoStoreVersion, useVideoThreads, type JobProgress,
@@ -26,11 +27,13 @@ import { SCENE_KIND } from '../context/state';
 import { stagesOf, upscaleFailView, upscaleInfo, upscaledCaption, type CardStage } from './upscale';
 import { ic } from '../editor/primitives';
 import { recordOf, str } from './records';
+import { SoundChooser } from '../sound/SoundChooser';
 
 
 // Потолки карточки в ленте: ширина читаемой колонки и высота плеера
 const CARD_MAX_W = 560;
 const PLAYER_MAX_H = 280;
+const LAUNCH_PLAYER_MAX_H = 180;
 
 // ── Модель карточки: чистая функция от сцены, записи ленты и хода задач ──
 
@@ -55,6 +58,8 @@ export function priceOfVersions(versions: VideoClipVersion[]): string | null {
   return cr > 0 ? `${cr} ${plural(cr, 'кредит', 'кредита', 'кредитов')}` : null;
 }
 
+export interface LaunchPreview { versionId: string; caption: string }
+
 export interface SceneCardView {
   kind: 'scene' | 'launch';
   sceneId: string;
@@ -70,24 +75,43 @@ export interface SceneCardView {
   upscaleFail: { text: string; tone: 'warning' | 'info'; actionLabel: string | null; jobId: string; versionId: string } | null;
   // «Версия 1 · 1440p · 2528×1440» под превью увеличенного клипа
   upscaledCaption: string | null;
+  // «Увеличить ×2/×4» (RelayVSR, локально): действие над готовой версией, отдельное от «Макс»; нет у версии, уже
+  // полученной увеличением. enhanceRun — идёт именно оно (у него своя «Отменить увеличение» вне двухстадийной полосы «Макс»)
+  canEnhance: boolean;
+  enhanceRun: boolean;
+  // «×2 · 1728×960» у версии, полученной увеличением
+  enhancedCaption: string | null;
   // «Veo 3.1 · 2 вар. · ≈ $3.20» — что запустили и почём
   launchLine: string | null;
   failure: string | null;
   // Итог запуска для компактной строки: «Отменено · деньги не списаны», «Готово: 2 варианта»
   outcome: string | null;
   versions: VideoClipVersion[];
+  // Строка запуска: готовые версии именно этого jobId для встроенного превью; пусто, пока идёт съёмка, и у сбоя без версий
+  previews: LaunchPreview[];
   index: number;
   version: VideoClipVersion | null;
   // Подпись модели версии — из каталога, не сырой id
   versionModel: string | null;
   isCurrent: boolean;
   savedPath: string | null;
+  // Личная область: сохранено в «Личное», а не в проект
+  personal: boolean;
   canSave: boolean;
   canDownload: boolean;
   canAddToFilm: boolean;
   stale: string[];
   emptyText: string | null;
   film: { path: string; name: string; position: number } | null;
+}
+
+function previewCaption(x: VideoClipVersion, catalog: VideoCatalog | null): string {
+  return [
+    modelLabel(catalog, x.provider, x.model),
+    x.width && x.height ? `${x.width}×${x.height}` : null,
+    `${x.durationSec} с`,
+    x.hasSound ? 'со звуком' : null,
+  ].filter(Boolean).join(' · ');
 }
 
 export function sceneCardView(p: {
@@ -123,7 +147,7 @@ export function sceneCardView(p: {
   if (!running && launch?.status === 'cancelled') {
     outcome = versions.length ? 'Отменено · готовые варианты сохранены' : 'Отменено · деньги не списаны';
   } else if (!running && launch?.status === 'done' && versions.length) {
-    outcome = `Готово: ${versions.length} ${plural(versions.length, 'вариант', 'варианта', 'вариантов')} — в карточке сцены`;
+    outcome = `Готово: ${versions.length} ${plural(versions.length, 'вариант', 'варианта', 'вариантов')}`;
   }
   return {
     kind: jobId ? 'launch' : 'scene',
@@ -138,21 +162,28 @@ export function sceneCardView(p: {
       ? (f => ({ text: f.text, tone: f.tone, actionLabel: f.action?.label ?? null, jobId: version.jobId, versionId: version.versionId }))(upscaleFailView(vInfo, versions, version))
       : null,
     upscaledCaption: !jobId && version ? upscaledCaption(vInfo, version) : null,
+    canEnhance: !jobId && !running && !!version && !version.enhanceScale && !version.upscaleError,
+    enhanceRun: !jobId && !stages && !!jobs[0] && (runLaunch?.model ?? '').startsWith('relayvsr-x'),
+    enhancedCaption: !jobId && version?.enhanceScale
+      ? `Увеличено ×${version.enhanceScale}${version.width && version.height ? ` · ${version.width}×${version.height}` : ''}`
+      : null,
     launchLine,
     failure,
     outcome,
     versions,
+    previews: jobId && !running ? versions.map(x => ({ versionId: x.versionId, caption: previewCaption(x, p.catalog ?? null) })) : [],
     index,
     version,
     versionModel: version ? modelLabel(p.catalog ?? null, version.provider, version.model) : null,
     isCurrent: !!version && version.versionId === cur?.versionId,
     savedPath: saved?.path ?? null,
-    canSave: !!version && !personal && !saved,
+    personal,
+    canSave: !!version && !saved,
     canDownload: !!version && personal,
-    canAddToFilm: !!version && !personal && !scene.filmRef,
+    canAddToFilm: !!version && !scene.filmRef,
     stale: staleNotes(scene),
     emptyText: !version && !running ? (scene.settings.text ? `«${scene.settings.text.slice(0, 140)}»` : 'Сцена без клипа — кадры и текст в редакторе сцены') : null,
-    film: scene.filmRef && !personal ? { path: scene.filmRef.path, name: filmName(scene.filmRef.path), position: scene.filmRef.position } : null,
+    film: scene.filmRef ? { path: scene.filmRef.path, name: filmName(scene.filmRef.path), position: scene.filmRef.position } : null,
   };
 }
 
@@ -177,12 +208,44 @@ export interface SceneCardActions {
   onDownload: () => void;
   onAddToFilm: () => void;
   onReshoot: () => void;
+  // «Озвучить сцену»: звук по видео версии; нет колбэка (строка запуска) — кнопки нет
+  onVoice?: () => void;
   onWork: () => void;
   onOpenFilm: () => void;
   // «Макс» local H3: отмена запуска и только увеличения, «Повторить» после сбоя увеличения
   onCancelJob?: () => void;
   onCancelUpscale?: () => void;
   onRetryUpscale?: () => void;
+  // «Увеличить ×2/×4»: котировка (время по замеру) и запуск
+  onEnhanceQuote?: () => Promise<VideoEnhanceQuote | null>;
+  onEnhance?: (scale: 2 | 4) => void;
+}
+
+// «Увеличить» → выбор ×2 / ×4 с ожидаемым временем из замера сервера; нет числа — «время не замерено», не выдумываем
+function EnhancePicker({ a, busy }: { a: SceneCardActions; busy: boolean }) {
+  const [quote, setQuote] = useState<VideoEnhanceQuote | null | 'loading'>(null);
+  const [open, setOpen] = useState(false);
+  const toggle = () => {
+    if (open) { setOpen(false); return; }
+    setOpen(true);
+    setQuote('loading');
+    void a.onEnhanceQuote?.().then(q => setQuote(q));
+  };
+  return (
+    <span data-video-enhance="" style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
+      <Button size="sm" variant="ghost" leftIcon={ic(Maximize2)} loading={busy} onClick={toggle}
+        title="Локально на видеокарте: ролик станет в 2 или 4 раза больше по каждой стороне, звук сохранится">Увеличить</Button>
+      {open && quote === 'loading' && <span style={{ fontSize: FS.xs, color: C.textMuted }}>Считаем время…</span>}
+      {open && quote === null && <span style={{ fontSize: FS.xs, color: C.warningText }}>Не удалось получить варианты</span>}
+      {open && quote && quote !== 'loading' && quote.options.map(o => (
+        <Button key={o.scale} size="xs" variant="secondary" disabled={!o.available} data-video-enhance-scale={o.scale}
+          title={o.available ? (o.width && o.height ? `Результат ${o.width}×${o.height}` : undefined) : o.reason}
+          onClick={() => { setOpen(false); a.onEnhance?.(o.scale); }}>
+          ×{o.scale} · {o.available ? (etaText(o.etaSeconds) ?? 'время не замерено') : 'недоступно'}
+        </Button>
+      ))}
+    </span>
+  );
 }
 
 // Стадии «Макс» local H3: «Снимаем · 1344×768…» и «Увеличиваем до 1440p…», на второй своя отмена
@@ -241,6 +304,12 @@ export function SceneCardView({ v, src, busy, a, chooser, gpuBlock }: { v: Scene
         <video data-video-player="" controls preload="metadata" playsInline src={src}
           style={{ width: '100%', maxHeight: PLAYER_MAX_H, borderRadius: R.md, background: C.bgInset, display: 'block' }} />
       )}
+      {v.enhancedCaption && <div data-video-enhanced="" style={{ fontSize: FS.xs, color: C.textMuted }}>{v.enhancedCaption}</div>}
+      {v.enhanceRun && a.onCancelUpscale && (
+        <div data-video-enhance-cancel="" style={{ display: 'inline-flex' }}>
+          <Button size="xs" variant="secondary" onClick={a.onCancelUpscale}>Отменить увеличение</Button>
+        </div>
+      )}
       {v.upscaledCaption && <div data-video-upscaled="" style={{ fontSize: FS.xs, color: C.textMuted }}>{v.upscaledCaption}</div>}
       {v.upscaleFail && (
         <Notice tone={v.upscaleFail.tone} icon={v.upscaleFail.tone === 'warning' ? TriangleAlert : Info} data-video-upscale-fail=""
@@ -261,9 +330,9 @@ export function SceneCardView({ v, src, busy, a, chooser, gpuBlock }: { v: Scene
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
         {v.canDownload && (
           <Button size="sm" variant="secondary" leftIcon={ic(Download)} onClick={a.onDownload}
-            title="В личном чате клип живёт только в этом чате — скачайте файл">Скачать</Button>
+            title="Скачать клип файлом">Скачать</Button>
         )}
-        {v.savedPath && <Badge tone="success">В проекте: {v.savedPath.split('/').pop()}</Badge>}
+        {v.savedPath && <Badge tone="success">{v.personal ? 'В «Личном»' : 'В проекте'}: {v.savedPath.split('/').pop()}</Badge>}
         {v.canSave && <Button size="sm" variant="secondary" leftIcon={ic(Save)} loading={busy} onClick={a.onSave}>Сохранить сцену</Button>}
         {v.canAddToFilm && <Button size="sm" variant="ghost" loading={busy} onClick={a.onAddToFilm}>В фильм →</Button>}
         {!v.focused && (
@@ -271,6 +340,8 @@ export function SceneCardView({ v, src, busy, a, chooser, gpuBlock }: { v: Scene
             title="Сцена станет основной в контексте хода: чипы действий и панель «Контекст»">Работать с этой</Button>
         )}
         {v.version && <Button size="sm" variant="ghost" onClick={a.onReshoot}>Переснять</Button>}
+        {v.canEnhance && a.onEnhance && a.onEnhanceQuote && <EnhancePicker a={a} busy={busy} />}
+        {v.version && a.onVoice && <Button size="sm" variant="ghost" onClick={a.onVoice} title="Сгенерировать звук по видео этой версии: новая версия сцены со звуком">Озвучить сцену</Button>}
       </div>
       {chooser}
       {v.film && (
@@ -283,9 +354,10 @@ export function SceneCardView({ v, src, busy, a, chooser, gpuBlock }: { v: Scene
   );
 }
 
-// Запуск в ленте — компактная строка под карточкой сцены: модель, число вариантов, цена, ход и итог.
-// Плеер и варианты живут в ОДНОЙ полной карточке сцены (якорь video_scene), поэтому съёмка не рисует двойника
-export function LaunchRowView({ v, a }: { v: SceneCardView; a: Pick<SceneCardActions, 'onPick'> }) {
+// Запуск в ленте — компактная строка: модель, число вариантов, цена, ход и итог. Готовые версии этого запуска
+// показываются тут же компактными плеерами (карточка сцены может стоять далеко вверху ленты); полная карточка
+// с версиями ‹ ›, «Сохранить», «В фильм» остаётся одна — якорь video_scene
+export function LaunchRowView({ v, a, srcOf }: { v: SceneCardView; a: Pick<SceneCardActions, 'onPick'>; srcOf?: (versionId: string) => string }) {
   // Тихая строка без рамки: карточка в ленте одна — сцена, запуск лишь подписывает, что и почём снимали
   return (
     <div data-video-card="launch" data-scene={v.sceneId} data-current={v.focused ? 'true' : 'false'}
@@ -300,6 +372,19 @@ export function LaunchRowView({ v, a }: { v: SceneCardView; a: Pick<SceneCardAct
       </div>
       {v.failure && <Line>{v.failure}</Line>}
       {v.outcome && <Line><span data-video-launch-outcome="">{v.outcome}</span></Line>}
+      {srcOf && v.previews.length > 0 && (
+        <div data-video-launch-previews="" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm }}>
+          {v.previews.map(pr => (
+            <div key={pr.versionId} data-video-launch-preview={pr.versionId}
+              style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: v.previews.length > 1 ? '1 1 180px' : '1 1 100%', minWidth: 0, maxWidth: v.previews.length > 1 ? 260 : 360 }}>
+              {/* #t=0.1 — браузер показывает первый кадр как постер до нажатия */}
+              <video controls preload="metadata" playsInline src={`${srcOf(pr.versionId)}#t=0.1`}
+                style={{ width: '100%', maxHeight: LAUNCH_PLAYER_MAX_H, borderRadius: R.md, background: C.bgInset, display: 'block' }} />
+              <span data-video-launch-preview-caption="" style={{ fontSize: FS.xs, color: C.textMuted }}>{pr.caption}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -320,7 +405,7 @@ export async function addToFilm(scope: string, sessionId: string, scene: VideoSc
 }
 
 // «Сохранить сцену»: клип ложится в папку фильма и встаёт в него
-export async function saveToFolder(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, to: SaveTarget): Promise<void> {
+export async function saveToFolder(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, to: SaveTarget | null): Promise<void> {
   const res = await saveScene(scope, sessionId, scene, versionId, to);
   if (res?.addedToFilm) void loadFilmList(scope, sessionId, true);
 }
@@ -328,6 +413,8 @@ export async function saveToFolder(scope: string, sessionId: string, scene: Vide
 // Старт «Сохранить сцену» / «В фильм →»: открытый фильм старше папки сцены; нигде не лежит — false, спросить человека
 export function startSceneSave(scope: string, sessionId: string, scene: VideoScene, versionId: string | undefined, kind: 'save' | 'film'): boolean {
   const to = saveTargetFor(getFocusedFilmPath(sessionId), scene);
+  // Личная область: «Сохранить сцену» вне фильма — плоский клип в Personal/video/, спрашивать нечего
+  if (!to && kind === 'save' && isPersonalScope(scope)) { void saveToFolder(scope, sessionId, scene, versionId, null); return true; }
   if (!to) return false;
   void (kind === 'save' ? saveToFolder(scope, sessionId, scene, versionId, to) : addToFilm(scope, sessionId, scene, versionId, to));
   return true;
@@ -366,6 +453,7 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const [pos, setPos] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [ask, setAsk] = useState<'save' | 'film' | null>(null);
+  const [voicing, setVoicing] = useState(false);
   const scene = state.scenes.find(s => s.sceneId === sceneId) ?? null;
   if (!scene || !sessionId) return null;
   const jobs = getJobsOf(sessionId, scene.sceneId);
@@ -375,7 +463,8 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
   const ver = v.version;
   if (jobId) {
-    return <LaunchRowView v={v} a={{ onPick: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId); } }} />;
+    return <LaunchRowView v={v} srcOf={vid => videoApi.versionFileUrl(scope, sessionId, scene.sceneId, vid)}
+      a={{ onPick: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId); } }} />;
   }
   // Папка — из открытого фильма; нет фильма и у сцены нет папки — человека спрашивают
   const act = (kind: 'save' | 'film', folder: string) => run(() => (kind === 'save'
@@ -392,7 +481,9 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
     : null;
   return (
     <SceneCardView v={v} busy={busy} gpuBlock={gpuBlock}
-      chooser={ask && <FilmChooser scope={scope} sessionId={sessionId} onCancel={() => setAsk(null)}
+      chooser={voicing && ver
+        ? <SoundChooser scope={scope} sessionId={sessionId} sceneId={scene.sceneId} versionId={ver.versionId} durationSec={ver.durationSec} onClose={() => setVoicing(false)} />
+        : ask && <FilmChooser scope={scope} sessionId={sessionId} onCancel={() => setAsk(null)}
         onPick={folder => { const k = ask; setAsk(null); void act(k, folder); }} />}
       src={ver ? videoApi.versionFileUrl(scope, sessionId, scene.sceneId, ver.versionId) : null}
       a={{
@@ -404,10 +495,16 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
         onDownload: () => { if (ver) downloadClip(scope, sessionId, scene, ver.versionId); },
         onAddToFilm: () => start('film'),
         onWork: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId); },
+        onVoice: () => setVoicing(v => !v),
         onReshoot: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId).then(() => openScenePanel(sessionId)); },
         onCancelJob: () => { const j = getJobsOf(sessionId, scene.sceneId)[0]; if (j) void stopJob(scope, sessionId, j.jobId); },
         onCancelUpscale: () => { const j = getJobsOf(sessionId, scene.sceneId)[0]; if (j) void stopUpscale(scope, sessionId, j.jobId); },
         onRetryUpscale: () => { const f = v.upscaleFail; if (f) void run(() => retryUpscale(scope, sessionId, scene.sceneId, f.versionId)); },
+        onEnhanceQuote: async () => {
+          if (!ver) return null;
+          try { return await videoApi.enhanceQuote(scope, sessionId, scene.sceneId, ver.versionId); } catch { return null; }
+        },
+        onEnhance: scale => { if (ver) void run(() => enhanceVersion(scope, sessionId, scene.sceneId, ver.versionId, scale)); },
         onOpenFilm: () => { if (v.film) { const p = v.film.path; void selectFilmByHuman(scope, sessionId, p).then(() => openFilmPanel(sessionId, p)); } },
       }} />
   );

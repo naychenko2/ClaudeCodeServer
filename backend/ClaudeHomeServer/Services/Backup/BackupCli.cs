@@ -3,7 +3,10 @@ using System.IO.Compression;
 
 namespace ClaudeHomeServer.Services.Backup;
 
-// Режимы командной строки: exe --backup | --restore <zip> | --inspect <zip>.
+// Режимы командной строки: exe --backup | --snapshot | --restore <zip|каталог снимка> | --inspect <zip>.
+//
+// --backup — полный zip (как плановый бэкап); --snapshot — инкрементальный снимок на жёстких
+// ссылках в data/backups/snapshots, быстрый шаг перед выкаткой (BACKUP_MODE в switch-release.sh).
 //
 // Зачем не только кнопка в вебе: бэкап нужен ровно тогда, когда приложение не работает —
 // сторы обнулились, сервер не стартует, диск новый. Механизм восстановления, живущий
@@ -23,13 +26,14 @@ public static class BackupCli
         if (args.Length == 0) return false;
 
         var mode = args[0];
-        if (mode is not ("--backup" or "--restore" or "--inspect")) return false;
+        if (mode is not ("--backup" or "--snapshot" or "--restore" or "--inspect")) return false;
 
         try
         {
             return mode switch
             {
                 "--backup" => RunBackup(),
+                "--snapshot" => RunSnapshot(),
                 "--restore" => RunRestore(args),
                 "--inspect" => RunInspect(args),
                 _ => false,
@@ -71,9 +75,35 @@ public static class BackupCli
             Console.WriteLine($"  {s.Chats} чатов · {s.Personas} персон · {s.Tasks} задач · " +
                               $"{s.Notes} заметок · {s.Projects} проектов");
             Console.WriteLine($"  секреты отдельно: {ctx.SecretsDir}");
+            if (result.Metrics is not null) Console.WriteLine(result.Metrics.Format());
         }
         else
         {
+            Console.Error.WriteLine($"ОШИБКА: {result.Error}");
+            Environment.ExitCode = 1;
+        }
+        return true;
+    }
+
+    private static bool RunSnapshot()
+    {
+        var ctx = BuildContext(BuildConfiguration());
+        Console.WriteLine($"Снимок: {ctx.DataDir} → {ctx.SnapshotsDir}");
+
+        var result = BackupCore.SnapshotIncremental(ctx);
+        if (result.Ok)
+        {
+            var s = result.Manifest!.Summary;
+            Console.WriteLine($"Готово: {result.ArchivePath}");
+            Console.WriteLine($"  {s.Chats} чатов · {s.Personas} персон · {s.Tasks} задач · " +
+                              $"{s.Notes} заметок · {s.Projects} проектов");
+            Console.WriteLine($"  секреты отдельно: {ctx.SecretsDir}");
+            Console.WriteLine(result.Metrics!.Format());
+        }
+        else
+        {
+            // Метрики пишем и при провале: по фазам видно, где снимок застрял
+            if (result.Metrics is not null) Console.Error.WriteLine(result.Metrics.Format());
             Console.Error.WriteLine($"ОШИБКА: {result.Error}");
             Environment.ExitCode = 1;
         }
@@ -85,7 +115,7 @@ public static class BackupCli
         var archive = args.Length > 1 ? args[1] : null;
         if (string.IsNullOrWhiteSpace(archive))
         {
-            Console.Error.WriteLine("Укажи архив: --restore <файл.zip> [--secrets <файл.zip>] [--force]");
+            Console.Error.WriteLine("Укажи архив: --restore <файл.zip | каталог снимка> [--secrets <файл.zip>] [--force]");
             Environment.ExitCode = 1;
             return true;
         }

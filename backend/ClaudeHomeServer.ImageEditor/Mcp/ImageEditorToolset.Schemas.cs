@@ -91,7 +91,7 @@ public sealed partial class ImageEditorToolset
         new(ToolNew,
             "Заводит карточку «Новая картинка» (черновик без файла) и берёт её в работу — строкой в "
             + "ленте. Нарисовать её — image_generate с threadId черновика; сохранит в проект (в чате вне "
-            + "проекта — скачает) человек.",
+            + "проекта — в «Личное») человек.",
             Obj(new JsonObject
             {
                 ["folder"] = Str("Папка проекта, куда человек сохранит картинку; пусто — корень. Только в чате проекта"),
@@ -104,7 +104,7 @@ public sealed partial class ImageEditorToolset
             + "выбор человека в строке контекста: не передавай их без его просьбы. Не больше двух запусков "
             + "за ход. Основа правки — текущая версия картинки или versionId («поправь вторую»). Возвращает "
             + "{ jobId, threadId, baseVersion, quote }. Каждый вариант станет новой версией внизу ленты; "
-            + "сохранить в проект (или скачать) может только человек.",
+            + "сохранить в проект (в чате вне проекта — в «Личное») может только человек.",
             Obj(new JsonObject
             {
                 ["threadId"] = Str("Картинка этого чата (threadId из image_state)"),
@@ -114,7 +114,7 @@ public sealed partial class ImageEditorToolset
                 ["provider"] = Str("Поставщик (ключ из image_state): fal, higgsfield или local — «Локальные модели» "
                     + "на своей видеокарте, бесплатно, но с очередью. " + NotWithoutAsk),
                 ["model"] = Str("Модель поставщика из image_state или auto. " + NotWithoutAsk),
-                ["mode"] = OneOf(Modes, "Режим при модели auto"),
+                ["mode"] = OneOf(Modes, "Режим при модели auto; у local не действует"),
                 ["count"] = Count(),
                 ["references"] = new JsonObject
                 {
@@ -128,7 +128,7 @@ public sealed partial class ImageEditorToolset
                         ["role"] = OneOf(Roles, "Роль образца"),
                     }, "path", "role"),
                 },
-                ["character"] = Str("Персонаж проекта (slug папки characters/; только в чате проекта). "
+                ["character"] = Str("Персонаж проекта или «Личного» (slug папки characters/; у личного чата — если персонаж уже заведён). "
                     + "Не передан — персонаж из контекста чата, пустая строка — без персонажа. " + NotWithoutAsk),
                 ["face"] = new JsonObject
                 {

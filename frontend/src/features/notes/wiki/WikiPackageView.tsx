@@ -11,6 +11,13 @@
 // Отказ без причины невозможен: бэк отвечает 409 wiki_pkg_reason_required, поэтому кнопка
 // «Подтвердить отказ» активна только с написанной причиной.
 //
+// Режим судьи (проп judgeMode, доработка J-F1 по финалу 9c305f19): экран открывается и в
+// режиме судьи — когда в пакете есть операции вне допуска к судье (см. outsideJudgeScope в
+// WikiInbox). Кнопки здесь получают только они; допустительные и ещё нерешённые — без кнопок,
+// их решает проход («вердикта ещё нет»); вердикт судьи — по-прежнему без кнопок (И1).
+// «Принять всё» в режиме судьи — только когда всё нерешённое открыто человеку: accept-all
+// решает ВСЕ нерешённые, молча забирать судью ему нельзя.
+//
 // Дифф рендерится только через общий DiffView (c3): свой код здесь — лишь сборка строк
 // намерения в текст для DiffView, не его рендер.
 // Кнопки блокируются на время запроса (урок S5b/S5e); состояние действия локально экрану.
@@ -31,18 +38,9 @@ import { DiffView } from '../../../components/DiffView';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 // Цикл импорта WikiInbox ↔ WikiPackageView: словари читаются в рендере, не при сборке
 // модуля, — к тому времени оба уже вычислены
-import { pendingContested, pkgErrorText } from './WikiInbox';
+import { outsideJudgeScope, pendingContested, pkgErrorText } from './WikiInbox';
 import { sectionPrefix } from './WikiTab';
-import { ORIGIN_META, PAGE_TYPE } from './wikiLabels';
-
-// op — пять, удаления нет (WikiPackage.OpValues)
-const OP_META: Record<string, { text: string; tone: BadgeTone }> = {
-  create: { text: 'новая страница', tone: 'accent' },
-  append: { text: 'дописать', tone: 'neutral' },
-  supersede: { text: 'замещение', tone: 'warning' },
-  conflict: { text: 'противоречие', tone: 'warning' },
-  link: { text: 'связь', tone: 'neutral' },
-};
+import { JUDGE_TEXT, OP_META, ORIGIN_META, PAGE_TYPE } from './wikiLabels';
 
 // Статусы пакета (WikiPackage.StatusValues) — то, что человек видит в шапке после решения
 const PKG_STATUS: Record<string, { tone: BadgeTone; text: string }> = {
@@ -107,12 +105,14 @@ function fmtDateTime(iso: string): string {
 // ─── Карточка спорной операции ───
 
 function OperationCard({
-  pkg, op, busy, decidable, draft, onDraft, onAccept, onRejectOpen, onRejectConfirm, onRejectCancel, rejecting,
+  pkg, op, busy, decidable, judgeMode, draft, onDraft, onAccept, onRejectOpen, onRejectConfirm, onRejectCancel, rejecting,
 }: {
   pkg: WikiPackageDto;
   op: WikiPackageOperationDto;
   busy: boolean;
   decidable: boolean;
+  // режим судьи: кнопок нет у всего, что не вне его допуска (J-F1, см. шапку файла)
+  judgeMode: boolean;
   draft: string;
   onDraft: (v: string) => void;
   onAccept: () => void;
@@ -123,11 +123,24 @@ function OperationCard({
 }) {
   const isMobile = useIsMobile();
   const meta = OP_META[op.op];
+  // Знак решения: человека — по humanDecision, судьи — по judgeDecision (И1: ровно одно
+  // решение на операцию, чужое называется). Вердикт судьи — решение этой операции (J-J2b):
+  // кнопок «Принять/Отклонить» под ним нет — человек его вторым решением не переворачивает,
+  // его путь — откат пакета (хвост ревью R-J-J2a).
   const decidedBadge = op.humanDecision === 'accepted'
     ? <Badge tone="success" size="xs">принята</Badge>
     : op.humanDecision === 'rejected'
       ? <Badge tone="danger" size="xs">отклонена</Badge>
-      : null;
+      : op.judgeDecision === 'accepted'
+        ? <Badge tone="success" size="xs">{JUDGE_TEXT.verdictAccepted}</Badge>
+        : op.judgeDecision === 'rejected'
+          // «отклонена кодом» — не вердикт модели (И4′): нейтральный тон, как у «откатан»
+          ? <Badge tone={op.judgeModel === 'code' ? 'neutral' : 'danger'} size="xs">{op.judgeModel === 'code' ? JUDGE_TEXT.verdictByCode : JUDGE_TEXT.verdictRejected}</Badge>
+          // режима судьи здесь нет ни одного решения, а к судье операция допущена: её решает
+          // проход — честная метка ожидания тем же текстом, что в строке очереди (J-F1);
+          // вне допуска та же операция остаётся без бейджа и с кнопками человека
+          : judgeMode && !outsideJudgeScope(op)
+            ? <Badge tone="neutral" size="xs">{JUDGE_TEXT.verdictNone}</Badge> : null;
   const diff = intentLines(op);
   // kind приходит из поля модели в любом регистре: подпись PAGE_TYPE ищется по
   // нижнему регистру, и признак «state» меряется по приведённому значению
@@ -243,7 +256,7 @@ function OperationCard({
 
 // ─── Экран ───
 
-export function WikiPackageView({ pkg: initialPkg, onBack }: { pkg: WikiPackageDto; onBack: () => void }) {
+export function WikiPackageView({ pkg: initialPkg, judgeMode = false, onBack }: { pkg: WikiPackageDto; judgeMode?: boolean; onBack: () => void }) {
   const tree = useWikiTree();
   const [pkg, setPkg] = useState(initialPkg);
   const [busy, setBusy] = useState(false);
@@ -262,6 +275,10 @@ export function WikiPackageView({ pkg: initialPkg, onBack }: { pkg: WikiPackageD
   const contested = pkg.operations.filter(o => o.decision === 'inbox');
   const pending = pendingContested(pkg);
   const decidable = pkg.status === 'proposed';
+  // В режиме судьи человек решает только операции вне его допуска (J-F1): допустительные
+  // нерешённые — территория прохода, не место решения человека
+  const humanDecidable = (o: WikiPackageOperationDto) => decidable && (!judgeMode || outsideJudgeScope(o));
+  const pendingHuman = pending.filter(o => humanDecidable(o));
 
   const runDecision = (fn: () => Promise<WikiDecisionDto>) => {
     setBusy(true);
@@ -310,13 +327,16 @@ export function WikiPackageView({ pkg: initialPkg, onBack }: { pkg: WikiPackageD
         </Notice>
       );
     }
-    if (!decided.apply && pkg.status !== 'rejected' && pending.length > 0) {
+    // в режиме судьи «осталось» считаем по человеческой доле: допустительные операции
+    // человеку не предложение («разберите» их нельзя — ровно упрёк финала 9c305f19)
+    const openHuman = judgeMode ? pendingHuman : pending;
+    if (!decided.apply && pkg.status !== 'rejected' && openHuman.length > 0) {
       // apply=null ровно когда применять нечего: здесь часть спорных ещё не решена, статус
       // остался proposed. Подтверждаем, что решение записано, и говорим, сколько осталось:
       // человек продолжает решать на этом же экране (оставшиеся операции — ниже плашки).
       return (
-        <Notice tone="info" icon={Inbox} title={`Решение записано, осталось ${pending.length} спорных`} style={{ marginTop: SP.sm }}>
-          Остальные спорные операции ниже — решите их, и пакет применится.
+        <Notice tone="info" icon={Inbox} title={`Решение записано. Ещё ${openHuman.length} спорных ждут вас`} style={{ marginTop: SP.sm }}>
+          Они ниже — решите их, и пакет применится целиком.
         </Notice>
       );
     }
@@ -327,7 +347,7 @@ export function WikiPackageView({ pkg: initialPkg, onBack }: { pkg: WikiPackageD
     <div style={{ padding: `0 ${SP.md}px ${SP.md}px` }}>
       <div style={{ paddingTop: SP.sm }}>
         <Button
-          variant="ghost" size="sm" dataTestId="wiki-pkg-back" ariaLabel="Вернуться к списку «Входящих»"
+          variant="ghost" size="sm" dataTestId="wiki-pkg-back" ariaLabel="Вернуться к списку «Решений»"
           leftIcon={<ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
           onClick={onBack}
         >
@@ -384,7 +404,8 @@ export function WikiPackageView({ pkg: initialPkg, onBack }: { pkg: WikiPackageD
             pkg={pkg}
             op={op}
             busy={busy}
-            decidable={decidable}
+            decidable={humanDecidable(op)}
+            judgeMode={judgeMode}
             draft={drafts[op.index] ?? ''}
             onDraft={v => setDrafts(d => ({ ...d, [op.index]: v }))}
             rejecting={rejectIdx === op.index}
@@ -401,7 +422,9 @@ export function WikiPackageView({ pkg: initialPkg, onBack }: { pkg: WikiPackageD
           display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.md,
           borderTop: `1px solid ${C.border}`, paddingTop: SP.sm, flexWrap: 'wrap',
         }}>
-          {pending.length > 1 && (
+          {/* «Принять всё» решает ВСЕ нерешённые спорные разом: в режиме судьи он допустим,
+              только когда всё нерешённое вне его допуска — молча забрать судью нельзя (J-F1) */}
+          {pendingHuman.length > 1 && pendingHuman.length === pending.length && (
             <Button variant="ghost" size="sm" dataTestId="wiki-pkg-accept-all" disabled={busy} onClick={() => runDecision(() => acceptAllWikiPackage(pkg.id))}>
               Принять всё
             </Button>

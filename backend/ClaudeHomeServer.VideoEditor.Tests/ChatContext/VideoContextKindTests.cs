@@ -83,6 +83,24 @@ public sealed class VideoContextKindTests : IDisposable
     }
 
     [Fact]
+    public void Фильм_Личного_принимается_когда_папка_уже_есть_и_нет_когда_её_нет()
+    {
+        File.WriteAllText(Path.Combine(_project, "video", "утро", "утро.film"), "{}");
+        var personalProject = new Project { Id = "personal-id", OwnerId = Owner, RootPath = _project, Kind = ProjectKind.Personal };
+        var store = new Moq.Mock<ClaudeHomeServer.Services.Composition.IPersonalProjects>();
+        store.Setup(s => s.GetPersonalOf(Owner)).Returns(personalProject);
+        var withFolder = new VideoContextKind(_store, personal: new ClaudeHomeServer.Services.Composition.PersonalFolderResolver(store.Object));
+
+        withFolder.Validate(Personal, "video-film", FilmRef("video/утро/утро.film")).Should().BeNull();
+        withFolder.Validate(Personal, "video-film", FilmRef("video/утро/нет.film")).Should().NotBeNull();
+        withFolder.Describe(Personal, Item("video-film", FilmRef("video/утро/утро.film"))).Missing.Should().BeFalse();
+        // Чат проекта к «Личному» не относится: проект чата — его, а не «Личное»
+        var projectChat = new ContextScope(Owner, new Session { Id = Chat, OwnerId = Owner, ProjectId = "p1" }, null);
+        withFolder.Validate(projectChat, "video-film", FilmRef("video/утро/утро.film")).Should().NotBeNull();
+        _kind.Validate(Personal, "video-film", FilmRef("video/утро/утро.film")).Should().Contain("личном", "без папки Личного фильмов нет");
+    }
+
+    [Fact]
     public void Describe_сцена_называет_фильм_и_позицию_а_без_фильма_имя_сцены()
     {
         var id = AddScene();

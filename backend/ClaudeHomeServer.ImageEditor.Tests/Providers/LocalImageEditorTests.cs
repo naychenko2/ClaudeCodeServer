@@ -41,6 +41,8 @@ public class LocalImageEditorTests : IDisposable
         public int? QueuedFrom { get; set; }
         // Сходство лица, которое адаптер возвращает в каждом файле результата
         public double? Similarity { get; set; }
+        // JSON-описание Fibo 2.0, которое адаптер возвращает в каждом файле результата (Ш8)
+        public string? Vgl { get; set; }
         // Снимок очереди GPU, который адаптер возвращает в каждом опросе (шаг 28)
         public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; set; }
         private readonly ConcurrentDictionary<string, bool> _seen = new();
@@ -82,7 +84,7 @@ public class LocalImageEditorTests : IDisposable
                 return Task.FromResult(new LocalImagePoll(LocalImageState.Queued, 5, [], null, Gpu: Gpu));
             var request = Submitted.ElementAt(int.Parse(ticket[1..]) - 1);
             var files = Enumerable.Range(0, request.Count)
-                .Select(i => new LocalImageFile(TestImages.Png(8, 8, (byte)i), "image/png", Similarity))
+                .Select(i => new LocalImageFile(TestImages.Png(8, 8, (byte)i), "image/png", Similarity, Vgl))
                 .ToList();
             return Task.FromResult(new LocalImagePoll(LocalImageState.Completed, null, files, null, Gpu: Gpu));
         }
@@ -143,7 +145,7 @@ public class LocalImageEditorTests : IDisposable
 
         quote.Value.Should().NotBeNull(quote.Error);
         quote.Value!.Provider.Should().Be("local");
-        quote.Value.Model.Should().Be(LocalImageEditor.QwenImageTurbo, "авто-выбор — Qwen Turbo (решение 2026-10-22)");
+        quote.Value.Model.Should().Be(LocalImageEditor.FluxKlein, "авто-выбор генерации — Klein (таблица Ш10)");
         quote.Value.Estimate.Should().Be(new ImageEditEstimateDto(0, ImageEditPriceUnits.Free, false,
             ImageEditEstimateSources.Provider, EtaSeconds: 80, QueueLength: 3));
         quote.Value.ExpectedSeconds.Should().Be(80, "время для процентов — то же, что в котировке");
@@ -312,13 +314,13 @@ public class LocalImageEditorTests : IDisposable
         editor.PickModel(ImageEditOp.EnhanceFaces, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be("face-detailer");
     }
 
-    // Решение Андрея 2026-10-22: умолчание всех операций — Qwen Turbo; Klein и «качественно» — по выбору
+    // Умолчание генерации — Klein, правки, маски и дорисовки — Qwen Turbo (таблица Ш10)
     [Theory]
-    [InlineData(ImageEditOp.Generate, "qwen-image-2.1-turbo")]
+    [InlineData(ImageEditOp.Generate, "flux3-klein")]
     [InlineData(ImageEditOp.Edit, "qwen-image-2.1-turbo")]
     [InlineData(ImageEditOp.Inpaint, "qwen-image-2.1-turbo")]
     [InlineData(ImageEditOp.Outpaint, "qwen-image-2.1-turbo")]
-    public void АвтоВыбор_TurboПоУмолчанию(ImageEditOp op, string expected)
+    public void АвтоВыбор_ПоУмолчанию_ПоТаблицеШ10(ImageEditOp op, string expected)
     {
         new LocalImageEditor(new FakeMedia()).PickModel(op, EditMode.Auto, new EditTraits(false, 0, false))!.Id
             .Should().Be(expected);
@@ -395,7 +397,9 @@ public class LocalImageEditorTests : IDisposable
         var caps = new LocalImageEditor(new FakeMedia()).Models.Single(m => m.Id == id).Caps;
 
         caps.Ops.Should().Equal(ImageEditOp.Generate);
-        caps.MaxReferences.Should().Be(0);
+        // Krea берёт один образец-стиль (остальные образцы шов отдаёт Qwen); MOSS образцов не берёт
+        caps.MaxReferences.Should().Be(id == "krea2-turbo" ? 15 : 0);
+        if (id != "krea2-turbo") caps.Styles.Should().BeNull("стили только у Krea");
         caps.FaceByReferences.Should().BeFalse();
         caps.Mask.Should().Be(MaskSupport.None);
         caps.Format!.ModelLabel.Should().Be(format);
@@ -567,6 +571,27 @@ public class LocalImageEditorTests : IDisposable
         reports.Should().OnlyContain(r => r.Runs == 2 && r.EtaSeconds == 52);
     }
 
+    // Подпись карточки версии (жалоба 13.11): отчёт прогресса несёт модель, на которой прогон идёт на
+    // самом деле. MOSS-Image картинок на входе не берёт — генерация с образцом уходит на Qwen «качественно»
+    [Theory]
+    [InlineData(false, LocalImageEditor.MossImage)]
+    [InlineData(true, LocalImageEditor.QwenImage)]
+    public async Task Прогресс_НесётФактическуюМодель(bool withReference, string expected)
+    {
+        var media = new FakeMedia();
+        var reports = new List<EditProgress>();
+        List<ReferenceImage> refs = withReference
+            ? [new ReferenceImage(TestImages.Png(4, 4), "image/png", ReferenceRole.Object, null)]
+            : [];
+        var request = new ImageEditRequest(ImageEditOp.Generate, "рыбак", null, null, refs, 1, "1:1", null,
+            LocalImageEditor.MossImage, null);
+
+        var result = await Editor(media).RunAsync(request, new SyncProgress(reports.Add), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        reports.Should().NotBeEmpty().And.OnlyContain(r => r.Model == expected);
+    }
+
     // Шаг 28: метка происхождения прогона (владелец, чат, вид=картинка, операция, тяжёлый ли)
     // заполняется при постановке; снимок очереди GPU из опроса прокидывается в отчёт прогресса
     [Fact]
@@ -628,6 +653,104 @@ public class LocalImageEditorTests : IDisposable
             (EditStage.Downloading, 1, 1), (EditStage.Downloading, 2, 1), (EditStage.Downloading, 3, 1));
         result.Images.Should().HaveCount(3, "итог несёт все варианты по порядку")
             .And.Equal(ready.SelectMany(r => r.Ready!));
+    }
+
+    // ── Fibo 2.0: JSON-описание сцены и доводка (Ш8) ──
+
+    private const string Scene = "{\"background_setting\":\"street\"}";
+
+    [Fact]
+    public async Task ГенерацияFibo2_СидНаПрогон_ОписаниеСидИХолстВВарианте()
+    {
+        var media = new FakeMedia { Vgl = Scene };
+        var request = new ImageEditRequest(ImageEditOp.Generate, "ёжик", null, null, [], 2, "1:1", null,
+            LocalImageEditor.Fibo2Dev, null);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        var sent = media.Submitted.ToList();
+        sent.Should().HaveCount(2).And.OnlyContain(r => r.Seed > 0 && r.Vgl == null && r.VglChange == null);
+        sent[0].Seed.Should().NotBe(sent[1].Seed, "у каждого варианта свой сид");
+        result.Images.Select(i => i.Scene).Should().Equal(
+            new ImageVglScene(Scene, sent[0].Seed!.Value, 8, 8), new ImageVglScene(Scene, sent[1].Seed!.Value, 8, 8));
+    }
+
+    [Fact]
+    public async Task ГенерацияQwen_БезСидаИОписания_КакРаньше()
+    {
+        var media = new FakeMedia { Vgl = Scene };
+        var request = new ImageEditRequest(ImageEditOp.Generate, "ёжик", null, null, [], 1, "1:1", null,
+            LocalImageEditor.QwenImage, null);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        media.Submitted.Should().ContainSingle().Which.Seed.Should().BeNull("сид выбирает адаптер");
+        result.Images.Should().ContainSingle().Which.Scene.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Доводка_ОдинПрогон_JsonСидИХолстВерсии_НовоеОписаниеВВарианте()
+    {
+        const string rewritten = "{\"background_setting\":\"winter forest\"}";
+        var media = new FakeMedia { Vgl = rewritten };
+        var refine = new ImageVglRefine(new ImageVglScene(Scene, 101, 1248, 832), "background", "зимний лес");
+        var request = new ImageEditRequest(ImageEditOp.Generate, "Доводка: фон → зимний лес", null, null, [], 3, null, null,
+            LocalImageEditor.Fibo2Dev, null, Refine: refine);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        var sent = media.Submitted.Should().ContainSingle("доводка — один вариант").Subject;
+        sent.Model.Should().Be(LocalImageModels.Fibo2);
+        sent.Vgl.Should().Be(Scene);
+        sent.VglChange.Should().Be(new LocalVglChange("background", "зимний лес"));
+        sent.Seed.Should().Be(101);
+        (sent.Width, sent.Height).Should().Be((1248, 832));
+        sent.Images.Should().BeEmpty();
+        result.Images.Should().ContainSingle().Which.Scene.Should().Be(new ImageVglScene(rewritten, 101, 8, 8));
+    }
+
+    [Fact]
+    public async Task Доводка_ОписаниеНеИзменилось_ОтказВместоДубляВерсии()
+    {
+        var media = new FakeMedia { Vgl = Scene };
+        var refine = new ImageVglRefine(new ImageVglScene(Scene, 101, 1248, 832), "background", "зимний лес");
+        var request = new ImageEditRequest(ImageEditOp.Generate, "x", null, null, [], 1, null, null,
+            LocalImageEditor.Fibo2Dev, null, Refine: refine);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Failed);
+        result.Images.Should().BeEmpty();
+        result.Error.Should().Contain("не изменилось").And.Contain("зимний лес");
+    }
+
+    [Fact]
+    public async Task Доводка_НеFibo_Отказ()
+    {
+        var media = new FakeMedia();
+        var refine = new ImageVglRefine(new ImageVglScene(Scene, 1, 1024, 1024), "light", "ночь");
+        var request = new ImageEditRequest(ImageEditOp.Generate, "x", null, null, [], 1, null, null,
+            LocalImageEditor.QwenImage, null, Refine: refine);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Failed);
+        media.Submitted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ЗадачаFibo2_ОписаниеВариантаДоходитДоDto()
+    {
+        var media = new FakeMedia { Vgl = Scene };
+        var service = Service(Editor(media));
+
+        var job = await RunAsync(service, Quote(ImageEditOp.Generate) with { Model = LocalImageEditor.Fibo2Dev }, Input("ёжик"));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        job.Scenes.Should().ContainKey(1).WhoseValue.Json.Should().Be(Scene);
+        job.Scenes![1].Seed.Should().Be(media.Submitted.Single().Seed);
     }
 
     [Fact]
@@ -1193,5 +1316,90 @@ public class LocalImageEditorTests : IDisposable
         result.Outcome.Should().Be(EditOutcome.Ok);
         media.Submitted.Should().ContainSingle();
         gate.Waits.Should().Be(0);
+    }
+
+    // ── Стили Krea 2 Turbo (Ш4) ──
+
+    private static ImageEditJobInput KreaInput(string? style, params ReferenceImage[] refs) =>
+        new("", "кот на крыше", null, null, null, null, refs, null, Style: style);
+
+    private static ImageEditQuoteRequest KreaQuote(int references = 0) =>
+        Quote(ImageEditOp.Generate) with { Model = LocalImageEditor.Krea2Turbo, References = references };
+
+    [Fact]
+    public void КаталогKrea2_ДевятьСтилейПлашками()
+    {
+        var caps = new LocalImageEditor(new FakeMedia()).Models.Single(m => m.Id == "krea2-turbo").Caps;
+
+        caps.Styles.Should().HaveCount(9);
+        caps.Styles!.Select(x => x.Id).Should().Equal(Krea2Styles.All.Select(x => x.Id));
+        new LocalImageEditor(new FakeMedia()).Models.Where(m => m.Id != "krea2-turbo").Should().OnlyContain(m => m.Caps.Styles == null);
+    }
+
+    [Fact]
+    public async Task Krea2_СтильУходитВШов()
+    {
+        var media = new FakeMedia();
+        var job = await RunAsync(Service(Editor(media)), KreaQuote(), KreaInput("neondrip"));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Model.Should().Be(LocalImageModels.Krea2Turbo);
+        sent.KreaStyle.Should().Be("neondrip");
+        sent.StyleReference.Should().BeFalse();
+        sent.Images.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Krea2_НеизвестныйСтиль_БезСтиля()
+    {
+        var media = new FakeMedia();
+        await RunAsync(Service(Editor(media)), KreaQuote(), KreaInput("нет-такого"));
+
+        media.Submitted.Should().ContainSingle().Subject.KreaStyle.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Krea2_ОдинОбразецСРольюСтиль_СтильПоОбразцу()
+    {
+        var media = new FakeMedia();
+        var job = await RunAsync(Service(Editor(media)), KreaQuote(references: 1),
+            KreaInput("darkbrush", new ReferenceImage(TestImages.Png(8, 8), "image/png", ReferenceRole.Style, "стиль")));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.StyleReference.Should().BeTrue();
+        sent.Images.Should().ContainSingle();
+        sent.KreaStyle.Should().BeNull("образец важнее плашки стиля");
+        LocalImageModels.Effective(sent).Should().Be(LocalImageModels.Krea2Turbo);
+        sent.Prompt.Should().Be("кот на крыше", "роли образцов в текст не пишутся");
+    }
+
+    [Theory]
+    [InlineData(ReferenceRole.Object)]
+    [InlineData(ReferenceRole.Character)]
+    public async Task Krea2_ОбразецДругойРоли_УходитНаQwen(ReferenceRole role)
+    {
+        var media = new FakeMedia();
+        await RunAsync(Service(Editor(media)), KreaQuote(references: 1),
+            KreaInput(null, new ReferenceImage(TestImages.Png(8, 8), "image/png", role, "образец")));
+
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.StyleReference.Should().BeFalse();
+        LocalImageModels.Effective(sent).Should().Be(LocalImageModels.Quality);
+    }
+
+    [Fact]
+    public async Task Krea2_КотировкаСОдНимОбразцом_СчитаетсяПоKrea()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+
+        await service.QuoteAsync("user-a", Project, KreaQuote(references: 1), default);
+        media.EtaModels.Should().Contain(LocalImageEditor.Krea2Turbo).And.NotContain(LocalImageEditor.QwenImage);
+
+        while (media.EtaModels.TryDequeue(out _)) { }
+        await service.QuoteAsync("user-a", Project, KreaQuote(references: 2), default);
+        media.EtaModels.Should().Contain(LocalImageEditor.QwenImage, "два образца — Qwen");
     }
 }

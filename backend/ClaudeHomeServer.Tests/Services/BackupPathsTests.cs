@@ -20,6 +20,8 @@ public class BackupPathsTests
     [InlineData("personas.json")]
     [InlineData("notes/user1/Заметка.md")]
     [InlineData("instance-id.txt")]
+    // Стор «Личного» (ADR-040 §1.4): в корне data, не секрет и не временный — едет в архив
+    [InlineData("personal-projects.json")]
     [InlineData("handle-migration-v1.done")]
     [InlineData(".personas-project-bindings-migrated")]
     // Паспорта изменений (ADR-004): невосстановимы (сырьё — история чатов), в архив по
@@ -30,6 +32,10 @@ public class BackupPathsTests
     // Репозитории встроенного Forgejo — едут, исключены только ключи хоста SSH
     [InlineData("forgejo/git/repositories/andrey/ai-home.git/HEAD")]
     [InlineData("forgejo/gitea/gitea.db")]
+    // Вложения и пакеты Forgejo — данные пользователей, не кеш (исключены только артефакты CI)
+    [InlineData("forgejo/gitea/attachments/ab/cd/abcd-0123.png")]
+    [InlineData("forgejo/gitea/packages/0f/1e/0f1e2d3c")]
+    [InlineData("forgejo/gitea/actions_log/andrey/ai-home/01/720.log.zst")]
     public void СтейтИМаркерыМиграций_ПопадаютВАрхив(string path)
     {
         BackupPaths.ShouldInclude(path).Should().BeTrue();
@@ -74,12 +80,17 @@ public class BackupPathsTests
     [InlineData("forgejo/gitea/queues/common/LOCK")]
     // Поисковый индекс Forgejo (bleve/bolt) — тоже под блокировкой, пересобирается
     [InlineData("forgejo/gitea/indexers/issues.bleve/store/root.bolt")]
+    // Артефакты CI-прогонов Forgejo — пересобираемый кеш со своим сроком жизни
+    [InlineData("forgejo/gitea/actions_artifacts/720/76693.chunk")]
+    [InlineData("forgejo/gitea/actions_artifacts/tmp720/720-76693-0-22032.chunk")]
     [InlineData("backup-state.json")]
     [InlineData("projects.json.abc123.tmp")]
     [InlineData("users.json.corrupt-20260101-000000.bak")]
     // Копия исходника при частичном подъёме стора — дубликат живого файла (на проде
     // sessions.json это ~2 МБ), в архив не едет
     [InlineData("sessions.json.partial-20260921-153000.bak")]
+    [InlineData("personal-projects.json.partial-20261113-120000.bak")]
+    [InlineData("personal-projects.json.corrupt-20261113-120000.bak")]
     // Корзина синка профилей — мусорная зона с TTL, восстановлению не подлежит
     [InlineData(".sync-trash/deepseek/2026-09-02T11-30-00Z/CLAUDE.md")]
     [InlineData(".sync-trash/deepseek/2026-09-02T11-30-00Z/rules/extra.md")]

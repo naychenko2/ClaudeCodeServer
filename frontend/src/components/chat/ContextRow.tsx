@@ -6,7 +6,7 @@ import type { Project, Session } from '../../types';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
 import { useGitChip } from '../../hooks/useGitChip';
 import { registerGitActions } from '../../lib/chatContext/gitActions';
-import { execMenuTitle, selectRowAction } from '../../lib/chatContext/rowExec';
+import { rowExecOf, selectRowAction } from '../../lib/chatContext/rowExec';
 import { getKindApi, getKindRegistry } from '../../lib/chatContext/registry';
 import { dimmedKindItem } from '../../lib/chatContext/disabledKind';
 import { getRunVersion, subscribeRun } from '../../lib/chatContext/actionRun';
@@ -129,12 +129,8 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
   const action: ContextAction | null = sel?.action ?? null;
   // Чип «Формат» (ADR-025): у вида с `format`, в том числе в «Чате» (action = null)
   const format = primary ? getKindApi(primary.kind)?.format?.(kindCtx, action?.id ?? null) ?? null : null;
-  const exec: RowExec | null = sel?.executors
-    ? {
-        rows: sel.executors.rows, value: sel.executors.value, onChange: sel.executors.onChange,
-        title: execMenuTitle(action),
-      }
-    : null;
+  // «Чат»: чип — первый раздел вида («Править» у картинки), меню — все разделы
+  const exec: RowExec | null = primary ? rowExecOf(getKindApi(primary.kind), kindCtx, sel) : null;
 
   return (
     <div ref={ref}>

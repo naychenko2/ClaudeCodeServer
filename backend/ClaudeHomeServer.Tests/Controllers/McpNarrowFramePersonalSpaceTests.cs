@@ -131,10 +131,12 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
             new { type = "semantic", text = $"PERSONAL-секрет-{tag}" }, personalChat);
         seedErr.Should().BeFalse(seedText);
 
+        // Чат до участников: в общем проекта без руководителя провижна владельца нет (W4-B1a
+        // доработка 2, финал ed64271c); состояние фикстуры прежнее.
         var sharedProject = await CreateProjectAsync($"Общий-{tag}");
+        var sharedChat = await CreateSessionAsync(sharedProject);
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(sharedProject,
             [new ProjectMember { UserId = "участник-" + tag, Role = ProjectRole.Editor }]);
-        var sharedChat = await CreateSessionAsync(sharedProject);
         // Пишущие вызовы этого чата идут под названным актором (см. StartOwnerTurnAsync)
         await StartOwnerTurnAsync(sharedChat);
         var projectPersona = await CreatePersonaAsync($"КОМАНДА-{tag}", "project", sharedProject);
@@ -166,9 +168,9 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
         sphereResp.EnsureSuccessStatusCode();
         var sphere = IdOf(JsonSerializer.Deserialize<JsonElement>(await sphereResp.Content.ReadAsStringAsync()));
         var sharedInSphere = await CreateProjectAsync($"Общий-сфера-{f.Tag}", sphere);
+        var sharedSphereChat = await CreateSessionAsync(sharedInSphere);
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(sharedInSphere,
             [new ProjectMember { UserId = "участник-" + f.Tag, Role = ProjectRole.Editor }]);
-        var sharedSphereChat = await CreateSessionAsync(sharedInSphere);
         var personalInSphere = await CreateProjectAsync($"Личный-сфера-{f.Tag}", sphere);
         var personalSphereChat = await CreateSessionAsync(personalInSphere);
         // Тот же порядок, что в ArrangeAsync: общий чат сферы — под названным актором
@@ -206,9 +208,9 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
         sphereResp.EnsureSuccessStatusCode();
         var sphere = IdOf(JsonSerializer.Deserialize<JsonElement>(await sphereResp.Content.ReadAsStringAsync()));
         var sharedInSphere = await CreateProjectAsync($"Общий-сфера-{f.Tag}", sphere);
+        var sharedSphereChat = await CreateSessionAsync(sharedInSphere);
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(sharedInSphere,
             [new ProjectMember { UserId = "участник-" + f.Tag, Role = ProjectRole.Editor }]);
-        var sharedSphereChat = await CreateSessionAsync(sharedInSphere);
         var personalInSphere = await CreateProjectAsync($"Личный-сфера-{f.Tag}", sphere);
         var personalSphereChat = await CreateSessionAsync(personalInSphere);
 

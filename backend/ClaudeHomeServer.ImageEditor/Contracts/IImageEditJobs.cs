@@ -51,4 +51,6 @@ public interface IImageEditSaver
 // InputCaps — возможности модели котировки с лимитами входа (ImageEditCatalog.WithInputLimits): до них
 // сборщик подстановки на лицо уменьшает кроп (Д5); null — лимиты неизвестны
 public sealed record ImageEditQuoteInfo(ImageEditOp Op, long? ContextRevision, string? Provider = null, int? FacePasses = null,
-    ImageEditCaps? InputCaps = null);
+    ImageEditCaps? InputCaps = null,
+    // Модель котировки (id каталога): доводку по JSON-описанию рисует только Fibo 2.0 (Ш8)
+    string? Model = null);

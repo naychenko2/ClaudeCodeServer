@@ -15,6 +15,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // разведено — UpdateScoring правит score/signals и stage1Zone/stage1Reason и не трогает
 // поля разбора (курсор, zone, reason, nothingNewStreak), а Upsert разбора переносит поля
 // скорера из прежней записи.
+// J-P1b: ResetCursors — сброс полей разбора по всем записям (после чистки старой вики);
+// балл, ступени 1–2 и чужие поля (в т.ч. пометка человека) сохраняются; гонка сброса с
+// апдейтом одной записи — под тем же замком корня.
 public class WikiChatTriageStoreTests : IDisposable
 {
     private const string Hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -435,6 +438,194 @@ public class WikiChatTriageStoreTests : IDisposable
         e.RejectStreak.Should().Be(2, "оба приращения учтены");
         e.Score.Should().Be(7, "поля пересчёта не потеряны");
         e.Stage1Zone.Should().Be("triage");
+    }
+
+    // ─── J-P1b: ResetCursors — сброс курсоров после чистки старой вики ────────
+
+    [Fact]
+    public void СбросКурсоров_КурсорыИИсходыОбнулены_БаллИСтупениСохранены()
+    {
+        // Три записи со всеми полями: поля разбора (курсор, хэш границы, исход, серии) +
+        // score/signals, stage1*, вердикт ступени 2 и «mark» — пометка человека как чужое
+        // поле записи (сама пометка живёт на чате, не в сторе: стор её не создаёт, но и не
+        // теряет — общее правило чужих полей, как «future» в тесте 3).
+        WriteRaw($$"""
+            [{"sessionId":"chat-a","cursor":7,"cursorHash":"{{Hash}}","zone":"nothing_new","reason":"нет новых",
+              "nothingNewStreak":3,"rejectStreak":2,"triagedAt":"{{Date}}","score":17,
+              "signals":[{"name":"decision_words","weight":8},{"name":"nothing_new_penalty","weight":-10}],
+              "stage1Zone":"triage","stage1Reason":"балл 17",
+              "stage2Zone":"gray","stage2Reason":"серый чат","stage2HistoryCount":4,"mark":"important"},
+             {"sessionId":"chat-b","cursor":7,"cursorHash":"{{Hash}}","zone":"triage","reason":"есть утверждения",
+              "nothingNewStreak":1,"rejectStreak":1,"triagedAt":"{{Date}}","score":9,
+              "signals":[{"name":"human_turns","weight":6}],"stage1Zone":"gray","stage1Reason":"балл 9",
+              "mark":"skip"},
+             {"sessionId":"chat-c","cursor":7,"cursorHash":null,"zone":null,"reason":null,
+              "nothingNewStreak":0,"rejectStreak":0,"triagedAt":"{{Date}}"}]
+            """);
+        var before = WikiChatTriageStore.Get(_root);
+        before.State.Should().Be(WikiTriageFileState.Valid);
+        before.Entries.Should().HaveCount(3);
+
+        var res = WikiChatTriageStore.ResetCursors(_root);
+        res.Ok.Should().BeTrue(res.Reason);
+        res.ResetCount.Should().Be(3, "сбросились все записи стора");
+
+        var after = WikiChatTriageStore.Get(_root);
+        after.State.Should().Be(WikiTriageFileState.Valid);
+        after.Entries.Should().HaveCount(3, "сброс не удаляет записи: только их состояние разбора");
+        foreach (var e in after.Entries)
+        {
+            e.Cursor.Should().Be(0, "разбор чатов начинается заново");
+            e.CursorHash.Should().BeNull("нулевой курсор не имеет хэша границы (то же, что откат окна: back==0 → null)");
+            e.Zone.Should().BeNull();
+            e.Reason.Should().BeNull();
+            e.NothingNewStreak.Should().Be(0);
+            e.RejectStreak.Should().Be(0);
+            e.TriagedAt.Should().BeOnOrAfter(DateTimeOffset.UtcNow.AddMinutes(-1), "запись изменена — дату ставит сервер");
+        }
+
+        // Всё, что не поля разбора, остаётся равным исходному прочтению.
+        var a = after.Entries.Single(e => e.SessionId == "chat-a");
+        var a0 = before.Entries.Single(e => e.SessionId == "chat-a");
+        a.Score.Should().Be(17, "балл посчитан с причиной: после сброса его пересчитывать не нужно");
+        a.Signals.Should().Equal(a0.Signals, "порядок и веса сигналов — часть причины");
+        a.Stage1Zone.Should().Be("triage");
+        a.Stage1Reason.Should().Be("балл 17");
+        a.Stage2Zone.Should().Be("gray", "вердикт ступени 2 тоже не пересчитывается");
+        a.Stage2Reason.Should().Be("серый чат");
+        a.Stage2HistoryCount.Should().Be(4);
+
+        var b = after.Entries.Single(e => e.SessionId == "chat-b");
+        var b0 = before.Entries.Single(e => e.SessionId == "chat-b");
+        b.Score.Should().Be(9);
+        b.Signals.Should().Equal(b0.Signals);
+        b.Stage1Zone.Should().Be("gray");
+        b.Stage1Reason.Should().Be("балл 9");
+
+        // Пометка человека — чужое поле записи: оно остаётся в файле как было.
+        var raw = File.ReadAllText(TriageFile(), new UTF8Encoding(false));
+        raw.Should().Contain("\"important\"");
+        raw.Should().Contain("\"skip\"");
+    }
+
+    [Fact]
+    public void СбросКурсоров_ПустогоСтораИлиФайлаНет_НольБезСозданияФайла_БитыйФайлОтказБезПерезаписи()
+    {
+        var none = WikiChatTriageStore.ResetCursors(_root);
+        none.Ok.Should().BeTrue(none.Reason);
+        none.ResetCount.Should().Be(0);
+        File.Exists(TriageFile()).Should().BeFalse("сбрасывать нечего — пустой стор не создаётся");
+
+        WriteRaw("[]");
+        WikiChatTriageStore.ResetCursors(_root).ResetCount.Should().Be(0);
+
+        // Битый файл — тот же fail-closed, что у писателей: Ok=false с кодом, байты файла
+        // целые, исключение наружу не выходит.
+        const string broken = "{ не json";
+        WriteRaw(broken);
+        var res = WikiChatTriageStore.ResetCursors(_root);
+        res.Ok.Should().BeFalse();
+        res.Code.Should().Be(WikiChatTriageStore.CodeInvalid);
+        File.ReadAllText(TriageFile()).Should().Be(broken,
+            "битый файл не перезаписывается молча: его записи были бы стёрты без разбора");
+    }
+
+    [Fact]
+    public async Task СбросИАпдейтОднойЗаписи_ПодОднимЗамкомКорня_КаждаяИтерацияОднуЦелуюВерсию()
+    {
+        // 50 итераций параллельных ResetCursors и Update(cursor=5) одной записи. Под одним
+        // замком корня владельца (тот же WithRootLock, что у Update/UpdateScoring/UpdateStage2)
+        // операции сериализованы: итог — либо «сброс, потом апдейт», либо «апдейт, потом
+        // сброс» — одна целая версия записи, не смесь полей двух версий; файл парсится.
+        // На итерациях с удержанием (каждая десятая) Update держит замок внутри build
+        // (событие), и ResetCursors обязан его ждать: без замка у ResetCursors его запись
+        // из устаревшего прочтения легла бы поверх только что записанного курсора —
+        // утверждение ожидания краснеет (мутация «снять замок у ResetCursors»).
+        // Сброс стартует только после входа Update в build (go.SetResult после inside):
+        // запущенный сразу, под нагрузкой пула он успевал взять замок и пройти до входа
+        // Update — краснея на порядке старта, а не на замке.
+        for (var iter = 0; iter < 50; iter++)
+        {
+            var hold = iter % 10 == 0;
+            WikiChatTriageStore.Upsert(_root, Entry("chat-a", 7, Hash, "nothing_new", "старый исход", 3) with { RejectStreak = 2 })
+                .Ok.Should().BeTrue($"посев итерации {iter}");
+
+            using var inside = new ManualResetEventSlim();
+            using var gate = new ManualResetEventSlim();
+            var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var update = Task.Run(async () =>
+            {
+                if (!hold)
+                    await go.Task.ConfigureAwait(false);
+                return WikiChatTriageStore.Update(_root, "chat-a", cur =>
+                {
+                    if (hold)
+                    {
+                        inside.Set();
+                        gate.Wait(TimeSpan.FromSeconds(10));
+                    }
+                    return (cur ?? Entry("chat-a")) with
+                    {
+                        Cursor = 5, CursorHash = Hash, Zone = "triage", Reason = "новый исход",
+                        NothingNewStreak = 2, RejectStreak = 1,
+                    };
+                });
+            });
+
+            var reset = Task.Run(async () =>
+            {
+                // Тот же go-гейт, что в неудерживаемых итерациях: сброс стартует только
+                // после того, как Update подтверждён внутри замка (go.SetResult ниже).
+                await go.Task.ConfigureAwait(false);
+                return WikiChatTriageStore.ResetCursors(_root);
+            });
+
+            if (hold)
+            {
+                inside.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue($"вход в build, итерация {iter}");
+                // Update держит замок корня (он внутри него, ждёт gate): сброс под тем же
+                // замком не может завершиться, пока его держат.
+                go.SetResult();
+                var winner = await Task.WhenAny(reset, Task.Delay(200));
+                ReferenceEquals(winner, reset).Should().BeFalse(
+                    $"итерация {iter}: ResetCursors ждёт замок корня, который держит Update");
+                gate.Set();
+            }
+            else
+            {
+                go.SetResult();
+            }
+
+            var ur = await update;
+            var rr = await reset;
+            ur.Ok.Should().BeTrue($"итерация {iter}: {ur.Reason}");
+            rr.Ok.Should().BeTrue($"итерация {iter}: {rr.Reason}");
+            rr.ResetCount.Should().Be(1, $"итерация {iter}");
+
+            var read = WikiChatTriageStore.Get(_root);
+            read.State.Should().Be(WikiTriageFileState.Valid, $"итерация {iter}: файл всегда валидный JSON");
+            var e = read.Entries.Single();
+            new[] { 0, 5 }.Should().Contain(e.Cursor, $"итерация {iter}: курсор — либо сброленный (0), либо обновлённый (5)");
+            if (e.Cursor == 0)
+            {
+                // Версия сброса — целая: ни одного поля апдейта в ней нет.
+                e.CursorHash.Should().BeNull($"итерация {iter}");
+                e.Zone.Should().BeNull($"итерация {iter}");
+                e.Reason.Should().BeNull($"итерация {iter}");
+                e.NothingNewStreak.Should().Be(0, $"итерация {iter}");
+                e.RejectStreak.Should().Be(0, $"итерация {iter}");
+            }
+            else
+            {
+                // Версия апдейта — целая: ни одного поля сброса в ней нет.
+                e.CursorHash.Should().Be(Hash, $"итерация {iter}");
+                e.Zone.Should().Be("triage", $"итерация {iter}");
+                e.Reason.Should().Be("новый исход", $"итерация {iter}");
+                e.NothingNewStreak.Should().Be(2, $"итерация {iter}");
+                e.RejectStreak.Should().Be(1, $"итерация {iter}");
+            }
+        }
     }
 
     private static WikiChatTriageEntry Entry(

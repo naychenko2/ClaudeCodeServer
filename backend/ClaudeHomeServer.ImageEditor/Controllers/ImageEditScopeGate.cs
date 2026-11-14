@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
@@ -12,7 +13,8 @@ namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 // Чужой проект и чужой чат одинаково 404: ручки редактора не выдают ни фичу, ни чужие id.
 // Чужой, несуществующий, чат другого проекта и (для личной ручки) чат проекта
 // неотличимы — одно и то же тело chat_not_found.
-public sealed class ImageEditScopeGate(IProjectManager projects, ISessionDirectory directory, IProjectAccess access)
+public sealed class ImageEditScopeGate(
+    IProjectManager projects, ISessionDirectory directory, IProjectAccess access, PersonalFolderResolver? personal = null)
 {
     // Ручки проекта без чата: нужно право записи (ручки редактора запускают платные задачи)
     public bool TryProject(string userId, string projectId,
@@ -77,9 +79,51 @@ public sealed class ImageEditScopeGate(IProjectManager projects, ISessionDirecto
             denied = ChatNotFound();
             return false;
         }
-        scope = ImageEditScope.Of(session) with { TenantOwnerId = session.OwnerId };
+        // «Личное» кладём, только если папка уже есть: GET-путь папку не создаёт (ADR-040 §1.2).
+        // Ключ области остаётся personal, Session.ProjectId остаётся null
+        scope = ImageEditScope.Of(session) with { TenantOwnerId = session.OwnerId, Project = personal?.Find(session.OwnerId) };
         denied = null;
         return true;
+    }
+
+    // Проект персонажа по маршруту ручек обучения LoRA: с projectId — гейт проекта, с sessionId (личный чат) —
+    // «Личное» владельца чата. Папки ещё нет — персонажа нет: 404 как у несуществующего slug
+    public bool TryCharacterProject(string userId, string? projectId, string? sessionId,
+        [NotNullWhen(true)] out Project? project, [NotNullWhen(false)] out IActionResult? denied)
+    {
+        if (sessionId is null) return TryProject(userId, projectId ?? "", out project, out denied);
+        project = null;
+        if (!TryPersonalChat(userId, sessionId, out var scope, out denied)) return false;
+        if (scope.Project is not { } folder)
+        {
+            denied = new ObjectResult(new { error = "Персонаж не найден", code = ImageEditErrorCodes.CharacterNotFound })
+            { StatusCode = StatusCodes.Status404NotFound };
+            return false;
+        }
+        project = folder;
+        return true;
+    }
+
+    // Пишущий путь личной области (первый персонаж): «Личное» создаётся лениво (ADR-040 §1.2). Читающие пути
+    // идут через scope.Project из TryPersonalChat и папку не создают. Папку получить нельзя — 503
+    public async Task<(Project? Project, IActionResult? Denied)> EnsurePersonalFolderAsync(
+        ImageEditScope scope, CancellationToken ct)
+    {
+        if (scope.Project is { } have) return (have, null);
+        var made = personal is null ? null : await personal.EnsureAsync(scope.TenantOwnerId, ct);
+        return made is not null
+            ? (made, null)
+            : (null, new ObjectResult(new { error = PersonalFolderResolver.UnavailableText, code = PersonalFolderResolver.UnavailableCode })
+            { StatusCode = StatusCodes.Status503ServiceUnavailable });
+    }
+
+    // Пишущий путь или вход, которому нужен диск: «Личное» создаётся здесь, лениво (ADR-040 §1.2).
+    // Область проекта и личная область с готовой папкой возвращаются как есть; не вышло — тоже как есть
+    // (Project остаётся null), вызывающий отвечает отказом «папка недоступна»
+    public async Task<ImageEditScope> WithFolderAsync(ImageEditScope scope, CancellationToken ct = default)
+    {
+        if (!scope.IsPersonal || scope.Project is not null || personal is null) return scope;
+        return await personal.EnsureAsync(scope.TenantOwnerId, ct) is { } project ? scope with { Project = project } : scope;
     }
 
     private static ObjectResult ChatNotFound() =>

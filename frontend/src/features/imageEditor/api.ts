@@ -12,7 +12,7 @@ import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
 import type { MediaFormatState, MediaFormatWish } from 'aihome_shell/kit';
 import type { LocalGpuQueueInfo } from '../../types/localGpuQueue';
 import { mockFormatState, mockTierFactor } from './mockFormat';
-import { isPersonalScope, projectBase, scopeBase, threadsBase } from './scope';
+import { projectBase, scopeBase, threadsBase } from './scope';
 import { transformedSize } from './transforms';
 
 export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale' | 'enhanceFaces';
@@ -41,6 +41,8 @@ export interface ImageEditCaps {
   maxInputSide?: number | null;
   maxInputMegapixels?: number | null;
   maxInputMb?: number | null;
+  // Стили модели (Krea 2 Turbo): плашки выбора; id уходит в запуск полем style. Нет — стилей у модели нет
+  styles?: { id: string; label: string }[] | null;
 }
 
 export interface ImageEditPriceHint { amount: number; unit: string; per: string }
@@ -90,6 +92,8 @@ export interface ImageEditQuoteRequest {
   hasAnnotations?: boolean;
   // Запрос просит стереть отмеченное кистью
   removal?: boolean;
+  // Текст запроса: по нему «Авто» у локальных моделей выбирает модель (надпись, люди, фото)
+  prompt?: string | null;
   // Чат и ревизия контекста (ADR-023 §Д2.1): с ревизией сервер берёт образцы, персонажа и размер из стора
   sessionId?: string | null;
   contextRevision?: number | null;
@@ -121,6 +125,8 @@ export interface ImageEditQuote {
   expectedSeconds?: number | null;
   // Число проходов подстановки (ADR-028, этап 3): N = число лиц в faceTarget; у обычной правки поля нет
   facePasses?: number | null;
+  // Почему «Авто» выбрало эту модель («Авто → Klein: в запросе надпись»); у явного выбора поля нет
+  routeReason?: string | null;
 }
 
 export interface EditCost { amount: number; unit: string }
@@ -154,6 +160,10 @@ export interface ImageEditJob {
   // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
   // или задача вне локальных моделей
   gpu?: LocalGpuQueueInfo | null;
+  // Модель, на которой задача идёт на самом деле (local: запасная Qwen); нет — верна model
+  actualModel?: string | null;
+  // Почему «Авто» выбрало модель («Авто → MOSS: …»); нет — модель названа явно
+  routeReason?: string | null;
 }
 
 // Кто запустил задачу или написал промпт: человек в редакторе или агент чата картинки
@@ -177,6 +187,8 @@ export interface ImageEditJobInput {
   referencePaths?: ImageEditProjectReference[];
   // Пропорции «Дорисовать за края»: 1:1, 16:9, 9:16
   aspectRatio?: string;
+  // Стиль Krea 2 Turbo (id из caps.styles); без поля — без стиля
+  style?: string;
   // Вернуть размер оригинала после скачивания (ADR-018 §9); по умолчанию сервер — true
   matchSourceSize?: boolean;
   chatSessionId?: string;
@@ -193,6 +205,9 @@ export interface ImageEditJobInput {
   // верхнеуровневый characterSlug при подстановке не едет; с ней contextRevision/mask/annotated
   // и референсы контекста в тело не кладутся (сборка — buildQuoteBody/buildJobBody)
   faceTarget?: FaceTarget | null;
+  // Доводка версии Fibo 2.0 по JSON-описанию (Ш8): поле (VglField) и новое значение; версия — versionId
+  refineField?: string;
+  refineValue?: string;
 }
 
 export interface ImageEditUploadedReference { file: Blob; name: string; role: ReferenceRole }
@@ -222,6 +237,7 @@ export function jobForm(input: ImageEditJobInput): FormData {
     form.append('referencePathRoles', r.role);
   }
   if (input.aspectRatio) form.append('aspectRatio', input.aspectRatio);
+  if (input.style) form.append('style', input.style);
   if (input.matchSourceSize != null) form.append('matchSourceSize', String(input.matchSourceSize));
   if (input.chatSessionId) form.append('chatSessionId', input.chatSessionId);
   if (input.sessionId) form.append('sessionId', input.sessionId);
@@ -233,6 +249,8 @@ export function jobForm(input: ImageEditJobInput): FormData {
   // {versionId, facesKey, faces: [{face, characterSlug}]}, уходит JSON-строкой (как photoLabels);
   // сервер десериализует в FaceTarget
   if (input.faceTarget) form.append('faceTarget', JSON.stringify(input.faceTarget));
+  if (input.refineField) form.append('refineField', input.refineField);
+  if (input.refineValue) form.append('refineValue', input.refineValue);
   return form;
 }
 
@@ -375,7 +393,9 @@ export type ImageEditEvent = ImageEditEventOrigin & (
   | { type: 'image_edit_progress'; jobId: string; projectId: string; stage: EditStage; queuePosition?: number | null;
       run?: number | null; runs?: number | null; etaSeconds?: number | null; runElapsedSeconds?: number | null;
       // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
-      gpu?: LocalGpuQueueInfo | null }
+      gpu?: LocalGpuQueueInfo | null;
+      // Модель, на которой задача идёт на самом деле; нет — драйвер не сообщил
+      actualModel?: string | null }
   | { type: 'image_edit_completed'; jobId: string; projectId: string; variants: number[]; cost?: EditCost | null }
   | { type: 'image_edit_failed'; jobId: string; projectId: string; outcome: EditOutcome; charged?: boolean | null; error?: string | null; retryQuote?: ImageEditQuote | null });
 
@@ -469,13 +489,9 @@ function parseFacesResponse(v: unknown): FacesResponse | null {
   return r;
 }
 
-// «Найти лица» (этап 2 · шаг 10a): POST {threadsBase}/{threadId}/versions/{versionId}/faces.
-// Только проектная область: в личной области персонажей нет по построению → типизированный
-// отказ not_found без сетевого запроса. Отказ — типизированный FacesError (facesError)
+// «Найти лица» (этап 2 · шаг 10a): POST {threadsBase}/{threadId}/versions/{versionId}/faces —
+// у личной области тот же путь на чате (ADR-040 Ф2-4). Отказ — типизированный FacesError (facesError)
 export function findFaces(scope: string, sessionId: string, threadId: string, versionId: string): Promise<FacesResponse> {
-  if (isPersonalScope(scope)) {
-    return Promise.reject(Object.assign(new Error('not_found'), { status: 404, body: { code: 'not_found' } }));
-  }
   return request<FacesResponse>(
     `${threadsBase(scope, sessionId)}/${encodeURIComponent(threadId)}/versions/${encodeURIComponent(versionId)}/faces`,
     { method: 'POST' },
@@ -486,7 +502,8 @@ export interface ImageEditorApi {
   catalog(projectId: string): Promise<ImageEditCatalog>;
   quote(projectId: string, req: ImageEditQuoteRequest): Promise<ImageEditQuote>;
   // Состояние чипа «Формат» (ADR-025): возможности модели, желание, действующий формат, ступени с ценой
-  format(projectId: string, q: { provider: string; model: string; op: ImageEditOp }): Promise<MediaFormatState>;
+  // prompt — текст запроса у «Авто»: формат считается по модели, которую «Авто» выберет по тексту
+  format(projectId: string, q: { provider: string; model: string; op: ImageEditOp; prompt?: string }): Promise<MediaFormatState>;
   startJob(projectId: string, input: ImageEditJobInput): Promise<{ jobId: string }>;
   // Образец с диска человека в рабочую папку модуля; дальше он встаёт в контекст чата ref'ом {upload}
   uploadSample(projectId: string, file: Blob, name: string): Promise<{ uploadId: string }>;
@@ -680,6 +697,13 @@ const liveApi: ImageEditorApi = {
 const caps = (ops: ImageEditOp[], mask: MaskSupport): ImageEditCaps =>
   ({ ops, mask, maxReferences: 4, maxCount: 4, faceByReferences: mask !== 'native' });
 const ALL_EDIT: ImageEditOp[] = ['generate', 'edit', 'inpaint', 'outpaint', 'removeBackground', 'upscale'];
+// Стили Krea 2 Turbo для макета без бэкенда: те же id и подписи, что в Krea2Styles на сервере
+const MOCK_KREA2_STYLES = [
+  ['darkbrush', 'Тёмная кисть'], ['dotmatrix', 'Пунктир'], ['kidsdrawing', 'Детский рисунок'],
+  ['neondrip', 'Неоновые потёки'], ['rainywindow', 'Дождь на стекле'], ['retroanime', 'Ретро-аниме'],
+  ['softwatercolor', 'Акварель'], ['sunsetblur', 'Закатное размытие'], ['vintagetarot', 'Винтажное таро'],
+].map(([id, label]) => ({ id, label }));
+
 const AUTO_ITEM: ImageEditModel = { id: AUTO_MODEL, label: 'Авто', modes: ['fast', 'precise', 'photoreal'] };
 
 const MOCK_PROVIDERS: ImageEditProvider[] = [
@@ -704,7 +728,7 @@ const MOCK_PROVIDERS: ImageEditProvider[] = [
     { id: 'minimax-h3-image', label: 'MiniMax H3 Image — детали и 4K', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'fibo2', label: 'Fibo 2.0 — состав сцены и текст, некоммерч.', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'fibo2-turbo', label: 'Fibo 2.0 Turbo — быстрая правка, некоммерч.', caps: caps(['edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
-    { id: 'krea2-turbo', label: 'Krea 2 Turbo — эстетика, 8 шагов', caps: { ...caps(['generate'], 'none'), maxReferences: 0, faceByReferences: false }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
+    { id: 'krea2-turbo', label: 'Krea 2 Turbo — эстетика, 8 шагов', caps: { ...caps(['generate'], 'none'), maxReferences: 15, faceByReferences: false, styles: MOCK_KREA2_STYLES }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'moss-image', label: 'MOSS-Image — надписи и вёрстка', caps: { ...caps(['generate'], 'none'), maxReferences: 0, faceByReferences: false }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'face-detailer', label: 'Улучшить лица', caps: { ...caps(['enhanceFaces'], 'none'), maxReferences: 0, maxCount: 1 }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
   ] },

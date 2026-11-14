@@ -203,9 +203,14 @@ PREV="$RELEASES/$STAMP"
 LOG="${LOG:-/opt/ccs/deploy-$STAMP.log}"
 # Бэкап данных перед переключением (шаг data-backup): бинарник ТЕКУЩЕГО прода из $APP
 # снимает data/ при живом сервере (json-сторы атомарны, SQLite — online-backup API).
-# Таймаут — секунды, дефолт 2400 (как -BackupTimeoutSec Windows-агента; 26.08 занял 834 с,
-# объём растёт). Провал = отказ без изменений прода (код 3, как «не удалось сохранить билд»).
-BACKUP_TIMEOUT="${BACKUP_TIMEOUT:-2400}"
+# Таймаут — секунды, дефолт 4800: длительность зависит от нагрузки узла (ldavg ~17 — ~20 мин,
+# 50–66 — ~50 мин), 12.11 две выкатки упали на 2400 (задача 5ae50667). Провал = отказ без
+# изменений прода (код 3, как «не удалось сохранить билд»).
+BACKUP_TIMEOUT="${BACKUP_TIMEOUT:-4800}"
+# Вид бэкапа перед выкаткой: snapshot (дефолт) — инкрементальный снимок на жёстких ссылках
+# в data/backups/snapshots (--snapshot, минуты вместо 20+ мин); zip — прежний полный архив
+# (--backup). Откат к старому поведению — одной правкой env: BACKUP_MODE=zip.
+BACKUP_MODE="${BACKUP_MODE:-snapshot}"
 # Песочница: имя контейнера из прод-конфига (Sandbox:ContainerName); на проде cc-sandbox-prod,
 # дев-контейнер cc-sandbox не трогаем. SKIP_SANDBOX=1 — заявка не пересобирает/не пересоздаёт.
 SANDBOX_CONTAINER="$(sandbox_container_name)"
@@ -261,12 +266,29 @@ __mark=$(( $(date +%s%N) / 1000000 ))   # отсчёт длительности 
 # отказавшая страховка хуже отсутствующей (как Windows-агент). Бинарник ТЕКУЩЕГО прода
 # из $APP с его appsettings.Local.json; окружение Production — как у ccs.service.
 if [ -f "$APP/ClaudeHomeServer.dll" ]; then
-  log "бэкап данных: dotnet ClaudeHomeServer.dll --backup (таймаут ${BACKUP_TIMEOUT} с)"
+  # Бэкап снимает бинарник ТЕКУЩЕГО прода: в выкатке, что впервые приносит --snapshot, он
+  # этого режима ещё не знает и запустил бы вместо бэкапа второй сервер. Строка режима лежит
+  # в сборке UTF-16 — ищем её байтами; нет — этот раз полный zip, со следующей выкатки снимок.
+  if [ "$BACKUP_MODE" = snapshot ] \
+     && ! LC_ALL=C grep -qaP -- '-\x00-\x00s\x00n\x00a\x00p\x00s\x00h\x00o\x00t\x00' "$APP/ClaudeHomeServer.dll" 2>/dev/null; then
+    log "текущий прод не знает --snapshot (первая выкатка с этой фичей) — этот раз BACKUP_MODE=zip"
+    BACKUP_MODE=zip
+  fi
+  case "$BACKUP_MODE" in
+    snapshot) BACKUP_FLAG="--snapshot" ;;
+    zip)      BACKUP_FLAG="--backup" ;;
+    *)
+      # Опечатка в env не должна молча стать «без бэкапа» или «не тот бэкап»: отказ до остановки
+      log "ОТКАЗ: BACKUP_MODE='$BACKUP_MODE' неизвестен (snapshot|zip) — прод не трогаем"
+      exit 3
+      ;;
+  esac
+  log "бэкап данных ($BACKUP_MODE): dotnet ClaudeHomeServer.dll $BACKUP_FLAG (таймаут ${BACKUP_TIMEOUT} с)"
   if ( cd "$APP" && ASPNETCORE_ENVIRONMENT=Production timeout "$BACKUP_TIMEOUT" \
-        dotnet ClaudeHomeServer.dll --backup >>"$LOG" 2>&1 ); then
+        dotnet ClaudeHomeServer.dll "$BACKUP_FLAG" >>"$LOG" 2>&1 ); then
     step data-backup ok
   else
-    log "ОТКАЗ: бэкап данных не уложился/упал (таймаут ${BACKUP_TIMEOUT} с) — прод не трогаем"
+    log "ОТКАЗ: бэкап данных ($BACKUP_MODE) не уложился/упал (таймаут ${BACKUP_TIMEOUT} с) — прод не трогаем"
     exit 3
   fi
 else

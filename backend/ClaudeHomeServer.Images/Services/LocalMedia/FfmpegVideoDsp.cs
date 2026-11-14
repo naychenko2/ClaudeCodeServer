@@ -106,6 +106,19 @@ public sealed class FfmpegVideoDsp(
         return Finish(run, outPath, "Не удалось снять последний кадр.");
     }
 
+    // Вклейка звука: видеодорожка копируется, звук — AAC (источник — аудиофайл или ролик); нет звуковой дорожки
+    // у источника — копия одного видео; -shortest держит длину по видео
+    public async Task<VideoDspResult> MuxAudioAsync(string videoPath, string audioPath, string outPath, CancellationToken ct)
+    {
+        if (!Available) return VideoDspResult.Fail(Unavailable);
+        if (!Rooted(videoPath) || !Rooted(audioPath) || !Rooted(outPath))
+            return VideoDspResult.Fail("Пути к файлам должны быть полными.");
+        var run = await RunShortAsync(Ffmpeg, [.. Head, "-protocol_whitelist", "file", "-i", videoPath,
+            "-protocol_whitelist", "file", "-i", audioPath, "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", "-f", "mp4", outPath], ct);
+        return Finish(run, outPath, "Не удалось вклеить звук в видео.");
+    }
+
     // ── Сборка фильма ─────────────────────────────────────────────────────────────
 
     public async Task<VideoDspResult> AssembleAsync(FilmPlan plan, string outPath, IProgress<VideoAssembleProgress>? progress,

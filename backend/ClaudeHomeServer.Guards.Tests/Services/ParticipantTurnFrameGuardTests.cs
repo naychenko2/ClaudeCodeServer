@@ -357,6 +357,8 @@ public class ParticipantTurnFrameGuardTests : IClassFixture<ParticipantFrameFixt
         new("video-editor", "video_shoot", X, "то же", "{{sc}}", "{}"),
         new("video-editor", "video_state", X, "то же", "{{sc}}", "{}"),
         new("video-editor", "video_cancel", X, "то же", "{{sc}}", "{}"),
+        new("video-editor", "video_enhance", X, "то же", "{{sc}}", "{}"),
+        new("video-editor", "video_voice", X, "то же", "{{sc}}", "{}"),
         new("video-editor", "video_suggest_prompt", X, "то же", "{{sc}}", "{}"),
         new("video-editor", "video_film_build", X, "то же", "{{sc}}", "{}"),
         new("video-editor", "video_film_edit", X, "то же", "{{sc}}", "{}"),
@@ -746,11 +748,17 @@ public sealed class ParticipantFrameFixture : IDisposable
         spherMemErr.Should().BeFalse(spherMemText);
 
         // ── общий проект (с участником-редактором) и его чат ──
+        // Чат создаётся ДО участников: пока проект личный, провижна владельца нет, и чат остаётся
+        // под его глобальной персоной — это худший случай утечки личного, на нём фикстура и стоить
+        // (после W4-B1a, доработка 2, финал ed64271c в осиротевшем общем проекте провижна нет).
+        // Руководителем проект становится уже после: он нужен строке манифеста chats_create, чтобы
+        // та мерилала работу инструмента в проекте, а не отказ «нет руководителя».
         SharedProject = await CreateProjectAsync($"Общий-{Tag}");
-        Factory.Services.GetRequiredService<ProjectManager>().SetMembers(SharedProject,
-            [new ProjectMember { UserId = "участник-" + Tag, Role = ProjectRole.Editor }]);
         SharedChat = await CreateSessionAsync(SharedProject);
         ProjectPersona = await CreatePersonaAsync($"КОМАНДА-{Tag}", "project", projectId: SharedProject);
+        await PostJsonAsync($"/api/personas/{ProjectPersona}/make-default", new { });
+        Factory.Services.GetRequiredService<ProjectManager>().SetMembers(SharedProject,
+            [new ProjectMember { UserId = "участник-" + Tag, Role = ProjectRole.Editor }]);
 
         // база знаний этого проекта — та же запись стора, что делает живая связка
         // (формулу дефолтного датасета DifyToolset/PersonasToolset читает живьём)

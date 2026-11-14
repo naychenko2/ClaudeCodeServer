@@ -252,7 +252,11 @@ CONSULT-CONTEXT-SUBJECT): у аудитории рассылки нет одно
 ### Запуск звука: поля формы
 
 С ревизией `threadId`, `baseVersionId`, `voice`, `referencePath`, `clipPaths` не нужны; остаются `quoteId`, `text`,
-`prompt`, `lyrics`, `language`, `durationSec`, `startSec`/`endSec` (выделение на волне), `params`. Остальные поля формы, которых нет в примере: `seed`, `reference`, `clips`, `voiceModelPath`, `voiceIndexPath` — клиент шлёт их по месту.
+`prompt`, `lyrics`, `language`, `durationSec`, `startSec`/`endSec` (выделение на волне), `params`. Остальные поля формы,
+которых нет в примере: `seed`, `reference`, `clips`, `voiceModelPath`, `voiceIndexPath` — клиент шлёт их по месту.
+Звук по видео: `videoPath` — файл проекта либо `videoSceneId` + `videoVersionId` — версия сцены чата (`videoVersionId`
+не задана — текущая); `pasteIntoScene` — по готовности добавить в сцену новую версию со вклеенным звуком
+(только у версии сцены).
 
 ```json audio-job-form
 {

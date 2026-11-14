@@ -1,15 +1,21 @@
 // Блок «Артефакты» (F15): файлы с версиями, дифф с режимами, гонка ответов по ключу path+from+to.
+// D1: привязанные задачей файлы и итог видны и без коммитов; F-2.11: привязанные файлы видны и при
+// непустых files, пустое состояние различает отсутствие дерева.
 //
 // Мутации (в отчёте): (1) читать состояние диффа не по ключу, а по последнему ответу → тест
 // «запоздавший ответ» красный; (2) убрать `if (signal.aborted) return` при отказе → тест «отказ под
 // файлом» остаётся зелёным, поэтому отдельный тест «размонтирование» ловит применение после отмены;
-// (3) не рисовать «ещё N файлов» → тест «сворачивает» красный.
+// (3) не рисовать «ещё N файлов» → тест «сворачивает» красный; (4) не рисовать «Файлы задачи» при
+// пустых files → тест «без файлов коммитов» красный; (5) оставить пустое состояние при результате →
+// тест «без пустого состояния» красный; (6) не рисовать «Файлы задачи» при непустых files → тест
+// «при файлах коммитов» красный; (7) не различать commitsAvailable в пустом состоянии → тест «без
+// дерева задачи» красный.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { FeatureStageArtifacts, diffModes } from './FeatureStageArtifacts';
 import { findNodeByAttr, installFakeDom, mount, reactProps, textNodes, uninstallFakeDom } from '../chat/__tests__/fakeDom';
-import type { StageArtifacts, StageFile, StageFileDiff } from '../../types/featureStage';
+import type { StageArtifacts, StageCommit, StageFile, StageFileDiff } from '../../types/featureStage';
 
 const { diffMock } = vi.hoisted(() => ({ diffMock: vi.fn() }));
 vi.mock('../../lib/api', async (importOriginal) => {
@@ -70,10 +76,55 @@ describe('diffModes', () => {
 });
 
 describe('FeatureStageArtifacts · файлы', () => {
-  it('пусто: иконка и подсказка, итог исполнителя всё равно виден', () => {
-    const { container } = render(arts([], { resultMarkdown: 'сделано' }));
+  it('пусто всё: иконка и подсказка', () => {
+    const { container } = render(arts([]));
     expect(text(findNodeByAttr(container, 'data-testid', 'stage-artifacts-empty')!)).toContain('Артефактов пока нет');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-linked-files')).toBeNull();
+  });
+
+  it('итог без файлов: пустого состояния нет, итог исполнителя виден', () => {
+    const { container } = render(arts([], { resultMarkdown: 'сделано' }));
+    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts-empty')).toBeNull();
     expect(text(container)).toContain('Итог исполнителя');
+    expect(text(container)).toContain('сделано');
+  });
+
+  it('D1: без файлов коммитов привязанные файлы задачи и итог видны, пустого состояния нет', () => {
+    const { container } = render(arts([], { linkedFiles: ['qa/cut.md', 'docs/plan.md'], resultMarkdown: 'готово' }));
+    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts-empty')).toBeNull();
+    const linked = findNodeByAttr(container, 'data-testid', 'stage-linked-files');
+    expect(linked, 'stage-linked-files').not.toBeNull();
+    expect(text(linked!)).toContain('qa/cut.md');
+    expect(text(linked!)).toContain('docs/plan.md');
+    expect(text(container)).toContain('Итог исполнителя');
+  });
+
+  it('F-2.11: при файлах коммитов привязанные файлы задачи показаны рядом с ними', async () => {
+    diffMock.mockResolvedValue(fdiff('A.cs', 'AAA'));
+    const { container } = render(arts([file('A.cs', 1)], { linkedFiles: ['docs/plan.md', 'qa/cut.md'] }));
+    await act(async () => { await flush(); });
+    // вид с файлами жив: файл и его дифф на месте
+    expect(findNodeByAttr(container, 'data-testid', 'stage-file-A.cs'), 'список файлов').not.toBeNull();
+    expect(text(findNodeByAttr(container, 'data-testid', 'stage-file-diff')!)).toContain('AAA');
+    // и привязанный, но не закоммиченный файл не потерян
+    const linked = findNodeByAttr(container, 'data-testid', 'stage-linked-files');
+    expect(linked, 'stage-linked-files').not.toBeNull();
+    expect(text(linked!)).toContain('docs/plan.md');
+    expect(text(linked!)).toContain('qa/cut.md');
+  });
+
+  it('F-2.11: без дерева задачи пустое состояние говорит про недоступные коммиты, а не «появятся»', () => {
+    const { container } = render(arts([], { commitsAvailable: false }));
+    const t = text(findNodeByAttr(container, 'data-testid', 'stage-artifacts-empty')!);
+    expect(t).toContain('Коммиты недоступны: дерево задачи не найдено');
+    expect(t).not.toContain('Появятся с первым коммитом');
+  });
+
+  it('без файлов, но есть коммиты без файлов: список коммитов, пустого состояния нет', () => {
+    const c: StageCommit = { sha: 's1', shortSha: 's1abcde', subject: 'коммит без файлов', at: null, files: [], taskId: 't1', role: null, version: 0 };
+    const { container } = render(arts([], { commits: [c] }));
+    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts-empty')).toBeNull();
+    expect(text(findNodeByAttr(container, 'data-testid', 'stage-commits')!)).toContain('коммит без файлов');
   });
 
   it('файл с тремя версиями: чипы v3·v2·v1, переключатель, клик «v2 → v3» — один запрос from=2,to=3', async () => {

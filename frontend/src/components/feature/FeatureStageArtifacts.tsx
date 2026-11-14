@@ -1,5 +1,8 @@
 // Блок «Артефакты» экрана этапа (D1c): коммиты шага и доработок как версии (sha, сообщение,
 // файлы), дифф коммита по клику (ленивая загрузка), linkedFiles и resultMarkdown.
+// Артефакт — файл коммита, привязанный задачей файл или итог (D1): привязанные файлы видны и с
+// файлами коммитов, и без них (F-2.11), итог — без коммитов; пустое состояние — только когда нет
+// ничего, и при отсутствии дерева оно говорит об этом, а не обещает коммит (F-2.11).
 //
 // Дифф: один запрос на коммит — пока он идёт, повторный клик ничего не шлёт (inFlight);
 // готовый дифф кэшируется в состоянии, повторное раскрытие запроса не делает. Отказ
@@ -79,6 +82,18 @@ function CommitRow({ commit, state, open, isMobile, onToggle }: {
   );
 }
 
+// Привязанные задачей файлы (без версий и диффов): видны и при отсутствии коммитов (D1)
+function LinkedFilesBlock({ files }: { files: string[] }) {
+  return (
+    <div data-testid="stage-linked-files" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+      <div style={SEC_LABEL}>Файлы задачи</div>
+      {files.map(f => (
+        <span key={f} style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, overflowWrap: 'anywhere' }}>{f}</span>
+      ))}
+    </div>
+  );
+}
+
 // Прежний вид (сервер без artifacts.files): коммиты с диффом на каждый
 function LegacyArtifacts({ taskId, artifacts, isMobile }: {
   taskId: string; artifacts: StageArtifacts; isMobile: boolean;
@@ -127,14 +142,7 @@ function LegacyArtifacts({ taskId, artifacts, isMobile }: {
             onToggle={() => toggle(c.sha)} />
         ))
       )}
-      {linkedFiles.length > 0 && (
-        <div data-testid="stage-linked-files" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-          <div style={SEC_LABEL}>Файлы задачи</div>
-          {linkedFiles.map(f => (
-            <span key={f} style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, overflowWrap: 'anywhere' }}>{f}</span>
-          ))}
-        </div>
-      )}
+      {linkedFiles.length > 0 && <LinkedFilesBlock files={linkedFiles} />}
       {resultMarkdown && (
         <div data-testid="stage-result" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
           <div style={SEC_LABEL}>Итог</div>
@@ -193,6 +201,21 @@ function ResultCard({ markdown }: { markdown: string }) {
       }}>
         {markdown}
       </div>
+    </div>
+  );
+}
+
+// Список коммитов (shortSha + subject): вспомогательный блок при файлах и при их отсутствии
+function CommitsList({ commits, style }: { commits: StageCommit[]; style?: CSSProperties }) {
+  return (
+    <div data-testid="stage-commits" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, ...style }}>
+      <div style={SEC_LABEL}>Коммиты</div>
+      {commits.map(c => (
+        <div key={c.sha} style={{ display: 'flex', gap: SP.xs, alignItems: 'baseline', minWidth: 0 }}>
+          <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{c.shortSha}</span>
+          <span style={{ fontSize: FS.xs, color: C.textSecondary, overflowWrap: 'anywhere', minWidth: 0 }}>{c.subject}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -270,17 +293,7 @@ function FilesArtifacts({ taskId, artifacts, files, isMobile }: {
             <Button size="xs" variant="ghost" dataTestId="stage-files-more" style={isMobile ? { minHeight: 40 } : undefined}
               onClick={() => setExpanded(true)}>ещё {hidden} {filesWord(hidden)}</Button>
           )}
-          {artifacts.commits.length > 0 && (
-            <div data-testid="stage-commits" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, marginTop: SP.sm }}>
-              <div style={SEC_LABEL}>Коммиты</div>
-              {artifacts.commits.map(c => (
-                <div key={c.sha} style={{ display: 'flex', gap: SP.xs, alignItems: 'baseline', minWidth: 0 }}>
-                  <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{c.shortSha}</span>
-                  <span style={{ fontSize: FS.xs, color: C.textSecondary, overflowWrap: 'anywhere', minWidth: 0 }}>{c.subject}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          {artifacts.commits.length > 0 && <CommitsList commits={artifacts.commits} style={{ marginTop: SP.sm }} />}
         </div>
         {file && (
           <div data-testid="stage-file-diff-pane" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
@@ -310,6 +323,8 @@ function FilesArtifacts({ taskId, artifacts, files, isMobile }: {
           </div>
         )}
       </div>
+      {/* F-2.11: привязанный задачей, но не закоммиченный файл показывается рядом с файлами коммитов */}
+      {artifacts.linkedFiles.length > 0 && <LinkedFilesBlock files={artifacts.linkedFiles} />}
       {artifacts.resultMarkdown && <ResultCard markdown={artifacts.resultMarkdown} />}
     </div>
   );
@@ -319,20 +334,28 @@ export function FeatureStageArtifacts({ taskId, artifacts, isMobile }: {
   taskId: string; artifacts: StageArtifacts; isMobile: boolean;
 }) {
   if (!artifacts.files) return <LegacyArtifacts taskId={taskId} artifacts={artifacts} isMobile={isMobile} />;
-  const { files, resultMarkdown } = artifacts;
+  const { files, linkedFiles, resultMarkdown, commits } = artifacts;
+  // Артефакт — файл коммита, привязанный задачей файл или итог (D1): пустое состояние —
+  // только когда нет ни коммитов, ни привязанных файлов, ни итога
+  const hasArtifacts = files.length > 0 || linkedFiles.length > 0 || commits.length > 0 || !!resultMarkdown;
   return (
     <section data-testid="stage-artifacts" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
       <div style={SEC_LABEL}>Артефакты</div>
-      {files.length === 0 ? (
+      {files.length > 0 ? (
+        <FilesArtifacts taskId={taskId} artifacts={artifacts} files={files} isMobile={isMobile} />
+      ) : hasArtifacts ? (
         <>
-          <div data-testid="stage-artifacts-empty">
-            <EmptyState compact inline icon={<FileText size={20} />} title="Артефактов пока нет"
-              subtitle="Появятся с первым коммитом (CCS-Task) или итогом задачи" />
-          </div>
+          {linkedFiles.length > 0 && <LinkedFilesBlock files={linkedFiles} />}
+          {commits.length > 0 && <CommitsList commits={commits} />}
           {resultMarkdown && <ResultCard markdown={resultMarkdown} />}
         </>
       ) : (
-        <FilesArtifacts taskId={taskId} artifacts={artifacts} files={files} isMobile={isMobile} />
+        <div data-testid="stage-artifacts-empty">
+          <EmptyState compact inline icon={<FileText size={20} />} title="Артефактов пока нет"
+            subtitle={artifacts.commitsAvailable
+              ? 'Появятся с первым коммитом (CCS-Task) или итогом задачи'
+              : 'Коммиты недоступны: дерево задачи не найдено.'} />
+        </div>
       )}
     </section>
   );

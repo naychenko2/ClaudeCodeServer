@@ -2,8 +2,10 @@
 // ai-fabrika-workflow-cut-2026-11.md §4–§5): показывает предложение модели (шаблон и
 // обоснование), даёт сменить шаблон и снять необязательные этапы, «Подтвердить маршрут»
 // → confirmWorkflow, «Подобрать маршрут» → recommendWorkflow (обе ручки из
-// features/workflowTemplates/api.ts). Подтверждает только человек (И7): после подтверждения
-// сервер вещает task_changed, своего refetch эпика здесь нет.
+// features/workflowTemplates/api.ts). Подтверждает только человек (И7): свой ответ confirm —
+// записанный сервером маршрут с новой версией — блок применяет себе сразу (Ф-2.15), своего
+// refetch эпика здесь нет. Дальше настоящее состояние эпика приходит штатным task_changed и
+// заменяет собой этот ответ (сброс applied).
 //
 // Состояние (выбор шаблона, снятие этапов, локальное предложение) привязано к featureId:
 // при смене фичи оно сбрасывается, идущий «Подобрать» прерывается AbortSignal, а его ответ
@@ -31,9 +33,9 @@ import { STAGE_ROLE_LABEL } from '../../features/workflowTemplates/WorkflowStage
 import { workflowTemplatesApi } from '../../features/workflowTemplates/api';
 import { normalizeStages } from '../../features/workflowTemplates/workflowGraphModel';
 import {
-  applyRecommend, confirmBodyOf, confirmedLineText, doubtReasonText,
-  initialRemovedIds, newStageIds, pickInitialTemplate, rationaleByText, routeBlockState, templateUpdateText,
-  updateExplainText,
+  applyConfirmed, applyRecommend, confirmBodyOf, confirmedLineText, doubtReasonText,
+  initialRemovedIds, newStageIds, pickInitialTemplate, rationaleByText, routeBlockState, shownConfirmed,
+  templateUpdateText, updateExplainText,
   type ConfirmedRoute,
 } from './FeatureWorkflowConfirmModel';
 import type { WorkflowProposal, WorkflowTemplateEntry, WorkflowTemplateScope } from '../../features/workflowTemplates/types';
@@ -69,13 +71,16 @@ const errText = (e: unknown): string =>
   e instanceof Error && e.message ? e.message : 'Не получилось, попробуйте ещё раз';
 
 export function FeatureWorkflowConfirm({
-  featureId, projectId, proposal, confirmed, isMobile, quiet, routeRequired, sheetOpenRequest, onSheetClosed,
+  featureId, projectId, proposal, confirmed: confirmedState, isMobile, quiet, routeRequired, sheetOpenRequest, onSheetClosed,
 }: FeatureWorkflowConfirmProps): React.ReactElement {
   const [entries, setEntries] = useState<WorkflowTemplateEntry[] | null>(null);
   const [selKey, setSelKey] = useState<SelectedKey | null>(null);
   // null — человек ничего не трогал: снятие берётся из предложения модели.
   const [removedTouched, setRemovedTouched] = useState<string[] | null>(null);
   const [localProposal, setLocalProposal] = useState<WorkflowProposal | null>(null);
+  // Ответ собственного подтверждения (Ф-2.15): записанный сервером маршрут — им блок и
+  // показывает, пока настоящее состояние эпика не пришло штатным task_changed.
+  const [applied, setApplied] = useState<ConfirmedRoute | null>(null);
   const [busyConfirm, setBusyConfirm] = useState(false);
   const [busyRecommend, setBusyRecommend] = useState(false);
   const [busyKeep, setBusyKeep] = useState(false);
@@ -97,6 +102,9 @@ export function FeatureWorkflowConfirm({
   const recommendBusyRef = useRef(false);
   const keepBusyRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  // Признак «пришло настоящее состояние эпика»: ответ своего подтверждения держится только
+  // до него (ссылка props меняется на каждом refetch — тот же приём, что featureIdRef).
+  const confirmedRef = useRef(confirmedState);
 
   // Смена фичи — синхронный сброс до рендера: выбор, снятие и локальное предложение
   // принадлежат одной фиче; идущий recommend прерывается (его ответ всё равно не применился бы).
@@ -105,14 +113,26 @@ export function FeatureWorkflowConfirm({
     setSelKey(null);
     setRemovedTouched(null);
     setLocalProposal(null);
+    setApplied(null);
     setErrorText(null);
     setExpanded(false);
     setWhyOpen(false);
     setManual(false);
     setSheetOpen(false);
     setInfoOpen(false);
+    confirmedRef.current = confirmedState;
     abortRef.current?.abort();
   }
+  // Пришёл новый confirmed эпика (refetch по task_changed) — свой ответ больше не нужен:
+  // истина уже в состоянии, держаться поверх него он не должен.
+  if (confirmedRef.current !== confirmedState) {
+    confirmedRef.current = confirmedState;
+    setApplied(null);
+  }
+  // Подтверждённый маршрут, с которым работает весь блок: состояние эпика или ответ своего
+  // подтверждения этой же фичи (Ф-2.15: версия читается сразу, а не через полторы секунды
+  // дебаунса и сети).
+  const confirmed = shownConfirmed(confirmedState ?? null, applied);
   // Шторка открывается по ЗАПРОСУ страницы (уровень флага). Флаг снимает сама страница
   // в onSheetClosed (R-F05): пока он не снят, он остаётся true, и повторное «Подтвердить»
   // не открывает шторку снова (мёртвая кнопка).
@@ -160,29 +180,42 @@ export function FeatureWorkflowConfirm({
     setRemovedTouched(null);
   };
 
+  // Применить ответ подтверждения: он становится видом блока, только если относится к
+  // показанной фиче (поздний ответ другой фичи — нет, тот же приём, что applyRecommend).
+  const applyConfirm = (answer: ConfirmedRoute | null, requested: string) => {
+    const next = applyConfirmed(requested, featureIdRef.current, answer);
+    if (next) setApplied(next);
+  };
+
   const onConfirm = () => {
     const entry = selectedEntry;
     if (!entry || confirmBusyRef.current) return;
     confirmBusyRef.current = true;
     setBusyConfirm(true);
     setErrorText(null);
+    const requested = featureId;
     workflowTemplatesApi
-      // Состояние эпика после подтверждения придёт штатным task_changed — здесь только
-      // отказ показать; успешный ответ тела не имеет.
+      // Успешный ответ — записанный сервером маршрут: его и показываем. Отказ — только
+      // показать, состояние остаётся прежним.
       .confirmWorkflow(featureId, confirmBodyOf(entry.template, entry.scope, removedIds))
+      .then(r => applyConfirm(r, requested))
       .catch(e => setErrorText(errText(e)))
       .finally(() => { confirmBusyRef.current = false; setBusyConfirm(false); });
   };
 
   // «Обновить маршрут до vN»: то же подтверждение, но с прежним снятием из confirmed.skipped
   // (confirmBodyOf отсеивает то, что в новой версии уже не съёмно), а не из предложения модели.
+  // Ответ сервера несёт записанную версию — она и становится видимой сразу (Ф-2.15), карточка
+  // «шаблон изменился» при новой подтверждённой версии больше не предлагается.
   const onUpdateRoute = () => {
     if (!confirmed || !confirmedTemplate || confirmBusyRef.current) return;
     confirmBusyRef.current = true;
     setBusyConfirm(true);
     setErrorText(null);
+    const requested = featureId;
     workflowTemplatesApi
       .confirmWorkflow(featureId, confirmBodyOf(confirmedTemplate, confirmed.scope, confirmed.skipped ?? []))
+      .then(r => applyConfirm(r, requested))
       .catch(e => setErrorText(errText(e)))
       .finally(() => { confirmBusyRef.current = false; setBusyConfirm(false); });
   };

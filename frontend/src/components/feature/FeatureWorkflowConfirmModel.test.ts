@@ -11,8 +11,8 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  applyRecommend, confirmBodyOf, confirmedLineText, initialRemovedIds, isRemovableStage,
-  pickInitialTemplate, routeBlockState, templateChanged, templateUpdateText, type ConfirmedRoute,
+  applyConfirmed, applyRecommend, confirmBodyOf, confirmedLineText, initialRemovedIds, isRemovableStage,
+  pickInitialTemplate, routeBlockState, shownConfirmed, templateChanged, templateUpdateText, type ConfirmedRoute,
 } from './FeatureWorkflowConfirmModel';
 import type { WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from '../../features/workflowTemplates/types';
 
@@ -196,6 +196,20 @@ describe('гонка «Подобрать маршрут»', () => {
 
   it('устаревший ответ recommend после смены featureId не применяется', () => {
     expect(applyRecommend('f1', 'f2', proposal)).toBeNull();
+  });
+});
+
+describe('ответ подтверждения как вид блока (Ф-2.15)', () => {
+  it('ответ своей фичи применяется, поздний ответ другой — нет', () => {
+    expect(applyConfirmed('f1', 'f1', CONFIRMED)).toBe(CONFIRMED);
+    expect(applyConfirmed('f1', 'f2', CONFIRMED)).toBeNull();
+  });
+
+  it('пока ответа нет — прежний слепок; пришёл — вид на нём (и на новой версии)', () => {
+    expect(shownConfirmed(CONFIRMED, null)).toBe(CONFIRMED);
+    expect(shownConfirmed(null, null)).toBeNull();
+    const v4 = { ...CONFIRMED, confirmedVersion: 4 };
+    expect(shownConfirmed(CONFIRMED, v4)).toBe(v4);
   });
 });
 

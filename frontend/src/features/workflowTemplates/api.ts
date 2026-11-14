@@ -8,6 +8,10 @@
 // recommendWorkflow/confirmWorkflow — ручки B4b (разрез §5), вызывает их блок подтверждения
 // маршрута (C2); recommend разворачивает серверный ответ { proposal } здесь (см. ниже).
 import { request } from '../../lib/offline';
+// ConfirmedRoute — тип подтверждённого маршрута, он же поле epic.workflow агрегата
+// (types/featureRun.ts импортирует его оттуда же): ответ confirm даёт тот же набор полей,
+// поэтому переводить их некуда.
+import type { ConfirmedRoute } from '../../components/feature/FeatureWorkflowConfirmModel';
 import type { ConfirmWorkflowBody, WorkflowProposal, WorkflowTemplate, WorkflowTemplateEntry } from './types';
 
 // Строка запроса области: без параметра — глобальная, с параметром — проектная (ScopeOf на бэке).
@@ -63,9 +67,15 @@ export const workflowTemplatesApi = {
   },
 
   // Подтверждение маршрута (B4b): единственный писатель epic.Workflow, только человек (И7).
-  // Тело ответа не используется: состояние эпика приходит штатным task_changed.
-  confirmWorkflow: (epicId: string, body: ConfirmWorkflowBody) =>
-    request<void>(`/tasks/${encodeURIComponent(epicId)}/workflow/confirm`, { method: 'POST', body: JSON.stringify(body) }),
+  // Ответ — подтверждённый маршрут таким, каким его записал сервер: обёртка { confirmed }
+  // (ConfirmedDto, TaskWorkflowController.cs:136). Её разворачиваем на границе, как обёртку
+  // recommend: вызывающий применяет записанную версию сразу (Ф-2.15), а не ждёт штатный
+  // task_changed. Старый сервер тела не даёт — null: вызывающий остаётся на прежнем виде.
+  confirmWorkflow: async (epicId: string, body: ConfirmWorkflowBody): Promise<ConfirmedRoute | null> => {
+    const resp = await request<{ confirmed?: ConfirmedRoute | null }>(
+      `/tasks/${encodeURIComponent(epicId)}/workflow/confirm`, { method: 'POST', body: JSON.stringify(body) });
+    return resp?.confirmed ?? null;
+  },
 
   // «Оставить vN» (B03): отказ от обновления маршрута до версии templateVersion; маршрут не меняется,
   // предупреждение не возвращается до следующей версии. Состояние придёт штатным task_changed.

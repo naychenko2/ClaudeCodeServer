@@ -389,9 +389,37 @@ public class TeamWaveServiceTests : IClassFixture<TeamWaveServiceTests.Fixture>
         await _sut.RaiseLaunchFailedAsync(_sessions.GetById(session.Id)!, task,
             new InvalidOperationException("Задача удалена"));
 
+        // Граница хвоста Ф-2.22: совет о провайдере остаётся за настоящими сбоями провайдера
+        var card = (await ((ITeamHistoryStore)_sessions).GetOpenTeamEscalationsAsync(session.Id))
+            .Should().ContainSingle(c => c.TaskId == task.Id).Which;
+        card.Details.Should().Contain("Задача удалена").And.Contain("доступность провайдера");
+
         var ti = _sessions.GetById(session.Id)!.TeamImplement!;
         ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
             "карточка эскалации ставит практику на ожидание решения — молчаливых пауз не бывает");
+    }
+
+    // Хвост Ф-2.22 (B3): отказ гейта маршрута — штатный отказ правила, а не сбой провайдера.
+    // Карточка несёт причину гейта дословно (что именно заблокировано) и совет про маршрут;
+    // ложный «проверьте модель и доступность провайдера» в ней быть не должно.
+    [Fact]
+    public async Task ОтказГейтаМаршрута_КарточкаНесётСвоюПричинуАНеСоветОПровайдере()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-route-refusal");
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var task = created[0];
+
+        await _sut.RaiseRouteRefusedAsync(_sessions.GetById(session.Id)!, task,
+            new FeatureRouteLaunchException("маршрут фичи не подтверждён — подтвердите его на странице фичи"));
+
+        var card = (await ((ITeamHistoryStore)_sessions).GetOpenTeamEscalationsAsync(session.Id))
+            .Should().ContainSingle(c => c.TaskId == task.Id).Which;
+        card.Kind.Should().Be(TeamEscalationKind.TaskFailed, "для человека это тот же «работа не идёт»");
+        card.Details.Should()
+            .Contain("маршрут фичи не подтверждён", "причина гейта доходит дословно")
+            .And.Contain("гейтом маршрута", "человек видит, какой гейт закрыл запуск")
+            .And.NotContain("доступность провайдера", "ложный совет о провайдере — только для сбоев провайдера");
+        _sessions.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
     }
 
     // ADR-016, вариант А плана §5: под-задача ждала устройство локального проекта и не

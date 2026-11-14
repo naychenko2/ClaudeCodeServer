@@ -378,6 +378,15 @@ public class TeamWaveService
                     _log.LogInformation("Под-задача {TaskId} «{Title}» ждёт устройство: {Reason}",
                         task.Id, task.Title, launched.DeviceWaitReason);
             }
+            catch (FeatureRouteLaunchException ex)
+            {
+                // Гейт маршрута — штатный отказ правила, а не поломка провайдера: тихий лог
+                // без трейса (тот же приём, что у автозапуска — TaskSchedulerService.IsHoldRefusal),
+                // иначе штатные отказы тонят реальные провалы. Карточка — со своей причиной.
+                _log.LogInformation("Запуск исполнителя по задаче {TaskId} «{Title}» закрыт гейтом маршрута: {Reason}",
+                    task.Id, task.Title, ex.Message);
+                await RaiseRouteRefusedAsync(session, task, ex);
+            }
             catch (Exception ex)
             {
                 _log.LogError(ex, "Запуск исполнителя по задаче {TaskId} «{Title}» не удался", task.Id, task.Title);
@@ -388,10 +397,22 @@ public class TeamWaveService
 
     // Карточка в ленту штаба: исполнитель не стартовал вовсе (модель недоступна, лимит
     // провайдера, задача удалена). Kind — TaskFailed: для человека это ровно тот же случай
-    // «работа по под-задаче не идёт», и кнопки карточки те же.
+    // «работа по под-задаче не идёт», и кнопки карточки те же. Отказ гейта маршрута — не
+    // сюда: он штатный отказ правила, у него своя карточка (RaiseRouteRefusedAsync).
     internal Task RaiseLaunchFailedAsync(Session session, TaskItem task, Exception ex) =>
         RaiseLaunchFailedAsync(session, task, $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message}.\n\n"
             + "Работа по ней не идёт. Проверьте модель исполнителя и доступность провайдера, "
+            + "затем перевыдайте задачу.");
+
+    // Отказ гейта маршрута (B3, хвост Ф-2.22): это отказ правила («маршрут не подтверждён»,
+    // «ветка не завершена»), а не сбой модели/провайдера — прежняя общая карточка врала и
+    // уводила человека не туда. Причина гейта доходит дословно из FeatureRouteLaunchException
+    // (там же сказано, что именно заблокировано), совет — про маршрут. Карточка та же
+    // (TaskFailed): для человека это по-прежнему «работа по под-задаче не идёт».
+    internal Task RaiseRouteRefusedAsync(Session session, TaskItem task, FeatureRouteLaunchException ex) =>
+        RaiseLaunchFailedAsync(session, task, $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message}.\n\n"
+            + "Работа по ней не идёт: её запуск закрыт гейтом маршрута фичи. Приведите в порядок маршрут "
+            + "(подтвердите его на странице фичи или дождитесь завершения предшествующих веток), "
             + "затем перевыдайте задачу.");
 
     // Под-задача ждала устройство локального проекта и не дождалась (хук

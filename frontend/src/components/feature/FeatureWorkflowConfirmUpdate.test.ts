@@ -1,5 +1,7 @@
 // Тесты карточки «шаблон изменился» (F04): лестница v2 с новым этапом, «Обновить маршрут до vN»
 // (confirm с прежним skipped из confirmed), «Оставить vN» (keep-version), закрытое предупреждение.
+// Плюс применение записанной версии (Ф-2.15): ответ confirm (ConfirmedDto) становится видом
+// блока — строка и граф сразу на новой версии, карточка больше не предлагается.
 // Окружение node: mount (fakeDom), каталог и ручки — заглушки workflowTemplatesApi.
 
 import { act, createElement } from 'react';
@@ -11,7 +13,9 @@ import type { WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from '../
 
 const api = vi.hoisted(() => ({
   entries: [] as WorkflowTemplateEntry[],
-  confirm: vi.fn((..._a: unknown[]) => Promise.resolve()),
+  // Ответ confirm — неизвестный по форме: тест подставляет его значение (mockResolvedValue),
+  // по умолчанию — «тела нет» (старый сервер / отказ): блок остаётся на прежнем виде.
+  confirm: vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve(null)),
   keep: vi.fn((..._a: unknown[]) => Promise.resolve()),
 }));
 vi.mock('../../features/workflowTemplates/api', () => ({
@@ -62,7 +66,8 @@ const click = async (c: ReturnType<typeof mount>['container'], id: string) => {
 };
 
 describe('FeatureWorkflowConfirm: карточка «шаблон изменился» (F04)', () => {
-  beforeEach(() => { installFakeDom(); api.confirm.mockClear(); api.keep.mockClear(); });
+  // mockReset, а не mockClear: подставленный тестом ответ confirm не должен доживать в следующем.
+  beforeEach(() => { installFakeDom(); api.confirm.mockReset(); api.confirm.mockResolvedValue(null); api.keep.mockClear(); });
   afterEach(() => { uninstallFakeDom(); });
 
   it('показывает заголовок «Имя»: v1 → v2, лестницу и пояснение про новый обязательный этап', async () => {
@@ -84,6 +89,43 @@ describe('FeatureWorkflowConfirm: карточка «шаблон изменил
     await click(c, 'feature-workflow-confirm-update-apply');
     expect(api.confirm).toHaveBeenCalledTimes(1);
     expect(api.confirm).toHaveBeenCalledWith('f1', { templateId: 'full-cycle', scope: 'global', skipped: ['qa'] });
+  });
+
+  it('«Обновить маршрут до v3» применяет записанную версию: строка на v3, карточка исчезает (Ф-2.15)', async () => {
+    api.entries = [entry(tpl(3, [NEW_REVIEW]))];
+    // Что отдаёт ручка после подтверждения — записанный сервером маршрут (ConfirmedDto на
+    // бэке): v3, то же снятие, новый обязательный этап в графе.
+    const written: ConfirmedRoute = {
+      ...CONFIRMED,
+      confirmedVersion: 3,
+      stages: [
+        { id: 'plan', role: 'plan', after: [] },
+        { id: 'step', role: 'step', lane: 'back', after: ['plan'] },
+        { id: 'review', role: 'review', after: ['step'] },
+        { id: 'final', role: 'final', after: ['review'] },
+        { id: 'merge', role: 'merge', after: ['final'] },
+      ],
+    };
+    api.confirm.mockResolvedValue(written);
+    const c = await render(CONFIRMED);
+    expect(text(c)).toContain('v1 → v3');
+    await click(c, 'feature-workflow-confirm-update-apply');
+    expect(api.confirm).toHaveBeenCalledTimes(1);
+    expect(api.confirm).toHaveBeenCalledWith('f1', { templateId: 'full-cycle', scope: 'global', skipped: ['qa'] });
+    // Карточка больше не предлагается: подтверждённая версия догнала версию шаблона.
+    expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-update')).toBeNull();
+    // Строка подтверждённого маршрута — на новой версии, сразу, без ожидания task_changed.
+    expect(text(c)).toContain('Полный цикл v3');
+    expect(text(c)).not.toContain('v1 → v3');
+  });
+
+  it('без тела ответа (старый сервер/отказ) вид остаётся прежним: карточка и v1 на месте', async () => {
+    api.entries = [entry(tpl(3, [NEW_REVIEW]))];
+    const c = await render(CONFIRMED);
+    await click(c, 'feature-workflow-confirm-update-apply');
+    expect(api.confirm).toHaveBeenCalledTimes(1);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-update')).not.toBeNull();
+    expect(text(c)).toContain('Полный цикл v1');
   });
 
   it('«Оставить v1» шлёт keep-version с версией шаблона и не подтверждает', async () => {

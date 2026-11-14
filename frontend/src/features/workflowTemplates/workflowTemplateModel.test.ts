@@ -348,4 +348,16 @@ describe('api — отказ различим по коду (Контракт к
     request.mockResolvedValue({ proposal: proposed });
     expect(await workflowTemplatesApi.recommendWorkflow('e1')).toBe(proposed);
   });
+
+  it('confirm разворачивает обёртку { confirmed }: записанный маршрут наружу, без тела — null (Ф-2.15)', async () => {
+    // Тот же приём, что у recommend: вызывающий (блок подтверждения) должен видеть версию,
+    // которую записал сервер, сразу после подтверждения, а не ждать штатный task_changed.
+    const written = { templateId: 't1', scope: 'project', skipped: ['design'], confirmedVersion: 3, confirmedByUser: true };
+    request.mockResolvedValue({ confirmed: written });
+    expect(await workflowTemplatesApi.confirmWorkflow('e1', { templateId: 't1', scope: 'project', skipped: ['design'] })).toBe(written);
+    request.mockResolvedValue(undefined);
+    expect(await workflowTemplatesApi.confirmWorkflow('e1', { templateId: 't1', scope: 'project', skipped: [] })).toBeNull();
+    request.mockResolvedValue({ confirmed: null });
+    expect(await workflowTemplatesApi.confirmWorkflow('e1', { templateId: 't1', scope: 'project', skipped: [] })).toBeNull();
+  });
 });

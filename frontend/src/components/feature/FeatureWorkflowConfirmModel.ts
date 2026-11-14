@@ -174,6 +174,24 @@ export function applyRecommend(
   return requestedFeatureId === currentFeatureId ? proposal : null;
 }
 
+// Тот же приём для ответа подтверждения (Ф-2.15): он относится к фиче, для которой его
+// просили. Поздний ответ другой фичи — null: чужой маршрут не перетирает показанную фичу.
+export function applyConfirmed(
+  requestedFeatureId: string,
+  currentFeatureId: string,
+  answer: ConfirmedRoute | null,
+): ConfirmedRoute | null {
+  return requestedFeatureId === currentFeatureId ? answer : null;
+}
+
+// Что блок считает подтверждённым маршрутом (Ф-2.15): ответ своего подтверждения — он и есть
+// записанный сервером маршрут (ConfirmedDto на бэке), и показывать его надо сразу, а не после
+// штатного task_changed. Ответа нет (отказ, старый сервер без тела, чужая фича) — прежний
+// слепок состояния эпика.
+export function shownConfirmed(state: ConfirmedRoute | null, applied: ConfirmedRoute | null): ConfirmedRoute | null {
+  return applied ?? state;
+}
+
 // Состояние блока маршрута на экране фичи (M4): 'none' — режим маршрута, но предложения
 // нет (модель не ответила / ответ не разобран); 'proposal' — предложение есть;
 // 'confirmed' — маршрут подтверждён; null — не режим маршрута (легаси-эпик): блока нет.

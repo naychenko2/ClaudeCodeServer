@@ -590,6 +590,16 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                     throw new InvalidOperationException(
                         "Проектная персона этапа может выполнять только задачи своего проекта.");
             }
+            else
+            {
+                // Шва IPersonaLookup нет — это поломка сборки DI, а не пользовательский сбой:
+                // 500 по пути подтверждённого маршрута сломал бы фичу целиком. Поведение не
+                // меняется (персона подставляется), но состояние не молчащее: предупреждение
+                // в логе говорит, какой шв отсутствует и что проверка пропущена (R-B2-дельта).
+                _log?.LogWarning(
+                    "Шов IPersonaLookup не подключён: проверка персоны этапа «{StagePersona}» пропущена, "
+                    + "исполнитель подставлен без проверки", stagePersona);
+            }
             task.PersonaId = stagePersona;
             NormalizePersonaAssignee(task);
         }

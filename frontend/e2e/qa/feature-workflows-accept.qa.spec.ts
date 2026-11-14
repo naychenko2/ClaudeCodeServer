@@ -1,6 +1,6 @@
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync } from 'node:fs';
-import { login, api } from './helpers';
+import { login } from './helpers';
 
 // Приёмка фичи «Процессы фичи»: страница фичи, граф процесса, блок подтверждения
 // маршрута, экран этапа, дорожки этапов. Данные — сид-мир на стенде (см. ids.json),

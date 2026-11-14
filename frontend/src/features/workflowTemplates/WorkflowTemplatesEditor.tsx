@@ -403,7 +403,8 @@ export function WorkflowTemplatesEditor({
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, minWidth: 0 }}>
         {isMobile && (
           <div>
-            <Button variant="ghost" size="sm" onClick={close}>‹ Процессы</Button>
+            {/* «Назад» существует только на мобиле — сразу md (≥40 px), как тач-цель (D2). */}
+            <Button variant="ghost" size="md" onClick={close}>‹ Процессы</Button>
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', minWidth: 0 }}>

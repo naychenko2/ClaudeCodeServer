@@ -3,6 +3,7 @@
 
 import { AlertTriangle, Info, RotateCcw, Trash2 } from 'lucide-react';
 import { C, FS, SP } from '../../lib/design';
+import { useIsMobile } from '../../lib/breakpoints';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, Notice } from '../../components/ui';
 import {
@@ -25,12 +26,14 @@ export interface EditorNoticesProps {
 
 export function EditorNotices(p: EditorNoticesProps): React.ReactElement {
   const { failure } = p;
+  // Тач-цель на мобиле (D2): «Сбросить к исходному» — md (≥40 px), на десктопе без изменений.
+  const isMobile = useIsMobile();
   return (
     <>
       {p.isBuiltIn && !p.readOnly && (
         <Notice tone="info" icon={Info}
           action={p.canReset ? (
-            <Button size="sm" variant="secondary" onClick={p.onReset}
+            <Button size={isMobile ? 'md' : 'sm'} variant="secondary" onClick={p.onReset}
               leftIcon={<RotateCcw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Сбросить к исходному</Button>
           ) : undefined}
         >{BUILTIN_NOTICE}</Notice>

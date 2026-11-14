@@ -378,6 +378,16 @@ public class TeamWaveService
                     _log.LogInformation("Под-задача {TaskId} «{Title}» ждёт устройство: {Reason}",
                         task.Id, task.Title, launched.DeviceWaitReason);
             }
+            catch (FeatureHoldException ex)
+            {
+                // Удержание фичи (пауза или черновик) — штатный отказ правила, а не поломка
+                // провайдера: тихий лог без трейса (тот же приём, что у автозапуска —
+                // TaskSchedulerService.IsHoldRefusal), иначе штатные отказы тонят реальные
+                // провалы. Карточка — со своей причиной.
+                _log.LogInformation("Запуск исполнителя по задаче {TaskId} «{Title}» закрыт удержанием фичи: {Reason}",
+                    task.Id, task.Title, ex.Message);
+                await RaiseFeatureHoldRefusedAsync(session, task, ex);
+            }
             catch (Exception ex)
             {
                 _log.LogError(ex, "Запуск исполнителя по задаче {TaskId} «{Title}» не удался", task.Id, task.Title);
@@ -388,11 +398,23 @@ public class TeamWaveService
 
     // Карточка в ленту штаба: исполнитель не стартовал вовсе (модель недоступна, лимит
     // провайдера, задача удалена). Kind — TaskFailed: для человека это ровно тот же случай
-    // «работа по под-задаче не идёт», и кнопки карточки те же.
+    // «работа по под-задаче не идёт», и кнопки карточки те же. Отказ по удержанию фичи — не
+    // сюда: он штатный отказ правила, у него своя карточка (RaiseFeatureHoldRefusedAsync).
     internal Task RaiseLaunchFailedAsync(Session session, TaskItem task, Exception ex) =>
         RaiseLaunchFailedAsync(session, task, $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message}.\n\n"
             + "Работа по ней не идёт. Проверьте модель исполнителя и доступность провайдера, "
             + "затем перевыдайте задачу.");
+
+    // Отказ по удержанию фичи (хвост Ф-2.23, та же природа, что у отказа гейта маршрута):
+    // это отказ состояния самой фичи («фича на паузе», «фича — черновик»), а не сбой
+    // модели/провайдера — прежняя общая карточка врала и уводила человека проверять модель.
+    // Причина доходит дословно из FeatureHoldException (FeatureHoldRefusal уже называет, что
+    // именно заблокировано и что с этим делать), совет — про фичу. Карточка та же
+    // (TaskFailed): для человека это по-прежнему «работа по под-задаче не идёт».
+    internal Task RaiseFeatureHoldRefusedAsync(Session session, TaskItem task, FeatureHoldException ex) =>
+        RaiseLaunchFailedAsync(session, task, $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message}.\n\n"
+            + "Работа по ней не идёт: её запуск закрыт удержанием самой фичи (паузой или черновиком). "
+            + "Снимите паузу или запустите её на странице фичи, затем перевыдайте задачу.");
 
     // Под-задача ждала устройство локального проекта и не дождалась (хук
     // TaskExecutionService.TeamTaskNotLaunched). Перевыдачи нет: она упёрлась бы в то же устройство.

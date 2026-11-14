@@ -389,9 +389,43 @@ public class TeamWaveServiceTests : IClassFixture<TeamWaveServiceTests.Fixture>
         await _sut.RaiseLaunchFailedAsync(_sessions.GetById(session.Id)!, task,
             new InvalidOperationException("Задача удалена"));
 
+        // Граница хвоста Ф-2.23: совет о провайдере остаётся за настоящими сбоями запуска
+        var failedCard = (await ((ITeamHistoryStore)_sessions).GetOpenTeamEscalationsAsync(session.Id))
+            .Should().ContainSingle(c => c.TaskId == task.Id).Which;
+        failedCard.Details.Should().Contain("Задача удалена").And.Contain("доступность провайдера");
+
         var ti = _sessions.GetById(session.Id)!.TeamImplement!;
         ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
             "карточка эскалации ставит практику на ожидание решения — молчаливых пауз не бывает");
+    }
+
+    // Хвост Ф-2.23 (тот же дефект, что у Ф-2.22, на другом типе отказа): удержание фичи —
+    // пауза или черновик — штатный отказ её состояния, а не сбой провайдера. Карточка несёт
+    // причину дословно (FeatureHoldRefusal уже называет, что заблокировано) и совет про фичу;
+    // ложного «проверьте модель и доступность провайдера» в ней быть не должно.
+    [Theory]
+    [InlineData("pause", "Фича на паузе, снимите паузу на странице фичи.")]
+    [InlineData("draft", "Фича — черновик, запустите её на странице фичи.")]
+    public async Task ОтказПоУдержаниюФичи_КарточкаНесётСвоюПричинуАНеСоветОПровайдере(string kind, string holdReason)
+    {
+        // Имя штава уникально на кейз: ProjectManager держит подключённые папки между
+        // тестами класса, одинаковое имя второго кейза дало бы «папка уже подключена».
+        var (session, plan) = await MakeRunningStabAsync($"wave-hold-refusal-{kind}");
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var task = created[0];
+
+        await _sut.RaiseFeatureHoldRefusedAsync(_sessions.GetById(session.Id)!, task,
+            new FeatureHoldException(holdReason));
+
+        var card = (await ((ITeamHistoryStore)_sessions).GetOpenTeamEscalationsAsync(session.Id))
+            .Should().ContainSingle(c => c.TaskId == task.Id).Which;
+        card.Kind.Should().Be(TeamEscalationKind.TaskFailed, "для человека это тот же «работа не идёт»");
+        card.Details.Should()
+            .Contain(holdReason, "причина удержания доходит дословно")
+            .And.Contain("удержанием самой фичи", "человек видит, что именно остановило запуск")
+            .And.NotContain("доступность провайдера", "ложный совет о провайдере — только для сбоев провайдера")
+            .And.NotContain("Проверьте модель", "и ложный совет про модель — тоже");
+        _sessions.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
     }
 
     // ADR-016, вариант А плана §5: под-задача ждала устройство локального проекта и не

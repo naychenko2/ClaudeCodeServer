@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru" data-theme="light" data-w="desk" data-st="inherit" data-ps="base">
+<html lang="ru" data-theme="light" data-w="desk" data-st="inherit" data-ps="base" data-ms="own">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -325,7 +325,7 @@ textarea.fld.pown { min-height:120px; font-size:var(--fs-sm); }
   <span class="lb">Тема</span><span class="pseg" data-k="theme"><button data-v="light">Светлая</button><button data-v="dark">Тёмная</button></span>
   <span class="lb">Ширина</span><span class="pseg" data-k="w"><button data-v="desk">1240</button><button data-v="mob">360</button></span>
   <span class="lb">Состояние</span><span class="pseg" data-k="st">
-    <button data-v="inherit">Всё как у специальности</button><button data-v="own">Свои права и ячейки</button><button data-v="back">Вернуть к специальности?</button><button data-v="spec">Смена специальности</button><button data-v="none">Без специальности</button><button data-v="member">Участник (только чтение)</button></span>
+    <button data-v="inherit">Всё как у специальности</button><button data-v="own">Свои права и ячейки</button><button data-v="back">Вернуть к специальности?</button><button data-v="spec">Смена специальности</button><button data-v="swapped">После смены</button><button data-v="none">Без специальности</button><button data-v="member">Участник (только чтение)</button></span>
   <span class="lb">Секции промпта</span><span class="pseg" data-k="ps"><button data-v="base">Всё как у специальности</button><button data-v="own">Своё и выключено</button><button data-v="edit">Админ поправил специальность</button><button data-v="over">Длиннее 1024</button></span>
 </div>
 <div class="stage">
@@ -339,39 +339,41 @@ textarea.fld.pown { min-height:120px; font-size:var(--fs-sm); }
           <button class="back">‹ Персоны</button><span class="av lg i">В</span>
           <div class="col grow" style="gap:0"><span class="tname">Вера</span><span class="inh">QA-тестер AI Home</span></div>
         </div>
-        <div class="ih" style="background:var(--c-bg-main)"><div class="tabs" style="border:0"><button>Профиль</button><button aria-selected="true">Поведение</button><button>Умения</button><button>Память</button></div></div>
+        <div class="ih" style="background:var(--c-bg-main)"><div class="tabs" style="border:0"><button>Профиль</button><button aria-selected="true">Поведение</button><button>Промпт</button><button>Умения</button><button>Память</button></div></div>
         <div class="body">
           <div class="notice info" data-show="st:member" style="margin-bottom:var(--sp-md)"><span class="ic">i</span><span>Права, модели и специальность меняет владелец проекта — вам они видны только для чтения.</span></div>
 
           <div class="fl">Специальность</div>
-          <select class="fld" data-show="!st:none|spec" ><option>QA-тестер</option></select>
+          <select class="fld" data-show="!st:none|spec|swapped" ><option>QA-тестер</option></select>
           <select class="fld" data-show="st:none"><option>Без специальности</option></select>
           <select class="fld" data-show="st:spec" style="border-color:var(--c-accent)"><option>Код-ревьюер</option></select>
+          <select class="fld" data-show="st:swapped"><option>Код-ревьюер</option></select>
+          <div class="notice info" data-show="st:swapped" style="margin-top:var(--sp-sm)"><span class="ic">i</span><span>Специальность сменена на «Код-ревьюер»: права и модели пересчитаны, умения специальности заменены — ваши отключения и свои умения остались.</span></div>
           <div class="fhint" data-show="!st:none">От неё приходят права, модели и типовые умения. <a class="lnk" href="#">Открыть специальность «QA-тестер» →</a> <span class="muted">(правит админ)</span></div>
           <div class="fhint" data-show="st:none">Наследовать не от кого: права — полный доступ, модели — «Модели по умолчанию», типовых умений нет.</div>
 
           <!-- === Группа: права === -->
           <div class="sect">Группы, которые приходят от специальности</div>
-          <div class="grp inherit" data-show="st:inherit|none|member|spec">
-            <div class="gh"><span class="gt">Права</span><span class="sp"></span>
+          <div class="grp inherit" data-show="st:inherit|none|member|spec|swapped">
+            <div class="gh"><span class="gt">Права</span><span class="tag ok" data-show="st:swapped">права пересчитаны</span><span class="sp"></span>
               <span class="seg"><button aria-pressed="true">Как у специальности</button><button data-go="st:own" data-show="!st:member">Своё</button><button disabled data-show="st:member">Своё</button></span></div>
-            <div class="src" data-show="!st:none">↳ от специальности «<span data-show="!st:spec">QA-тестер</span><span data-show="st:spec">Код-ревьюер</span>» · обновится вместе с ней</div>
+            <div class="src" data-show="!st:none">↳ от специальности «<span data-show="!st:spec|swapped">QA-тестер</span><span data-show="st:spec|swapped">Код-ревьюер</span>» · обновится вместе с ней</div>
             <div class="src" data-show="st:none">↳ по умолчанию: полный доступ без ограничений</div>
             <div class="fl" style="margin-top:var(--sp-md)">Профиль доступа</div>
-            <span class="seg"><button disabled aria-pressed="true">Полный</button><button disabled>Только чтение</button><button disabled data-show="!st:spec">Свой</button><button disabled data-show="st:spec" aria-pressed="true">Свой</button></span>
+            <span class="seg"><button disabled aria-pressed="true">Полный</button><button disabled>Только чтение</button><button disabled data-show="!st:spec|swapped">Свой</button><button disabled data-show="st:spec|swapped" aria-pressed="true">Свой</button></span>
             <div class="fl" style="margin-top:var(--sp-md)">Инструменты продукта</div>
             <div class="tools">
               <span class="cb dis"><i class="on">✓</i>Задачи</span><span class="cb dis"><i class="on">✓</i>Заметки</span><span class="cb dis"><i class="on">✓</i>Веб-поиск</span>
             </div>
             <div class="fl" style="margin-top:var(--sp-md)">Запрещённые инструменты</div>
-            <div class="row wrap" data-show="!st:spec"><span class="muted">нет</span></div>
-            <div class="row wrap" data-show="st:spec"><span class="chip off mono" style="text-decoration:none">Edit</span><span class="chip off mono" style="text-decoration:none">Write</span></div>
+            <div class="row wrap" data-show="!st:spec|swapped"><span class="muted">нет</span></div>
+            <div class="row wrap" data-show="st:spec|swapped"><span class="chip off mono" style="text-decoration:none">Edit</span><span class="chip off mono" style="text-decoration:none">Write</span></div>
             <div class="fhint">Править нельзя, пока права наследуются. Нужно иначе — «Своё»: скопируем текущие значения, дальше они ваши.</div>
           </div>
           <div class="grp" data-show="st:own|back">
             <div class="gh"><span class="gt">Права</span><span class="tag plan">своё</span><span class="sp"></span>
               <span class="seg"><button data-go="st:back">Как у специальности</button><button aria-pressed="true">Своё</button></span></div>
-            <div class="src">↳ скопировано со специальности «QA-тестер» 12.11 · <span class="diff">отличается в 2 местах</span> · правка специальности сюда не доедет</div>
+            <div class="src">↳ скопировано со специальности «QA-тестер» · <span class="diff">отличается в 2 местах</span> · правка специальности сюда не доедет</div>
             <div class="fl" style="margin-top:var(--sp-md)">Профиль доступа</div>
             <span class="seg"><button>Полный</button><button>Только чтение</button><button aria-pressed="true">Свой</button></span>
             <div class="fl" style="margin-top:var(--sp-md)">Инструменты продукта</div>
@@ -391,15 +393,26 @@ textarea.fld.pown { min-height:120px; font-size:var(--fs-sm); }
               <div class="trow"><span class="tn">Слабая</span><span class="rp inh">Flash <span class="sp"></span><span class="mono">спец.</span></span></div>
             </div>
           </div>
-          <div class="grp" data-show="st:own|back">
+          <div class="grp" data-show="st:own|back ms:own">
             <div class="gh"><span class="gt">Модели</span><span class="tag plan">своё · 1 из 3</span><span class="sp"></span>
-              <span class="seg"><button>Как у специальности</button><button aria-pressed="true">Своё</button></span></div>
+              <span class="seg"><button data-go="ms:spec">Как у специальности</button><button aria-pressed="true">Своё</button></span></div>
             <div class="src">↳ пустая ячейка по-прежнему берётся у специальности</div>
             <div style="margin-top:var(--sp-sm)">
               <div class="trow"><span class="tn">Сильная</span><span class="rp inh">пусто — как у специальности · Opus 5.5</span></div>
               <div class="trow"><span class="tn">Средняя</span><span class="rp inh">пусто — как у специальности · Sonnet 5.5</span></div>
               <div class="trow"><span class="tn">Слабая</span><span class="rp">Flash Lite <span class="sp"></span><span class="mono">своя</span></span><button class="btn xs ghostAccent">Сбросить</button></div>
               <div class="prev">Сейчас пойдёт: Flash Lite · своя ячейка персоны</div>
+            </div>
+          </div>
+          <div class="grp inherit" data-show="st:own|back ms:spec">
+            <div class="gh"><span class="gt">Модели</span><span class="tag">своё не действует · 1 из 3</span><span class="sp"></span>
+              <span class="seg"><button aria-pressed="true">Как у специальности</button><button data-go="ms:own">Своё</button></span></div>
+            <div class="src">↳ действуют ячейки специальности «QA-тестер». Ваше значение остаётся в форме и вернётся по «Своё» — в отличие от прав, здесь ничего не стирается</div>
+            <div style="margin-top:var(--sp-sm)">
+              <div class="trow"><span class="tn">Сильная</span><span class="rp inh">Opus 5.5 <span class="sp"></span><span class="mono">спец.</span></span></div>
+              <div class="trow"><span class="tn">Средняя</span><span class="rp inh">Sonnet 5.5 <span class="sp"></span><span class="mono">спец.</span></span></div>
+              <div class="trow"><span class="tn">Слабая</span><span class="rp inh">Flash <span class="sp"></span><span class="mono">спец.</span></span><span class="diff">≠ своё: Flash Lite</span></div>
+              <div class="prev">Сейчас пойдёт: Flash · как у специальности. «Flash Lite» не действует, пока выбрано «Как у специальности»</div>
             </div>
           </div>
         </div>
@@ -418,8 +431,8 @@ textarea.fld.pown { min-height:120px; font-size:var(--fs-sm); }
         <div class="scrim" data-show="st:spec">
           <div class="modal" style="max-width:380px">
             <div class="mh">Специальность — «Код-ревьюер»</div>
-            <div class="mb">Права и модели Веры наследуются — они станут как у «Код-ревьюера»: запрещены <span class="mono">Edit</span> и <span class="mono">Write</span>. Умения специальности заменятся, ваши отключения и свои умения останутся.<div class="fhint">Если права были бы «своими», здесь стоял бы выбор: оставить свои или перейти на новые.</div></div>
-            <div class="ma"><button class="btn sm ghost" data-go="st:inherit">Отмена</button><button class="btn sm primary" data-go="st:inherit">Сменить</button></div>
+            <div class="mb">Права и модели Веры наследуются — они станут как у «Код-ревьюера»: запрещены <span class="mono">Edit</span> и <span class="mono">Write</span>. Умения специальности заменятся, ваши отключения и свои умения останутся.<div class="fhint">Отмена вернёт «QA-тестер», ничего не меняя. Если права были бы «своими», здесь стоял бы выбор: оставить свои или перейти на новые.</div></div>
+            <div class="ma"><button class="btn sm ghost" data-go="st:inherit">Отмена</button><button class="btn sm primary" data-go="st:swapped">Сменить специальность</button></div>
           </div>
         </div>
       </div>
@@ -428,16 +441,17 @@ textarea.fld.pown { min-height:120px; font-size:var(--fs-sm); }
     <!-- ===== Умения ===== -->
     <div class="pane p-skills" data-mcap="A3b · вкладка «Умения»">
       <div class="island">
-        <div class="ih"><span class="t">Умения</span><span class="cnt">7</span><span class="sp"></span><button class="btn xs ghost" data-show="!st:member">+ Умение</button></div>
+        <div class="ih"><span class="t">Умения</span><span class="cnt" data-show="!st:none">7</span><span class="cnt" data-show="st:none">3</span><span class="sp"></span><button class="btn xs ghost" data-show="!st:member">+ Умение</button></div>
         <div class="body">
           <div class="sect row"><span class="grow">От специальности «QA-тестер»</span><span class="tag" data-show="!st:none">наследуются</span></div>
           <div data-show="st:none"><div class="empty sm"><div class="em-x">Без специальности типовых умений нет — только свои.</div></div></div>
           <div data-show="!st:none">
             <div class="sk"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">playwright-e2e</span><span class="tag">от специальности</span></span><span class="sd ell">навык · проверка UI в браузере</span></div><button class="btn xs ghost" data-show="!st:member">Отключить</button></div>
             <div class="sk"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">regression-matrix</span><span class="tag">от специальности</span></span><span class="sd ell">навык · матрица регрессий</span></div><button class="btn xs ghost" data-show="!st:member">Отключить</button></div>
-            <div class="sk offd" data-show="!st:inherit"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">web-design-guidelines</span><span class="tag w">отключено вами</span></span><span class="sd ell">у специальности есть, у Веры выключено</span></div><button class="btn xs ghostAccent" data-show="!st:member">Вернуть</button></div>
+            <div class="sk offd" data-show="!st:inherit"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">web-design-guidelines</span><span class="tag w">отключено вами</span></span><span class="sd ell">у специальности есть, у Веры выключено</span></div><button class="btn xs ghost" data-show="!st:member">Вернуть</button></div>
             <div class="sk" data-show="st:inherit"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">web-design-guidelines</span><span class="tag">от специальности</span></span><span class="sd ell">навык · аудит интерфейса</span></div><button class="btn xs ghost">Отключить</button></div>
-            <p class="fhint">Новое умение специальности появится у Веры само. «Отключить» гасит только у неё — у специальности оно остаётся.</p>
+            <div class="sk offd"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">perf-profiling</span><span class="tag">выключено специальностью</span></span><span class="sd ell">админ выключил для всех «QA-тестеров» — у Веры его нет</span></div></div>
+            <p class="fhint">Новое умение специальности появится у Веры само. «Отключить» гасит умение только у неё: оно остаётся в списке с пометкой «отключено вами», и «Вернуть» включает его обратно. «Выключено специальностью» — пометка админа для всех; у персоны кнопки нет, вернуть можно только в самой специальности.</p>
           </div>
           <div class="sect">Свои</div>
           <div class="sk"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="sn ell">vera-checklists</span><span class="sd ell">навык · добавлен вручную</span></div><button class="ib" title="Убрать" data-show="!st:member">×</button></div>

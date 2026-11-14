@@ -1,18 +1,24 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Info, Pencil, Trash2 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaAccess, PersonaContract, PersonaGender, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project, UpdatePersonaDto } from '../../types';
 import { api } from '../../lib/api';
 import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { PersonaVoicePicker } from './PersonaVoicePicker';
+import { ReturnInheritDialog, SwitchSpecialtyInheritDialog, SwitchSpecialtyOwnDialog } from './PersonaInheritDialogs';
+import { PersonaAccessGroup } from './PersonaAccessGroup';
+import { PersonaModelsGroup } from './PersonaModelsGroup';
+import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, claimTierReset, clearedTiers, ownTierCount, settleTierReset, takeReturn, tiersModeAction, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey, type TierResetOutcome } from './personaInheritModel';
 import { createVoicePayload } from './voicePayload';
- import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Select, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
+import { PersonaPromptTab, SECTIONS_RESET_TEXT, SECTIONS_RESET_TITLE, sectionsResetNeedsConfirm } from './PersonaPromptTab';
+import { applySections, emptyState, hasOverLimit, toOverrides, type PromptSectionsState } from './promptSectionsModel';
+ import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Select, Menu, MenuItem, Notice, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
 import { PillSwitch } from '../../components/Toolbar';
 import { RoutePicker } from '../../components/RoutePicker';
 import { useModels, useModelCaps, modelProvider, modelLabel, USAGE } from '../../lib/models';
-import { parseTier, useTierModels, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
+import { parseTier, useTierModels, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import {
   formatEffectiveLine, invalidateEffectiveLines, routeDisplayLabel,
   usePresets, usePreview, useSpecialtySettings, type EffectiveLineContext,
@@ -22,7 +28,7 @@ import { effectiveSpecialtyRecord } from '../../lib/specialties';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -83,6 +89,9 @@ interface PersonaFormProps {
   onOpenMemory?: () => void;
   // Переход во вкладку «Знания» из плашки-переадресации (фича persona-bindings)
   onOpenKnowledge?: () => void;
+  // «Отменить» футера формы — тот же выход из правки, что кнопка тулбара-родителя:
+  // родитель передаёт один и тот же обработчик и в тулбар, и в форму
+  onCancelEdit?: () => void;
   // Дефолты зоны при создании (persona=null): для проектной панели персон —
   // сразу «Проект» + id текущего проекта, чтобы персона создавалась проектной.
   defaultScope?: PersonaScope;
@@ -90,18 +99,75 @@ interface PersonaFormProps {
   defaultSphereId?: string;
 }
 
-// Подсказка выключенных полей зоны и денег (W3-F1e): видимым текстом под полем, тот же
-// смысл, что у отказа бэка (403 owner_settings на PUT этих полей участнику)
-const OWNER_ONLY_HINT = 'Меняет только владелец проекта';
+// Подсказка выключенных полей зоны и денег (W3-F1e) — с F29 (макет P3) не повторяется
+// у каждого поля: для участника в начале секции «Поведение и контекст» одна плашка Notice
+
+// ── Сброс уровней персоны: отправка и решение по исходу (F28) ─────────────────────────
+// Вынесено из тела формы отдельными функциями, чтобы путь сброса был проверяем тестом:
+// форма перемонтируется родителем по смене персоны, и «ответ мой» определяется живостью
+// экземпляра, а не сравнением id.
+
+// Живость экземпляра формы: после размонтирования (родитель сменил персону) — false.
+export function useMountedRef(): { current: boolean } {
+  const ref = useRef(true);
+  useEffect(() => {
+    ref.current = true;
+    return () => { ref.current = false; };
+  }, []);
+  return ref;
+}
+
+// Отправка сброса уровней: захват права на отправку (пока идёт первая, вторая не уходит)
+// и сам PUT. null — не отправляли, право занято. Отказ не бросается наружу, а становится
+// исходом: текст ошибки должен дойти до формы целиком.
+export async function runTierReset(
+  flag: { current: boolean },
+  put: () => Promise<unknown>,
+  onSend?: () => void,
+): Promise<TierResetOutcome | null> {
+  if (!claimTierReset(flag)) return null;
+  onSend?.();
+  try {
+    const saved = await put();
+    return { ok: true, saved };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Не удалось сбросить уровни' };
+  }
+}
+
+// Полный путь сброса: отправка → решение по исходу (успех / отказ / умерший экземпляр) →
+// показ ошибки или применение ответа. apply=false у умершего экземпляра: ответ чужой
+// персоны не трогает ни форму, ни родителя.
+export async function performTierReset(deps: {
+  flag: { current: boolean };
+  put: () => Promise<unknown>;
+  isAlive: () => boolean;
+  setError: (message: string | null) => void;
+  onApplied: (saved: unknown) => void;
+}): Promise<boolean> {
+  try {
+    const outcome = await runTierReset(deps.flag, deps.put, () => deps.setError(null));
+    if (!outcome) return false;
+    const settled = settleTierReset(outcome, deps.isAlive());
+    if (settled.error) deps.setError(settled.error);
+    if (!settled.apply) return true;
+    deps.onApplied(settled.saved);
+    return true;
+  } finally {
+    deps.flag.current = false;
+  }
+}
 
 // Инлайн-форма создания/редактирования персоны (без Modal-обёртки).
 // Редизайн «Студия-профиль»: ОДНА центрированная колонка с плоскими секциями,
 // разделёнными тонкой линией (паттерн TaskEditForm/FeatureFlagsModal),
 // character-first (идентичность → характер → поведение → память). Кнопки действий
-// (сохранить/удалить/отмена) живут в тулбаре РОДИТЕЛЯ: форма экспонирует
-// save()/remove() через ref и сообщает своё состояние через onStatus.
+// (сохранить/удалить) живут в тулбаре РОДИТЕЛЯ: форма экспонирует save()/remove() через
+// ref и сообщает своё состояние через onStatus. С F29 (макет P24) в конце формы — ещё и
+// свой футер «Отменить / Сохранить»: save() та же, что у тулбара, «Отменить» — тот же
+// обработчик, что кнопка тулбара (parent передаёт его и туда, и сюда через onCancelEdit).
 export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(function PersonaForm(
-  { persona, projects, onSaved, onDelete, initial, onStatus, onColorChange, onOpenMemory, defaultScope, defaultProjectId, defaultSphereId }, ref,
+  { persona, projects, onSaved, onDelete, initial, onStatus, onColorChange, onOpenMemory, onCancelEdit, defaultScope, defaultProjectId, defaultSphereId }, ref,
 ) {
   const isEdit = !!persona;
   // Гейт по роли (W3-F1e, разрез §2/§3.4): роль читается только через personaRights — по
@@ -163,6 +229,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Точечный сброс уровней персоны (план model-settings-reset.md, шаг 3) — отдельный
   // busy от общего сохранения формы, бьёт сразу PUT'ом, не дожидаясь кнопки «Сохранить»
   const [tiersResetBusy, setTiersResetBusy] = useState(false);
+  // Группа «Модели»: «Своё» (true) или «Как у специальности». Пока задана хоть одна ячейка —
+  // «Своё»; пустые ячейки при выбранном «Своём» — тоже допустимое состояние (ещё не заполнили)
+  const [tiersOwn, setTiersOwn] = useState(!!(persona?.tierStrong || persona?.tierMedium || persona?.tierWeak));
+  const [pendingTiersInherit, setPendingTiersInherit] = useState(false);
   const [effort, setEffort] = useState(persona?.effort ?? initial?.effort ?? '');
   // Специальность (функциональная роль) для оркестрации — конвейер/брифинг/статус/память
   const [specialty, setSpecialty] = useState<PersonaSpecialty>(
@@ -171,6 +241,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const specialtyCatalog = useSpecialtyCatalog();
   // Отложенная смена специальности: ждёт подтверждения перезаписи прав шаблоном
   const [pendingSpecialty, setPendingSpecialty] = useState<PersonaSpecialty | null>(null);
+  const [pendingSpecialtyInherit, setPendingSpecialtyInherit] = useState<PersonaSpecialty | null>(null);
+  // Вкладки формы: «Основное» / «Промпт» (P2b)
+  const [tab, setTab] = useState<'main' | 'prompt'>('main');
+  // Секции промпта «от специальности»: состояние привязано к personaId (смена персоны сбрасывает
+  // черновики), ответ GET prompt-sections принимает только applySections
+  const [sectionsState, setSectionsState] = useState<PromptSectionsState>(() => emptyState(persona?.id ?? ''));
+  const [sectionsError, setSectionsError] = useState<string | null>(null);
+  // Счётчик перечитывания: растёт после успешного сохранения
+  const [sectionsReload, setSectionsReload] = useState(0);
+  // Смена специальности со своими секциями ждёт подтверждения
+  const [pendingSectionsReset, setPendingSectionsReset] = useState<PersonaSpecialty | null>(null);
   // Плашка «права подставлены из шаблона» после подстановки
   const [templateNote, setTemplateNote] = useState<string | null>(null);
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
@@ -190,6 +271,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'));
   const [disallowedText, setDisallowedText] = useState(
     (persona?.disallowedTools ?? []).join(', '));
+  // Группа прав «как у специальности» (true) или «своё» (false). Источник — persona.inheritsAccess
+  // с сервера; новая персона наследует, пока человек не выбрал «Своё»
+  const [inheritsAccess, setInheritsAccess] = useState<boolean>(
+    persona ? readAccessMode(persona) === 'inherited' : true);
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
   // Облегчённый контекст: переключатель Вкл/Выкл без «Авто» (решение владельца)
   const [lightContext, setLightContext] = useState(persona?.lightContext ?? false);
@@ -208,6 +293,52 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // дальше они правятся вручную. Если текущие поля уже отличаются от нового шаблона —
   // спрашивает подтверждение (защита ручных правок). Без каталога (ещё не загружен) —
   // обычный setSpecialty.
+  // Эффективная группа прав для показа в режиме «как у специальности»: шаблон выбранной сейчас
+  // специальности; без каталога/шаблона — поля персоны (сервер подставил их при выдаче)
+  const specialtyTemplate = specialtyCatalog?.find(e => e.key === specialty)?.template ?? null;
+  const effectiveGroup: AccessGroup = specialtyTemplate
+    ? { access: specialtyTemplate.access, tools: specialtyTemplate.tools, disallowedTools: specialtyTemplate.disallowedTools }
+    : { access, tools, disallowedTools: parseDisallowed(disallowedText) };
+
+  // Переключатель группы прав. «Своё» забирает текущие эффективные значения как override
+  // (toOwn), «Как у специальности» шлёт только флаг (toInherited) — значения не копируются
+  // Отличия своих прав от шаблона выбранной специальности — текст диалога возврата
+  const currentGroup: AccessGroup = { access, tools, disallowedTools: parseDisallowed(disallowedText) };
+  const currentDiffs = !inheritsAccess && specialtyTemplate
+    ? describeAccessDiff(accessDiff(currentGroup, specialtyTemplate), currentGroup)
+    : [];
+  const [pendingReturn, setPendingReturn] = useState(false);
+  // Ref, а не state: два клика подряд до перерисовки видят одно и то же замкнутое состояние
+  const pendingReturnRef = useRef(false);
+  const confirmReturn = () => {
+    // Повторный клик «Вернуть» (диалог ещё не размонтирован) ничего не делает
+    const t = takeReturn(pendingReturnRef.current);
+    pendingReturnRef.current = t.pending;
+    if (!t.apply) return;
+    setPendingReturn(false);
+    setInheritsAccess(toInherited().inheritsAccess);
+  };
+
+  const switchAccessMode = (own: boolean) => {
+    if (own === !inheritsAccess) return;
+    // Возврат к наследованию теряет свои значения — спрашиваем, если они отличаются
+    if (!own && currentDiffs.length > 0) {
+      pendingReturnRef.current = true;
+      setPendingReturn(true);
+      return;
+    }
+    if (own) {
+      const o = toOwn({ access, tools, disallowedTools: parseDisallowed(disallowedText) }, effectiveGroup);
+      setAccess(o.access);
+      setTools(o.tools ?? ALL_TOOL_KEYS);
+      setDisallowedText((o.disallowedTools ?? []).join(', '));
+      setInheritsAccess(o.inheritsAccess);
+      setTemplateNote(null);
+    } else {
+      setInheritsAccess(toInherited().inheritsAccess);
+    }
+  };
+
   const applySpecialtyTemplate = (next: PersonaSpecialty) => {
     const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
     if (template) {
@@ -221,8 +352,27 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     setSpecialty(next);
   };
 
+  // Специальность в форме уже отличается от сохранённой: свои секции сервер сбросит при сохранении
+  const specialtyChanged = !!persona && specialty !== (persona.specialty ?? 'none');
+
   const changeSpecialty = (next: PersonaSpecialty) => {
     if (next === specialty) return;
+    // Свои секции промпта пропадут при смене роли — сначала подтверждение (временное решение
+    // разреза: слой сбрасывается целиком)
+    if (sectionsResetNeedsConfirm(sectionsState, specialtyChanged)) {
+      setPendingSectionsReset(next);
+      return;
+    }
+    proceedSpecialtyChange(next);
+  };
+
+  const proceedSpecialtyChange = (next: PersonaSpecialty) => {
+    // Права «как у специальности» не копируются: смена роли меняет только саму роль
+    if (inheritsAccess) {
+      // Права и модели наследуются — человеку показываем, какими они станут
+      setPendingSpecialtyInherit(next);
+      return;
+    }
     const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
     if (!template) {
       setSpecialty(next);
@@ -339,7 +489,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     const rec = specialty !== 'none' && specSettings
       ? effectiveSpecialtyRecord(specSettings.global, specSettings.global, specialty) : null;
     const defRec = specSettings?.global.defaultSpecialty ?? null;
-    const fromSpec = cellOfRec(rec) || cellOfRec(defRec);
+    const fromSpec = tierCellView({}, rec, TIER_KEY[t]).value || cellOfRec(defRec);
     if (fromSpec) return `Как у специальности · ${routeDisplayLabel(fromSpec, presets, chainCtx)}`;
     return tierModels[t] ? `Как у всех · ${modelLabel(tierModels[t])}` : 'Как у всех';
   };
@@ -361,6 +511,23 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // Живой цвет — в родителя (перекраска полосы/тулбара)
   useEffect(() => { onColorChange?.(color); }, [color, onColorChange]);
+
+  // Секции промпта персоны: читаем при открытии и после сохранения; запрос отменяется при уходе,
+  // запоздавший ответ прежней персоны отбрасывает applySections
+  const personaId = persona?.id;
+  useEffect(() => {
+    if (!personaId) return;
+    const ctrl = new AbortController();
+    setSectionsState(prev => (prev.personaId === personaId ? prev : emptyState(personaId)));
+    setSectionsError(null);
+    api.personas.getPromptSections(personaId, ctrl.signal)
+      .then(list => setSectionsState(prev => applySections(prev, personaId, list)))
+      .catch(e => {
+        if (ctrl.signal.aborted) return;
+        setSectionsError(e instanceof Error ? e.message : 'Не удалось загрузить секции промпта');
+      });
+    return () => ctrl.abort();
+  }, [personaId, sectionsReload]);
 
   // Персона для превью аватара: актуальные имя/аватар из формы. Цвет для инициалов
   // берём из выбранного color; при наличии картинки — kind='image' показывает её.
@@ -513,7 +680,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // Форма только для чтения не сохраняется: «Сохранить» родителя гасится этим сигналом
   // (в самой форме своей кнопки нет — она в тулбаре)
-  const canSave = name.trim().length > 0 && !(isProjectZone && !projectId) && !(isSphereZone && !sphereId) && !readOnlyForm;
+  const canSave = name.trim().length > 0 && !(isProjectZone && !projectId) && !(isSphereZone && !sphereId) && !readOnlyForm
+    && !(isEdit && !specialtyChanged && hasOverLimit(sectionsState));
 
   // Снимок редактируемых полей — для вычисления «есть несохранённые правки» (dirty)
   const snapshot = JSON.stringify({
@@ -531,9 +699,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     sphereId: isSphereZone ? sphereId : '',
     color, greeting: greeting.trim(), memoryEnabled, lightContext, gender,
     tools: [...tools].sort(),
-    access,
+    inheritsAccess,
+    // В режиме «как у специальности» поля прав не свои и не уходят — в снимок не входят
+    access: inheritsAccess ? null : access,
     specialty,
-    disallowed: access === 'custom' ? parseDisallowed(disallowedText) : [],
+    disallowed: !inheritsAccess && access === 'custom' ? parseDisallowed(disallowedText) : [],
   });
   // Исходный снимок считается от предзаполненного состояния: у legacy-персоны
   // слот «Характер» = systemPrompt, поэтому сама миграция не делает форму dirty.
@@ -567,12 +737,19 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       lightContext: persona?.lightContext ?? false,
       gender: persona?.gender ?? 'unspecified',
       tools: [...(persona ? (persona.tools ?? ALL_TOOL_KEYS) : ALL_TOOL_KEYS)].sort(),
-      access: persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
+      inheritsAccess: persona ? readAccessMode(persona) === 'inherited' : true,
+      access: persona && readAccessMode(persona) === 'inherited' ? null
+        : persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
       specialty: persona ? (persona.specialty ?? 'none') : (initial?.specialty ?? 'none'),
-      disallowed: (persona?.access ?? 'full') === 'custom' ? (persona?.disallowedTools ?? []) : [],
+      disallowed: persona && readAccessMode(persona) !== 'inherited' && (persona.access ?? 'full') === 'custom'
+        ? (persona.disallowedTools ?? []) : [],
     });
   }, [persona, defaultScope, defaultProjectId, initial?.access, initial?.specialty]);
-  const dirty = snapshot !== initialSnapshot;
+  // Секции промпта в dirty — по тому, что реально уйдёт в запись (явное «как у специальности»
+  // у унаследованной секции правкой не считается)
+  const promptKey = JSON.stringify(toOverrides(sectionsState));
+  const promptBaseKey = JSON.stringify(toOverrides({ ...sectionsState, overrides: {} }));
+  const dirty = snapshot !== initialSnapshot || promptKey !== promptBaseKey;
 
   // Сравнение «менялся ли голос»: поля простые, порядок фиксирован — JSON достаточно
   const voiceKey = (v: Persona['voice']) =>
@@ -632,14 +809,25 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       // Пол: всегда явный (текущее значение селекта). unspecified = дефолт «авто по имени»,
       // совпадает с текущим — нет-оп; female/male — явная установка.
       gender,
-      // Всегда явный список: полный набор бэкенд нормализует в «без ограничений»
-      tools,
+      // Своё: явный список (полный набор бэкенд нормализует в «без ограничений»).
+      // «Как у специальности»: поля прав не уходят — иначе смена роли в другой вкладке
+      // перезаписала бы наследование устаревшей копией
+      tools: inheritsAccess ? undefined : tools,
+      // Режим группы прав: участнику не шлём (права арендатора, см. поля выше);
+      // «Как у специальности» — true без полей, «Своё» — false вместе с полями
+      inheritsAccess: ownerOnlyFields ? undefined : inheritsAccess,
       // Профиль доступа: свой список запретов уходит только при custom; участнику —
       // ни профиль, ни запреты (деньга/права арендатора, см. поля выше)
-      access: ownerOnlyFields ? undefined : access,
+      access: ownerOnlyFields || inheritsAccess ? undefined : access,
       // Специальность шлём всегда (включая 'none' — сброс); update на бэке None ставит явно
       specialty,
-      disallowedTools: ownerOnlyFields ? undefined : (access === 'custom' ? parseDisallowed(disallowedText) : []),
+      // Секции промпта — только правка и только загруженные (иначе пустой список снёс бы слой).
+      // При смене специальности — явный сброс: сервер и так сбрасывает слой, секции старой роли
+      // не переносим
+      promptSections: isEdit && !readOnlyForm && sectionsState.effective.length > 0
+        ? (specialtyChanged ? [] : toOverrides(sectionsState))
+        : undefined,
+      disallowedTools: ownerOnlyFields || inheritsAccess ? undefined : (access === 'custom' ? parseDisallowed(disallowedText) : []),
     };
     try {
       const saved = isEdit
@@ -652,6 +840,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
       bumpPersonas();
       invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
+      if (isEdit) setSectionsReload(n => n + 1); // перечитать секции с сервера
       onSaved(savedVoice);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить персону');
@@ -664,27 +853,46 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // (тот же контракт, что и обычное сохранение) — Model/ModelTier не трогаем, это другие
   // оси настройки. Бьёт сразу, не дожидаясь общего «Сохранить» — уровни в форме и так
   // независимы от остальных полей (пусто = наследование от специальности/слотов).
+  // Busy-ref, а не state: два вызова до перерисовки видят одно замкнутое состояние.
+  const tiersBusyRef = useRef(false);
+  // Живость экземпляра формы: родители перемонтируют её по смене персоны (key={persona.id}),
+  // поэтому «ответ мой» — это «экземпляр ещё жив», а не сравнение id.
+  const mountedRef = useMountedRef();
   const resetPersonaTiers = async () => {
-    if (!persona || tiersResetBusy) return;
+    if (!persona) { setTierStrong(''); setTierMedium(''); setTierWeak(''); setTiersOwn(false); return; }
     setTiersResetBusy(true);
-    setError(null);
+    const personaId = persona.id;
     try {
-      // tierStrong/… не входят в типаж CreatePersonaDto/UpdatePersonaDto (только в Persona
-      // и SpecialtyTemplateSettings), хотя бэкенд их принимает — тот же неполный тип уже
-      // обходит save() ниже, посылая их в общем dto среди полей, которые в типе есть
-      const dto = { tierStrong: '', tierMedium: '', tierWeak: '' } as unknown as UpdatePersonaDto;
-      const saved = await api.personas.update(persona.id, dto);
-      setTierStrong('');
-      setTierMedium('');
-      setTierWeak('');
-      bumpPersonas();
-      invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
-      onSaved(saved);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось сбросить уровни');
+      await performTierReset({
+        flag: tiersBusyRef,
+        // tierStrong/… не входят в типаж CreatePersonaDto/UpdatePersonaDto (только в Persona
+        // и SpecialtyTemplateSettings), хотя бэкенд их принимает — тот же неполный тип уже
+        // обходит save() ниже, посылая их в общем dto среди полей, которые в типе есть
+        put: () => api.personas.update(personaId, clearedTiers() as unknown as UpdatePersonaDto),
+        isAlive: () => mountedRef.current,
+        setError,
+        onApplied: (saved: unknown) => {
+          setTierStrong('');
+          setTierMedium('');
+          setTierWeak('');
+          setTiersOwn(false);
+          bumpPersonas();
+          invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
+          onSaved(saved as Persona);
+        },
+      });
     } finally {
       setTiersResetBusy(false);
     }
+  };
+
+  // Переключатель группы «Модели»: «Своё» только открывает ячейки; возврат к специальности
+  // стирает заданные ячейки — сначала подтверждение
+  const switchTiersMode = (own: boolean) => {
+    const act = tiersModeAction(own ? 'own' : 'inherited', tiersOwn, ownTierCount({ tierStrong, tierMedium, tierWeak }), tiersBusyRef.current);
+    if (act === 'open') setTiersOwn(true);
+    else if (act === 'confirm') setPendingTiersInherit(true);
+    else if (act === 'close') setTiersOwn(false);
   };
 
   // Отдаём тулбару-родителю императивные действия. save — через ref-зеркало: он
@@ -1189,18 +1397,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 
-  // Подпись под профилем доступа: у «Полного» пояснять нечего (это состояние по умолчанию),
-  // у «Своего» подсказка описывает формат поля запретов под контролом
-  const accessHint = access === 'readOnly'
-    ? 'Смотрит и советует, но ничего не меняет: без правок файлов, Bash и мутаций задач/заметок'
-    : access === 'custom'
-      ? 'Имена инструментов через запятую, напр. Bash, Edit, mcp__tasks__tasks_delete'
-      : undefined;
-
   // === Секция 3 — Поведение и контекст (сетка 2×2) ===
   const behaviorSection = (
     <div style={section}>
       <SectionLabel style={{ marginBottom: 14 }}>Поведение и контекст</SectionLabel>
+      {/* P3 (макет A3b): для участника — одна плашка вместо hint у каждого поля зоны и
+          денег: те же права, что отказ бэка 403 owner_settings на PUT этих полей */}
+      {ownerOnlyFields && (
+        <Notice tone="info" icon={Info} style={{ marginBottom: SP.md }}>
+          Права, модели и специальность меняет владелец проекта — вам они видны только для чтения.
+        </Notice>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
         {/* Модели по уровням (спека, блок 4): три ячейки Сильная/Средняя/Слабая — модель
             или цепочка; пустая ячейка наследуется (специальность → «Модели по умолчанию»).
@@ -1208,71 +1415,46 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             «Сейчас пойдёт» под каждой ячейкой — резолв места chat-persona с уровнем: видно
             реальную модель и откуда она возьмётся, без догадок про наследование. */}
         <div style={{ gridColumn: '1 / -1' }}>
-          {/* Модель/уровень/усилие — деньга арендатора (Configure): участнику поля выключены
-              с видимой подсказкой (не только в title), и в DTO они не едут */}
-          <Field label="Модели" hint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {isEdit && (tierStrong || tierMedium || tierWeak) && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button
-                    type="button"
-                    onClick={resetPersonaTiers}
-                    disabled={tiersResetBusy || ownerOnlyFields}
-                    title="Вернуть наследование"
-                    style={{
-                      font: 'inherit', fontSize: 11.5, fontWeight: 600, color: C.accent,
-                      background: 'transparent', border: 'none', padding: 0,
-                      cursor: tiersResetBusy || ownerOnlyFields ? 'default' : 'pointer', textDecoration: 'underline',
-                      opacity: tiersResetBusy ? 0.5 : 1,
-                    }}
-                  >
-                    {tiersResetBusy ? 'Сбрасываю…' : 'Вернуть наследование'}
-                  </button>
-                </div>
-              )}
-              {TIER_ORDER.map(t => {
-                const cell = tierCell(t);
-                return (
-                  <div key={t} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ width: 64, flexShrink: 0, fontSize: 12.5, color: C.textSecondary }}>
-                        {TIER_TITLE[t]}
-                      </span>
-                      <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
-                        <RoutePicker
-                          route={cell}
-                          label={cell ? routeDisplayLabel(cell, presets, chainCtx) : ''}
-                          models={models}
-                          tierModels={tierModels}
-                          placeholder={personaCellPlaceholder(t)}
-                          showTiers={false}
-                          showPresets
-                          readOnly={ownerOnlyFields}
-                          onChange={v => setTierCell(t, v)}
-                        />
-                      </div>
-                      {cell && (
-                        <button
-                          type="button"
-                          onClick={() => setTierCell(t, '')}
-                          title="Вернуть наследование"
-                          disabled={ownerOnlyFields}
-                          style={{
-                            flexShrink: 0, font: 'inherit', fontSize: 11.5, color: C.accent,
-                            background: 'transparent', border: 'none', padding: 0,
-                            cursor: ownerOnlyFields ? 'default' : 'pointer', textDecoration: 'underline',
-                          }}
-                        >
-                          Сбросить
-                        </button>
-                      )}
-                    </div>
-                    <div style={{ paddingLeft: 72 }}>
-                      <PersonaTierPreview personaId={persona?.id ?? null} tier={t} />
-                    </div>
-                  </div>
-                );
-              })}
+          {/* Модель/уровень/усилие — деньга арендатора (Configure): участнику поля выключены,
+              объяснение — в общей плашке Notice выше; в DTO эти поля для участника не едут */}
+          {/* P27 (макет A3b): без специальности источник моделей — общий слой «Модели по
+              умолчанию»: подпись над карточкой, пока группа «Как у специальности» */}
+          {!tiersOwn && specialty === 'none' && (
+            <div data-testid="models-source" style={{ fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted, marginBottom: SP.xs }}>
+              ↳ «Модели по умолчанию»
+            </div>
+          )}
+          <PersonaModelsGroup
+            own={tiersOwn}
+            onModeChange={switchTiersMode}
+            busy={tiersResetBusy}
+            readOnly={ownerOnlyFields}
+            ownCount={ownTierCount({ tierStrong, tierMedium, tierWeak })}
+            cells={{ strong: tierStrong, medium: tierMedium, weak: tierWeak }}
+            inheritedLabel={t => {
+              const ph = personaCellPlaceholder(t);
+              const m = /^Как у (специальности|всех) · (.+)$/.exec(ph);
+              return m ? `${m[2]} · ${m[1] === 'специальности' ? 'спец.' : 'общая'}` : ph;
+            }}
+            renderPicker={t => {
+              const cell = tierCell(t);
+              return (
+                <RoutePicker
+                  route={cell}
+                  label={cell ? routeDisplayLabel(cell, presets, chainCtx) : ''}
+                  models={models}
+                  tierModels={tierModels}
+                  placeholder={personaCellPlaceholder(t)}
+                  showTiers={false}
+                  showPresets
+                  readOnly={ownerOnlyFields || tiersResetBusy}
+                  onChange={v => setTierCell(t, v)}
+                />
+              );
+            }}
+            renderPreview={t => <PersonaTierPreview personaId={persona?.id ?? null} tier={t} />}
+            onReset={t => setTierCell(t, '')}
+            footer={(
               <div style={{
                 fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45,
                 marginTop: 2,
@@ -1280,12 +1462,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                 Когда {persona?.name?.trim() ? persona.name.trim() : 'персону'} зовут сабагентом в чужой чат,
                 она отвечает моделью вызова — эти настройки касаются её собственного чата и задач.
               </div>
-            </div>
-          </Field>
+            )}
+          />
         </div>
 
         {caps.supportsEffort && (
-          <Field label="Усилие рассуждения" hint={ownerOnlyFields ? OWNER_ONLY_HINT : 'Выше — глубже размышляет, но дольше и дороже.'}>
+          <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
             <SegmentedControl value={effort}
               options={effortsForProvider(modelProvider(model)).map(o => ({ ...o, disabled: ownerOnlyFields }))}
               onChange={setEffort} columns={3} />
@@ -1329,7 +1511,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
         {/* Зона (Scope/ProjectId/SphereId) — Configure: участнику выключена с видимой
             подсказкой; в DTO её поля для участника не едут */}
-        <Field label="Зона" hint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}>
+        <Field label="Зона">
           {spheresOn ? (
             <PersonaZoneSelect
               value={{ scope, projectId, sphereId }}
@@ -1368,8 +1550,23 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
         {/* Специальность — Configure (доработка ревью fd328e70, п.3): бэк (01ebbf0ed)
             отвечает участнику 403 owner_settings на её смену, поэтому тот же гейт, что у
-            полей зоны и денег, и та же подсказка — фронт не обещает того, что бэк откажет. */}
-        <Field label="Специальность" hint={ownerOnlyFields ? OWNER_ONLY_HINT : 'Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.'}>
+            полей зоны и денег; для участника объяснение — в общей плашке Notice выше.
+            Подсказка по состоянию (P4/P5, макет A3b): со специальностью — откуда берутся
+            права/модели/умения и ссылка на неё; без — что наследовать не от кого. */}
+        <Field
+          label="Специальность"
+          hint={specialty === 'none'
+            ? 'Наследовать не от кого: права — полный доступ, модели — «Модели по умолчанию», типовых умений нет.'
+            : (
+              <>
+                От неё приходят права, модели и типовые умения. {' '}
+                <a href={`#/specialties/${specialty}`} style={{ color: C.accent }}>
+                  Открыть специальность «{specialtyLabel(specialtyCatalog, specialty)}» →
+                </a>
+                {' '}<span style={{ color: C.textMuted }}>(правит админ)</span>
+              </>
+            )}
+        >
           <select
             value={specialty}
             onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)}
@@ -1377,7 +1574,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             aria-label="Специальность"
             disabled={ownerOnlyFields}
           >
-            <option value="none">Не задана</option>
+            <option value="none">Без специальности</option>
             {specialtyCatalog?.filter(e => e.key !== 'none').map(e => (
               <option key={e.key} value={e.key}>{specialtyLabel(specialtyCatalog, e.key)}</option>
             ))}
@@ -1397,32 +1594,76 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         <div style={{ gridColumn: '1 / -1' }}>
           {/* Профиль доступа — права арендатора (Configure): участнику выключен с видимой
               подсказкой вместо обычного hint */}
-          <Field label="Профиль доступа" hint={ownerOnlyFields ? OWNER_ONLY_HINT : accessHint}>
-            <SegmentedControl<PersonaAccess>
-              value={access}
-              onChange={setAccess}
-              columns={3}
-              options={[
-                { value: 'full', label: 'Полный', disabled: ownerOnlyFields },
-                { value: 'readOnly', label: 'Только чтение', disabled: ownerOnlyFields },
-                { value: 'custom', label: 'Свой', disabled: ownerOnlyFields },
-              ]}
-            />
-            {access === 'custom' && (
-              <TextArea value={disallowedText} onChange={setDisallowedText}
-                autoGrow minHeight={56} placeholder="Bash, Edit, Write" disabled={ownerOnlyFields} />
-            )}
-          </Field>
+          <PersonaAccessGroup
+            inherited={inheritsAccess}
+            onModeChange={switchAccessMode}
+            readOnly={ownerOnlyFields}
+            specialtyKey={specialty}
+            specialtyTitle={specialtyLabel(specialtyCatalog, specialty)}
+            access={inheritsAccess ? (effectiveGroup.access ?? 'full') : access}
+            tools={inheritsAccess ? (effectiveGroup.tools ?? ALL_TOOL_KEYS) : tools}
+            disallowed={inheritsAccess ? (effectiveGroup.disallowedTools ?? []) : parseDisallowed(disallowedText)}
+            onAccess={setAccess}
+            onTools={setTools}
+            onDisallowed={d => setDisallowedText(d.join(', '))}
+            diff={inheritsAccess || !specialtyTemplate ? null : accessDiff(
+              { access, tools, disallowedTools: parseDisallowed(disallowedText) },
+              { access: specialtyTemplate.access, tools: specialtyTemplate.tools, disallowedTools: specialtyTemplate.disallowedTools })}
+            // Строка «скопировано …» читается из поля ответа бэка (F26a); форма его не правит —
+            // после переключения в «Своё» дата появится только с перечитыванием персоны.
+            // accessDiffCount (области 0..3) больше не передаётся: число в подписи карточка
+            // считает из своих видимых меток (F26a).
+            copiedAt={persona?.accessCopiedAt ?? null}
+          />
         </div>
       </div>
 
-      {pendingSpecialty && (
+      {pendingSectionsReset && (
         <ConfirmDialog
-          title="Заменить права и инструменты?"
-          subtitle="Текущие профиль доступа и инструменты отличаются от шаблона новой специальности. Заменить их шаблоном? Ручные правки будут перезаписаны."
-          confirmLabel="Заменить"
+          title={SECTIONS_RESET_TITLE}
+          subtitle={SECTIONS_RESET_TEXT}
+          confirmLabel="Сменить специальность"
           cancelLabel="Оставить как есть"
-          onConfirm={() => { applySpecialtyTemplate(pendingSpecialty); setPendingSpecialty(null); }}
+          onConfirm={() => { const next = pendingSectionsReset; setPendingSectionsReset(null); proceedSpecialtyChange(next); }}
+          onCancel={() => setPendingSectionsReset(null)}
+        />
+      )}
+
+      {pendingTiersInherit && (
+        <ConfirmDialog
+          title="Вернуть модели как у специальности?"
+          subtitle="Заданные вами ячейки моделей будут стёрты, персона станет брать модели у специальности и менять их вместе с ней."
+          confirmLabel="Вернуть"
+          cancelLabel="Оставить своё"
+          onConfirm={() => { setPendingTiersInherit(false); void resetPersonaTiers(); }}
+          onCancel={() => setPendingTiersInherit(false)}
+        />
+      )}
+
+      {pendingReturn && (
+        <ReturnInheritDialog
+          specialtyTitle={specialtyLabel(specialtyCatalog, specialty)}
+          diffs={currentDiffs}
+          onKeep={() => { pendingReturnRef.current = false; setPendingReturn(false); }}
+          onReturn={confirmReturn}
+        />
+      )}
+
+      {pendingSpecialtyInherit && (
+        <SwitchSpecialtyInheritDialog
+          specialtyTitle={specialtyLabel(specialtyCatalog, pendingSpecialtyInherit)}
+          rights={describeAccessGroup(specialtyCatalog?.find(e => e.key === pendingSpecialtyInherit)?.template)}
+          onApply={() => { const next = pendingSpecialtyInherit; setPendingSpecialtyInherit(null); setSpecialty(next); setTemplateNote(null); }}
+          onCancel={() => setPendingSpecialtyInherit(null)}
+        />
+      )}
+
+      {pendingSpecialty && (
+        <SwitchSpecialtyOwnDialog
+          specialtyTitle={specialtyLabel(specialtyCatalog, pendingSpecialty)}
+          rights={describeAccessGroup(specialtyCatalog?.find(e => e.key === pendingSpecialty)?.template)}
+          onKeep={() => { const next = pendingSpecialty; setPendingSpecialty(null); setSpecialty(next); setTemplateNote(null); }}
+          onTemplate={() => { const next = pendingSpecialty; setPendingSpecialty(null); applySpecialtyTemplate(next); }}
           onCancel={() => setPendingSpecialty(null)}
         />
       )}
@@ -1533,13 +1774,47 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         padding: isMobile ? '18px 16px 32px' : '22px 32px 40px',
         display: 'flex', flexDirection: 'column', gap: 28,
       }}>
-        {heroSection}
-        {characterSection}
-        {behaviorSection}
-        {memorySection}
-        {dangerSection}
+        <SegmentedControl<'main' | 'prompt'>
+          value={tab}
+          onChange={setTab}
+          touch={isMobile}
+          options={[{ value: 'main', label: 'Основное' }, { value: 'prompt', label: 'Промпт' }]}
+        />
+        {tab === 'main' ? (
+          <>
+            {heroSection}
+            {behaviorSection}
+            {memorySection}
+            {dangerSection}
+          </>
+        ) : (
+          <PersonaPromptTab
+            state={sectionsState}
+            onChange={setSectionsState}
+            hasSpecialty={specialty !== 'none'}
+            specialtyChanged={specialtyChanged}
+            isNew={!isEdit}
+            loadError={sectionsError}
+            disabled={readOnlyForm}
+            isMobile={isMobile}
+            specialtyTitle={specialtyLabel(specialtyCatalog, specialty)}
+            changedByAdminSince={persona?.changedByAdminSince}
+          >
+            {characterSection}
+          </PersonaPromptTab>
+        )}
         {error && (
           <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
+        )}
+        {/* P24 (макет A3b): футер правки «Отменить / Сохранить» — в конце формы, на обеих
+            вкладках. «Сохранить» вызывает ту же save(), что тулбар через ref; «Отменить» —
+            тот же обработчик выхода, что кнопка тулбара (parent передаёт один и тот же).
+            На мобиле кнопки переносятся (flexWrap) и остаются tappable-целями Button sm */}
+        {isEdit && onCancelEdit && (
+          <div data-testid="persona-form-footer" style={{ display: 'flex', gap: SP.sm, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+            <Button variant="ghost" size={isMobile ? 'md' : 'sm'} onClick={onCancelEdit}>Отменить</Button>
+            <Button variant="primary" size={isMobile ? 'md' : 'sm'} disabled={!canSave || busy} loading={busy} onClick={() => { void save(); }}>Сохранить</Button>
+          </div>
         )}
       </div>
 
@@ -1564,6 +1839,8 @@ function parseDisallowed(s: string): string[] {
 
 // Возможности персоны (Persona.Tools): полный набор = «без ограничений»
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
+
+const TIER_KEY: Record<ModelTierKey, TierKey> = { strong: 'tierStrong', medium: 'tierMedium', weak: 'tierWeak' };
 
 // Пресеты тона — single-select: выбор записывает текст в редактируемый слот «Тон»
 const TONE_PRESETS: { label: string; text: string }[] = [

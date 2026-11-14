@@ -52,7 +52,7 @@ public class PersonaPluginSkillBindingCascadeTests : IDisposable
         // Реальный каскад: PluginInstallCascade → PluginBindingPurgerAdapter → PersonaBindingsService.
         var cascade = new PluginInstallCascade(new PluginBindingPurgerAdapter(bindings));
         _uninstall = new PluginUninstall(_store, _secrets, cascade);
-        _lookup = new PersonaSkillBindingLookup(_personas);
+        _lookup = new PersonaSkillBindingLookup(_personas, bindings);
     }
 
     public void Dispose()

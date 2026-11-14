@@ -16,6 +16,12 @@ public class SpecialtyTemplatesService(SpecialtySettingsStore settings)
     // PersonaManager.Update (null = «не менять») честно перезаписал Tools на «без ограничений»
     public static readonly IReadOnlyList<string> AllToolKeys = ["tasks", "notes", "web"];
 
+    // Эффективный шаблон прав специальности одним снимком настроек: общая точка для Apply и
+    // гидратации персоны (PersonaManager.Hydrate); null — шаблона нет (None, нет стора или шаблона)
+    public static SpecialtyTemplate? EffectiveAccessTemplate(
+        SpecialtySettingsStore? settings, string ownerId, PersonaSpecialty specialty) =>
+        specialty == PersonaSpecialty.None || settings is null ? null : settings.EffectiveTemplate(ownerId, specialty);
+
     public sealed record Applied(
         PersonaAccess? Access,
         List<string>? Tools,
@@ -33,7 +39,7 @@ public class SpecialtyTemplatesService(SpecialtySettingsStore settings)
         if (newSpecialty == PersonaSpecialty.None) return passthrough;
         if (currentSpecialty == newSpecialty) return passthrough; // та же специальность — не «смена»
 
-        if (settings.EffectiveTemplate(ownerId, newSpecialty) is not { } template) return passthrough;
+        if (EffectiveAccessTemplate(settings, ownerId, newSpecialty) is not { } template) return passthrough;
 
         // Tools шаблона null = «все» — разворачиваем в полный список: PersonaManager.Update
         // трактует null как «не менять», а полный список нормализует в «без ограничений»

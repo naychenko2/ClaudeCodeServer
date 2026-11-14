@@ -2,7 +2,7 @@ import { C, FONT, FS } from '../../lib/design';
 import { ICON_SIZE } from '../ui/icons';
 import { BackButton } from '../ui';
 import { useFeatureBackNav, useFeatureBackNavForTask, consumeFeatureViewReturn, type FeatureBackNavInfo } from '../../lib/featureBackNav';
-import { setFeatureMainTab, FEATURE_MAIN_TAB_LABEL } from '../../lib/featurePage';
+import { setFeatureMainTab } from '../../lib/featurePage';
 
 // «← к фиче «{название}» · {мейн-вкладка}» (Ф-pl-b + Ф9b, FS-FBACK): чат открыт переходом
 // ИЗ страницы фичи — в шапке кнопка возврата на ту же мейн-вкладку, с которой ушли
@@ -13,8 +13,9 @@ import { setFeatureMainTab, FEATURE_MAIN_TAB_LABEL } from '../../lib/featurePage
 //
 // major 1: из попапа/панели/шторки (showTab=false) — чип БЕЗ вкладки («← к фиче {название}»),
 // но возврат ведёт на последнюю использованную вкладку (featureBack.tab).
-// minor 1: название вкладки — из ЕДИНОГО словаря мейн-вкладок FEATURE_MAIN_TAB_LABEL
-// (чип и полоса не разъезжаются).
+// minor 1 + дефект 762b7c03: название вкладки — из записи возврата (featureBack.tabLabel:
+// отображаемое имя страницы в момент перехода — «Процесс» у фичи с маршрутом, «Ход» у легаси;
+// фолбэк словаря — в featureBackNav для записей без поля). Чип и полоса не разъезжаются.
 // minor 4: длинное название — обрезка с многоточием (min-width:0 + text-overflow), полное
 // название в title/aria-label (кнопка может сжиматься: flexShrink:1 + overflow:hidden).
 //
@@ -57,7 +58,7 @@ export function FeatureBackChip({ sessionId, taskId, projectId, isCompact = fals
   // «К фиче», чип не рисуется (иначе две кнопки с одной целью и лишняя строка 40 px на 360).
   // Указатель на другую фичу — чип как раньше: карточка туда не ведёт.
   if (hideForFeatureIds?.includes(featureBack.featureId)) return null;
-  const tabName = FEATURE_MAIN_TAB_LABEL[featureBack.tab];
+  const tabName = featureBack.tabLabel;
   // Полное название (title/aria-label): название фичи + (если есть вкладка) её имя.
   const fullLabel = `К фиче${featureBack.title ? ` «${featureBack.title}»` : ''}${featureBack.showTab ? `, вкладка «${tabName}»` : ''}`;
   return (

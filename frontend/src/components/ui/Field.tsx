@@ -167,10 +167,14 @@ interface TextAreaProps {
   autoFocus?: boolean;
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
   style?: CSSProperties;
+  // Подпись для скринридера, когда видимой метки у поля нет
+  ariaLabel?: string;
+  // Красная рамка и aria-invalid
+  invalid?: boolean;
 }
 
 // === Многострочное поле с авто-ростом высоты ===
-export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, readOnly, autoFocus, onKeyDown, autoComplete = 'off', style, voice, isMobile }: TextAreaProps & { voice?: boolean; isMobile?: boolean }) {
+export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, readOnly, autoFocus, onKeyDown, autoComplete = 'off', style, voice, isMobile, ariaLabel, invalid }: TextAreaProps & { voice?: boolean; isMobile?: boolean }) {
   const [focused, setFocused] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const [recording, setRecording] = useState(false);
@@ -194,13 +198,13 @@ export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 8
   // кликабельным по всей ширине
   const wrapperStyle: CSSProperties | undefined = voice ? { position: 'relative' } : undefined;
   const areaStyle: CSSProperties = voice
-    ? controlStyle(focused, false, false, {
+    ? controlStyle(focused, false, invalid, {
         minHeight, maxHeight, resize: 'none',
         overflow: autoGrow && !maxHeight ? 'hidden' : 'auto',
         lineHeight: 1.5, paddingRight: 36, ...style,
         ...(recording ? { display: 'none' } : null),
       })
-    : controlStyle(focused, false, false, {
+    : controlStyle(focused, false, invalid, {
         minHeight, maxHeight, resize: 'none',
         overflow: autoGrow && !maxHeight ? 'hidden' : 'auto',
         lineHeight: 1.5, ...style,
@@ -217,6 +221,8 @@ export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 8
         readOnly={readOnly}
         autoFocus={autoFocus}
         autoComplete={autoComplete}
+        aria-label={ariaLabel}
+        aria-invalid={invalid || undefined}
         onKeyDown={onKeyDown}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}

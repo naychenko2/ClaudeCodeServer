@@ -7,6 +7,10 @@ namespace ClaudeHomeServer.Services.Composition;
 // реально нужными подбору (Role/Name/Description/Character/MustDo) плюс
 // пред-отфильтрованный список Skill-биндингов.
 //
+// SkillBindingTargets — эффективные Skill-привязки персоны (свои + унаследованные от
+// специальности, без Off): тот же список, что отдаёт промпту EffectiveBindings (R-A2 M2).
+// Вызывающие (--plugin-dir, подбор скиллов) обязаны видеть тот же набор, что и промпт.
+//
 // Если завтра SkillSuggestService понадобится ещё и фильтр по Knowledge/Project —
 // расширим, а пока seam узкий и повторяет форму `PersonaManager.Get(id, ownerId)`.
 // Character уже слит с SystemPrompt (Contract.Character ?? SystemPrompt), чтобы

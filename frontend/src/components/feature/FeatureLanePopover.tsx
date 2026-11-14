@@ -30,7 +30,7 @@ import { PressableArea } from '../ui/PressableArea';
 import { tooltipPlacement } from '../ui/Tooltip';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { formatClock, formatDateTime, formatDuration } from './FeatureStatsBits';
-import type { LaneIntervalState } from './FeatureLaneModel';
+import { isFailedTurnOutcome, type LaneIntervalState } from './FeatureLaneModel';
 import type { StageKey } from '../../types/featureRun';
 
 // Ширина поповера (макет feature-gantt-6 §«Поповер»): 288 px.
@@ -72,10 +72,11 @@ export interface LaneIntervalDetails {
   pauseAfterMinutes: number;
 }
 
-// Слово состояния интервала. «Прервано» — по исходу последнего хода (cancelled /
-// interrupted / error): интервал закрылся, но работа в нём сорвалась.
+// Слово состояния интервала. «Прервано» — по отказу последнего хода: предикат один на весь
+// фронт (isFailedTurnOutcome, FeatureLaneModel — зеркало бэкового IsFailedTurn), своего
+// списка исходов здесь нет (дефект 29c053fb: «работа завершена» рядом с «Последний ход: failed»).
 export function intervalStateWord(state: LaneIntervalState, lastOutcome: string | null): string {
-  if (lastOutcome === 'cancelled' || lastOutcome === 'interrupted' || lastOutcome === 'error') return 'прервано';
+  if (isFailedTurnOutcome(lastOutcome)) return 'прервано';
   switch (state) {
     case 'live': return 'работа';
     case 'wait': return 'ждёт';

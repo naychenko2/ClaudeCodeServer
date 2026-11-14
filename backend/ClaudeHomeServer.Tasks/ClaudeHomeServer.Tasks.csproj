@@ -36,6 +36,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- Доработка B1a по R-B1a (п.1): ссылка на вертикаль Llm снята — Tasks от неё
+         не зависит. Проверка ячеек матрицы этапа живёт в спине (ModelCellRules,
+         Core/Services/Llm/), Tasks берёт её оттуда, как остальные контракты. -->
   </ItemGroup>
 
 </Project>

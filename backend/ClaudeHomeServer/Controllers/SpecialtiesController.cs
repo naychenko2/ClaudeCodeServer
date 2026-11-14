@@ -46,6 +46,22 @@ public class SpecialtiesController(
         }));
     }
 
+    // Одна специальность: подпись и наследники — персоны вызывающего, наследующие её секции
+    // (все с этой специальностью), с числом секций, которые у каждой «своё» (B09).
+    [HttpGet("{key}")]
+    public IActionResult Get(string key)
+    {
+        if (!SpecialtyCatalog.TryGetByKey(key, out var entry) || entry.Specialty == PersonaSpecialty.None)
+            return NotFound(new { error = $"Неизвестная специальность: {key}" });
+        return Ok(new
+        {
+            key = entry.Key,
+            label = entry.Label,
+            inheritors = personas.SpecialtyInheritors(UserId, entry.Specialty)
+                .Select(i => new { personaId = i.PersonaId, name = i.Name, ownSections = i.OwnSections }),
+        });
+    }
+
     // Каталог секций промптов: состав секций задаёт система, здесь — их метаданные и
     // дефолты кода по каждой специальности (включённость и типовой текст — пресет
     // «Типовой текст…» и база для клиентского резолва поверх слоёв). Профиль типовых
@@ -122,6 +138,19 @@ public class SpecialtiesController(
         });
     }
 
+    // A1c (разрез §2 «Персистентные…»): после успешной записи настроек — перематериализовать
+    // персистентные права наследующих персон, чтобы снимок для отката кода не протухал.
+    // Ручки не адресуют одну специальность (слой целый), поэтому обход по всем специальностям
+    // каталога; вызов идемпотентен: изменений нет — записи стора нет. Бюджет подмен и уровни
+    // своих персон прав не касаются, но план требует свежий снимок после любой записи панели —
+    // пустой прогон здесь дёшев и без изменений. Сама перематериализация не бросает (лог) —
+    // ответ ручки она не валит.
+    private void RematerializeInheritingPersonas()
+    {
+        foreach (var entry in SpecialtyCatalog.All)
+            personas.RematerializeSpecialtyAccess(entry.Specialty);
+    }
+
     // Замена глобального слоя — только админ (общие значения инстанса).
     [HttpPut("settings/global")]
     [Authorize(Roles = "admin")]
@@ -129,6 +158,7 @@ public class SpecialtiesController(
     {
         if (layer is null) return BadRequest(new { error = "Не задан слой настроек" });
         if (settings.SetGlobal(layer) is { } error) return BadRequest(new { error });
+        RematerializeInheritingPersonas();
         return Ok(new { global = settings.Snapshot.Global });
     }
 
@@ -155,6 +185,7 @@ public class SpecialtiesController(
     public IActionResult SetGlobalMaxSubstitutions([FromBody] FallbackMaxRequest? body)
     {
         if (fallback.SetGlobal(body?.MaxSubstitutions) is { } error) return BadRequest(new { error });
+        RematerializeInheritingPersonas();
         return Ok(new { maxSubstitutions = fallback.Snapshot.Global.MaxSubstitutions });
     }
 
@@ -194,6 +225,8 @@ public class SpecialtiesController(
     private IActionResult ResetPersonaTiers(bool apply)
     {
         var touched = personas.ResetTierMatrices(UserId, apply);
+        // Тот же порядок, что у Reset: перематериализация только после реальной записи
+        if (apply) RematerializeInheritingPersonas();
         return Ok(new
         {
             personas = touched.Count,
@@ -209,6 +242,8 @@ public class SpecialtiesController(
             return BadRequest(new { error = $"Неизвестная специальность: {key}" });
 
         var result = settings.ResetModelSettings(resolvedKey, apply);
+        // Предпросмотр (apply=false) ничего не писал — перематериализация не нужна
+        if (apply) RematerializeInheritingPersonas();
         return Ok(new
         {
             specialties = result.Changed,

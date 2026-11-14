@@ -206,8 +206,11 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
         };
         http.SetRequestScope(new RequestScope(userId, tenant,
             userId == tenant ? ProjectRole.Owner : ProjectRole.Editor));
+        // Последний null — контрибьютор секций промпта: ручка {id}/prompt-sections этим
+        // тестам не нужна, карточка и список чатов живут без него
         return new PersonasController(_personas, _projects, _sessions, null!, null!, null!, null!, null!,
-            null!, null!, null!, null!, null!, null!, null!, _config, NullLogger<PersonasController>.Instance, null!)
+            null!, null!, null!, null!, null!, null!, null!, _config, NullLogger<PersonasController>.Instance,
+            null!, null!)
         { ControllerContext = new ControllerContext { HttpContext = http } };
     }
 

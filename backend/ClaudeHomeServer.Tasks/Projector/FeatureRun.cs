@@ -88,6 +88,16 @@ public sealed class FeatureRun
     // Честный прогресс по шагам: корзины accepted/review/work/notCreated (сумма = Total),
     // вне знаменателя — withdrawn и unlinkedReworks. Вся арифметика на бэке.
     public FeatureStepProgress StepProgress { get; init; } = new();
+    // Счётчик этапов «пройдено N из M» (G3, разрез 2 §1.7): отдельная ось от процента по шагам
+    // (StepProgress не трогается): M = число этапов подтверждённого маршрута (у легаси-фичи — 0,
+    // графа нет); N = стадии с состоянием done (active/pending/absent в пройденные не входят).
+    public int StagesPassed { get; init; }
+    public int StagesTotal { get; init; }
+    // B02: данные метастроки шапки страницы фичи. Срок (EtaMinutes) проставляет вызывающий,
+    // у которого есть бриф (ApplyEta): единая точка правды по сроку — FeatureBrief.EtaOf.
+    public FeatureRunMeta Meta { get; private set; } = new();
+    public void ApplyEta(int? etaMinutes) => Meta = Meta with { EtaMinutes = etaMinutes };
+    internal FeatureRun WithMeta(FeatureRunMeta meta) { Meta = meta; return this; }
     // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
     public DateTime? LastActivityAt { get; init; }
     // W4-ANB (разрез §4, решение Андрея 24.10): «тихо» — фича стоит без движения ≥ 24 часов.
@@ -120,6 +130,22 @@ public sealed class FeatureRun
     // Волна после мержа: после последнего закрытого мержа заведён шаг/доработка (или к предыдущему
     // мержу осталась открытая работа) — состояние merged снято до следующего мержа без неё.
     public bool WaveAfterMerge { get; init; }
+}
+
+// Метастрока шапки страницы фичи (B02). Снятые (skipped) этапы в StagesTotal не входят.
+// У легаси-фичи (без маршрута): stages 0/0, ParallelBranches 0, ProgressPct null, Approx true.
+public sealed record FeatureRunMeta
+{
+    public int StagesDone { get; init; }
+    public int StagesTotal { get; init; }
+    // Макс. число этапов в одной колонке маршрута (≥1); у легаси — 0.
+    public int ParallelBranches { get; init; }
+    // Минут до финала; null — замера нет.
+    public int? EtaMinutes { get; init; }
+    // Доля этапов done/total, 0..100; у легаси — null.
+    public int? ProgressPct { get; init; }
+    // true у легаси — число приблизительное («≈»).
+    public bool Approx { get; init; } = true;
 }
 
 // Метка мержа на гантe: id задачи мержа, момент закрытия и шаги, попавшие в master по этому мержу
@@ -169,8 +195,15 @@ public sealed class FeatureNow
 {
     // Id задачи.
     public string TaskId { get; init; } = "";
-    // Стадия конвейера: cut | plan | prod | review | qa | final | merge.
+    // Стадия конвейера: cut | plan | prod | review | qa | final | merge. Ключ стадии
+    // (FeatureTimeMath.RoleToStage) и для легаси, и для фичи с маршрутом: то же пространство имён,
+    // что run.Stages[].Key и FeatureBrief.CurrentStageOf (R-G3: одна «текущая стадия» независимо
+    // от того, идёт ли задача).
     public string Stage { get; init; } = "";
+    // Id этапа (доработка R-G3): у фичи с маршрутом — id этапа маршрута, к которому относится
+    // задача (для различения параллельных этапов одного вида: step-back/step-front); у легаси-фичи
+    // и задачи вне проекции — null (графа нет: ключ и есть единственный id).
+    public string? StageId { get; init; }
     // Исполнитель (PersonaId задачи).
     public string? PersonaId { get; init; }
     // Код шага (у step/rework).
@@ -260,11 +293,31 @@ public sealed class FeatureVerdicts
 // Арифметику считает бэк (FeatureProjector.Build); фронт только показывает (шаг Ф5).
 public sealed class FeatureStage
 {
-    // Ключ стадии: cut | design | plan | prod | review | qa | final | merge.
+    // Ключ стадии: cut | design | plan | prod | review | qa | final | merge. Он же у фичи с маршрутом:
+    // вид стадии задаётся её ролью (вердикт R-B5 «по Role, а не по id»), параллельные этапы одной роли
+    // имеют общий ключ (step-back/step-front → prod) и различаются Id/Column/After (граф C3a).
     public string Key { get; init; } = "";
-    // Состояние: done — все задачи стадии закрыты; active — первая непройденная;
-    // pending — ещё не начата; absent — ноль задач, а следующая стадия уже начата;
-    // skipped — необязательная стадия «design» без задач (W4-DES-B).
+    // Id этапа (G3, разрез 2 §1.7): у фичи с маршрутом — id этапа маршрута (уникален в графе);
+    // у легаси-стадии — её ключ (графа нет, ключ и есть единственный id).
+    public string Id { get; init; } = "";
+    // Роль этапа (ключ TaskRoles): у фичи с маршрутом — из RouteStage.Role; у легаси-стадии —
+    // роль её задач (у prod — step).
+    public string Role { get; init; } = "";
+    // Линия этапа (back | front | other) — только у графового этапа роли step; иначе null.
+    public string? Lane { get; init; }
+    // Имя этапа (G7, a5d0c76e): из RouteStage.Title подтверждённого маршрута (заморожено при
+    // подтверждении); у легаси-стадии и этапа без имени — null (фронт тогда подписывает узел
+    // именем роли и линией — доработка C3a/C1b).
+    public string? Title { get; init; }
+    // Предшественники в графе (id этапов): у фичи с маршрутом — из маршрута; у легаси-стадии —
+    // пусто (графа нет).
+    public List<string> After { get; init; } = [];
+    // Колонка графа = длиннейший путь от корня (WorkflowGraph.Columns, разрез 2 §1.7);
+    // у легаси-стадии — 0 (графа нет).
+    public int Column { get; init; }
+    // Состояние: done — все задачи стадии закрыты; active — идущая или «готовая» (разрез 2 §1.7);
+    // pending — ещё не начата; absent — ноль задач, а наследник по графу уже начат;
+    // skipped — необязательная стадия «design» без задач (W4-DES-B, легаси).
     public string State { get; init; } = "pending";
     // Тон (только у active, иначе null): run — идёт; wait — ждёт человека;
     // stopped — исполнитель встал; loop — работа вернулась (доработка идёт).
@@ -317,6 +370,34 @@ public sealed class FeatureStage
     // вызывающий. Бэк отдаёт сырые данные (TaskRole/StepRef/Lane, статус, исполнителя) —
     // подпись роли (roleLabel) строит фронт.
     public List<FeatureStageExecutor> Executors { get; init; } = [];
+    // B01 (узел графа процесса; у легаси-стадии без маршрута — пусто/null/0):
+    // имена исполнителей по порядку PersonaIds (нерезолвнутые id пропускаются).
+    public List<string> PersonaNames { get; init; } = [];
+    // Минуты работы этапа (ApproxMinutes); null — этап не начат или маршрута нет.
+    public int? ElapsedMinutes { get; init; }
+    // Чего ждёт этап: human — открыт вопрос человеку на задаче этапа; branches — ждёт завершения
+    // веток-предшественников; null — не ждёт.
+    public string? Waiting { get; init; }
+    // Возвраты на доработку: число rework-задач этапа (≥0).
+    public int Returns { get; init; }
+    // Полоска задач — только у этапа шагов с несколькими задачами ветки; иначе null.
+    public FeatureStageSegments? TaskSegments { get; init; }
+    // Линия этапа для узла графа: back | front; иначе null.
+    public string? Line { get; init; }
+    // Маршрут предложен, но не подтверждён (epic.WorkflowProposal != null && epic.Workflow == null):
+    // признак один на весь маршрут, одинаков у всех узлов; у подтверждённого и у легаси — false.
+    public bool Proposed { get; init; }
+    // B11: этап предложенного маршрута включён «по решению» (Presence=optional в шаблоне предложения):
+    // true — optional, false — on; null — признака нет (легаси, подтверждённый маршрут, шаблон не найден).
+    public bool? ByDecision { get; init; }
+}
+
+// Полоска задач этапа (B01): закрытые / идущие / всего.
+public sealed class FeatureStageSegments
+{
+    public int Done { get; init; }
+    public int Running { get; init; }
+    public int Total { get; init; }
 }
 
 // Исполнитель стадии (Б2): одна запись на задачу стадии. Сырые данные для подписи:

@@ -21,8 +21,16 @@ import { useMe } from '../../lib/defaultPersona';
 import { useSpecialtyCatalog } from '../../lib/specialties';
 import { parseHash, navPush, navReplace, type NavSnapshot } from '../../lib/nav';
 import { PersonasSpecialties } from './PersonasSpecialties';
+import { PillSwitch } from '../../components/ui/PillSwitch';
+import { WorkflowTemplatesAdminPanel } from '../workflowTemplates/WorkflowTemplatesAdminPanel';
 
 type ViewMode = 'list' | 'role' | 'edit';
+type Section = 'specialties' | 'workflows';
+
+const SECTION_OPTIONS: { value: Section; label: string }[] = [
+  { value: 'specialties', label: 'Специальности' },
+  { value: 'workflows', label: 'Процессы фичи' },
+];
 
 export function SpecialtiesPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
@@ -32,6 +40,9 @@ export function SpecialtiesPage({ auth, onLogout, onHubTab }: {
   const isMobile = useIsMobile();
   const me = useMe();
   const isAdmin = me.role === 'admin';
+  // Раздел «Процессы фичи» — только админу; локальное состояние, адреса не трогает.
+  const [section, setSection] = useState<Section>('specialties');
+  const showWorkflows = isAdmin && section === 'workflows';
 
   // Стартовое положение — из адреса: #/specialties/{roleKey}[/edit]
   const [roleKey, setRoleKey] = useState<string | null>(() => {
@@ -109,6 +120,16 @@ export function SpecialtiesPage({ auth, onLogout, onHubTab }: {
             </div>
           </div>
         )}
+        {isAdmin && !roleKey && (
+          <div style={{ flex: 'none', padding: `${SP.sm}px ${SP.md}px`, display: 'flex' }}>
+            <PillSwitch<Section> value={section} onChange={setSection} options={SECTION_OPTIONS} isMobile={isMobile} />
+          </div>
+        )}
+        {showWorkflows && !roleKey ? (
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            <WorkflowTemplatesAdminPanel />
+          </div>
+        ) : (
         <div style={{ flex: 1, minHeight: 0 }}>
           <PersonasSpecialties
             roleKey={roleKey}
@@ -118,6 +139,7 @@ export function SpecialtiesPage({ auth, onLogout, onHubTab }: {
             onNavigateEdit={goEdit}
           />
         </div>
+        )}
       </div>
     </PageCanvas>
   );

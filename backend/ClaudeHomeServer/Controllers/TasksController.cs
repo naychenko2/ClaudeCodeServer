@@ -20,6 +20,7 @@ using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -35,7 +36,12 @@ public class ProjectTasksController(
     ISphereDirectory spheres, SessionManager sessions,
     // Явный резолв доступа к проекту — та же точка, что у FeatureOwnerGate на двери правки
     // (F2-M2); null — fail-closed (проект недоступен)
-    IProjectAccess? access = null) : ControllerBase
+    IProjectAccess? access = null,
+    // B4b (разрез workflow §5 «Запуск»): фоновый подбор маршрута при создании эпика. null —
+    // подбора нет (прямая сборка без DI в тестах); в боевом хосте его регистрирует tasks.
+    WorkflowRecommender? workflowRecommender = null,
+    // Лог нужен только отказу фона (сам сбой модели логирует рекомендатель): null — без лога.
+    ILogger<ProjectTasksController>? log = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -153,6 +159,9 @@ public class ProjectTasksController(
         // Событие доски: адресат полной карточки — владелец записи (не тот, кто нажал кнопку):
         // группе проекта идёт проекция участника, арендатору — полная (ISessionBroadcaster.ToTaskBoard).
         await broadcaster.ToTaskBoard(task.OwnerId!, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
+        // B4b (разрез workflow §5 «Запуск»): создание эпика запускает подбор маршрута фоном.
+        // Best-effort: сбой не роняет создание и не оставляет в фоне необработанного исключения.
+        EpicWorkflowRecommend.Start(workflowRecommender, tasks, broadcaster, sessions, projects, log, task);
         // Ответ записи — копия с маской чужих приватных чатов (S2d-4i), та же форма, что в GET-пути.
         // Проектная задача лежит под арендатором (TaskManager), а её чат-источник может быть
         // приватным чатом участника: ни id, ни название этого чата в ответ не идут. Запись стора не правится.
@@ -220,7 +229,16 @@ public class TasksController(
     // как в FilesController): exists/branch файлов макета считаются им по main и всем worktree
     // проекта. null — прямая сборка без DI (тесты): exists остаётся таким, как его посчитали
     // каталог и слияние W4-5 (прежнее поведение), без 500.
-    ProjectTreeLocator? locator = null) : ControllerBase
+    ProjectTreeLocator? locator = null,
+    // D1a: экран этапа (артефакты, вход и транскрипт, ревью). null — подсистема Tasks выключена → 503
+    StageScreenService? stage = null,
+    // B4b (разрез workflow §5 «Запуск»): фоновый подбор маршрута при создании эпика. null —
+    // подбора нет (прямая сборка без DI в тестах); в боевом хосте его регистрирует tasks.
+    WorkflowRecommender? workflowRecommender = null,
+    // Лог нужен только отказу фона (сам сбой модели логирует рекомендатель): null — без лога.
+    ILogger<TasksController>? log = null,
+    // B04: доставка ответа человека в чат исполнителя. null — ответ только записывается и снимает ожидание
+    ISessionMessageSender? messageSender = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -436,6 +454,9 @@ public class TasksController(
             return BadRequest(new { error = ex.Message });
         }
         await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
+        // B4b (разрез workflow §5 «Запуск»): создание эпика запускает подбор маршрута фоном.
+        // Best-effort: сбой не роняет создание и не оставляет в фоне необработанного исключения.
+        EpicWorkflowRecommend.Start(workflowRecommender, tasks, broadcaster, sessions, projects, log, task);
         // Та же маска ответа записи, что в проектной ветке Create и в GET-путе (S2d-4i):
         // чат-источник из тела — id чата, и он может быть приватным чатом другого человека.
         return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(UserId)));
@@ -513,6 +534,80 @@ public class TasksController(
         // Посторонний, отозванный, выключенный флаг, личная задача владельца — всегда 404:
         // «нет» и «чужое» не различаем.
         return NotFound();
+    }
+
+    // Экран этапа задачи фичи (D1a): три блока — артефакты, вход и транскрипт, ревью; metrics
+    // зарезервирован под D1b (null). Только чтение. Чужая/несуществующая/не-фичевая задача — один 404
+    [HttpGet("{taskId}/stage")]
+    public IActionResult GetStage(string taskId)
+    {
+        if (stage is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        var result = stage.Build(taskId, UserId);
+        return result.Outcome == StageOutcome.Ok ? Ok(result.Value) : NotFound(new { error = "Задача не найдена" });
+    }
+
+    // Ответ человека на открытый вопрос этапа (B04). Только человек: сервисный токен — 403. Снимает
+    // ожидание, пишет ответ в журнал и пересылает его исполнителю в чат задачи (если чат привязан)
+    public record StageAnswerRequest(string? Text);
+
+    [HttpPost("{taskId}/stage/questions/{questionId}/answer")]
+    public async Task<IActionResult> AnswerStageQuestion(string taskId, string questionId, [FromBody] StageAnswerRequest? req)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "На вопрос этапа отвечает только человек" });
+        if (stage is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        var task = tasks.GetById(taskId);
+        if (task is not null && TaskActionDenied(task, ProjectRight.RunTurn) is { } denied) return denied;
+        var result = stage.AnswerQuestion(taskId, questionId, req?.Text, UserId);
+        switch (result.Outcome)
+        {
+            case StageOutcome.BadRequest: return BadRequest(new { error = result.Error });
+            case StageOutcome.Conflict: return Conflict(new { error = result.Error });
+            case StageOutcome.Ok: break;
+            default: return NotFound(new { error = "Вопрос не найден" });
+        }
+        var answered = result.Value!;
+        // Доставка и рассылка — после записи: их сбой ответ не отменяет
+        try
+        {
+            if (messageSender is not null && answered.Task.LinkedSessionId is { Length: > 0 } sessionId)
+                await messageSender.SendOrEnqueueAsync(sessionId, answered.Question.Answer!.Text, senderUserId: UserId);
+        }
+        catch (Exception ex) { log?.LogWarning(ex, "Ответ на вопрос этапа {Task}: не доставлен в чат", taskId); }
+        return Ok(answered.Question);
+    }
+
+    // Дифф одного коммита из списка этапа с потолком размера (truncated = true — обрезан). sha вне
+    // белого списка [0-9a-f]{7,40} — 400; не из списка этапа — 404
+    [HttpGet("{taskId}/stage/commits/{sha}/diff")]
+    public IActionResult GetStageCommitDiff(string taskId, string sha)
+    {
+        if (stage is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        var result = stage.BuildDiff(taskId, sha, UserId);
+        return result.Outcome switch
+        {
+            StageOutcome.Ok => Ok(result.Value),
+            StageOutcome.BadRequest => BadRequest(new { error = result.Error }),
+            _ => NotFound(new { error = "Коммит не найден" }),
+        };
+    }
+
+    // Дифф файла этапа между версиями (B06): from/to — номера версий файла или all (по умолчанию all)
+    [HttpGet("{taskId}/stage/files/diff")]
+    public IActionResult GetStageFileDiff(string taskId, [FromQuery] string? path, [FromQuery] string? from, [FromQuery] string? to)
+    {
+        if (stage is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        var result = stage.BuildFileDiff(taskId, path, from, to, UserId);
+        return result.Outcome switch
+        {
+            StageOutcome.Ok => Ok(result.Value),
+            StageOutcome.BadRequest => BadRequest(new { error = result.Error }),
+            _ => NotFound(new { error = "Файл или версия не найдены" }),
+        };
     }
 
     [HttpPut("{taskId}")]
@@ -787,8 +882,8 @@ public class TasksController(
         var snapshot = SessionSnapshot();
         var resolver = ChatModelResolver();
         var runs = sessionId is null
-            ? features.ProjectAll(UserId, snapshot, resolver)
-            : features.ProjectForSession(sessionId, UserId, snapshot, resolver);
+            ? features.ProjectAll(UserId, snapshot, resolver, PersonaNameOf)
+            : features.ProjectForSession(sessionId, UserId, snapshot, resolver, PersonaNameOf);
         return Ok(runs.Select(r => FeatureChatDoor.MaskRunChats(r, sessions, projects, UserId)).ToList());
     }
 
@@ -822,8 +917,15 @@ public class TasksController(
     // места «исполнитель» = Strong → UserModelTierResolver.ModelFor, единственная точка, инвариант
     // CLAUDE.md). assignments null (Llm выключена) → null (без разворота). Функцию передаём
     // в проектор: он в Main не лезет (инвариант изоляции вертикалей).
+    // Имя персоны для узла графа процесса (B01): только персона, видимая вызывающему (ResolvePersona
+    // с правом Read: своя глобальная или командная проекта), иначе null.
+    private string? PersonaNameOf(string personaId) =>
+        access?.ResolvePersona(UserId, personaId, ProjectRight.Read) is { } scope
+            ? personas.Get(personaId, scope.TenantOwnerId)?.Name
+            : null;
+
     // internal — тестовый хук (минор 5): сверка owner-check задачи (чужая задача → «без задачи»).
-    internal Func<FeatureIndexSession, (string? Label, string? Full)>? ChatModelResolver()
+    internal Func<FeatureIndexSession,(string? Label, string? Full)>? ChatModelResolver()
     {
         if (assignments is null) return null;
         return s =>
@@ -903,7 +1005,7 @@ public class TasksController(
         // функция (ChatModelResolver), что у исполнителей: список и страница дают одинаковые.
         var snapshot = SessionSnapshot();
         var resolver = ChatModelResolver();
-        var run = features.ProjectFull(featureId, UserId, snapshot, resolver);
+        var run = features.ProjectFull(featureId, UserId, snapshot, resolver, PersonaNameOf);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
         // Снимок сессий владельца — как для индекса (SessionSnapshot): sessionId события наружу
         // только если в нём (fail-closed: удалённый/чужой чат → null). Лента считается по
@@ -1127,6 +1229,8 @@ public class TasksController(
         // queueStartEstimate: набор фич проекта нужен, только когда фича сама стоит в очереди.
         var projectRuns = run.Queue is null ? null : features!.ProjectAll(UserId, snapshot);
         var brief = FeatureBrief.Build(run, timeline, typical, now, projectRuns, FeatureQueuePolicy.Limit(config));
+        // B02: срок метастроки — тот же brief.eta (единая точка правды), без второго расчёта.
+        run.ApplyEta(brief.Eta?.Minutes);
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);

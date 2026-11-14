@@ -178,7 +178,8 @@ public class TaskItem
     // nullable-поле: допустимо ТОЛЬКО у role=plan (валидация — TaskManager), у прочих ролей и в
     // старых задачах — null. BackupSchema.Version не растёт (прецедент ReviewOf).
     public List<PlannedStep>? PlanSteps { get; set; }
-    // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика.
+    // «Ждёт вас»: с какого момента и почему. Пишет пара TaskManager.SetAwaitingHuman/ClearAwaitingHuman
+    // у любой задачи (MCP tasks_update, report_up(blocker)); у эпика — merge/decision.
     public DateTime? AwaitingHumanSince { get; set; }
     public string? AwaitingHumanReason { get; set; }
     // Удержание фичи (волна 4, разрез §1): null — работа разрешена; иначе — причина (FeatureHoldReasons).
@@ -189,6 +190,22 @@ public class TaskItem
     // (role=feature), пишет TaskManager.SetFeatureNote. Аддитивное nullable-поле: старый tasks.json
     // без «note» читается как null, BackupSchema.Version не растёт.
     public FeatureNote? Note { get; set; }
+    // Маршрут процесса фичи (разрез workflow §1, только у role=feature): предложение рекомендателя и
+    // подтверждённый человеком маршрут. Пишут ТОЛЬКО TaskManager.SetWorkflowProposal / ConfirmWorkflow
+    // (И7); через PUT/MCP не принимаются. Аддитивные nullable-поля: BackupSchema.Version не растёт.
+    public WorkflowProposal? WorkflowProposal { get; set; }
+    public FeatureWorkflow? Workflow { get; set; }
+    // Маркер «фича в режиме маршрута» (M1, только у role=feature): true — эпик создан или переведён
+    // в feature при подключённом сторе шаблонов с непустым каталогом; до подтверждения маршрута его
+    // задачи стоят на гейте запуска (FeatureRouteLaunchRefusal). Ставит ТОЛЬКО TaskManager (Create и
+    // переход роли в feature); через PUT/MCP не принимается. У легаси-эпиков (рождённых до M1) и при
+    // пустом каталоге — null: при пустом каталоге подтвердить маршрут нечем, запирать фичу нельзя.
+    // Аддитивное nullable-поле: старый tasks.json без «routeRequired» читается как null,
+    // BackupSchema.Version не растёт.
+    public bool? RouteRequired { get; set; }
+    // Слепок этапа шаблона на задаче фичи (любая роль, кроме feature/consult): пишет ТОЛЬКО
+    // TaskManager.Create (И3/И4), дальше неизменен. Эпик без Workflow — null (легаси).
+    public StageSnapshot? Stage { get; set; }
     // Срок из первой оценки оркестратора после старта фичи (FeatureEstimate.EtaMinutes): пишется один раз
     // SetFeatureNote и не перезаписывается, снятие голоса его не трогает. Аддитивное nullable-поле.
     public int? InitialEtaMinutes { get; set; }
@@ -235,6 +252,8 @@ public class TaskItem
     public PregateRecord? Pregate { get; set; }
     private List<AcceptanceEvidence> _evidence = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    // Короткий id (первые 8 знаков) для шапки страницы фичи (B02); вычисляемое, не хранится.
+    public string ShortId => Id.Length <= 8 ? Id : Id[..8];
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     // Дата+время завершения: когда статус стал Done. null — не завершена.
     // Сбрасывается при переоткрытии (статус ≠ Done). Не переносится в следующий

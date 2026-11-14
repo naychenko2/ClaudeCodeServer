@@ -41,6 +41,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     private readonly LlmProviderRegistry? _providers;
     // Справочник сфер: зона персоны сферы (видимость, уникальность handle); без него (юнит-тесты) сфер нет
     private readonly ISphereDirectory? _spheres;
+    // Разовая миграция прав к наследованию (A1b): выполняется только когда включена явно
+    // (флаг Personas:SpecialtyInheritanceMigration:Enabled, дефолт false — сначала сухой прогон)
+    private readonly bool _specialtyInheritanceMigration;
 
     public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null,
         ProjectEventLogService? events = null, UserModelTierResolver? userTiers = null,
@@ -53,6 +56,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         _events = events;
         _userTiers = userTiers;
         _specialty = specialty;
+        _specialtyInheritanceMigration =
+            bool.TryParse(config["Personas:SpecialtyInheritanceMigration:Enabled"], out var inheritMigration)
+            && inheritMigration;
         // Стор — в каталоге DataPath (как у всех сервисов): в контейнере это /data (volume).
         // Прежний фолбэк AppContext.BaseDirectory/data жил ВНУТРИ контейнера, и персоны
         // с аватарами пропадали при каждом его пересоздании (деплое).
@@ -71,6 +77,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         // Разовый перенос явной модели персоны в ячейку её рабочего уровня — строго ПОСЛЕ
         // миграции уровней: та перезаписывает TierMedium безусловно и затёрла бы перенос
         MigratePersonaModelToTierCell();
+        // Разовая миграция прав к наследованию от специальности — ПОСЛЕ модельных миграций:
+        // её отчёт по ячейкам моделей читает уже приведённые к ячейкам значения
+        MigrateSpecialtyInheritance();
     }
 
     // Папка с ассетами персон (аватары): data/personas/
@@ -91,9 +100,146 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // в Update ДО OnPersonaChanged.
     public event Action<Persona, string>? OnPersonaHandleChanged;
 
+    // Выдача персоны наружу: при InheritsAccess права подставляются эффективным шаблоном
+    // специальности в КОПИИ, запись кэша не трогается (там остаются материализованные значения).
+    // Шаблон читается одним снимком на вызов, поэтому группа Access/Tools/DisallowedTools не
+    // рвётся; сбой чтения — материализованные поля персоны.
+    // Соглашение A1b (M3 из R-A1a): EffectiveAccessTemplate возвращает null и для Specialty=None,
+    // и для «шаблона нет» — поэтому None проверяется ЯВНО до вызова, а null после него значит
+    // только «шаблона нет»: права персоны остаются материализованными (как в Apply), не Full.
+    internal Persona Hydrate(Persona p) => DecorateInheritance(HydrateAccess(p));
+
+    // Поля ответа наследования (B09): число отличий копии прав и «админ менял секции». Считаются
+    // только когда есть от чего (AccessCopiedAt / SectionsSeenVersion), на копии — запись кэша
+    // не мутируется и в personas.json эти поля не попадают.
+    private Persona DecorateInheritance(Persona p)
+    {
+        var diff = p is { InheritsAccess: false, AccessCopiedAt: not null } ? AccessDiff(p) : null;
+        var version = p.SectionsSeenVersion is null ? null : CurrentSectionsVersion(p);
+        if (diff is null && version is null) return p;
+        var copy = p.ShallowCopy();
+        copy.AccessDiffCount = diff;
+        if (version is not null)
+        {
+            copy.SectionsVersion = version;
+            copy.ChangedByAdminSince = !string.Equals(version, p.SectionsSeenVersion, StringComparison.Ordinal);
+        }
+        return copy;
+    }
+
+    // Отличия копии прав персоны от текущего шаблона её специальности: профиль, инструменты,
+    // запрещённые (null и пустой список запрещённых равны). Нет шаблона — null.
+    private int? AccessDiff(Persona p)
+    {
+        SpecialtyTemplate? template;
+        try { template = SpecialtyTemplatesService.EffectiveAccessTemplate(_specialty, p.OwnerId, p.Specialty); }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Не удалось прочитать шаблон прав специальности для персоны {Id}", p.Id);
+            return null;
+        }
+        if (template is null) return null;
+        var diff = p.Access != template.Access ? 1 : 0;
+        var tools = NormalizeTools(template.Tools?.ToList());
+        if (!SameSet(p.Tools, tools)) diff++;
+        // Как в RematerializeSpecialtyAccess: запреты живут только при Custom, иначе null
+        var disallowed = template.Access == PersonaAccess.Custom
+            ? NormalizeDisallowed(template.DisallowedTools?.ToList())
+            : null;
+        if (!SameSet(p.DisallowedTools, disallowed)) diff++;
+        return diff;
+    }
+
+    private static bool SameSet(IReadOnlyCollection<string>? a, IReadOnlyCollection<string>? b) =>
+        (a ?? []).ToHashSet(StringComparer.Ordinal).SetEquals(b ?? []);
+
+    // Версия набора секций специальности: хеш (id, enabled, text) базового состояния в порядке
+    // каталога — без слоя персоны, чтобы правка секций самой персоны версию не двигала.
+    // Короткий hex (12 знаков SHA-256): сравнение на равенство, не безопасность.
+    internal static string SectionsVersion(IReadOnlyList<EffectivePromptSection> baseStates)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var s in baseStates)
+            sb.Append(s.Id).Append('\u001f').Append(s.Enabled ? '1' : '0').Append('\u001f').Append(s.Text).Append('\u001e');
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(hash, 0, 6).ToLowerInvariant();
+    }
+
+    // «Обновилось от специальности» (B09): набор менялся админом с момента отметки, и значение секции
+    // сейчас идёт от настройки специальности (Global), а не от своего слоя персоны
+    public static bool UpdatedFromRole(bool changedByAdminSince, EffectivePromptSection s) =>
+        changedByAdminSince && (s.EnabledSource == Llm.SectionSource.Global || s.TextSource == Llm.SectionSource.Global);
+
+    // Текущая версия набора секций специальности персоны; без стора настроек или при сбое — null
+    // (ChangedByAdminSince тогда не выставляется)
+    public string? CurrentSectionsVersion(Persona p)
+    {
+        if (_specialty is null || p.Specialty == PersonaSpecialty.None) return null;
+        try { return SectionsVersion(_specialty.EffectivePromptSectionStates(p.OwnerId, p.Specialty)); }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Не удалось посчитать версию секций специальности для персоны {Id}", p.Id);
+            return null;
+        }
+    }
+
+    // Отмечает текущий набор секций специальности как «виденный» (база для ChangedByAdminSince).
+    // Specialty=None — секций нет, отмечать нечего (null не пишется).
+    public Persona MarkSectionsSeen(string id, string userId)
+    {
+        var persona = GetRaw(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        var version = CurrentSectionsVersion(persona);
+        if (version is not null)
+        {
+            lock (_saveLock) { persona.SectionsSeenVersion = version; }
+            Save();
+        }
+        return Hydrate(persona);
+    }
+
+    // Персоны владельца, наследующие секции специальности (все с этой специальностью), и число
+    // секций, которые у каждой «своё» (слой PromptSections нормализован: только реальные подмены)
+    public IReadOnlyList<(string PersonaId, string Name, int OwnSections)> SpecialtyInheritors(
+        string ownerId, PersonaSpecialty specialty) =>
+        specialty == PersonaSpecialty.None ? [] : _personas.Values
+            .Where(p => p.OwnerId == ownerId && p.Specialty == specialty)
+            .OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Select(p => (p.Id, p.Name, p.PromptSections?.Count ?? 0))
+            .ToList();
+
+    private Persona HydrateAccess(Persona p)
+    {
+        if (!p.InheritsAccess) return p;
+        if (p.Specialty == PersonaSpecialty.None)
+        {
+            // None — осознанный шаблон кода: Full без ограничений (поведение A1a не меняется)
+            var none = p.ShallowCopy();
+            none.Access = PersonaAccess.Full;
+            none.Tools = null;
+            none.DisallowedTools = null;
+            return none;
+        }
+        try
+        {
+            var template = SpecialtyTemplatesService.EffectiveAccessTemplate(_specialty, p.OwnerId, p.Specialty);
+            if (template is null) return p; // шаблона нет — наследовать нечего, права персоны целы
+            var copy = p.ShallowCopy();
+            copy.Access = template.Access;
+            copy.Tools = NormalizeTools(template.Tools?.ToList());
+            copy.DisallowedTools = template.DisallowedTools?.ToList();
+            return copy;
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Не удалось прочитать шаблон прав специальности для персоны {Id}", p.Id);
+            return p;
+        }
+    }
+
     public IReadOnlyCollection<Persona> GetByOwner(string userId) =>
         _personas.Values.Where(p => p.OwnerId == userId)
-            .OrderByDescending(p => p.UpdatedAt).ToList();
+            .OrderByDescending(p => p.UpdatedAt).Select(Hydrate).ToList();
 
     // Сфера проекта на текущий момент (без кэша); null — вне сфер, флаг выключен или справочника нет
     private string? SphereOfProject(string userId, string? projectId) =>
@@ -107,7 +253,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
                 && (p.Scope == PersonaScope.Global
                     || PersonaZone.IsProjectTeam(p, projectId)
                     || (sphereId is not null && PersonaZone.IsSphereTeam(p, sphereId))))
-            .OrderByDescending(p => p.UpdatedAt).ToList();
+            .OrderByDescending(p => p.UpdatedAt).Select(Hydrate).ToList();
     }
 
     // Контекст + внешние кросс-проектные scope-ы вызывающей персоны (ProjectPersonas-привязки):
@@ -159,20 +305,26 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             .Where(p => PersonaZone.OwnProjectId(p) is { } ownProjectId
                 && tenants.TryGetValue(ownProjectId, out var tenant)
                 && p.OwnerId == tenant)
-            .OrderByDescending(p => p.UpdatedAt).ToList();
+            .OrderByDescending(p => p.UpdatedAt).Select(Hydrate).ToList();
     }
 
     // Персона по id с проверкой владельца (null — нет или чужая)
     public Persona? Get(string id, string userId) =>
+        _personas.TryGetValue(id, out var p) && p.OwnerId == userId ? Hydrate(p) : null;
+
+    // Запись кэша как есть (без подстановки прав) — ТОЛЬКО для мутаторов самого менеджера:
+    // правка копии из Hydrate пропала бы
+    internal Persona? GetRaw(string id, string userId) =>
         _personas.TryGetValue(id, out var p) && p.OwnerId == userId ? p : null;
 
     // Персона по id без проверки владельца — ТОЛЬКО для внутренних сервисов (авто-память),
     // где владелец берётся из самой персоны. Не использовать в обработчиках запросов.
-    public Persona? GetByIdInternal(string id) => _personas.GetValueOrDefault(id);
+    public Persona? GetByIdInternal(string id) =>
+        _personas.TryGetValue(id, out var p) ? Hydrate(p) : null;
 
     // Все персоны всех владельцев — ТОЛЬКО для фоновых сервисов (консолидация памяти),
     // где гейт по владельцу делается через саму персону. Не использовать в обработчиках запросов.
-    public IReadOnlyCollection<Persona> GetAllInternal() => _personas.Values.ToList();
+    public IReadOnlyCollection<Persona> GetAllInternal() => _personas.Values.Select(Hydrate).ToList();
 
     // Персона владельца по handle без учёта контекста (legacy). Handle больше НЕ уникален
     // per-owner (проектные персоны разных проектов могут делить handle) — предпочитайте
@@ -312,6 +464,51 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     private static string? TrimToNull(string? s) =>
         string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+    // Текст ответа о сбросе слоя секций (разрез 2, §2.3): одна строка на REST-тело и на ответ
+    // personas_update — она описывает ровно ту мутацию, что делает Update ниже, поэтому держит
+    // её писатель, а не каждый вызывающий свою формулировку (P1d).
+    public const string PromptSectionsResetNotice =
+        "свои секции промпта сброшены: сменилась специальность";
+
+    // Признак сброса — ровно тот же, что у мутации в Update: РЕАЛЬНАЯ смена специальности у
+    // персоны, у которой слой был. Одна функция на писателя и на ответ: иначе текст «сброшены»
+    // мог бы прозвучать о правке, которая ничего не сбрасывала (Г4).
+    internal static bool ResetsPromptSections(Persona persona, PersonaSpecialty? requestedSpecialty) =>
+        requestedSpecialty is { } s && s != persona.Specialty && persona.PromptSections is { Count: > 0 };
+
+    // Нормализация слоя секций промпта персоны (разрез 2, §2.2 и Г4) — по образцу NormalizeContract:
+    // id — только из каталога SpecialtyPromptPresets, текст — в общем с UI счётчиком лимите
+    // SectionTextLimit; дубли id схлопываются (побеждает последняя запись — тот же смысл, что у
+    // «последний слот патча побеждает» в MergeContract); пустой override (Enabled == null и текста
+    // нет — «ни один параметр не задан») выбрасывается, пустой список → null («всё как у
+    // специальности»). Id нормализуется к каталожному (регистронезависимый поиск, канонический
+    // вид — из каталога), Text — трим.
+    // Ошибки — ArgumentException: та же точка отказа, что у handle в Create/Update, — контроллер
+    // отдаёт 400, персона остаётся нетронутой.
+    internal static List<PromptSectionOverride>? NormalizePromptSections(List<PromptSectionOverride>? sections)
+    {
+        if (sections is not { Count: > 0 }) return null;
+        var byId = new Dictionary<string, PromptSectionOverride>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in sections)
+        {
+            if (s is null || !SpecialtyPromptPresets.TryGetSection(s.Id, out var meta))
+                throw new ArgumentException($"Неизвестная секция промпта: {s?.Id}");
+            if (s.Text?.Length > SpecialtyPromptPresets.SectionTextLimit)
+                throw new ArgumentException(
+                    $"Текст секции промпта «{meta.Label}» длиннее {SpecialtyPromptPresets.SectionTextLimit} символов");
+            var text = TrimToNull(s.Text);
+            // Пустой override ничего не меняет в эффективном состоянии — его нет; если той же
+            // секции значение уже задано, решает последняя запись (пустая — снимает)
+            if (s.Enabled is null && text is null)
+            {
+                byId.Remove(meta.Id);
+                continue;
+            }
+            byId[meta.Id] = s with { Id = meta.Id, Text = text };
+        }
+        return byId.Count > 0 ? [.. byId.Values] : null; // порядок — порядок первых упоминаний каталога в запросе
+    }
+
     // --- Потолок контракта персоны ---
 
     // Весь слой персоны уезжает в claude аргументом --append-system-prompt (ClaudeSession),
@@ -382,7 +579,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         bool allProjectsAccess = false, string? handle = null,
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
-        bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null)
+        bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null,
+        bool? inheritsAccess = null, List<PromptSectionOverride>? promptSections = null)
     {
         var persona = new Persona
         {
@@ -418,6 +616,16 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             DisallowedTools = access == PersonaAccess.Custom ? NormalizeDisallowed(disallowedTools) : null,
             // Доступ ко всем проектам имеет смысл только у глобальных персон
             AllProjectsAccess = scope == PersonaScope.Global && allProjectsAccess,
+            // Наследование прав от специальности: null — false (MCP, ai/quick-create, ai/team,
+            // pantheon/connect флаг не передают → поведение не меняется). true — права при
+            // каждой выдаче подставляет шаблон специальности (Hydrate); вызывающий
+            // (PersonasCrudService) материализует эффективный шаблон в полях выше —
+            // персистентные поля остаются снимком для отката кода
+            InheritsAccess = inheritsAccess ?? false,
+            // Слой секций промпта (Г4): не передан — null, «всё как у специальности» (поведение
+            // pantheon/connect, ai/quick-create, ai/team, Onboarding не меняется); передан —
+            // нормализованный набор по каталогу
+            PromptSections = NormalizePromptSections(promptSections),
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
         };
         // Генерация handle и вставка атомарны: без лока два одновременных Create
@@ -445,7 +653,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
             _events?.Append(persona.ProjectId, userId, ProjectEventTypes.TeamJoined, "user",
                 $"В команде: {PersonaLabel(persona)}", persona.Id);
-        OnPersonaCreated?.Invoke(persona);
+        OnPersonaCreated?.Invoke(Hydrate(persona));
         return persona;
     }
 
@@ -672,6 +880,175 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         }
     }
 
+    // Разовая миграция прав персон к наследованию от специальности (разрез §2 «Миграция», A1b):
+    // группа персоны совпадает с эффективным шаблоном его специальности → InheritsAccess=true,
+    // иначе false — override сохраняется байт в байт. Включается флагом
+    // Personas:SpecialtyInheritanceMigration:Enabled (дефолт false: сначала отчёт админской ручки
+    // сухого прогона, потом включение). Идемпотентна по маркеру InheritsAccessMigratedAt, а не по
+    // данным: после смены шаблона специальности повторный прогон пересчитал бы группу и молча
+    // переключил бы наследование — в том числе у прав, которые человек выбрал сам после миграции.
+    // Маркер ставится и тем, чьё значение уже верное: решение принято, второй раз его не решаем.
+    // A2: в том же пуске у ещё не решённых персон удаляются точные Skill-копии типовых умений
+    // профиля специальности (совпадение по SkillName, Mode и Condition, R-A2 M1) — умение теперь
+    // наследуется в рантайме.
+    // UpdatedAt НЕ бампаем (как соседние миграции) — иначе перетасовался бы список персон.
+    // Сбой — лог, без маркера и без записи: стор поднимается на прежних данных.
+    internal PersonaSpecialtyMigration.Plan MigrateSpecialtyInheritance()
+    {
+        if (!_specialtyInheritanceMigration)
+            return new PersonaSpecialtyMigration.Plan([], []);
+
+        try
+        {
+            var plan = PlanOfSpecialtyInheritance();
+            var pending = plan.Pending;
+            if (pending.Count > 0)
+            {
+                var now = DateTime.UtcNow;
+                lock (_saveLock)
+                {
+                    foreach (var d in pending)
+                    {
+                        // Персону могли удалить между снимком и записью — её решение больше не нужно
+                        if (!_personas.TryGetValue(d.PersonaId, out var persona)) continue;
+                        persona.InheritsAccess = d.InheritsAccess;
+                        persona.InheritsAccessMigratedAt = now;
+                        // A2 (разрез §2 п.4): Skill-копии типовых умений удаляются — теперь они
+                        // наследуются в рантайме (PersonaBindingsService.EffectiveBindings).
+                        // Удаление по id из плана: привязку могли править между снимком и записью —
+                        // её нет, нечего и удалять. Тот же лок и тот же Save, что у прав.
+                        if (d.RemovedSkills.Count > 0 && persona.Bindings is { Count: > 0 } bindings)
+                        {
+                            var drop = d.RemovedSkills.Select(r => r.BindingId).ToHashSet(StringComparer.Ordinal);
+                            var kept = bindings.Where(b => !drop.Contains(b.Id)).ToList();
+                            if (kept.Count < bindings.Count) persona.Bindings = kept;
+                        }
+                    }
+                    JsonFileStore.Save(_storePath, _personas.Values.ToList(), JsonOpts);
+                }
+                _log?.LogInformation(
+                    "Миграция прав к наследованию: персон {Total} — наследуют {Inherits}, override {Override}, "
+                    + "без эффективного шаблона {NoTemplate}, правка значений {Changes}, "
+                    + "ячеек моделей, совпавших со специальностью: {Cells}, "
+                    + "Skill-копий умений удалено (теперь наследуются): {Skills}",
+                    plan.Decisions.Count, plan.CountOf(PersonaSpecialtyMigration.Group.Inherits),
+                    plan.CountOf(PersonaSpecialtyMigration.Group.Override),
+                    plan.CountOf(PersonaSpecialtyMigration.Group.NoTemplate), plan.CountChanges(),
+                    plan.ModelCells.Count, plan.CountRemovedSkills());
+            }
+            return plan;
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Миграция прав к наследованию не выполнена — стор поднимается на прежних данных");
+            return new PersonaSpecialtyMigration.Plan([], []);
+        }
+    }
+
+    // Снимок плана под _saveLock — под тем же локом, под которым Update меняет группу прав:
+    // отчёт не собирает состояние из середины чужой правки и не перемешивается с миграцией
+    private PersonaSpecialtyMigration.Plan PlanOfSpecialtyInheritance()
+    {
+        lock (_saveLock)
+            return PersonaSpecialtyMigration.Build(
+                _personas.Values,
+                (ownerId, specialty) => SpecialtyTemplatesService.EffectiveAccessTemplate(_specialty, ownerId, specialty),
+                _specialty is null
+                    ? null
+                    : (Func<string, PersonaSpecialty, PersonaSpecialtyMigration.SpecialtyCells?>)CellsOfSpecialty,
+                _specialty is null
+                    ? null
+                    : (Func<string, PersonaSpecialty, IReadOnlyList<SpecialtyDefaultBinding>>)
+                        DefaultBindingsOfSpecialty);
+    }
+
+    // Типовой профиль умений специальности (A2): та же точка EffectiveDefaultBindings, что
+    // читает рантайм (PersonaBindingsService.EffectiveBindings) и материализация
+    // (PersonasCrudService.MaterializeDefaultBindingsAsync) — по ней миграция находит копии.
+    private IReadOnlyList<SpecialtyDefaultBinding> DefaultBindingsOfSpecialty(
+        string ownerId, PersonaSpecialty specialty) =>
+        _specialty!.EffectiveDefaultBindings(ownerId, specialty);
+
+    // Ячейки моделей специальности — только для отчёта (A1b их не чистит): тот же слой настроек,
+    // что читает TierMatricesOf
+    private PersonaSpecialtyMigration.SpecialtyCells? CellsOfSpecialty(
+        string ownerId, PersonaSpecialty specialty) =>
+        _specialty?.TemplateSettings(ownerId, specialty) is { } settings
+            ? new PersonaSpecialtyMigration.SpecialtyCells(settings.TierStrong, settings.TierMedium, settings.TierWeak)
+            : null;
+
+    // Сухой прогон (админская ручка): отчёт по снимку, ничего не пишет — ни personas.json, ни
+    // specialty-settings.json. Флаг не нужен: это способ посмотреть ДО включения миграции
+    public PersonaSpecialtyMigration.Plan DryRunSpecialtyInheritance() => PlanOfSpecialtyInheritance();
+
+    // Выполнить миграцию сейчас (админская ручка без перезапуска): тот же путь, что при загрузке
+    public PersonaSpecialtyMigration.Plan RunSpecialtyInheritanceMigration() => MigrateSpecialtyInheritance();
+
+    // A1c (разрез §2 «Персистентные…»): после успешного сохранения специальности — переписать
+    // персистентные Access/Tools/DisallowedTools её персон с InheritsAccess=true эффективными
+    // значениями: снимок для отката кода не должен протухать. Override (false) не трогается:
+    // флаг перепроверяется под тем же _saveLock, под которым пишет Update, — персона, параллельно
+    // переключённая в «своё», не затирается.
+    // Эффективный шаблон читается ОДНИМ снимком вне лока (та же конвенция, что у Hydrate):
+    // группа прав внутри одного вызова не рвётся параллельной правкой настроек. None — дефолт
+    // кода Full без ограничений (как Hydrate). Одна запись стора на вызов (образец:
+    // MigrateSpecialtyInheritance); изменений нет — записи нет. UpdatedAt не бампаем (как
+    // соседние системные правки): перематериализация не должна перетасовывать список персон.
+    // События не поднимаются: фронт перечитывает персоны после сохранения (контракт шага).
+    // Сбой — только лог: ответ ручки специальности перематериализация не валит, исключение
+    // наружу не выходит.
+    public void RematerializeSpecialtyAccess(PersonaSpecialty specialty)
+    {
+        if (_specialty is null) return; // нет стора настроек — брать шаблон нечего
+        try
+        {
+            // Резолв стора плоский с v5: ownerId на результат не влияет (разрез §2),
+            // меж-владелецный вызов передаёт его пустым. None — явный дефолт кода, как в Hydrate.
+            var template = specialty == PersonaSpecialty.None
+                ? new SpecialtyTemplate(PersonaAccess.Full, null, null)
+                : SpecialtyTemplatesService.EffectiveAccessTemplate(_specialty, "", specialty);
+            if (template is null) return; // шаблона нет — наследовать нечего, снимки персон целы
+
+            var access = template.Access;
+            var tools = NormalizeTools(template.Tools?.ToList());
+            // Инвариант персоны (Create/Update): свой список запретов живёт только при Custom
+            var disallowed = access == PersonaAccess.Custom
+                ? NormalizeDisallowed(template.DisallowedTools?.ToList())
+                : null;
+
+            static bool Same(List<string>? a, List<string>? b) =>
+                a is null ? b is null : b is not null && a.SequenceEqual(b);
+
+            var changed = 0;
+            lock (_saveLock)
+            {
+                foreach (var persona in _personas.Values)
+                {
+                    if (persona.Specialty != specialty) continue;
+                    // Флаг проверяется под тем же локом, что и Update: параллельный переход
+                    // в override побеждает этот вызов
+                    if (!persona.InheritsAccess) continue;
+                    if (persona.Access == access && Same(persona.Tools, tools) && Same(persona.DisallowedTools, disallowed))
+                        continue; // снимок уже свежий — писать нечего
+                    persona.Access = access;
+                    persona.Tools = tools;
+                    persona.DisallowedTools = disallowed;
+                    changed++;
+                }
+                if (changed > 0)
+                    JsonFileStore.Save(_storePath, _personas.Values.ToList(), JsonOpts);
+            }
+            if (changed > 0)
+                _log?.LogInformation("Перематериализация прав специальности {Specialty}: обновлено {Changed} персон(ы)",
+                    specialty, changed);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Перематериализация прав специальности {Specialty} не выполнена — стор остаётся на прежнем снимке",
+                specialty);
+        }
+    }
+
     // Узкие матрицы для разворота уровня персоны — та же сборка, что у боевого резолва
     // (ModelAssignmentResolver.PersonaMatrices): матрица персоны, затем матрицы её
     // специальности. Дублируется сознательно: резолвер собирает их у себя из своих данных,
@@ -697,10 +1074,16 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         bool? allProjectsAccess = null, string? handle = null,
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
-        bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null)
+        bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null,
+        bool? inheritsAccess = null, List<PromptSectionOverride>? promptSections = null)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+
+        // Нормализация слоя секций — ДО мутаций и вне лока: отказ по каталогу или лимиту не должен
+        // тронуть персону (тот же порядок, что у валидации handle ниже). null — «не менять»,
+        // пустой список — явный сброс к «всё как у специальности» (нормализуется в null)
+        var normalizedSections = promptSections is null ? null : NormalizePromptSections(promptSections);
 
         var oldHandle = persona.Handle;
         // Мутации полей — под _saveLock, чтобы параллельные читатели (Save/enumerate _personas)
@@ -747,7 +1130,25 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             if (tierMedium is not null) persona.TierMedium = NormalizeModel(tierMedium);
             if (tierWeak is not null) persona.TierWeak = NormalizeModel(tierWeak);
             if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
-            // Специальность (функциональная роль): null — не менять; None — сбросить явно
+            // Специальность (функциональная роль): null — не менять; None — сбросить явно.
+            // «Смена» — только реальная разница значений: тот же признак, что у
+            // SpecialtyTemplatesService.Apply (та же специальность — не смена, права не трогает).
+            // Слой секций промпта (Г4): null — не менять; список — нормализованный набор по
+            // каталогу (пустой → null, «всё как у специальности»); при РЕАЛЬНОЙ смене специальности
+            // сбрасывается целиком (§2.3, временное решение вопроса Андрею №2): тексты секций
+            // ролевые — под новой специальностью они бессмысленны. Порядок внутри одного лока —
+            // сброс, запись новых секций, затем специальность: «Update с секциями и новой
+            // специальностью» = «секции поверх новой специальности», а не старой; промежуточного
+            // «специальность уже новая, старый слой ещё висит» нет вовсе — P1c наложил бы его
+            // поверх новой. Соседние поля не теряются: обе правки — под одним _saveLock, итог
+            // гонки «смена специальности ∥ свои секции» — одна из двух сериализаций целиком.
+            // Признак — ResetsPromptSections: та же функция, которой ответ REST/MCP (P1d)
+            // сообщает сброс человеку; без слоя в записи сбрасывать нечего — мутация молчит.
+            if (ResetsPromptSections(persona, specialty)) persona.PromptSections = null;
+            if (promptSections is not null) persona.PromptSections = normalizedSections;
+            // База «секции просмотрены» привязана к набору СТАРОЙ специальности: после смены хеш
+            // другой, и без сброса все секции получили бы ложное «обновилось от специальности».
+            if (specialty is not null && specialty != persona.Specialty) persona.SectionsSeenVersion = null;
             if (specialty is not null) persona.Specialty = specialty.Value;
             if (scope is not null)
             {
@@ -768,6 +1169,16 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             if (greeting is not null) persona.Greeting = greeting.Length == 0 ? null : greeting;
             if (memoryEnabled is not null) persona.MemoryEnabled = memoryEnabled.Value;
             if (lightContext is not null) persona.LightContext = lightContext.Value;
+            // Наследование прав (A1d): null — не менять (частичный PUT не сбрасывает флаг);
+            // запись — в объект из GetRaw под тем же _saveLock, что и остальные поля:
+            // гидратированная копия из Hydrate наружу не пишется, её правка пропала бы (A1a)
+            if (inheritsAccess is not null)
+            {
+                // true → false: фиксируем момент копирования прав; повторное включение — сброс
+                if (persona.InheritsAccess && !inheritsAccess.Value) persona.AccessCopiedAt = DateTime.UtcNow;
+                else if (inheritsAccess.Value) persona.AccessCopiedAt = null;
+                persona.InheritsAccess = inheritsAccess.Value;
+            }
             // null — не менять; явный Unspecified — сбросить сигнал рода
             if (gender is not null) persona.Gender = gender.Value;
             // null — не менять; список — установить (полный набор нормализуется в null)
@@ -805,8 +1216,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         // Сначала чистка старых .md по прежнему handle, затем запись новых через OnPersonaChanged
         if (!string.Equals(oldHandle, persona.Handle, StringComparison.Ordinal))
             OnPersonaHandleChanged?.Invoke(persona, oldHandle);
-        OnPersonaChanged?.Invoke(persona);
-        return persona;
+        OnPersonaChanged?.Invoke(Hydrate(persona));
+        return Hydrate(persona);
     }
 
     // Голос персоны в голосовом режиме; сохранение мгновенное. Пустой объект (ни голоса,
@@ -817,7 +1228,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // и двадцать пятый позиционный аргумент ради голоса — плохой шов.
     public Persona SetVoice(string id, string userId, PersonaVoice? voice)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         lock (_saveLock)
         {
@@ -829,15 +1240,15 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
-        return persona;
+        OnPersonaChanged?.Invoke(Hydrate(persona));
+        return Hydrate(persona);
     }
 
     // Полная замена привязок персоны (фича persona-bindings); сохранение мгновенное.
     // Пустой список нормализуется в null (поведение как без привязок).
     public Persona UpdateBindings(string id, string userId, List<PersonaBinding>? bindings)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         lock (_saveLock)
         {
@@ -845,8 +1256,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
-        return persona;
+        OnPersonaChanged?.Invoke(Hydrate(persona));
+        return Hydrate(persona);
     }
 
     // Добавление одной привязки к набору (W3-B5a, POST {id}/bindings): список строится
@@ -856,7 +1267,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // классическая потерянная правка. Полная замена — остаётся за UpdateBindings.
     public Persona AppendBinding(string id, string userId, PersonaBinding binding)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         lock (_saveLock)
         {
@@ -864,8 +1275,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
-        return persona;
+        OnPersonaChanged?.Invoke(Hydrate(persona));
+        return Hydrate(persona);
     }
 
     // Правка одной привязки (W3-B5a доработка, PUT {id}/bindings/{bindingId}; возврат ревью
@@ -877,7 +1288,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     public PersonaBinding? UpdateBinding(string id, string userId, string bindingId,
         Action<PersonaBinding> mutate)
     {
-        var persona = Get(id, userId);
+        var persona = GetRaw(id, userId);
         if (persona is null) return null;
         PersonaBinding? updated = null;
         lock (_saveLock)
@@ -890,7 +1301,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             updated = current;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
+        OnPersonaChanged?.Invoke(Hydrate(persona));
         return updated;
     }
 
@@ -899,7 +1310,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // в null (как UpdateBindings). false — персоны или привязки уже нет.
     public bool RemoveBinding(string id, string userId, string bindingId)
     {
-        var persona = Get(id, userId);
+        var persona = GetRaw(id, userId);
         if (persona is null) return false;
         lock (_saveLock)
         {
@@ -909,7 +1320,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
+        OnPersonaChanged?.Invoke(Hydrate(persona));
         return true;
     }
 
@@ -919,7 +1330,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // в PersonaAutomationService, чтобы не переписывать personas.json на каждом тике.
     public Persona UpdateRules(string id, string userId, List<PersonaAutomationRule>? rules)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         lock (_saveLock)
         {
@@ -934,8 +1345,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
-        return persona;
+        OnPersonaChanged?.Invoke(Hydrate(persona));
+        return Hydrate(persona);
     }
 
     // Массовый сброс СВОИХ уровней персон владельца («Сбросить исключения», scope=owner):
@@ -949,7 +1360,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         // Мутации — под _saveLock (как Update/Delete), Save и события — вне его
         lock (_saveLock)
         {
-            foreach (var p in GetByOwner(userId))
+            foreach (var p in _personas.Values.Where(x => x.OwnerId == userId).OrderByDescending(x => x.UpdatedAt).ToList())
             {
                 if (string.IsNullOrWhiteSpace(p.TierStrong) && string.IsNullOrWhiteSpace(p.TierMedium)
                     && string.IsNullOrWhiteSpace(p.TierWeak)) continue;
@@ -962,7 +1373,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         }
         if (!apply || changed.Count == 0) return changed;
         Save();
-        foreach (var p in changed) OnPersonaChanged?.Invoke(p);
+        foreach (var p in changed) OnPersonaChanged?.Invoke(Hydrate(p));
         _log?.LogInformation("Сброшены свои уровни моделей у {Count} персон (owner={Owner})",
             changed.Count, userId);
         return changed;
@@ -972,7 +1383,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // при этом теряют смысл — чистим (и файл оригинала тоже).
     public Persona SetAvatarImage(string id, string userId, string imageFile)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         DeleteAvatarAssets(id, persona.Avatar.ImageFile, keep: null);
         DeleteAsset(id, persona.Avatar.OriginalFile, keep: null);
@@ -982,7 +1393,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         persona.Avatar.Crop = null;
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
-        return persona;
+        return Hydrate(persona);
     }
 
     // Загруженный аватар: кропнутая картинка + оригинал (для перекропа) + параметры кропа.
@@ -990,7 +1401,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     public Persona SetAvatarUploaded(string id, string userId, string imageFile, string originalFile,
         AvatarCropState? crop)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         DeleteAvatarAssets(id, persona.Avatar.ImageFile, keep: imageFile);
         DeleteAsset(id, persona.Avatar.OriginalFile, keep: originalFile);
@@ -1000,14 +1411,14 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         persona.Avatar.Crop = crop;
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
-        return persona;
+        return Hydrate(persona);
     }
 
     // Перекроп существующего оригинала: заменяется только кропнутая картинка и параметры;
     // прежняя картинка с её миниатюрами удаляется.
     public Persona SetAvatarRecropped(string id, string userId, string imageFile, AvatarCropState? crop)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         DeleteAvatarAssets(id, persona.Avatar.ImageFile, keep: imageFile);
         persona.Avatar.Kind = PersonaAvatarKind.Image;
@@ -1015,7 +1426,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         persona.Avatar.Crop = crop;
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
-        return persona;
+        return Hydrate(persona);
     }
 
     // Удалить файл-ассет персоны (кроме keep); ошибки удаления не критичны
@@ -1048,7 +1459,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         Persona? deleted;
         lock (_saveLock)
         {
-            deleted = Get(id, userId);
+            deleted = GetRaw(id, userId);
             if (deleted is null) return false;
             // Запоминаем проектную принадлежность до удаления — для лога команды проекта
             if (deleted.Scope == PersonaScope.Project && !string.IsNullOrEmpty(deleted.ProjectId))

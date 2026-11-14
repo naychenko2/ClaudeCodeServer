@@ -128,6 +128,10 @@ public static class LocalActionCatalog
     // FeatureRun (≤4000 симв.), ответ — короткий markdown. По умолчанию локаль: цена
     // одного короткого вызова, исполнителя выбирает админ в «Поставщиках моделей».
     public const string FeatureSummary = "feature-summary";
+    // Рекоменд маршрута фичи (разрез workflow §5, B4a): вход — Title/Description эпика + каталог
+    // шаблонов, ответ — JSON { templateId, skipped, rationale }. Пишет только WorkflowProposal
+    // (И7), подтверждает человек
+    public const string FeatureWorkflowRecommend = "feature-workflow-recommend";
     public const string SkillSuggest = "skill-suggest";
     public const string SessionSummary = "session-summary";
     // Сводка карточки архива чата (шаг 5 плана «Архив чатов» v4): 2–3 предложения по кнопке
@@ -326,6 +330,14 @@ public static class LocalActionCatalog
         // (256 токенов вывода обрежут резюме), Large избыточен. Локаль по умолчанию — по
         // политике A: один дешёвый вызов по кнопке, облачный выбор остаётся правом админа.
         new(FeatureSummary, "Резюме фичи", "Задачи", CheapProfile.Text, DefaultLocal: true),
+        // Рекоменд маршрута фичи (workflow §5): Large — в промпт идут описание эпика (≤8000 симв.)
+        // и весь каталог шаблонов с Presence; на Text num_ctx молча обрезал бы хвост промпта,
+        // то есть сам каталог, и модель выдумывала бы id. Ответ маленький (JSON с одной
+        // фразой), потолок вывода профиля его покрывает. Локаль по умолчанию, как у резюме
+        // фичи: предложение дешёвое и ничего не решает само — маршрут подтверждает человек (И7),
+        // цена ошибочной рекомендации один отказ в диалоге
+        new(FeatureWorkflowRecommend, "Рекоменд маршрута фичи", "Задачи", CheapProfile.Large,
+            DefaultLocal: true),
         new(SkillSuggest, "Подбор навыка", "Навыки", CheapProfile.Small, DefaultLocal: true),
         new(SessionSummary, "Сводка сессии", "Сессии", CheapProfile.Large, DefaultLocal: true),
         // Сводка карточки архива: сырьё то же (транскрипт чата), а ответ — 2–3 предложения

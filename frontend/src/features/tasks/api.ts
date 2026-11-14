@@ -6,6 +6,7 @@ import { request } from '../../lib/offline';
 import type { BoardItem, CreateTaskDto, FeatureSummaryResult, Task, UpdateTaskDto } from './types';
 import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../../types/featureIndex';
+import type { StageScreen, StageCommitDiff, StageFileDiff, StageQuestion } from '../../types/featureStage';
 
 export const tasksApi = {
   // Доска агентов (диспетчерская)
@@ -25,6 +26,23 @@ export const tasksApi = {
   },
 
   tasks: {
+    // Экран этапа (D1a): GET /api/tasks/{id}/stage; signal — отмена устаревшего ответа при смене задачи.
+    // live: данные этапа меняются на ходу, пассивный GET-кэш прошлым ответом их бы подменил
+    stage: (taskId: string, signal?: AbortSignal) =>
+      request<StageScreen>(`/tasks/${encodeURIComponent(taskId)}/stage`, { live: true, signal }),
+    // Дифф одного коммита этапа (ленивая загрузка по клику)
+    stageCommitDiff: (taskId: string, sha: string, signal?: AbortSignal) =>
+      request<StageCommitDiff>(`/tasks/${encodeURIComponent(taskId)}/stage/commits/${encodeURIComponent(sha)}/diff`, { live: true, signal }),
+    // Дифф файла этапа между версиями (B06): from/to — номера версий или 'all'
+    stageFileDiff: (taskId: string, path: string, from: string, to: string, signal?: AbortSignal) =>
+      request<StageFileDiff>(
+        `/tasks/${encodeURIComponent(taskId)}/stage/files/diff?path=${encodeURIComponent(path)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+        { live: true, signal }),
+    // Ответ человека на открытый вопрос этапа (B04): POST {text}; 400 пустой текст, 409 уже отвечен, 403 сервисный токен
+    answerStageQuestion: (taskId: string, questionId: string, text: string) =>
+      request<StageQuestion>(`/tasks/${encodeURIComponent(taskId)}/stage/questions/${encodeURIComponent(questionId)}/answer`, {
+        method: 'POST', body: JSON.stringify({ text }),
+      }),
     // Все задачи пользователя (для календаря)
     listAll: (from?: string, to?: string) => {
       const qs = new URLSearchParams();

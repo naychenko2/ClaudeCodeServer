@@ -519,6 +519,8 @@ export function PersonaStudio({ persona, projects, talking, initialView, onDelet
         <PersonaForm ref={formRef} persona={persona} projects={projects} onStatus={onStatus}
           onColorChange={setLiveColor} onOpenMemory={() => goView('memory')}
           onOpenKnowledge={() => goView('knowledge')}
+          // «Отменить» футера формы — тот же выход из правки, что кнопка тулбара ниже
+          onCancelEdit={() => { if (status.dirty) setConfirmDiscard(() => () => setEditing(false)); else setEditing(false); }}
           onSaved={() => setEditing(false)} onDelete={() => onDelete()} />
       </div>
     // Профиль — read-only визитка со сводкой и недавними разговорами

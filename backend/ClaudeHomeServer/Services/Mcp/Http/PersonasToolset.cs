@@ -6,6 +6,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
@@ -251,16 +252,24 @@ public sealed partial class PersonasToolset(
                     if (setResult.IsError) return setResult;
                 }
                 var req = BuildUpdateRequest(arguments, projectId);
+                string? resetNotice = null;
                 if (req is not null)
                 {
                     // С голосом событие «updated» шлёт запись голоса — одно на всю правку
-                    var updated = Unwrap(await crud.UpdateAsync(ownerId, id, req, session.Id,
-                        broadcast: voicePatch is null));
-                    if (updated.IsError || voicePatch is null) return updated;
+                    var result = await crud.UpdateAsync(ownerId, id, req, session.Id,
+                        broadcast: voicePatch is null);
+                    // Строка о сбросе своих секций промпта (§2.3) уже в карточке обновлённой
+                    // персоны, но в её JSON модель её пропустит — отдельной строкой, как текст
+                    // о голосе в personas_create: правка, которая что-то сбросила, обязана это
+                    // назвать и дальше, если за правкой идёт ещё одна (голос)
+                    if (result.Value?.Notice is { } notice) resetNotice = notice;
+                    var updated = Unwrap(result);
+                    if (updated.IsError || voicePatch is null) return WithNotice(updated, resetNotice);
                 }
                 // Голос — своим путём (у него своя запись и валидация, как PUT /voice)
                 if (voicePatch is not null)
-                    return Unwrap(await crud.SetVoiceAsync(ownerId, id, voicePatch));
+                    return WithNotice(Unwrap(await crud.SetVoiceAsync(ownerId, id, voicePatch)),
+                        resetNotice);
                 // Изменены только привязки — вернуть актуальную персону (семантика stdio)
                 return personas.Get(id, ownerId) is { } fresh
                     ? Json(fresh) : Deny($"Персона {id} не найдена.");
@@ -754,6 +763,12 @@ public sealed partial class PersonasToolset(
         }
     }
 
+    // Строка о побочном эффекте правки (§2.3 — сброс своих секций промпта) к ответу
+    // инструмента: отдельной строкой после карточки. Ошибочный ответ остаётся как есть —
+    // при отказе правки не было, и сбрасывать нечего
+    private static McpToolCallResult WithNotice(McpToolCallResult result, string? notice) =>
+        result.IsError || notice is null ? result : Text(result.Text + "\n\n" + notice);
+
     // Текст отказа из тела ответа: у контроллеров это { error = "…" } либо строка
     private static string ErrorText(object? value) => value switch
     {
@@ -922,7 +937,10 @@ public sealed partial class PersonasToolset(
             AvatarPrompt: OptionalArg(arguments, "avatarPrompt"),
             Handle: OptionalArg(arguments, "handle"),
             ModelTier: OptionalArg(arguments, "modelTier"),
-            Voice: CreateVoiceArg(arguments));
+            Voice: CreateVoiceArg(arguments),
+            // Слой секций промпта (P1d): не передан — «всё как у специальности» (поведение
+            // прежних вызовов не меняется)
+            PromptSections: PromptSectionsArg(arguments, "promptSections"));
     }
 
     // null — в аргументах не было ни одного изменяемого поля (только привязки)
@@ -934,7 +952,7 @@ public sealed partial class PersonasToolset(
         string[] fields = ["name", "role", "description", "systemPrompt", "effort", "color", "greeting",
             "memoryEnabled", "scope", "projectId", "handle", "modelTier", "specialty", "gender",
             "character", "tone", "mustDo", "mustNot", "outputFormat", "speechExamples",
-            "tierStrong", "tierMedium", "tierWeak"];
+            "tierStrong", "tierMedium", "tierWeak", "promptSections"];
         if (!fields.Any(arguments.ContainsKey)) return null;
 
         PersonaScope? scope = arguments.ContainsKey("scope")
@@ -964,7 +982,29 @@ public sealed partial class PersonasToolset(
             ModelTier: arguments.ContainsKey("modelTier") ? StringArg(arguments, "modelTier") : null,
             TierStrong: arguments.ContainsKey("tierStrong") ? StringArg(arguments, "tierStrong") : null,
             TierMedium: arguments.ContainsKey("tierMedium") ? StringArg(arguments, "tierMedium") : null,
-            TierWeak: arguments.ContainsKey("tierWeak") ? StringArg(arguments, "tierWeak") : null);
+            TierWeak: arguments.ContainsKey("tierWeak") ? StringArg(arguments, "tierWeak") : null,
+            // Тот же ContainsKey, что у tier-ячеек: «не менять» и «явный сброс к «всё как у
+            // специальности»» (пустой массив) — разные намерения, OptionalArg слил бы их
+            PromptSections: arguments.ContainsKey("promptSections")
+                ? PromptSectionsArg(arguments, "promptSections") : null);
+    }
+
+    // Слой секций промпта из аргументов (P1d): [{id, enabled?, text?}] — как есть, без своей
+    // валидации: id по каталогу и лимит текста проверяет PersonaManager, и отказ приходит тем
+    // же текстом, что у REST. Массива нет — null («не менять» / «своих нет»); пустой массив —
+    // явный сброс. Элемент без id доходит до менеджера и отказывает по нему — молчаливо
+    // выбросить целую секцию было бы хуже, чем назвать её в отказе
+    private static List<PromptSectionOverride>? PromptSectionsArg(JsonObject arguments, string name)
+    {
+        if (arguments[name] is not JsonArray arr) return null;
+        var list = new List<PromptSectionOverride>(arr.Count);
+        foreach (var node in arr)
+        {
+            if (node is not JsonObject item) continue;
+            bool? enabled = item["enabled"] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
+            list.Add(new PromptSectionOverride(StringArg(item, "id"), enabled, OptionalArg(item, "text")));
+        }
+        return list;
     }
 
     private static List<PersonaBindingRequest> BindingRequests(JsonObject arguments, string name)

@@ -73,6 +73,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // проактивного уведомления о спавне следующего экземпляра регулярной задачи.
     // Полный PersonaManager ради одного `GetByIdInternal` — overkill.
     private readonly IPersonaLookup? _personas;
+    // Стор шаблонов процесса фичи (слепок этапа в Create); null — легаси без шаблонов.
+    private readonly WorkflowTemplateStore? _workflows;
     // Журнал событий фичи (волна 3, Б8b): append-only JSONL. Запись переходов задач
     // фичи (старт/остановка/ожидание/статус/вердикт/снятие) — см. WriteJournalTransitions.
     // Опциональный: тесты без журнала (null) пишут в воздух. Та же вертикаль (Tasks.Journal),
@@ -95,8 +97,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
 
     public TaskManager(IConfiguration config, IProjectEventLogService? events = null,
         ITaskNotificationDispatcher? notif = null, IPersonaLookup? personas = null,
-        FeatureJournalStore? journal = null, ILogger<TaskManager>? log = null)
+        FeatureJournalStore? journal = null, ILogger<TaskManager>? log = null,
+        WorkflowTemplateStore? workflows = null)
     {
+        _workflows = workflows;
         _events = events;
         _notif = notif;
         _personas = personas;
@@ -159,7 +163,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // самого поля (started/stopped/waiting/dropped); у снятий (stop_cleared/waiting_cleared)
     // и у status/verdict — момент мутации (DateTime.UtcNow). Задача без фичи не пишется.
     // Сбой записи не роняет мутацию (AppendJournal).
-    private void WriteJournalTransitions(TaskItem task, TaskTransition before)
+    private void WriteJournalTransitions(TaskItem task, TaskTransition before,
+        string? answerText = null, string? answerBy = null)
     {
         // featureId: у эпика (Role=feature) — его собственный id, у дочерней — FeatureId.
         var featureId = task.Role == TaskRoles.Feature ? task.Id : task.FeatureId;
@@ -229,6 +234,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                     At = now,
                     Kind = "waiting_cleared",
                     TaskId = task.Id,
+                    // Ответ человека через экран этапа: текст и автор едут в самой записи снятия
+                    Reason = answerText,
+                    By = answerBy,
                 });
         }
 
@@ -482,6 +490,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         ValidateFeatureFields(task.FeatureId, task.Role, task.Verification?.Verdict,
             task.ReviewOf, task.PersonaId, ownerId,
             planSteps: task.PlanSteps, enforceReworkReviewOf: true);
+        // Маршрут эпика: этап, снятый маршрутом, → отказ; слепок этапа и предзаполнение personaId.
+        if (task.PlanSteps is not null) EnsurePlanStepsInRoute(task.FeatureId, task.PlanSteps);
+        ApplyWorkflowStage(task, explicitRole: Trimmed(req.Role), explicitStageId: Trimmed(req.StageId));
         EnsureReturnReason(task.Verification);
         // Origin из тела не принимается (§8.4): та же единственная точка нормализации, что у
         // ReturnReason; дальше по методу идут валидаторы и самоснятие — они видят чистый вердикт.
@@ -506,17 +517,276 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // created: эпик фичи — первая запись её журнала (журнал точный, только если
         // начинается с created; дочерние задачи фичи created не пишут).
         if (task.Role == TaskRoles.Feature)
+        {
+            // Маркер режима маршрута (M1): фича, рождённая при подключённом сторе с непустым
+            // каталогом, обязана подтвердить маршрут до запуска своих шагов. При пустом каталогe
+            // маркера нет: подтвердить нечем, и фича осталась бы заперта навсегда.
+            task.RouteRequired = RouteRequiredFor(task.ProjectId);
             AppendJournal(task.OwnerId ?? "", task.Id, new FeatureJournalEntry
             {
                 At = task.CreatedAt,
                 Kind = "created",
                 TaskId = task.Id,
             });
+        }
         // Переходы: начальные значения полей (свежая задача → before = дефолт Todo).
         WriteJournalTransitions(task, new TaskTransition { Status = TaskItemStatus.Todo });
         ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
         return task;
+    }
+
+    // ─── Маршрут процесса фичи (разрез workflow §1, §3, §4) ──────────────────────────
+    // Замок маршрута: чтение epic.Workflow в Create и запись в ConfirmWorkflow/SetWorkflowProposal —
+    // секции под одним листовым замком, шаг видит либо старый, либо новый маршрут целиком.
+    private readonly Lock _workflowLock = new();
+
+    public const string StageSkippedText = WorkflowGraph.StageSkippedText;
+
+    // Роль этапа: rework берёт этап step; не-этапные роли (feature/consult) — null.
+    private static string? StageRoleOf(string? role) =>
+        role == TaskRoles.Rework ? TaskRoles.Step
+        : role is not null && WorkflowRules.StageRoles.Contains(role) ? role
+        : null;
+
+    // Единственная точка записи Task.Stage (И3/И4). Эпик без Workflow — легаси, Stage = null.
+    // Роль задана явно: автоназначенная роль дефекта (qa) маршрутом не режется — дефект не теряем.
+    // Этап выбирает WorkflowGraph.StageFor по маршруту эпика (G2); ошибка выбора — штатный отказ.
+    private void ApplyWorkflowStage(TaskItem task, string? explicitRole, string? explicitStageId)
+    {
+        if (task.FeatureId is null || explicitRole is null) return;
+        var stageRole = StageRoleOf(task.Role);
+        if (stageRole is null) return;
+        var epic = GetById(task.FeatureId);
+        if (epic is null) return;
+
+        StageSnapshot snapshot;
+        lock (_workflowLock)
+        {
+            var route = epic.Workflow;
+            if (route is null) return;
+            var choice = WorkflowGraph.StageFor(route.Stages, stageRole, task.Lane, explicitStageId);
+            if (!choice.Ok) throw new InvalidOperationException(choice.Error);
+            snapshot = BuildStageSnapshot(route, choice.StageId!, epic.ProjectId);
+        }
+        task.Stage = snapshot;
+        if (task.PersonaId is null && snapshot.PersonaId is { Length: > 0 } stagePersona)
+        {
+            // Персона из этапа приходит из конфигурации шаблона, минуя входные врата дверей
+            // (TaskPersonaGate в контроллере): до этой подстановки существование и арендатор
+            // персоны не проверял никто. Проверяем здесь минимум — персона резолвится у
+            // арендатора задачи и не чужая проектная; молча подставить недоступного
+            // исполнителя нельзя (правило ValidateFeatureFields: неверное значение — отказ).
+            // Полную проверку зон и кросс-проектных привязок делает только дверь; без шва
+            // привязок вертикаль их не видит, поэтому здесь fail-closed по доступному.
+            if (_personas is not null)
+            {
+                var stagePersonaEntity = _personas.GetByIdInternal(stagePersona);
+                if (stagePersonaEntity is null || stagePersonaEntity.OwnerId != task.OwnerId)
+                    throw new InvalidOperationException(
+                        $"Персона этапа «{stagePersona}» не найдена или недоступна.");
+                if (PersonaZone.IsProjectPersona(stagePersonaEntity)
+                    && stagePersonaEntity.ProjectId != task.ProjectId)
+                    throw new InvalidOperationException(
+                        "Проектная персона этапа может выполнять только задачи своего проекта.");
+            }
+            task.PersonaId = stagePersona;
+            NormalizePersonaAssignee(task);
+        }
+    }
+
+    // B11: Presence этапов шаблона ПРЕДЛОЖЕНИЯ эпика по ключу стадии проекции (FeatureTimeMath.RoleToStage);
+    // off в маршрут не попадает и в словарь не входит. Несколько этапов одного ключа: on сильнее optional.
+    // null — предложения нет или шаблон не найден (признак «по решению» тогда не отдаётся).
+    public IReadOnlyDictionary<string, string>? ProposalPresence(TaskItem epic)
+    {
+        var proposal = epic.WorkflowProposal;
+        if (proposal is null || _workflows is null) return null;
+        var scope = string.Equals(proposal.Scope, "project", StringComparison.Ordinal)
+            ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
+        var template = _workflows.Get(proposal.TemplateId, scope, epic.ProjectId);
+        if (template is null) return null;
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var st in template.Stages)
+        {
+            if (st.Presence == WorkflowStagePresence.Off) continue;
+            var key = FeatureTimeMath.RoleToStage(st.Role);
+            if (!result.TryGetValue(key, out var prev) || prev == WorkflowStagePresence.Optional)
+                result[key] = st.Presence == WorkflowStagePresence.On ? WorkflowStagePresence.On : (prev ?? WorkflowStagePresence.Optional);
+        }
+        return result;
+    }
+
+    // Слепок: StageId/Lane/After — из маршрута эпика (замороженный граф), поля этапа (промпт, матрица…) —
+    // из ТЕКУЩЕЙ версии шаблона по id этапа. Шаблон удалён/этап убран — слепок без полей этапа (логируем).
+    private StageSnapshot BuildStageSnapshot(FeatureWorkflow route, string stageId, string? projectId)
+    {
+        var routeStage = route.Stages.First(s => s.Id == stageId);
+        var scope = string.Equals(route.Scope, "project", StringComparison.Ordinal)
+            ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
+        var template = _workflows?.Get(route.TemplateId, scope, projectId);
+        var stage = template is null ? null : TemplateStageById(template, stageId);
+        if (template is null || stage is null)
+        {
+            _log?.LogWarning("Шаблон «{Template}» или этап «{StageId}» не найден: слепок без полей этапа",
+                route.TemplateId, stageId);
+            return new StageSnapshot
+            {
+                TemplateId = route.TemplateId,
+                TemplateVersion = route.ConfirmedVersion,
+                Role = routeStage.Role,
+                StageId = routeStage.Id,
+                Lane = routeStage.Lane,
+                After = routeStage.After.ToList(),
+            };
+        }
+        return new StageSnapshot
+        {
+            TemplateId = template.Id,
+            TemplateVersion = template.Version,
+            Role = routeStage.Role,
+            StageId = routeStage.Id,
+            Lane = routeStage.Lane,
+            After = routeStage.After.ToList(),
+            Specialty = stage.Specialty,
+            PersonaId = Trimmed(stage.PersonaId),
+            Prompt = stage.Prompt,
+            TierStrong = stage.TierStrong,
+            TierMedium = stage.TierMedium,
+            TierWeak = stage.TierWeak,
+            DefaultTier = stage.DefaultTier,
+            DisallowedTools = stage.DisallowedTools?.ToList(),
+            McpAllow = stage.McpAllow?.ToList(),
+            StallMinutes = WorkflowRules.NormalizeStall(stage.StallMinutes),
+            StallPolicy = stage.StallPolicy,
+        };
+    }
+
+    // Этап шаблона по id этапа (Id ??= Role — нормализация та же, что у Resolve).
+    private static WorkflowStage? TemplateStageById(WorkflowTemplate template, string stageId)
+    {
+        var nodes = WorkflowGraph.Normalize(template.Stages);
+        var index = nodes.FindIndex(n => n.Id == stageId);
+        return index < 0 ? null : template.Stages[index];
+    }
+
+    // Проверка маршрута без записи слепка (Update, шаги плана): stageId туда не приходит, поэтому
+    // неоднозначность этапа отказом не считается — отказывает только «этап пропущен маршрутом».
+    private static string? SkippedByRouteError(FeatureWorkflow route, string stageRole, string? lane)
+    {
+        var choice = WorkflowGraph.StageFor(route.Stages, stageRole, lane, null);
+        return !choice.Ok && choice.Error!.StartsWith(WorkflowGraph.StageSkippedText, StringComparison.Ordinal)
+            ? choice.Error : null;
+    }
+
+    // Смена роли/фичи в Update проходит ту же проверку маршрута, что Create: роль этапа,
+    // снятая маршрутом эпика, → отказ. Без этого Create(role=qa) на снятом qa даёт 400, а
+    // Create с ролью null + tasks_update {role:"qa"} — проходит (major ревью R-B2).
+    // Путь задачи с неизменной ролью и фичей не проверяется: автоназначенная роль дефекта
+    // (qa) маршрутом не режется — дефект не теряем. Stage здесь НЕ переписывается (И3/И4):
+    // смена роли на другую роль маршрута слепок от прежнего этапа не трогает.
+    private void EnsureRoleChangeInRoute(
+        string? effFeatureId, string? effRole, string? effLane, string? roleBefore, string? featureIdBefore)
+    {
+        if (effFeatureId is null) return;
+        if (effRole == roleBefore && effFeatureId == featureIdBefore) return;
+        var stageRole = StageRoleOf(effRole);
+        if (stageRole is null) return;
+        var epic = GetById(effFeatureId);
+        if (epic is null) return;
+        FeatureWorkflow? route;
+        lock (_workflowLock) { route = epic.Workflow; }
+        if (route is null) return;
+        if (SkippedByRouteError(route, stageRole, effLane) is { } error)
+            throw new InvalidOperationException(error);
+    }
+
+    // Шаги плана: роль вида review/qa/final/step снята маршрутом эпика → отказ; у step с линией,
+    // когда все step-этапы маршрута привязаны к линиям, линия обязана совпасть с одной из них (п.5 G2).
+    // Эпик без Workflow — no-op.
+    private void EnsurePlanStepsInRoute(string? featureId, List<PlannedStep> steps)
+    {
+        if (featureId is null || steps.Count == 0) return;
+        var epic = GetById(featureId);
+        if (epic is null) return;
+        FeatureWorkflow? route;
+        lock (_workflowLock) { route = epic.Workflow; }
+        if (route is null) return;
+        foreach (var step in steps)
+        {
+            var role = step?.Kind switch
+            {
+                PlannedStep.KindReview => TaskRoles.Review,
+                PlannedStep.KindQa => TaskRoles.Qa,
+                PlannedStep.KindFinal => TaskRoles.Final,
+                _ => TaskRoles.Step,
+            };
+            if (SkippedByRouteError(route, role, null) is not null)
+                throw new InvalidOperationException(
+                    $"{StageSkippedText}: шаг «{step!.StepRef}» вида {step.Kind ?? PlannedStep.KindStep} — роль «{role}» снята в маршруте фичи.");
+            if (role == TaskRoles.Step && !string.IsNullOrWhiteSpace(step!.Lane))
+            {
+                var stepStages = route.Stages.Where(s => s.Role == TaskRoles.Step).ToList();
+                if (stepStages.All(s => s.Lane is not null))
+                {
+                    var lane = FeatureProjector.NormalizeLane(step.Lane);
+                    if (!stepStages.Any(s => FeatureProjector.NormalizeLane(s.Lane) == lane))
+                        throw new InvalidOperationException(
+                            $"Шаг «{step.StepRef}»: линия «{lane}» не совпадает ни с одной линией этапов step маршрута ("
+                            + string.Join(", ", stepStages.Select(s => $"{s.Id}={FeatureProjector.NormalizeLane(s.Lane)}")) + ").");
+                }
+            }
+        }
+    }
+
+    // Единственный писатель epic.WorkflowProposal (И7): рекомендатель (B4a).
+    public TaskItem? SetWorkflowProposal(string epicId, WorkflowProposal? proposal)
+    {
+        var epic = GetById(epicId);
+        if (epic is null || epic.Role != TaskRoles.Feature) return null;
+        lock (_workflowLock)
+        {
+            epic.WorkflowProposal = proposal;
+            epic.UpdatedAt = DateTime.UtcNow;
+        }
+        ScheduleSave();
+        return epic;
+    }
+
+    // Единственный писатель epic.Workflow (И7): подтверждение человека (B4b). Запись под замком маршрута —
+    // параллельный Create шага видит старый или новый маршрут целиком.
+    // M3: onlyIfUnconfirmed — путь авто-подтверждения: проверка «маршрута ещё нет» делается ВНУТРИ замка,
+    // иначе человек, подтвердивший между проверкой и записью, был бы затёрт. Маршрут уже есть — ничего
+    // не пишем и возвращаем null. И7 сохраняется: писатель Workflow по-прежнему один — этот метод.
+    public TaskItem? ConfirmWorkflow(string epicId, FeatureWorkflow workflow, bool onlyIfUnconfirmed = false)
+    {
+        var epic = GetById(epicId);
+        if (epic is null || epic.Role != TaskRoles.Feature) return null;
+        lock (_workflowLock)
+        {
+            if (onlyIfUnconfirmed && epic.Workflow is not null) return null;
+            epic.Workflow = workflow;
+            epic.UpdatedAt = DateTime.UtcNow;
+        }
+        ScheduleSave();
+        return epic;
+    }
+
+    // B03: человек отказался от обновления v1→vN. Правит только поле DismissedUpdateVersion уже
+    // подтверждённого маршрута (граф, шаблон и версия подтверждения не трогаются), под замком маршрута.
+    // null — эпика нет или маршрут не подтверждён.
+    public TaskItem? KeepWorkflowVersion(string epicId, int templateVersion)
+    {
+        var epic = GetById(epicId);
+        if (epic is null || epic.Role != TaskRoles.Feature) return null;
+        lock (_workflowLock)
+        {
+            if (epic.Workflow is null) return null;
+            epic.Workflow.DismissedUpdateVersion = templateVersion;
+            epic.UpdatedAt = DateTime.UtcNow;
+        }
+        ScheduleSave();
+        return epic;
     }
 
     // Локи по FeatureId (не по экземпляру менеджера и не глобальный): сериализуют только создание
@@ -1117,6 +1387,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             legacyStepRefs: req.PlanSteps is null || task.PlanSteps is null ? null
                 : task.PlanSteps.Where(s => s.IsStep && !string.IsNullOrWhiteSpace(s.StepRef))
                     .Select(s => s.StepRef.Trim()).ToHashSet(FeatureStepAccounting.StepKeyComparer));
+        EnsureRoleChangeInRoute(effFeatureId, effRole, req.Lane is null ? task.Lane : Trimmed(req.Lane), task.Role, task.FeatureId);
+        if (req.PlanSteps is not null && effPlanSteps is not null) EnsurePlanStepsInRoute(effFeatureId, effPlanSteps);
         EnsureReturnReason(req.Verification);
         // Та же норма на двери Update (major ревью d27c643c: раньше защищался только контроллер):
         // applied ниже — task.Verification = req.Verification, поэтому без снятия сюда подделка
@@ -1228,6 +1500,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // Снятие списка явным [] при сохранении роли plan — выше: остаётся пустым списком (не null).
         if (roleBefore == TaskRoles.Plan && effRole != TaskRoles.Plan)
             task.PlanSteps = null;
+        // Маркер режима маршрута (M1): переход в role=feature из другой роли ставит маркер по тому
+        // же правилу, что Create. У уже-фичи и при уходе из feature не трогаем: снятый маркер вернул
+        // бы легаси-фичу на гейт без причины.
+        if (roleBefore != TaskRoles.Feature && task.Role == TaskRoles.Feature)
+            task.RouteRequired = RouteRequiredFor(task.ProjectId);
         if (req.AwaitingHumanSince is not null) task.AwaitingHumanSince = req.AwaitingHumanSince;
         if (req.AwaitingHumanReason is not null) task.AwaitingHumanReason = Trimmed(req.AwaitingHumanReason);
 
@@ -1830,6 +2107,24 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         }
     }
 
+    // Ответ человека на ожидание через экран этапа (B04): то же снятие, что ClearAwaitingHuman,
+    // но запись waiting_cleared несёт текст ответа и автора. Ожидания нет — null, без мутации.
+    public TaskItem? AnswerAwaitingHuman(string id, string text, string by)
+    {
+        lock (_awaitLock)
+        {
+            var task = _tasks.GetValueOrDefault(id);
+            if (task is null || task.AwaitingHumanSince is null) return null;
+            var before = Capture(task);
+            task.AwaitingHumanSince = null;
+            task.AwaitingHumanReason = null;
+            task.UpdatedAt = DateTime.UtcNow;
+            WriteJournalTransitions(task, before, text, by);
+            ScheduleSave();
+            return task;
+        }
+    }
+
     // Лимит текста «чего ждём от человека» (Reason): 1–120 символов после Trim.
     public const int AwaitingAskMaxLength = 120;
 
@@ -2124,6 +2419,59 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return FeatureProjector.IsPaused(epic)
             ? "Фича на паузе, снимите паузу на странице фичи."
             : "Фича — черновик, запустите её на странице фичи.";
+    }
+
+    // Роли и вид, которым гейт слияния не мешает (разрез 2 §1.8, одним списком): ревью идёт
+    // конвейером по шагу через ReviewOf (временное решение, вопрос Андрею №1 — правится только
+    // этот список), rework и consult — не узлы графа, дефект живёт вне маршрута.
+    private static readonly string[] MergeGateExemptRoles = [TaskRoles.Review, TaskRoles.Rework, TaskRoles.Consult];
+
+    // Маркер режима маршрута (M1): true — при подключённом сторе с непустым каталогом шаблонов,
+    // иначе null (маркера нет): при пустом каталогe подтвердить маршрут нечем, и фича была бы
+    // заперта навсегда. Единственные писатели маркера — Create и переход роли в feature (Update);
+    // List у стора исключений не бросает (пустой каталог — пустой список).
+    private bool? RouteRequiredFor(string? projectId) =>
+        _workflows is not null && _workflows.List(projectId).Count > 0 ? true : null;
+
+    // Гейты запуска по маршруту фичи (B3, разрез §5 «Без подтверждения» и разрез 2 §1.8):
+    // читают ТОЛЬКО эпик (RouteRequired/Workflow/WorkflowProposal) и слепок task.Stage,
+    // шаблон — никогда (И4).
+    // Эпик и задачи фичи читаются в момент вызова, а не из снимка на входе в ExecuteAsync:
+    // подтверждение маршрута и закрытие предшественника между двумя вызовами видны сразу.
+    // Отказ — штатная строка, не исключение. null — запуск разрешён. Эпик без маркера RouteRequired,
+    // без Proposal и без Workflow — легаси (фичи до M1 или при пустом каталоге шаблонов), гейтов нет;
+    // задача без фичи гейтов не знает вовсе.
+    // Гейт на ЗАПУСКЕ: толкач простоя и возобновление идущего исполнителя сюда не заходят.
+    public string? FeatureRouteLaunchRefusal(TaskItem task)
+    {
+        var epic = FeatureEpicOf(task);
+        if (epic is null) return null;
+
+        // Гейт подтверждения: фича в режиме маршрута (маркер M1) или с предложением рекомендателя,
+        // но без подтверждённого человеком маршрута
+        if (epic.Workflow is null && (epic.RouteRequired == true || epic.WorkflowProposal is not null))
+            return task.Role == TaskRoles.Consult
+                ? null
+                : "маршрут фичи не подтверждён — подтвердите его на странице фичи";
+
+        // Гейт слияния: узел с ≥2 предшественниками ждёт их все
+        if (epic.Workflow is not { } route
+            || task.Stage is not { } stage || stage.After.Count < 2
+            || MergeGateExemptRoles.Contains(task.Role) || task.Kind == TaskKind.Defect)
+            return null;
+
+        var featureTasks = _tasks.Values.Where(t => t.FeatureId == epic.Id && t.OwnerId == epic.OwnerId).ToList();
+        var states = WorkflowGraph.States(route.Stages, featureTasks);
+        foreach (var parent in stage.After)
+        {
+            if (!states.TryGetValue(parent, out var state)) continue;
+            if (state == WorkflowGraph.StageStates.Done) continue;
+            var started = featureTasks.Any(t => t.Stage?.StageId == parent);
+            return started
+                ? $"ветка «{parent}» не завершена: узел слияния ждёт все предшественники"
+                : $"ветка «{parent}» не начата; если она не нужна — обновите маршрут фичи";
+        }
+        return null;
     }
 
     // «Фича задачи на паузе» — та же сфера, что у гейта запуска (W4-HOLD-I, контракт §1 :179,
@@ -2457,7 +2805,10 @@ public record CreateTaskRequest(
     // null = старая семантика «проверено»
     TaskVerification? Verification = null,
     // Критерии приёмки (измеримые); пустой Id получает «cN». См. AcceptanceRules
-    List<AcceptanceCriterion>? Acceptance = null);
+    List<AcceptanceCriterion>? Acceptance = null,
+    // Этап маршрута эпика (WorkflowGraph.StageFor, G2): нужен, когда роль/линия не выбирают этап
+    // однозначно (параллельный маршрут). Только при создании: в Update слепок неизменен.
+    string? StageId = null);
 
 public record CreateSubtaskRequest(string Title);
 

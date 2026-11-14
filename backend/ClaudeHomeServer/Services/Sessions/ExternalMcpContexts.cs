@@ -197,7 +197,8 @@ public sealed class ExternalMcpContexts
     // Провайдер, а не готовое значение: правка реестра применяется со следующего хода
     // без пересоздания адаптера. Секреты разворачиваются здесь и живут только во
     // временном конфиге хода.
-    internal Func<ExternalMcpContext?>? BuildExternalMcpProvider(string? ownerId, string? projectId, Persona? persona, string? sessionId)
+    internal Func<ExternalMcpContext?>? BuildExternalMcpProvider(string? ownerId, string? projectId, Persona? persona, string? sessionId,
+        IReadOnlyList<string>? stageMcpAllow = null)
     {
         if (ownerId is null || _mcpRegistry is null || _mcpSecrets is null) return null;
         // Профиль «Только чтение»: имён инструментов чужого сервера мы не знаем, а гасить их
@@ -230,6 +231,8 @@ public sealed class ExternalMcpContexts
                 foreach (var record in registry.GetByOwner(ownerId))
                 {
                     if (!record.Enabled) continue;
+                    // Сужение слепком этапа (И5): этап только убирает сервер из уже выданного
+                    if (!BuiltinMcpContexts.StageAllows(stageMcpAllow, record.Key)) continue;
                     // Встроенные интеграции (IntegrationKeys: dify/fal-ai/glif/higgsfield)
                     // доставляются собственной веткой (TryAddHiggsfieldBuiltin) по рубильнику
                     // записи и RO-гейту. Реестровый путь для них НЕ применяется: иначе у

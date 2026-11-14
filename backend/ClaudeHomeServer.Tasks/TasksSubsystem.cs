@@ -63,7 +63,12 @@ public sealed class TasksSubsystem : IAppSubsystem
         // случается лениво — на первом обращении из контроллера либо hosted-сервиса;
         // к тому моменту DI гарантирует все зависимости.
         // Читатель коммита дерева для гейта предгейта (NC-P1b); без него TaskManager закрывает шаги как раньше
-        services.AddSingleton<ClaudeHomeServer.Services.Composition.IWorktreeHeadReader, GitWorktreeHeadReader>();
+        services.AddSingleton<GitWorktreeHeadReader>();
+        services.AddSingleton<ClaudeHomeServer.Services.Composition.IWorktreeHeadReader>(sp => sp.GetRequiredService<GitWorktreeHeadReader>());
+        // Коммиты задачи и дифф коммита для экрана этапа (D1a): тот же читатель git, второй интерфейс
+        services.AddSingleton<ClaudeHomeServer.Services.Composition.IWorktreeCommitReader>(sp => sp.GetRequiredService<GitWorktreeHeadReader>());
+        // Сборка экрана этапа (D1a): только чтение; опциональные швы (git, лента чата) — null при их отсутствии
+        services.AddSingleton<StageScreenService>();
         services.AddSingleton<TaskManager>();
         // Шов «чат привязан к фиче?» для SessionManager (S2d-7b-2): живёт рядом с TaskManager
         services.AddSingleton<ClaudeHomeServer.Services.IFeatureChatLinks, FeatureChatLinks>();
@@ -101,6 +106,11 @@ public sealed class TasksSubsystem : IAppSubsystem
         // IHostedService (Tasks, не Main — граница подсистем держится), явная регистрация
         // по образцу строки выше.
         services.AddGatedHostedService<AwaitingHumanAnswerSubscriber>(config, "tasks");
+        // Стор шаблонов процесса фичи (data/workflow-templates.json): singleton — лок на файл один.
+        services.AddSingleton<WorkflowTemplateStore>();
+        // Рекоменд маршрута фичи (B4a, разрез workflow §5): шов Tasks → Llm (ICheapTextRunner)
+        // уже declared — тот же, что у TaskAiService; запись только через TaskManager (И7).
+        services.AddSingleton<WorkflowRecommender>();
         // Шов IPersonaAutomationRunner (Core) — регистрация фабрики вынесена в
         // Program.cs рядом с `PersonaAutomationRunnerAdapter`, потому что адаптер
         // живёт в Main (обёртка над `PersonaAutomationService`).

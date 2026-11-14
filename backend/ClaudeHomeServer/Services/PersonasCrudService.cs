@@ -163,10 +163,19 @@ public sealed class PersonasCrudService(
         // Шаблон специальности: при выборе специальности неподставленные
         // access/tools/disallowedTools берутся из эффективного шаблона;
         // явные поля запроса всегда побеждают, после создания поля правятся вручную.
+        // InheritsAccess=true (A1d): явные права запроса игнорируются — персистентные поля
+        // пишутся эффективным шаблоном (снимок для отката кода); None — шаблон кода Full без
+        // ограничений (дефолты Create), «нет шаблона» — свои права запроса (passthrough Apply).
+        // null/false — поведение прежнее.
         var createSpecialty = req.Specialty ?? PersonaSpecialty.None;
-        var templated = specialtyTemplates.Apply(userId, createSpecialty, currentSpecialty: null,
-            access, req.Tools, req.DisallowedTools);
+        var templated = req.InheritsAccess == true
+            ? InheritedGroupForCreate(userId, createSpecialty, access, req.Tools, req.DisallowedTools)
+            : specialtyTemplates.Apply(userId, createSpecialty, currentSpecialty: null,
+                access, req.Tools, req.DisallowedTools);
 
+        // Слой секций промпта (Г4, P1d) идёт в менеджер как есть: id по каталогу и лимит текста
+        // нормализует он же, тот же catch отдаёт 400, персона не создана. Не передан — «всё как
+        // у специальности» (поведение вызовов без поля не меняется).
         Persona persona;
         try
         {
@@ -175,7 +184,9 @@ public sealed class PersonasCrudService(
                 req.MemoryEnabled ?? true, templated.Tools, req.Contract,
                 templated.Access ?? PersonaAccess.Full, templated.DisallowedTools, createSpecialty,
                 req.AllProjectsAccess ?? false, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender, sphereId: req.SphereId);
+                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender,
+                sphereId: req.SphereId, inheritsAccess: req.InheritsAccess,
+                promptSections: req.PromptSections);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindingList.Count > 0)
@@ -232,6 +243,26 @@ public sealed class PersonasCrudService(
         return Ok(persona);
     }
 
+    // Группа прав при создании с InheritsAccess=true (A1d): персистентные поля — снимок
+    // эффективного шаблона специальности (для отката кода), явные права запроса игнорируются.
+    // Соглашение M3 (то же, что у Hydrate и миграции): None — не «нет шаблона», а шаблон кода
+    // Full без ограничений; «нет шаблона» не становится Full — свои права запроса, как в Apply.
+    private SpecialtyTemplatesService.Applied InheritedGroupForCreate(
+        string userId, PersonaSpecialty specialty,
+        PersonaAccess? explicitAccess, List<string>? explicitTools, List<string>? explicitDisallowed)
+    {
+        if (specialty == PersonaSpecialty.None)
+            return new(PersonaAccess.Full, null, null, true);
+        if (SpecialtyTemplatesService.EffectiveAccessTemplate(specialtySettings, userId, specialty)
+                is { } template)
+            // Tools шаблона null = «все»: разворачиваем в полный список — Create нормализует
+            // его в null стора («без ограничений»), тот же приём, что у Apply
+            return new(template.Access,
+                template.Tools?.ToList() ?? SpecialtyTemplatesService.AllToolKeys.ToList(),
+                template.DisallowedTools?.ToList(), true);
+        return new(explicitAccess, explicitTools, explicitDisallowed, false);
+    }
+
     // broadcast: false — вызывающий доводит правку следующей мутацией (голос в MCP
     // personas_update) и шлёт одно событие «updated» сам, по её итогу
     public async Task<ActionResult<Persona>> UpdateAsync(string userId, string id,
@@ -269,11 +300,57 @@ public sealed class PersonasCrudService(
                 return BadRequest(new { error = tooBig });
         }
 
-        // Шаблон специальности: применяется только при реальной СМЕНЕ специальности;
-        // неподставленные access/tools/disallowedTools берутся из шаблона, явные поля
-        // запроса побеждают. Та же специальность в запросе — поля не трогает.
-        var templated = specialtyTemplates.Apply(userId, req.Specialty ?? current.Specialty, current.Specialty,
-            access, req.Tools, req.DisallowedTools);
+        // Группа прав (A1d) — что пишется в персистентные поля, с учётом итогового флага
+        // наследования: переданного или текущего у персоны (null — не менять).
+        var finalInherits = req.InheritsAccess ?? current.InheritsAccess;
+        PersonaAccess? writeAccess;
+        List<string>? writeTools;
+        List<string>? writeDisallowed;
+        if (finalInherits)
+        {
+            // Права — шаблон специальности: access/tools/disallowedTools запроса игнорируются,
+            // персистентные поля пишутся эффективным шаблоном — снимок для отката кода.
+            // Соглашение M3 (как Hydrate/миграция): None — шаблон кода Full без ограничений;
+            // «нет шаблона» не становится Full — поля не трогается (эффективные права такой
+            // персоны — её собственные).
+            var effSpecialty = req.Specialty ?? current.Specialty;
+            if (effSpecialty == PersonaSpecialty.None)
+                // null в Update значит «не менять», поэтому «без ограничений» — полный список:
+                // он нормализуется в null стора (тот же приём, что у Apply)
+                (writeAccess, writeTools, writeDisallowed) =
+                    (PersonaAccess.Full, SpecialtyTemplatesService.AllToolKeys.ToList(), null);
+            else if (SpecialtyTemplatesService.EffectiveAccessTemplate(specialtySettings, userId, effSpecialty)
+                     is { } template)
+                // Пустые значения шаблона пишутся явно («пустой» список нормализуется в null
+                // стора): null в Update означал бы «не менять», и старый снимок пережил бы
+                // шаблон, где прав уже нет
+                (writeAccess, writeTools, writeDisallowed) = (template.Access,
+                    template.Tools?.ToList() ?? SpecialtyTemplatesService.AllToolKeys.ToList(),
+                    template.DisallowedTools?.ToList() ?? []);
+            else
+                (writeAccess, writeTools, writeDisallowed) = (null, null, null);
+        }
+        else if (current.InheritsAccess)
+        {
+            // Переход true → false («своё»): человек фиксирует ровно то, что видел — поля
+            // запроса побеждают, непереданные берутся из гидратированной персоны (personas.Get
+            // уже подставил ей эффективные права), а не из сырой записи. Пустые эффективные
+            // значения — тоже явно: «без ограничений» полным списком, пустой запрет — []
+            (writeAccess, writeTools, writeDisallowed) = (access ?? current.Access,
+                req.Tools ?? current.Tools ?? SpecialtyTemplatesService.AllToolKeys.ToList(),
+                req.DisallowedTools ?? current.DisallowedTools ?? []);
+        }
+        else
+        {
+            // Флаг false или null у не наследующей персоны — как раньше: шаблон специальности
+            // применяется только при реальной СМЕНЕ специальности; неподставленные
+            // access/tools/disallowedTools берутся из шаблона, явные поля запроса побеждают.
+            // Та же специальность в запросе — поля не трогает.
+            var templated = specialtyTemplates.Apply(userId, req.Specialty ?? current.Specialty,
+                current.Specialty, access, req.Tools, req.DisallowedTools);
+            (writeAccess, writeTools, writeDisallowed) = (templated.Access, templated.Tools,
+                templated.DisallowedTools);
+        }
 
         // Статус заготовки снимает только ЧЕЛОВЕК из раздела «Персоны». Правка, пришедшая из
         // личного знакомства владельца, статус НЕ снимает: интервью само зовёт personas_update
@@ -295,14 +372,25 @@ public sealed class PersonasCrudService(
         var beforeRole = current.Role;
         var beforeGreeting = current.Greeting;
         var beforeContract = current.Contract;
+        // Признак сброса своих секций промпта (§2.3, P1d) снимается ДО записи: personas.Update
+        // правит запись in-place (у не наследующей персоны current — она же), и после неё
+        // «был ли слой» уже не увидеть; у наследующей — hydrated-копия держала бы старый список,
+        // и проверка после записи врала бы в обратную сторону. Та же функция, которой
+        // PersonaManager сбрасывает слой (Г4) — текст ответа и действие не разъедутся.
+        var resetsPromptSections = PersonaManager.ResetsPromptSections(current, req.Specialty);
         Persona persona;
         try
         {
             persona = personas.Update(id, userId, req.Name, req.Role, req.Description, req.SystemPrompt,
                 req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-                req.MemoryEnabled, templated.Tools, req.Contract, templated.Access, templated.DisallowedTools,
+                req.MemoryEnabled, writeTools, req.Contract, writeAccess, writeDisallowed,
                 req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender, sphereId: req.SphereId);
+                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender,
+                sphereId: req.SphereId, inheritsAccess: req.InheritsAccess,
+                // Слой секций (Г4): как есть — нормализация и отказ по каталогу в менеджере,
+                // этот же catch отдаёт 400, персона остаётся нетронутой (там же порядком,
+                // что валидация handle до мутаций)
+                promptSections: req.PromptSections);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         // Ручная правка заготовки снимает её статус (план 2.8): если у нетронутой заготовки
@@ -313,7 +401,21 @@ public sealed class PersonasCrudService(
         if (isAssistantDraft && IsCharacterRelevantChange(beforeName, beforeRole, beforeGreeting, beforeContract, persona))
             users.SetAssistantPersona(userId, null);
         if (broadcast) await Broadcast(userId, persona, "updated", id);
-        return Ok(persona);
+        // О сбросе своих секций промпта ответ сообщает строкой notice (§2.3): её читает тот,
+        // кто правку сделал (REST-форма и personas_update). Событие «updated» идёт карточкой
+        // без неё: адресату события эффект не нужен, а хранящаяся запись и personas.json не
+        // должны видеть текст ответа (поле ставится на копии — WhenWritingNull в модели).
+        return resetsPromptSections ? Ok(WithPromptSectionsReset(persona)) : Ok(persona);
+    }
+
+    // Копия персоны с строкой о сбросе слоя (P1d): ShallowCopy — тот же приём, что у Hydrate,
+    // чтобы не мутировать запись стора; текст держит PersonaManager — та же формулировка, что
+    // описывает мутацию
+    private static Persona WithPromptSectionsReset(Persona persona)
+    {
+        var response = persona.ShallowCopy();
+        response.Notice = PersonaManager.PromptSectionsResetNotice;
+        return response;
     }
 
     public async Task<IActionResult> DeleteAsync(string userId, string id, string? successorId)
@@ -870,12 +972,14 @@ public sealed class PersonasCrudService(
         return persona;
     }
 
-    // Типовые умения специальности → личные привязки персоны («копия при создании» и
-    // кнопка «Применить типовые» для существующих). Скиллы материализуются напрямую из
-    // каталога владельца (отсутствующие пропускаются молча — каталог у каждого свой),
-    // остальные типы — one-shot AI-подбор конкретных целей. Дубликаты и недоступные цели
-    // отбрасывает валидация. Возвращает персону и число ДОБАВЛЕННЫХ привязок (0 — профиль
-    // пуст или ничего не подошло). Сбой (например, недоступность AI-подбора) пробрасывает
+    // Типовые умения специальности → личные привязки персоны (кнопка «Применить типовые» для
+    // существующих). A2 (разрез §2 «Типовые умения»): Skill-часть профиля больше НЕ материализуется
+    // — Skill-умения наследуются в рантайме (PersonaBindingsService.EffectiveBindings), копия
+    // в сторе была бы тем, от чего этот шаг отказался; существующие копии снимает миграция A1b-шага.
+    // Остаётся AI-часть (Knowledge/Project/…): one-shot подбор конкретных целей — она была и
+    // остаётся копией (§7 разреза: «их проектные, наследовать нечего»). Дубликаты и недоступные
+    // цели отбрасывает валидация. Возвращает персону и число ДОБАВЛЕННЫХ привязок (0 — профиль
+    // пуст, Skill-only или ничего не подошло). Сбой (например, недоступность AI-подбора) пробрасывает
     // наружу: вызывающий сам решает семантику — создание персоны глотает его (best-effort),
     // а кнопка «Применить типовые» отдаёт ошибку, иначе её ветка «Не удалось применить»
     // недостижима (до записи привязок сбой ничего не меняет).
@@ -897,24 +1001,9 @@ public sealed class PersonasCrudService(
         var accepted = new List<PersonaBinding>(persona.Bindings ?? []);
         var added = new List<PersonaBinding>();
 
-        // Скиллы — явная цель профиля, AI не нужен
-        foreach (var entry in profile.Where(e => e.Type == PersonaBindingType.Skill))
-        {
-            var binding = new PersonaBinding
-            {
-                Type = PersonaBindingType.Skill,
-                Target = entry.SkillName?.Trim() ?? "",
-                Condition = entry.Condition,
-                Mode = entry.Mode,
-            };
-            // W3-B5b: плагин-скилл владельца — цель его личного пакета (право Configure):
-            // не-владелец её не материализует.
-            if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, binding) is not null) continue;
-            if (await bindings.ValidateAsync(userId, binding, accepted, persona) is not null) continue;
-            accepted.Add(binding);
-            added.Add(binding);
-        }
-
+        // A2: Skill-часть профиля здесь не материализуется — она наследуется в рантайме
+        // (PersonaBindingsService.EffectiveBindings). Возврат этого цикла вернул бы копию,
+        // от которой шаг отказался (тест MaterializeDefaultBindings_SkillНeМатериализуется краснеет).
         var aiEntries = profile.Where(e => e.Type != PersonaBindingType.Skill).ToList();
         if (aiEntries.Count > 0)
             added.AddRange(await SuggestBindingsAsync(userId, persona, profile: aiEntries, acceptedSeed: accepted,
@@ -931,8 +1020,8 @@ public sealed class PersonasCrudService(
     // userPrompt задан — генерация под свободный запрос пользователя, иначе подбор под роль.
     // profile задан — материализация типовых умений роли: AI подбирает только ЦЕЛИ типов
     // профиля (по одному на запись), условие и режим подставляются из профиля сервером.
-    // acceptedSeed — уже подготовленные к добавлению привязки (например, скиллы профиля):
-    // валидация дубликатов должна видеть их рядом с текущими привязками персоны.
+    // acceptedSeed — уже подготовленные к добавлению привязки: валидация дубликатов
+    // должна видеть их рядом с текущими привязками персоны.
     // callerRole/projectId — сужение кандидатов для не-владельца общего проекта (W3-B5b,
     // разрез §3.1 строка «suggest/generate», И-4): кандидат отбрасывается тем же
     // NonOwnerBindingEditDenied ДО валидации и до ответа — праву отказа не мешает ни

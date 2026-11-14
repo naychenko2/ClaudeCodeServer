@@ -60,7 +60,10 @@ public sealed class TasksToolset(
     UserStore users,
     IProjectAccess access,
     IActorRightGate actorGate,
-    INoteTaskSync? noteSync = null) : IMcpParameterizedToolset
+    INoteTaskSync? noteSync = null,
+    // B4c: подбор маршрута при агентском создании эпика — тот же фоновый запуск, что у REST-дверей
+    WorkflowRecommender? workflowRecommender = null,
+    ILogger<TasksToolset>? log = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession); живёт в Core
@@ -325,6 +328,7 @@ public sealed class TasksToolset(
                     Role: OptionalArg(arguments, "role"),
                     StepRef: OptionalArg(arguments, "stepRef"),
                     Lane: OptionalArg(arguments, "lane"),
+                    StageId: OptionalArg(arguments, "stageId"),
                     ReviewOf: LabelsArg(arguments, "reviewOf"),
                     PlanSteps: planSteps,
                     // Создатель — актор хода-создателя (редактор общего проекта и т.п.); актор
@@ -350,6 +354,9 @@ public sealed class TasksToolset(
                     return Deny(ex.Message);
                 }
                 await broadcaster.ToTaskBoard(context.OwnerId, created.ProjectId, new TaskChangedMessage("created", created));
+                // B4c: агентски созданный эпик получает предложение маршрута так же, как созданный
+                // через REST; ключ владельца — арендатор записи (внутри Start), сбой не роняет ответ
+                EpicWorkflowRecommend.Start(workflowRecommender, tasks, broadcaster, sessions, projects, log, created);
                 return Json(ForCaller(created, session, context.OwnerId));
             }
 
@@ -1661,6 +1668,7 @@ public sealed class TasksToolset(
                     ["role"] = RoleSchema(),
                     ["stepRef"] = StepRefSchema(),
                     ["lane"] = LaneSchema(),
+                    ["stageId"] = StageIdSchema(),
                     ["reviewOf"] = ReviewOfSchema(),
                     ["acceptance"] = AcceptanceSchema(),
                     ["planSteps"] = PlanStepsSchema(),
@@ -2074,6 +2082,12 @@ public sealed class TasksToolset(
     {
         ["type"] = "string",
         ["description"] = "Id задачи-эпика фичи; без роли — частичный мерж",
+    };
+
+    private static JsonObject StageIdSchema() => new()
+    {
+        ["type"] = "string",
+        ["description"] = "Id этапа маршрута фичи; нужен, когда роль и линия не выбирают этап однозначно (только при создании)",
     };
 
     private static JsonObject RoleSchema() => new()

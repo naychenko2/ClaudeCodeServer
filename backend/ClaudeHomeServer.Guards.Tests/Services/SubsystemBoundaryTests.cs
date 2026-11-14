@@ -1313,6 +1313,12 @@ public class SubsystemBoundaryTests
         // без допуска сторож зелёный. ТАКОЙ ЖЕ мёртвый допуск остался ещё у пяти
         // вертикалей (Backgrounds, ProjectIcons, Memory, Docs, Changelog) — снимается
         // отдельной уборкой, чтобы не смешивать её с выносом Tasks.
+        // Точечный шов B1a (разрез ai-fabrika-workflow-cut-2026-11 §1) снят доработкой
+        // B1a по R-B1a (п.1): WorkflowRules валидирует ячейки матрицы этапа той же
+        // проверкой, что ячейки специальности, — через ModelCellRules из Core (спина
+        // допустима по IsCoreAssembly), а не через SpecialtySettingsStore вертикали Llm.
+        // Мёртвый префикс-шов `Services.Llm` (снят ревью 2026-09-09) не возвращаем:
+        // Tasks нужен ровно тип из Core, а не вся вертикаль. Точечных допусков нет.
         new object[]
         {
             new VerticalBoundary(
@@ -1324,7 +1330,7 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Tasks",
                     })
                     .ToArray(),
-                Array.Empty<string>()),
+                []),
         },
         // Notes — вертикаль заметок (волна 4C, шаг 2). Obsidian-совместимый vault
         // (`[[wikilinks]]`/backlinks/граф/комментарии), AI-сводки, синк с Dify,
@@ -1958,6 +1964,9 @@ public class SubsystemBoundaryTests
         // FeatureKeyChain читают Tasks и корень — владения вертикалью нет. По прецеденту
         // TaskUrl — в корневном namespace, поимённо; Services.Tasks в allow-list не добавляется.
         "ClaudeHomeServer.Services.FeatureHoldException",
+        // Тот же протокол для отказа по маршруту фичи (B3): бросает корневой TaskExecutionService,
+        // автозапуск Tasks отличает его от падения — по прецеденту FeatureHoldException, поимённо.
+        "ClaudeHomeServer.Services.FeatureRouteLaunchException",
         "ClaudeHomeServer.Services.FeatureKeyChain",
         // Общий предикат «фичу закрывает/возобновляет только человек» (хвост B статуса-модели,
         // пункт 1 вердикта 3d2d793c): композицию читают корневый TasksController и TasksToolset —

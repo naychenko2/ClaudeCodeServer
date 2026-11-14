@@ -175,6 +175,11 @@ public class SharedProjectPersonaTaskTests : IClassFixture<TestWebApplicationFac
         var epicId = await PostAsync(Owner(), $"/api/projects/{projectId}/tasks",
             new { title = "Эпик мержа" + Guid.NewGuid().ToString("N")[..6], role = "feature",
                   worktreePath = wt, worktreeBranch = branch });
+        // Подтверждение маршрута реальным эндпоинтом confirm (M1): новый эпик при сторе с непустым
+        // каталогом несёт маркер RouteRequired, и без подтверждённого маршрута гейт не пускает
+        // задачи фичи на запуск — включая мерж. Фикстура мержа — фича с подтверждённым маршрутом.
+        (await Owner().PostAsJsonAsync($"/api/tasks/{epicId}/workflow/confirm",
+            new { templateId = "builtin-fast-track" })).EnsureSuccessStatusCode();
         (await Owner().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
             new { title = "Финал фичи", featureId = epicId, role = "final", status = "done",
                   verification = new { verdict = "accepted" } })).EnsureSuccessStatusCode();

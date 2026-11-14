@@ -413,3 +413,84 @@ describe('featureBackNav: вкладка возврата — FeatureMainTab (FS
     expect(featureBackNavFrom('c1')?.tab, 'чип читает не последнюю вкладку').toBe('progress');
   });
 });
+
+// Дефект 762b7c03 (после C3d): имя первой вкладки зависит от наличия маршрута
+// (featureMainTabLabel), и канал возврата обязан называть её так же, как страница.
+// Отображаемое имя фиксируется при записи (recordFeatureReturn, страница открыта и run
+// известен); читатель берёт его из информации; записи без поля (старый код) — фолбэк
+// словаря. Мутации (в отчёте): (15) не писать fromTabLabel в recordFeatureReturn →
+// «Процесс» краснеет; (16) игнорировать fromTabLabel в featureBackNavFrom (всегда
+// словарь) → «Процесс» и «старая запись» краснеют; (17) в featureHasRoute не проверять
+// открытую страницу/данные (читать любой готовый run) → «чужая фича» и «без данных» краснеют;
+// (18) в hasRouteOfRun (единый предикат, lib/featurePage) не проверять рёбра стадий →
+// «по рёбрам стадий» краснеет.
+describe('featureBackNav: имя вкладки — то же, что у страницы (дефект 762b7c03)', () => {
+  beforeEach(() => { __test.reset(); pageStore.reset(); });
+
+  // Открытая страница 'f1' в сторе: признак маршрута (featureHasRoute) читает её run.
+  const openPage = (fid: string, over: Record<string, unknown> = {}) => {
+    pageStore.setFid(fid);
+    pageStore.setState({
+      status: 'ok',
+      page: {
+        run: {
+          featureId: fid, state: 'in_progress', steps: [], reviews: [], qa: [], final: null, merge: null,
+          verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+          progress: 0, ready: false, ...over,
+        } as never,
+        events: [], eventsTotal: 0,
+      },
+    });
+  };
+  const routed = { epic: { id: 'f1', title: 'Моя фича', workflow: { templateId: 't', scope: 'global', stages: [], skipped: [], confirmedVersion: 1 } } };
+
+  it('фича с маршрутом (подтверждённый epic.workflow): запись и информация — «Процесс»', () => {
+    openPage('f1', routed);
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича', 'timeline');
+    expect(getBackNav()?.fromTabLabel, 'отображаемое имя не записано').toBe('Процесс');
+    expect(featureBackNavFrom('c1')?.tabLabel, 'информация читает словарь, а не запись').toBe('Процесс');
+  });
+
+  it('маршрут по рёбрам стадий (без epic.workflow): тоже «Процесс»', () => {
+    openPage('f1', { stages: [{ key: 'prod', id: 'b', after: ['a'], state: 'active' }] });
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича', 'timeline');
+    expect(featureBackNavFrom('c1')?.tabLabel, 'рёбра стадий не признаны маршрутом').toBe('Процесс');
+  });
+
+  it('легаси (открытая страница без маршрута): «Ход», как раньше', () => {
+    openPage('f1');
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича', 'timeline');
+    expect(featureBackNavFrom('c1')?.tabLabel, 'имя легаси сдвинулось').toBe('Ход');
+  });
+
+  it('фича с маршрутом, прочие вкладки: имена словаря, «Процесс» — только первая', () => {
+    openPage('f1', routed);
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича', 'plans');
+    expect(featureBackNavFrom('c1')?.tabLabel, '«Материалы» переименованы').toBe('Материалы');
+    __test.reset();
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c2' }, 'Моя фича', 'chats');
+    expect(featureBackNavFrom('c2')?.tabLabel, '«Разбор» переименован').toBe('Разбор');
+  });
+
+  it('признак только открытой страницы: чужая фича или нет данных — «Ход»', () => {
+    openPage('other', routed); // страница другой фичи: её run чужому переходу не имя
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича', 'timeline');
+    expect(featureBackNavFrom('c1')?.tabLabel, 'чужой run дал имя').toBe('Ход');
+    // данных нет: страница открыта для 'f1', но run не готов — имя не берётся из run.
+    // (Раньше здесь оставался открытый 'other', и проверка проходила на признаке чужой
+    // фичи — ветка «данных нет» никогда не выполнялась.)
+    openPage('f1', routed);
+    pageStore.setState({ status: 'loading' });
+    __test.reset();
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c2' }, 'Моя фича', 'timeline');
+    expect(featureBackNavFrom('c2')?.tabLabel, 'имя без данных страницы').toBe('Ход');
+  });
+
+  it('старая запись без fromTabLabel: информация фолбэком словарь (c2)', () => {
+    __test.setBack({ from: 'f1', fromKind: 'feature', to: { kind: 'chat', id: 'c1' }, fromTitle: 'Фича', fromTab: 'review', showTab: true, view: null });
+    const info = featureBackNavFrom('c1');
+    expect(info, 'нет информации').not.toBeNull();
+    expect(info!.tab, 'значение вкладки').toBe('review');
+    expect(info!.tabLabel, 'нет фолбэка на словарь').toBe('Разбор');
+  });
+});

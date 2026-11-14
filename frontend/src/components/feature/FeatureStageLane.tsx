@@ -48,7 +48,7 @@
 
 import { Fragment } from 'react';
 import { C, R, FS, FONT, SP, SHADOW } from '../../lib/design';
-import { axisFrac, type LaneAxis, type LaneIntervalState, type StageLane } from './FeatureLaneModel';
+import { axisFrac, isFailedTurnOutcome, type LaneAxis, type LaneIntervalState, type StageLane } from './FeatureLaneModel';
 import { formatClock, formatDateTime, formatDuration } from './FeatureStatsBits';
 
 // «Какие интервалы подсвечены» (GC-F8R): множество индексов lane.intervals + флаг рисования.
@@ -231,8 +231,9 @@ export function FeatureStageLane({
           ...(dim && highlight?.animate ? { transition: 'opacity 0.3s' } : {}),
           ...(hl ? { boxShadow: `0 0 0 2px ${C.bgCard}, 0 0 0 4px ${C.accent}`, zIndex: 3 } : {}),
         };
-        const risk = iv.lastOutcome ? (
-          // Риска 2 px на конце интервала с плохим исходом последнего хода.
+        const risk = isFailedTurnOutcome(iv.lastOutcome) ? (
+          // Риска 2 px на конце интервала с отказным исходом последнего хода
+          // (isFailedTurnOutcome — общий предикат с словом состояния, не второй словарь).
           <span
             data-testid={`lane-risk-${lane.key}-${i}`}
             aria-hidden="true"

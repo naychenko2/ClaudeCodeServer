@@ -150,29 +150,33 @@ internal sealed class TurnLaunchContextFactory
         ITurnEventBus? events, string cliConfigRoot, bool transcriptOnServer)
     {
         var persona = BuildPersonaLayer(session, ownerId);
-        var workspace = _external.BuildWorkspaceContext(ownerId, session.ProjectId, session.Id, persona.Persona);
+        // Сужение набора MCP слепком этапа (И5): свойство сессии, зафиксированное при её создании
+        var stageAllow = session.StageMcpAllow;
+        T? Gate<T>(string serverKey, T? context) where T : class =>
+            BuiltinMcpContexts.StageAllows(stageAllow, serverKey) ? context : null;
+        var workspace = Gate("wsp", _external.BuildWorkspaceContext(ownerId, session.ProjectId, session.Id, persona.Persona));
 
-        var widgetsMcp = _builtin.BuildWidgetsContext(ownerId, persona.Persona);
-        var watchMcp = _builtin.BuildWatchContext(ownerId);
-        var webSearchMcp = _builtin.BuildWebSearchContext(ownerId, persona.Persona);
-        var higgsfieldMcp = _builtin.BuildHiggsfieldContext(ownerId, persona.Persona);
-        var imageEditorMcp = _builtin.BuildImageEditorContext(ownerId, session);
-        var audioEditorMcp = _builtin.BuildAudioEditorContext(ownerId, session);
-        var videoEditorMcp = _builtin.BuildVideoEditorContext(ownerId, session);
-        var pluginsMcp = _builtin.BuildPluginsContext(ownerId, session);
-        var turnContextMcp = _builtin.BuildTurnContextContext(ownerId, session);
-        var localMediaMcp = _builtin.BuildLocalMediaContext(ownerId, session.ProjectId, persona.Persona);
-        var testsMcp = _builtin.BuildTestsContext(ownerId, session.ProjectId, persona.Persona);
-        var memoryMcp = persona.Memory ?? _builtin.BuildTeamMemoryContext(ownerId, session.ProjectId);
+        var widgetsMcp = Gate("widgets", _builtin.BuildWidgetsContext(ownerId, persona.Persona));
+        var watchMcp = Gate("watch", _builtin.BuildWatchContext(ownerId));
+        var webSearchMcp = Gate("websearch", _builtin.BuildWebSearchContext(ownerId, persona.Persona));
+        var higgsfieldMcp = Gate("higgsfield", _builtin.BuildHiggsfieldContext(ownerId, persona.Persona));
+        var imageEditorMcp = Gate("image-editor", _builtin.BuildImageEditorContext(ownerId, session));
+        var audioEditorMcp = Gate("audio-editor", _builtin.BuildAudioEditorContext(ownerId, session));
+        var videoEditorMcp = Gate("video-editor", _builtin.BuildVideoEditorContext(ownerId, session));
+        var pluginsMcp = Gate("plugins", _builtin.BuildPluginsContext(ownerId, session));
+        var turnContextMcp = Gate("turn-context", _builtin.BuildTurnContextContext(ownerId, session));
+        var localMediaMcp = Gate("local-media", _builtin.BuildLocalMediaContext(ownerId, session.ProjectId, persona.Persona));
+        var testsMcp = Gate("tests", _builtin.BuildTestsContext(ownerId, session.ProjectId, persona.Persona));
+        var memoryMcp = Gate("memory", persona.Memory ?? _builtin.BuildTeamMemoryContext(ownerId, session.ProjectId));
         var tasksMcp = _builtin.TasksMcpEnabled(ownerId, session, persona.Persona)
             ? _builtin.BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
         var notesMcp = _builtin.NotesMcpEnabled(ownerId, persona.Persona)
-            ? _builtin.BuildNotesContext(ownerId, session.ProjectId, persona.Persona) : null;
-        var personasMcp = _persona.BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona);
-        var notificationsMcp = _external.BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona);
-        var codeGraphMcp = _builtin.BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona);
-        var architectureMcp = _builtin.BuildArchitectureContext(ownerId, session.ProjectId, persona.Persona);
-        var difyMcp = _builtin.BuildDifyContext(ownerId);
+            ? Gate("notes", _builtin.BuildNotesContext(ownerId, session.ProjectId, persona.Persona)) : null;
+        var personasMcp = Gate("personas", _persona.BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona));
+        var notificationsMcp = Gate("notifications", _external.BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona));
+        var codeGraphMcp = Gate("codegraph", _builtin.BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona));
+        var architectureMcp = Gate("architecture", _builtin.BuildArchitectureContext(ownerId, session.ProjectId, persona.Persona));
+        var difyMcp = Gate("dify", _builtin.BuildDifyContext(ownerId));
         var hands = _builtin.HandsFor(session.ProjectId);
         // Материалы контекста и проверка локальности — по проекту, который нашёл вызывающий:
         // тот же GetById по session.ProjectId, что делал фасад (null — когда id нет или проекта нет).
@@ -204,7 +208,7 @@ internal sealed class TurnLaunchContextFactory
             BrowserEnabled: _builtin.BrowserEnabled(ownerId, persona.Persona),
             SystemPromptViaFile: SystemPromptViaFile,
             CliConfigRoot: cliConfigRoot,
-            ExternalMcpProvider: _external.BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona, session.Id),
+            ExternalMcpProvider: _external.BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona, session.Id, stageAllow),
             PersistSessions: _store.SaveSessions,
             EnqueueBypass: enqueueBypass,
             OrchestrationDone: BuildOrchestrationDone(session.Id),

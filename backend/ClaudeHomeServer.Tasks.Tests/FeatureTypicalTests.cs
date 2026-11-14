@@ -191,6 +191,62 @@ public class FeatureTypicalTests
         stats.Loops.P75.Should().Be(2.5);
     }
 
+    // И4 (D1b): ожидание «типичных» вычитает очередь фич, как таймлайн. Эпизод 10…70 мин, очередь
+    // 30…50 → net 40, а не 60. Мутация «не вычитать очередь» → 60 ≠ 40.
+    [Fact]
+    public void Typical_ЭпизодСОчередьюДаётNetМинуты()
+    {
+        FeatureTypical.ClearCache();
+        var tasks = new List<TaskItem>();
+        var journals = new Dictionary<string, FeatureJournalReadResult>();
+        foreach (var id in new[] { "a", "b", "c" })
+        {
+            tasks.AddRange(MergedFeature(id, "t5", "p1", 200, 1));
+            var j = JournalWithEpisodes(id, [(id, 10, 70)]);
+            j.Entries.Add(new FeatureJournalEntry
+            {
+                At = T0 + TimeSpan.FromMinutes(30), Kind = "held", TaskId = id, Reason = FeatureHoldReasons.Queue,
+            });
+            j.Entries.Add(new FeatureJournalEntry
+            {
+                At = T0 + TimeSpan.FromMinutes(50), Kind = "hold_cleared", TaskId = id,
+            });
+            journals[id] = j;
+        }
+        tasks.AddRange(MergedFeature("cur", "t5", "p1", 200, 1));
+        journals["cur"] = JournalWithWaiting("cur", 10);
+
+        var stats = FeatureTypical.Build(tasks, "t5", "p1", "cur", id => journals[id], NOW);
+
+        stats!.Waiting!.Median.Should().Be(40.0, "20 мин в очереди — не ожидание человека");
+    }
+
+    // И4 (D1b): waiting_cleared в ту же миллисекунду, что waiting, закрывает эпизод (≥, было >):
+    // нулевой эпизод не тянется до следующего cleared. Мутация «> вместо ≥» → 60 ≠ 0.
+    [Fact]
+    public void Typical_ClearedВМоментНачалаЗакрываетЭпизод()
+    {
+        FeatureTypical.ClearCache();
+        var tasks = new List<TaskItem>();
+        var journals = new Dictionary<string, FeatureJournalReadResult>();
+        foreach (var id in new[] { "a", "b", "c" })
+        {
+            tasks.AddRange(MergedFeature(id, "t6", "p1", 200, 1));
+            var j = JournalWithEpisodes(id, [(id, 10, 10)]);
+            j.Entries.Add(new FeatureJournalEntry
+            {
+                At = T0 + TimeSpan.FromMinutes(70), Kind = "waiting_cleared", TaskId = id,
+            });
+            journals[id] = j;
+        }
+        tasks.AddRange(MergedFeature("cur", "t6", "p1", 200, 1));
+        journals["cur"] = JournalWithWaiting("cur", 10);
+
+        var stats = FeatureTypical.Build(tasks, "t6", "p1", "cur", id => journals[id], NOW);
+
+        stats!.Waiting!.Median.Should().Be(0.0);
+    }
+
     // Две смерженные — null: шкалы сравнения нет.
     [Fact]
     public void Typical_ДвеСмерженныеNull()

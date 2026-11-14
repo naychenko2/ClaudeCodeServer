@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Check, GitBranch, ListChecks, ListEnd, ListX, Pause, Play, RotateCcw, Zap } from 'lucide-react';
+import { Check, GitBranch, ListChecks, ListEnd, ListX, MessageSquare, Pause, Play, RotateCcw, Zap } from 'lucide-react';
 import { C, R, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { refetchFeaturePage } from '../../lib/featurePage';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Button } from '../ui/Button';
+import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { alarmView } from '../chat/feature/featureTruthModel';
@@ -20,7 +21,9 @@ import type { FeatureRun, FeatureState, FeatureAttention, FeatureNow, FeatureQue
 import { api } from '../../lib/api';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 import { NavTargetButton } from './NavTargetButton';
-import { StatusTag, shortRunTagLabel, type FeatureRunTag } from './FeatureStatusTag';
+import { FeatureWorkflowConfirm } from './FeatureWorkflowConfirm';
+import { routeBlockState, runRouteKind } from './FeatureWorkflowConfirmModel';
+import { useTemplateName } from './FeatureProcessGraphSection';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { minutesSince } from './FeatureStatsBits';
 import { useNow } from '../../lib/useNow';
@@ -407,7 +410,6 @@ export interface FeaturePageToolbarProps {
   run: FeatureRun | null;
   feature: FeatureIndexFeature | null;
   isMobile: boolean;
-  tag: FeatureRunTag | null;
   // «Мерж…»: открыть общую модалку подтверждения (Ф6); undefined — без действия.
   onMerge?: () => void;
   // Гейт владельца для «Закрыть фичу» (F2) и «Возобновить» (F3): true — только
@@ -416,7 +418,7 @@ export interface FeaturePageToolbarProps {
   canClose?: boolean;
 }
 
-export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canClose }: FeaturePageToolbarProps) {
+export function FeaturePageToolbar({ run, feature, isMobile, onMerge, canClose }: FeaturePageToolbarProps) {
   const branch = feature?.branch ?? null;
   const keyChat = feature?.keySessionId ?? null;
   const epic = run?.epic ?? null;
@@ -549,13 +551,12 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   // старыми данными UI обязан пережить и то, и другое — hold важнее.
   const attention = run?.attention ?? null;
   const primary = featurePrimaryAction(attention, attentionPersonaName(attention));
-  const notStarted = run?.state === 'not_started';
   // «Мерж…» — только когда state === 'merge_pending'; никогда при merging/merged/closed.
   const mergePending = run?.state === 'merge_pending';
   const effectivePrimary = (primary?.kind === 'merge' && !mergePending) ? null : primary;
   // У фичи в очереди главной кнопки нет: «Снять паузу» там был бы запуском вне очереди без предупреждения.
   const holdAction: 'unpause' | 'start' | null = paused && !queued ? 'unpause' : draft ? 'start' : null;
-  const showPrimary = !isMobile && (holdAction != null || effectivePrimary != null || (notStarted && keyChat != null));
+  const showPrimary = !isMobile && (holdAction != null || effectivePrimary != null);
   // Название фичи для плашки «← к фиче {название}» в открытом чате — из пропов
   // компонента, как в блоке тревоги: переход в чат из шапки тоже пишет возврат (FS-FKEY).
   const featureTitle = run?.epic?.title ?? null;
@@ -570,10 +571,12 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
       onMerge?.();
       return;
     }
-    if (notStarted && keyChat) {
-      recordFeatureReturn(fid, { kind: 'chat', id: keyChat }, featureTitle);
-      void openChatById(keyChat);
-    }
+  };
+  // «Ключевой чат» (F09): отдельная кнопка, не главное действие; запись возврата — как у остальных переходов.
+  const openKeyChat = () => {
+    if (!keyChat) return;
+    recordFeatureReturn(fid, { kind: 'chat', id: keyChat }, featureTitle);
+    void openChatById(keyChat);
   };
 
   // Пункты ⋯: только существующие (ветки/эпика/ключевого чата нет — пункта нет).
@@ -653,27 +656,18 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
       onClick: () => void resumeClick(),
     });
   }
-  // Пункта «Открыть ключевой чат» здесь нет: ключевой чат открывается из вкладки «Чаты».
+  // На мобиле кнопки «Ключевой чат» в ряду нет (не лезет в 360) — пункт шторки; на десктопе — дубль кнопки.
+  if (keyChat) {
+    items.push({
+      key: 'key-chat',
+      icon: <MessageSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+      label: 'Открыть ключевой чат',
+      onClick: openKeyChat,
+    });
+  }
 
   return (
     <>
-      {tag && (
-        // На 360 тег не должен вытеснять название: показываем только тон-слово (без суффикса
-        // стадии «· Производство», полный текст — в title/aria), потолок обёртки 64 px; обёртка не сжимается (flex-shrink 0) —
-        // сжимается название, иначе в ряду 332 px слово тега схлопывалось до 0–17 px.
-        // Расчёт: 360 − поля 24 − «К списку» ~72 − глиф 14 − ⋯ 36 − зазоры 24 − тег 64 = 126 px
-        // названию (≥ 2 слов, хвост — многоточием). На десктопе — без изменений.
-        <span
-          title={isMobile ? tag.label : undefined}
-          style={isMobile ? { display: 'inline-flex', flexShrink: 0, maxWidth: TAG_MAX_W_MOBILE, overflow: 'hidden' } : { display: 'contents' }}
-        >
-          <StatusTag
-            tag={isMobile ? { ...tag, label: shortRunTagLabel(tag.label) } : tag}
-            testId="feature-page-status"
-            clip={isMobile}
-          />
-        </span>
-      )}
       {canPause && !isMobile && (
         <span data-testid="feature-page-pause-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
           <Button
@@ -701,7 +695,14 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
           >
             {holdAction === 'unpause' ? (holdBusy ? 'Снимаю паузу…' : 'Снять паузу')
               : holdAction === 'start' ? (holdBusy ? 'Запускаю…' : 'Запустить фичу')
-              : effectivePrimary ? effectivePrimary.label : 'Открыть ключевой чат'}
+              : effectivePrimary?.label}
+          </Button>
+        </span>
+      )}
+      {!isMobile && keyChat && (
+        <span data-testid="feature-page-key-chat-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
+          <Button size="xs" variant="ghost" dataTestId="feature-page-key-chat" onClick={openKeyChat}>
+            Ключевой чат
           </Button>
         </span>
       )}
@@ -1126,4 +1127,133 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
       </div>
     </div>
   );
+}
+
+// Подтверждение маршрута в шапке страницы (C3b): у эпика с предложением или подтверждённым
+// маршрутом — блок C2 в тихом режиме (рисуется, только когда нужен ответ человека или
+// «шаблон изменился»). Легаси-эпик (ни предложения, ни маршрута) — блока нет вовсе, каталог
+// шаблонов для него не запрашивается.
+export function hasWorkflowRoute(run: FeatureRun | null | undefined): boolean {
+  const epic = run?.epic;
+  return !!epic && routeBlockState(epic.routeRequired, epic.workflowProposal, epic.workflow) !== null;
+}
+
+// Состояния run, у которых маршрут уже не нужен: «Выбрать шаблон» у них бессмысленно.
+const ROUTE_FINISHED: readonly FeatureState[] = ['merged', 'closed'];
+
+// Легаси-строка показывается, пока фича жива: у влитой/закрытой выбирать шаблон поздно.
+export function showLegacyRouteRow(run: FeatureRun | null | undefined): boolean {
+  return !!run && runRouteKind(run.epic) === 'legacy' && !ROUTE_FINISHED.includes(run.state);
+}
+
+// Предложение ждёт человека (F08): есть предложение шаблона и подтверждённого маршрута нет.
+export function proposalAwaitsConfirm(run: FeatureRun | null | undefined): boolean {
+  return !!run && runRouteKind(run.epic) === 'proposal';
+}
+
+// Компактная строка шапки (макет P10/P12): тег, текст и одна кнопка раскрытия.
+function RouteHeaderRow({ testId, tone, tag, children, actionLabel, onAction, isMobile }: {
+  testId: string;
+  tone: 'plan' | 'neutral';
+  tag: string;
+  children: ReactNode;
+  actionLabel: string;
+  onAction: () => void;
+  isMobile: boolean;
+}) {
+  return (
+    <div
+      data-testid={testId}
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+        padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg, marginBottom: SP.md,
+        fontFamily: FONT.sans, fontSize: FS.sm, color: C.textPrimary,
+        background: tone === 'plan' ? C.planLight : C.bgWhite,
+        border: `1px solid ${tone === 'plan' ? C.planBorder : C.borderLight}`,
+      }}
+    >
+      <Badge tone={tone === 'plan' ? 'warning' : 'neutral'} size="xs">{tag}</Badge>
+      <span style={{ flex: '1 1 220px', minWidth: 0 }}>{children}</span>
+      <Button
+        variant={tone === 'plan' ? 'primary' : 'ghost'} size={isMobile ? 'sm' : 'xs'}
+        fullWidth={isMobile} style={isMobile ? { minHeight: 40 } : undefined}
+        dataTestId={`${testId}-action`} onClick={onAction}
+      >
+        {actionLabel}
+      </Button>
+    </div>
+  );
+}
+
+// Строка предложения: имя шаблона берётся из каталога (пока нет — id).
+function ProposalRow({ run, onOpen, isMobile }: { run: FeatureRun; onOpen: () => void; isMobile: boolean }) {
+  const proposal = run.epic?.workflowProposal ?? null;
+  const name = useTemplateName(proposal?.templateId, proposal?.scope, run.epic?.projectId ?? undefined);
+  const label = name || proposal?.templateId || 'шаблон';
+  return (
+    <RouteHeaderRow
+      testId="feature-page-route-proposal" tone="plan" tag="ждёт вас"
+      actionLabel="Посмотреть и подтвердить" onAction={onOpen} isMobile={isMobile}
+    >
+      Модель предлагает «{label}». Пока не подтвердите, исполнители не стартуют.
+    </RouteHeaderRow>
+  );
+}
+
+// Подтверждение маршрута в шапке: предложение — компактная строка, «Посмотреть и подтвердить»
+// раскрывает блок F03 (open держит страница: «Подтвердить» из области этапа открывает то же);
+// легаси — строка «старая фича» с «Выбрать шаблон»; прочие состояния — блок в тихом режиме.
+export function FeaturePageWorkflowConfirm({ run, featureId, projectId, isMobile, open = false, onOpen, onSheetClosed }: {
+  run: FeatureRun | null;
+  featureId: string;
+  projectId?: string;
+  isMobile: boolean;
+  open?: boolean;
+  onOpen?: () => void;
+  // Шторку «Маршрут фичи» закрыли — страница снимает флаг запроса на открытие (R-F05).
+  onSheetClosed?: () => void;
+}) {
+  if (!run) return null;
+  const block = (quiet: boolean) => (
+    <FeatureWorkflowConfirm
+      quiet={quiet}
+      featureId={featureId}
+      projectId={projectId}
+      proposal={run.epic?.workflowProposal ?? null}
+      confirmed={run.epic?.workflow ?? null}
+      routeRequired={run.epic?.routeRequired ?? null}
+      isMobile={isMobile}
+      sheetOpenRequest={open}
+      onSheetClosed={onSheetClosed}
+    />
+  );
+  // Мобила (F05): предложение — компактная строка блока и шторка «Маршрут фичи», а не ProposalRow.
+  if (proposalAwaitsConfirm(run) && isMobile) {
+    return <div data-testid="feature-page-workflow-confirm">{block(true)}</div>;
+  }
+  if (proposalAwaitsConfirm(run) && !open) {
+    return (
+      <div data-testid="feature-page-workflow-confirm">
+        <ProposalRow run={run} onOpen={() => onOpen?.()} isMobile={isMobile} />
+      </div>
+    );
+  }
+  if (showLegacyRouteRow(run)) {
+    return (
+      <div data-testid="feature-page-workflow-confirm">
+        {open ? (
+          <div style={{ marginBottom: SP.md }}>{block(false)}</div>
+        ) : (
+          <RouteHeaderRow
+            testId="feature-page-route-legacy" tone="neutral" tag="старая фича"
+            actionLabel="Выбрать шаблон" onAction={() => onOpen?.()} isMobile={isMobile}
+          >
+            Создана до шаблонов: маршрута нет, замеры приблизительные.
+          </RouteHeaderRow>
+        )}
+      </div>
+    );
+  }
+  if (!hasWorkflowRoute(run)) return null;
+  return <div data-testid="feature-page-workflow-confirm">{block(true)}</div>;
 }

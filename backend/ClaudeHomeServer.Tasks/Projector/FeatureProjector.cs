@@ -29,12 +29,16 @@ public sealed class FeatureProjector(TaskManager tasks)
     // только если в нём (fail-closed); null — снимка нет, все чаты null (как в BuildIndexCore).
     public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
-        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
-        => SlimRun(BuildCore(epic, featureTasks, now, sessions, modelResolver));
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
+        Func<string, string?>? personaName = null,
+        Func<TaskItem, IReadOnlyDictionary<string, string>?>? proposalPresence = null)
+        => SlimRun(BuildCore(epic, featureTasks, now, sessions, modelResolver, personaName, proposalPresence));
 
     internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
-        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
+        Func<string, string?>? personaName = null,
+        Func<TaskItem, IReadOnlyDictionary<string, string>?>? proposalPresence = null)
     {
         var nowUtc = now ?? DateTime.UtcNow;
         ArgumentNullException.ThrowIfNull(epic);
@@ -215,6 +219,27 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
+        // Конвейер: стадии в порядке жизненного цикла. Без подтверждённого маршрута
+        // (epic.Workflow == null) — фиксированный список легаси (W4-DES-B: «design» —
+        // необязательный этап после «cut»; без дизайн-задач — состояние skipped, на готовность
+        // не влияет). С маршрутом — этапы из графа epic.Workflow.Stages (G3, разрез 2 §1.7):
+        // вид стадии — по Role этапа, колонки — WorkflowGraph.Columns, состояния —
+        // WorkflowGraph.States; своей реализации «пройден ли этап» и «какой этап у задачи»
+        // здесь нет. Снятые маршрутом стадии в проекцию не попадают (решение Андрея,
+        // разрез workflow §3, шаг B5) — BuildStageDefs.
+        // Определения строятся ДО «Сейчас»: стадия задачи в Now — ключ стадии (RoleToStage),
+        // та же величина, что ключ стадии в run.Stages (FS-V1: одна «текущая стадия», R-G3);
+        // id этапа — в отдельном поле StageId.
+        // B11: «по решению» — только у предложенного (не подтверждённого) маршрута; Presence этапов
+        // берётся из шаблона предложения вызывающим (проектор шаблонов не видит), ключ — ключ стадии.
+        bool proposedRoute = epic.WorkflowProposal is not null && epic.Workflow is null;
+        var proposalPresenceByKey = proposedRoute ? proposalPresence?.Invoke(epic) : null;
+
+        var stageDefs = FilterProposalStages(
+            BuildStageDefs(epic, cut, design, plan, steps, reviews, qa, final, merge),
+            proposedRoute, proposalPresenceByKey);
+        var graph = epic.Workflow is { } confirmed ? confirmed.Stages : null;
+
         // «Сейчас»: только действительно идущие InProgress-задачи фичи (эпик + дочерние),
         // по убыванию ClaudeStartedAt. «Держатся» (ждёт человека / исполнитель встал) — не
         // «Сейчас» (дефект 4a241bee): их ловит Attention и ветки state выше, единое правило —
@@ -228,7 +253,14 @@ public sealed class FeatureProjector(TaskManager tasks)
             .Select(t => new FeatureNow
             {
                 TaskId = t.Id,
+                // Стадия задачи — ключ по таблице RoleToStage и для легаси, и для фичи с маршрутом
+                // (R-G3): та же величина, что ключ стадии в run.Stages и вторая половина
+                // CurrentStageOf. Роль задачи отображается в тот же ключ, что и роль её этапа
+                // (rework→prod = RoleToStage(step), consult→cut = RoleToStage(cut)).
                 Stage = FeatureTimeMath.RoleToStage(t.Role),
+                // Id этапа для различения параллельных этапов одного вида (R-G3) — отдельное поле,
+                // не через Stage. У легаси графа нет (ключ и есть id) — null; задача вне проекции — null.
+                StageId = graph is not null ? TaskStageId(graph, t) : null,
                 PersonaId = t.PersonaId,
                 StepRef = t.StepRef,
                 Title = t.Title,
@@ -286,71 +318,105 @@ public sealed class FeatureProjector(TaskManager tasks)
                 .Select(t => t.Id)
                 .ToList();
 
-        // Конвейер: стадии в порядке жизненного цикла. Порядок задаётся ЯВНЫМ списком,
-        // а не выводится из порядка кода (W4-DES-B): «design» — необязательный этап после
-        // «cut»; без дизайн-задач — состояние skipped, на готовность не влияет.
-        var stageDefs = new (string key, List<TaskItem> tasks)[]
+        // Состояния стадий (G3): у фичи с маршрутом — WorkflowGraph.States по DAG графа
+        // (done/active/pending/absent; активным этап делает ИДУЩАЯ по Status задача — держащая
+        // человека тоже InProgress, её ловит Attention, как в легаси). У легаси-фичи — прежние
+        // isDone/activeIndex (п.7 задачи, без изменений).
+        Dictionary<string, string>? graphStates = null;
+        string? readyId = null; // «готовая» стадия графа — только когда нигде нет активной, см. ниже
+        if (graph is not null)
         {
-            ("cut", cut),
-            ("design", design),
-            ("plan", plan),
-            ("prod", steps),
-            ("review", reviews),
-            ("qa", qa),
-            ("final", final is not null ? [final] : []),
-            ("merge", merge is not null ? [merge] : []),
-        };
-
-        // isDone[i]: стадия имеет ≥1 задачи И все они Done.
-        // Мерж done ТОЛЬКО при merge.Status == Done (финал зелёный, а мержа нет → мерж active).
-        bool[] isDone = stageDefs
-            .Select((_, i) => stageDefs[i].tasks.Count > 0
-                && stageDefs[i].tasks.All(t => t.Status == TaskItemStatus.Done))
-            .ToArray();
-
-        // activeIndex: ТЕКУЩАЯ стадия фичи — та же величина, что FeatureBrief.CurrentStageOf
-        // (FS-V1, разрез §2.1 П2): стадия первой ИДУЩЕЙ задачи, иначе — первая непройденная
-        // стадия с работой. До FS-V1 здесь жила только вторая половина, а brief.now и row.now0
-        // брали первую: два разных ответа на один вопрос, и Гант с шапкой расходились.
-        // nowList построен выше и пуст там, где идущих нет намеренно (пауза — W4-HOLD-D, гашение
-        // nowList в BuildCore), поэтому «первая идущая задача» здесь ровно та, что станет run.Now[0].
-        int activeIndex = -1;
-        if (nowList.Count > 0)
-        {
-            // Стадия идущей задачи — ключ из stageDefs (RoleToStage отдаёт только их). Задача без
-            // роли даёт «prod»: по ней активной может стать стадия без своих задач — тот же
-            // случай, что «фича дошла и ждёт следующую» ниже.
-            for (int i = 0; i < stageDefs.Length; i++)
+            // Вход States — задачи с id разрешённого этапа (G3): States читает только Stage.StageId
+            // слепка, а проектор распределяет и задачи без слепка (TaskStageId) — для них передаётся
+            // минимальная копия с resolved StageId (снимок стора не мутируется: Build — чистая
+            // функция). Поле Stage здесь — единственное, что States читает из TaskItem вместе
+            // со Status; копия намеренно тонкая, под сигнатуру G1.
+            var stateInput = new List<TaskItem>();
+            foreach (var def in stageDefs)
+                foreach (var t in def.tasks)
+                    if (t.Stage?.StageId == def.id) stateInput.Add(t);
+                    else stateInput.Add(new TaskItem { Id = t.Id, Status = t.Status, Stage = new StageSnapshot { StageId = def.id } });
+            graphStates = WorkflowGraph.States(graph, stateInput, epic.Workflow!.Skipped);
+            // «Готовый» этап (разрез 2 §1.7): если идущих задач нет нигде (ни одного active по графу),
+            // активен первый в топологическом порядке pending-этап, у которого все предшественники
+            // done: фича «дошла» и ждёт следующий этап — та же семантика, что «следующая после
+            // последней заполненной» в легаси (тест B5 «честный мерж» зелёный без правки ожиданий).
+            // absent в кандидаты не входит: «нет в трекере» — не «ждёт работы» (п.5).
+            if (!graphStates.Values.Contains(WorkflowGraph.StageStates.Active))
             {
-                if (stageDefs[i].key == nowList[0].Stage) { activeIndex = i; break; }
+                var doneByGraph = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var stage in graph)
+                {
+                    var st = graphStates[stage.Id];
+                    if (st == WorkflowGraph.StageStates.Done) { doneByGraph.Add(stage.Id); continue; }
+                    if (st == WorkflowGraph.StageStates.Pending && stage.After.All(doneByGraph.Contains))
+                    {
+                        readyId = stage.Id;
+                        break;
+                    }
+                }
             }
         }
-        if (activeIndex == -1)
+
+        bool[] isDone = [];
+        int activeIndex = -1;
+        if (graph is null)
         {
-            // Идущих задач нет.
-            // 1) Первая стадия, которая ИМЕТ задачи и НЕ пройдена (есть работа).
-            // 2) Если таких нет (все стадии с задачами пройдены) и merge не пройдена —
-            //    активной считается стадия СРАЗУ ПОСЛЕДНЕЙ стадии, у которой есть задачи
-            //    (все стадии с задачами пройдены, merge ещё нет): фича «дошла» до последней
-            //    заполненной стадии и ждёт следующую. Задач нет вообще (все стадии пусты) →
-            //    cut (Разрез) — фича ещё не стартовала. Честный мерж (финал принят, merge-задачи
-            //    нет) — частный случай: последняя с задачами = final → active = merge.
-            //    Ложного «Мерж · сейчас» нет: cut done + пусто дальше → plan, plan done + пусто → prod.
-            // 3) -1 — все стадии пройдены (merge done).
-            for (int i = 0; i < isDone.Length; i++)
+            // isDone[i]: стадия имеет ≥1 задачи И все они Done.
+            // Мерж done ТОЛЬКО при merge.Status == Done (финал зелёный, а мержа нет → мерж active).
+            isDone = stageDefs
+                .Select((_, i) => stageDefs[i].tasks.Count > 0
+                    && stageDefs[i].tasks.All(t => t.Status == TaskItemStatus.Done))
+                .ToArray();
+
+            // activeIndex: ТЕКУЩАЯ стадия фичи — та же величина, что FeatureBrief.CurrentStageOf
+            // (FS-V1, разрез §2.1 П2): стадия первой ИДУЩЕЙ задачи, иначе — первая непройденная
+            // стадия с работой. До FS-V1 здесь жила только вторая половина, а brief.now и row.now0
+            // брали первую: два разных ответа на один вопрос, и Гант с шапкой расходились.
+            // nowList построен выше и пуст там, где идущих нет намеренно (пауза — W4-HOLD-D, гашение
+            // nowList в BuildCore), поэтому «первая идущая задача» здесь ровно та, что станет run.Now[0].
+            if (nowList.Count > 0)
             {
-                if (!isDone[i] && stageDefs[i].tasks.Count > 0) { activeIndex = i; break; }
-            }
-            if (activeIndex == -1 && !isDone[^1])
-            {
-                int lastWithTasks = -1;
+                // Стадия идущей задачи — ключ из stageDefs (RoleToStage отдаёт только их). Задача без
+                // роли даёт «prod»: по ней активной может стать стадия без своих задач — тот же
+                // случай, что «фича дошла и ждёт следующую» ниже.
                 for (int i = 0; i < stageDefs.Length; i++)
-                    if (stageDefs[i].tasks.Count > 0) lastWithTasks = i;
-                activeIndex = lastWithTasks < 0 ? 0 : lastWithTasks + 1;
-                // Пустая необязательная «design» не может быть активной: активность
-                // уходит на следующую стадию (W4-DES-B).
-                if (stageDefs[activeIndex].key == "design" && stageDefs[activeIndex].tasks.Count == 0)
-                    activeIndex++;
+                {
+                    if (stageDefs[i].key == nowList[0].Stage) { activeIndex = i; break; }
+                }
+            }
+            if (activeIndex == -1)
+            {
+                // Идущих задач нет.
+                // 1) Первая стадия, которая ИМЕТ задачи и НЕ пройдена (есть работа).
+                // 2) Если таких нет (все стадии с задачами пройдены) и merge не пройдена —
+                //    активной считается стадия СРАЗУ ПОСЛЕДНЕЙ стадии, у которой есть задачи
+                //    (все стадии с задачами пройдены, merge ещё нет): фича «дошла» до последней
+                //    заполненной стадии и ждёт следующую. Задач нет вообще (все стадии пусты) →
+                //    cut (Разрез) — фича ещё не стартовала. Честный мерж (финал принят, merge-задачи
+                //    нет) — частный случай: последняя с задачами = final → active = merge.
+                //    Ложного «Мерж · сейчас» нет: cut done + пусто дальше → plan, plan done + пусто → prod.
+                // 3) -1 — все стадии пройдены (merge done).
+                for (int i = 0; i < isDone.Length; i++)
+                {
+                    if (!isDone[i] && stageDefs[i].tasks.Count > 0) { activeIndex = i; break; }
+                }
+                // isDone.Length == 0 — маршрут без стадий (пустой граф, битые данные): активной
+                // стадии нет, activeIndex остаётся -1 (список пуст, [^1] не брать).
+                if (activeIndex == -1 && isDone.Length > 0 && !isDone[^1])
+                {
+                    int lastWithTasks = -1;
+                    for (int i = 0; i < stageDefs.Length; i++)
+                        if (stageDefs[i].tasks.Count > 0) lastWithTasks = i;
+                    activeIndex = lastWithTasks < 0 ? 0 : lastWithTasks + 1;
+                    // Пустая необязательная «design» не может быть активной: активность
+                    // уходит на следующую стадию (W4-DES-B). В маршруте design может стоять
+                    // последней (порядок задаёт шаблон) — следующей стадии нет, остаёмся на
+                    // design: расчёт состояния даёт ей skipped, ложного «active» не будет.
+                    if (activeIndex + 1 < stageDefs.Length
+                        && stageDefs[activeIndex].key == "design" && stageDefs[activeIndex].tasks.Count == 0)
+                        activeIndex++;
+                }
             }
         }
 
@@ -362,11 +428,19 @@ public sealed class FeatureProjector(TaskManager tasks)
         var stages = new List<FeatureStage>(stageDefs.Length);
         for (int i = 0; i < stageDefs.Length; i++)
         {
-            var (key, tasks) = stageDefs[i];
+            var (key, id, role, lane, title, after, column, tasks) = stageDefs[i];
 
             // Состояние стадии.
             string state;
-            if (key == "design" && tasks.Count == 0)
+            if (graphStates is not null)
+            {
+                // Фича с маршрутом (G3): состояние — из WorkflowGraph.States по DAG (единственная
+                // реализация); «readyId» — исключение проекции «нет идущих нигде → ждём следующий
+                // этап» (разрез 2 §1.7), ставится вместо pending у первого готового этапа.
+                state = graphStates[id];
+                if (id == readyId) state = "active";
+            }
+            else if (key == "design" && tasks.Count == 0)
             {
                 // Необязательный «Дизайн» без задач: skipped — никогда не активна,
                 // на готовность фичи не влияет (W4-DES-B).
@@ -503,9 +577,51 @@ public sealed class FeatureProjector(TaskManager tasks)
                 };
             }).ToList();
 
+            // B01: данные узла графа процесса — только у фичи с маршрутом (graphStates), у легаси — пусто.
+            bool routed = graphStates is not null;
+            var personaIds = StagePersonaIds(tasks);
+            List<string> personaNames = !routed ? [] : personaIds
+                .Select(pid => personaName?.Invoke(pid))
+                .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n!).ToList();
+            string? waiting = null;
+            if (routed && state != "done")
+            {
+                if (tasks.Any(t => t.Status != TaskItemStatus.Done && t.AwaitingHumanSince is not null))
+                    waiting = "human";
+                else if (after.Count >= 2 && !tasks.Any(IsRunning)
+                    && after.Any(a => graphStates!.TryGetValue(a, out var ps) && ps is not ("done" or "skipped" or "absent")))
+                    waiting = "branches";
+            }
+            int stageReturns = routed ? tasks.Count(t => t.Role == TaskRoles.Rework) : 0;
+            FeatureStageSegments? taskSegments = routed && key == "prod" && tasks.Count > 1
+                ? new FeatureStageSegments
+                {
+                    Done = tasks.Count(t => t.Status == TaskItemStatus.Done),
+                    Running = tasks.Count(IsRunning),
+                    Total = tasks.Count,
+                }
+                : null;
+
             stages.Add(new FeatureStage
             {
+                PersonaNames = personaNames,
+                ElapsedMinutes = routed && firstStartedAt is not null ? approxMinutes : null,
+                Waiting = waiting,
+                Returns = stageReturns,
+                TaskSegments = taskSegments,
+                Line = routed && lane is "back" or "front" ? lane : null,
+                Proposed = epic.WorkflowProposal is not null && epic.Workflow is null,
+                ByDecision = ByDecisionOf(proposedRoute, proposalPresenceByKey, key),
                 Key = key,
+                // G3 (разрез 2 §1.7): id/роль/линия/предшественники/колонка — из графа маршрута;
+                // у легаси-стадии id = ключ, роль — роль её задач, After/Column пустые (графа нет).
+                Id = id,
+                Role = role,
+                Lane = lane,
+                // G7: имя — из замороженного RouteStage.Title; у легаси-стадии — null.
+                Title = title,
+                After = after,
+                Column = column,
                 State = state,
                 Tone = tone,
                 Passes = passes,
@@ -514,7 +630,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Rounds = stageRounds,
                 LongestStepRef = longestStepRef,
                 // Б5: исполнители, число задач и исход последней по времени закрытой задачи стадии.
-                PersonaIds = StagePersonaIds(tasks),
+                PersonaIds = personaIds,
                 TaskCount = tasks.Count,
                 Verdict = StageVerdict(tasks),
                 // Б2: границы, длительность (объединение интервалов), пересечение, исполнители.
@@ -538,6 +654,13 @@ public sealed class FeatureProjector(TaskManager tasks)
         var stepProgress = accounting.Progress;
         int stepsTotal = stepProgress.Total;
         int stepsAccepted = stepProgress.Accepted;
+
+        // Счётчик этапов «пройдено N из M» (G3, разрез 2 §1.7): отдельная ось от процента по
+        // шагам (StepProgress не трогается): M = число этапов подтверждённого маршрута (у легаси-
+        // фичи — 0: графа нет), N = стадии с состоянием done (active/pending/absent не входят).
+        int stagesTotal = graph?.Count ?? 0;
+        int stagesPassed = graphStates is not null ? stages.Count(s => s.State == "done") : 0;
+        var meta = BuildMeta(graphStates is not null ? stages : null);
 
         // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи
         // (время мержа — это CompletedAt merge-задачи, уже учтено).
@@ -646,6 +769,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             StepsAccepted = stepsAccepted,
             StepsTotal = stepsTotal,
             StepProgress = stepProgress,
+            StagesPassed = stagesPassed,
+            StagesTotal = stagesTotal,
             LastActivityAt = lastActivityAt,
             Quiet = quiet,
             Closed = closed,
@@ -655,7 +780,152 @@ public sealed class FeatureProjector(TaskManager tasks)
             // корзины: второй предикат «что такое хвост» не заводится, список только переносится.
             ClosedTailKeys = accounting.ClosedTailKeys,
             Tracker = tracker,
+        }.WithMeta(meta);
+    }
+
+    // B02: метастрока шапки. stages == null — легаси (графа нет). Снятые (skipped) этапы в
+    // знаменатель не входят; ветки = макс. число оставшихся этапов в одной колонке.
+    internal static FeatureRunMeta BuildMeta(IReadOnlyList<FeatureStage>? stages)
+    {
+        if (stages is null) return new FeatureRunMeta();
+        var live = stages.Where(s => s.State != "skipped").ToList();
+        int total = live.Count;
+        int done = live.Count(s => s.State == "done");
+        return new FeatureRunMeta
+        {
+            StagesDone = done,
+            StagesTotal = total,
+            ParallelBranches = total == 0 ? 1 : live.GroupBy(s => s.Column).Max(g => g.Count()),
+            ProgressPct = total == 0 ? 0 : (int)Math.Round(done * 100.0 / total, MidpointRounding.AwayFromZero),
+            Approx = false,
         };
+    }
+
+    // ─── G3 (разрез 2 §1.7): список стадий конвейера (B5, расширенный до графа) ────────────
+    // Без подтверждённого маршрута (epic.Workflow == null) — фиксированный список легаси
+    // (байт в байт к прежнему stageDefs): старые фичи не ломаются; новые поля легаси-стадии
+    // описывают существующую цепь: id = ключ, роль = роль её задач, After/Column пусты
+    // (графа нет). С маршрутом — стадии из графа Workflow.Stages в топологическом порядке.
+    // Вид стадии — по Role этапа (вердикт R-B5 (a): после G1 id этапа — не роль, и проверка id
+    // через StageRoles молча выбрасывала графовые этапы): ключ — ОДНА таблица
+    // FeatureTimeMath.RoleToStage (step → prod, остальные — собой), второй таблицы здесь нет;
+    // параллельные этапы одной роли имеют общий ключ и различаются Id/Column/After (граф C3a).
+    // Задачи распределяются по этапам: по слепку Stage.StageId, без слепка — WorkflowGraph.
+    // StageFor (TaskStageId); своей реализации «какой этап у задачи» здесь нет. Снятые маршрутом
+    // стадии в проекцию НЕ попадают (решение Андрея: пропуски в графе не показываем, данные о
+    // пропуске — в Workflow.Skipped). Роль вне StageRoles — вне проекции: валидатор шаблона
+    // (WorkflowRules.Validate) не пропускает её на записи, здесь — защита от битых данных.
+    // Повтор id этапа (битые данные) не даёт второй копии стадии (правило B5 «повтор роли →
+    // одна стадия prod»: в линейном маршруте id = роль, повтор роли = повтор id). Пустой граф —
+    // пустой список (проектор не падает; activeIndex для пустого списка — -1, см. BuildCore).
+    private static (string key, string id, string role, string? lane, string? title, List<string> after, int column,
+        List<TaskItem> tasks)[] BuildStageDefs(
+        TaskItem epic,
+        List<TaskItem> cut, List<TaskItem> design, List<TaskItem> plan, List<TaskItem> steps,
+        List<TaskItem> reviews, List<TaskItem> qa, TaskItem? final, TaskItem? merge)
+    {
+        var byKey = new Dictionary<string, List<TaskItem>>(StringComparer.Ordinal)
+        {
+            ["cut"] = cut,
+            ["design"] = design,
+            ["plan"] = plan,
+            ["prod"] = steps,
+            ["review"] = reviews,
+            ["qa"] = qa,
+            ["final"] = final is not null ? [final] : [],
+            ["merge"] = merge is not null ? [merge] : [],
+        };
+
+        // Подтверждённый маршрут читаем буквально: пустой (или null) граф — пустой
+        // конвейер, не откат к легаси: легаси — только отсутствие Workflow.
+        if (epic.Workflow is { } confirmed)
+        {
+            var route = confirmed.Stages;
+            var columns = WorkflowGraph.Columns(route);
+            // Задача → этап (разрез 2 §1.7): id этапа; null — роль вне графа, задача вне
+            // проекции (как раньше).
+            var stageIdByTask = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var bucket in byKey.Values)
+                foreach (var t in bucket)
+                    if (TaskStageId(route, t) is { } sid)
+                        stageIdByTask[t.Id] = sid;
+
+            var defs = new List<(string, string, string, string?, string?, List<string>, int, List<TaskItem>)>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var stage in route)
+            {
+                if (!WorkflowRules.StageRoles.Contains(stage.Role)) continue;
+                if (!seen.Add(stage.Id)) continue;
+                var key = FeatureTimeMath.RoleToStage(stage.Role);
+                // Имя — из RouteStage.Title (G7): из шаблона на лету не берём (И7).
+                defs.Add((key, stage.Id, stage.Role, stage.Lane, stage.Title, stage.After, columns[stage.Id],
+                    byKey[key].Where(t => stageIdByTask.TryGetValue(t.Id, out var tid) && tid == stage.Id).ToList()));
+            }
+            return defs.ToArray();
+        }
+
+        // Легаси: порядок жизненного цикла, «design» — необязательный этап после «cut» (W4-DES-B).
+        // Новые поля описывают существующую цепь: id = ключ, роль — роль задач стадии
+        // (TaskStageRole отображает её обратно); After/Column пусты — графа нет;
+        // имени нет — оно живёт только в маршруте (G7).
+        return new (string, string, string, string?, string?, List<string>, int, List<TaskItem>)[]
+        {
+            ("cut", "cut", TaskRoles.Cut, null, null, [], 0, cut),
+            ("design", "design", TaskRoles.Design, null, null, [], 0, design),
+            ("plan", "plan", TaskRoles.Plan, null, null, [], 0, plan),
+            ("prod", "prod", TaskRoles.Step, null, null, [], 0, steps),
+            ("review", "review", TaskRoles.Review, null, null, [], 0, reviews),
+            ("qa", "qa", TaskRoles.Qa, null, null, [], 0, qa),
+            ("final", "final", TaskRoles.Final, null, null, [], 0, byKey["final"]),
+            ("merge", "merge", TaskRoles.Merge, null, null, [], 0, byKey["merge"]),
+        };
+    }
+
+    // B11b: в графе ПРЕДЛОЖЕНИЯ стадии, выключенные в шаблоне (off), быть не должно — узел
+    // исчезает, а не просто теряет признак. Словарь ProposalPresence содержит ровно стадии
+    // шаблона предложения (off в него не входит), поэтому фильтр — по его ключам.
+    // Применяется только к предложению с непустым словарём: легаси-фича и подтверждённый
+    // маршрут словаря не имеют (словарь зовётся только при proposedRoute), их состав стадий
+    // не меняется. Пустой словарь — фильтр не включаем (шаблон не найден: оставляем как было).
+    private static (string key, string id, string role, string? lane, string? title, List<string> after, int column,
+        List<TaskItem> tasks)[] FilterProposalStages(
+        (string key, string id, string role, string? lane, string? title, List<string> after, int column,
+            List<TaskItem> tasks)[] stageDefs,
+        bool proposedRoute, IReadOnlyDictionary<string, string>? presenceByKey)
+        => proposedRoute && presenceByKey is { Count: > 0 }
+            ? stageDefs.Where(d => presenceByKey.ContainsKey(d.key)).ToArray()
+            : stageDefs;
+
+    // Роль для выбора этапа графа (G3): rework → step (как TaskManager.StageRoleOf),
+    // consult → cut (задача консультации относится к стадии «Разрез», как в таблице
+    // FeatureTimeMath.RoleToStage), feature/без роли — null (вне проекции).
+    private static string? TaskStageRole(string? role) => role switch
+    {
+        TaskRoles.Rework => TaskRoles.Step,
+        TaskRoles.Consult => TaskRoles.Cut,
+        _ => role is not null && WorkflowRules.StageRoles.Contains(role) ? role : null,
+    };
+
+    // Задача → этап (G3, разрез 2 §1.7): по слепку Stage.StageId; без слепка (задача создана до
+    // подтверждения) — WorkflowGraph.StageFor без исключения: проекция не роняет данные, которые
+    // стор мог содержать. Неоднозначность или неудачный выбор (битый слепок этапа, снятого
+    // маршрутом) — первый подходящий этап в порядке маршрута. Подходящих нет — null: задача
+    // вне проекции (как раньше).
+    // B11: true — этап шаблона предложения optional («по решению»), false — on; null — признака
+    // нет (легаси/подтверждённый маршрут, шаблон не найден, этапа с таким ключом в шаблоне нет).
+    private static bool? ByDecisionOf(bool proposedRoute, IReadOnlyDictionary<string, string>? presenceByKey, string key)
+        => proposedRoute && presenceByKey is not null && presenceByKey.TryGetValue(key, out var presence)
+            ? presence == WorkflowStagePresence.Optional
+            : null;
+
+    private static string? TaskStageId(IReadOnlyList<RouteStage> route, TaskItem t)
+    {
+        var role = TaskStageRole(t.Role);
+        if (role is null) return null;
+        var choice = WorkflowGraph.StageFor(route, role, t.Lane,
+            t.Stage?.StageId is { Length: > 0 } sid ? sid : null);
+        if (choice.Ok) return choice.StageId;
+        return route.FirstOrDefault(s => s.Role == role)?.Id;
     }
 
     // ─── Б1.2: лента событий фичи (волна 2 «Обзор фич», разрез §2) ─────────────────────────
@@ -939,7 +1209,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // облегчёнными копиями (Slim), вычисленные поля (стадии/цепочки/счётчики/«сейчас»/тревога)
     // передаются по ссылке — они уже вычислены по исходным задачам. Страница фичи (GetFeature)
     // сначала считает ленту событий (BuildEvents) по ПОЛНОМУ run, а в ответ run облегчает SlimRun.
-    internal static FeatureRun SlimRun(FeatureRun run) => new()
+    internal static FeatureRun SlimRun(FeatureRun run) => new FeatureRun
     {
         FeatureId = run.FeatureId,
         Epic = Slim(run.Epic),
@@ -973,6 +1243,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         StepsAccepted = run.StepsAccepted,
         StepsTotal = run.StepsTotal,
         StepProgress = run.StepProgress,
+        StagesPassed = run.StagesPassed,
+        StagesTotal = run.StagesTotal,
         LastActivityAt = run.LastActivityAt,
         Quiet = run.Quiet,
         Closed = run.Closed,
@@ -982,7 +1254,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         // обязан пережить облегчение (тот же смысл, что с PostMergeTails).
         ClosedTailKeys = run.ClosedTailKeys,
         Tracker = run.Tracker,
-    };
+    }.WithMeta(run.Meta);
 
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
 
@@ -1242,7 +1514,8 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Пересечение строгое (положительный нахлёст): касание «подряд» (конец одного = старт
     // другого) пересечением не считается.
     private static bool StageOverlapsActive(
-        int index, (string key, List<TaskItem> tasks)[] stageDefs, DateTime now)
+        int index, (string key, string id, string role, string? lane, string? title, List<string> after, int column,
+            List<TaskItem> tasks)[] stageDefs, DateTime now)
     {
         var selfEnd = StageLastCompletedAt(stageDefs[index].tasks);
         var selfIntervals = stageDefs[index].tasks
@@ -1294,7 +1567,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         => t.AwaitingHumanSince is not null || HasValidStopMark(t);
 
     // «Задача идёт»: InProgress и не held. Единая точка правды для run.now и stage.runningSince.
-    private static bool IsRunning(TaskItem t)
+    internal static bool IsRunning(TaskItem t)
         => t.Status == TaskItemStatus.InProgress && !IsHeld(t);
 
     // Б2: статус исполнителя из полей задачи. Приоритет: running (ход идёт сейчас —
@@ -1327,7 +1600,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner), null, sessions), owner);
+        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner), null, sessions, proposalPresence: tasks.ProposalPresence), owner);
     }
 
     // Одна фича по id эпика — ПОЛНЫЙ (необлегчённый) run: для страницы фичи (GetFeature).
@@ -1338,11 +1611,12 @@ public sealed class FeatureProjector(TaskManager tasks)
     // modelLabel/modelFull (оба маршрута GetFeatures/GetFeature — одна и та же функция).
     public FeatureRun? ProjectFull(string featureId, string ownerId,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
-        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
+        Func<string, string?>? personaName = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : WithQueue(BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver), owner);
+        return epic is null ? null : WithQueue(BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence), owner);
     }
 
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.
@@ -1351,12 +1625,13 @@ public sealed class FeatureProjector(TaskManager tasks)
     // modelResolver (Б4) — как в ProjectFull: одинаковые modelLabel/modelFull во всех ветвлениях.
     public IReadOnlyList<FeatureRun> ProjectAll(string ownerId,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
-        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
+        Func<string, string?>? personaName = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature)
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence))
             .ToList();
         ApplyQueue(runs, owner);
         return runs;
@@ -1371,7 +1646,8 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Пилюля показывает runs[0], поэтому порядок определяет бэк, фронт его не пересортирует.
     public IReadOnlyList<FeatureRun> ProjectForSession(string sessionId, string ownerId,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
-        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
+        Func<string, string?>? personaName = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         // Набор фич чата — из единого правила, не из локального фильтра по эпику.
@@ -1381,7 +1657,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             featureIds.UnionWith(links.Keys);
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature && featureIds.Contains(t.Id))
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence))
             .ToList();
         ApplyQueue(runs, owner);
         var ordered = OrderRuns(runs);

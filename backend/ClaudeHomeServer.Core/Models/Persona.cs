@@ -1,4 +1,6 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 
 namespace ClaudeHomeServer.Models;
@@ -100,6 +102,14 @@ public class Persona
     public string? SystemPrompt { get; set; }
     // Структурированный контракт (P1); null — legacy-режим с единым SystemPrompt
     public PersonaContract? Contract { get; set; }
+    // Слой секций промпта персоны поверх секций её специальности (разрез 2, §2.2, Г4): null —
+    // «всё как у специальности». Id — только из каталога SpecialtyPromptPresets; Enabled/Text
+    // наследуются попараметрно (PromptSectionOverlay.Apply). Пишется только через
+    // PersonaManager.Create/Update (нормализация там же); при реальной смене специальности
+    // сбрасывается целиком (§2.3). У Specialty=None слой хранится, но не действует: секций
+    // специальности нет. Аддитивное nullable-поле: старый personas.json читается без миграции,
+    // BackupSchema.Version не растёт (§2.5).
+    public List<PromptSectionOverride>? PromptSections { get; set; }
     // Модель CLI (алиас/id любого провайдера); null = дефолт сервера
     public string? Model { get; set; }
     // УСТАРЕЛО (15.08.2026, упрощение модели): уровень модели персоны выведен из цепочки
@@ -148,6 +158,37 @@ public class Persona
     public PersonaAccess Access { get; set; } = PersonaAccess.Full;
     // Свой список запрещённых инструментов — только при Access == Custom
     public List<string>? DisallowedTools { get; set; }
+    // Права (Access/Tools/DisallowedTools) наследуются от специальности: при true PersonaManager
+    // на каждой выдаче подставляет эффективный шаблон специальности, персистентные поля остаются
+    // материализованными (откат кода видит последнее значение). false — поля персоны это её override.
+    public bool InheritsAccess { get; set; }
+    // Маркер разовой миграции прав к наследованию (A1b): дата, когда миграция РЕШИЛА эту
+    // персону (значение совпало или нет — решение принято). Решённую миграция больше не
+    // пересматривает: иначе следующий пуск вернул бы «свои» права, выбранные человеком после
+    // миграции, или переписал бы наследование из-за изменившегося шаблона. Аддитивное
+    // nullable-поле: старый personas.json читается без правок (null — решения ещё нет)
+    public DateTime? InheritsAccessMigratedAt { get; set; }
+    // Когда при выключении наследования (true → false) права скопированы со специальности (B09).
+    // Хранимое поле: сбрасывается при повторном включении наследования. null — копии не было
+    // (персона «своя» с создания или до появления поля). Аддитивное nullable-поле.
+    public DateTime? AccessCopiedAt { get; set; }
+    // Число отличий копии прав от ТЕКУЩЕГО шаблона специальности (профиль, инструменты, запрещённые:
+    // 0..3) — поле ОТВЕТА, считает PersonaManager.Hydrate на копии, в personas.json не пишется.
+    // null — копии нет или шаблона нет (сравнивать не с чем).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? AccessDiffCount { get; set; }
+    // Версия набора секций специальности, которую человек видел последней (B09, хеш
+    // PersonaManager.SectionsVersion). Хранимое; null — базовая точка не отмечена, «изменено
+    // админом» не считается. Обновляется POST {id}/sections-seen.
+    public string? SectionsSeenVersion { get; set; }
+    // Поля ОТВЕТА (не хранятся, ставит Hydrate на копии, только при заданном SectionsSeenVersion):
+    // текущая версия набора и признак «админ менял секции специальности с момента SectionsSeenVersion».
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SectionsVersion { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ChangedByAdminSince { get; set; }
+    // Поверхностная копия: PersonaManager отдаёт её вместо записи кэша, когда подставляет права
+    public Persona ShallowCopy() => (Persona)MemberwiseClone();
     // Первое приветственное сообщение при открытии чата (опционально)
     public string? Greeting { get; set; }
     // Ключ каталога пантеона OmO (omo-sisyphus…), если персона подключена из него:
@@ -163,6 +204,15 @@ public class Persona
     // чья модель уходит в провайдер с облегчённым профилем, остальным false; в рантайме
     // null читается как false.
     public bool? LightContext { get; set; }
+    // Строка о побочном эффекте последней правки — только для ответа REST/MCP (разрез 2, §2.3):
+    // сейчас это единственный случай «свои секции промпта сброшены: сменилась специальность».
+    // Поле ОТВЕТА, не хранения: его ставит PersonasCrudService на копии для ответа (ShallowCopy),
+    // хранящаяся запись его не мутируется, поэтому в personas.json он не появляется
+    // (WhenWritingNull — форма старых записей не меняется, прецедент проецируемых полей TaskItem).
+    // Текст держит PersonaManager.PromptSectionsResetNotice — та же строка, что описывает саму
+    // мутацию: ответ и действие не разъедутся.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Notice { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

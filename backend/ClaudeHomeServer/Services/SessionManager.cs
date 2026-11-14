@@ -691,6 +691,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // дедлайн считается от него, если он позже последней активности.
     public Session? SetExpiry(string sessionId, int? minutes) => _settings.SetExpiry(sessionId, minutes);
 
+    // Сужение прав чата-исполнителя слепком этапа (И5): запреты инструментов и подмножество
+    // ключей MCP; вызывается один раз при создании сессии, до первого хода.
+    public Session? SetStageLimits(string sessionId, IReadOnlyList<string>? disallowedTools, IReadOnlyList<string>? mcpAllow) =>
+        _settings.SetStageLimits(sessionId, disallowedTools, mcpAllow);
+
     // Заморозить срок чата паузой фичи (W4-HOLD-E/J, хвост N): снимаемое значение сохраняется
     // в HoldFrozenExpiresAfterMinutes — возврат после снятия паузы восстанавливает срок самого
     // чата, а не задачи (R-HOLD-J п.3). Идемпотентна: повторная пауза той же записи не трогает

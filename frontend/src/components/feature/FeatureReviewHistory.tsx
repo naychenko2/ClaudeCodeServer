@@ -1,17 +1,13 @@
 // Секция «Хронология» вкладки «Разбор» (FS-FR6; записка docs/mockups/feature-page-simplify-v4-clickable.md
-// §2 «Гант этапов»/«Лента событий», §5 «6. Хронология»; в макете — секция rz-hist). Два блока:
-// дорожки этапов и ключевые события. Полной ленты, списков задач и чатов здесь нет (решение по v4).
-// Порядок: дорожки → события → подпись.
+// §2 «Гант этапов»/«Лента событий», §5 «6. Хронология»; в макете — секция rz-hist). С F18b
+// (docs/mockups/feature-workflows/materials-review-placement.html, M33) здесь только ключевые
+// события и подпись: по макету «Хронология» — лента событий без дорожек.
 //
-// Дорожки — та же модель и те же рендеры, что у вкладки «Хронология»: buildStageLanes
-// (FeatureLaneModel), ось FeatureLaneAxis, дорожки FeatureStageLane — вызовы повторены
-// как в FeatureTimelineTab, но без строк исполнителей, без раскрытия этапа и без поповеров:
-// здесь интервал — статичная картинка (interactive={false}), открывать в нём нечего.
-// Геометрия шкалы — та же, что у строки этапа: отступы оси — экспортируемые laneAxisInsets,
-// сетка строки строится из тех же отступов (колонка имени = левый отступ, колонка
-// длительности = правый, дорожка между ними) — ось лежит ровно над дорожкой (GC-F5cR).
-// Своей арифметики времени нет: длительность — lane.totalMinutes модели (когда есть
-// интервалы) или stage.approxMinutes бэка (когда их нет).
+// Дорожки этапов переехали в секцию «Время и срок» (M33): они экспортируются отсюда как
+// FeatureReviewStageLanes и подключаются в FeatureReviewTime. Модель и рендеры перенесены
+// целиком (buildStageLanes, FeatureLaneAxis, FeatureStageLane) — второй копии lane-модели
+// во фронте не заводим; компонент живёт в этом файле, здесь же и его тесты.
+// Порядок «Хронологии»: события → подпись.
 //
 // События — только из пропа events, отфильтрованные по ключевым видам (вердикты, остановки,
 // ожидания, мерж — записка §5 «6. Хронология»); строки — FeatureEventsTab, переходы через
@@ -42,27 +38,27 @@ const KEY_EVENT_KINDS: ReadonlySet<string> = new Set([
   'accepted', 'accepted_with_remarks', 'returned', 'stopped', 'waiting', 'merged', 'closed',
 ]);
 
-export interface FeatureReviewHistoryProps {
+export interface FeatureReviewStageLanesProps {
   run: FeatureRun;
   // Статистика страницы. null или approx (нет intervalsByStage) — шкалы нет: вместо дорожек
   // строка о журнале времени.
   stats: FeatureStats | null;
-  // Лента событий страницы (at desc) — единственный источник событий здесь.
-  events: FeatureEvent[];
-  // Общее число событий истории — для подписи внизу.
-  eventsTotal: number;
-  // Навигация строк событий (FeatureEventsTab): точка возврата, пометки «в архиве»/«закрыта».
-  featureId: string;
-  featureTitle?: string | null;
-  projectId?: string;
-  marks?: NavMarks;
   isMobile?: boolean;
 }
 
-export function FeatureReviewHistory({
-  run, stats, events, eventsTotal, featureId, featureTitle = null, projectId,
-  marks = EMPTY_NAV_MARKS, isMobile = false,
-}: FeatureReviewHistoryProps) {
+// Дорожки этапов для секции «Время и срок» (F18b; макет M33 «Время и срок · дорожки этапов»):
+// по одной строке на этап, в порядке run.stages (порядок жизненного цикла, своей сортировки
+// нет), ось времени — над ними. Вызовы те же, что у вкладки «Хронология» (FeatureTimelineTab),
+// но без строк исполнителей, без раскрытия этапа и без поповеров: здесь интервал — статичная
+// картинка (interactive={false}), открывать в нём нечего.
+// Геометрия шкалы — та же, что у строки этапа: отступы оси — экспортируемые laneAxisInsets,
+// сетка строки строится из тех же отступов (колонка имени = левый отступ, колонка
+// длительности = правый, дорожка между ними) — ось лежит ровно над дорожкой (GC-F5cR).
+// Своей арифметики времени нет: длительность — lane.totalMinutes модели (когда есть
+// интервалы) или stage.approxMinutes бэка (когда их нет).
+export function FeatureReviewStageLanes({
+  run, stats, isMobile = false,
+}: FeatureReviewStageLanesProps) {
   // «Сейчас» — тот же паттерн, что у «Хронологии» (FeatureTimelineTab.tsx:597): useNow(60_000);
   // дорожки и ось только читают это значение.
   const now = useNow(60_000);
@@ -81,9 +77,6 @@ export function FeatureReviewHistory({
   // Строки этапов в порядке run.stages (порядок жизненного цикла, своей сортировки нет).
   const laneStages = (run.stages ?? []).filter((s) => laneOf(s.key) !== null);
   const hasLanes = laneStages.length > 0;
-
-  // Ключевые события — только из пропа events, порядок бэка (at desc) сохраняется.
-  const keyEvents = useMemo(() => events.filter((e) => KEY_EVENT_KINDS.has(e.kind)), [events]);
 
   // «Сейчас» на оси — только у открытой фичи (тот же контракт, что FeatureTimelineTab.tsx:633-636).
   const finished = run.closed === true || run.state === 'merged' || run.state === 'closed';
@@ -122,13 +115,13 @@ export function FeatureReviewHistory({
   const metaStyle: CSSProperties = { fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap' };
 
   return (
-    <div ref={rootRef} data-testid="review-history" style={{ fontFamily: FONT.sans }}>
+    <div ref={rootRef} data-testid="review-stage-lanes" style={{ fontFamily: FONT.sans }}>
       {noScale ? (
-        <div data-testid="review-history-no-scale" style={{ fontSize: FS.sm, color: C.textMuted, padding: `${SP.sm}px 0` }}>
+        <div data-testid="review-stage-lanes-no-scale" style={{ fontSize: FS.sm, color: C.textMuted, padding: `${SP.sm}px 0` }}>
           Шкала появится, когда у фичи будет журнал времени
         </div>
       ) : hasLanes && axis ? (
-        <div data-testid="review-history-gantt">
+        <div data-testid="review-stage-lanes-gantt">
           {/* Ось времени над дорожками: отступы — та же геометрия, что у сетки строк (GC-F5cR). */}
           <FeatureLaneAxis
             axis={axis}
@@ -146,7 +139,7 @@ export function FeatureReviewHistory({
             return (
               <div
                 key={stage.key}
-                data-testid={`review-history-lane-${stage.key}`}
+                data-testid={`review-stage-lane-${stage.key}`}
                 style={isMobile
                   ? { paddingLeft: insets.left, paddingBottom: SP.lg }
                   : { display: 'grid', gridTemplateColumns: `${insets.left}px 1fr ${insets.right}px`, alignItems: 'center', paddingBottom: SP.lg }}
@@ -176,7 +169,46 @@ export function FeatureReviewHistory({
             );
           })}
         </div>
-      ) : null}
+      ) : (
+        // Журнал есть, дорожек нет: ни одна стадия не даёт строки (этапов нет или все
+        // absent). Пустое состояние с причиной, а не тишина (постановка F18b).
+        <div data-testid="review-stage-lanes-empty" style={{ fontSize: FS.sm, color: C.textMuted, padding: `${SP.sm}px 0` }}>
+          Дорожек этапов пока нет
+        </div>
+      )}
+    </div>
+  );
+}
+
+export interface FeatureReviewHistoryProps {
+  // run и stats с F18b здесь не читаются: дорожки — в FeatureReviewStageLanes (их подключает
+  // FeatureReviewTime). Пропы оставлены как есть: их передаёт вкладка FeatureReviewTab,
+  // а её правка — вне этого шага (F18a); снятие — там же.
+  run: FeatureRun;
+  // Статистика страницы. null или approx (нет intervalsByStage) — шкалы нет: вместо дорожек
+  // строка о журнале времени.
+  stats: FeatureStats | null;
+  // Лента событий страницы (at desc) — единственный источник событий здесь.
+  events: FeatureEvent[];
+  // Общее число событий истории — для подписи внизу.
+  eventsTotal: number;
+  // Навигация строк событий (FeatureEventsTab): точка возврата, пометки «в архиве»/«закрыта».
+  featureId: string;
+  featureTitle?: string | null;
+  projectId?: string;
+  marks?: NavMarks;
+  isMobile?: boolean;
+}
+
+export function FeatureReviewHistory({
+  events, eventsTotal, featureId, featureTitle = null, projectId,
+  marks = EMPTY_NAV_MARKS, isMobile = false,
+}: FeatureReviewHistoryProps) {
+  // Ключевые события — только из пропа events, порядок бэка (at desc) сохраняется.
+  const keyEvents = useMemo(() => events.filter((e) => KEY_EVENT_KINDS.has(e.kind)), [events]);
+
+  return (
+    <div data-testid="review-history" style={{ fontFamily: FONT.sans }}>
       {/* Ключевые события: строки FeatureEventsTab (переходы — через featureId/marks, без изменений).
           eventsTotal вкладке — длина отфильтрованного списка: полной ленты здесь нет и догружать
           нечего; свой fold (8 строк) вкладка делает по этой же длине. */}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Link, Plus, Search, Check as CheckIcon, SquarePen, CheckCircle2, Power, Trash2, Globe, Minimize2, Sparkles } from 'lucide-react';
-import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, PersonaBindingMode, PersonaBindingType, Project, ServerMessage, SkillSuggestion } from '../../types';
+import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, PersonaBindingMode, PersonaBindingType, Project, ServerMessage, SkillSuggestion, SpecialtyPromptSectionsCatalog } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
@@ -24,6 +24,8 @@ import { ToolTargetPicker } from './ToolTargetPicker';
 import { PluginTargetPicker } from './PluginTargetPicker';
 import { ownProjectId } from '../../lib/personaZone';
 import { canPersona, personaRole } from './personaRights';
+import { groupSkillBindings, skillsRowCount, specialtySkillNames, type SkillRowKind } from './personaBindingsModel';
+import { loadPromptSectionsCatalog, specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 
 // Вкладка «Умения» студии персоны (фича persona-bindings): карточки привязок
 // «источник + правило, когда им пользоваться». Семантика мгновенного сохранения
@@ -226,9 +228,35 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
 
   const list = bindings ?? [];
   // Кросс-проектные привязки живут в своей секции «Сотрудничество с другими проектами»
-  // (см. CROSS_PROJECT_TYPES) — остальные типы остаются в общем списке «Умения и правила»
+  // (см. CROSS_PROJECT_TYPES) — остальные типы группируются в три секции вкладки
+  // (personaBindingsModel, A3b): «От специальности» / «Свои» / «Подобраны ИИ под проект».
   const localBindings = list.filter(b => !CROSS_PROJECT_TYPES.includes(b.type));
   const crossBindings = list.filter(b => CROSS_PROJECT_TYPES.includes(b.type));
+
+  // ── Группировка вкладки «Умения» (A3b, макет P29–P37) ────────────────────────────
+  // Skill-профиль специальности берётся из каталога prompt-sections: его defaultBindings
+  // отдаются ЭФФЕКТИВНЫЕ вызывающему (SpecialtiesController.cs:52-54,82), тот же резолв,
+  // что у счётчика «не хватает типовых» и кнопки «Применить типовые». Каталог не загрузился
+  // или записи специальности нет — профиль пуст: «отключено вами» не опознаётся (своя
+  // off-запись останется в «Своих») — при неизвестном профиле фронт не обещает лишнего.
+  const hasSpecialty = !!persona.specialty && persona.specialty !== 'none';
+  const [promptCatalog, setPromptCatalog] = useState<SpecialtyPromptSectionsCatalog | null>(null);
+  useEffect(() => {
+    if (!hasSpecialty) return;
+    let alive = true;
+    loadPromptSectionsCatalog().then(c => { if (alive) setPromptCatalog(c); });
+    return () => { alive = false; };
+  }, [hasSpecialty]);
+  const specialtyCatalog = useSpecialtyCatalog();
+  const specialtyName = hasSpecialty ? specialtyLabel(specialtyCatalog, persona.specialty!) : '';
+  const skillGroups = useMemo(
+    () => groupSkillBindings(
+      localBindings,
+      specialtySkillNames(promptCatalog?.specialties?.[persona.specialty ?? '']?.defaultBindings),
+    ),
+    [localBindings, promptCatalog, persona.specialty],
+  );
+  const skillsCount = skillsRowCount(skillGroups);
 
   // Сводка по серверам личного MCP-реестра — каталог тот же, что у пикера инструментов
   // (статический + серверы владельца, ключи «mcp:»). Семантика читается по флагу
@@ -302,6 +330,51 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
     const cond = expandedId === b.id ? condDraft.trim() : b.condition;
     void putBinding(b, { mode, condition: cond });
   };
+
+  // ── «Отключить»/«Вернуть» унаследованное умение (A3b) ───────────────────────────
+  // «Отключить» — своя Skill-привязка с тем же именем и Mode=Off (бэк гасит ею
+  // унаследованную, A2), а не удаление — у наследника нечего удалять. «Вернуть» —
+  // удаление той своей off-записи: после него бэк снова отдаёт унаследованную строку.
+  // Guard по id умения (target, нижний регистр), а не по экземпляру строки: после
+  // «Отключить» строка становится «отключено вами» с другим id — guard по target
+  // покрывает оба состояния одного умения, и быстрый двойной клик даёт один запрос.
+  // Кнопки открыты только при mayBind (решение 12.11 из W4-FA1): редактору и читателю
+  // привязки не меняются вовсе.
+  const skillReq = useRef(new Map<string, string>()); // target(lower) → personaId запроса
+  const [busySkill, setBusySkill] = useState<string | null>(null);
+  // Ответ запроса прежней персоны игнорируется: список новой перечитывает её собственный
+  // load (эффект на persona.id), а не чужий опоздавший ответ.
+  const personaIdRef = useRef(persona.id);
+  useEffect(() => { personaIdRef.current = persona.id; }, [persona.id]);
+  // Диалог подтверждения возврата: «Вернуть» снимает персональное отключение —
+  // подтверждение нужно, чтобы случайный клик не вернул умение, которое гасили намеренно
+  // (тот же путь, что у ConfirmDialog пресета «Минимум»).
+  const [returnConfirm, setReturnConfirm] = useState<PersonaBinding | null>(null);
+
+  const runSkillRequest = async (target: string, run: () => Promise<unknown>, failText: string) => {
+    const key = target.toLowerCase();
+    if (skillReq.current.has(key)) return;
+    skillReq.current.set(key, persona.id);
+    setBusySkill(key);
+    const pid = persona.id;
+    try {
+      await run();
+      if (personaIdRef.current === pid) await load();
+    } catch (e) {
+      showToast('Умения', e instanceof Error ? e.message : failText);
+    } finally {
+      skillReq.current.delete(key);
+      setBusySkill(cur => (cur === key ? null : cur));
+    }
+  };
+
+  const disableInherited = (b: PersonaBinding) => runSkillRequest(b.target, () =>
+    api.personas.addBinding(persona.id, {
+      type: 'skill', target: b.target, condition: b.condition, mode: 'off',
+    }), 'Не удалось отключить умение.');
+
+  const returnSkill = (b: PersonaBinding) => runSkillRequest(b.target, () =>
+    api.personas.removeBinding(persona.id, b.id), 'Не удалось вернуть умение.');
 
   const remove = async (b: PersonaBinding) => {
     try {
@@ -571,26 +644,37 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
     setPanel({ step: type ? 2 : 1, type, condition: '', mode: 'auto' });
   };
 
-  // Карточка одной привязки — общая для секции «Умения и правила» и секции
-  // «Сотрудничество с другими проектами» (обе используют один и тот же список бindings)
-  const renderBindingCard = (b: PersonaBinding) => {
+  // Карточка одной привязки — общая для всех секций вкладки и секции
+  // «Сотрудничество с другими проектами». kind — состояние строки по группировке
+  // (personaBindingsModel): оно диктует пометку и кнопки (сверка §2.4 п.6 —
+  // «Отключить»/«Вернуть» по состоянию строки): 'inherited' — «Отключить»;
+  // 'disabledByYou' — пунктир, зачёркнутое имя, «Вернуть»; 'disabledBySpecialty' —
+  // пунктир и пометка без кнопок (выбор админа для всех, не этой персоны);
+  // 'own'/'copy' — «×» и меню; 'cross' — кросс-проектная секция, как прежде (меню,
+  // без «×» — эта секция этой задачей не менялась).
+  const renderBindingCard = (b: PersonaBinding, kind: 'own' | 'copy' | 'cross' | SkillRowKind = 'own') => {
     // Гейт по роли (W3-F1f + решение 12.11 из W4-FA1): карточку может менять только тот,
     // у кого открыто право bindingWrite (owner / без роли); редактору и читателю — никаких
-    // привязок. Нередактируемая этому человеку карточка не раскрывается (в раскрытом теле
-    // живут textarea условия, переключатель режима и «Удалить привязку») и не имеет меню «⋯».
-    // Сама карточка и её режим остаются видимыми — право Read; порядок списка не меняется.
-    const editable = mayBind;
+    // привязок. Унаследованные строки править нечем; «отключено вами» — своя off-запись,
+    // она редактируется как своя. Нередактируемая этому человеку карточка не раскрывается
+    // (в раскрытом теле живут textarea условия, переключатель режима и «Удалить привязку»)
+    // и не имеет меню «⋯». Сама карточка и её режим остаются видимыми — право Read;
+    // порядок списка не меняется.
+    const offd = kind === 'disabledByYou' || kind === 'disabledBySpecialty';
+    const ownRecord = kind === 'own' || kind === 'copy' || kind === 'cross' || kind === 'disabledByYou';
+    const editable = ownRecord && mayBind;
     const open = editable && expandedId === b.id;
-    const dim = b.mode === 'off' && !open;
+    const dim = (b.mode === 'off' && !open) || kind === 'disabledBySpecialty';
     const flashing = flashIds.has(b.id);
+    const busy = busySkill === b.target.toLowerCase();
     return (
       <div
-        key={b.id}
+        key={kind === 'inherited' || kind === 'disabledBySpecialty' ? `inherited:${b.target}` : b.id}
         onMouseEnter={editable ? () => setHoveredId(b.id) : undefined}
         onMouseLeave={editable ? () => setHoveredId(h => h === b.id ? null : h) : undefined}
         style={{
-          background: flashing ? C.accentLight : C.bgWhite,
-          border: `1px solid ${open || hoveredId === b.id ? accent : C.border}`,
+          background: flashing ? C.accentLight : offd ? 'transparent' : C.bgWhite,
+          border: offd ? `1px dashed ${C.dashed}` : `1px solid ${open || hoveredId === b.id ? accent : C.border}`,
           borderRadius: R.xl, padding: '10px 14px',
           transition: 'border-color 0.15s, background 0.6s',
         }}
@@ -602,19 +686,59 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
         >
           <BindingTypeIcon type={b.type} dim={dim} />
           <div style={{ flex: 1, minWidth: 0, opacity: dim ? 0.55 : 1 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>{labelOf(b)}</div>
+            <div style={{
+              fontSize: 13.5, fontWeight: 600,
+              color: offd ? C.textMuted : C.textHeading,
+              textDecoration: offd ? 'line-through' : undefined,
+            }}>{labelOf(b)}</div>
             {b.condition ? (
               <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {b.condition}
               </div>
-            ) : (
+            ) : !offd && (
               <div style={{ fontSize: 12, color: C.textMuted, fontStyle: 'italic', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 Всегда под рукой — условие не задано
               </div>
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <BindingModeBadge mode={b.mode} />
+            {(kind === 'inherited' || kind === 'disabledBySpecialty') && (
+              <span style={{
+                fontSize: 11, fontWeight: 600, color: C.textMuted, background: C.bgPanel,
+                borderRadius: R.md, padding: '2px 8px', whiteSpace: 'nowrap',
+              }}>{kind === 'inherited' ? 'от специальности' : 'выключено специальностью'}</span>
+            )}
+            {kind === 'disabledByYou' && (
+              <span style={{
+                fontSize: 11, fontWeight: 600, color: C.warningText, background: C.warningBg,
+                borderRadius: R.md, padding: '2px 8px', whiteSpace: 'nowrap',
+              }}>отключено вами</span>
+            )}
+            {!offd && <BindingModeBadge mode={b.mode} />}
+            {kind === 'inherited' && mayBind && (
+              <Button variant="ghost" size={isMobile ? 'md' : 'sm'} disabled={busy}
+                onClick={() => void disableInherited(b)}>Отключить</Button>
+            )}
+            {kind === 'disabledByYou' && mayBind && (
+              <Button variant="ghost" size={isMobile ? 'md' : 'sm'} disabled={busy}
+                onClick={() => setReturnConfirm(b)}>Вернуть</Button>
+            )}
+            {/* «×» — убрать свою привязку (свои и «подобраны ИИ»): тот же путь удаления,
+                что у меню «⋯» (askDelete: повторный клик подтверждает). На мобиле —
+                всегда виден, на десктопе — по ховеру или в состоянии подтверждения. */}
+            {editable && !open && (kind === 'own' || kind === 'copy') && (
+              <button
+                onClick={e => { e.stopPropagation(); askDelete(b); }}
+                aria-label="Убрать"
+                title="Убрать"
+                style={{
+                  width: isMobile ? 36 : 28, height: isMobile ? 36 : 28, border: 'none',
+                  background: 'transparent', borderRadius: R.md, cursor: 'pointer',
+                  color: confirmDelId === b.id ? C.dangerText : C.textMuted, fontSize: 16, lineHeight: 1,
+                  visibility: isMobile || hoveredId === b.id || confirmDelId === b.id ? 'visible' : 'hidden',
+                }}
+              >×</button>
+            )}
             {editable && !open && (
               <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
                 <button
@@ -708,12 +832,16 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
         padding: isMobile ? '20px 16px 32px' : '26px 32px 40px',
         display: 'flex', flexDirection: 'column', gap: 0, fontFamily: FONT.sans,
       }}>
-        {/* Заголовок секции + счётчик + подзаголовок */}
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-          <SectionLabel>Умения и правила</SectionLabel>
-          <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
-            {bindings === null ? 'загрузка…' : bindingsCounter(localBindings)}
-          </span>
+        {/* Заголовок вкладки: «Умения N» — N фактическое число строк трёх секций
+            (сверка §2.4 п.2: по факту, не «7» из макета). «+ Умение» — та же панель
+            добавления, что кнопка под списком (openAdd); по решению 12.11 она открыта
+            только владельцу (mayBind). Кросс-проектные привязки — в своей секции,
+            в этот счётчик не входят. */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <SectionLabel>Умения{bindings !== null ? ` ${skillsCount}` : ''}</SectionLabel>
+          {mayBind && bindings !== null && (
+            <Button variant="ghost" size="sm" onClick={() => openAdd()}>+ Умение</Button>
+          )}
         </div>
         <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.5, marginTop: 4 }}>
           Что персона знает и умеет — и когда этим пользоваться. Изменения сохраняются сразу.
@@ -856,11 +984,82 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
           </div>
         )}
 
-        {/* Карточки привязок */}
-        {localBindings.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
-            {localBindings.map(renderBindingCard)}
+        {/* ── Секции вкладки «Умения» (A3b, макет P29–P37) ─────────────────────── */}
+
+        {/* Без специальности типовых умений нет — только свои (макет, состояние «none») */}
+        {bindings !== null && !error && !hasSpecialty && (
+          <div style={{ marginTop: 14, fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
+            Без специальности типовых умений нет — только свои.
           </div>
+        )}
+
+        {/* Секция «От специальности»: унаследованные строки, «отключено вами» и
+            «выключено специальностью». Строки рисуются и когда специальность персоны
+            не задана: что вернул бэк (старые данные, снятая роль) надо показать и
+            дать «Отключить». Пустая секция при непустом списке — честно: у этой
+            роли типовых нет; при пустом списке всю картину объясняет empty-state ниже */}
+        {bindings !== null && !error && skillGroups.fromSpecialty.length > 0 && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+              <SectionLabel>{hasSpecialty ? `От специальности «${specialtyName}»` : 'От специальности'}</SectionLabel>
+              <SectionTag>наследуются</SectionTag>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              {skillGroups.fromSpecialty.map(row => renderBindingCard(row.b, row.kind))}
+            </div>
+            {hasSpecialty && (
+              <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.5, marginTop: 8 }}>
+                Новое умение специальности появится у {persona.name} само. «Отключить» гасит
+                умение только у неё: оно остаётся в списке с пометкой «отключено вами», и
+                «Вернуть» включает его обратно. «Выключено специальностью» — пометка админа
+                для всех; у персоны кнопки нет, вернуть можно только в самой специальности.
+              </div>
+            )}
+          </>
+        )}
+        {bindings !== null && !error && hasSpecialty && skillGroups.fromSpecialty.length === 0 && localBindings.length > 0 && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+              <SectionLabel>От специальности «{specialtyName}»</SectionLabel>
+              <SectionTag>наследуются</SectionTag>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12.5, color: C.textMuted }}>
+              У этой специальности типовых умений нет.
+            </div>
+          </>
+        )}
+
+        {/* Секция «Свои» — свои навыки (несовпавшие с профилем, включая навыки
+            плагинов) и свои инструменты: возможности самой персоны */}
+        {bindings !== null && !error && skillGroups.own.length > 0 && (
+          <>
+            <SectionLabel style={{ marginTop: 22 }}>Свои</SectionLabel>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              {skillGroups.own.map(b => renderBindingCard(b, 'own'))}
+            </div>
+          </>
+        )}
+
+        {/* Секция «Подобраны ИИ под проект» — копии данных проекта (разрез 12.11 §2:
+            «проектные, наследовать нечего»), с тегом и «×» удаления; «Подобрать ещё»
+            — тот же AI-подбор, что «✨ Подобрать автоматически» */}
+        {bindings !== null && !error && skillGroups.projectCopies.length > 0 && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 22 }}>
+              <SectionLabel>Подобраны ИИ под проект</SectionLabel>
+              <SectionTag>копия, не наследуются</SectionTag>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              {skillGroups.projectCopies.map(b => renderBindingCard(b, 'copy'))}
+            </div>
+            {mayBind && (
+              <div style={{ marginTop: 12 }}>
+                <Button variant="ghostAccent" size="sm" onClick={runSuggest}>
+                  Подобрать ещё под проект
+                </Button>
+              </div>
+            )}
+          </>
         )}
 
         {/* Кнопки под списком (скрыты, пока открыта панель добавления/подбор/ввод описания).
@@ -926,7 +1125,7 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-                {crossBindings.map(renderBindingCard)}
+                {crossBindings.map(b => renderBindingCard(b, 'cross'))}
               </div>
             )}
           </div>
@@ -1158,6 +1357,21 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
             confirmVariant="danger"
             onConfirm={applyMinimal}
             onCancel={() => setMinimalConfirm(false)}
+          />
+        )}
+
+        {returnConfirm && (
+          <ConfirmDialog
+            title={`Вернуть «${labelOf(returnConfirm)}»?`}
+            subtitle={
+              <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
+                Отключение снимается: умение снова придёт от специальности «{specialtyName}» и будет
+                меняться вместе с ней. Отключить его можно снова — в любой момент.
+              </div>
+            }
+            confirmLabel="Вернуть"
+            onConfirm={async () => { await returnSkill(returnConfirm); setReturnConfirm(null); }}
+            onCancel={() => setReturnConfirm(null)}
           />
         )}
       </div>
@@ -1701,6 +1915,17 @@ function AddBindingButton({ onClick }: { onClick: () => void }) {
       <Plus size={14} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
       Добавить привязку
     </button>
+  );
+}
+
+// Тег секции («наследуются», «копия, не наследуются») — тот же приглушённый тег,
+// что у строки «от специальности»
+function SectionTag({ children }: { children: string }) {
+  return (
+    <span style={{
+      fontSize: 11, fontWeight: 600, color: C.textMuted, background: C.bgPanel,
+      borderRadius: R.md, padding: '2px 8px', whiteSpace: 'nowrap',
+    }}>{children}</span>
   );
 }
 

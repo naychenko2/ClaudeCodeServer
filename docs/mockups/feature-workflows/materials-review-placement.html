@@ -379,7 +379,7 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
 </style>
 <script>
 // Рёбра графа: пересчёт по раскладке. Соседние уровни — кривая из края в край; ребро через уровень
-// (например «Проверка плана» → «Проверка») идёт обходом: под графом в горизонтали, справа в вертикали.
+// (например «Проверка плана» → «QA») идёт обходом: под графом в горизонтали, справа в вертикали.
 // Вертикаль: прямая из центра в центр, только если между узлами никого нет; иначе — дуга слева.
 (function(){
   const NS = 'http://www.w3.org/2000/svg';
@@ -449,11 +449,11 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
         <div class="tb"><button class="back">‹ Фичи</button><span class="sp"></span><button class="btn xs ghost d-only">Ключевой чат</button><button class="ib" title="Ещё">⋯</button></div>
         <div class="scroll">
           <div class="fh">
-            <div class="row wrap"><span class="tag info">в работе</span><span class="inh">эпик a149e308 · 12.11</span><span class="sp"></span><span class="inh d-only">4 из 10 этапов · 2 ветки параллельно · ≈ 7 ч до финала</span></div>
+            <div class="row wrap"><span class="tag info">в работе</span><span class="inh">эпик a149e308 · 12.11</span><span class="sp"></span><span class="inh d-only" data-show="st:route">4 из 10 этапов · 2 ветки параллельно · ≈ 7 ч до финала</span></div>
             <h2 class="ftitle">Процессы фичи: шаблоны и наследование</h2>
-            <div class="pb" style="margin-top:var(--sp-sm)"><i style="width:52%"></i></div>
-            <div class="hrow" data-show="st:route"><span class="tag ok">✓ маршрут</span><span class="sec grow ell">Параллельный цикл v1 · подтвердил Андрей 12.11</span><button class="btn xs ghost">Почему так</button></div>
-            <div class="hrow" data-show="st:legacy"><span class="tag">старая фича</span><span class="sec grow">Создана до шаблонов: маршрута нет, страница как раньше.</span><button class="btn xs ghost">Выбрать шаблон</button></div>
+            <div class="pb" style="margin-top:var(--sp-sm)" data-show="st:route"><i style="width:40%"></i></div>
+            <div class="hrow" data-show="st:route"><span class="tag ok">✓ маршрут</span><span class="sec grow ell">Параллельный цикл v1 · подтвердил человек</span><button class="btn xs ghost">Почему так</button></div>
+            <div class="hrow" data-show="st:legacy"><span class="tag">старая фича</span><span class="sec grow"><b>Маршрута ещё нет.</b> Создана до шаблонов: страница как раньше, графа нет.</span><button class="btn xs ghost">Выбрать шаблон</button></div>
           </div>
 
           <!-- ===== полоса вкладок сверху: вариант A и легаси ===== -->
@@ -477,11 +477,11 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
                 <button class="node done" data-n="qa-plan" data-id="qa-plan" data-after="design" data-go="f:one"><span class="nn"><span class="ico">✓</span>Проверка плана <span class="role">qa</span></span><span class="nm">Вера · 25 мин</span></button>
               </div>
               <div class="lv par"><span class="pl">⇉ параллельно</span>
-                <button class="node act" data-n="steps" data-id="step-back" data-after="plan" data-go="tab:stage"><span class="cnt s ret" title="Один возврат на доработку">↺1</span><span class="nn"><span class="ico"></span>Шаги <span class="lane">бэк</span></span><span class="nm">Тимур, Денис · 2/3</span></button>
+                <button class="node act" data-n="steps" data-id="step-back" data-after="plan" data-go="tab:stage"><span class="cnt s ret" title="Один возврат на доработку">↺1</span><span class="nn"><span class="ico"></span>Шаги <span class="lane">бэк</span></span><span class="nm">Тимур, Денис · 2/3 · ◐ вопрос</span></button>
                 <button class="node act" data-n="steps-f" data-id="step-front" data-after="plan" data-go="tab:stage"><span class="nn"><span class="ico"></span>Шаги <span class="lane">фронт</span></span><span class="nm">Полина · 1/2</span></button>
               </div>
-              <div class="lv"><button class="node hum" data-n="review" data-id="review"><span class="nn"><span class="ico"></span>Ревью</span><span class="nm">ждёт вас</span></button></div>
-              <div class="lv"><button class="node todo" data-n="qa" data-id="qa" data-after="review qa-plan"><span class="nn"><span class="ico"></span>Проверка <span class="role">qa</span></span><span class="nm">Вера</span></button></div>
+              <div class="lv"><button class="node todo" data-n="review" data-id="review"><span class="nn"><span class="ico"></span>Ревью</span><span class="nm">ждёт ветки</span></button></div>
+              <div class="lv"><button class="node todo" data-n="qa" data-id="qa" data-after="review qa-plan"><span class="nn"><span class="ico"></span>QA <span class="role">qa</span></span><span class="nm">Вера</span></button></div>
               <div class="lv"><button class="node todo" data-n="final" data-id="final"><span class="nn"><span class="ico"></span>Финал</span><span class="nm">Александр</span></button></div>
               <div class="lv"><button class="node todo" data-n="merge" data-id="merge"><span class="nn"><span class="ico"></span>Слияние</span><span class="nm">Марк</span></button></div>
             </div>
@@ -595,7 +595,7 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
                 </div>
                 <div class="fone">
                   <div class="ev"><span class="tm">12.11 19:05</span><span class="grow">Майя сдала макеты · принято</span></div>
-                  <div class="ev"><span class="tm">12.11 18:53</span><span class="grow">Андрей ответил на вопрос о финале</span></div>
+                  <div class="ev"><span class="tm">12.11 18:53</span><span class="grow">Человек ответил на вопрос о финале</span></div>
                   <div class="ev"><span class="tm">12.11 17:00</span><span class="grow">Майя взяла задачу c1a597af</span></div>
                 </div>
               </div>

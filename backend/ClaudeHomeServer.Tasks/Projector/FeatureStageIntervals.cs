@@ -19,9 +19,6 @@ internal static class FeatureStageIntervals
     // конца предыдущего — это один интервал (зазор — работа этапа, не простой).
     internal static readonly TimeSpan GlueGap = TimeSpan.FromMinutes(2);
 
-    // Исходы, которыми интервал «заканчивается» (LastOutcome): этап оборвался на них.
-    private static readonly HashSet<string> BadOutcomes = ["cancelled", "interrupted", "error"];
-
     // Промежуток до склейки: закрытый ход или живой хвост (Turn null у хвоста).
     private sealed record Raw(DateTime From, DateTime To, string TaskId, bool Live, StageTurn? Turn);
 
@@ -57,15 +54,29 @@ internal static class FeatureStageIntervals
         foreach (var t in AllTasks(run))
             if (t.Id is not null) stageByTask[t.Id] = FeatureTimeMath.RoleToStage(t.Role);
 
-        // Промежутки по стадиям: закрытые ходы + (ниже) живые хвосты.
+        return BuildGroups(journal.Entries, stageByTask,
+            run.Now.Where(n => n.TaskId is not null).Select(n => (n.TaskId, n.StartedAt)), now);
+    }
+
+    /// <summary>
+    /// Правило интервала стадии с ключом группы (И6, мини-разрез D0): «Хронология» зовёт его с ключом
+    /// стадии, метрики этапа — с ключом доли (исполнитель / ревью). Склейка зазора ≤ GlueGap и
+    /// живой хвост — только здесь, второй копии нет. Задача вне groupByTask — пропускается.
+    /// live — задачи, идущие сейчас, со стартом (ClaudeStartedAt): их хвост тянется до now.
+    /// </summary>
+    internal static Dictionary<string, List<StageInterval>> BuildGroups(
+        IReadOnlyList<FeatureJournalEntry> entries, IReadOnlyDictionary<string, string> groupByTask,
+        IEnumerable<(string TaskId, DateTime? StartedAt)> live, DateTime now)
+    {
+        // Промежутки по группам: закрытые ходы + (ниже) живые хвосты.
         var raw = new Dictionary<string, List<Raw>>();
         // Конец последнего закрытого хода задачи — старт живого хвоста той же задачи.
         var lastClosedEnd = new Dictionary<string, DateTime>();
 
-        foreach (var e in journal.Entries)
+        foreach (var e in entries)
         {
             if (e.Kind != "turn" || e.StartedAt is null || e.EndedAt is null) continue;
-            if (e.TaskId is null || !stageByTask.TryGetValue(e.TaskId, out var stage)) continue;
+            if (e.TaskId is null || !groupByTask.TryGetValue(e.TaskId, out var stage)) continue;
             var from = e.StartedAt.Value;
             var to = e.EndedAt.Value;
             if (to < from) continue; // битый ход (конец раньше начала) — не интервал
@@ -76,14 +87,14 @@ internal static class FeatureStageIntervals
                 lastClosedEnd[e.TaskId] = to;
         }
 
-        // Живой хвост (GC-B1): для каждой задачи run.Now — [max(ClaudeStartedAt, конец
+        // Живой хвост (GC-B1): для каждой задачи live — [max(ClaudeStartedAt, конец
         // последнего закрытого хода ЭТОЙ задачи), now]. max нужен, чтобы хвост не начинался
         // с самого запуска задачи, уже покрытого её закрытыми ходами. Задача без старта и без
         // закрытых ходов, а также хвост нулевой длины — не интервал.
-        foreach (var n in run.Now)
+        foreach (var (taskId, startedAt) in live)
         {
-            if (n.TaskId is not { } taskId || !stageByTask.TryGetValue(taskId, out var stage)) continue;
-            DateTime? start = n.StartedAt;
+            if (!groupByTask.TryGetValue(taskId, out var stage)) continue;
+            DateTime? start = startedAt;
             if (lastClosedEnd.TryGetValue(taskId, out var closedEnd) && (start is null || closedEnd > start))
                 start = closedEnd;
             if (start is null || start >= now) continue;
@@ -120,7 +131,8 @@ internal static class FeatureStageIntervals
             {
                 // LastOutcome — исход последнего хода (Turns уже в порядке From); живой
                 // хвост ходом не считается — он ничего не «заканчивает».
-                var lastOutcome = a.Turns.Count > 0 && BadOutcomes.Contains(a.Turns[^1].Outcome ?? "")
+                // Упавший ход — единый предикат (И7): failed/crashed/local_* и пр., не только cancelled.
+                var lastOutcome = a.Turns.Count > 0 && FeatureTimeMath.IsFailedTurn(a.Turns[^1].Outcome)
                     ? a.Turns[^1].Outcome
                     : null;
                 return new StageInterval(a.From, a.To, FeatureTimeMath.Minutes(a.From, a.To),

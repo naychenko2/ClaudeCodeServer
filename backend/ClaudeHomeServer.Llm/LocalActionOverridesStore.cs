@@ -23,27 +23,20 @@ public sealed class LocalActionOverridesStore
     public const string DefaultRoute = "default";
     // Локальный расчёт ракурса лица (InsightFace, ADR-027 §3): только для места с FacePose
     public const string FacePoseRoute = "face-pose";
-    // Слоты тиров (v2): "tier:strong|medium|weak" — ссылка на именованную модель инстанса
-    // (AppSettings.ModelTier*). Легаси-значения ClaudeRoute/DefaultRoute при чтении маршрута
-    // трактуются как tier:medium (LocalActionRouter.Parse) — сам стор их не переписывает.
-    public const string TierPrefix = "tier:";
+    // Лексика тиров — в спине (ModelCellRules, Core/Services/Llm/): той же лексикой
+    // валидируются ячейки этапа шаблона процесса (Tasks) и матрицы персоны, а вертикаль не
+    // может зависеть от другой вертикали (R-B1a, п.1). Публичный API стора сохранён тонким
+    // вызовом: вызывающие стора не заметили переезда.
+    public const string TierPrefix = ModelCellRules.TierPrefix;
 
     // Ссылка на именованный пресет-цепочку (ADR-007 §3): "preset:{id}" — допустимое значение
     // там, где выбирается модель (слоты, ячейки матриц персоны/специальности, места каталога,
     // явная модель). Хранится как есть, разворачивается в цепочку на границе запуска хода.
     public const string PresetPrefix = "preset:";
 
-    public static string TierRoute(ModelTier tier) =>
-        TierPrefix + tier.ToString().ToLowerInvariant();
+    public static string TierRoute(ModelTier tier) => ModelCellRules.TierRoute(tier);
 
-    public static ModelTier? ParseTierRoute(string route) =>
-        route.ToLowerInvariant() switch
-        {
-            "tier:strong" => ModelTier.Strong,
-            "tier:medium" => ModelTier.Medium,
-            "tier:weak" => ModelTier.Weak,
-            _ => null,
-        };
+    public static ModelTier? ParseTierRoute(string route) => ModelCellRules.ParseTierRoute(route);
 
     // Это ссылка на пресет? ("preset:{id}"). Регистр префикса не важен — как у tier:.
     public static bool IsPresetRoute(string? route) =>

@@ -295,9 +295,10 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<FallbackSettingsStore>();
 
         // Этап 5, шаг 4 (шов IPromptSectionProvider): Core-интерфейс под единственный
-        // метод `EffectivePromptSections`, который PromptSectionsContributor в Turn
-        // дёргает у SpecialtySettingsStore через прямую ссылку на Llm. Адаптер
-        // лежит тут, в Main, рядом со сторем — DI подтянет его по конструктору.
+        // метод `EffectivePromptSectionStates` (полное состояние с Enabled), который
+        // PromptSectionsContributor в Turn дёргает вместо прямой ссылки на Llm. Адаптер
+        // лежит рядом со сторем — DI подтянет его по конструктору. Срез по включённым
+        // делает потребитель: контрибьютору нужно и состояние для наложения/выдачи (P1d).
         services.AddSingleton<IPromptSectionProvider, SpecialtyPromptSectionProvider>();
 
         // Пресеты автоподбора исполнителя фоновых действий.

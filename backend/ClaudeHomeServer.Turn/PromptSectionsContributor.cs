@@ -16,6 +16,12 @@ namespace ClaudeHomeServer.Services.Turn;
 // Этап 5, шаг 4: разрыв цикла Turn → Llm через Core-шов `IPromptSectionProvider`.
 // Опциональность (`?`) сохранена — без DI секция не собирается, и это осознанное
 // поведение, а не недосмотр (см. комментарий в `Core/Services/Llm/IPromptSectionProvider.cs`).
+//
+// P1c (разрез 2, Г6): EffectiveSectionsFor — единственное место, где зовётся
+// IPromptSectionProvider; поверх базовых секций специальности налагается слой персоны
+// (persona.PromptSections) через PromptSectionOverlay.Apply. Своего кэша нет: персона
+// читается из PromptSessionContext на каждый ход (устаревшее между ходами — следующий
+// BuildAsync видит новые секции).
 public sealed class PromptSectionsContributor : IPromptSectionContributor
 {
     private readonly IPromptSectionProvider? _sections;
@@ -38,14 +44,35 @@ public sealed class PromptSectionsContributor : IPromptSectionContributor
         && sessionContext.Persona.Specialty != PersonaSpecialty.None
         && (sessionContext.Session.Participants is null || sessionContext.Session.Participants.Count <= 1);
 
+    // Единственная точка чтения эффективных секций для персоны (Г6): базовое состояние
+    // специальности через IPromptSectionProvider + наложение слоя персоны через
+    // PromptSectionOverlay.Apply. Ручка выдачи P1d зовёт этот метод.
+    //
+    // Без провайдера — пустой список, а не NRE: опциональность шва осознанна (см. комментарий
+    // в Core/Services/Llm/IPromptSectionProvider.cs), а читатель не должен получать 500 на
+    // отсутствующей опции (находка R-P1c). IsEnabled тем же условием выключает секцию хода.
+    //
+    // База — ПОЛНОЕ состояние специальности (с Enabled), не только включённые секции: иначе
+    // слой персоны был бы слабее слоя админа (стор налагает его ко всем состояниям) и в выдаче
+    // не было бы «выключено специальностью» ни для показа, ни для «включить себе» (P2a/P2b).
+    public IReadOnlyList<EffectivePromptSection> EffectiveSectionsFor(string ownerId, Persona persona)
+    {
+        if (_sections is null) return [];
+        var baseStates = _sections.EffectivePromptSectionStates(ownerId, persona.Specialty);
+        return PromptSectionOverlay.Apply(baseStates, persona.PromptSections, SectionSource.Persona);
+    }
+
     public Task<PromptSectionContribution?> BuildAsync(
         PromptSessionContext sessionContext, string? turnText)
     {
         if (sessionContext.OwnerId is null || sessionContext.Persona is null || _sections is null)
             return Task.FromResult<PromptSectionContribution?>(null);
 
-        var sections = _sections.EffectivePromptSections(sessionContext.OwnerId, sessionContext.Persona.Specialty);
-        var text = sections.Count == 0 ? null : string.Join("\n\n", sections.Select(s => s.Text));
+        // Срез по Enabled — здесь, а не в шве: базовые и персональные выключенные нужны для
+        // выдачи состояния (P1d), в текст хода они не идут. Порядок — порядок каталога (база).
+        var sections = EffectiveSectionsFor(sessionContext.OwnerId, sessionContext.Persona);
+        var enabled = sections.Where(s => s.Enabled).ToList();
+        var text = enabled.Count == 0 ? null : string.Join("\n\n", enabled.Select(s => s.Text));
         if (string.IsNullOrWhiteSpace(text))
             return Task.FromResult<PromptSectionContribution?>(null);
 

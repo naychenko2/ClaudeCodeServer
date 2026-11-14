@@ -2346,6 +2346,704 @@ public class FeatureProjectorTests
         Stage(run, "merge").State.Should().NotBe("active");
     }
 
+    // ─── B5 (разрез workflow §3): стадии из подтверждённого маршрута (FeatureWorkflow.Stages) ──
+
+    // Фаст-трек (маршрут без cut/design/qa): Stages — ровно порядок графа маршрута,
+    // снятых стадий нет; роль step → стадия prod (одна таблица FeatureTimeMath.RoleToStage).
+    // Мутация «игнорировать Workflow» (BuildStageDefs: не читать epic.Workflow) — красный
+    // этот и оба следующих cases; легаси-случай ниже при ней зелёный.
+    // Фикстура G3: линейный маршрут записан как Stages (id = роль, After = предыдущий — то,
+    // что даёт Resolve по fast-track шаблону); переходный шим Route удалён (п.8 задачи G3).
+    [Fact]
+    public void Build_МаршрутФастТрек_StagesИзRouteБезСнятыхСтадий()
+    {
+        const string epicId = "epic-fast-track";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Workflow = new FeatureWorkflow
+            {
+                TemplateId = "builtin-fast-track", Scope = "global",
+                Stages =
+                [
+                    new RouteStage { Id = "plan", Role = "plan" },
+                    new RouteStage { Id = "step", Role = "step", After = ["plan"] },
+                    new RouteStage { Id = "review", Role = "review", After = ["step"] },
+                    new RouteStage { Id = "final", Role = "final", After = ["review"] },
+                    new RouteStage { Id = "merge", Role = "merge", After = ["final"] },
+                ],
+                Skipped = [TaskRoles.Cut, TaskRoles.Design, TaskRoles.Qa],
+                ConfirmedVersion = 1,
+                ConfirmedAt = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc),
+                ConfirmedByUser = true,
+            },
+        };
+        var plan = new TaskItem { Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var review = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        // qa-задача при снятом qa (битые данные: TaskManager.Create её бы не пустил) —
+        // в стадии её быть не должно ни при каком раскладе.
+        var qa = new TaskItem { Id = "q1", FeatureId = epicId, Role = TaskRoles.Qa, Status = TaskItemStatus.Done };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, plan, step, review, qa, final]);
+
+        run.Stages.Select(s => s.Key).Should().Equal(
+            new[] { "plan", "prod", "review", "final", "merge" },
+            "порядок стадий = порядок Route; снятых маршрутом стадий (cut/design/qa) в проекции нет");
+        run.Stages.Should().NotContain(s => s.Key == "cut" || s.Key == "design" || s.Key == "qa",
+            "пропуски маршрута в графе не показываем (решение Андрея)");
+        // Задачи — по своим стадиям; снятая qa-задача не попадает ни в одну стадию.
+        Stage(run, "plan").TaskIds.Should().Equal(new[] { "p1" });
+        Stage(run, "prod").TaskIds.Should().Equal(new[] { "s1" });
+        Stage(run, "review").TaskIds.Should().Equal(new[] { "r1" });
+        Stage(run, "final").TaskIds.Should().Equal(new[] { "f1" });
+        run.Stages.SelectMany(s => s.TaskIds).Should().NotContain("q1");
+        // Финал принят, мержа нет → «честный мерж» в маршруте: активна merge (последняя
+        // стадия Route), а не снятая cut.
+        Stage(run, "merge").State.Should().Be("active");
+    }
+
+    // Эпик без Workflow — легаси: фиксированный список из 8 ключей, байт в байт к прежнему
+    // stageDefs (старые фичи не ломаются). При мутации «игнорировать Workflow» этот case
+    // зелёный: легаси-ветка от правки маршрута не зависит (проверено прогоном мутации).
+    [Fact]
+    public void Build_БезWorkflow_LегасиСписокИзВосьмиСтадий()
+    {
+        const string epicId = "epic-legacy-route";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var plan = new TaskItem { Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+
+        var run = FeatureProjector.Build(epic, [epic, plan, step]);
+
+        run.Stages.Select(s => s.Key).Should().Equal(
+            new[] { "cut", "design", "plan", "prod", "review", "qa", "final", "merge" },
+            "без подтверждённого маршрута — прежний фиксированный список (W4-DES-B)");
+        run.Stages.Should().OnlyContain(s => s.Title == null,
+            "у легаси-стадий имени нет: Title живёт только в подтверждённом маршруте (G7)");
+    }
+
+    // Пустой граф маршрута (битые данные: валидатор маршрута ещё не на месте подтверждения):
+    // Stages пуст, Build не падает, активной стадии нет (activeIndex для пустого списка — -1).
+    [Fact]
+    public void Build_МаршрутПустойRoute_StagesПустой_НеПадает()
+    {
+        const string epicId = "epic-empty-route";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Workflow = new FeatureWorkflow { TemplateId = "t", Scope = "global", Stages = [], ConfirmedByUser = true },
+        };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step,
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        run.Stages.Should().BeEmpty("пустой маршрут — пустой конвейер, без исключения");
+        run.Stages.Should().NotContain(s => s.State == "active");
+    }
+
+    // Роль вне StageRoles (feature) и повтор id этапа (битые данные: валидатор не пропускает их
+    // на записи): вне проекции — стадия без соответствия не заводится, повтор id не даёт второй
+    // копии той же стадии (правило B5 «повтор роли → одна стадия prod»: в линейном маршруте
+    // id = роль, поэтому повтор роли = повтор id).
+    [Fact]
+    public void Build_МаршрутНеизвестнаяРольИПовтор_ВнеПроекции()
+    {
+        const string epicId = "epic-bad-route";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Workflow = new FeatureWorkflow
+            {
+                TemplateId = "t", Scope = "global",
+                Stages =
+                [
+                    new RouteStage { Id = "step", Role = "step" },
+                    new RouteStage { Id = "review", Role = "review", After = ["step"] },
+                    new RouteStage { Id = "feature", Role = "feature", After = ["review"] },
+                    new RouteStage { Id = "step", Role = "step", After = ["feature"] },
+                    new RouteStage { Id = "merge", Role = "merge", After = ["step"] },
+                ],
+                ConfirmedByUser = true,
+            },
+        };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var review = new TaskItem { Id = "r1", FeatureId = epicId, Role = TaskRoles.Review, Status = TaskItemStatus.Done };
+        var merge = new TaskItem { Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge, Status = TaskItemStatus.Done };
+
+        var run = FeatureProjector.Build(epic, [epic, step, review, merge]);
+
+        run.Stages.Select(s => s.Key).Should().Equal(new[] { "prod", "review", "merge" },
+            "feature вне набора стадий; повтор step — одна стадия prod");
+    }
+
+    // ─── G3 (разрез 2 §1.7): граф маршрута — параллельные этапы, колонки, absent по графу ─────
+
+    // Стадия по id: графовая стадия опознаётся id (ключ у параллельных этапов одной роли общий —
+    // «prod»), поэтому Stage(run, key) для графа не читается, только StageById.
+    private static FeatureStage StageById(FeatureRun run, string id) => run.Stages.Single(s => s.Id == id);
+
+    // Граф parallel-cycle (разрез 2 §1.10): step-back и step-front идут одновременно → оба active,
+    // в одной колонке (3: оба после plan), одного вида стадии prod с разными Id/Lane/After
+    // (вердикт R-B5 (c): «step-back и step-front дают одну стадию prod» — один вид стадии).
+    // Пустой qa-plan при начатом step-front — не absent: его единственный наследник (qa) не начат;
+    // старое правило «любой более поздний в списке» сделал бы его absent (мутация c3).
+    // Задача со слепком относится к своему этапу по StageId; задача без слепка — StageFor по линии.
+    // Фикстура без ревью/мерж-задач: их отсутствие не меняет ни одного проверяемого состояния.
+    [Fact]
+    public void Build_ГрафParallelCycle_ДваStepОдновременно_ОбаАктивныОднаКолонка()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-parallel-cycle";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var wf = new FeatureWorkflow
+        {
+            TemplateId = "builtin-parallel-cycle", Scope = "global",
+            Stages =
+            [
+                new RouteStage { Id = "cut", Role = "cut" },
+                new RouteStage { Id = "design", Role = "design", After = ["cut"] },
+                new RouteStage { Id = "plan", Role = "plan", After = ["design"] },
+                new RouteStage { Id = "qa-plan", Role = "qa", After = ["design"] },
+                new RouteStage { Id = "step-back", Role = "step", Lane = "back", After = ["plan"] },
+                new RouteStage { Id = "step-front", Role = "step", Lane = "front", After = ["plan"] },
+                new RouteStage { Id = "review", Role = "review", After = ["step-back", "step-front"] },
+                new RouteStage { Id = "qa", Role = "qa", After = ["review", "qa-plan"] },
+                new RouteStage { Id = "final", Role = "final", After = ["qa"] },
+                new RouteStage { Id = "merge", Role = "merge", After = ["final"] },
+            ],
+            ConfirmedVersion = 1,
+            ConfirmedAt = t.AddHours(-7),
+            ConfirmedByUser = true,
+        };
+        epic.Workflow = wf;
+        var cut = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut, Status = TaskItemStatus.Done,
+            CompletedAt = t.AddHours(-6),
+        };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done,
+            CompletedAt = t.AddHours(-5),
+        };
+        var sBack = new TaskItem
+        {
+            Id = "s-back", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddHours(-2),
+            // Слепок этапа (TaskManager.Create пишет его на задаче фичи с маршрутом) —
+            // проекция относится к этапу по StageId, а не по линии.
+            Stage = new StageSnapshot { TemplateId = "builtin-parallel-cycle", Role = "step", StageId = "step-back", After = ["plan"] },
+        };
+        var sFront = new TaskItem
+        {
+            Id = "s-front", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G2", Lane = "front",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddHours(-1),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, cut, plan, sBack, sFront], t);
+
+        var back = StageById(run, "step-back");
+        var front = StageById(run, "step-front");
+        back.State.Should().Be("active", "этап с идущей задачей активен");
+        front.State.Should().Be("active", "параллельный этап активен одновременно с ним");
+        back.Column.Should().Be(3); front.Column.Should().Be(3, "оба после plan — одна колонка графа");
+        back.Key.Should().Be("prod"); front.Key.Should().Be("prod", "вид стадии — по роли, одна таблица RoleToStage");
+        back.Role.Should().Be("step"); back.Lane.Should().Be("back"); front.Lane.Should().Be("front");
+        back.After.Should().Equal(new[] { "plan" }); front.After.Should().Equal(new[] { "plan" });
+        back.TaskIds.Should().Equal(new[] { "s-back" }, "задача со слепком — по Stage.StageId");
+        front.TaskIds.Should().Equal(new[] { "s-front" }, "задача без слепка — WorkflowGraph.StageFor по линии");
+        // Пустой design при начатом потомке (plan) — absent по графу: потомок начат.
+        StageById(run, "design").State.Should().Be("absent");
+        // Пустой qa-plan при начатом step-front — НЕ absent: по графу его наследник (qa) не начат,
+        // а по старому списочному правилу step-front был бы «более поздним в списке».
+        StageById(run, "qa-plan").State.Should().NotBe("absent",
+            "пустой план тестирования не «пропадает» оттого, что начался фронт (разрез 2 §1.7)");
+        StageById(run, "qa-plan").State.Should().Be("pending");
+        // Счётчик «этапов пройдено N из M» (п.6): M = число этапов маршрута, пройденные — done.
+        run.StagesTotal.Should().Be(10);
+        run.StagesPassed.Should().Be(2, "done: cut, plan");
+    }
+
+    private static FeatureWorkflow ParallelBranchesRoute(DateTime t) => new()
+    {
+        TemplateId = "builtin-parallel-cycle", Scope = "global",
+        Stages =
+        [
+            new RouteStage { Id = "plan", Role = "plan" },
+            new RouteStage { Id = "step-back", Role = "step", Lane = "back", After = ["plan"] },
+            new RouteStage { Id = "step-front", Role = "step", Lane = "front", After = ["plan"] },
+            new RouteStage { Id = "review", Role = "review", After = ["step-back", "step-front"] },
+        ],
+        ConfirmedVersion = 1, ConfirmedAt = t.AddHours(-7), ConfirmedByUser = true,
+    };
+
+    // B01: этап с двумя ветками — ревью ждёт ветки (waiting=branches), у ветки с двумя задачами
+    // полоска задач и возврат, линия и имена исполнителей заполнены, у плана — нет.
+    [Fact]
+    public void Build_УзелГрафа_ДветВетки_РевьюЖдётВетки()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-b01-branches";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8), Workflow = ParallelBranchesRoute(t) };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done,
+            CompletedAt = t.AddHours(-5), PersonaId = "egor",
+        };
+        var back1 = new TaskItem
+        {
+            Id = "b1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back", Status = TaskItemStatus.Done,
+            PersonaId = "timur", ClaudeStartedAt = t.AddMinutes(-90), CompletedAt = t.AddMinutes(-60),
+        };
+        var back2 = new TaskItem
+        {
+            Id = "b2", FeatureId = epicId, Role = TaskRoles.Rework, StepRef = "G1", Lane = "back", Status = TaskItemStatus.InProgress,
+            PersonaId = "timur", ClaudeStartedAt = t.AddMinutes(-30),
+        };
+        var front = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G2", Lane = "front", Status = TaskItemStatus.InProgress,
+            PersonaId = "polina", ClaudeStartedAt = t.AddMinutes(-20),
+        };
+
+        var run = FeatureProjector.BuildCore(epic, [epic, plan, back1, back2, front], t,
+            personaName: id => id switch { "egor" => "Егор", "timur" => "Тимур", "polina" => "Полина", _ => null });
+
+        var sb = StageById(run, "step-back");
+        sb.PersonaNames.Should().Equal("Тимур");
+        sb.Line.Should().Be("back");
+        sb.Returns.Should().Be(1);
+        sb.TaskSegments.Should().BeEquivalentTo(new FeatureStageSegments { Done = 1, Running = 1, Total = 2 });
+        sb.ElapsedMinutes.Should().Be(60, "объединение интервалов: 30 мин закрытой задачи + 30 мин идущей");
+        StageById(run, "step-front").TaskSegments.Should().BeNull("у ветки одна задача полоски нет");
+        StageById(run, "step-front").Line.Should().Be("front");
+        var review = StageById(run, "review");
+        review.Waiting.Should().Be("branches");
+        review.ElapsedMinutes.Should().BeNull("этап не начат");
+        review.Line.Should().BeNull();
+        StageById(run, "plan").Waiting.Should().BeNull();
+        StageById(run, "plan").PersonaNames.Should().Equal("Егор");
+    }
+
+    // B01: открытый вопрос человеку на задаче этапа → waiting=human (приоритетнее ожидания веток).
+    [Fact]
+    public void Build_УзелГрафа_ОткрытыйВопрос_WaitingHuman()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-b01-human";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8), Workflow = ParallelBranchesRoute(t) };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done, CompletedAt = t.AddHours(-5),
+        };
+        var back = new TaskItem
+        {
+            Id = "b1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back", Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = t.AddMinutes(-40), AwaitingHumanSince = t.AddMinutes(-5), AwaitingHumanReason = "нужно решение",
+        };
+
+        var run = FeatureProjector.BuildCore(epic, [epic, plan, back], t);
+
+        StageById(run, "step-back").Waiting.Should().Be("human");
+        StageById(run, "step-front").Waiting.Should().BeNull();
+    }
+
+    // B01: легаси-эпик без маршрута — все новые поля пусты (null/[]/0).
+    [Fact]
+    public void Build_УзелГрафа_ЛегасиБезМаршрута_НовыеПоляПусты()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-b01-legacy";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back", Status = TaskItemStatus.InProgress,
+            PersonaId = "timur", ClaudeStartedAt = t.AddMinutes(-30), AwaitingHumanSince = t.AddMinutes(-5),
+        };
+        var s2 = new TaskItem
+        {
+            Id = "s2", FeatureId = epicId, Role = TaskRoles.Rework, StepRef = "G1", Lane = "back", Status = TaskItemStatus.Todo,
+        };
+
+        var run = FeatureProjector.BuildCore(epic, [epic, s1, s2], t, personaName: _ => "Тимур");
+
+        run.Stages.Should().NotBeEmpty();
+        run.Stages.Should().OnlyContain(s => s.PersonaNames.Count == 0 && s.ElapsedMinutes == null && s.Waiting == null
+            && s.Returns == 0 && s.TaskSegments == null && s.Line == null);
+    }
+
+    // B10: предложенный маршрут (предложение есть, подтверждения нет) — proposed=true у всех узлов;
+    // подтверждённый — false; легаси без предложения — false.
+    [Fact]
+    public void Build_Proposed_ПредложенныйМаршрут_TrueУВсехУзлов()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        var s1 = new TaskItem { Id = "s1", FeatureId = "e-b10-p", Role = TaskRoles.Step, StepRef = "G1", Status = TaskItemStatus.Todo };
+        var epic = new TaskItem
+        {
+            Id = "e-b10-p", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-1) },
+        };
+        var run = FeatureProjector.BuildCore(epic, [epic, s1], t);
+        run.Stages.Should().NotBeEmpty();
+        run.Stages.Should().OnlyContain(s => s.Proposed);
+    }
+
+    [Fact]
+    public void Build_Proposed_ПодтверждённыйМаршрут_ФолсУВсехУзлов()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem
+        {
+            Id = "e-b10-c", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8), Workflow = ParallelBranchesRoute(t),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-9) },
+        };
+        var run = FeatureProjector.BuildCore(epic, [epic], t);
+        run.Stages.Should().NotBeEmpty();
+        run.Stages.Should().OnlyContain(s => !s.Proposed);
+    }
+
+    [Fact]
+    public void Build_Proposed_ЛегасиБезПредложения_ФолсУВсехУзлов()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem { Id = "e-b10-l", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var run = FeatureProjector.BuildCore(epic, [epic], t);
+        run.Stages.Should().NotBeEmpty();
+        run.Stages.Should().OnlyContain(s => !s.Proposed);
+    }
+
+    // B11: «по решению» у предложенного маршрута — optional → true, on → false; у легаси (нет
+    // предложения) и у подтверждённого маршрута признака нет (null), даже если резолвер Presence передан.
+    [Fact]
+    public void Build_ByDecision_Предложение_OptionalTrue_OnFalse()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem
+        {
+            Id = "e-b11-p", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-1) },
+        };
+        var s1 = new TaskItem { Id = "s1", FeatureId = epic.Id, Role = TaskRoles.Step, StepRef = "G1", Status = TaskItemStatus.Todo };
+        var qa = new TaskItem { Id = "q1", FeatureId = epic.Id, Role = TaskRoles.Qa, Status = TaskItemStatus.Todo };
+        IReadOnlyDictionary<string, string> presence = new Dictionary<string, string> { ["prod"] = "on", ["qa"] = "optional" };
+
+        var run = FeatureProjector.BuildCore(epic, [epic, s1, qa], t, proposalPresence: _ => presence);
+
+        run.Stages.Single(x => x.Key == "qa").ByDecision.Should().BeTrue();
+        run.Stages.Single(x => x.Key == "prod").ByDecision.Should().BeFalse();
+        // этапа, которого нет в словаре (off/не в шаблоне), в графе предложения нет вовсе (B11b)
+        run.Stages.Select(x => x.Key).Should().NotContain(["cut", "design", "plan", "review", "final", "merge"]);
+    }
+
+    [Fact]
+    public void Build_ByDecision_ЛегасиИПодтверждённый_ПризнакаНет()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        IReadOnlyDictionary<string, string> presence = new Dictionary<string, string> { ["prod"] = "optional" };
+        var legacy = new TaskItem { Id = "e-b11-l", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var confirmed = new TaskItem
+        {
+            Id = "e-b11-c", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8), Workflow = ParallelBranchesRoute(t),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-9) },
+        };
+
+        FeatureProjector.BuildCore(legacy, [legacy], t, proposalPresence: _ => presence)
+            .Stages.Should().OnlyContain(s => s.ByDecision == null);
+        FeatureProjector.BuildCore(confirmed, [confirmed], t, proposalPresence: _ => presence)
+            .Stages.Should().OnlyContain(s => s.ByDecision == null);
+    }
+
+    // B11b: этапы, выключенные в шаблоне предложения (off), в графе предложения быть не должно —
+    // узел ИСЧЕЗАЕТ, а не просто теряет признак «по решению». Словарь Presence — ровно стадии
+    // шаблона «Быстрый трек»: plan optional, prod/review/final/merge on; cut/design/qa off.
+    [Fact]
+    public void Build_Stages_Предложение_OffСтадииВГрафеНет()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem
+        {
+            Id = "e-b11b-p", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "builtin-fast-track", ProposedAt = t.AddHours(-1) },
+        };
+        var s1 = new TaskItem { Id = "s1", FeatureId = epic.Id, Role = TaskRoles.Step, StepRef = "G1", Status = TaskItemStatus.Todo };
+        var qa = new TaskItem { Id = "q1", FeatureId = epic.Id, Role = TaskRoles.Qa, Status = TaskItemStatus.Todo };
+        IReadOnlyDictionary<string, string> presence = new Dictionary<string, string>
+        {
+            ["plan"] = WorkflowStagePresence.Optional,
+            ["prod"] = WorkflowStagePresence.On,
+            ["review"] = WorkflowStagePresence.On,
+            ["final"] = WorkflowStagePresence.On,
+            ["merge"] = WorkflowStagePresence.On,
+        };
+
+        var run = FeatureProjector.BuildCore(epic, [epic, s1, qa], t, proposalPresence: _ => presence);
+
+        run.Stages.Select(x => x.Key).Should().NotContain(["qa", "cut", "design"]);
+        run.Stages.Select(x => x.Key).Should().Contain(["plan", "prod", "review", "final", "merge"]);
+        run.Stages.Single(x => x.Key == "plan").ByDecision.Should().BeTrue("optional — «по решению»");
+        run.Stages.Single(x => x.Key == "prod").ByDecision.Should().BeFalse("on — не по решению");
+    }
+
+    // B11b: фильтр графа предложения не трогает легаси-фичу и подтверждённый маршрут —
+    // там словаря Presence нет (словарь зовётся только при предложении), состав стадий прежний.
+    [Fact]
+    public void Build_Stages_ЛегасиИПодтверждённый_СоставСтадийНеИзменён()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        IReadOnlyDictionary<string, string> presence = new Dictionary<string, string>
+        {
+            ["plan"] = WorkflowStagePresence.Optional,
+            ["prod"] = WorkflowStagePresence.On,
+        };
+        var legacy = new TaskItem { Id = "e-b11b-l", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var confirmed = new TaskItem
+        {
+            Id = "e-b11b-c", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8), Workflow = ParallelBranchesRoute(t),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-9) },
+        };
+
+        FeatureProjector.BuildCore(legacy, [legacy], t, proposalPresence: _ => presence)
+            .Stages.Select(x => x.Key).Should().Equal("cut", "design", "plan", "prod", "review", "qa", "final", "merge");
+        FeatureProjector.BuildCore(confirmed, [confirmed], t, proposalPresence: _ => presence)
+            .Stages.Select(x => x.Id).Should().Equal("plan", "step-back", "step-front", "review");
+    }
+
+    // G7 (решение контракта a5d0c76e по возврату R-C3a): две стадии роли qa в «Параллельном
+    // цикле» различаются именами. Маршрут построен Resolve'ом из пресета кода — проверяется
+    // вся цепочка контракта: Title пресета → валидация → заморозка в RouteStage → проекция.
+    // Без имён граф показал бы две неотличимые «Проверки» (Key у обеих общий — «qa»).
+    [Fact]
+    public void Build_МаршрутParallelCycle_ДвеQaСтадииОтличаютсяИменами()
+    {
+        const string epicId = "epic-qa-titles";
+        var preset = WorkflowTemplateStore.BuiltInPreset(WorkflowTemplateStore.ParallelCycleKey);
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Workflow = new FeatureWorkflow
+            {
+                TemplateId = preset.Id, Scope = "global",
+                Stages = WorkflowGraph.Resolve(preset, []),
+                Skipped = [], ConfirmedVersion = preset.Version,
+                ConfirmedAt = new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc),
+                ConfirmedByUser = true,
+            },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic]);
+
+        run.Stages.Where(s => s.Key == "qa").Select(s => s.Id).Should()
+            .Equal(new[] { "qa-plan", "qa" }, "обе стадии общей роли в проекции и различаются id");
+        StageById(run, "qa-plan").Title.Should().Be("Проверка плана");
+        StageById(run, "qa").Title.Should().Be("Проверка");
+        // Этап без имени в пресете — null: имя не выдумывается из роли (подпись — дело фронта, C3a).
+        StageById(run, "plan").Title.Should().BeNull();
+        run.Stages.Should().OnlyContain(s => s.Title == null || s.Id == "qa-plan" || s.Id == "qa",
+            "имена есть только у двух qa-этапов пресета");
+    }
+
+    // Две активные стадии (п.4): шапка и Гант — FeatureBrief.CurrentStageOf — берут первую активную
+    // в топологическом порядке; файл FeatureBrief.cs под этим шагом не правился. Задача первого
+    // топологического этапа запущена позже — Now[0] она, и обе половины CurrentStageOf (Now[0].Stage
+    // и первая active в run.Stages) дают одно и то же: ключ стадии prod (R-G3: одно пространство имён;
+    // id этапа для различения параллельных — отдельное поле StageId).
+    [Fact]
+    public void CurrentStageOf_ДваАктивныхЭтапа_ШапкаПервыйВТопологическомПорядке()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-two-active";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var wf = new FeatureWorkflow
+        {
+            TemplateId = "builtin-parallel-cycle", Scope = "global",
+            Stages =
+            [
+                new RouteStage { Id = "plan", Role = "plan" },
+                new RouteStage { Id = "step-back", Role = "step", Lane = "back", After = ["plan"] },
+                new RouteStage { Id = "step-front", Role = "step", Lane = "front", After = ["plan"] },
+                new RouteStage { Id = "review", Role = "review", After = ["step-back", "step-front"] },
+            ],
+            ConfirmedVersion = 1,
+            ConfirmedAt = t.AddHours(-7),
+            ConfirmedByUser = true,
+        };
+        epic.Workflow = wf;
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done,
+            CompletedAt = t.AddHours(-5),
+        };
+        // Фронт запущен раньше, бэк (первый в топологическом порядке) — позже: Now[0] — бэк.
+        var sFront = new TaskItem
+        {
+            Id = "s-front", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "F1", Lane = "front",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddHours(-2),
+        };
+        var sBack = new TaskItem
+        {
+            Id = "s-back", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "B1", Lane = "back",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddHours(-1),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, plan, sFront, sBack], t);
+
+        run.Now.Select(n => n.TaskId).Should().Equal(new[] { "s-back", "s-front" },
+            "обе задачи идут; Now — по позднему старту впереди");
+        run.Now[0].Stage.Should().Be("prod",
+            "стадия задачи — ключ стадии (RoleToStage), то же пространство имён, что run.Stages[].Key (R-G3)");
+        run.Now[0].StageId.Should().Be("step-back", "id этапа для различения параллельных — отдельное поле, не Stage");
+        run.Now[1].StageId.Should().Be("step-front", "вторая идущая задача — свой этап в StageId");
+        FeatureBrief.CurrentStageOf(run).Should().Be("prod", "одна функция на все потребители");
+        FeatureBrief.ActiveStageOf(run).Should().Be("prod", "внешний вход штампа голоса — та же база");
+        run.Stages.First(s => s.State == "active").Key.Should().Be("prod",
+            "вторая половина CurrentStageOf (FirstActiveStageOf) даёт тот же ключ, что Now[0].Stage");
+        run.Stages.First(s => s.State == "active").Id.Should().Be("step-back",
+            "первая активная стадия в run.Stages — первый в топологическом порядке (Stages идут по графу)");
+        StageById(run, "step-front").State.Should().Be("active", "второй этап остаётся активным");
+    }
+
+    // Р-G3 (инвариант «текущая стадия»): у фичи с маршрутом обе половины CurrentStageOf дают одно
+    // значение в пространстве ключа стадии — и при идущей задаче (Now[0].Stage == CurrentStageOf),
+    // и на паузе (Now пуст, работает вторая половина — FirstActiveStageOf): та же величина, что при
+    // работе. Мутация: вернуть в nowList Stage = TaskStageId (id этапа) — первая проверка краснеет
+    // («prod» ≠ «step-back»); убрать в CurrentStageOf fallback — вторая краснеет.
+    [Fact]
+    public void CurrentStageOf_ФичаСМаршрутом_ОдноЗначениеПриРаботеИНаПаузе()
+    {
+        var t = new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-one-namespace";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        epic.Workflow = new FeatureWorkflow
+        {
+            TemplateId = "builtin-parallel-cycle", Scope = "global",
+            Stages =
+            [
+                new RouteStage { Id = "plan", Role = "plan" },
+                new RouteStage { Id = "step-back", Role = "step", Lane = "back", After = ["plan"] },
+            ],
+            ConfirmedVersion = 1,
+            ConfirmedAt = t.AddHours(-7),
+            ConfirmedByUser = true,
+        };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done,
+            CompletedAt = t.AddHours(-5),
+        };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddHours(-1),
+            Stage = new StageSnapshot { TemplateId = "builtin-parallel-cycle", Role = "step", StageId = "step-back", After = ["plan"] },
+        };
+
+        // Идущая задача: Now[0].Stage и CurrentStageOf — одно значение (ключ стадии).
+        var run = FeatureProjector.Build(epic, [epic, plan, s1], t);
+        run.Now[0].Stage.Should().Be("prod");
+        FeatureBrief.CurrentStageOf(run).Should().Be(
+            run.Now[0].Stage, "обе половины при идущей задаче дают одно и то же");
+        run.Stages.First(s => s.State == "active").Key.Should().Be("prod",
+            "и третья точка — ключ активной стадии run.Stages");
+
+        // Пауза (Now гасится, W4-HOLD-D): та же величина — стадия не менялась.
+        epic.Hold = new FeatureHold(FeatureHoldReasons.Manual, t, null, true);
+        var runPaused = FeatureProjector.Build(epic, [epic, plan, s1], t);
+        runPaused.State.Should().Be(FeatureStates.Paused, "фикстура: явное удержание человека");
+        runPaused.Now.Should().BeEmpty("пауза гасит «Сейчас»");
+        FeatureBrief.CurrentStageOf(runPaused).Should().Be(
+            FeatureBrief.CurrentStageOf(run),
+            "на паузе — та же «текущая стадия», что при работе: одно значение независимо от того, идёт ли задача");
+    }
+
+    // Р-G3 сценарий 1: человек пишет голос на prod (штамп ActiveStageOf = CurrentStageOf), затем
+    // стартует шаг маршрута. До правки Now[0].Stage был id этапа («step-back») и StaleOf помечал
+    // голос устаревшим, хотя стадия не менялась. Теперь — не устаревший.
+    // Мутация: вернуть в nowList Stage = TaskStageId → Stale = true, тест красный.
+    [Fact]
+    public void Note_ГолосНаProdПриИдущемШагеМаршрутаНеУстаревший()
+    {
+        var t = new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-voice-prod";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            Note = new FeatureNote("работа идёт", t.AddHours(-2), "sess-1", true, "prod", "running"),
+        };
+        epic.Workflow = new FeatureWorkflow
+        {
+            TemplateId = "builtin-parallel-cycle", Scope = "global",
+            Stages =
+            [
+                new RouteStage { Id = "plan", Role = "plan" },
+                new RouteStage { Id = "step-back", Role = "step", Lane = "back", After = ["plan"] },
+            ],
+            ConfirmedVersion = 1,
+            ConfirmedAt = t.AddHours(-7),
+            ConfirmedByUser = true,
+        };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddHours(-1),
+            Stage = new StageSnapshot { TemplateId = "builtin-parallel-cycle", Role = "step", StageId = "step-back", After = ["plan"] },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1], t);
+        var brief = FeatureBrief.Build(run, null, null, t);
+
+        brief.Now!.Stage.Should().Be("prod", "brief.now.stage — ключ стадии, фронт находит по нему подпись");
+        brief.Note!.StageAtWrite.Should().Be("prod", "хранимый штамп не переписывается");
+        brief.Note.Stale.Should().BeFalse(
+            "стадия не менялась: голос записан на prod, текущая стадия — тоже prod");
+    }
+
+    // Задача без слепка и без линии при нескольких step-этапах (StageFor неоднозначен):
+    // проекция не падает и не выбирает наугад — первый подходящий этап в порядке маршрута (п.3).
+    [Fact]
+    public void Build_ЗадачаБезСлепкаИЛинии_ПервыйПодходящийЭтапВПорядкеМаршрута()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-ambiguous-step";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var wf = new FeatureWorkflow
+        {
+            TemplateId = "builtin-parallel-cycle", Scope = "global",
+            Stages =
+            [
+                new RouteStage { Id = "plan", Role = "plan" },
+                new RouteStage { Id = "step-back", Role = "step", Lane = "back", After = ["plan"] },
+                new RouteStage { Id = "step-front", Role = "step", Lane = "front", After = ["plan"] },
+                new RouteStage { Id = "review", Role = "review", After = ["step-back", "step-front"] },
+            ],
+            ConfirmedVersion = 1,
+            ConfirmedAt = t.AddHours(-7),
+            ConfirmedByUser = true,
+        };
+        epic.Workflow = wf;
+        var s = new TaskItem { Id = "s-x", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Todo };
+
+        var run = FeatureProjector.Build(epic, [epic, s], t);
+
+        StageById(run, "step-back").TaskIds.Should().Equal(new[] { "s-x" },
+            "неоднозначный выбор — первый подходящий этап в порядке маршрута");
+        StageById(run, "step-front").TaskIds.Should().BeEmpty();
+    }
+
     // ─── FS-V1 (разрез §2.1 П2): одна «текущая стадия» на все четыре потребителя ──────────────────
 
     // Сторож инварианта: работа реально идёт на «review» (ревью принятого шага Ш1), а по старому

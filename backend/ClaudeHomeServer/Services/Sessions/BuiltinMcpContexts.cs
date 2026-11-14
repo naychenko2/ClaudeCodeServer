@@ -67,6 +67,16 @@ public sealed class BuiltinMcpContexts
     // ни прочитать, ни завершить и свалится в нерабочий встроенный Task-тул).
     // internal — ту же формулу резолвит TasksToolset по живой сессии-вызывателю (http,
     // ADR-012 волна 2): право на сервер проверяется на каждый tools/list и tools/call
+    // Сужение набора MCP слепком этапа (И5, Stage.McpAllow): фильтр ПОВЕРХ уже собранного
+    // allow-списка (персона/проект/привязки) — этап лишь убирает серверы, добавить не может,
+    // а чужой ключ (которого персоне не выдано) просто ничего не добавляет. null — без сужения.
+    // tasks исполнителю не снимается: без него он не закроет собственную задачу. Решение по
+    // СЕССИИ (Session.StageMcpAllow фиксируется при создании), не по ходу — tools/list не мерцает.
+    internal static bool StageAllows(IReadOnlyList<string>? stageMcpAllow, string serverKey) =>
+        stageMcpAllow is null
+        || string.Equals(serverKey, "tasks", StringComparison.OrdinalIgnoreCase)
+        || stageMcpAllow.Contains(serverKey, StringComparer.OrdinalIgnoreCase);
+
     internal bool TasksMcpEnabled(string? ownerId, Session session, Persona? persona) =>
         session.TaskExecution || _bindings.EffectiveToolEnabled(ownerId, persona, "tasks");
 

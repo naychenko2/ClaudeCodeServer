@@ -207,6 +207,32 @@ describe('FeatureChatCard: строка, поповер и «Ключевой ч
 });
 
 describe('FeatureChatCard: «К фиче»', () => {
+  // Дефект 762b7c03 (после C3d): первая вкладка фичи с маршрутом называется «Процесс»,
+  // и кнопка «К фиче» обязана называть её так же, как страница. Имя берётся из записи
+  // возврата (FeatureBackNavInfo.tabLabel), а не восстанавливается из значения вкладки.
+  // Мутация (в отчёте): (20) вернуть backTabName на словарь FEATURE_MAIN_TAB_LABEL →
+  // «· Процесс» краснеет (тест «Материалы» выше остаётся зелёным — это и есть проверка
+  // мутацией: словарь даёт те же имена для всех случаев, кроме маршрута).
+  it('фича с маршрутом, ушли с «Процесса»: подпись «‹ К фиче · Процесс» (дефект 762b7c03)', async () => {
+    seedIndex(feat({ ...indexProgress }));
+    // Открытая страница 'f1' с подтверждённым маршрутом — признак (featureHasRoute) читает её run.
+    pageStore.setFid('f1');
+    pageStore.setState({
+      status: 'ok',
+      page: {
+        run: run({ epic: { id: 'f1', title: 'Фича', status: 'todo', workflow: { templateId: 't', scope: 'global', stages: [], skipped: [], confirmedVersion: 1 } } }),
+        events: [], eventsTotal: 0,
+      },
+    });
+    setFeatureMainTab('progress');
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 's-me' }, 'Правда о прогрессе');
+    const c = await renderCard();
+    openPopover(c);
+    const btn = inBody('feature-popover-to-feature');
+    expect(btn, 'кнопки «К фиче» нет').not.toBeNull();
+    expect(textOf(btn!), 'кнопка назвала вкладку по словарю, а не по странице').toContain('· Процесс');
+  });
+
   it('с указателем на эту фичу (tab=materials): подпись «‹ К фиче · Материалы», клик — returnToFeature (на записанную вкладку, fromChat:false)', async () => {
     seedIndex(feat({ ...indexProgress }));
     setFeatureMainTab('materials');

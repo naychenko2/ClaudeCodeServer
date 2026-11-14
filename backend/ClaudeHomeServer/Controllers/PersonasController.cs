@@ -49,6 +49,10 @@ public class PersonasController(
     IConfiguration config,
     ILogger<PersonasController> log,
     IHubContext<SessionHub> hub,
+    // Единственная точка чтения эффективных секций промпта (Г6): ручка {id}/prompt-sections
+    // считает через неё, своего наложения в контроллере нет. Зарегистрирована безусловно
+    // (Program.cs → AddPromptSectionContributors), поэтому зависимость обязательная
+    Services.Turn.PromptSectionsContributor promptSections,
     // `= null` — обязательность для DI (S2b-1, ADR-014): на выключенной вертикали images
     // активация контроллера не должна падать — аватарные ручки отвечают гейтом (503/catch),
     // остальные эндпоинты персон живут без неё
@@ -79,6 +83,7 @@ public class PersonasController(
     private readonly IConfiguration _config = config;
     private readonly ILogger<PersonasController> _log = log;
     private readonly IHubContext<SessionHub> _hub = hub;
+    private readonly Services.Turn.PromptSectionsContributor _promptSections = promptSections;
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -278,6 +283,45 @@ public class PersonasController(
         var scope = HttpContext.GetRequestScope();
         var persona = _personas.Get(id, scope.TenantOwnerId);
         return persona is null ? NotFound() : Ok(persona);
+    }
+
+    /// <summary>
+    /// Эффективное состояние секций промпта персоны (разрез 2, §2.6; инвариант Г6): базовые
+    /// секции её специальности с наложенным слоем самой персоны. Считается ТОЛЬКО через
+    /// PromptSectionsContributor.EffectiveSectionsFor — единственное место, где зовётся
+    /// IPromptSectionProvider и где живёт наложение (PromptSectionOverlay.Apply); своя копия
+    /// порядка здесь была бы второй точкой правды (урок MediaFormatResolver: фронт и любой
+    /// другой читатель получают готовое состояние).
+    /// Доступ — как у GET {id} выше: тот же [ProjectScope(From = Persona)] и тот же ключ
+    /// арендатора из резолва; чужая персона не доходит до тела. Ключ слоёв — владелец персоны
+    /// (тот же, под которым её отдал резолв). Specialty=None — пустой массив: у такой
+    /// специальности секций нет (§2.3), и своего слоя нечего накладывать.
+    /// </summary>
+    [HttpGet("{id}/prompt-sections")]
+    [ProjectScope(From = ScopeSource.Persona)]
+    public ActionResult<IReadOnlyList<PersonaPromptSectionView>> PromptSections(string id)
+    {
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
+        // B09: updatedFromRole — см. PersonaManager.UpdatedFromRole
+        var changed = persona.ChangedByAdminSince == true;
+        return Ok(_promptSections.EffectiveSectionsFor(persona.OwnerId, persona)
+            .Select(s => new PersonaPromptSectionView(s, PersonaManager.UpdatedFromRole(changed, s)))
+            .ToList());
+    }
+
+    /// <summary>
+    /// B09: человек просмотрел секции специальности — текущий набор становится базой для
+    /// «изменено админом с тех пор» (Persona.ChangedByAdminSince). Права — как у правки персоны:
+    /// «только владелец» (Configure, решение 12.11), участник-редактор базу не сбрасывает.
+    /// </summary>
+    [HttpPost("{id}/sections-seen")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
+    public ActionResult<Persona> MarkSectionsSeen(string id)
+    {
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        return Ok(_personas.MarkSectionsSeen(id, scope.TenantOwnerId));
     }
 
     // Арендатор проекта, названного в ТЕЛЕ записывающего действия персон (W3-B3a, разрез §3.1
@@ -922,14 +966,30 @@ public class PersonasController(
 
     [HttpGet("{id}/bindings")]
     [ProjectScope(From = ScopeSource.Persona)]
-    public ActionResult<IReadOnlyList<PersonaBinding>> Bindings(string id)
+    public ActionResult Bindings(string id)
     {
         // W3-B1c (разрез §3.1 строка GET {id}/bindings; И-2): ключ чтения персоны — арендатор:
         // участник видит привязки владельца, в том числе к личным целям (И-4: видеть, не менять).
         var scope = HttpContext.GetRequestScope();
         var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
-        return Ok(persona.Bindings ?? []);
+        // A2 (разрез §2 «Типовые умения»): эффективный список — Skill-умения специальности
+        // первыми, с признаком источника inherited=true (фронт A3b показывает их с пометкой
+        // «от специальности» и кнопкой «Отключить»), затем свои привязки персоны.
+        // Путь записи не меняется: в Persona.Bindings пишутся только свои.
+        return Ok(_bindings.EffectiveBindings(scope.TenantOwnerId, persona)
+            .Select(e => new
+            {
+                id = e.Binding.Id,
+                type = e.Binding.Type,
+                target = e.Binding.Target,
+                path = e.Binding.Path,
+                condition = e.Binding.Condition,
+                mode = e.Binding.Mode,
+                createdAt = e.Binding.CreatedAt,
+                updatedAt = e.Binding.UpdatedAt,
+                inherited = e.Inherited,
+            }));
     }
 
     // Добавить одну привязку (мгновенное сохранение)
@@ -2116,6 +2176,64 @@ public class PersonasController(
         }
     }
 
+    /// <summary>
+    /// Разовая миграция персон к наследованию от специальности (разрез §2 «Миграция», A1b —
+    /// права; A2 — удаление Skill-копий типовых умений, они наследуются в рантайме).
+    /// dryRun=true — только отчёт поимённо: ни personas.json, ни specialty-settings.json не
+    /// пишутся, и флаг не нужен (это способ посмотреть ДО включения). Без dryRun миграция
+    /// выполняется, если она включена флагом Personas:SpecialtyInheritanceMigration:Enabled
+    /// (дефолт false) — иначе 400 с указанием, как посмотреть прогон.
+    /// Только админ: отчёт перечисляет персон всех владельцев.
+    /// </summary>
+    [Authorize(Roles = "admin")]
+    [HttpPost("migrations/specialty-inheritance")]
+    public IActionResult MigrateSpecialtyInheritance([FromQuery] bool dryRun = false)
+    {
+        var migrationEnabled = bool.TryParse(
+            _config["Personas:SpecialtyInheritanceMigration:Enabled"], out var flag) && flag;
+        if (!dryRun && !migrationEnabled)
+            return BadRequest(new
+            {
+                error = "Миграция выключена флагом Personas:SpecialtyInheritanceMigration:Enabled. "
+                    + "Сухой прогон доступен всегда: ?dryRun=true",
+            });
+
+        var plan = dryRun ? _personas.DryRunSpecialtyInheritance() : _personas.RunSpecialtyInheritanceMigration();
+        return Ok(new
+        {
+            dryRun,
+            counts = new
+            {
+                total = plan.Decisions.Count,
+                inherits = plan.CountOf(PersonaSpecialtyMigration.Group.Inherits),
+                overrideRights = plan.CountOf(PersonaSpecialtyMigration.Group.Override),
+                noTemplate = plan.CountOf(PersonaSpecialtyMigration.Group.NoTemplate),
+                changes = plan.CountChanges(),
+                alreadyMigrated = plan.Decisions.Count(d => d.AlreadyMigrated),
+                modelCellsMatched = plan.ModelCells.Count,
+                // A2: Skill-копии типовых умений, которые прогон удалит (теперь они наследуются)
+                removedSkillBindings = plan.CountRemovedSkills(),
+            },
+            personas = plan.Decisions.Select(d => new
+            {
+                id = d.PersonaId,
+                name = d.Name,
+                ownerId = d.OwnerId,
+                specialty = SpecialtyCatalog.KeyOf(d.Specialty),
+                group = d.Group.ToString(),
+                currentAccess = d.CurrentAccess.ToString(),
+                currentTools = d.CurrentTools,
+                currentDisallowedTools = d.CurrentDisallowed,
+                inheritsAccess = d.InheritsAccess,
+                changed = d.IsChange && !d.AlreadyMigrated,
+                alreadyMigrated = d.AlreadyMigrated,
+                // A2: поимённо — какая Skill-привязка и с каким именем удалится прогоном
+                removedSkills = d.RemovedSkills.Select(r => new { id = r.BindingId, target = r.Target }),
+            }),
+            modelCells = plan.ModelCells.Select(c => new { id = c.PersonaId, name = c.Name, cell = c.Cell, value = c.Value }),
+        });
+    }
+
     // Разбор CSV-параметра запроса (extraProjectIds/extraPersonaIds) в список id
     private static List<string> SplitCsv(string? csv) =>
         string.IsNullOrWhiteSpace(csv)
@@ -2177,7 +2295,16 @@ public record CreatePersonaRequest(
     string? SphereId = null,
     // Голос (валидация как у PUT /voice). null — подобрать по характеру после создания
     // (best-effort); пустой объект — создать без голоса (голос инстанса), ничего не подбирая
-    PersonaVoice? Voice = null);
+    PersonaVoice? Voice = null,
+    // Права «как у специальности» (true) или свои (false). null — false (свои права):
+    // поведение прежнее — без специальности Full без ограничений, со специальностью
+    // непереданные поля запроса берутся из её эффективного шаблона (A1d)
+    bool? InheritsAccess = null,
+    // Слой секций промпта персоны (разрез 2, §2.2): [{id, enabled?, text?}]. Id — только из
+    // каталога /api/specialties/prompt-sections; неизвестный id или текст сверх 1024 символов —
+    // 400 (нормализация PersonaManager, P1b), персона при этом не создана. null — «своих
+    // секций нет», всё как у специальности (поведение прежних вызовов не меняется)
+    List<Services.Llm.PromptSectionOverride>? PromptSections = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -2218,7 +2345,16 @@ public record UpdatePersonaRequest(
     // Явный пол; null — не менять, "unspecified" — сбросить сигнал рода
     PersonaGender? Gender = null,
     // Сфера для Scope.Sphere (смена scope на Sphere требует её); null — не менять
-    string? SphereId = null);
+    string? SphereId = null,
+    // Права «как у специальности» (true) / свои (false); null — не менять.
+    // При итоговом true access/tools/disallowedTools запроса игнорируются: права —
+    // эффективный шаблон специальности (A1d)
+    bool? InheritsAccess = null,
+    // Слой секций промпта: null — не менять; список — заменить целиком (по каталогу,
+    // нормализация и отказ 400 — в PersonaManager); пустой список — явный сброс к «всё как у
+    // специальности». При РЕАЛЬНОЙ смене specialty слой сбрасывается сам (§2.3), и ответ
+    // несёт об этом строку notice (§2.3, P1d)
+    List<Services.Llm.PromptSectionOverride>? PromptSections = null);
 
 // Private: чат создаётся приватным сразу (W4-B1b) — только для общего проекта, иначе 409
 // not_shared_project; тот же смысл и тот же отказ, что у тумблера и у POST /api/projects/{pid}/sessions
@@ -2310,3 +2446,14 @@ public record PersonaAskRequest(string? Handle, string Question, string? Context
     // Кросс-проектные extra-скоупы вызывающей персоны (ProjectPersonas-привязки) — расширяют
     // резолв handle за пределы контекста ProjectId; заполняет MCP personas-server
     List<string>? ExtraProjectIds = null, List<string>? ExtraPersonaIds = null);
+
+// Секция в выдаче GET {id}/prompt-sections: эффективное состояние плюс признак B09
+// «обновилось от специальности» (поля состояния — в той же плоской форме, что раньше)
+public sealed record PersonaPromptSectionView(
+    string Id, bool Enabled, string Text,
+    Services.Llm.SectionSource EnabledSource, Services.Llm.SectionSource TextSource,
+    bool UpdatedFromRole)
+{
+    public PersonaPromptSectionView(Services.Llm.EffectivePromptSection s, bool updatedFromRole)
+        : this(s.Id, s.Enabled, s.Text, s.EnabledSource, s.TextSource, updatedFromRole) { }
+}

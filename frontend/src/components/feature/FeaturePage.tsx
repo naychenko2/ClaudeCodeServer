@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Inbox } from 'lucide-react';
-import { R, FS, SP } from '../../lib/design';
+import { Inbox, Workflow } from 'lucide-react';
+import { C, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage, refetchFeaturePage, useFeatureMainTab, setFeatureMainTab, stepsTabCount, type FeatureBrief } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage, useFeatureMainTab, setFeatureMainTab, stepsTabCount, featureMainTabLabel, hasRouteOfRun, hasProposalGraph, type FeatureBrief } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
@@ -27,12 +27,19 @@ import { FeatureReviewTab } from './FeatureReviewTab';
 import { stageLabel } from './FeatureStatsBits';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import {
-  FeaturePageToolbar, FeaturePageAlert,
+  FeaturePageToolbar, FeaturePageAlert, FeaturePageWorkflowConfirm,
   featurePageStatusTag, toRunTag, type FeatureRunTag,
 } from './FeaturePageHeader';
 import { FeaturePageTabs } from './FeaturePageTabs';
+import { FeaturePageHero } from './FeaturePageHero';
 import { FeatureFirstScreen } from './FeatureFirstScreen';
+import { FeatureProcessGraphSection } from './FeatureProcessGraphSection';
+import { FeatureStageArea, resolveSelectedStage, stageTasksOf, type StageSelection } from './FeatureStageArea';
+import { FeatureStageScreen } from './FeatureStageScreen';
+import { stageNodeId } from './FeatureProcessGraphModel';
+import { nodeTitle } from './FeatureProcessGraph';
 import { analysisLineState } from './FeatureAnalysisModel';
+import { runRouteKind } from './FeatureWorkflowConfirmModel';
 import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
 
 // Куда ведёт закрытие (кнопка «Закрыть»):
@@ -146,6 +153,30 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   // Вкладка: из стора страницы (сохраняется при скрытии/возврате).
   const mainTab = useFeatureMainTab();
 
+  // Выбранный этап графа (C3b): ключ — featureId + id стадии. Состояние хранит выбор вместе
+  // с фичей, а читается через resolveSelectedStage: чужой фиче выбор не принадлежит, при
+  // смене фичи страница сама возвращается к defaultSelected — без эффекта сброса.
+  const [stageSel, setStageSel] = useState<StageSelection | null>(null);
+  // Отдельный экран этапа (F10): «Открыть этап →» заменяет центр экраном, «‹ Фича» и Esc возвращают.
+  // Выбранный узел и вкладка живут отдельно (stageSel, стор вкладки) и возврат переживают.
+  const [stageOpen, setStageOpen] = useState<StageSelection | null>(null);
+  // Блок подтверждения маршрута раскрыт (F08): «Посмотреть и подтвердить» в шапке и «Подтвердить»
+  // в области этапа открывают один и тот же блок. Ключ — featureId: чужой фиче раскрытие не принадлежит.
+  const [confirmOpenFor, setConfirmOpenFor] = useState<string | null>(null);
+  const confirmOpen = confirmOpenFor === featureId;
+  const openConfirm = () => {
+    setConfirmOpenFor(featureId);
+    // Блок живёт в шапке, а «Подтвердить» нажимают из области этапа: подводим его в видимость.
+    if (typeof document !== 'undefined' && typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        document.querySelector('[data-testid="feature-page-workflow-confirm"]')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+      });
+    }
+  };
+  // Шторку «Маршрут фичи» закрыли — снимаем флаг запроса (R-F05). Пока флаг не снят, он
+  // остаётся true, и повторное «Подтвердить» не открывает шторку снова (мёртвая кнопка).
+  const closeConfirmSheet = () => { setConfirmOpenFor(null); };
+
   // Регистрация страницы в канале окна возврата (GC-F11R4): окно снимка живёт ради этого
   // открытия страницы — закрытие гасит его (отложенная проверка в featureBackNav), а
   // перерегистрация (мнимый unmount→mount StrictMode) её отменяет. Регистрация — только
@@ -181,6 +212,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   // Esc закрывает страницу — общим хуком useEscapeClose (в CenterViewShell): не
   // перехватываем, если печатают в поле/редакторе или уже открыт диалог/меню.
   const goBack = () => { onBack(target); clearBackNav(); };
+  const closeStageScreen = () => setStageOpen(null);
 
   // === Мерж (Ф6): общая модалка подтверждения → POST /merge ===
   // Состояния: pending (запрос в полёте, кнопка «Запускаю…» заблокирована),
@@ -293,9 +325,12 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
       </Notice>
     );
   } else {
-    // ok: мета-строка (макет §1), тревога по attention (макет §2), липкие вкладки
-    // (макет §4) и содержимое: «Хронология» — блок «Сводка» (волна 6, Ф6) + конвейер,
-    // остальные — «Скоро».
+    // ok: мета-строка (макет §1), тревога по attention (макет §2), вкладки под шапкой
+    // и содержимое выбранной вкладки. Вариант A (решение Андрея 13.11, макет
+    // materials-review-placement.html): у фичи с маршрутом «Процесс» — граф и выбранный
+    // этап (их работа делает прежний «Ход», конвейер не рисуется); «Материалы» и «Разбор»
+    // — прежние виды всей фичи, без графа. У легаси-фичи без маршрута — прежний «Ход»
+    // (конвейер), графа нет.
     // ok: run есть (page.page.run) — локальная переменная без null.
     const okRun = page.page.run;
     // Строки «Сейчас»: переход в задачу.
@@ -324,8 +359,16 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     // только когда attention нет — иначе то же говорит плашка «от тебя») и «ещё не начата».
     const lineKey = okRun.attention ? null : analysisLineState(okRun, Date.now()).key;
     const watchdogOrIdle = okRun.state === 'not_started' || lineKey === 'stuck' || lineKey === 'nudged' || lineKey === 'quiet';
+    const graphShown = hasRouteOfRun(okRun);
+    // Граф предложения (F08): узлы есть, маршрут не подтверждён — детали этапов ждут подтверждения.
+    const proposalGraph = hasProposalGraph(okRun);
+    // «Модель не предложила» / режим маршрута без этапов: графа нет и конвейер не рисуем;
+    // этапы из задач есть — «Этапов пока нет» было бы ложью, остаётся «Ход».
+    const emptyGraph = !graphShown && runRouteKind(okRun.epic) === 'none' && (okRun.stages ?? []).length === 0;
+    const selectedStageId = resolveSelectedStage(stageSel, featureId, okRun);
     body = (
       <>
+        <FeaturePageWorkflowConfirm run={okRun} featureId={featureId} projectId={okRun.epic?.projectId ?? projectId ?? undefined} isMobile={isMobile} open={confirmOpen} onOpen={openConfirm} onSheetClosed={closeConfirmSheet} />
         <FeatureFirstScreen
           status="ok"
           brief={page.page.brief ?? null}
@@ -345,20 +388,58 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           value={mainTab}
           onChange={setFeatureMainTab}
           isMobile={isMobile}
+          progressLabel={featureMainTabLabel('progress', graphShown)}
           plansCount={plansTabCount(page.page)}
         />
         <div data-testid="feature-page-body" style={{ marginTop: SP.md }}>
           {mainTab === 'progress' ? (
-            <FeatureProgressWithNames
-              stages={okRun.stages ?? []}
-              next={page.page.brief?.next ?? []}
-              active={page.page.brief?.active ?? []}
-              isMobile={isMobile}
-              // «Все N шагов этапа ›» раскрывает шаги внутри «Производства».
-              stepsSlot={<FeatureTasksTab run={okRun} featureId={featureId} marks={marks} isMobile={isMobile} />}
-              stepsTotal={stepsTabCount(okRun)}
-              onOpenActive={openActiveTask}
-            />
+            graphShown ? (
+              <div data-testid="feature-page-process" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
+                <FeatureProcessGraphSection
+                  run={okRun}
+                  selectedId={selectedStageId}
+                  onSelect={(id) => setStageSel({ featureId, id })}
+                />
+                {proposalGraph ? (
+                  <div data-testid="feature-page-unconfirmed" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
+                    <Notice
+                      icon={Workflow}
+                      action={<Button size="xs" variant="ghost" dataTestId="feature-page-unconfirmed-confirm" onClick={openConfirm}>Подтвердить</Button>}
+                    >
+                      Разрез готов, дальше работа стоит: исполнители не стартуют, пока маршрут не подтверждён.
+                    </Notice>
+                    <div data-testid="feature-page-unconfirmed-hint" style={{ fontSize: FS.sm, color: C.textSecondary, textAlign: 'center' }}>
+                      Детали этапов появятся после подтверждения маршрута.
+                    </div>
+                  </div>
+                ) : (
+                  <FeatureStageArea run={okRun} selectedId={selectedStageId} isMobile={isMobile} onOpenTask={openActiveTask} onOpenStage={() => selectedStageId && setStageOpen({ featureId, id: selectedStageId })} onSelectStage={(id) => setStageSel({ featureId, id })} />
+                )}
+              </div>
+            ) : emptyGraph ? (
+              <div data-testid="feature-page-empty-graph" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+                <EmptyState
+                  compact inline
+                  icon={<Workflow size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+                  title="Этапов пока нет"
+                  subtitle="Граф появится, когда вы подтвердите маршрут."
+                />
+                <div style={{ fontSize: FS.sm, color: C.textSecondary, textAlign: 'center' }}>
+                  Детали этапов появятся после подтверждения маршрута.
+                </div>
+              </div>
+            ) : (
+              <FeatureProgressWithNames
+                stages={okRun.stages ?? []}
+                next={page.page.brief?.next ?? []}
+                active={page.page.brief?.active ?? []}
+                isMobile={isMobile}
+                // «Все N шагов этапа ›» раскрывает шаги внутри «Производства».
+                stepsSlot={<FeatureTasksTab run={okRun} featureId={featureId} marks={marks} isMobile={isMobile} />}
+                stepsTotal={stepsTabCount(okRun)}
+                onOpenActive={openActiveTask}
+              />
+            )
           ) : mainTab === 'materials' ? (
             <FeaturePlansTab page={page.page} materials={page.page.materials} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} featureId={featureId} projectId={projectId} />
           ) : (
@@ -384,10 +465,27 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   // на 4 строки и ломает шапку. Видимое — «Чат»/«К списку», полный текст — в title/aria-label.
   const shortLabel = fromChat ? 'Чат' : (isMobile ? 'К списку' : 'Назад');
 
+  // Экран этапа показываем, только пока этап этой же фичи ещё есть в run (иначе — страница).
+  const openStageObj = run && stageOpen && stageOpen.featureId === featureId
+    ? (run.stages ?? []).find(st => stageNodeId(st) === stageOpen.id)
+    : undefined;
+  const stageView = run && openStageObj ? (
+    <FeatureStageScreen
+      tasks={stageTasksOf(run, openStageObj).map(t => ({ id: t.id, title: t.title, stepRef: t.stepRef }))}
+      isMobile={isMobile}
+      chrome={{
+        featureTitle: title,
+        stageTitle: nodeTitle(openStageObj),
+        onBack: closeStageScreen,
+        onOpenChat: (sid) => { recordFeatureReturn(featureId, { kind: 'chat', id: sid }, title); void openChatById(sid); },
+      }}
+    />
+  ) : null;
+
   return (
     <CenterViewShell
       isMobile={isMobile}
-      onClose={goBack}
+      onClose={stageView ? closeStageScreen : goBack}
       closeLabel={shortLabel}
       mobileTitle={label}
       closeTitle="Закрыть"
@@ -407,7 +505,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
       }
       trailing={
         // Тег (1280) · главное действие (1280) · ⋯ (макет §1/§11).
-        <FeaturePageToolbar run={run} feature={feature} isMobile={isMobile} tag={tag} onMerge={openMergeDialog} canClose={canClose} />
+        <FeaturePageToolbar run={run} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} canClose={canClose} />
       }
       rootRef={rootRef}
       rootTestId="feature-page"
@@ -418,7 +516,10 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
       <>
         {/* Тело: прокрутка, поля 16 16 24 (макет §5.4; 16 сверху — как у файла, Майя m2). */}
         <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: `${SP.lg}px ${SP.lg}px ${SP.xl}px` }}>
-          {body}
+          {stageView ?? (<>
+            <FeaturePageHero title={title} tag={tag} run={run} />
+            {body}
+          </>)}
         </div>
         {/* Модалка подтверждения мержа (Ф6): портал, рендерится при mergeOpen. */}
         {mergeOpen && (

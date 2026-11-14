@@ -252,6 +252,12 @@ public sealed class SpecialtySettingsStore
     // берутся из настройки инстанса, ЕСЛИ там заданы, иначе из дефолта кода
     // (SpecialtyPromptPresets); настройка одной секции не трогает соседние. «Замена целиком»
     // здесь была бы ошибкой: настройка одной секции сносила бы дефолтные тексты остальных.
+    //
+    // P1a (разрез 2, Г6): само наложение вынесено в PromptSectionOverlay.Apply — одну
+    // функцию на все слои (слой персоны в промпте хода сядет на неё же, P1c). Здесь
+    // остаются только состояния кода (дефолты каталога) и приведение настройки админа к
+    // PromptSectionOverride: Enabled записи всегда «задан» (bool без null), Text — «задан»
+    // только когда непустой. Чтение — тот же volatile-снимок _file, без блокировок.
     public IReadOnlyList<EffectivePromptSection> EffectivePromptSectionStates(
         string ownerId, PersonaSpecialty specialty)
     {
@@ -259,29 +265,18 @@ public sealed class SpecialtySettingsStore
         var key = SpecialtyCatalog.KeyOf(specialty);
         var record = _file.Global.Specialties.GetValueOrDefault(key);
 
-        var result = new List<EffectivePromptSection>(SpecialtyPromptPresets.Sections.Count);
+        var codeStates = new List<EffectivePromptSection>(SpecialtyPromptPresets.Sections.Count);
         foreach (var meta in SpecialtyPromptPresets.Sections)
-        {
-            var enabled = SpecialtyPromptPresets.DefaultEnabled(meta.Id, specialty);
-            var text = SpecialtyPromptPresets.DefaultText(meta.Id, specialty);
-            var enabledSource = SectionSource.Code;
-            var textSource = SectionSource.Code;
+            codeStates.Add(new EffectivePromptSection(
+                meta.Id,
+                SpecialtyPromptPresets.DefaultEnabled(meta.Id, specialty),
+                SpecialtyPromptPresets.DefaultText(meta.Id, specialty),
+                SectionSource.Code, SectionSource.Code));
 
-            var entry = record?.PromptSections?
-                .FirstOrDefault(p => string.Equals(p.Id, meta.Id, StringComparison.OrdinalIgnoreCase));
-            if (entry is not null)
-            {
-                enabled = entry.Enabled;
-                enabledSource = SectionSource.Global;
-            }
-            if (!string.IsNullOrWhiteSpace(entry?.Text))
-            {
-                text = entry.Text!.Trim();
-                textSource = SectionSource.Global;
-            }
-            result.Add(new EffectivePromptSection(meta.Id, enabled, text, enabledSource, textSource));
-        }
-        return result;
+        var overrides = record?.PromptSections?
+            .Select(p => new PromptSectionOverride(p.Id, p.Enabled, p.Text))
+            .ToList();
+        return PromptSectionOverlay.Apply(codeStates, overrides, SectionSource.Global);
     }
 
     // Эффективные секции промпта специальности (контракт вклейки в системный промпт):
@@ -593,16 +588,18 @@ public sealed class SpecialtySettingsStore
         return null;
     }
 
-    // Ячейки матрицы — id модели или "preset:{id}"; "tier:*" запрещён (ячейка уже адресована
-    // уровнем). name — для текста ошибки (ключ специальности или "any").
+    // Ячейка матрицы — id модели или "preset:{id}"; "tier:*" запрещён (ячейка уже адресована
+    // уровнем). null — ячейка валидна. name — для текста ошибки (например «специальность «tester»»).
+    // Тонкий вызов спину ModelCellRules (Core/Services/Llm/): единственная реализация той же
+    // проверки для матриц специальности, этапа и персоны; текст ошибки — байт в байт прежний
+    // (доработка B1a по R-B1a, п.1: шов Tasks→Llm снят, проверка опущена в спину).
+    public static string? ValidateModelCell(string? cell, string name) =>
+        ModelCellRules.ValidateModelCell(cell, name);
+
     private static string? ValidateTemplateSettings(SpecialtyTemplateSettings settings, string name)
     {
         foreach (var cell in new[] { settings.TierStrong, settings.TierMedium, settings.TierWeak })
-        {
-            if (string.IsNullOrWhiteSpace(cell)) continue;
-            if (LocalActionOverridesStore.ParseTierRoute(cell) is not null)
-                return $"Специальность «{name}»: в ячейке уровня не может быть tier:* — уровень уже выбран строкой";
-        }
+            if (ValidateModelCell(cell, $"Специальность «{name}»") is { } cellError) return cellError;
 
         // Секции промптов: id из каталога, без дублей, текст в лимите (общий с UI счётчиком)
         var seenSections = new HashSet<string>(StringComparer.Ordinal);

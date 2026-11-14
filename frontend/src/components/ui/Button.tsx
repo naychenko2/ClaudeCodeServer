@@ -49,6 +49,9 @@ interface ButtonProps {
   fullWidth?: boolean;
   loading?: boolean;
   disabled?: boolean;
+  // Недоступна, но остаётся в фокусе и показывает подсказку (title): aria-disabled вместо
+  // нативного disabled, клик гасится.
+  ariaDisabled?: boolean;
   glow?: boolean;            // свечение под основной кнопкой (логин)
   pill?: boolean;            // pill-форма (полное скругление), независимо от size
   leftIcon?: ReactNode;
@@ -79,7 +82,7 @@ interface ButtonProps {
 
 export function Button({
   variant = 'primary', size = 'md', fullWidth, loading = false,
-  disabled, glow, pill, leftIcon, onClick, type = 'button', title, ariaLabel, ariaExpanded, ariaControls, ariaPressed, style, dataTestId, href, children,
+  disabled, ariaDisabled, glow, pill, leftIcon, onClick, type = 'button', title, ariaLabel, ariaExpanded, ariaControls, ariaPressed, style, dataTestId, href, children,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
   const baseStyle: CSSProperties = {
@@ -89,8 +92,8 @@ export function Button({
     width: fullWidth ? '100%' : undefined,
     fontWeight: 600,
     fontFamily: FONT.sans,
-    cursor: isDisabled ? 'not-allowed' : 'pointer',
-    opacity: disabled && !loading ? 0.7 : 1,
+    cursor: isDisabled || ariaDisabled ? 'not-allowed' : 'pointer',
+    opacity: (disabled || ariaDisabled) && !loading ? 0.7 : 1,
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
     textDecoration: 'none',
     boxShadow: glow && variant === 'primary' ? SHADOW.button : 'none',
@@ -127,7 +130,8 @@ export function Button({
       aria-pressed={ariaPressed}
       data-testid={dataTestId}
       disabled={isDisabled}
-      onClick={onClick}
+      aria-disabled={ariaDisabled || undefined}
+      onClick={ariaDisabled ? undefined : onClick}
       style={baseStyle}
     >
       {loading ? <Spinner /> : leftIcon}

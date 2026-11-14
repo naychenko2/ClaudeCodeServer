@@ -97,7 +97,8 @@ public static class FeatureActivityBuilder
             if (end < started.At) end = started.At;
             intervals.Add(new FeatureActivityInterval(started.At, end));
         }
-        // waiting: waiting → (waiting_cleared | now).
+        // waiting: waiting → (waiting_cleared | now). Пары — как FeatureTimeMath.WaitingEpisodes;
+        // минуты ожидания отсюда не считать (здесь «когда фича жила», без окна и вычета очереди).
         foreach (var w in journal.Entries.Where(e => e.Kind == "waiting").OrderBy(e => e.At))
         {
             var end = FirstAfter(journal, w.TaskId, w.At, "waiting_cleared", now);

@@ -95,8 +95,19 @@ public static class FeatureOwnerGate
     public static string? Denied(IProjectAccess? access, string actorUserId, TaskItem task, UpdateTaskRequest req)
     {
         if (!Touches(req, task)) return null;
-        if (task.OwnerId == actorUserId) return null;
-        if (string.IsNullOrEmpty(task.ProjectId)) return DeniedText;
-        return access?.Resolve(actorUserId, task.ProjectId, ProjectRight.Write) is null ? DeniedText : null;
+        return IsOwnerOf(access, actorUserId, task) ? null : DeniedText;
+    }
+
+    /// <summary>
+    /// «Только владелец» для записи: актор — владелец записи (личная задача, свой проект) либо у него
+    /// право <see cref="ProjectRight.Write"/> на проект задачи. Единый предикат двери правки
+    /// (<see cref="Denied"/>) и ручек маршрута эпика (TaskWorkflowController): расхождение двух
+    /// копий дало бы дверь, открытую с одной стороны.
+    /// </summary>
+    public static bool IsOwnerOf(IProjectAccess? access, string actorUserId, TaskItem task)
+    {
+        if (task.OwnerId == actorUserId) return true;
+        if (string.IsNullOrEmpty(task.ProjectId)) return false;
+        return access?.Resolve(actorUserId, task.ProjectId, ProjectRight.Write) is not null;
     }
 }

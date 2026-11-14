@@ -85,6 +85,10 @@ public sealed class FeatureSpendRecord
     public string? TaskId { get; init; }
     public string? PersonaId { get; init; }
     public string? Model { get; init; }
+    // Кто начал ход: SpendInitiators.* (human — защёлка TurnFromHuman, agent — автономный ход или
+    // подача агента). null — не размечено, запись до поля и дневные агрегаты (DailySpendRow его
+    // не сворачивает): по ним «реплики человека» не считаются (метрики этапа, replies = null).
+    public string? Initiator { get; init; }
     public long InputTokens { get; init; }
     public long OutputTokens { get; init; }
     public long CacheReadTokens { get; init; }

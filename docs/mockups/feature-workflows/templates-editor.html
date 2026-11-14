@@ -218,6 +218,8 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
 /* «унаследовано» — серая подпись со ссылкой на источник */
 .inh { font-size:var(--fs-xs); color:var(--c-text-muted); }
 .inh a, a.lnk { color:var(--c-accent); text-decoration:none; } .inh a:hover, a.lnk:hover { text-decoration:underline; }
+.tname-in { width:auto; min-width:0; max-width:280px; min-height:32px; padding:0 var(--sp-md); font-weight:600; font-size:var(--fs-md); }
+[data-w="mob"] .tname-in { min-height:44px; max-width:none; flex:1; }
 </style>
 <script>
 // Пульт прототипа: кнопки .pseg[data-k] пишут значение в html[data-<k>]; элементы с data-show="k:v1|v2 k2:v" видны,
@@ -356,7 +358,7 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
 </style>
 <script>
 // Рёбра графа: пересчёт по раскладке. Соседние уровни — кривая из края в край; ребро через уровень
-// (например «Проверка плана» → «Проверка») идёт обходом: под графом в горизонтали, справа в вертикали.
+// (например «Проверка плана» → «QA») идёт обходом: под графом в горизонтали, справа в вертикали.
 // Вертикаль: прямая из центра в центр, только если между узлами никого нет; иначе — дуга слева.
 (function(){
   const NS = 'http://www.w3.org/2000/svg';
@@ -433,6 +435,7 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
             <div class="ti"><span class="row"><span class="n grow ell">Фаст-трек</span><span class="tag">встроенный</span></span><span class="m">5 этапов · v2 · без дизайна и QA</span></div>
             <div class="ti"><span class="n">Исследование</span><span class="m">4 этапа · v1 · разрез, план, финал</span></div>
           </div>
+          <div class="fhint" style="padding:0 var(--sp-sm)">Встроенных три — с тегом «встроенный»: «Полный цикл», «Параллельный цикл», «Фаст-трек». «Исследование» — свой шаблон админа, тега у него нет.</div>
           <div class="sect">Проект «AI Home» · правит владелец</div>
           <div class="tl" data-show="!st:empty">
             <div class="ti" data-go="st:norm" data-show="st:builtin|par"><span class="n">Бэк без дизайна</span><span class="m">7 этапов · v5 · от «Полного цикла» v3</span></div>
@@ -452,21 +455,18 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
         <div class="tb">
           <button class="back m-only flex">‹ Процессы</button>
           <div class="col grow" style="gap:0">
-            <span class="row"><span class="tname ell" data-show="st:norm|conflict|invalid">Бэк без дизайна</span><span class="tname ell" data-show="st:builtin">Полный цикл</span><span class="tname ell" data-show="st:par">Параллельный цикл</span><span class="tname ell" data-show="st:empty">Новый шаблон</span>
+            <span class="row"><input class="fld tname-in" value="Бэк без дизайна" aria-label="Имя шаблона" maxlength="60" data-show="st:norm|conflict|invalid"><span class="tname ell" data-show="st:builtin">Полный цикл</span><span class="tname ell" data-show="st:par">Параллельный цикл</span><input class="fld tname-in" value="" placeholder="Новый шаблон" aria-label="Имя шаблона" maxlength="60" data-show="st:empty">
               <span class="tag" data-show="st:builtin|par">встроенный</span><span class="tag plan" data-show="st:norm|conflict|invalid">проект</span></span>
             <span class="inh" data-show="st:norm|invalid">v5 · от «Полного цикла» v3 — <a href="#">глобальный уже v4</a></span>
             <span class="inh" data-show="st:conflict">у вас открыт v5 · на сервере v6</span>
             <span class="inh" data-show="st:builtin">v4 · отличается от исходного в 2 местах</span><span class="inh" data-show="st:par">v1 · как исходный</span>
           </div>
-          <span class="relp d-only">
-            <button class="ib" title="Ещё">⋯</button>
-          </span>
         </div>
         <div class="body">
           <!-- 409 -->
           <div class="notice danger" data-show="st:conflict" style="margin-bottom:var(--sp-md)"><span class="ic">!</span>
-            <div class="grow">Пока вы правили, шаблон сохранили в другом окне — теперь это <b>v6</b> (Андрей, 18:42). Ваши правки не записаны.
-              <div class="act"><button class="btn xs secondary">Загрузить v6 — мои правки пропадут</button><button class="btn xs ghost">Сохранить мои правки новым шаблоном</button></div></div></div>
+            <div class="grow">Пока вы правили, шаблон сохранили в другом окне — теперь это <b>v6</b>. Ваши правки не записаны, а «Сохранить» отключена: поверх v6 писать нельзя.
+              <div class="act"><button class="btn xs secondary">Загрузить v6 — мои правки пропадут</button><button class="btn xs ghost">Сохранить мои правки новым шаблоном</button><span class="inh">новый шаблон получит другое имя</span></div></div></div>
           <!-- валидация: сводка -->
           <div class="notice danger" data-show="st:invalid" style="margin-bottom:var(--sp-md)"><span class="ic">!</span>
             <div class="grow"><b>Сохранить нельзя — 3 ошибки.</b> <a class="lnk" href="#">Финал: снять нельзя</a> · <a class="lnk" href="#">Ревью: таймаут</a> · <a class="lnk" href="#">Ревью: промпт длиннее 4000</a></div></div>
@@ -502,12 +502,12 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
               <div class="st-row"><span class="grip">⠿</span><span class="num">4</span><div class="col grow" style="gap:0"><span class="row wrap" style="gap:var(--sp-xs)"><span class="rn">Шаги</span><span class="lane-t">фронт</span><span class="rk">step · доработки тоже</span></span><span class="who ell">исполнитель из плана</span><span class="after">после: План</span></div><span class="lock" title="Снять нельзя">🔒</span><span class="tag ok pres">всегда</span></div>
             </div>
             <div class="st-row"><span class="grip">⠿</span><span class="num">5</span><div class="col grow" style="gap:0"><span class="row wrap" style="gap:var(--sp-xs)"><span class="rn">Ревью</span><span class="rk">review</span></span><span class="who ell">Код-ревьюер · Глеб</span><span class="after">после: Шаги · бэк, Шаги · фронт</span></div><span class="tag ok pres">всегда</span></div>
-            <div class="st-row"><span class="grip">⠿</span><span class="num">6</span><div class="col grow" style="gap:0"><span class="row wrap" style="gap:var(--sp-xs)"><span class="rn">Проверка</span><span class="rk">qa</span></span><span class="who ell">QA-тестер · Вера</span><span class="after">после: Ревью, Проверка плана</span></div><span class="tag w pres">по решению</span></div>
-            <div class="st-row"><span class="grip">⠿</span><span class="num">7</span><div class="col grow" style="gap:0"><span class="row wrap" style="gap:var(--sp-xs)"><span class="rn">Финал</span><span class="rk">final</span></span><span class="who ell">Архитектор · Александр</span><span class="after">после: Проверка</span></div><span class="lock" title="Снять нельзя">🔒</span><span class="tag ok pres">всегда</span></div>
+            <div class="st-row"><span class="grip">⠿</span><span class="num">6</span><div class="col grow" style="gap:0"><span class="row wrap" style="gap:var(--sp-xs)"><span class="rn">QA</span><span class="rk">qa</span></span><span class="who ell">QA-тестер · Вера</span><span class="after">после: Ревью, Проверка плана</span></div><span class="tag w pres">по решению</span></div>
+            <div class="st-row"><span class="grip">⠿</span><span class="num">7</span><div class="col grow" style="gap:0"><span class="row wrap" style="gap:var(--sp-xs)"><span class="rn">Финал</span><span class="rk">final</span></span><span class="who ell">Архитектор · Александр</span><span class="after">после: QA</span></div><span class="lock" title="Снять нельзя">🔒</span><span class="tag ok pres">всегда</span></div>
             <div class="st-row"><span class="grip">⠿</span><span class="num">8</span><div class="col grow" style="gap:0"><span class="row wrap" style="gap:var(--sp-xs)"><span class="rn">Слияние</span><span class="rk">merge</span></span><span class="who ell">DevOps · Марк</span><span class="after">после: Финал</span></div><span class="lock" title="Снять нельзя">🔒</span><span class="tag ok pres">всегда</span></div>
             <button class="btn sm dashed" style="width:100%;margin-top:var(--sp-sm)">+ Добавить этап</button>
             <p class="fhint">Параллельность задаёт поле «После этапов»: у кого одни и те же предшественники, те идут одновременно и встают в одну колонку. Следующий этап ждёт всех, кто у него в «после».</p>
-            <p class="fhint">Два этапа с одной ролью и линией («Проверка плана» и «Проверка» — оба <span class="mono">qa</span>) обязаны иметь разные имена, иначе на графе и в списке будут две неотличимые «Проверки». У шагов имя не нужно — их различает линия.</p>
+            <p class="fhint">Два этапа с одной ролью и линией («Проверка плана» и «QA» — оба <span class="mono">qa</span>) обязаны иметь разные имена, иначе на графе и в списке будут две неотличимые «QA». У шагов имя не нужно — их различает линия.</p>
           </div>
 
           <!-- ===== Параллельный цикл, вариант B: превью графа + таблица ===== -->
@@ -519,11 +519,11 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
               <div class="lv par"><span class="pl">⇉ параллельно</span><button class="node" data-id="plan" data-after="design"><span class="nn">План</span></button><button class="node opt sel" data-id="qa-plan" data-after="design"><span class="nn">Проверка плана? <span class="role">qa</span></span></button></div>
               <div class="lv par"><span class="pl">⇉ параллельно</span><button class="node" data-id="sb" data-after="plan"><span class="nn">Шаги <span class="lane">бэк</span> 🔒</span></button><button class="node" data-id="sf" data-after="plan"><span class="nn">Шаги <span class="lane">фронт</span> 🔒</span></button></div>
               <div class="lv"><button class="node" data-id="review"><span class="nn">Ревью</span></button></div>
-              <div class="lv"><button class="node opt" data-id="qa" data-after="review qa-plan"><span class="nn">Проверка? <span class="role">qa</span></span></button></div>
+              <div class="lv"><button class="node opt" data-id="qa" data-after="review qa-plan"><span class="nn">QA? <span class="role">qa</span></span></button></div>
               <div class="lv"><button class="node" data-id="final"><span class="nn">Финал 🔒</span></button></div>
               <div class="lv"><button class="node" data-id="merge"><span class="nn">Слияние 🔒</span></button></div>
             </div>
-            <p class="fhint">Рамка «параллельно» — этапы одной колонки идут одновременно; пунктирное ребро в обход — «Проверка» ждёт ещё и «Проверку плана». «?» — этап по решению.</p>
+            <p class="fhint">Рамка «параллельно» — этапы одной колонки идут одновременно; пунктирное ребро в обход — «QA» ждёт ещё и «Проверку плана». «?» — этап по решению.</p>
             <div class="sect row"><span class="grow">Этапы</span><button class="btn xs ghost">+ Этап</button></div>
             <table class="mx">
               <thead><tr><th></th><th>Этап · имя</th><th>Роль</th><th>После</th><th>Есть</th><th>Исполнитель</th></tr></thead>
@@ -535,8 +535,8 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
                 <tr><td class="grip">⠿</td><td><b>Шаги</b> <span class="lane-t">бэк</span> 🔒 <span class="pmark">⇉</span></td><td data-l="Роль" class="mono">step</td><td data-l="После">План</td><td data-l="Есть"><span class="tag ok">всегда</span></td><td data-l="Кто">из плана</td></tr>
                 <tr><td class="grip">⠿</td><td><b>Шаги</b> <span class="lane-t">фронт</span> 🔒 <span class="pmark">⇉</span></td><td data-l="Роль" class="mono">step</td><td data-l="После">План</td><td data-l="Есть"><span class="tag ok">всегда</span></td><td data-l="Кто">из плана</td></tr>
                 <tr><td class="grip">⠿</td><td><b>Ревью</b></td><td data-l="Роль" class="mono">review</td><td data-l="После">Шаги · бэк, Шаги · фронт</td><td data-l="Есть"><span class="tag ok">всегда</span></td><td data-l="Кто">Код-ревьюер</td></tr>
-                <tr><td class="grip">⠿</td><td><b>Проверка</b></td><td data-l="Роль" class="mono">qa</td><td data-l="После">Ревью, Проверка плана</td><td data-l="Есть"><span class="tag w">по решению</span></td><td data-l="Кто">QA-тестер</td></tr>
-                <tr><td class="grip">⠿</td><td><b>Финал</b> 🔒</td><td data-l="Роль" class="mono">final</td><td data-l="После">Проверка</td><td data-l="Есть"><span class="tag ok">всегда</span></td><td data-l="Кто">Архитектор</td></tr>
+                <tr><td class="grip">⠿</td><td><b>QA</b></td><td data-l="Роль" class="mono">qa</td><td data-l="После">Ревью, Проверка плана</td><td data-l="Есть"><span class="tag w">по решению</span></td><td data-l="Кто">QA-тестер</td></tr>
+                <tr><td class="grip">⠿</td><td><b>Финал</b> 🔒</td><td data-l="Роль" class="mono">final</td><td data-l="После">QA</td><td data-l="Есть"><span class="tag ok">всегда</span></td><td data-l="Кто">Архитектор</td></tr>
                 <tr><td class="grip">⠿</td><td><b>Слияние</b> 🔒</td><td data-l="Роль" class="mono">merge</td><td data-l="После">Финал</td><td data-l="Есть"><span class="tag ok">всегда</span></td><td data-l="Кто">DevOps</td></tr>
               </tbody>
             </table>
@@ -555,7 +555,7 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
             <div class="st-row on bad" data-show="st:invalid"><span class="grip">⠿</span><span class="num">4</span><div class="col grow" style="gap:0"><span class="row"><span class="rn">Ревью</span><span class="rk">review</span><span class="cnt s">2</span></span><span class="who ell">Код-ревьюер · Глеб</span></div><span class="tag ok pres">всегда</span></div>
             <div class="st-row"><span class="grip">⠿</span><span class="num">5</span><div class="col grow" style="gap:0"><span class="row"><span class="rn">QA</span><span class="rk">qa</span></span><span class="who ell">QA-тестер · Вера</span></div><span class="tag w pres">по решению</span></div>
             <div class="st-row" data-show="!st:invalid"><span class="grip">⠿</span><span class="num">6</span><div class="col grow" style="gap:0"><span class="row"><span class="rn">Финал</span><span class="rk">final</span></span><span class="who ell">Архитектор · Александр</span></div><span class="lock" title="Снять нельзя">🔒</span><span class="tag ok pres">всегда</span></div>
-            <div class="st-row bad" data-show="st:invalid"><span class="grip">⠿</span><span class="num">6</span><div class="col grow" style="gap:0"><span class="row"><span class="rn">Финал</span><span class="rk">final</span><span class="cnt s">1</span></span><span class="who" style="color:var(--c-danger-text)">Финал снять нельзя — единственная проверка фичи целиком</span></div><span class="tag pres">нет</span></div>
+            <div class="st-row bad" data-show="st:invalid"><span class="grip">⠿</span><span class="num">6</span><div class="col grow" style="gap:0"><span class="row"><span class="rn">Финал</span><span class="rk">final</span><span class="cnt s">1</span></span><span class="who" style="color:var(--c-danger-text)">Финал снять нельзя — единственная проверка фичи целиком</span></div><span class="tag s pres">🔒 Снять нельзя</span></div>
             <div class="st-row"><span class="grip">⠿</span><span class="num">7</span><div class="col grow" style="gap:0"><span class="row"><span class="rn">Слияние</span><span class="rk">merge</span></span><span class="who ell">DevOps · Марк</span></div><span class="lock" title="Снять нельзя">🔒</span><span class="tag ok pres">всегда</span></div>
             <button class="btn sm dashed" style="width:100%;margin-top:var(--sp-sm)">+ Добавить этап</button>
             <p class="fhint">Сохранённая правка дойдёт до идущих фич со следующего созданного шага; состав маршрута у них поменяется только после подтверждения человеком.</p>
@@ -580,7 +580,7 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
                 <tr class="on bad" data-show="st:invalid"><td class="grip">⠿</td><td><b>Ревью</b> <span class="cnt s">2</span></td><td data-l="Есть"><span class="tag ok">всегда</span></td><td data-l="Кто">Код-ревьюер</td><td data-l="Модели"><span class="cell3"><span>спец</span><span class="own">Sonnet</span><span>спец</span></span></td><td data-l="Таймаут" style="color:var(--c-danger-text)">300 мин ✕</td><td data-l="Сужение">−2 инстр. · 3 MCP</td></tr>
                 <tr><td class="grip">⠿</td><td><b>QA</b></td><td data-l="Есть"><span class="tag w">по решению</span></td><td data-l="Кто">QA-тестер</td><td data-l="Модели"><span class="cell3"><span>спец</span><span>спец</span><span class="own">Flash</span></span></td><td data-l="Таймаут">по умолч.</td><td data-l="Сужение" class="muted">—</td></tr>
                 <tr data-show="!st:invalid"><td class="grip">⠿</td><td><b>Финал</b> 🔒</td><td data-l="Есть"><span class="tag ok">всегда</span></td><td data-l="Кто">Архитектор</td><td data-l="Модели"><span class="cell3"><span class="own">Opus</span><span>спец</span><span>спец</span></span></td><td data-l="Таймаут">по умолч.</td><td data-l="Сужение" class="muted">—</td></tr>
-                <tr class="bad" data-show="st:invalid"><td class="grip">⠿</td><td><b>Финал</b> 🔒 <span class="cnt s">1</span></td><td data-l="Есть"><span class="tag s">нет ✕</span></td><td data-l="Кто" colspan="4" style="color:var(--c-danger-text)">Финал снять нельзя — единственная проверка фичи целиком</td></tr>
+                <tr class="bad" data-show="st:invalid"><td class="grip">⠿</td><td><b>Финал</b> <span class="cnt s">1</span></td><td data-l="Есть"><span class="tag s">🔒 Снять нельзя</span></td><td data-l="Кто" colspan="4" style="color:var(--c-danger-text)">Финал снять нельзя — единственная проверка фичи целиком</td></tr>
                 <tr><td class="grip">⠿</td><td><b>Слияние</b> 🔒</td><td data-l="Есть"><span class="tag ok">всегда</span></td><td data-l="Кто">DevOps</td><td data-l="Модели"><span class="cell3"><span>спец</span><span>спец</span><span>спец</span></span></td><td data-l="Таймаут">по умолч.</td><td data-l="Сужение" class="muted">—</td></tr>
               </tbody>
             </table>
@@ -588,12 +588,12 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
           </div>
         </div>
         <div class="foot">
-          <button class="btn sm ghost d-only" data-show="!st:builtin|par" title="Удалить шаблон">Удалить</button>
-          <span class="relp d-only" data-show="st:builtin|par"><button class="btn sm ghost" aria-disabled="true" title="Встроенный шаблон удалить нельзя — можно сбросить к исходному">Удалить</button></span>
+          <button class="btn sm ghost" data-show="!st:builtin|par" title="Удалить шаблон">Удалить</button>
+          <span class="relp" data-show="st:builtin|par"><button class="btn sm ghost" aria-disabled="true" title="Встроенный шаблон удалить нельзя — можно сбросить к исходному">Удалить</button></span>
           <span class="sp"></span>
                     <button class="btn sm ghost">Отменить</button>
           <button class="btn sm primary" data-show="st:norm|builtin|par">Сохранить</button>
-          <button class="btn sm primary" disabled data-show="st:conflict|invalid|empty">Сохранить</button>
+          <button class="btn sm primary" disabled data-show="st:invalid|empty">Сохранить</button><button class="btn sm primary" disabled title="Конфликт версий: сохранить поверх v6 нельзя" data-show="st:conflict">Сохранить</button>
         </div>
       </div>
     </div>
@@ -621,10 +621,10 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
           <div data-show="st:par" style="margin-bottom:var(--sp-md)">
             <div class="fl">Имя этапа <span class="h req">— обязательно</span></div>
             <div class="row" style="gap:var(--sp-sm)"><input class="fld grow" value="Проверка плана" aria-label="Имя этапа"><span class="cntr">14 / 40</span></div>
-            <div class="fhint">Этап делит роль <span class="mono">qa</span> с этапом «Проверка» — имя обязательно и должно от него отличаться, иначе в списке и на схеме будут две неотличимые «Проверки».</div>
+            <div class="fhint">Этап делит роль <span class="mono">qa</span> с этапом «QA» — имя обязательно и должно от него отличаться, иначе в списке и на схеме будут две неотличимые «QA».</div>
             <div class="fl" style="margin-top:var(--sp-md)">После этапов <span class="h">— кого ждёт этот этап</span></div>
             <div class="row wrap"><span class="chip">Дизайн<button class="x" aria-label="Убрать">×</button></span><button class="btn xs dashed">+ Этап</button></div>
-            <div class="fhint">Те же предшественники, что у «Плана», — поэтому они идут параллельно, в одной колонке. «Проверка» ждёт этот этап вместе с «Ревью».</div>
+            <div class="fhint">Те же предшественники, что у «Плана», — поэтому они идут параллельно, в одной колонке. «QA» ждёт этот этап вместе с «Ревью».</div>
           </div>
           <div class="grid2">
             <div><div class="fl">Есть в маршруте</div>
@@ -667,7 +667,7 @@ table.mx { width:100%; border-collapse:separate; border-spacing:0; font-size:var
           <div class="grid2">
             <div><div class="fl">Порог молчания, мин <span class="h">5–240</span></div>
               <input class="fld" value="30" data-show="!st:invalid"><input class="fld err" value="300" data-show="st:invalid">
-              <div class="fhint" data-show="!st:invalid">Пусто — как в проекте: 20 мин. Это порог тишины, а не лимит длины хода.</div>
+              <div class="fhint" data-show="!st:invalid">Пусто — по умолчанию проекта (20 мин). Это порог тишины, а не лимит длины хода.</div>
               <div class="ferr" data-show="st:invalid">От 5 до 240 минут. Пусто — по умолчанию проекта.</div></div>
             <div><div class="fl">Что делать</div>
               <div class="radio"><span class="dot"></span><span><span class="rt">Подтолкнуть и сообщить</span><br><span class="rx">как сейчас: автоход «продолжай» и уведомление</span></span></div>

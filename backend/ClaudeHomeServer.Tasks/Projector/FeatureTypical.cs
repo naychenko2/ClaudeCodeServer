@@ -214,7 +214,7 @@ public static class FeatureTypical
             if (journal is { StartsWithCreated: true, Truncated: false })
                 // Дешёвый путь: прямой скан эпизодов ожидания, без полного sweep-line
                 // таймлайна. Окно закрытой фичи — [создание эпика, мерж].
-                waiting = HumanWaitingMinutes(journal, epic.CreatedAt, summary.MergedAt ?? now);
+                waiting = HumanWaitingMinutes(journal, epic.CreatedAt, summary.MergedAt ?? now, now);
         }
 
         // B2a (разрез п.3): шаг и хвост — с уже посчитанного этого же run, без нового прохода:
@@ -240,38 +240,23 @@ public static class FeatureTypical
             summary.MergedAt is not null);
     }
 
-    // Минуты ожидания человека в окне [from, to): эпизоды waiting…(waiting_cleared).
-    // Семантика — правило таймлайна (п.2 хвостов вердикта ST-R-B1): пересечения эпизодов
-    // объединяются (sweep), округление — одно по суммарному TimeSpan (FeatureTimeMath.
-    // UnionMinutes), а не сумма floor по эпизодам: параллельное ожидание двух задач одной
-    // фичи считается один раз, подминутные эпизоды не обнуляются. Единственная намеренная
-    // разница с stats.timeline.waitingMinutes — device_wait: здесь только человеческое
-    // ожидание (метрика «сколько ждал человек»), согласовано с прошлым вердиктом.
-    private static int HumanWaitingMinutes(FeatureJournalReadResult journal, DateTime from, DateTime to)
+    // Минуты ожидания человека в окне [from, to): эпизоды waiting…(waiting_cleared) минус очередь
+    // фич. Правило — общее с таймлайном и метриками этапа (И4, FeatureTimeMath.WaitingEpisodes и
+    // QueueIntervals): пары «начало → конец» по `≥`, начало в [from, to), конец режется по `to`,
+    // минуты очереди (R-Q3B-4) — не ожидание человека. Пересечения эпизодов объединяются (sweep),
+    // округление — одно по суммарному TimeSpan: параллельное ожидание двух задач одной фичи
+    // считается один раз, подминутные эпизоды не обнуляются. Единственная разница с
+    // stats.timeline.waitingMinutes — device_wait: здесь только человеческое ожидание (метрика
+    // «сколько ждал человек»), согласовано с прошлым вердиктом.
+    private static int HumanWaitingMinutes(
+        FeatureJournalReadResult journal, DateTime from, DateTime to, DateTime now)
     {
-        var clearedByTask = new Dictionary<string, List<DateTime>>();
-        foreach (var e in journal.Entries)
-        {
-            if (e.Kind != "waiting_cleared" || e.TaskId is null) continue;
-            if (!clearedByTask.TryGetValue(e.TaskId, out var list))
-                clearedByTask[e.TaskId] = list = new List<DateTime>();
-            list.Add(e.At);
-        }
-
-        var intervals = new List<(DateTime Start, DateTime End)>();
-        foreach (var e in journal.Entries)
-        {
-            // Считаются только эпизоды, начавшиеся внутри окна [from, to) — то же правило,
-            // что в FeatureTimeline.cs:338.
-            if (e.Kind != "waiting" || e.At < from || e.At >= to) continue;
-            var end = to;
-            if (e.TaskId is not null && clearedByTask.TryGetValue(e.TaskId, out var cleared))
-                foreach (var c in cleared)
-                    if (c > e.At) { end = c; break; }
-            if (end > to) end = to;
-            if (end > e.At) intervals.Add((e.At, end));
-        }
-        return FeatureTimeMath.UnionMinutes(intervals, from, to);
+        var intervals = FeatureTimeMath
+            .WaitingEpisodes(journal.Entries, "waiting", "waiting_cleared", from, to, now)
+            .Select(ep => (start: ep.Start, end: ep.End))
+            .ToList();
+        var queue = FeatureTimeMath.QueueIntervals(journal.Entries, from, to, now);
+        return FeatureTimeMath.CeilMinutes(FeatureTimeMath.NetUnionSpan(intervals, queue, from, to));
     }
 
     // Квантили непустой выборки: медиана и p25–p75 линейной интерполяцией.

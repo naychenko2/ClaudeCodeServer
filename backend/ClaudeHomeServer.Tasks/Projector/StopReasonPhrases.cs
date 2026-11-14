@@ -23,6 +23,7 @@ internal static class StopReasonPhrases
         [ExecutorStopClassifier.ToolCallLeakStuckReason] = "Вызовы инструмента уходят текстом раз за разом — нужно решение",
         [ExecutorStopClassifier.InterruptedByUserReason] = "Исполнитель остановлен вами — запустите снова или оставьте",
         [ExecutorStopClassifier.DeviceWaitExpiredReason] = "Устройство не вышло в онлайн за потолок ожидания",
+        [ExecutorStopClassifier.StageStallStopReason] = "Исполнитель молчал дольше порога этапа и остановлен — перезапустите шаг",
         [ExecutorStopClassifier.FeatureHeldReason] = "Фича на паузе — снимите паузу, когда будете готовы",
         [ExecutorStopClassifier.FeatureHeldExpiredReason] = "Чат прерванного исполнителя удалён — шаг нужно перезапустить",
     };

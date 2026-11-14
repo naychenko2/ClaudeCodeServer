@@ -92,6 +92,8 @@ export interface PersonaVoice {
 export interface Persona {
   id: string;
   ownerId: string;
+  // B09: админ менял секции специальности с момента, когда человек их видел; null/нет — база не отмечена
+  changedByAdminSince?: boolean | null;
   name: string;
   role?: string;              // роль персоны (главная подпись: «Роль (Имя)»)
   handle: string;             // машинное имя (@handle) — уникально в контексте (проект/глобально)
@@ -130,6 +132,20 @@ export interface Persona {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (только при access === 'custom')
   disallowedTools?: string[] | null;
+  // Права (access/tools/disallowedTools) как группа, наследуемая от специальности: true — при
+  // чтении сервер подставляет эффективный шаблон специальности (PersonaManager.Hydrate), поля
+  // не свои; false/отсутствие (старый бэк) — поля персоны есть её override. Та же читка, что на бэке.
+  inheritsAccess?: boolean;
+  // Дата, когда права были скопированы в «своё» (бэковый AccessCopiedAt: ставится при переходе
+  // в «Своё», PersonaManager.cs:1178, и обнуляется при возврате к наследованию, :1179).
+  // null/отсутствие (старый бэк) — копирования не было.
+  accessCopiedAt?: string | null;
+  // Число отличий копии от ТЕКУЩЕГО шаблона специальности: бэк считает его только при чтении и
+  // только для копии (DecorateInheritance, PersonaManager.cs:117-121), по областям — профиль /
+  // набор инструментов / набор запретов → 0..3. null/отсутствие — считать не с чего.
+  // Отличия в интерфейсе («≠») и число в подписи «отличается в N местах» считает фронт по
+  // видимым меткам самой карточки (PersonaAccessGroup, F26a) — это поле в подписи не участвует.
+  accessDiffCount?: number | null;
   // Ключ шаблона пантеона OmO, из которого подключена персона (null — создана вручную)
   templateKey?: string | null;
   // Привязки к источникам знаний и правилам (фича persona-bindings); null — нет
@@ -241,6 +257,9 @@ export interface PersonaBinding {
   mode: PersonaBindingMode;
   createdAt: string;
   updatedAt: string;
+  // true — умение пришло от специальности (эффективный список бэка, A2): своей записи нет,
+  // менять/удалять нельзя, выключается привязкой Mode=Off с тем же именем навыка
+  inherited?: boolean;
 }
 
 // Тело создания/обновления привязки (POST/PUT bindings)
@@ -303,8 +322,17 @@ export interface CreatePersonaDto {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (для custom)
   disallowedTools?: string[];
+  // Права как группа, наследуемая от специальности (true) или свой override (false);
+  // та же семантика, что у Persona.inheritsAccess
+  inheritsAccess?: boolean;
   // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
   specialty?: PersonaSpecialty;
+  // Слой секций промпта (разрез 2, §2.2): [{id, enabled?, text?}]. id — только из каталога
+  // /api/specialties/prompt-sections, текст ≤1024 — проверяет бэк (400, нормализация PersonaManager, P1b).
+  // В теле создания отсутствие — «своих секций нет». В теле UpdatePersonaDto (Partial): null — не менять,
+  // список — заменить целиком, пустой список — явный сброс к «всё как у специальности». Эффективное
+  // состояние читается не отсюда, а из GET {id}/prompt-sections: фронт наложение не повторяет (P2a).
+  promptSections?: PersonaPromptSectionOverride[] | null;
   // Доступ ко всем проектам владельца (текущим и будущим); только для scope === 'global'
   allProjectsAccess?: boolean;
   // true — сгенерировать фото-аватар сразу после создания (опт-ин для авто/LLM-путей,
@@ -312,6 +340,16 @@ export interface CreatePersonaDto {
   autoAvatar?: boolean;
   // Описание внешности для фотопортрета (англ.); пусто — берётся из роли/описания персоны
   avatarPrompt?: string;
+}
+
+// Переопределение одной секции промпта в теле записи (CreatePersonaDto/UpdatePersonaDto
+// promptSections) — форма бэкового PromptSectionOverride (Core/Services/Llm/IPromptSectionProvider.cs:29):
+// параметр «задан» только когда имеет значение; text null/пусто — «не задан» (типовой текст базы),
+// как на бэке (PromptSectionOverlay.Apply).
+export interface PersonaPromptSectionOverride {
+  id: string;
+  enabled?: boolean;
+  text?: string;
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны

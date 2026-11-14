@@ -8,10 +8,11 @@ namespace ClaudeHomeServer.Services.Llm;
 //
 // Вся логика — форвард одного метода. Наследование секций (посекочное от слоя + дефолт
 // кода) живёт в `SpecialtySettingsStore` и выполняется ДО отдачи наружу — наружу
-// поступает уже развёрнутое состояние.
+// поступает уже развёрнутое состояние ПОЛНОСТЬЮ, со включёнными и выключенными: срез по
+// Enabled делает потребитель (контрибьютор), ему нужно и состояние для наложения/выдачи.
 public sealed class SpecialtyPromptSectionProvider(SpecialtySettingsStore inner) : IPromptSectionProvider
 {
-    public IReadOnlyList<EffectivePromptSection> EffectivePromptSections(
+    public IReadOnlyList<EffectivePromptSection> EffectivePromptSectionStates(
         string ownerId, PersonaSpecialty specialty)
-        => inner.EffectivePromptSections(ownerId, specialty);
+        => inner.EffectivePromptSectionStates(ownerId, specialty);
 }

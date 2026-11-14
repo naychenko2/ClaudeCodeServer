@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru" data-theme="light" data-w="desk" data-st="proposal">
+<html lang="ru" data-theme="light" data-w="desk" data-st="proposal" data-tpl="par" data-by="human">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,6 +11,11 @@
   ConfirmedAt, ConfirmedByUser }; подтверждение — только человек, POST /api/tasks/{id}/workflow/confirm (MCP-инструмента нет).
   skipped ⊂ этапов с Presence=optional; несъёмные (step, final, merge) снять нельзя. Разрез 12.11, §4–§5.
   Блок живёт в шапке страницы фичи (feature-page.html) — здесь все его состояния подряд.
+  13.11, решение Андрея: маршрут — лестница колонок (вариант A), мини-граф (B) не берём. Колонка = слот процесса (глубина
+  по длиннейшему пути), параллельные этапы — стопкой под скобкой «∥», не-соседнее ребро — пунктирной дугой. Лестница
+  считается по РАЗРЕШЁННОМУ маршруту: снятые этапы выпадают из неё в строку «Снято», их потомки получают их предшественников,
+  лишние (транзитивные) рёбра убираются. Правило продукта: очевидный выбор модель подтверждает сама, человека зовём только
+  при сомнениях. Из подтверждения в модели есть только флаг «подтверждено человеком» — имени и даты в строке нет.
 -->
 <style>
 /* ===== Токены: значения из frontend/src/lib/theme.css, имена — C.* / SHADOW.* из design.ts.
@@ -230,6 +235,7 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
       const ok = el.dataset.show.trim().split(/\s+/).every(c=>{ const [k,v]=c.split(':'); const neg=k.startsWith('!'); const kk=neg?k.slice(1):k; const hit=v.split('|').includes(H.dataset[kk]); return neg?!hit:hit; });
       el.hidden = !ok;
     });
+    if (window.afterSync) window.afterSync();
   }
   function set(k,v){ H.dataset[k]=v; sync(); }
   document.addEventListener('click', e=>{
@@ -253,28 +259,50 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
 .rc .rt { font-weight:600; color:var(--c-text-heading); }
 .why2 { margin-top:var(--sp-sm); padding:var(--sp-sm) var(--sp-md); border-left:3px solid var(--c-plan); background:var(--c-bg-white); border-radius:0 var(--r-md) var(--r-md) 0; font-size:var(--fs-base); color:var(--c-text-primary); }
 .why2 .by { display:block; font-size:var(--fs-xs); color:var(--c-text-muted); margin-top:var(--sp-xxs); }
-.route { display:flex; align-items:center; flex-wrap:wrap; gap:var(--sp-xs); margin-top:var(--sp-md); }
-.route .arr { color:var(--c-text-muted); font-size:var(--fs-xs); }
-.rchip { display:inline-flex; align-items:center; gap:var(--sp-xxs); min-height:30px; padding:0 var(--sp-xs) 0 var(--sp-sm); border-radius:var(--r-max); background:var(--c-bg-white); border:1px solid var(--c-border); font-size:var(--fs-sm); color:var(--c-text-primary); }
-.rchip.opt { border-style:dashed; }
-.rchip.skip { background:transparent; border-style:dashed; color:var(--c-text-muted); }
-.rchip.skip .nm { text-decoration:line-through; }
-.rchip.add { border-color:var(--c-success); color:var(--c-success-text); background:var(--c-success-bg); }
-.rchip .x { border:0; background:none; width:22px; height:22px; border-radius:var(--r-max); color:var(--c-text-muted); padding:0; }
-.rchip .x:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
-.rchip .pin { font-size:var(--fs-xxs); color:var(--c-text-muted); padding-right:var(--sp-xs); }
-[data-w="mob"] .rchip { min-height:36px; } [data-w="mob"] .rchip .x { width:32px; height:32px; }
+/* ===== Лестница колонок (вариант A, 13.11). Рисует скрипт ниже по разрешённому маршруту ===== */
+.ladw { margin-top:var(--sp-md); }
+.lad { position:relative; display:flex; align-items:center; gap:var(--sp-xs); overflow-x:auto; padding:var(--sp-xxs); }
+.lad.arc { padding-bottom:var(--sp-xl); }
+.lad > svg { position:absolute; left:0; top:0; pointer-events:none; overflow:visible; }
+.lad > svg path { fill:none; stroke:var(--c-text-muted); stroke-width:1.5; stroke-dasharray:3 4; stroke-linecap:round; }
+.lad > svg circle { fill:var(--c-text-muted); }
+.lcol { position:relative; flex:none; display:flex; flex-direction:column; gap:var(--sp-xs); }
+.lcol.par { padding:18px var(--sp-xs) var(--sp-xs); border:1px dashed var(--c-border); border-radius:var(--r-xl); }
+.lcol.par > .pl { position:absolute; top:2px; left:var(--sp-sm); right:var(--sp-sm); font-size:var(--fs-xxs); line-height:14px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.larr { flex:none; color:var(--c-text-muted); font-size:var(--fs-xs); text-align:center; }
+/* Чип-чекбокс этапа: высота 32 / 40 на мобиле; пунктир — «по решению»; 🔒 — снять нельзя */
+.ck { display:inline-flex; align-items:center; gap:var(--sp-xs); height:32px; padding:0 var(--sp-sm); border-radius:var(--r-max); border:1px solid var(--c-border); background:var(--c-bg-white); font-size:var(--fs-sm); color:var(--c-text-primary); white-space:nowrap; text-align:left; }
+.ck.opt { border-style:dashed; }
+.ck .bx { width:14px; height:14px; border-radius:4px; border:1.5px solid var(--c-border); background:var(--c-bg-white); flex:none; display:inline-flex; align-items:center; justify-content:center; font:700 var(--fs-xxs)/1 var(--font-sans); color:var(--c-on-accent); }
+.ck[aria-checked="true"] .bx { background:var(--c-accent); border-color:var(--c-accent); }
+.ck[aria-checked="true"] .bx::before { content:"✓"; }
+.ck[aria-checked="false"] { background:transparent; color:var(--c-text-muted); }
+.ck[aria-checked="false"] .nm { text-decoration:line-through; }
+.ck .lk { font-size:var(--fs-xxs); flex:none; }
+.ck[aria-disabled="true"] { cursor:default; }
+button.ck:not([aria-disabled="true"]):hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.ck .role { font:var(--fs-xxs)/16px var(--font-mono); color:var(--c-text-muted); }
+.ck .lane { font:500 var(--fs-xxs)/16px var(--font-sans); padding:0 var(--sp-xs); border-radius:var(--r-sm); background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.ck.new { border-color:var(--c-success); background:var(--c-success-bg); color:var(--c-success-text); }
+[data-w="mob"] .ck { height:40px; }
+/* «Снято» — выпавшие из лестницы этапы, отсюда их возвращают */
+.lsk { display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-xs); margin-top:var(--sp-sm); }
+.lsk .lb2 { font-size:var(--fs-xs); color:var(--c-text-muted); }
+/* место под лестницу, пока шаблон не выбран: та же высота, что у лестницы — блок не прыгает */
+.lslot { display:flex; align-items:center; justify-content:center; min-height:158px; border:1px dashed var(--c-border); border-radius:var(--r-lg); font-size:var(--fs-sm); color:var(--c-text-muted); padding:var(--sp-md); text-align:center; }
+[data-w="desk"] .ladw.pick { min-height:158px; }
+/* вертикальная лестница (шторка 360): колонки сверху вниз, «∥ параллельно» над группой */
+.lad.v { flex-direction:column; align-items:stretch; overflow:visible; }
+.lad.v.arc { padding-bottom:var(--sp-xxs); padding-right:var(--sp-xl); }
+.lad.v .ck { width:100%; }
 .legend { font-size:var(--fs-xs); color:var(--c-text-muted); margin-top:var(--sp-xs); }
 .acts { display:flex; gap:var(--sp-sm); align-items:center; flex-wrap:wrap; margin-top:var(--sp-md); }
 [data-w="mob"] .acts .btn.primary { width:100%; }
-.skel { height:12px; border-radius:var(--r-sm); background:var(--c-bg-inset); }
-.wait { display:inline-flex; gap:3px; } .wait i { width:5px; height:5px; border-radius:var(--r-max); background:var(--c-plan); opacity:.4; animation:bl 1.2s infinite; } .wait i:nth-child(2){animation-delay:.2s} .wait i:nth-child(3){animation-delay:.4s}
-@keyframes bl { 50% { opacity:1; } }
 /* мобила: компактная строка в шапке + шторка */
 .mrow { margin-top:var(--sp-sm); display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-sm) var(--sp-md); border-radius:var(--r-lg); border:1px solid var(--c-plan-border); background:var(--c-plan-light); }
 .mrow.warn { border-color:var(--c-warning); background:var(--c-warning-bg); }
 .mrow.ok { border-color:var(--c-border-light); background:var(--c-bg-white); }
-.ghostgraph { margin-top:var(--sp-lg); }
+.modal .ma.stick { position:sticky; bottom:0; background:var(--c-bg-card); }
 </style>
 </head>
 <body>
@@ -282,11 +310,13 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
   <h1>Подтверждение маршрута</h1>
   <span class="lb">Тема</span><span class="pseg" data-k="theme"><button data-v="light">Светлая</button><button data-v="dark">Тёмная</button></span>
   <span class="lb">Ширина</span><span class="pseg" data-k="w"><button data-v="desk">1240</button><button data-v="mob">360 (шапка + шторка)</button></span>
-  <span class="lb">Состояние</span><span class="pseg" data-k="st"><button data-v="loading">Подбираем</button><button data-v="proposal">Предложение</button><button data-v="edit">Правит человек</button><button data-v="none">Предложения нет</button><button data-v="confirmed">Подтверждён</button><button data-v="changed">Шаблон изменился</button></span>
+  <span class="lb">Состояние</span><span class="pseg" data-k="st"><button data-v="proposal">Предложение</button><button data-v="edit">Правит человек</button><button data-v="none">Предложения нет</button><button data-v="confirmed">Подтверждён</button><button data-v="changed">Шаблон изменился</button><button data-v="legacy">Старый эпик</button></span>
+  <span class="lb">Маршрут</span><span class="pseg" data-k="tpl"><button data-v="par">Параллельный цикл</button><button data-v="par1">Снят один из двух</button><button data-v="lin">Линейный шаблон</button></span>
+  <span class="lb">Кто подтвердил</span><span class="pseg" data-k="by"><button data-v="human">Человек</button><button data-v="auto">Модель сама</button></span>
 </div>
 <div class="stage">
-  <div class="cap"><span class="agree">на согласование</span><b>C2 · Блок подтверждения маршрута</b> · один вариант, шесть состояний; живёт в шапке страницы фичи под названием</div>
-  <p class="why">Пока маршрут не подтверждён, исполнители фичи не стартуют (кроме консультаций) — блок поэтому стоит в шапке, а не прячется во вкладке. Подтверждает только человек: у агентов кнопки нет, они могут лишь попросить «подобрать заново».</p>
+  <div class="cap"><span class="agree">на согласование</span><b>C2 · Блок подтверждения маршрута</b> · шесть состояний, три примера маршрута (лестница колонок, вариант A от 13.11); живёт в шапке страницы фичи под названием</div>
+  <p class="why">Пока маршрут не подтверждён, исполнители фичи не стартуют (кроме консультаций) — блок поэтому стоит в шапке, а не прячется во вкладке. Если выбор очевиден, модель подтверждает маршрут сама и процесс идёт дальше; «ждёт вас» появляется только при сомнениях. У агентов кнопки подтверждения нет, они могут лишь попросить «подобрать ещё раз». Нажмите на этап с пунктирной рамкой: лестница пересчитается по оставшимся этапам.</p>
   <div class="app" style="height:auto">
     <div class="pane p-head" data-mcap="C2 · шапка страницы фичи (360)">
       <div class="island" style="flex:none">
@@ -297,102 +327,106 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
 
           <!-- ===== Десктоп: блок целиком ===== -->
           <div class="d-only">
-            <!-- loading -->
-            <div class="rc" data-show="st:loading">
-              <div class="rh"><span class="rt">Подбираем маршрут</span><span class="wait"><i></i><i></i><i></i></span><span class="sp"></span><button class="btn xs ghost">Выбрать вручную</button></div>
-              <div class="col" style="margin-top:var(--sp-md);gap:var(--sp-xs)"><div class="skel" style="width:60%"></div><div class="skel" style="width:85%"></div><div class="skel" style="width:40%"></div></div>
-              <div class="legend">Модель читает название и описание фичи и выбирает из шаблонов проекта и глобальных. Обычно до полуминуты.</div>
-            </div>
             <!-- proposal / edit -->
             <div class="rc" data-show="st:proposal|edit">
-              <div class="rh"><span class="tag w">ждёт вас</span><span class="rt">Маршрут предлагает модель</span><span class="sp"></span><button class="btn xs ghost">Подобрать заново</button></div>
+              <div class="rh"><span class="tag w">ждёт вас</span><span class="rt">Маршрут предлагает модель</span><span class="sp"></span><button class="btn xs ghost">Подобрать ещё раз</button></div>
               <div class="row wrap" style="margin-top:var(--sp-sm)"><span class="inh">Шаблон</span>
-                <select class="fld" style="width:auto;min-height:32px;padding:0 var(--sp-md)" data-show="st:proposal"><option>Бэк без дизайна · проект · v5</option></select>
-                <select class="fld" style="width:auto;min-height:32px;padding:0 var(--sp-md);border-color:var(--c-accent)" data-show="st:edit"><option>Полный цикл · глобальный · v4</option></select>
+                <select class="fld" data-tplsel aria-label="Шаблон маршрута" style="width:auto;min-height:32px;padding:0 var(--sp-md)"><option value="par">Параллельный цикл · глобальный · v1</option><option value="lin">Бэк без дизайна · проект · v5</option></select>
                 <span class="tag" data-show="st:edit">сменили вы</span></div>
-              <div class="why2" data-show="st:proposal">Фича меняет бэкенд и две формы, но новых экранов почти нет — подойдёт «Бэк без дизайна». QA снимаю: поведение покрывают тесты и ревью.<span class="by">Flash · 12.11 18:02 · обоснование модели</span></div>
-              <div class="why2" data-show="st:edit">Обоснование модели было про «Бэк без дизайна». Вы выбрали другой шаблон — обоснование к нему не относится, решение за вами.<span class="by">Flash · 12.11 18:02</span></div>
-              <div class="route" data-show="st:proposal">
-                <span class="rchip">Разрез</span><span class="arr">→</span>
-                <span class="rchip">План</span><span class="arr">→</span>
-                <span class="rchip">Шаги <span class="pin">🔒</span></span><span class="arr">→</span>
-                <span class="rchip">Ревью</span><span class="arr">→</span>
-                <span class="rchip skip"><span class="nm">QA</span><button class="x" title="Вернуть в маршрут">+</button></span><span class="arr">→</span>
-                <span class="rchip">Финал <span class="pin">🔒</span></span><span class="arr">→</span>
-                <span class="rchip">Слияние <span class="pin">🔒</span></span>
-              </div>
-              <div class="route" data-show="st:edit">
-                <span class="rchip">Разрез</span><span class="arr">→</span>
-                <span class="rchip opt">Дизайн<button class="x" title="Снять этап">×</button></span><span class="arr">→</span>
-                <span class="rchip">План</span><span class="arr">→</span>
-                <span class="rchip">Шаги <span class="pin">🔒</span></span><span class="arr">→</span>
-                <span class="rchip">Ревью</span><span class="arr">→</span>
-                <span class="rchip skip"><span class="nm">QA</span><button class="x" title="Вернуть в маршрут">+</button></span><span class="arr">→</span>
-                <span class="rchip">Финал <span class="pin">🔒</span></span><span class="arr">→</span>
-                <span class="rchip">Слияние <span class="pin">🔒</span></span>
-              </div>
-              <div class="legend">Пунктир с × — этап «по решению», его можно снять. 🔒 — снять нельзя. Зачёркнутые после подтверждения в графе фичи не покажутся.</div>
+              <div class="why2" data-show="st:proposal tpl:par">Фича меняет и бэкенд, и экраны — подойдёт «Параллельный цикл»: шаги бэка и фронта идут одновременно. Сомневаюсь насчёт «Проверки плана»: фронт небольшой. Оставил её — решите сами.<span class="by">Flash · 12.11 18:02 · обоснование модели</span></div>
+              <div class="why2" data-show="st:proposal tpl:par1">Бэкенд и одна форма — «Параллельный цикл», шаги идут двумя линиями. «Проверку плана» снимаю: на одну форму хватит итоговой проверки. Не уверен насчёт QA в конце — оставил.<span class="by">Flash · 12.11 18:02 · обоснование модели</span></div>
+              <div class="why2" data-show="st:proposal tpl:lin">Фича меняет бэкенд и две формы, но новых экранов почти нет — подойдёт «Бэк без дизайна». QA снимаю: поведение покрывают тесты и ревью. Сомневаюсь, хватит ли ревью для форм.<span class="by">Flash · 12.11 18:02 · обоснование модели</span></div>
+              <div class="why2" data-show="st:edit">Модель предлагала другой шаблон. Вы выбрали этот — обоснование к нему не относится, решение за вами.<span class="by">Flash · 12.11 18:02</span></div>
+              <div class="ladw" data-lad="tpl"></div>
+              <div class="legend">Галочка — этап в маршруте. Пунктирная рамка — этап «по решению»: нажмите, чтобы снять или вернуть. 🔒 — снять нельзя. «∥ параллельно» — этапы одной колонки идут одновременно, следующая колонка ждёт всех. Пунктирная дуга — этап ждёт результат не из соседней колонки. Снятые выпадают в строку «Снято» и в графе фичи не покажутся.</div>
               <div class="acts"><button class="btn sm primary">Подтвердить маршрут</button><span class="inh">Пока не подтвердите, исполнители фичи не стартуют.</span></div>
             </div>
-            <!-- none -->
+            <!-- none: Select + заблокированное подтверждение; лестница встаёт в то же место, место под неё занято заранее -->
             <div class="rc" data-show="st:none">
-              <div class="rh"><span class="tag w">ждёт вас</span><span class="rt">Модель не предложила маршрут</span><span class="sp"></span><button class="btn xs ghost">Подобрать ещё раз</button></div>
-              <div class="legend" style="margin-top:var(--sp-xs)">Подбор не ответил или ответ не прошёл проверку. Выберите шаблон сами — этапы появятся ниже.</div>
-              <div class="row wrap" style="margin-top:var(--sp-sm)"><select class="fld" style="width:auto;min-height:32px;padding:0 var(--sp-md);color:var(--c-text-muted)"><option>Выберите шаблон…</option></select></div>
-              <div class="acts"><button class="btn sm primary" disabled>Подтвердить маршрут</button><span class="inh">Сначала шаблон.</span></div>
+              <div class="rh"><span class="tag w">ждёт вас</span><span class="rt">Предложения пока нет</span><span class="sp"></span><button class="btn xs ghost">Подобрать ещё раз</button></div>
+              <div class="legend" style="margin-top:var(--sp-xs)">Модель обычно отвечает до полуминуты: она читает название и описание фичи и выбирает из шаблонов проекта и глобальных. Если подбор не ответил или ответ не прошёл проверку — выберите шаблон сами, этапы появятся ниже.</div>
+              <div class="row wrap" style="margin-top:var(--sp-sm)"><select class="fld" data-picksel aria-label="Шаблон маршрута" style="width:auto;min-height:32px;padding:0 var(--sp-md)"><option value="">Выберите шаблон…</option><option value="par">Параллельный цикл · глобальный · v1</option><option value="lin">Бэк без дизайна · проект · v5</option></select></div>
+              <div class="ladw pick" data-lad="pick"></div>
+              <div class="acts"><button class="btn sm primary" data-needpick disabled>Подтвердить маршрут</button><span class="inh" data-pickhint>Сначала шаблон.</span></div>
             </div>
-            <!-- confirmed -->
-            <div class="rc ok" data-show="st:confirmed">
-              <div class="rh"><span class="tag ok">✓ маршрут</span><span class="sec">Бэк без дизайна v5 · без QA · подтвердил Андрей 12.11 в 18:05</span><span class="sp"></span><button class="btn xs ghost">Почему так</button></div>
+            <!-- legacy: эпик создан до шаблонов, маршрута нет и графа нет -->
+            <div class="rc" data-show="st:legacy">
+              <div class="rh"><span class="tag">старая фича</span><span class="rt">Маршрута ещё нет</span></div>
+              <div class="legend" style="margin-top:var(--sp-xs)">Эпик создан до шаблонов: графа и экрана этапа у него нет, страница работает как раньше. Выберите шаблон — этапы появятся ниже, и маршрут можно будет вести.</div>
+              <div class="row wrap" style="margin-top:var(--sp-sm)"><select class="fld" data-picksel aria-label="Шаблон маршрута" style="width:auto;min-height:32px;padding:0 var(--sp-md)"><option value="">Выбрать шаблон…</option><option value="par">Параллельный цикл · глобальный · v1</option><option value="lin">Бэк без дизайна · проект · v5</option></select></div>
+              <div class="ladw pick" data-lad="pick"></div>
+              <div class="acts"><button class="btn sm primary" data-needpick disabled>Подтвердить маршрут</button><span class="inh" data-pickhint>Сначала шаблон.</span></div>
+            </div>
+            <!-- confirmed: два вида строки — человек или модель сама; имени и даты нет в модели -->
+            <div class="rc ok" data-show="st:confirmed by:human">
+              <div class="rh"><span class="tag ok">✓ маршрут</span><span class="sec" data-sum="full"></span><span class="sec">· подтвердил человек</span><span class="sp"></span><button class="btn xs ghost" data-whytoggle aria-expanded="false">Почему так</button></div>
+              <div class="why2" data-why hidden>Фича меняет и бэкенд, и экраны — подошёл «Параллельный цикл»: шаги бэка и фронта идут одновременно. Обоснование дала модель при подборе; маршрут подтвердили вы.<span class="by">Flash · 12.11 18:02 · подтвердил человек</span></div>
+            </div>
+            <div class="rc ok" data-show="st:confirmed by:auto">
+              <div class="rh"><span class="tag ok">✓ маршрут</span><span class="tag plan">авто</span><span class="sec" data-sum="full"></span><span class="sec">· выбрано моделью автоматически — выбор был очевиден</span><span class="sp"></span><button class="btn xs ghost" data-whytoggle aria-expanded="false">Почему так</button></div>
+              <div class="why2" data-why hidden>Фича меняет и бэкенд, и экраны, сомнений нет — «Параллельный цикл». Модель подтвердила маршрут сама, потому что выбор был очевиден.<span class="by">Flash · 12.11 18:02 · выбрано моделью автоматически</span></div>
             </div>
             <!-- changed -->
             <div class="rc warn" data-show="st:changed">
-              <div class="rh"><span class="tag w">шаблон изменился</span><span class="rt">«Бэк без дизайна»: v5 → v6</span><span class="sp"></span></div>
-              <div class="route">
-                <span class="rchip">Разрез</span><span class="arr">→</span><span class="rchip">План</span><span class="arr">→</span><span class="rchip">Шаги 🔒</span><span class="arr">→</span><span class="rchip">Ревью</span><span class="arr">→</span>
-                <span class="rchip add">+ QA<button class="x" title="Не добавлять">×</button></span><span class="arr">→</span><span class="rchip">Финал 🔒</span><span class="arr">→</span><span class="rchip">Слияние 🔒</span>
-              </div>
-              <div class="legend">В новой версии появился QA (по решению). Состав маршрута у фичи прежний, пока вы не подтвердите новый. Настройки этапов (модель, промпт, таймаут) действуют со следующего созданного шага и без подтверждения.</div>
-              <div class="acts"><button class="btn sm primary">Обновить маршрут до v6</button><button class="btn sm ghost">Оставить v5</button></div>
+              <div class="rh"><span class="tag w">шаблон изменился</span><span class="rt">«Параллельный цикл»: v1 → v2</span><span class="sp"></span></div>
+              <div class="ladw" data-lad="changed" data-ro></div>
+              <div class="legend">В v2 «Проверка плана» стала обязательной (зелёная рамка) и вернётся в маршрут. Остальное — как в вашем маршруте: снятая «QA» остаётся снятой. Состав маршрута у фичи прежний, пока вы не обновите его. Настройки этапов (модель, промпт, таймаут) действуют со следующего созданного шага и без подтверждения.</div>
+              <div class="acts"><button class="btn sm primary">Обновить маршрут до v2</button><button class="btn sm ghost">Оставить v1</button></div>
             </div>
           </div>
 
           <!-- ===== Мобила: компактная строка ===== -->
           <div class="m-only">
-            <div class="mrow" data-show="st:loading"><span class="wait"><i></i><i></i><i></i></span><span class="grow">Подбираем маршрут…</span></div>
-            <div class="mrow" data-show="st:proposal|edit|none"><span class="tag w">ждёт вас</span><span class="grow ell" data-show="st:proposal|edit">Маршрут: Бэк без дизайна, без QA</span><span class="grow ell" data-show="st:none">Маршрута нет — выберите</span><button class="btn sm primary">Посмотреть</button></div>
-            <div class="mrow ok" data-show="st:confirmed"><span class="tag ok">✓</span><span class="grow ell sec">Бэк без дизайна v5 · без QA</span><button class="ib" title="Почему так">ⓘ</button></div>
-            <div class="mrow warn" data-show="st:changed"><span class="grow ell">Шаблон изменился: v5 → v6</span><button class="btn sm secondary">Посмотреть</button></div>
+            <div class="mrow" data-show="st:proposal|edit|none"><span class="tag w">ждёт вас</span><span class="grow ell" data-show="st:proposal|edit" data-sum="short"></span><span class="grow ell" data-show="st:none">Предложения пока нет — выберите шаблон</span><button class="btn sm primary">Посмотреть</button></div>
+            <div class="mrow" data-show="st:legacy"><span class="tag">старая фича</span><span class="grow ell">Маршрута ещё нет</span><button class="btn sm primary">Выбрать шаблон</button></div>
+            <div class="mrow ok" data-show="st:confirmed"><span class="tag ok">✓</span><span class="tag plan" data-show="by:auto">авто</span><span class="grow ell sec" data-sum="short"></span><button class="ib" title="Почему так">ⓘ</button></div>
+            <div class="mrow warn" data-show="st:changed"><span class="grow ell">Шаблон изменился: v1 → v2</span><button class="btn sm secondary">Посмотреть</button></div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ===== Мобила: шторка с блоком ===== -->
+    <!-- ===== Мобила: шторка с блоком; лестница сверху вниз, подтверждение в липком подвале ===== -->
     <div class="pane m-only" data-mcap="C2 · шторка «Маршрут фичи» (360)" style="position:relative">
       <div style="flex:1;background:var(--c-bg-main)"></div>
       <div class="scrim">
         <div class="modal">
           <div class="mh">Маршрут фичи</div>
           <div class="mb">
-            <div data-show="st:proposal|edit|loading">
-              <span class="inh">Шаблон</span><select class="fld"><option>Бэк без дизайна · проект · v5</option></select>
-              <div class="why2">Новых экранов почти нет — «Бэк без дизайна». QA снимаю: поведение покрывают тесты и ревью.<span class="by">Flash · 18:02</span></div>
-              <div class="route">
-                <span class="rchip">Разрез</span><span class="rchip">План</span><span class="rchip">Шаги 🔒</span><span class="rchip">Ревью</span>
-                <span class="rchip skip"><span class="nm">QA</span><button class="x" title="Вернуть">+</button></span><span class="rchip">Финал 🔒</span><span class="rchip">Слияние 🔒</span>
-              </div>
-              <div class="legend">Пунктир — можно снять или вернуть. 🔒 — нельзя.</div>
+            <div data-show="st:proposal|edit">
+              <span class="inh">Шаблон</span><select class="fld" data-tplsel aria-label="Шаблон маршрута"><option value="par">Параллельный цикл · v1</option><option value="lin">Бэк без дизайна · v5</option></select>
+              <div class="why2" data-show="st:proposal tpl:par">Бэк и экраны — «Параллельный цикл». Сомневаюсь насчёт «Проверки плана»: фронт небольшой. Решите сами.<span class="by">Flash · 18:02</span></div>
+              <div class="why2" data-show="st:proposal tpl:par1">Бэк и одна форма — «Параллельный цикл». «Проверку плана» снимаю.<span class="by">Flash · 18:02</span></div>
+              <div class="why2" data-show="st:proposal tpl:lin">Новых экранов почти нет — «Бэк без дизайна». QA снимаю: поведение покрывают тесты и ревью.<span class="by">Flash · 18:02</span></div>
+              <div class="why2" data-show="st:edit">Модель предлагала другой шаблон — решение за вами.<span class="by">Flash · 18:02</span></div>
+              <div class="ladw" data-lad="tpl" data-v></div>
+              <div class="legend">Пунктир — можно снять или вернуть. 🔒 — нельзя. «∥ параллельно» — идут одновременно. Дуга справа — ждёт этап не из соседней колонки.</div>
             </div>
-            <div data-show="st:none"><div class="legend">Модель не ответила. Выберите шаблон сами.</div><select class="fld" style="color:var(--c-text-muted)"><option>Выберите шаблон…</option></select></div>
-            <div data-show="st:confirmed"><div class="why2">Новых экранов почти нет — «Бэк без дизайна». QA снят.<span class="by">подтвердил Андрей 12.11 в 18:05</span></div></div>
-            <div data-show="st:changed"><div class="route"><span class="rchip">Ревью</span><span class="rchip add">+ QA<button class="x">×</button></span><span class="rchip">Финал 🔒</span></div><div class="legend">В v6 появился QA. Пока не подтвердите — маршрут прежний.</div></div>
+            <div data-show="st:legacy">
+              <div class="legend" style="margin-top:0">Маршрута ещё нет: эпик создан до шаблонов. Выберите шаблон — этапы появятся ниже.</div>
+              <select class="fld" data-picksel aria-label="Шаблон маршрута"><option value="">Выбрать шаблон…</option><option value="par">Параллельный цикл · v1</option><option value="lin">Бэк без дизайна · v5</option></select>
+              <div class="ladw" data-lad="pick" data-v></div>
+            </div>
+            <div data-show="st:none">
+              <div class="legend" style="margin-top:0">Предложения пока нет, модель обычно отвечает до полуминуты. Выберите шаблон сами.</div>
+              <select class="fld" data-picksel aria-label="Шаблон маршрута"><option value="">Выберите шаблон…</option><option value="par">Параллельный цикл · v1</option><option value="lin">Бэк без дизайна · v5</option></select>
+              <div class="ladw" data-lad="pick" data-v></div>
+            </div>
+            <div data-show="st:confirmed">
+              <div class="why2" data-show="by:human">Бэк и экраны — «Параллельный цикл».<span class="by">Flash · 12.11 18:02 · подтвердил человек</span></div>
+              <div class="why2" data-show="by:auto">Бэк и экраны, сомнений нет — «Параллельный цикл».<span class="by">Flash · 12.11 18:02 · выбрано моделью автоматически</span></div>
+              <div class="ladw" data-lad="tpl" data-v data-ro></div>
+            </div>
+            <div data-show="st:changed">
+              <div class="ladw" data-lad="changed" data-v data-ro></div>
+              <div class="legend">В v2 «Проверка плана» стала обязательной. Пока не обновите — маршрут прежний.</div>
+            </div>
           </div>
-          <div class="ma">
-            <button class="btn sm ghost" data-show="st:proposal|edit|none|loading">Подобрать заново</button>
+          <div class="ma stick">
+            <button class="btn sm ghost" data-show="st:proposal|edit|none">Подобрать ещё раз</button>
             <button class="btn sm primary" data-show="st:proposal|edit">Подтвердить маршрут</button>
-            <button class="btn sm primary" disabled data-show="st:none|loading">Подтвердить маршрут</button>
-            <button class="btn sm ghost" data-show="st:changed">Оставить v5</button><button class="btn sm primary" data-show="st:changed">Обновить до v6</button>
+            <button class="btn sm primary" disabled data-needpick data-show="st:none|legacy">Подтвердить маршрут</button>
+            <button class="btn sm ghost" data-show="st:changed">Оставить v1</button><button class="btn sm primary" data-show="st:changed">Обновить до v2</button>
             <button class="btn sm ghost" data-show="st:confirmed">Закрыть</button>
           </div>
         </div>
@@ -400,5 +434,122 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
     </div>
   </div>
 </div>
+<script>
+// Лестница колонок. Колонка = глубина этапа по длиннейшему пути среди РАЗРЕШЁННЫХ этапов.
+// Снятый этап выпадает: его потомки наследуют его предшественников, транзитивные рёбра убираются.
+// Колонка из нескольких этапов — стопка под «∥ параллельно»; ребро через колонку и дальше — пунктирная дуга.
+(function(){
+  const H = document.documentElement;
+  const S = (id,n,p,after,extra)=>Object.assign({id,n,p,after:after||[]},extra||{}); // p: opt — по решению, req — всегда, lock — несъёмный
+  const PAR = [
+    S('cut','Разрез','req'), S('design','Дизайн','opt',['cut']),
+    S('plan','План','req',['design']), S('qa-plan','Проверка плана','opt',['design'],{role:'qa'}),
+    S('step-back','Шаги','lock',['plan'],{lane:'бэк'}), S('step-front','Шаги','lock',['plan'],{lane:'фронт'}),
+    S('review','Ревью','req',['step-back','step-front']), S('qa','QA','opt',['review','qa-plan'],{role:'qa'}),
+    S('final','Финал','lock',['qa']), S('merge','Слияние','lock',['final'])
+  ];
+  const LIN = [
+    S('cut','Разрез','req'), S('plan','План','req',['cut']), S('step','Шаги','lock',['plan']), S('review','Ревью','req',['step']),
+    S('qa','QA','opt',['review']), S('final','Финал','lock',['qa']), S('merge','Слияние','lock',['final'])
+  ];
+  const TPL = { par:{name:'Параллельный цикл', ver:'v1', st:PAR}, lin:{name:'Бэк без дизайна', ver:'v5', st:LIN} };
+  const PRESET = { par:{tpl:'par', skip:[]}, par1:{tpl:'par', skip:['qa-plan']}, lin:{tpl:'lin', skip:['qa']} };
+  const skip = {}; Object.keys(PRESET).forEach(k=>skip[k]=new Set(PRESET[k].skip));
+  const CONFIRMED_OFF = ['qa']; // в подтверждённом v1-маршруте этой фичи сняты «Проверка плана» (теперь обязательна в v2) и «QA»
+  let pick = '';
+  const LOCK_T = { lock:'Шаги, финал и слияние не снимаются', req:'В этом шаблоне этап всегда' };
+
+  function source(key){
+    if (key==='changed') return { st:PAR.map(s=>s.id==='qa-plan'?Object.assign({},s,{p:'req',isNew:true}):s), off:new Set(CONFIRMED_OFF) }; // подтверждённый состав: снятое остаётся снятым, новый этап подсвечен
+    if (key==='tpl') key = H.dataset.tpl;
+    if (key==='pick') { if (!pick) return null; key = pick; }
+    const pr = PRESET[key]; return { st:TPL[pr.tpl].st, off:skip[key], key };
+  }
+  function ladder(st, off){
+    const by = Object.fromEntries(st.map(s=>[s.id,s]));
+    const on = st.filter(s=>!off.has(s.id));
+    const eff = id => by[id].after.flatMap(p=>off.has(p)?eff(p):[p]);
+    const pre = {}; on.forEach(s=>pre[s.id]=[...new Set(eff(s.id))]);
+    const reach = (a,b,seen=new Set())=>{ if(a===b) return true; if(seen.has(b)) return false; seen.add(b); return (pre[b]||[]).some(p=>reach(a,p,seen)); };
+    on.forEach(s=>{ pre[s.id] = pre[s.id].filter(p=>!pre[s.id].some(q=>q!==p && reach(p,q))); });
+    const d = {}; const depth = id => d[id] ?? (d[id] = pre[id].length ? 1+Math.max(...pre[id].map(depth)) : 0);
+    on.forEach(s=>depth(s.id));
+    const cols = []; on.forEach(s=>(cols[d[s.id]] ||= []).push(s));
+    const arcs = []; on.forEach(s=>pre[s.id].forEach(p=>{ if (d[s.id]-d[p]>1) arcs.push([p,s.id]); }));
+    return { cols:cols.filter(Boolean), arcs, on };
+  }
+  function chip(s, checked, ro){
+    const lock = s.p!=='opt';
+    const inner = (lock?`<span class="lk" aria-hidden="true">🔒</span>`:`<i class="bx" aria-hidden="true"></i>`)
+      + `<span class="nm">${s.n}</span>` + (s.lane?`<span class="lane">${s.lane}</span>`:'') + (s.role?`<span class="role">${s.role}</span>`:'');
+    const title = lock ? LOCK_T[s.p] : (checked ? 'По решению — нажмите, чтобы снять' : 'Снят — нажмите, чтобы вернуть');
+    const dis = lock || ro;
+    const tag = dis ? 'span' : 'button';
+    return `<${tag} class="ck${lock?'':' opt'}${s.isNew?' new':''}" role="checkbox" aria-checked="${checked}"${dis?' aria-disabled="true"':''} data-id="${s.id}" title="${title}">${inner}</${tag}>`;
+  }
+  function render(w){
+    const src = source(w.dataset.lad);
+    if (!src) { w.innerHTML = `<div class="lslot">Этапы появятся здесь, когда вы выберете шаблон</div>`; return; }
+    const ro = w.hasAttribute('data-ro'), v = w.hasAttribute('data-v');
+    const { cols, arcs } = ladder(src.st, src.off);
+    const html = cols.map(c => c.length>1
+      ? `<div class="lcol par"><span class="pl">∥ параллельно</span>${c.map(s=>chip(s,true,ro)).join('')}</div>`
+      : `<div class="lcol">${chip(c[0],true,ro)}</div>`).join(`<span class="larr" aria-hidden="true">${v?'↓':'→'}</span>`);
+    const offList = src.st.filter(s=>src.off.has(s.id));
+    w.dataset.key = src.key || '';
+    w.innerHTML = `<div class="lad${v?' v':''}${arcs.length?' arc':''}" role="group" aria-label="Маршрут по колонкам">${html}</div>`
+      + (offList.length ? `<div class="lsk"><span class="lb2">Снято:</span>${offList.map(s=>chip(s,false,ro)).join('')}</div>` : '');
+    w._arcs = arcs;
+  }
+  function draw(w){
+    const lad = w.querySelector('.lad'); if (!lad || !w._arcs || !w._arcs.length || !lad.offsetParent) return;
+    lad.querySelector('svg')?.remove();
+    const v = lad.classList.contains('v'), L = lad.getBoundingClientRect();
+    const box = el => { const r = el.getBoundingClientRect(); return { l:r.left-L.left+lad.scrollLeft, r:r.right-L.left+lad.scrollLeft, t:r.top-L.top, b:r.bottom-L.top }; };
+    const chips = [...lad.querySelectorAll('.ck')].map(box);
+    const NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS,'svg');
+    svg.setAttribute('width', lad.scrollWidth); svg.setAttribute('height', lad.scrollHeight); svg.setAttribute('aria-hidden','true');
+    w._arcs.forEach(([a,b])=>{
+      const A = box(lad.querySelector(`.ck[data-id="${a}"]`)), B = box(lad.querySelector(`.ck[data-id="${b}"]`));
+      let dpath, ex, ey;
+      if (v) { const side = Math.max(...chips.map(c=>c.r)) + 16; const ay=(A.t+A.b)/2, by=(B.t+B.b)/2; dpath=`M${A.r} ${ay} C${side} ${ay} ${side} ${by} ${B.r} ${by}`; ex=B.r; ey=by; }
+      else { const base = Math.max(...chips.map(c=>c.b)) + 20; const ax=(A.l+A.r)/2, bx=(B.l+B.r)/2; dpath=`M${ax} ${A.b} C${ax} ${base} ${bx} ${base} ${bx} ${B.b}`; ex=bx; ey=B.b; }
+      const p = document.createElementNS(NS,'path'); p.setAttribute('d', dpath); svg.appendChild(p);
+      const c = document.createElementNS(NS,'circle'); c.setAttribute('cx',ex); c.setAttribute('cy',ey); c.setAttribute('r',2.5); svg.appendChild(c);
+    });
+    lad.prepend(svg);
+  }
+  function summary(full){
+    const key = H.dataset.st==='changed' ? 'par' : H.dataset.tpl, pr = PRESET[key], T = TPL[pr.tpl], off = skip[key];
+    const names = T.st.filter(s=>off.has(s.id)).map(s=>s.n);
+    if (full) return `${T.name} ${T.ver} · ${names.length ? 'снято: '+names.join(', ') : 'все этапы'}`;
+    return `${T.name} · ${T.st.length-names.length} из ${T.st.length} этапов`;
+  }
+  function all(){
+    document.querySelectorAll('[data-lad]').forEach(render);
+    document.querySelectorAll('[data-sum]').forEach(el=>el.textContent = summary(el.dataset.sum==='full'));
+    document.querySelectorAll('[data-tplsel]').forEach(s=>s.value = PRESET[H.dataset.tpl].tpl);
+    document.querySelectorAll('[data-picksel]').forEach(s=>s.value = pick);
+    document.querySelectorAll('[data-needpick]').forEach(b=>b.disabled = !pick);
+    document.querySelectorAll('[data-pickhint]').forEach(h=>h.hidden = !!pick);
+    requestAnimationFrame(()=>document.querySelectorAll('[data-lad]').forEach(draw));
+  }
+  window.afterSync = all;
+  window.addEventListener('resize', ()=>document.querySelectorAll('[data-lad]').forEach(draw));
+  document.addEventListener('click', e=>{
+    const t = e.target.closest('[data-whytoggle]');
+    if (t) { const w = t.closest('.rc').querySelector('[data-why]'); const open = w.hidden; w.hidden = !open; t.setAttribute('aria-expanded', String(open)); t.textContent = open ? 'Скрыть' : 'Почему так'; return; }
+    const c = e.target.closest('button.ck[data-id]'); if (!c) return;
+    const w = c.closest('[data-lad]'), key = w.dataset.key; if (!key) return;
+    const set = skip[key]; set.has(c.dataset.id) ? set.delete(c.dataset.id) : set.add(c.dataset.id);
+    all();
+    w.querySelector(`.ck[data-id="${c.dataset.id}"]`)?.focus();
+  });
+  document.addEventListener('change', e=>{
+    if (e.target.matches('[data-picksel]')) { pick = e.target.value; all(); }
+    if (e.target.matches('[data-tplsel]')) { H.dataset.tpl = e.target.value; H.dataset.st = 'edit'; document.querySelector('.pseg[data-k="st"] button[data-v="edit"]').click(); }
+  });
+})();
+</script>
 </body>
 </html>

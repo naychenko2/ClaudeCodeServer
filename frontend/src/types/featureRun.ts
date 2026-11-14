@@ -15,6 +15,8 @@
 // отсутствие любого (старые задачи без разметки не несут feature-полей).
 import type { StepProgress } from '../lib/featureProgress';
 import type { AcceptanceCriterion, AcceptanceEvidence } from './index';
+import type { WorkflowProposal } from '../features/workflowTemplates/types';
+import type { ConfirmedRoute } from '../components/feature/FeatureWorkflowConfirmModel';
 
 export interface FeatureTask {
   id: string;
@@ -32,6 +34,8 @@ export interface FeatureTask {
   worktreeBranch?: string | null;
   personaId?: string | null;
   createdAt?: string | null;
+  // Первые 8 знаков id (бэк: TaskItem.ShortId) — для шапки страницы фичи (B02).
+  shortId?: string | null;
   completedAt?: string | null;
   // Запуск исполнителя: отметка старта Claude-исполнителя (у step/rework/финала).
   // Уже приходит в JSON — просто не было описано.
@@ -69,6 +73,15 @@ export interface FeatureTask {
   // «обещали ≈ N»); бэк отдаёт его в run.epic — полном TaskItem. Аддитивное: старые
   // задачи его не несут.
   initialEtaMinutes?: number | null;
+  // Предложение маршрута и подтверждённый маршрут (бэк: `TaskItem.WorkflowProposal` /
+  // `TaskItem.Workflow`, только у эпика). Аддитивные: легаси-эпик не несёт ни того, ни
+  // другого — блока подтверждения у него нет.
+  workflowProposal?: WorkflowProposal | null;
+  workflow?: ConfirmedRoute | null;
+  // Режим маршрута (бэк: `TaskItem.RouteRequired`): true — блок маршрута показывается,
+  // даже когда предложения нет (модель не ответила / ответ не разобран). У легаси-эпика
+  // поля нет (undefined/null) — блока нет.
+  routeRequired?: boolean | null;
 }
 
 // Голос фичи на wire (зеркало бэкового `FeatureNote`, camelCase; bySessionId наружу
@@ -198,6 +211,29 @@ export interface FeatureStageExecutor {
 // только показывает (шаг Ф5).
 export interface FeatureStage {
   key: StageKey;
+  // Графовые поля стадии (G3, разрез 2 §1.7, бэк: FeatureRun.cs:279-292). Аддитивные:
+  // старые ответы их не несут — UI обязан пережить отсутствие; фолбэк модели зеркалит
+  // бэка (id → ключ, after → [], column → 0 — FeatureProjector.cs:804-814), ничего не
+  // пересчитывает (C3a).
+  // Id этапа: у фичи с маршрутом — id этапа маршрута (уникален в графе), у легаси-стадии —
+  // её ключ (бэк: FeatureStage.Id). Выбор стадии — по нему, не по индексу.
+  id?: string;
+  // Роль этапа (ключ TaskRoles): у фичи с маршрутом — из RouteStage.Role, у легаси — роль
+  // её задач (бэк: FeatureStage.Role).
+  role?: string;
+  // Линия этапа (back | front | other) — только у графового этапа роли step, иначе null
+  // (бэк: FeatureStage.Lane).
+  lane?: string | null;
+  // Имя этапа (G7, a5d0c76e): замороженный RouteStage.Title подтверждённого маршрута; бэк
+  // гарантирует различимость имён у этапов с общей парой (role, lane) — «Параллельный цикл»
+  // даёт qa-plan «Проверка плана» / qa «Проверка». У легаси-стадии и этапа без имени — null:
+  // фронт тогда подписывает узел именем роли и линией (своей таблицы имён фронт не ведёт).
+  title?: string | null;
+  // Предшественники в графе — id этапов (бэк: FeatureStage.After): у легаси пусто, графа нет.
+  after?: string[];
+  // Колонка графа = длиннейший путь от корня (бэк: WorkflowGraph.Columns, FeatureRun.cs:290-292);
+  // у легаси-стадии — 0. Фронт группирует строго по этому полю и НЕ пересчитывает колонки.
+  column?: number;
   state: StageState;
   // Тон — только у active, иначе null.
   tone?: StageTone | null;
@@ -235,6 +271,28 @@ export interface FeatureStage {
   // Б2: исполнители стадии (по одному на задачу стадии, в порядке, в котором задачи дал
   // вызывающий). Сырые данные — подпись роли строит фронт (roleLabel).
   executors: FeatureStageExecutor[];
+  // B01 (узел графа процесса). Аддитивные: старые ответы их не несут — UI переживает отсутствие.
+  // Имена исполнителей по порядку personaIds; минуты работы (null — не начат);
+  // чего ждёт этап (human — вопрос человеку, branches — ветки-предшественники);
+  // число возвратов на доработку; полоска задач ветки; линия узла (back | front).
+  personaNames?: string[];
+  elapsedMinutes?: number | null;
+  waiting?: 'human' | 'branches' | null;
+  returns?: number;
+  taskSegments?: FeatureStageSegments | null;
+  line?: 'back' | 'front' | null;
+  // B10: маршрут ещё не подтверждён человеком — узел показывает пометку «предложено».
+  proposed?: boolean;
+  // B11: этап предложенного маршрута включён «по решению» (presence=optional): true — по решению,
+  // false — обязательный; null/отсутствует — признака нет (легаси, подтверждённый маршрут).
+  byDecision?: boolean | null;
+}
+
+// Полоска задач этапа (B01, бэк: FeatureStageSegments): закрытые / идущие / всего.
+export interface FeatureStageSegments {
+  done: number;
+  running: number;
+  total: number;
 }
 
 // Цепочка шага (бэк: `FeatureStepChain`): задача шага + её доработки, в порядке времени.
@@ -416,10 +474,23 @@ export interface FeatureQueue {
 // Старые поля (epic/steps/reviews/qa/final/merge/verdicts/progress/ready) пока
 // использует `FeatureRunView` (страница фичи) — не удалять.
 // Новые поля (cut/plan/stages/stepChains/now/attention/returnsBySource/lanes/
-// stepsAccepted/stepsTotal/lastActivityAt/closed/summary) — аддитивные и
+// stepsAccepted/stepsTotal/stagesPassed/stagesTotal/lastActivityAt/closed/summary) — аддитивные и
 // nullable-терпимые: опциональны, UI обязан пережить их отсутствие (старые данные).
+// Метастрока шапки страницы фичи (B02, бэк: FeatureRunMeta). Снятые этапы в stagesTotal не входят;
+// у легаси-фичи: 0/0, parallelBranches 0, progressPct null, approx true («≈»).
+export interface FeatureRunMeta {
+  stagesDone: number;
+  stagesTotal: number;
+  parallelBranches: number;
+  etaMinutes: number | null;
+  progressPct: number | null;
+  approx: boolean;
+}
+
 export interface FeatureRun {
   featureId: string;
+  // B02: метастрока шапки. Аддитивное: старые ответы не несут.
+  meta?: FeatureRunMeta;
   // Состояние фичи (бэк: `FeatureRun.State`, 11 значений, всегда отдаётся).
   // Единая точка правды: из неё выводится bucket строки индекса и порядок OrderRuns.
   state: FeatureState;
@@ -466,6 +537,12 @@ export interface FeatureRun {
   // Счётчик шагов: принятые (Done) / все (из StepChains).
   stepsAccepted?: number;
   stepsTotal?: number;
+  // Счётчик этапов «пройдено N из M» (G3, разрез 2 §1.7, бэк: FeatureRun.cs:91-95): отдельная
+  // ось от процента по шагам (StepProgress не трогается). M — число этапов подтверждённого
+  // маршрута (у легаси-фичи — 0, графа нет); N — стадии с состоянием done. Аддитивное:
+  // старые ответы поля не несут — UI обязан пережить отсутствие.
+  stagesPassed?: number;
+  stagesTotal?: number;
   // Честный прогресс по шагам (волна 3, Ф-pr): planState/total/accepted/review/work/
   // notCreated/withdrawn/unlinkedReworks. Аддитивное: старые ответы не несут.
   stepProgress?: StepProgress;

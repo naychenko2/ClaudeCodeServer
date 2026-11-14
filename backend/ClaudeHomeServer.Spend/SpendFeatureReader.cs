@@ -183,6 +183,7 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         TaskId = r.TaskId,
         PersonaId = r.PersonaId,
         Model = r.Model,
+        Initiator = r.Initiator,
         InputTokens = r.InputTokens,
         OutputTokens = r.OutputTokens,
         CacheReadTokens = r.CacheReadTokens,

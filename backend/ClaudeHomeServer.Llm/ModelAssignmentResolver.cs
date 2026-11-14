@@ -51,15 +51,38 @@ public sealed class ModelAssignmentResolver(
     /// </summary>
     public string? ExecutorModel(TaskItem task, Persona? persona, string? ownerId)
     {
+        // Слепок этапа (И4): читается только task.Stage, шаблон не читается никогда. Матрица этапа —
+        // самая узкая: идёт перед персоной и специальностью. Явная Persona.Model сильнее этапа.
+        var stageMatrix = StageMatrixOf(task.Stage);
+        var stageTier = task.Stage?.DefaultTier;
         if (task.ModelTier is { } taskTier)
         {
-            var matrices = persona is null ? [] : PersonaMatrices(persona, ownerId);
+            var matrices = new List<TierMatrix>();
+            if (stageMatrix is not null) matrices.Add(stageMatrix);
+            if (persona is not null) matrices.AddRange(PersonaMatrices(persona, ownerId));
             var value = userTiers?.ModelFor(taskTier, ownerId, matrices) ?? appSettings.TierModel(taskTier);
             return PrimaryOf(value, ownerId);
         }
         // Без уровня задачи — модель персоны; дефолт места «исполнитель задач» (Strong)
-        // подхватывает ячейку персоны без явного уровня.
-        return PersonaModel(persona, ownerId, LocalActionCatalog.DefaultTierOf(LocalActionCatalog.TasksExecutor));
+        // подхватывает ячейку персоны без явного уровня. Уровень этапа встаёт на место уровня
+        // задачи (сильнее специальности и места), если у персоны нет явной модели.
+        var placeTier = LocalActionCatalog.DefaultTierOf(LocalActionCatalog.TasksExecutor);
+        if (persona is not null)
+            return PersonaModelDetailed(persona, persona.Specialty, ownerId, placeTier, stageTier,
+                stageMatrix, overrideOrigin: "stage").Model;
+        if (stageMatrix is null && stageTier is null) return null;
+        var level = stageTier ?? placeTier ?? ModelTier.Strong;
+        IReadOnlyList<TierMatrix> onlyStage = stageMatrix is null ? [] : [stageMatrix];
+        var cell = userTiers?.ModelFor(level, ownerId, onlyStage) ?? appSettings.TierModel(level);
+        return PrimaryOf(cell, ownerId);
+    }
+
+    // Матрица этапа из слепка; пустая ячейка не участвует (как у персоны).
+    private static TierMatrix? StageMatrixOf(StageSnapshot? stage)
+    {
+        if (stage is null) return null;
+        var m = new TierMatrix(stage.TierStrong, stage.TierMedium, stage.TierWeak);
+        return m.IsEmpty ? null : m;
     }
 
     /// <summary>
@@ -331,6 +354,7 @@ public sealed class ModelAssignmentResolver(
     public static class ModelSource
     {
         public const string PersonaModel = "persona-model";        // явная Persona.Model
+        public const string StageCell = "stage-cell";              // ячейка матрицы этапа (слепок задачи)
         public const string PersonaCell = "persona-cell";          // ячейка матрицы персоны
         public const string SpecialtyCell = "specialty-cell";      // ячейка матрицы специальности
         public const string OwnerSlot = "owner-slot";              // личный слот тира владельца
@@ -396,7 +420,8 @@ public sealed class ModelAssignmentResolver(
     // Полный резолв персоны с источником (те же шаги, что PersonaModel). personaSpecialty передаётся
     // снаружи: для превью карточки специальности матрицы строятся по ней даже без персоны.
     private ModelSourceDetail PersonaModelDetailed(Persona persona, PersonaSpecialty personaSpecialty,
-        string? ownerId, ModelTier? placeDefaultTier, ModelTier? overrideTier)
+        string? ownerId, ModelTier? placeDefaultTier, ModelTier? overrideTier,
+        TierMatrix? stageMatrix = null, string overrideOrigin = "task")
     {
         // 1. Явная модель персоны (в т.ч. preset) — сильнее всего
         if (!string.IsNullOrWhiteSpace(persona.Model))
@@ -407,7 +432,7 @@ public sealed class ModelAssignmentResolver(
         // Tier*, заданные при выкате значения мигрированы в TierMedium (PersonaManager).
         ModelTier level;
         string origin;
-        if (overrideTier is { } ot) { level = ot; origin = "task"; }
+        if (overrideTier is { } ot) { level = ot; origin = overrideOrigin; }
         else if (personaSpecialty != PersonaSpecialty.None && specialty is not null
             && specialty.SpecialtyDefaultTier(ownerId ?? "", personaSpecialty) is { } sdt)
         { level = sdt; origin = "specialty"; }
@@ -415,11 +440,15 @@ public sealed class ModelAssignmentResolver(
         else return ModelSourceDetail.Empty;
 
         var (matrices, personaMatrixCount) = PersonaMatricesFor(personaSpecialty, persona, ownerId);
+        // Матрица этапа — первая (самая узкая); индексы персоны и специальности сдвигаются на неё
+        var stageCount = 0;
+        if (stageMatrix is not null) { matrices.Insert(0, stageMatrix); stageCount = 1; }
         var cell = userTiers?.ModelForWithSource(level, ownerId, matrices)
             ?? new TierCellResult(appSettings.TierModel(level), TierCellOrigin.InstanceSlot, -1);
         var source = cell.Origin switch
         {
-            TierCellOrigin.NarrowMatrix when cell.MatrixIndex < personaMatrixCount => ModelSource.PersonaCell,
+            TierCellOrigin.NarrowMatrix when cell.MatrixIndex < stageCount => ModelSource.StageCell,
+            TierCellOrigin.NarrowMatrix when cell.MatrixIndex < stageCount + personaMatrixCount => ModelSource.PersonaCell,
             TierCellOrigin.NarrowMatrix => ModelSource.SpecialtyCell,
             TierCellOrigin.OwnerSlot => ModelSource.OwnerSlot,
             TierCellOrigin.InstanceSlot => ModelSource.InstanceSlot,

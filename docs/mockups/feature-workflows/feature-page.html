@@ -344,7 +344,7 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
 </style>
 <script>
 // Рёбра графа: пересчёт по раскладке. Соседние уровни — кривая из края в край; ребро через уровень
-// (например «Проверка плана» → «Проверка») идёт обходом: под графом в горизонтали, справа в вертикали.
+// (например «Проверка плана» → «QA») идёт обходом: под графом в горизонтали, справа в вертикали.
 // Вертикаль: прямая из центра в центр, только если между узлами никого нет; иначе — дуга слева.
 (function(){
   const NS = 'http://www.w3.org/2000/svg';
@@ -404,27 +404,27 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
     <span data-show="v:a">· вариант A: граф во всю ширину сверху — читается как маршрут слева направо, этап ниже на всю ширину</span>
     <span data-show="v:b">· вариант B: граф узкой колонкой слева — список этапов всегда рядом, детали этапа справа</span>
     <span>· шапка — блок C2</span></div>
-  <p class="why">Маршрут фичи — встроенный «Параллельный цикл»: после дизайна план и его проверка идут одновременно, шаги — двумя линиями (бэк ‖ фронт) и сходятся в «Ревью»; «Проверка» ждёт и ревью, и проверку плана (пунктирное ребро в обход). Этапы одной колонки — в рамке «параллельно»; у двух qa-этапов разные имена, по ним их и различают. Граф показывает только фактические этапы: снятые при подтверждении в нём не рисуются. Клик по узлу меняет нижнюю (правую) часть; «Открыть этап» ведёт на экран этапа.</p>
+  <p class="why">Маршрут фичи — встроенный «Параллельный цикл»: после дизайна план и его проверка идут одновременно, шаги — двумя линиями (бэк ‖ фронт) и сходятся в «Ревью»; «QA» ждёт и ревью, и проверку плана (пунктирное ребро в обход). Этапы одной колонки — в рамке «параллельно»; у двух qa-этапов разные имена, по ним их и различают. Граф показывает только фактические этапы: снятые при подтверждении в нём не рисуются. Клик по узлу меняет нижнюю (правую) часть; «Открыть этап» ведёт на экран этапа.</p>
   <div class="app">
     <div class="pane p-page" data-mcap="C3b · страница фичи (360)">
       <div class="island">
         <div class="tb"><button class="back">‹ Фичи</button><span class="sp"></span><button class="btn xs ghost d-only">Ключевой чат</button><button class="ib" title="Ещё">⋯</button></div>
         <div class="fh">
-          <div class="row wrap"><span class="tag info" data-show="!st:empty">в работе</span><span class="tag" data-show="st:empty">новая</span><span class="inh">эпик a149e308 · 12.11</span><span class="sp"></span><span class="inh d-only" data-show="!st:empty|unconf">4 из 10 этапов · 2 ветки идут параллельно · ≈ 7 ч до финала</span></div>
+          <div class="row wrap"><span class="tag info" data-show="!st:empty|unconf">в работе</span><span class="tag w" data-show="st:unconf">ждёт подтверждения</span><span class="tag" data-show="st:empty">новая</span><span class="inh">эпик a149e308 · 12.11</span><span class="sp"></span><span class="inh d-only" data-show="!st:empty|unconf|legacy">4 из 10 этапов · 2 ветки идут параллельно · ≈ 7 ч до финала</span></div>
           <h2 class="ftitle">Процессы фичи: шаблоны и наследование</h2>
-          <div class="pb" style="margin-top:var(--sp-sm)" data-show="!st:empty|unconf"><i style="width:52%"></i></div>
+          <div class="pb" style="margin-top:var(--sp-sm)" data-show="!st:empty|unconf|legacy"><i style="width:40%"></i></div>
           <!-- шапка: C2 в компактном виде -->
-          <div class="hrow" data-show="st:run"><span class="tag ok">✓ маршрут</span><span class="sec grow ell">Параллельный цикл v1 · подтвердил Андрей 12.11</span><button class="btn xs ghost">Почему так</button></div>
+          <div class="hrow" data-show="st:run"><span class="tag ok">✓ маршрут</span><span class="sec grow ell">Параллельный цикл v1 · подтвердил человек</span><button class="btn xs ghost">Почему так</button></div>
           <div class="hrow plan" data-show="st:unconf"><span class="tag w">ждёт вас</span><span class="grow">Модель предлагает «Параллельный цикл»: шаги бэка и фронта одновременно, план проверяет тестировщик. Пока не подтвердите, исполнители не стартуют.</span><button class="btn sm primary">Посмотреть и подтвердить</button></div>
           <div class="hrow warn" data-show="st:changed"><span class="tag w">шаблон изменился</span><span class="grow">«Параллельный цикл» v1 → v2: «Проверка плана» стала обязательной. Пока маршрут прежний.</span><button class="btn xs secondary">Обновить маршрут</button><button class="btn xs ghost">Оставить v1</button></div>
-          <div class="hrow" data-show="st:legacy"><span class="tag">старая фича</span><span class="sec grow">Создана до шаблонов: этапы — по прежнему фиксированному списку, замеры приблизительные.</span><button class="btn xs ghost">Выбрать шаблон</button></div>
+          <div class="hrow" data-show="st:legacy"><span class="tag">старая фича</span><span class="sec grow"><b>Маршрута ещё нет.</b> Создана до шаблонов: выберите шаблон — появятся граф и экран этапа.</span><button class="btn xs ghost">Выбрать шаблон</button></div>
           <div class="hrow plan" data-show="st:empty"><span class="tag w">ждёт вас</span><span class="grow">Маршрута ещё нет.</span><button class="btn sm primary">Подобрать маршрут</button><button class="btn sm ghost">Выбрать шаблон</button></div>
         </div>
 
         <div class="pg">
           <!-- ===== граф ===== -->
           <div class="gwrap">
-            <div class="row" style="margin-bottom:var(--sp-sm)"><span class="sect" style="margin:0">Процесс</span><span class="sp"></span><span class="inh" data-show="st:run|changed">Параллельный цикл v1</span><span class="inh" data-show="st:unconf">предложение · ещё не подтверждено</span><span class="inh" data-show="st:legacy">фиксированный список</span></div>
+            <div class="row" style="margin-bottom:var(--sp-sm)"><span class="sect" style="margin:0">Процесс</span><span class="sp"></span><span class="inh" data-show="st:run|changed">Параллельный цикл v1</span><span class="inh" data-show="st:unconf">предложение · ещё не подтверждено</span></div>
             <div data-show="st:empty"><div class="empty"><div class="em-ic">⇢</div><div class="em-t">Этапов пока нет</div><div class="em-x">Граф появится, когда вы подтвердите маршрут: модель подберёт шаблон по описанию фичи, вы снимете лишнее.</div></div></div>
 
             <div class="pgraph" data-show="st:run|changed" aria-label="Этапы фичи">
@@ -435,11 +435,11 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
                 <button class="node done" data-id="qa-plan" data-after="design"><span class="nn"><span class="ico">✓</span>Проверка плана <span class="role">qa</span></span><span class="nm">Вера · 25 мин</span></button>
               </div>
               <div class="lv par" title="Этапы одной колонки идут одновременно"><span class="pl">⇉ параллельно</span>
-                <button class="node act sel" data-id="step-back" data-after="plan"><span class="cnt s ret" title="Один возврат на доработку">↺1</span><span class="nn"><span class="ico"></span>Шаги <span class="lane">бэк</span></span><span class="nm">Тимур, Денис · 2/3</span><span class="lanes"><i class="d"></i><i class="d"></i><i class="a"></i></span></button>
+                <button class="node act sel" data-id="step-back" data-after="plan"><span class="cnt s ret" title="Один возврат на доработку">↺1</span><span class="nn"><span class="ico"></span>Шаги <span class="lane">бэк</span></span><span class="nm">Тимур, Денис · 2/3 · ◐ вопрос</span><span class="lanes"><i class="d"></i><i class="d"></i><i class="a"></i></span></button>
                 <button class="node act" data-id="step-front" data-after="plan"><span class="nn"><span class="ico"></span>Шаги <span class="lane">фронт</span></span><span class="nm">Полина · 1/2</span><span class="lanes"><i class="d"></i><i class="a"></i></span></button>
               </div>
-              <div class="lv"><button class="node hum" data-id="review"><span class="nn"><span class="ico"></span>Ревью</span><span class="nm">Глеб · ждёт ответа вас</span></button></div>
-              <div class="lv"><button class="node todo" data-id="qa" data-after="review qa-plan"><span class="nn"><span class="ico"></span>Проверка <span class="role">qa</span></span><span class="nm">Вера · ждёт обе ветки</span></button></div>
+              <div class="lv"><button class="node todo" data-id="review"><span class="nn"><span class="ico"></span>Ревью</span><span class="nm">Глеб · ждёт ветки</span></button></div>
+              <div class="lv"><button class="node todo" data-id="qa" data-after="review qa-plan"><span class="nn"><span class="ico"></span>QA <span class="role">qa</span></span><span class="nm">Вера · ждёт обе ветки</span></button></div>
               <div class="lv"><button class="node todo" data-id="final"><span class="nn"><span class="ico"></span>Финал</span><span class="nm">Александр</span></button></div>
               <div class="lv"><button class="node todo" data-id="merge"><span class="nn"><span class="ico"></span>Слияние</span><span class="nm">Марк</span></button></div>
             </div>
@@ -455,18 +455,12 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
                 <button class="node prop" data-id="step-front" data-after="plan"><span class="nn"><span class="ico"></span>Шаги <span class="lane">фронт</span></span><span class="nm">предложено</span></button>
               </div>
               <div class="lv"><button class="node prop" data-id="review"><span class="nn"><span class="ico"></span>Ревью</span><span class="nm">предложено</span></button></div>
-              <div class="lv"><button class="node prop" data-id="qa" data-after="review qa-plan"><span class="nn"><span class="ico"></span>Проверка <span class="role">qa</span></span><span class="nm">по решению</span></button></div>
+              <div class="lv"><button class="node prop" data-id="qa" data-after="review qa-plan"><span class="nn"><span class="ico"></span>QA <span class="role">qa</span></span><span class="nm">по решению</span></button></div>
               <div class="lv"><button class="node prop" data-id="final"><span class="nn"><span class="ico"></span>Финал</span><span class="nm">предложено</span></button></div>
               <div class="lv"><button class="node prop" data-id="merge"><span class="nn"><span class="ico"></span>Слияние</span><span class="nm">предложено</span></button></div>
             </div>
-            <div class="graph" data-show="st:legacy">
-              <button class="node done"><span class="nn"><span class="ico">✓</span>Разрез</span><span class="nm">≈ 1 ч</span></button><span class="link done"></span>
-              <button class="node done"><span class="nn"><span class="ico">✓</span>План</span><span class="nm">≈ 40 мин</span></button><span class="link done"></span>
-              <button class="node act sel"><span class="nn"><span class="ico"></span>Шаги · 2/4</span><span class="nm">≈ 3 ч</span></button><span class="link"></span>
-              <button class="node todo"><span class="nn"><span class="ico"></span>Ревью</span><span class="nm">—</span></button><span class="link"></span>
-              <button class="node todo"><span class="nn"><span class="ico"></span>Финал</span><span class="nm">—</span></button>
-            </div>
-            <div class="glegend" data-show="!st:empty"><span>✓ готово</span><span>● в работе</span><span>◐ ждёт человека</span><span>пунктир — впереди</span><span data-show="st:unconf">фиолетовый пунктир — предложено, не подтверждено</span><span>↺ — возвраты на доработку</span><span data-show="!st:legacy">рамка «параллельно» — ветки идут одновременно, следующий этап ждёт все входящие</span><span data-show="!st:legacy">одна роль — разные имена: «Проверка плана» и «Проверка» (обе <span class="mono">qa</span>)</span></div>
+            <div data-show="st:legacy"><div class="empty"><div class="em-ic">⇢</div><div class="em-t">Маршрута ещё нет</div><div class="em-x">Фича создана до шаблонов, графа у неё нет. Выберите шаблон — этапы появятся, и можно будет следить за маршрутом.</div><button class="btn sm primary">Выбрать шаблон</button></div></div>
+            <div class="glegend" data-show="!st:empty|legacy"><span>✓ готово</span><span>● в работе</span><span>◐ ждёт человека</span><span>пунктир — впереди</span><span data-show="st:unconf">фиолетовый пунктир — предложено, не подтверждено</span><span>↺ — возвраты на доработку</span><span>рамка «параллельно» — ветки идут одновременно, следующий этап ждёт все входящие</span><span>одна роль — разные имена: «Проверка плана» и «QA» (обе <span class="mono">qa</span>)</span></div>
           </div>
 
           <!-- ===== выбранный этап ===== -->
@@ -476,16 +470,16 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
               <div class="notice" style="margin-bottom:var(--sp-md)"><span class="ic">!</span><span>Разрез готов, дальше работа стоит: исполнители не стартуют, пока маршрут не подтверждён. <a class="lnk" href="#">Подтвердить</a></span></div>
               <div class="empty sm"><div class="em-x">Детали этапов появятся после подтверждения маршрута.</div></div>
             </div>
-            <div data-show="st:run|changed|legacy">
-              <div class="sh"><span class="stt">Шаги</span><span class="lane-t" data-show="!st:legacy">бэк</span><span class="tag acc">в работе</span><span class="tag s" data-show="!st:legacy">1 возврат</span><span class="sp"></span><button class="btn sm primary">Открыть этап →</button></div>
-              <div class="inh" style="margin-top:var(--sp-xxs)" data-show="!st:legacy">Исполнители из плана · шаблон «Параллельный цикл» v1 · этап: молчит 45 мин → только сообщить</div>
-              <div class="parnote" data-show="!st:legacy"><span class="pi">⇉</span><span class="grow">Параллельно идёт <a class="lnk" href="#">Шаги · фронт</a> — Полина, 1 из 2. «Ревью» стартует, когда закончатся обе ветки.</span></div>
-              <div class="inh" style="margin-top:var(--sp-xxs)" data-show="st:legacy">Старая фича: точного замера по исполнителю, ревью и человеку нет — показываем оценку по интервалам.</div>
-              <div class="kpis">
-                <div class="kpi"><div class="kl">Время этапа</div><div class="kv" data-show="!st:legacy">4 ч 05 мин</div><div class="kv" data-show="st:legacy">≈ 3 ч</div><div class="ks" data-show="!st:legacy">исп. 2 ч 50 · ревью 40 · вы 35</div><div class="ks" data-show="st:legacy">без разбивки</div></div>
-                <div class="kpi"><div class="kl">Ходы</div><div class="kv" data-show="!st:legacy">186</div><div class="kv muted" data-show="st:legacy">—</div><div class="ks" data-show="!st:legacy">3 задачи ветки</div><div class="ks" data-show="st:legacy">нет замера</div></div>
-                <div class="kpi"><div class="kl">Токены</div><div class="kv" data-show="!st:legacy">4,1 М</div><div class="kv muted" data-show="st:legacy">—</div><div class="ks" data-show="!st:legacy">кэш 82 %</div><div class="ks" data-show="st:legacy">нет замера</div></div>
-                <div class="kpi"><div class="kl">Ждёт вас</div><div class="kv" data-show="!st:legacy" style="color:var(--c-warning-text)">1 вопрос</div><div class="kv muted" data-show="st:legacy">—</div><div class="ks" data-show="!st:legacy">35 мин ожидания</div></div>
+            <div data-show="st:legacy"><div class="empty"><div class="em-ic">☰</div><div class="em-t">Этапов нет — нечего показать</div><div class="em-x">Замеры и задачи этапа появятся после выбора шаблона.</div></div></div>
+            <div data-show="st:run|changed">
+              <div class="sh"><span class="stt">Шаги</span><span class="lane-t">бэк</span><span class="tag acc">в работе</span><span class="tag s">1 возврат</span><span class="sp"></span><button class="btn sm primary">Открыть этап →</button></div>
+              <div class="inh" style="margin-top:var(--sp-xxs)">Исполнители из плана · шаблон «Параллельный цикл» v1 · этап: молчит 45 мин → только сообщить</div>
+              <div class="parnote"><span class="pi">⇉</span><span class="grow">Параллельно идёт <a class="lnk" href="#">Шаги · фронт</a> — Полина, 1 из 2. «Ревью» стартует, когда закончатся обе ветки.</span></div>
+                            <div class="kpis">
+                <div class="kpi"><div class="kl">Время этапа</div><div class="kv">4 ч 05 мин</div><div class="ks">исп. 2 ч 50 · ревью 40 · вы 35</div></div>
+                <div class="kpi"><div class="kl">Ходы</div><div class="kv">186</div><div class="ks">3 задачи ветки</div></div>
+                <div class="kpi"><div class="kl">Токены</div><div class="kv">4,1 М</div><div class="ks">кэш 82 %</div></div>
+                <div class="kpi"><div class="kl">Ждёт вас</div><div class="kv" style="color:var(--c-warning-text)">1 вопрос</div><div class="ks">35 мин ожидания</div></div>
               </div>
               <div class="two">
                 <div>
@@ -496,8 +490,7 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
                 </div>
                 <div>
                   <div class="sect">Что ждёт вас</div>
-                  <div class="card" data-show="!st:legacy"><div class="mini"><span class="tag w">вопрос</span><span class="grow">Глеб: «Финал — несъёмный этап?»</span></div><button class="btn xs secondary" style="margin-top:var(--sp-xs)">Ответить</button></div>
-                  <div class="empty sm" data-show="st:legacy"><div class="em-x">Вопросов к вам нет.</div></div>
+                  <div class="card"><div class="mini"><span class="tag w">вопрос</span><span class="grow">Тимур: «Финал — несъёмный этап: запретить снятие на сервере?»</span></div><button class="btn xs secondary" style="margin-top:var(--sp-xs)">Ответить</button></div>
                   <div class="sect">Артефакты этапа</div>
                   <div class="card"><div class="mini"><span class="mono">TaskManager.cs</span><span class="sp"></span><span class="tag">v3</span></div><div class="mini"><span class="mono">WorkflowTemplateStore.cs</span><span class="sp"></span><span class="tag">v1</span></div><div class="mini"><span class="sec">ещё 11 файлов · 6 коммитов</span></div></div>
                 </div>

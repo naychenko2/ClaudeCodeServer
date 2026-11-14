@@ -82,11 +82,11 @@ public class FeatureTimelineJournalTests
     // ── 1. Полный журнал → точные ожидание/простой/ошибки ───────────────────────────────────
 
     // Таймлайн 08:00 → now=20:00 (720 мин). Журнал:
-    //   created 08:00; turn 09:00–10:00 (finished); waiting 10:00 → waiting_cleared 11:00 (60 мин);
-    //   turn 11:00–12:00 (error, auth); stopped 12:00 (точка).
-    // major 2 (work исключает error): ход 11:00–12:00 с outcome=error даёт и work, и error на том
-    // же диапазоне — в итогах он идёт как ERROR, не work. Поэтому:
-    //   work = [09:00,10:00] = 60 мин (только finished-ход; error-ход не в work);
+    //   created 08:00; turn 09:00–10:00 (success); waiting 10:00 → waiting_cleared 11:00 (60 мин);
+    //   turn 11:00–12:00 (failed, auth); stopped 12:00 (точка).
+    // major 2 (work исключает error): ход 11:00–12:00 с отказным outcome=failed даёт и work, и
+    // error на том же диапазоне — в итогах он идёт как ERROR, не work. Поэтому:
+    //   work = [09:00,10:00] = 60 мин (только успешный ход; отказный — не в work);
     //   waiting = [10:00,11:00] = 60 мин; error = [11:00,12:00] (turn) + точка 12:00 (0) = 60 мин;
     //   idle = 720 − 60 − 60 − 60 = 540 мин. Инвариант: 60+60+60+540 = 720 = elapsed.
     [Fact]
@@ -101,12 +101,12 @@ public class FeatureTimelineJournalTests
             Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
             Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
                 startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
-                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished"),
+                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "success"),
             Entry("waiting", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1"),
             Entry("waiting_cleared", new DateTime(2026, 10, 1, 11, 0, 0), taskId: "s1"),
             Entry("turn", new DateTime(2026, 10, 1, 12, 0, 0), taskId: "s1",
                 startedAt: new DateTime(2026, 10, 1, 11, 0, 0),
-                endedAt: new DateTime(2026, 10, 1, 12, 0, 0), outcome: "error", errorClass: "auth"),
+                endedAt: new DateTime(2026, 10, 1, 12, 0, 0), outcome: "failed", errorClass: "auth"),
             Entry("stopped", new DateTime(2026, 10, 1, 12, 0, 0), taskId: "s1"));
 
         var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
@@ -116,7 +116,7 @@ public class FeatureTimelineJournalTests
         tl.To.Should().Be(now);
         tl.Totals.ElapsedMinutes.Should().Be(720);
 
-        // work = [09:00,10:00] = 60 мин (только finished-ход; error-ход 11:00–12:00 не в work).
+        // work = [09:00,10:00] = 60 мин (только успешный ход; отказный 11:00–12:00 не в work).
         tl.Totals.WorkWallMinutes.Should().Be(60);
         // waiting = [10:00,11:00] = 60 мин.
         tl.Totals.WaitingMinutes.Should().Be(60);
@@ -131,7 +131,7 @@ public class FeatureTimelineJournalTests
         (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
             + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
 
-        // Счётчики: 1 ожидание (60 мин, самое длинное), 2 ошибки (turn error + stopped).
+        // Счётчики: 1 ожидание (60 мин, самое длинное), 2 ошибки (turn failed + stopped).
         tl.Totals.WaitingCount.Should().Be(1);
         tl.Totals.LongestWaitMinutes.Should().Be(60);
         tl.Totals.ErrorCount.Should().Be(2);
@@ -143,7 +143,7 @@ public class FeatureTimelineJournalTests
         Kinds(tl, "waiting").Should().Contain(s =>
             s.From == new DateTime(2026, 10, 1, 10, 0, 0)
             && s.To == new DateTime(2026, 10, 1, 11, 0, 0));
-        // error-сегмент [11:00,12:00] (error-ход), НЕ work: work-сегментов только [09:00,10:00].
+        // error-сегмент [11:00,12:00] (ход с outcome=failed), НЕ work: work-сегментов только [09:00,10:00].
         Kinds(tl, "error").Should().Contain(s =>
             s.From == new DateTime(2026, 10, 1, 11, 0, 0)
             && s.To == new DateTime(2026, 10, 1, 12, 0, 0));
@@ -154,8 +154,8 @@ public class FeatureTimelineJournalTests
 
     // ── 1b. РЕАЛИСТИЧНЫЙ журнал С started: ожидание рисуется, work его не включает (major 1) ──
 
-    // Журнал: created 08:00; started 09:00 (work-период до done 12:00); turn 09:00–10:00 (finished);
-    // waiting 10:00 → waiting_cleared 11:00; turn 11:00–12:00 (finished); status→Done 12:00.
+    // Журнал: created 08:00; started 09:00 (work-период до done 12:00); turn 09:00–10:00 (success);
+    // waiting 10:00 → waiting_cleared 11:00; turn 11:00–12:00 (success); status→Done 12:00.
     // Период started…done = [09:00,12:00] перекрывает ожидание [10:00,11:00]. major 1: work-период
     // разрезается на waiting-интервалы, поэтому ожидание рисуется как WAITING (не work), а work =
     // [09:00,10:00] + [11:00,12:00] = 120 мин (без 60 мин ожидания). До фикса (work > waiting)
@@ -174,12 +174,12 @@ public class FeatureTimelineJournalTests
                 startedAt: new DateTime(2026, 10, 1, 9, 0, 0)),
             Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
                 startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
-                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished"),
+                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "success"),
             Entry("waiting", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1"),
             Entry("waiting_cleared", new DateTime(2026, 10, 1, 11, 0, 0), taskId: "s1"),
             Entry("turn", new DateTime(2026, 10, 1, 12, 0, 0), taskId: "s1",
                 startedAt: new DateTime(2026, 10, 1, 11, 0, 0),
-                endedAt: new DateTime(2026, 10, 1, 12, 0, 0), outcome: "finished"),
+                endedAt: new DateTime(2026, 10, 1, 12, 0, 0), outcome: "success"),
             Entry("status", new DateTime(2026, 10, 1, 12, 0, 0), taskId: "s1", to: "Done"));
 
         var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
@@ -793,11 +793,11 @@ public class FeatureTimelineJournalTests
         var rng = new Random(7);
         var baseTime = new DateTime(2026, 10, 1, 0, 0, 0);
 
-        // Ходы — основная масса журнала: [at, at+1..9 мин], finished/error.
+        // Ходы — основная масса журнала: [at, at+1..9 мин], success/failed.
         for (var i = 0; i < turns; i++)
         {
             var at = baseTime.AddMinutes(rng.NextDouble() * 1440);
-            var outcome = rng.Next(5) == 0 ? "error" : "finished"; // ~20% error
+            var outcome = rng.Next(5) == 0 ? "failed" : "success"; // ~20% отказ
             entries.Add(Entry("turn", at, taskId: "s1",
                 startedAt: at, endedAt: at.AddMinutes(rng.Next(1, 10)), outcome: outcome));
         }
@@ -907,7 +907,7 @@ public class FeatureTimelineJournalTests
         {
             var at = t0.AddMinutes(i);
             entries.Add(Entry("turn", at.AddMinutes(1), taskId: "s1",
-                startedAt: at, endedAt: at.AddMinutes(1), outcome: "finished"));
+                startedAt: at, endedAt: at.AddMinutes(1), outcome: "success"));
         }
         // 1 ожидание 60 мин в конце: [t0+600, t0+660].
         var wStart = t0.AddMinutes(600);
@@ -950,9 +950,9 @@ public class FeatureTimelineJournalTests
         var journal = Journal(
             Entry("created", t0, taskId: "epic"),
             Entry("turn", t0.AddMinutes(0.5), taskId: "s1",
-                startedAt: t0, endedAt: t0.AddMinutes(0.5), outcome: "finished"),
+                startedAt: t0, endedAt: t0.AddMinutes(0.5), outcome: "success"),
             Entry("turn", t0.AddMinutes(1.5), taskId: "s1",
-                startedAt: t0.AddMinutes(1), endedAt: t0.AddMinutes(1.5), outcome: "finished"));
+                startedAt: t0.AddMinutes(1), endedAt: t0.AddMinutes(1.5), outcome: "success"));
 
         var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
 
@@ -990,7 +990,7 @@ public class FeatureTimelineJournalTests
         {
             var at = t0.AddMinutes(i);
             entries.Add(Entry("turn", at.AddMinutes(1), taskId: "s1",
-                startedAt: at, endedAt: at.AddMinutes(1), outcome: "finished"));
+                startedAt: at, endedAt: at.AddMinutes(1), outcome: "success"));
         }
         // 1 ожидание 10 мин в конце: [t0+1000, t0+1010].
         var wStart = t0.AddMinutes(1000);
@@ -1021,7 +1021,7 @@ public class FeatureTimelineJournalTests
             Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
             Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
                 startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
-                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished"));
+                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "success"));
 
         var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
 
@@ -1050,11 +1050,11 @@ public class FeatureTimelineJournalTests
         var journal = Journal(
             Entry("created", t0, taskId: "epic"),
             Entry("turn", t0.AddMinutes(598.5), taskId: "s1",
-                startedAt: t0, endedAt: t0.AddMinutes(598.5), outcome: "finished"),
+                startedAt: t0, endedAt: t0.AddMinutes(598.5), outcome: "success"),
             Entry("waiting", t0.AddMinutes(598.5), taskId: "s1"),
             Entry("waiting_cleared", t0.AddMinutes(599.3), taskId: "s1"),
             Entry("turn", t0.AddMinutes(599.8), taskId: "s1",
-                startedAt: t0.AddMinutes(599.3), endedAt: t0.AddMinutes(599.8), outcome: "error"));
+                startedAt: t0.AddMinutes(599.3), endedAt: t0.AddMinutes(599.8), outcome: "failed"));
 
         var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
 
@@ -1087,11 +1087,11 @@ public class FeatureTimelineJournalTests
         var journal = Journal(
             Entry("created", t0, taskId: "epic"),
             Entry("turn", t0.AddSeconds(30), taskId: "s1",
-                startedAt: t0, endedAt: t0.AddSeconds(30), outcome: "finished"),
+                startedAt: t0, endedAt: t0.AddSeconds(30), outcome: "success"),
             Entry("waiting", t0.AddSeconds(30), taskId: "s1"),
             Entry("waiting_cleared", t0.AddSeconds(50), taskId: "s1"),
             Entry("turn", t0.AddSeconds(60), taskId: "s1",
-                startedAt: t0.AddSeconds(50), endedAt: t0.AddSeconds(60), outcome: "error"));
+                startedAt: t0.AddSeconds(50), endedAt: t0.AddSeconds(60), outcome: "failed"));
 
         var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
 
@@ -1131,11 +1131,11 @@ public class FeatureTimelineJournalTests
         var journal = Journal(
             Entry("created", t0, taskId: "epic"),
             Entry("turn", wEnd, taskId: "s1",
-                startedAt: t0, endedAt: wEnd, outcome: "finished"),
+                startedAt: t0, endedAt: wEnd, outcome: "success"),
             Entry("waiting", wEnd, taskId: "s1"),
             Entry("waiting_cleared", waEnd, taskId: "s1"),
             Entry("turn", eEnd, taskId: "s1",
-                startedAt: waEnd, endedAt: eEnd, outcome: "error"));
+                startedAt: waEnd, endedAt: eEnd, outcome: "failed"));
 
         var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
 
@@ -1165,7 +1165,7 @@ public class FeatureTimelineJournalTests
             Entry("created", t0, taskId: "epic"),
             Entry("started", t0, taskId: "s1", startedAt: t0),
             Entry("turn", t0.AddMinutes(10), taskId: "s1",
-                startedAt: t0, endedAt: t0.AddMinutes(10), outcome: "finished"),
+                startedAt: t0, endedAt: t0.AddMinutes(10), outcome: "success"),
             Entry("status", t0.AddMinutes(10), taskId: "s1", to: "Done"));
 
         var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
@@ -1235,7 +1235,7 @@ public class FeatureTimelineJournalTests
         {
             var at = t0.AddMinutes(i);
             entries.Add(Entry("turn", at.AddMinutes(1), taskId: "s1",
-                startedAt: at, endedAt: at.AddMinutes(1), outcome: "finished"));
+                startedAt: at, endedAt: at.AddMinutes(1), outcome: "success"));
         }
         // Ожидание 10 мин В СЕРЕДИНЕ: [t0+500, t0+510].
         var wStart = t0.AddMinutes(500);
@@ -1246,7 +1246,7 @@ public class FeatureTimelineJournalTests
         {
             var at = t0.AddMinutes(510 + i);
             entries.Add(Entry("turn", at.AddMinutes(1), taskId: "s1",
-                startedAt: at, endedAt: at.AddMinutes(1), outcome: "finished"));
+                startedAt: at, endedAt: at.AddMinutes(1), outcome: "success"));
         }
 
         var tl = FeatureTimeline.Build(Run(epic, s1), Journal(entries.ToArray()), now);
@@ -1290,7 +1290,7 @@ public class FeatureTimelineJournalTests
         var journal = Journal(
             Entry("created", t0, taskId: "epic"),
             Entry("turn", t0.AddMinutes(1), taskId: "s1",
-                startedAt: t0, endedAt: t0.AddMinutes(1), outcome: "finished"),
+                startedAt: t0, endedAt: t0.AddMinutes(1), outcome: "success"),
             Entry("waiting", t0.AddMinutes(1), taskId: "s1"),
             Entry("waiting_cleared", t0.AddMinutes(11), taskId: "s1"));
 
@@ -1407,7 +1407,7 @@ public class FeatureTimelineJournalTests
             Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
             Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
                 startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
-                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished"));
+                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "success"));
 
         var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
 
@@ -1441,7 +1441,7 @@ public class FeatureTimelineJournalTests
             [
                 Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
                     startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
-                    endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished"),
+                    endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "success"),
             ],
         };
 
@@ -1495,7 +1495,7 @@ public class FeatureTimelineJournalTests
 
         var turn = Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
             startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
-            endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished");
+            endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "success");
 
         // Журнала нет вовсе.
         FeatureTimeline.Build(Run(epic, s1), null, now).IntervalsByStage
@@ -1510,6 +1510,57 @@ public class FeatureTimelineJournalTests
         };
         FeatureTimeline.Build(Run(epic, s1), truncated, now).IntervalsByStage
             .Should().BeNull("обрезанный журнал — интервалы не считались");
+    }
+
+    // ── 21. Исход хода по реальному словарю паспорта: отказ = ошибка таймлайна (дефект a6b5a2d0) ─
+    //
+    // Прежняя ветка ждала outcome == "error" — значения, которого в журнале не бывает: исход
+    // пишет паспорт хода (TurnRunPassport.cs:12 — success | failed | egress_down | interrupted |
+    // cancelled | crashed, плюс local_* и window_1m_unavailable из фолбэка). Поэтому упавший ход
+    // был обычным work, а ErrorCount и error-минуты — только от stopped-точек. Теперь тот же
+    // предикат, что у метрик этапа и LastOutcome интервалов стадии: FeatureTimeMath.IsFailedTurn
+    // (И7) — любой исход кроме success; null (паспорт не собран) — не отказ.
+    // Мутация «вернуть сравнение со строкой "error"» красит строки failed/crashed/egress_down/
+    // local_down/window_1m_unavailable; success и null остаются нулём ошибок.
+    [Theory]
+    [InlineData("failed", 1)]
+    [InlineData("crashed", 1)]
+    [InlineData("egress_down", 1)]
+    [InlineData("interrupted", 1)]
+    [InlineData("cancelled", 1)]
+    [InlineData("local_down", 1)]
+    [InlineData("window_1m_unavailable", 1)]
+    [InlineData("success", 0)]
+    [InlineData(null, 0)]
+    public void Build_ИсходХодаПоСловарюПаспорта_ErrorКакВМетрикахЭтапа(string? outcome, int expected)
+    {
+        var now = new DateTime(2026, 10, 1, 14, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", startedAt: T0, completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var journal = Journal(
+            Entry("created", T0, taskId: "epic"),
+            Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
+                startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: outcome));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        // Отказ: ход — error на своём диапазоне (не work), счётчик 1; успех/без паспорта: работа.
+        tl.Totals.ErrorCount.Should().Be(expected);
+        tl.Totals.ErrorMinutes.Should().Be(expected * 60);
+        tl.Totals.WorkWallMinutes.Should().Be(expected == 1 ? 0 : 60,
+            "минуты отказа принадлежат error, минуты успеха — work");
+        // Инвариант: work + waiting + error + idle = elapsed (360 мин: 08:00 → 14:00).
+        (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
+            + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
+        if (expected == 1)
+            Kinds(tl, "error").Should().Contain(s =>
+                s.From == new DateTime(2026, 10, 1, 9, 0, 0) && s.To == new DateTime(2026, 10, 1, 10, 0, 0));
+
+        // Та же строка журнала в метриках этапа: тот же предикат → то же число отказов (И7).
+        var m = FeatureStageMetrics.Build(s1, [], journal, null, now);
+        m.Executor.ErrorTurns.Should().Be(expected);
     }
 
     // Хелпер: сегменты заданного вида ───────────────────────────────────────────────────────

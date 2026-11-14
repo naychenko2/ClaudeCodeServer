@@ -339,6 +339,43 @@ export const FEATURE_MAIN_TAB_LABEL: Record<FeatureMainTab, string> = {
   review: 'Разбор',
 };
 
+// Название мейн-вкладки. Первая вкладка именуется по наличию маршрута (вариант A,
+// решение Андрея 13.11, docs/mockups/feature-workflows/materials-review-placement.md):
+// у фичи с маршрутом — «Процесс» (её содержимое — граф процесса и выбранный этап),
+// у легаси — «Ход» (содержимое прежнее). Прочие имена — из словаря выше.
+export function featureMainTabLabel(t: FeatureMainTab, hasRoute: boolean): string {
+  return t === 'progress' && hasRoute ? 'Процесс' : FEATURE_MAIN_TAB_LABEL[t];
+}
+
+// Признак маршрута по run фичи: подтверждённый (epic.workflow) или рёбра в стадиях. ЕДИНЫЙ
+// предикат для показа графа процесса (FeaturePage → FeatureStageArea) и для имени первой
+// вкладки (featureMainTabLabel) — минор ревью 8910d5b6 (дефект 762b7c03): та же формула
+// вторым экземпляром жила в FeatureStageArea.hasProcessGraph, и правка на одной стороне
+// молча разошлась бы с именем на другой. Легаси (ни подтверждённого, ни рёбер) — false.
+export function hasRouteOfRun(run: FeatureRun): boolean {
+  return !!run.epic?.workflow || hasProposalGraph(run) || (run.stages ?? []).some(s => (s.after?.length ?? 0) > 0);
+}
+
+// Граф ПРЕДЛОЖЕНИЯ (F08): маршрут не подтверждён, но модель предложила шаблон и бэк отдал
+// его узлы (stage.proposed) — страница рисует их фиолетовым пунктиром. {state:'none'} —
+// «модель не предложила»: узлов предложения нет, это пустое состояние, а не граф.
+export function hasProposalGraph(run: FeatureRun): boolean {
+  const epic = run.epic;
+  if (!epic || epic.workflow) return false;
+  const proposal = epic.workflowProposal;
+  if (!proposal || proposal.state === 'none') return false;
+  return (run.stages ?? []).length > 0;
+}
+
+// Признак маршрута ОТКРЫТОЙ страницы фичи: тонкая обёртка «открытая страница + её run» —
+// по нему страница именует первую вкладку (featureMainTabLabel), тем же именем канал
+// возврата (featureBackNav) записывает вкладку в момент перехода. false — страница не
+// открыта, данных нет, страница другой фичи.
+export function featureHasRoute(featureId: string): boolean {
+  if (_fid !== featureId || _state.status !== 'ok') return false;
+  return hasRouteOfRun(_state.page.run);
+}
+
 // Перевод старых значений в новые — строго по таблице FS-FTABS:
 // timeline/tasks → progress, plans → materials, chats/events/stats → review.
 // Полного покрытия union — нет: новая вкладка FeaturePageTab без строки здесь

@@ -9,10 +9,15 @@
 //     единственная строка «Выключено пресетов: N — их видно в настройке роли.».
 //   • edit — настройка роли (SpecialtyEditView): все секции (включённые и
 //     выключенные), полный контроль: toggle, textarea, счётчик 1024 с
-//     порогами жёлтый 80% / красный 95%, бейдж источника, бейдж
-//     «Типовой текст» / «Свой текст», кнопки «Задать свой текст» /
+//     порогами жёлтый 80% / красный 95%, кнопки «Задать свой текст» /
 //     «Вернуть типовой», строка «Сейчас пойдёт: …», ссылка
-//     «Показать выключенные (N)» в конце.
+//     «Показать выключенные (N)» в конце. Плюс панель наследования (макет
+//     persona-inheritance.html, P56–P59): строка «Наследуют: … · своё у …: N»
+//     из inheritors (GET /api/specialties/{key}, B09), подпись строки
+//     «текст по умолчанию · код / свой текст · общее», подсветка hot и тег
+//     «изменено только что» для секций последнего сохранения с эффектом
+//     «у Лизы обновилось · у Веры своё — не тронуто», подсказка про лимит и
+//     «выключено специальностью» в конце панели.
 //
 // Все элементы — inline-стили по токенам lib/design.ts, контролы из
 // ui-кита. Без Tailwind, без CSS-модулей. Под мобильную ширину работает
@@ -23,8 +28,10 @@
 
 import { useMemo, useState } from 'react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { Button, Toggle } from '../ui';
+import { Badge, Button, Toggle } from '../ui';
 import { useIsMobile } from '../../lib/breakpoints';
+import { plural } from '../../lib/plural';
+import { genitiveName } from '../../lib/russianName';
 import {
   effectivePromptSection, getPromptSectionsCatalog, loadPromptSectionsCatalog,
   sectionsOf, withPromptSection, withoutPromptSection,
@@ -32,7 +39,7 @@ import {
 } from '../../lib/specialties';
 import type { LayerReducer } from '../../lib/presets';
 import type {
-  SpecialtyPromptSectionMeta, SpecialtyPromptSectionsCatalog,
+  SpecialtyInheritor, SpecialtyPromptSectionMeta, SpecialtyPromptSectionsCatalog,
   SpecialtySettingsLayer,
 } from '../../types';
 
@@ -45,19 +52,23 @@ const TEXT_LIMIT = 1024;
 // После перехода на единый общий слой (ADR-012) «owner» больше не значит «личное»:
 // в edit-режиме это ПРАВИМЫЙ слой, а он теперь общий. Поэтому подписи owner и global
 // совпадают — личной пометки в однослойной модели быть не должно.
+// 'persona' — слой самой персоны: этот экран его не рендерит (он резолвит specialty-слои),
+// запись нужна для полноты Record общего union (P2a, GET /api/personas/{id}/prompt-sections).
 const SRC_LABEL: Record<PromptSectionSource, string> = {
-  code:   'Из кода',
-  global: 'Общее',
-  user:   'Пользователя',
-  owner:  'Общее',
+  code:    'Из кода',
+  global:  'Общее',
+  user:    'Пользователя',
+  owner:   'Общее',
+  persona: 'Своей персоны',
 };
 
 // Подпись «Сейчас пойдёт» под текстом секции: чьё значение применится в промпте.
 const SRC_NOTE: Record<PromptSectionSource, string> = {
-  code:   'Сейчас пойдёт: текст из кода (дефолт)',
-  global: 'Сейчас пойдёт: текст из общего слоя (настройки администратора)',
-  user:   'Сейчас пойдёт: текст из слоя пользователя (выбранного администратором)',
-  owner:  'Сейчас пойдёт: текст из общего слоя (настройки администратора)',
+  code:    'Сейчас пойдёт: текст из кода (дефолт)',
+  global:  'Сейчас пойдёт: текст из общего слоя (настройки администратора)',
+  user:    'Сейчас пойдёт: текст из слоя пользователя (выбранного администратором)',
+  owner:   'Сейчас пойдёт: текст из общего слоя (настройки администратора)',
+  persona: 'Сейчас пойдёт: свой текст персоны',
 };
 
 // Цвет счётчика 1024: нейтральный → жёлтый (80%) → красный (95%). Те же пороги,
@@ -95,16 +106,44 @@ function SectionTitle({ children }: { children: React.ReactNode }): React.ReactE
     );
 }
 
-// Подпись «Типовой текст» / «Свой текст» внутри карточки секции (edit).
-function OverrideBadge({ isOverride }: { isOverride: boolean }): React.ReactElement {
+// Имя в родительном падеже для связных фраз («своё у Веры»); несклоняемое имя
+// остаётся в именительном — фраза хуже грамматически, но не теряет смысла.
+const genOf = (name: string): string => genitiveName(name) ?? name;
+
+// Строка «Наследуют: Вера, Лиза · своё у Веры: 1 секция» (P56, макет .heirs).
+// Наследники — из GET /api/specialties/{key} (B09); перечисляются только те,
+// у кого есть своё. Пустой список наследников — строки нет (сказать нечего).
+function InheritorsLine({ inheritors }: { inheritors: SpecialtyInheritor[] }): React.ReactElement {
+  const ownParts = inheritors
+    .filter(i => i.ownSections > 0)
+    .map(i => `· своё у ${genOf(i.name)}: ${i.ownSections} ${plural(i.ownSections, 'секция', 'секции', 'секций')}`);
   return (
-    <span style={{
-      fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
-      padding: '5px 9px',
-      borderRadius: R.md, border: `1px solid ${C.border}`,
-      background: C.bgWhite, color: C.textSecondary,
-    }}>{isOverride ? 'Свой текст' : 'Типовой текст'}</span>
+    <div style={{
+      fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.5,
+    }}>
+      <span>
+        Наследуют: {inheritors.map(i => i.name).join(', ')}{' '}
+        {ownParts.length > 0 && (
+          <span style={{ color: C.textMuted }}>{ownParts.join(' ')}</span>
+        )}
+      </span>
+    </div>
   );
+}
+
+// Эффект только что сохранённой правки для наследников (P58, «у Лизы обновилось ·
+// у Веры своё — не тронуто»): у кого своих подмен нет — правка дошла; у кого есть —
+// их своё не тронуто. Фронт не знает, какая именно секция у персоны своя (B09 даёт
+// только число), поэтому про конкретную секцию здесь не утверждается — только про
+// факт своего. Пустой список наследников — подписи нет.
+function hotEffectText(inheritors: SpecialtyInheritor[] | null | undefined): string | null {
+  if (!inheritors || inheritors.length === 0) return null;
+  const noOwn = inheritors.filter(i => i.ownSections === 0).map(i => genOf(i.name));
+  const own = inheritors.filter(i => i.ownSections > 0).map(i => genOf(i.name));
+  const parts: string[] = [];
+  if (noOwn.length) parts.push(`у ${noOwn.join(', ')} обновилось`);
+  if (own.length) parts.push(`у ${own.join(', ')} своё — не тронуто`);
+  return parts.length ? parts.join(' · ') : null;
 }
 
 // === Карточка секции в режиме просмотра ===
@@ -142,17 +181,25 @@ function PresetCardView({ meta, eff }: {
 }
 
 // === Карточка секции в режиме настройки ===
-function PresetCardEdit({ meta, eff, canEdit, onEnabled, onText, onReset, onOverride }: {
+// hot — секция изменена последним сохранением (P58): рамка C.info с кольцом C.infoBg
+// (тот же приём, что у .spsec.hot в макете) и тег «изменено только что».
+// caption — подпись строки (P57): «текст по умолчанию · код» / «свой текст · общее»
+// (в макете «свой текст · владелец»; в однослойной модели ADR-012 это общий слой —
+// формулировка совпадает с существующими подписями этого файла), для hot — вместо
+// неё эффект правки («у Лизы обновилось · у Веры своё — не тронуто»).
+function PresetCardEdit({ meta, eff, canEdit, hot, caption, onEnabled, onText, onReset, onOverride }: {
   meta: SpecialtyPromptSectionMeta;
   eff: EffectivePromptSection;
   canEdit: boolean;
+  hot: boolean;
+  caption: string | null;
   onEnabled: (sectionId: string, enabled: boolean) => void;
   onText: (sectionId: string, text: string) => void;
   onReset: (sectionId: string) => void;
   onOverride: (sectionId: string) => void;
 }): React.ReactElement {
   // isOverride — есть ли своё переопределение в текущем слое (owner в нашем случае,
-  // но резолв даёт owner/user/global). Для UI «Свой текст» достаточно source === 'owner':
+  // но резолв даёт owner/user/global). Для UI «свой текст» достаточно source === 'owner':
   // переопределение на user/global отображается бейджем источника отдельно.
   const hasOwnOverride = eff.enabledSource === 'owner' || eff.textSource === 'owner';
   const editable = canEdit && hasOwnOverride;
@@ -163,10 +210,12 @@ function PresetCardEdit({ meta, eff, canEdit, onEnabled, onText, onReset, onOver
 
   return (
     <div style={{
-      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+      background: C.bgWhite, borderRadius: R.xl,
+      border: hot ? `1px solid ${C.info}` : `1px solid ${C.border}`,
+      boxShadow: hot ? `0 0 0 3px ${C.infoBg}` : undefined,
       padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8,
     }}>
-      {/* Шапка: тумблер + название + бейдж источника */}
+      {/* Шапка: тумблер + название + тег «изменено только что» (hot) */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
       }}>
@@ -181,17 +230,21 @@ function PresetCardEdit({ meta, eff, canEdit, onEnabled, onText, onReset, onOver
           fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 700,
           color: C.textHeading,
         }}>{meta.label}</span>
-        <SourceBadge src={hasOwnOverride ? 'owner' : eff.enabledSource} />
+        {hot && <Badge tone="info" size="xs">изменено только что</Badge>}
       </div>
+      {caption && (
+        <div style={{
+          fontSize: FS.xs, color: hot ? C.textSecondary : C.textMuted, lineHeight: 1.45,
+        }}>{caption}</div>
+      )}
       <div style={{
         fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45,
       }}>{meta.description}</div>
 
-      {/* Панель управления: бейдж «Типовой/Свой» + кнопка переопределения/сброса + счётчик */}
+      {/* Панель управления: кнопка переопределения/сброса + счётчик */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
       }}>
-        <OverrideBadge isOverride={hasOwnOverride} />
         {editable ? (
           <Button variant="ghost" size="sm" onClick={() => onReset(meta.id)}>
             Вернуть типовой
@@ -256,10 +309,18 @@ export interface RolePresetsBlockProps {
   // Не рисовать собственный SectionTitle — родитель сам вешает SectionLabel
   // снаружи блока (визитка роли, плоские секции без белых коробок).
   showTitle?: boolean;
+  // Наследники секций специальности — из GET /api/specialties/{key} (B09). Только
+  // для edit: строка «Наследуют: …» и эффект правки на hot-секциях. null/undefined
+  // (не загружено) — строки и эффекта нет, остальной блок работает как раньше.
+  inheritors?: SpecialtyInheritor[] | null;
+  // Id секций, изменённых последним сохранением родителя (P58): подсветка hot и
+  // тег «изменено только что». Пустой/undefined — ничего не подсвечено.
+  justChanged?: ReadonlySet<string> | null;
 }
 
 export function RolePresetsBlock({
   roleKey, catalog, editLayer, globalLayer, userLayer, mode, onSave, showTitle = true,
+  inheritors, justChanged,
 }: RolePresetsBlockProps): React.ReactElement {
   const isMobile = useIsMobile();
   const isView = mode === 'view';
@@ -359,11 +420,38 @@ export function RolePresetsBlock({
   // === EDIT: все секции (по флагу showDisabled) ===
   const visibleMeta = showDisabled ? meta : enabledMeta;
 
+  // Строка «Наследуют: …» (P56) — над списком в обоих edit-состояниях, если
+  // наследники пришли. Не пришли (null) или их нет — строки нет.
+  const heirsEl = inheritors && inheritors.length > 0
+    ? <InheritorsLine inheritors={inheritors} />
+    : null;
+
+  // Подпись каждой строки: base — состояние текста и слой (P57); hot — эффект
+  // правки (P58), если наследники известны; без них — обычная подпись. Для
+  // выключенной строки подписи нет: «обновилось» про выключение говорит двусмысленно.
+  const captionOf = (m: SpecialtyPromptSectionMeta, eff: EffectivePromptSection): string | null => {
+    if (!eff.enabled) return null;
+    const base = (eff.enabledSource === 'owner' || eff.textSource === 'owner')
+      ? 'свой текст · общее' : 'текст по умолчанию · код';
+    if (justChanged?.has(m.id)) return hotEffectText(inheritors) ?? base;
+    return base;
+  };
+
+  // Подсказка конца панели (P59): общий лимит и смысл выключения для персон.
+  const limitHintEl = (
+    <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5 }}>
+      Счётчик и лимит те же: до {TEXT_LIMIT} символов на секцию. Выключение здесь
+      персона видит подписью «выключено специальностью» — это не её выбор, и
+      «Выключено» у неё не нажато.
+    </div>
+  );
+
   // Полностью пустое состояние: ничего не включено и пользователь ещё не раскрыл выключенные.
   if (visibleMeta.length === 0) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
         <SectionTitle>Пресеты для роли</SectionTitle>
+        {heirsEl}
         <div style={{
           border: `1px dashed ${C.dashed}`, borderRadius: R.xl,
           padding: isMobile ? '14px 12px' : '16px 14px',
@@ -393,23 +481,30 @@ export function RolePresetsBlock({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       <SectionTitle>Пресеты для роли</SectionTitle>
+      {heirsEl}
       <div style={{
         display: 'flex', flexDirection: 'column',
         gap: isMobile ? SP.xs : SP.sm,
       }}>
-        {visibleMeta.map(m => (
-          <PresetCardEdit
-            key={m.id}
-            meta={m}
-            eff={effById.get(m.id)!}
-            canEdit={canEdit}
-            onEnabled={handleEnabled}
-            onText={handleText}
-            onReset={handleReset}
-            onOverride={handleOverride}
-          />
-        ))}
+        {visibleMeta.map(m => {
+          const eff = effById.get(m.id)!;
+          return (
+            <PresetCardEdit
+              key={m.id}
+              meta={m}
+              eff={eff}
+              canEdit={canEdit}
+              hot={justChanged?.has(m.id) ?? false}
+              caption={captionOf(m, eff)}
+              onEnabled={handleEnabled}
+              onText={handleText}
+              onReset={handleReset}
+              onOverride={handleOverride}
+            />
+          );
+        })}
       </div>
+      {limitHintEl}
       {/* Ссылка «Показать/Скрыть выключенные (N)» — в edit-режиме видна, если есть что показать. */}
       {disabledCount > 0 && (
         <div>

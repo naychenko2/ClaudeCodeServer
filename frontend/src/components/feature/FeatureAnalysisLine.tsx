@@ -23,8 +23,13 @@ const BADGE_ICON: Record<AnalysisBadge['icon'], typeof Clock> = {
 
 // Тревожные состояния («стоит», «молчит», «тихо», «остановлена», «ждёт вас») строки не
 // принадлежат (Ш4): их говорит одна тревога под тулбаром страницы (FeaturePageAlert), на
-// всех вкладках. В строке при них остаётся лишь «Анализ моделью» — без своей фразы и бейджа.
+// всех вкладках. В строке при них остаётся лишь «Резюме фичи» — без своей фразы и бейджа.
 const ALARM_KEYS: ReadonlySet<AnalysisKey> = new Set(['stuck', 'nudged', 'quiet', 'stopped', 'attention']);
+
+// Видимая подпись действия «analysis» (M30, макет materials-review-placement.html):
+// «Резюме фичи». Модель несёт свою метку («Анализ моделью», FeatureAnalysisModel.ts) —
+// это территория F18b, здесь переопределяем текст только в интерфейсе.
+const SUMMARY_LABEL = 'Резюме фичи';
 
 // Тон короба: фон и рамка по таблице спецификации (quiet — пунктир warning).
 function boxStyle(st: AnalysisLineState, isMobile: boolean) {
@@ -61,7 +66,7 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
   const st = analysisLineState(run, Date.now());
 
   // Резюме (W5-F2): состояние живёт здесь — «результат держится в состоянии страницы».
-  // Открыто и готово — кнопки «Анализ моделью» в строке нет (действия — в шапке резюме);
+  // Открыто и готово — кнопки «Резюме фичи» в строке нет (действия — в шапке резюме);
   // идёт — кнопка остаётся, но disabled.
   const [openSummary, setOpenSummary] = useState(false);
   const [summaryData, setSummaryData] = useState<FeatureSummaryResult | null>(null);
@@ -73,7 +78,7 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
   // привязано к featureId (спека §«Точка 6»). Сброс состояния — здесь; отмена висящего
   // запроса — в useEffect по run.featureId (вердикт W5-R-F2a, п.4: без побочного
   // эффекта abort в рендере). Без отмены ответ старого запроса вернулся бы под другой
-  // фичей и «Анализ моделью» не запросил бы ничего.
+  // фичей и «Резюме фичи» не запросил бы ничего.
   const lastFeatureRef = useRef(run.featureId);
   if (lastFeatureRef.current !== run.featureId) {
     lastFeatureRef.current = run.featureId;
@@ -122,7 +127,7 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
       });
   };
 
-  // Чат шага в архиве или пуст — действие «Открыть чат» снимается; «Анализ моделью»
+  // Чат шага в архиве или пуст — действие «Открыть чат» снимается; «Резюме фичи»
   // снимается только когда резюме раскрыто и готово (спека: «когда резюме раскрыто —
   // кнопки в строке нет»).
   const alarm = ALARM_KEYS.has(st.key);
@@ -181,7 +186,7 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
                 if (!summaryData) fetchSummary(false);
               }}
             >
-              {a.label}
+              {SUMMARY_LABEL}
             </Button>
           ) : (
             <Button

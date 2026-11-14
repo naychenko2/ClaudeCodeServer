@@ -235,7 +235,10 @@ export function effectiveSpecialtyRecord(globalLayer: SpecialtySettingsLayer,
 // (SpecialtySettingsStore.EffectivePromptSectionStates).
 
 // Откуда пришло значение параметра секции — для бейджа источника в UI.
-export type PromptSectionSource = 'code' | 'global' | 'user' | 'owner';
+// 'persona' — слой самой персоны (GET /api/personas/{id}/prompt-sections): встречается только
+// в ответе сервера (PromptSectionOverlay.Apply с source=Persona); собственный резолв
+// specialty-слоёв (effectivePromptSection ниже) его никогда не производит.
+export type PromptSectionSource = 'code' | 'global' | 'user' | 'owner' | 'persona';
 
 export interface EffectivePromptSection {
   id: string;

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { mkdirSync } from 'node:fs';
 import { login, api, type Api } from './helpers';
 
 // QA-2 (задача 6c3cdc39), блок персон.
@@ -9,7 +10,8 @@ import { login, api, type Api } from './helpers';
 // S4 = п.2: подтверждение при смене специальности для своих секций промпта.
 // Порядок: S1 → S2 → S3 (всё на analyst) → S4 (смена специальности в конце).
 
-const NAME = 'qa-e2e-qa2-наследник';
+const NAME = 'qa-e2e-qa2-мастер';
+const INHERIT_NAME = 'qa-e2e-qa2-наследник';
 const OWN_NAME = 'qa-e2e-qa2-своя';
 const PID = 'ce3e224a-d0f8-4828-9519-f51d4c3dbf6a';
 const SHOTS = '.cc-attachments/qa-wf-e2e';
@@ -24,10 +26,33 @@ test.beforeAll(async ({ playwright, baseURL }) => {
   request = await playwright.request.newContext({ baseURL });
   token = await login(request);
   client = api(request, token);
+  mkdirSync(SHOTS, { recursive: true });
 });
+
+// Тесты самодостаточны: наследующая персона находится по имени или создаётся
+// через API с явным inheritsAccess=true (путь API для проверки наследования легален;
+// для мастера отдельный тест S1).
+async function ensureInheritingPersona(): Promise<string> {
+  const personas = await client.get<any[]>('/api/personas');
+  const found = personas.find(x => x.name === INHERIT_NAME);
+  if (found) {
+    if (!found.inheritsAccess) {
+      // хвост прошлого прогона (мастер создаёт с копией) — включаем наследование
+      await client.put(`/api/personas/${found.id}`, { inheritsAccess: true });
+    }
+    return found.id;
+  }
+  const p = await client.post<any>('/api/personas', { name: INHERIT_NAME, specialty: 'analyst', inheritsAccess: true });
+  return p.id;
+}
 test.afterAll(async () => {
-  if (personaId) await client.del(`/api/personas/${personaId}`).catch(() => undefined);
-  if (ownPersonaId) await client.del(`/api/personas/${ownPersonaId}`).catch(() => undefined);
+  // Уборка по имени: любые тестовые персоны этого файла (могли пережить прошлый прогон).
+  try {
+    const personas = await client.get<any[]>('/api/personas');
+    for (const p of personas.filter(x => [NAME, INHERIT_NAME, OWN_NAME].includes(x.name))) {
+      await client.del(`/api/personas/${p.id}`).catch(() => undefined);
+    }
+  } catch { /* best-effort */ }
   await request?.dispose();
 });
 
@@ -46,13 +71,19 @@ async function openPage(context: import('@playwright/test').BrowserContext, path
 }
 
 async function nextStep(page: import('@playwright/test').Page) {
-  const next = page.getByRole('button', { name: 'Далее' });
-  await next.click({ timeout: 10000 });
-  await page.waitForTimeout(2000);
+  // Мастер на каждом шаге сохраняет персону: во время записи кнопка «Сохраняю…» и disabled.
+  // Ждём кнопку в любом из этих состояний и кликаем — click сам ждёт enabled.
+  const next = page.getByRole('button', { name: /^(Далее|Сохраняю…)$/ });
+  await next.click({ timeout: 40000 });
+  await page.waitForTimeout(2500);
 }
 
 test('S1: мастер создания персоны со специальностью — наследование, своих слотов и секций нет', async ({ context }) => {
   test.setTimeout(240_000);
+  // Убираем хвосты прошлого прогона этого же имени.
+  for (const old of (await client.get<any[]>('/api/personas')).filter(x => x.name === NAME)) {
+    await client.del(`/api/personas/${old.id}`).catch(() => undefined);
+  }
   const { page, errs } = await openPage(context, '/#/personas');
 
   await page.getByRole('button', { name: 'Новая персона' }).first().click({ timeout: 15000 });
@@ -124,7 +155,7 @@ test('S1: мастер создания персоны со специально
 
 test('S2: правка специальности — унаследовавшая персона получает новое значение на живом ходу; своё не теряется', async () => {
   test.setTimeout(420_000);
-  expect(personaId, 'S1 должна пройти раньше').toBeTruthy();
+  personaId = await ensureInheritingPersona();
 
   // Персона с личной кастомизацией прав (свой запрет), чтобы проверить, что она не теряется.
   ownPersonaId = (await client.post<any>('/api/personas', {
@@ -186,16 +217,18 @@ test('S2: правка специальности — унаследовавша
 
 test('S3: средний и слабый слоты по отдельности — значения разные и применяются', async () => {
   test.setTimeout(300_000);
-  expect(personaId, 'S1 должна пройти раньше').toBeTruthy();
+  personaId = await ensureInheritingPersona();
 
   // Что вообще есть на стенде: список моделей для выбора разных значений слотов.
   const models = await client.get<any>('/api/models');
   const list: any[] = models?.models ?? [];
   console.log('S3 каталог моделей:', JSON.stringify(list).slice(0, 600));
-  const ids: string[] = list.flatMap((g: any) => Array.isArray(g?.models) ? g.models.map((m: any) => m?.id ?? m) : (g?.id ? [g.id] : []));
-  const uniq = [...new Set(ids.filter(Boolean))] as string[];
+  // Каталог отдаёт плоский список моделей с полем value.
+  const ids: string[] = list.map((m: any) => m?.value ?? m?.id ?? (typeof m === 'string' ? m : undefined)).filter(Boolean);
+  const uniq = [...new Set(ids)] as string[];
   const localId = uniq.find(id => /qwen/i.test(id)) ?? 'qwen3.8-27b';
-  const otherId = uniq.find(id => id !== localId) ?? null;
+  // Другая модель для различения слотов: не локальная и не «default» (он повторяет strong-путь).
+  const otherId = uniq.find(id => id !== localId && id !== 'default') ?? null;
   console.log('S3 выбрано: local=', localId, '| другой=', otherId);
 
   // Средний и слабый слоты специальности — разные значения.
@@ -250,7 +283,7 @@ test('S3: средний и слабый слоты по отдельности 
 
 test('S4: смена специальности персоной со своими секциями — диалог подтверждения', async ({ context }) => {
   test.setTimeout(300_000);
-  expect(personaId, 'S1 должна пройти раньше').toBeTruthy();
+  personaId = await ensureInheritingPersona();
 
   // Заведем своей секции промпта через API (это состояние рождается и в форме: «Своё»).
   const secs = await client.get<any[]>(`/api/personas/${personaId}/prompt-sections`);
@@ -268,8 +301,7 @@ test('S4: смена специальности персоной со своим
   const { page, errs } = await openPage(context, `/#/personas/${personaId}`);
   await page.getByRole('button', { name: 'Редактировать' }).first().click({ timeout: 15000 });
   await page.waitForTimeout(2500);
-  await page.getByText('Умения', { exact: true }).first().click().catch(() => undefined);
-  await page.waitForTimeout(1500);
+  // Селект специальности — на основном табe формы (aria-label «Специальность»), вкладка не нужна.
   const sel = page.getByLabel('Специальность');
   console.log('S4 селект специальности:', await sel.count());
   await sel.selectOption({ value: 'planner' });
@@ -286,20 +318,19 @@ test('S4: смена специальности персоной со своим
   const selVal = await sel.inputValue().catch(() => null);
   console.log('S4 специальность после «Оставить как есть»:', selVal);
   expect.soft(selVal, 'без подтверждения специальность не сменилась').toBe('analyst');
-  await page.getByRole('button', { name: 'Отменить' }).first().click().catch(() => undefined);
-  await page.waitForTimeout(1500);
   const mid = await client.get<any>(`/api/personas/${personaId}`);
   expect.soft(mid?.specialty, 'без подтверждения специальность на бэке прежняя').toBe('analyst');
   expect.soft((mid?.promptSections ?? []).length, 'без подтверждения свои секции целы').toBeGreaterThan(0);
 
   // С подтверждением: «Сменить специальность» + «Сохранить» — специальность сменилась,
-  // свои секции сброшены.
-  await page.getByRole('button', { name: 'Редактировать' }).first().click({ timeout: 15000 });
-  await page.waitForTimeout(2000);
-  await page.getByText('Умения', { exact: true }).first().click().catch(() => undefined);
-  await page.waitForTimeout(1200);
-  await page.getByLabel('Специальность').selectOption({ value: 'planner' });
+  // свои секции сброшены. Форма после «Оставить как есть» остаётся открытой — меняем в ней же.
+  await sel.selectOption({ value: 'planner' });
   await page.waitForTimeout(1500);
+  await page.getByRole('button', { name: 'Сменить специальность' }).click({ timeout: 10000 });
+  await page.waitForTimeout(1500);
+  // Для наследующей персоны второй диалог: «Специальность — …», права и модели наследуются.
+  const inh2 = flat(await page.locator('body').innerText());
+  console.log('S4 второй диалог (наследование при смене):', /наследуются/.test(inh2));
   await page.getByRole('button', { name: 'Сменить специальность' }).click({ timeout: 10000 });
   await page.waitForTimeout(1500);
   await page.getByTestId('persona-form-footer').getByRole('button', { name: 'Сохранить' }).click({ timeout: 10000 });

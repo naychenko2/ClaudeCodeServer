@@ -63,7 +63,7 @@ test('S5: порог молчания и политика зависания —
     title: 'qa-e2e-qa2-stall-step-1', role: 'step', featureId: epic.id, assignee: 'claude',
     description: 'Ничего не делай, ответь одно слово: готово',
   });
-  const snap1 = (await client.get<any>(`/api/projects/${PID}/tasks/${step1.id}`))?.stage;
+  const snap1 = (await client.get<any>(`/api/tasks/${step1.id}`))?.stage;
   console.log('S5 слепок этапа 1:', JSON.stringify({ v: snap1?.templateVersion, stallMinutes: snap1?.stallMinutes, stallPolicy: snap1?.stallPolicy }));
   expect.soft(snap1?.stallMinutes, 'слепок этапа нёс порог 7').toBe(7);
   expect.soft(snap1?.stallPolicy, 'слепок этапа нёс stop-alert').toBe('stop-alert');
@@ -73,7 +73,8 @@ test('S5: порог молчания и политика зависания —
   edited.id = tplId;
   const st2 = edited.stages.find((s: any) => s.role === 'step');
   st2.stallMinutes = 15; st2.stallPolicy = 'nudge-alert';
-  await client.put('/api/workflow-templates', edited);
+  // Правка — PUT по id с expectedVersion последней прочитанной (api.ts saveTemplate).
+  await client.put(`/api/workflow-templates/${tplId}`, { ...edited, expectedVersion: (mine?.version ?? mine?.template?.version ?? 1) });
   const afterEdit = await client.get<any[]>('/api/workflow-templates');
   const tplNow = afterEdit.find(t => t.id === tplId || t.template?.id === tplId);
   const stNow = (tplNow?.stages ?? tplNow?.template?.stages ?? []).find((s: any) => s.role === 'step');
@@ -84,12 +85,12 @@ test('S5: порог молчания и политика зависания —
     title: 'qa-e2e-qa2-stall-step-2', role: 'step', featureId: epic.id, assignee: 'claude',
     description: 'Ничего не делай, ответь одно слово: готово',
   });
-  const snap2 = (await client.get<any>(`/api/projects/${PID}/tasks/${step2.id}`))?.stage;
+  const snap2 = (await client.get<any>(`/api/tasks/${step2.id}`))?.stage;
   console.log('S5 слепок этапа 2:', JSON.stringify({ v: snap2?.templateVersion, stallMinutes: snap2?.stallMinutes, stallPolicy: snap2?.stallPolicy }));
   expect.soft(snap2?.stallMinutes, 'слепок нового этапа нёс правленый порог 15').toBe(15);
   expect.soft(snap2?.stallPolicy, 'слепок нового этапа нёс nudge-alert').toBe('nudge-alert');
   // Прежний этап остался на своём слепке (правка не переписывает созданные шаги).
-  const snap1After = (await client.get<any>(`/api/projects/${PID}/tasks/${step1.id}`))?.stage;
+  const snap1After = (await client.get<any>(`/api/tasks/${step1.id}`))?.stage;
   console.log('S5 слепок этапа 1 после правки шаблона:', JSON.stringify({ v: snap1After?.templateVersion, stallMinutes: snap1After?.stallMinutes }));
   expect.soft(snap1After?.stallMinutes, 'созданный ранее этап остался на пороге 7').toBe(7);
 
@@ -105,25 +106,33 @@ test('S6: авторазвержение маршрута — как включ�
   // Проверяем живой факт: эпик с однозначной задачей → что пишет сервер.
   const epic = await client.post<any>(`/api/projects/${PID}/tasks`, {
     title: 'qa-e2e-qa2-auto', role: 'feature', assignee: 'me',
-    description: 'Небольшая правка текста в существующем экране: поправить формулировку. Без новых экранов и без архитектуры.',
+    description: 'Большая фича: новый экран «Статистика расходов» со списком и фильтрами. Нужен бэкенд-эндпоит агрегации, фронтенд-страница, тесты. Обычный порядок работ.',
   });
   epicIds.push(epic.id);
   console.log('S6 эпик:', epic.id);
 
   let wf: any = null;
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 45; i++) {
     await new Promise(r => setTimeout(r, 4000));
     wf = await client.get<any>(`/api/tasks/${epic.id}/workflow`);
     if (wf?.confirmed || wf?.proposal) break;
   }
+  // Фоновый путь не дал предложения — пробуем явный recommend (тот же путь модели,
+  // что делал рабочий круг).
+  const rec = await request.post(`/api/tasks/${epic.id}/workflow/recommend`, { headers: { Authorization: `Bearer ${token}` } });
+  const recBody = await rec.json().catch(() => null);
+  console.log('S6 явный recommend:', rec.status(), JSON.stringify(recBody).slice(0, 500));
+  const wf2 = await client.get<any>(`/api/tasks/${epic.id}/workflow`);
+  if (wf2) wf = wf2;
   const confirmed = wf?.confirmed;
-  const proposal = wf?.proposal ?? wf?.proposalState;
+  const proposal = wf?.proposal ?? recBody?.proposal ?? wf?.proposalState;
   console.log('S6 состояние маршрута:', JSON.stringify({
     confirmed: !!confirmed, autoConfirmed: confirmed?.autoConfirmed ?? null,
     version: confirmed?.confirmedVersion ?? null,
     doubt: proposal?.doubtReason ?? null, skipped: proposal?.skipped ?? null,
-    state: proposal?.state ?? null,
-  }).slice(0, 500));
+    state: proposal?.state ?? null, reason: proposal?.reason ?? null,
+    template: proposal?.templateId ?? proposal?.templateKey ?? null,
+  }).slice(0, 700));
 
   if (confirmed?.autoConfirmed) {
     console.log('S6 автоподтверждение произошло');
@@ -131,10 +140,10 @@ test('S6: авторазвержение маршрута — как включ�
     const page = await context.newPage();
     page.setViewportSize({ width: 1280, height: 900 });
     await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
-    await page.goto(`/#/tasks/${epic.id}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`/#/project/${PID}/feature/${epic.id}`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(4000);
     const body = (await page.locator('body').innerText()).replace(/\n/g, ' | ');
-    const hasAuto = /выбрано моделью автоматически|авто/.test(body);
+    const hasAuto = /выбрано моделью/.test(body);
     console.log('S6 строка автоподтверждения в UI:', hasAuto);
     expect.soft(hasAuto, 'UI показывает автоподтверждение').toBeTruthy();
     await page.screenshot({ path: `${SHOTS}/qa2-s6-autoconfirm.png`, fullPage: true });

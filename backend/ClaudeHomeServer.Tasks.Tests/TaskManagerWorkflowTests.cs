@@ -4,6 +4,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Tasks;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace ClaudeHomeServer.Tasks.Tests;
@@ -102,6 +103,18 @@ public class TaskManagerWorkflowTests : IDisposable
     {
         public Persona? GetByIdInternal(string id) => items.FirstOrDefault(p => p.Id == id);
         public IReadOnlyCollection<Persona> GetAllInternal() => items;
+    }
+
+    // Логгер с захватом уровня/текста — тот же приём, что у RecordingLogger и CapturingLogger
+    // в соседних файлах: утверждения о фактических записях лога, а не об отсутствии падения.
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Text)> Entries { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 
     // Эпик с подтверждённым маршрутом «все роли шаблона» в заданном менеджере.
@@ -205,6 +218,28 @@ public class TaskManagerWorkflowTests : IDisposable
 
         step.PersonaId.Should().Be("persona-step");
         step.Assignee.Should().Be(TaskItemAssignee.Claude);
+    }
+
+    // R-B2-дельта: отсутствие шва персон (поломка сборки DI, в бою шв зарегистрирован) не молчит:
+    // путь подтверждённого маршрута не падает и поведение не меняется (персона подставляется),
+    // но в логе — предупреждение об отсутствующем шве и пропущенной проверке.
+    [Fact]
+    public void Create_ПерсонаЭтапа_БезШваПерсон_НеПадает_ЛогируетПредупреждение()
+    {
+        var tpl = _store.Save(Template(), WorkflowTemplateScope.Global);
+        var log = new CapturingLogger<TaskManager>();
+        var tasks = new TaskManager(_config, workflows: _store, log: log);
+        var epic = EpicIn(tasks, tpl);
+
+        var step = tasks.Create(null, Owner, new CreateTaskRequest("шаг", FeatureId: epic.Id,
+            Role: TaskRoles.Step, StepRef: "B1"));
+
+        step.PersonaId.Should().Be("persona-step", "без шва поведение не меняется: персона подставляется");
+        log.Entries.Should().Contain(e => e.Level == LogLevel.Warning
+                && e.Text.Contains("IPersonaLookup")
+                && e.Text.Contains("persona-step")
+                && e.Text.Contains("пропущена"),
+            "проверка персоны этапа без шва не должна проходить молча");
     }
 
     [Fact]

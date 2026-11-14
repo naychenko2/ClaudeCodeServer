@@ -38,7 +38,7 @@ test('С11: редактор шаблонов и экран этапа на 360 
   await req.dispose();
 
   for (const w of [360, 1280]) {
-    const page = await context.newPage();
+    let page = await context.newPage();
     page.setViewportSize({ width: w, height: w < 500 ? 800 : 900 });
     page.on('console', m => { if (m.type() === 'error') console.log(`[console ${m.type()}]`, m.text().slice(0, 200)); });
     await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
@@ -53,16 +53,18 @@ test('С11: редактор шаблонов и экран этапа на 360 
     console.log(`С11 редактор @${w}:`, JSON.stringify(await measure(page)).slice(0, 1200));
     await page.screenshot({ path: `.cc-attachments/qa-wf-e2e/С11-editor-${w}.png`, fullPage: true });
 
-    // экран этапа
+    // экран этапа — в свежей вкладке: хэш-переход на фичу из открытого /specialties в той же вкладке
+    // теряет сегмент /feature/ (дефект приложения, заведён отдельной карточкой), а не спека
+    await page.close();
+    page = await context.newPage();
+    page.setViewportSize({ width: w, height: w < 500 ? 800 : 900 });
     await page.goto(`/#/project/${PID}/feature/${EPIC}`, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(4000);
-    await page.getByTestId('pgraph-node-cut').click().catch(() => undefined);
-    await page.waitForTimeout(1500);
-    await page.getByTestId('feature-stage-area-open').click({ timeout: 15000 }).catch(() => undefined);
-    await page.waitForTimeout(4000);
+    await page.getByTestId('pgraph-node-cut').click({ timeout: 20000 });
+    await page.getByTestId('feature-stage-area-open').click({ timeout: 20000 });
+    await expect(page.getByTestId('stage-screen'), `экран этапа открылся @${w}`).toBeVisible({ timeout: 20000 });
+    await expect(page.getByTestId('stage-screen-loading')).toHaveCount(0, { timeout: 20000 });
     console.log(`С11 экран этапа @${w}:`, JSON.stringify(await measure(page)).slice(0, 1500));
     await page.screenshot({ path: `.cc-attachments/qa-wf-e2e/С11-stage-${w}.png`, fullPage: true });
     await page.close();
   }
-  expect(true).toBeTruthy();
 });

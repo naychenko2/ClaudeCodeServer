@@ -1,8 +1,9 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
-import { login, api, type Api } from './helpers';
+import { login, api, fullCycleTemplate, editFullCycleTemplate, alignEpicRoute, type Api } from './helpers';
 
-// Часть G: правка шаблона у идущей фичи (эффект со следующего шага, готовые шаги не
+// Часть G: правка шаблона у идущей фичи («шаблон изменился» — про состав маршрута, не про версию:
+// переименование этапа предупреждения не даёт, добавленный этап — даёт; готовые шаги не
 // переписываются) и кастомизация на уровне проекта поверх админского пресета.
 
 const PID = 'ce3e224a-d0f8-4828-9519-f51d4c3dbf6a';
@@ -38,48 +39,80 @@ async function editFullCycle(page: Page, title: string) {
   await page.waitForTimeout(2500);
 }
 
-test('С8: правка шаблона на идущей фиче', async ({ context, playwright, baseURL }) => {
+// Карточка «шаблон изменился» достижима через «Сменить»: открываем фичу, раскрываем маршрут
+// и возвращаем число карточек.
+async function updateCardCount(page: Page): Promise<number> {
+  await page.goto(`/#/project/${PID}/feature/${EPIC}`, { waitUntil: 'domcontentloaded' });
+  // тот же hash-URL перезагрузки не даёт: без неё экран держит шаблон, загруженный до правки
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+  if (await page.getByTestId('feature-workflow-confirm-update').count() === 0) {
+    const change = page.getByTestId('feature-workflow-confirm-change').first();
+    if (await change.count()) { await change.click({ timeout: 15000 }); await page.waitForTimeout(1500); }
+  }
+  return page.getByTestId('feature-workflow-confirm-update').count();
+}
+
+test('С8: переименование этапа — не «шаблон изменился»; добавленный этап — «шаблон изменился»', async ({ context, playwright, baseURL }) => {
   test.setTimeout(280_000);
   const req = await playwright.request.newContext({ baseURL });
   const token = await login(req);
   await req.dispose();
   const page = await context.newPage();
   page.setViewportSize({ width: 1280, height: 900 });
-  const errs: string[] = [];
-  page.on('console', m => { if (m.type() === 'error') errs.push(m.text().slice(0, 200)); });
   await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
 
-  const before = await client.get<any>(`/api/tasks/${EPIC}/workflow`);
-  const stepsBefore = (await client.get<any[]>(`/api/projects/${PID}/tasks`)).filter(t => t.featureId === EPIC);
-  console.log('С8 до правки: confirmedVersion', before.confirmed?.confirmedVersion, 'шаги:', JSON.stringify(stepsBefore.map(t => ({ role: t.role, v: t.stage?.templateVersion }))));
+  const tplStart = await fullCycleTemplate(client);
+  const titleStart = tplStart.stages.find((s: any) => s.role === 'design')?.title ?? null;
+  const qaStart = tplStart.stages.find((s: any) => s.role === 'qa')?.presence;
+  try {
+    const before = await alignEpicRoute(client, EPIC);
+    const stepsBefore = (await client.get<any[]>(`/api/projects/${PID}/tasks`)).filter(t => t.featureId === EPIC);
+    const viewBefore = stepsBefore.map(t => ({ role: t.role, v: t.stage?.templateVersion }));
 
-  await editFullCycle(page, 'Дизайн · проверка');
-  const tpls = await client.get<any[]>('/api/workflow-templates');
-  const full = tpls.find(e => e.template.builtInKey === 'full-cycle');
-  console.log('С8 версия шаблона после правки:', full?.template.version, 'title design:', full?.template.stages.find((s: any) => s.role === 'design')?.title);
+    // 1. Переименование этапа через экран шаблонов: версия шаблона растёт, состав не меняется.
+    const renamed = `Дизайн · проверка ${Date.now() % 100000}`;
+    await editFullCycle(page, renamed);
+    const tplRenamed = await fullCycleTemplate(client);
+    expect(tplRenamed.stages.find((s: any) => s.role === 'design')?.title, 'название этапа сохранилось').toBe(renamed);
+    expect(tplRenamed.version, 'версия шаблона выросла').toBeGreaterThan(tplStart.version);
 
-  await page.goto(`/#/project/${PID}/feature/${EPIC}`, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4000);
-  const upd = page.getByTestId('feature-workflow-confirm-update');
-  console.log('С8 предупреждение об обновлении:', await upd.count(), flat(await upd.innerText({ timeout: 3000 }).catch(() => '')).slice(0, 300));
-  expect.soft(await upd.count(), 'страница сообщает, что шаблон изменился').toBeGreaterThan(0);
-  await page.screenshot({ path: `${SHOTS}/С8-update.png`, fullPage: true });
+    const wfRenamed = await client.get<any>(`/api/tasks/${EPIC}/workflow`);
+    expect(wfRenamed.updateAvailable, 'переименование состав не меняет: updateAvailable=false').toBe(false);
+    expect(wfRenamed.templateUpdate, 'переименование состав не меняет: templateUpdate=null').toBeNull();
+    expect(await updateCardCount(page), 'карточки «шаблон изменился» нет').toBe(0);
+    await page.screenshot({ path: `${SHOTS}/С8-rename-no-card.png`, fullPage: true });
 
-  const stepsAfter = (await client.get<any[]>(`/api/projects/${PID}/tasks`)).filter(t => t.featureId === EPIC);
-  console.log('С8 после правки: confirmedVersion', (await client.get<any>(`/api/tasks/${EPIC}/workflow`)).confirmed?.confirmedVersion, 'шаги:', JSON.stringify(stepsAfter.map(t => ({ role: t.role, v: t.stage?.templateVersion, title: t.stage?.prompt ? 'has prompt' : null }))));
-  expect.soft(stepsAfter.map(t => t.stage?.templateVersion), 'созданные шаги остались на своей версии шаблона').toEqual(stepsBefore.map(t => t.stage?.templateVersion));
+    // 2. Добавленный этап (qa из «выключен» в «обязателен») — состав меняется.
+    await editFullCycleTemplate(client, t => { t.stages.find((s: any) => s.role === 'qa').presence = 'on'; });
+    const tplAdded = await fullCycleTemplate(client);
+    const wfAdded = await client.get<any>(`/api/tasks/${EPIC}/workflow`);
+    expect(wfAdded.updateAvailable, 'добавлен этап: updateAvailable=true').toBe(true);
+    expect(wfAdded.templateUpdate?.toVersion, 'templateUpdate указывает на новую версию').toBe(tplAdded.version);
+    expect(await updateCardCount(page), 'карточка «шаблон изменился» показана').toBeGreaterThan(0);
+    await page.screenshot({ path: `${SHOTS}/С8-added-card.png`, fullPage: true });
 
-  // Обновить маршрут до новой версии
-  await page.getByTestId('feature-workflow-confirm-update-apply').first().click({ timeout: 15000 }).catch(e => console.log('С8 apply:', String(e).slice(0, 100)));
-  await page.waitForTimeout(3000);
-  const after = await client.get<any>(`/api/tasks/${EPIC}/workflow`);
-  console.log('С8 после «Обновить»: confirmedVersion', after.confirmed?.confirmedVersion, 'stages:', JSON.stringify(after.confirmed?.stages?.map((s: any) => s.id ?? s.role)));
-  expect.soft(after.confirmed?.confirmedVersion, 'маршрут обновился до новой версии').toBeGreaterThan(before.confirmed?.confirmedVersion ?? 1);
-  const stepsAfter2 = (await client.get<any[]>(`/api/projects/${PID}/tasks`)).filter(t => t.featureId === EPIC);
-  console.log('С8 шаги после обновления:', JSON.stringify(stepsAfter2.map(t => ({ role: t.role, v: t.stage?.templateVersion }))));
-  await page.screenshot({ path: `${SHOTS}/С8-after-apply.png`, fullPage: true });
-  console.log('С8 errors:', JSON.stringify([...new Set(errs)]));
-  await page.close();
+    const stepsAdded = (await client.get<any[]>(`/api/projects/${PID}/tasks`)).filter(t => t.featureId === EPIC);
+    expect(stepsAdded.map(t => ({ role: t.role, v: t.stage?.templateVersion })), 'созданные шаги остались на своей версии шаблона').toEqual(viewBefore);
+
+    // 3. «Обновить»: маршрут получает новый этап и версию шаблона.
+    await page.getByTestId('feature-workflow-confirm-update-apply').first().click({ timeout: 15000 });
+    await expect.poll(async () => (await client.get<any>(`/api/tasks/${EPIC}/workflow`)).confirmed?.confirmedVersion, { timeout: 15000 }).toBe(tplAdded.version);
+    const after = await client.get<any>(`/api/tasks/${EPIC}/workflow`);
+    expect(after.updateAvailable, 'после «Обновить» предупреждения нет').toBe(false);
+    expect(after.confirmed.confirmedVersion, 'маршрут обновился до новой версии').toBeGreaterThan(before.confirmed.confirmedVersion);
+    const stepsAfter = (await client.get<any[]>(`/api/projects/${PID}/tasks`)).filter(t => t.featureId === EPIC);
+    expect(stepsAfter.map(t => ({ role: t.role, v: t.stage?.templateVersion })), 'готовые шаги не переписаны').toEqual(viewBefore);
+    await page.screenshot({ path: `${SHOTS}/С8-after-apply.png`, fullPage: true });
+  } finally {
+    // Возвращаем шаблон и маршрут как были: фикстура общая для остальных спеков.
+    await editFullCycleTemplate(client, t => {
+      const d = t.stages.find((s: any) => s.role === 'design'); if (titleStart === null) delete d.title; else d.title = titleStart;
+      if (qaStart) t.stages.find((s: any) => s.role === 'qa').presence = qaStart;
+    }).catch(e => console.log('С8 откат шаблона:', String(e).slice(0, 120)));
+    await alignEpicRoute(client, EPIC).catch(e => console.log('С8 откат маршрута:', String(e).slice(0, 120)));
+    await page.close();
+  }
 });
 
 test('С9: проектная копия глобального пресета', async ({ context, playwright, baseURL }) => {

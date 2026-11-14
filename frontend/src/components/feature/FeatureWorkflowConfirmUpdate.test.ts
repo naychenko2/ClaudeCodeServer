@@ -1,7 +1,9 @@
 // Тесты карточки «шаблон изменился» (F04): лестница v2 с новым этапом, «Обновить маршрут до vN»
 // (confirm с прежним skipped из confirmed), «Оставить vN» (keep-version), закрытое предупреждение.
 // Плюс применение записанной версии (Ф-2.15): ответ confirm (ConfirmedDto) становится видом
-// блока — строка и граф сразу на новой версии, карточка больше не предлагается.
+// блока — строка и граф сразу на новой версии, карточка больше не предлагается. И сброс
+// применённого ответа (доработка R-Ф-2.15): приход настоящего state (новый объект confirmed)
+// переводит вид на состояние; смена фичи не пропускает ответ в другую фичу.
 // Окружение node: mount (fakeDom), каталог и ручки — заглушки workflowTemplatesApi.
 
 import { act, createElement } from 'react';
@@ -64,6 +66,8 @@ const click = async (c: ReturnType<typeof mount>['container'], id: string) => {
   expect(n).not.toBeNull();
   await act(async () => { (reactProps(n!)!.onClick as () => void)(); });
 };
+// Select блока — единственный <select> (title из компонента).
+const selectOf = (c: ReturnType<typeof mount>['container']) => findNodeByAttr(c, 'title', 'Шаблон маршрута');
 
 describe('FeatureWorkflowConfirm: карточка «шаблон изменился» (F04)', () => {
   // mockReset, а не mockClear: подставленный тестом ответ confirm не должен доживать в следующем.
@@ -126,6 +130,64 @@ describe('FeatureWorkflowConfirm: карточка «шаблон изменил
     expect(api.confirm).toHaveBeenCalledTimes(1);
     expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-update')).not.toBeNull();
     expect(text(c)).toContain('Полный цикл v1');
+  });
+
+  it('пришёл настоящий state (новый объект confirmed): вид переходит на состояние, не на ответ (Ф-2.15)', async () => {
+    api.entries = [entry(tpl(3, [NEW_REVIEW]))];
+    const written: ConfirmedRoute = {
+      ...CONFIRMED,
+      confirmedVersion: 3,
+      stages: [
+        { id: 'plan', role: 'plan', after: [] },
+        { id: 'step', role: 'step', lane: 'back', after: ['plan'] },
+        { id: 'review', role: 'review', after: ['step'] },
+        { id: 'final', role: 'final', after: ['review'] },
+        { id: 'merge', role: 'merge', after: ['final'] },
+      ],
+    };
+    api.confirm.mockResolvedValue(written);
+    const mk = (confirmed: ConfirmedRoute) => createElement(FeatureWorkflowConfirm, { featureId: 'f1', confirmed, isMobile: false });
+    const { container, root } = mount(mk(CONFIRMED));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    await click(container, 'feature-workflow-confirm-update-apply');
+    // Ответ применён: строка на записанном маршруте — с снятием, которое просил человек.
+    expect(text(container)).toContain('Полный цикл v3 · снято: qa');
+    // Штатный task_changed принёс настоящий state эпика: новый объект той же версии,
+    // но сервер подтвердил без снятия (состав как в шаблоне).
+    const serverState: ConfirmedRoute = { ...written, skipped: [] };
+    await act(async () => { root.render(mk(serverState)); });
+    // Вид — по состоянию, а не по своему ответу: снятие ответа из строки ушло.
+    expect(text(container)).toContain('Полный цикл v3 · все этапы');
+    expect(text(container)).not.toContain('снято: qa');
+  });
+
+  it('после применения ответа фича сменилась: ответ не доезжает в другую фичу (Ф-2.15)', async () => {
+    api.entries = [entry(tpl(3, [NEW_REVIEW]))];
+    const written: ConfirmedRoute = {
+      ...CONFIRMED,
+      confirmedVersion: 3,
+      stages: [
+        { id: 'plan', role: 'plan', after: [] },
+        { id: 'step', role: 'step', lane: 'back', after: ['plan'] },
+        { id: 'review', role: 'review', after: ['step'] },
+        { id: 'final', role: 'final', after: ['review'] },
+        { id: 'merge', role: 'merge', after: ['final'] },
+      ],
+    };
+    api.confirm.mockResolvedValue(written);
+    const mk = (featureId: string, confirmed: ConfirmedRoute | null) =>
+      createElement(FeatureWorkflowConfirm, { featureId, confirmed, isMobile: false });
+    const { container, root } = mount(mk('f1', CONFIRMED));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    await click(container, 'feature-workflow-confirm-update-apply');
+    // Ответ применён к своей фиче.
+    expect(text(container)).toContain('Полный цикл v3');
+    // Человек перешёл на другую фичу: у неё подтверждённого маршрута нет.
+    await act(async () => { root.render(mk('f2', null)); });
+    // Чужой ответ не доехал: строки подтверждённого нет, редактор f2 пуст (без предвыбора).
+    expect(text(container)).not.toContain('Полный цикл v3');
+    expect(findNodeByAttr(container, 'data-testid', 'feature-workflow-confirm-confirmed')).toBeNull();
+    expect(reactProps(selectOf(container))?.value).toBe('');
   });
 
   it('«Оставить v1» шлёт keep-version с версией шаблона и не подтверждает', async () => {

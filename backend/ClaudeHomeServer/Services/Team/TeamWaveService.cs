@@ -378,6 +378,16 @@ public class TeamWaveService
                     _log.LogInformation("Под-задача {TaskId} «{Title}» ждёт устройство: {Reason}",
                         task.Id, task.Title, launched.DeviceWaitReason);
             }
+            catch (FeatureHoldException ex)
+            {
+                // Удержание фичи (пауза или черновик) — штатный отказ правила, а не поломка
+                // провайдера: тихий лог без трейса (тот же приём, что у автозапуска —
+                // TaskSchedulerService.IsHoldRefusal), иначе штатные отказы тонят реальные
+                // провалы. Карточка — со своей причиной.
+                _log.LogInformation("Запуск исполнителя по задаче {TaskId} «{Title}» закрыт удержанием фичи: {Reason}",
+                    task.Id, task.Title, ex.Message);
+                await RaiseFeatureHoldRefusedAsync(session, task, ex);
+            }
             catch (FeatureRouteLaunchException ex)
             {
                 // Гейт маршрута — штатный отказ правила, а не поломка провайдера: тихий лог
@@ -397,12 +407,24 @@ public class TeamWaveService
 
     // Карточка в ленту штаба: исполнитель не стартовал вовсе (модель недоступна, лимит
     // провайдера, задача удалена). Kind — TaskFailed: для человека это ровно тот же случай
-    // «работа по под-задаче не идёт», и кнопки карточки те же. Отказ гейта маршрута — не
-    // сюда: он штатный отказ правила, у него своя карточка (RaiseRouteRefusedAsync).
+    // «работа по под-задаче не идёт», и кнопки карточки те же. Отказ гейта маршрута и удержание
+    // фичи — не сюда: они штатные отказы правила, у каждого своя карточка
+    // (RaiseRouteRefusedAsync, RaiseFeatureHoldRefusedAsync).
     internal Task RaiseLaunchFailedAsync(Session session, TaskItem task, Exception ex) =>
         RaiseLaunchFailedAsync(session, task, $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message}.\n\n"
             + "Работа по ней не идёт. Проверьте модель исполнителя и доступность провайдера, "
             + "затем перевыдайте задачу.");
+
+    // Отказ по удержанию фичи (хвост Ф-2.23, та же природа, что у отказа гейта маршрута):
+    // это отказ состояния самой фичи («фича на паузе», «фича — черновик»), а не сбой
+    // модели/провайдера — прежняя общая карточка врала и уводила человека проверять модель.
+    // Причина доходит дословно из FeatureHoldException (FeatureHoldRefusal уже называет, что
+    // именно заблокировано и что с этим делать), совет — про фичу. Карточка та же
+    // (TaskFailed): для человека это по-прежнему «работа по под-задаче не идёт».
+    internal Task RaiseFeatureHoldRefusedAsync(Session session, TaskItem task, FeatureHoldException ex) =>
+        RaiseLaunchFailedAsync(session, task, $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message.TrimEnd('.')}.\n\n"
+            + "Работа по ней не идёт: её запуск закрыт удержанием самой фичи (паузой или черновиком). "
+            + "Снимите паузу или запустите её на странице фичи, затем перевыдайте задачу.");
 
     // Отказ гейта маршрута (B3, хвост Ф-2.22): это отказ правила («маршрут не подтверждён»,
     // «ветка не завершена»), а не сбой модели/провайдера — прежняя общая карточка врала и
@@ -410,7 +432,7 @@ public class TeamWaveService
     // (там же сказано, что именно заблокировано), совет — про маршрут. Карточка та же
     // (TaskFailed): для человека это по-прежнему «работа по под-задаче не идёт».
     internal Task RaiseRouteRefusedAsync(Session session, TaskItem task, FeatureRouteLaunchException ex) =>
-        RaiseLaunchFailedAsync(session, task, $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message}.\n\n"
+        RaiseLaunchFailedAsync(session, task, $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message.TrimEnd('.')}.\n\n"
             + "Работа по ней не идёт: её запуск закрыт гейтом маршрута фичи. Приведите в порядок маршрут "
             + "(подтвердите его на странице фичи или дождитесь завершения предшествующих веток), "
             + "затем перевыдайте задачу.");

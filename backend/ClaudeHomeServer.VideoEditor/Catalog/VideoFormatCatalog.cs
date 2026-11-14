@@ -98,6 +98,18 @@ public static class VideoFormatCatalog
         WireParam: null,
         NativeNote: "только 480p (864×480)");
 
+    // ── local LTX-2.5 ────────────────────────────────────────────────────────────
+
+    // Одна ступень — 720p (1280×704; латент LTX кратен 32, поэтому не 720): на 24 ГБ это потолок, пик VRAM 23,9 ГБ.
+    // Крупнее — отдельным «Увеличить» после съёмки (RelayVSR). У портрета стороны меняются местами
+    public static MediaFormatCaps LocalLtx25(IReadOnlyList<string> aspects) => new(
+        "LTX-2.5",
+        aspects,
+        [new FormatTierSpec(FormatTier.Standard, "720p", Sizes(aspects, 1280, 704), "720p")],
+        Exact: null,
+        WireParam: null,
+        NativeNote: "только 720p (1280×704)");
+
     private static IReadOnlyDictionary<string, FormatSize> Sizes(IReadOnlyList<string> aspects, int w, int h)
     {
         var sizes = new Dictionary<string, FormatSize>(StringComparer.Ordinal);

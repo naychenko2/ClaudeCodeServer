@@ -154,6 +154,7 @@ public sealed partial class LocalVideoMediaAdapter(
     public int? EtaSeconds(LocalVideoRequest request)
     {
         if (LocalVideoModels.IsKandinsky(request.Model)) return KandinskyEta(request);
+        if (LocalVideoModels.IsLtx(request.Model)) return LtxEta(request);
         var shape = Shape(request, LocalMediaOptions.Read(config));
         return shape is null ? null : LocalMediaService.ImageToVideoEta(shape.Value.Size, shape.Value.Seconds, shape.Value.Fast);
     }
@@ -172,6 +173,7 @@ public sealed partial class LocalVideoMediaAdapter(
         if (!options.Enabled) return LocalVideoSubmitted.Fail("Локальные модели выключены на этом сервере.");
 
         if (LocalVideoModels.IsKandinsky(request.Model)) return await SubmitKandinskyAsync(request, options, ct);
+        if (LocalVideoModels.IsLtx(request.Model)) return await SubmitLtxAsync(request, options, ct);
 
         Run plan;
         try
@@ -265,7 +267,7 @@ public sealed partial class LocalVideoMediaAdapter(
                 var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
                 if (LocalMediaService.ContentTypeOf(ext) is not { } type || !type.StartsWith("video/", StringComparison.Ordinal))
                     continue;
-                // Звук модель генерирует сама (H3 и Kandinsky 6), CreateVideo склеивает его с кадрами: дорожка есть всегда
+                // Звук модель генерирует сама (H3, Kandinsky 6, LTX-2.5), CreateVideo склеивает его с кадрами: дорожка есть всегда
                 RememberOutput(upscale, ticket, file);
                 var bytes = await comfy.DownloadAsync(file, ct);
                 return new LocalVideoPoll(LocalVideoState.Completed, null, new LocalVideoFile(bytes, type, ext, HasSound: true), null);
@@ -332,7 +334,7 @@ public sealed partial class LocalVideoMediaAdapter(
 
     public int? UpscaleEtaSeconds(LocalVideoRequest request)
     {
-        if (LocalVideoModels.IsKandinsky(request.Model)) return null;
+        if (LocalVideoModels.IsKandinsky(request.Model) || LocalVideoModels.IsLtx(request.Model)) return null;
         var options = LocalMediaOptions.Read(config);
         var shape = Shape(request, options);
         return shape is null ? null : LocalMediaService.Upscale1440Eta(ComfyWorkflows.FramesFor(shape.Value.Seconds), options.Upscale1440Tiled);

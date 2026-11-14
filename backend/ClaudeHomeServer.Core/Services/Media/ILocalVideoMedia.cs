@@ -57,7 +57,9 @@ public interface ILocalVideoMedia
 // FirstFrame — обязательный первый кадр (байты картинки), LastFrame — последний (узел last_frame).
 // Seconds — длительность (потолок — LocalMediaService.MaxVideoSeconds), Size — "full" | "half", Fast — ускоренный режим.
 // Model — модель шва (LocalVideoModels); null — MiniMax H3. У Kandinsky 6 Lite FirstFrame необязателен (пустой — съёмка
-// по тексту), LastFrame не берётся, Seconds — только 5, Size и Fast не действуют; звук, как у H3, есть всегда
+// по тексту), LastFrame не берётся, Seconds — только 5, Size и Fast не действуют; звук, как у H3, есть всегда.
+// У LTX-2.5 FirstFrame тоже необязателен, LastFrame не берётся, Seconds — 3–5, Size — "landscape" | "portrait"
+// (720p в пропорции 16:9 или 9:16), Fast не действует
 public sealed record LocalVideoRequest(
     string Prompt,
     byte[] FirstFrame,
@@ -76,9 +78,13 @@ public static class LocalVideoModels
 {
     public const string MiniMaxH3 = "minimax-h3";
     public const string Kandinsky6Lite = "kandinsky-6-lite";
+    public const string Ltx25 = "ltx-2.5";
 
     public static bool IsKandinsky(string? model) =>
         string.Equals(model?.Trim(), Kandinsky6Lite, StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsLtx(string? model) =>
+        string.Equals(model?.Trim(), Ltx25, StringComparison.OrdinalIgnoreCase);
 }
 
 // Video — mp4 исходной версии; Scale — 2 или 4; Origin — метка происхождения прогона (владелец, чат, «видео ×2», тяжёлый)

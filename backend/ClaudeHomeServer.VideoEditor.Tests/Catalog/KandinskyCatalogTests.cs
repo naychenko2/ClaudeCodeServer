@@ -30,7 +30,7 @@ public class KandinskyCatalogTests
         var picked = VideoCatalog.Pick(Engine(), VideoCatalog.AutoModelId, new VideoCatalog.Need(frameA, frameB, 5));
 
         picked?.Id.Should().NotBe(LocalVideoEngine.Kandinsky6Lite);
-        if (!frameA) picked.Should().BeNull("H3 без кадра не снимает, а Kandinsky только ручной");
+        if (!frameA) picked!.Id.Should().Be(LocalVideoEngine.Ltx25, "H3 без кадра не снимает, Kandinsky только ручной — без кадра берётся LTX-2.5");
         else picked!.Id.Should().Be(LocalVideoEngine.MiniMaxH3);
     }
 

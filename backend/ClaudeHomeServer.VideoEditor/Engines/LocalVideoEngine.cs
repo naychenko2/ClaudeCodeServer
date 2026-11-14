@@ -20,6 +20,15 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
     public const string ProviderKey = "local";
     public const string MiniMaxH3 = LocalVideoModels.MiniMaxH3;
     public const string Kandinsky6Lite = LocalVideoModels.Kandinsky6Lite;
+    public const string Ltx25 = LocalVideoModels.Ltx25;
+
+    // LTX-2.5: замер 14.11 — 1280×704, 5 с, пик VRAM 23,9 ГБ из 24: длиннее 5 с и крупнее 720p не даём
+    public static readonly IReadOnlyList<int> Ltx25Durations = [3, 4, 5];
+    public static readonly (int Width, int Height) Ltx25Landscape = (1280, 704);
+
+    public const string Ltx25Hint =
+        "Снимает по одному тексту или по своей картинке (кадр A); ролик 3–5 с, 720p (1280×704), со звуком и репликами, "
+        + "≈ 1–1,5 мин. Кадра B нет. Лицензия LTX: бесплатно для личного использования и компаний с выручкой до $10 млн";
 
     // Kandinsky 6 Lite: веса «Lite-distill-5s» — ролик ровно 5 с; проверено только 864×480 (16:9)
     public const int Kandinsky6Seconds = 5;
@@ -74,6 +83,14 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
                 VideoLicense.NotStated, VideoPriceUnits.Free, FirstFrame: true, MaxFrameBytes: MaxFrameBytes,
                 Format: VideoFormatCatalog.LocalKandinsky6(["16:9"]), FirstFrameOptional: true),
             ManualOnly: true, Hint: Kandinsky6Hint),
+        // Третья локальная (решение Андрея 15.11): с кадром «Авто» по-прежнему берёт H3, без кадра — LTX-2.5
+        // (раньше такие сцены уходили в облако)
+        new(Ltx25, "LTX-2.5",
+            new VideoCaps(Ltx25Durations, ["16:9", "9:16"], Sound: true, LastFrame: false,
+                new VideoLicense("LTX: бесплатно до $10 млн выручки", VideoLicenseKind.Permissive), VideoPriceUnits.Free,
+                FirstFrame: true, MaxFrameBytes: MaxFrameBytes,
+                Format: VideoFormatCatalog.LocalLtx25(["16:9", "9:16"]), FirstFrameOptional: true),
+            Hint: Ltx25Hint),
     ];
 
     public string Key => ProviderKey;
@@ -95,6 +112,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
     public IReadOnlySet<string>? ParamNames(VideoModelInfo model) =>
         string.Equals(model.Id, MiniMaxH3, StringComparison.OrdinalIgnoreCase) ? H3Params
         : string.Equals(model.Id, Kandinsky6Lite, StringComparison.OrdinalIgnoreCase) ? NoParams
+        : string.Equals(model.Id, Ltx25, StringComparison.OrdinalIgnoreCase) ? NoParams
         : null;
 
     // ── Котировка ────────────────────────────────────────────────────────────────
@@ -123,18 +141,25 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
     private static LocalVideoRequest Shape(VideoRequest req)
     {
         var fast = req.Params?["fast"] is { } f && (f.GetValueKind() is JsonValueKind.True or JsonValueKind.False) ? f.GetValue<bool>() : (bool?)null;
-        return new LocalVideoRequest(req.Text, [], null, req.DurationSec, SizeOf(req), fast, req.Seed, Model: ModelOf(req));
+        return new LocalVideoRequest(req.Text, [], null, req.DurationSec, IsLtx(req) ? LtxSize(req) : SizeOf(req), fast, req.Seed,
+            Model: ModelOf(req));
     }
 
-    // Шов знает модель только у Kandinsky: у H3 поле остаётся пустым, как до Ш5
-    private static string? ModelOf(VideoRequest req) => IsKandinsky(req) ? Kandinsky6Lite : null;
+    // Шов знает модель у Kandinsky и LTX: у H3 поле остаётся пустым, как до Ш5
+    private static string? ModelOf(VideoRequest req) => IsKandinsky(req) ? Kandinsky6Lite : IsLtx(req) ? Ltx25 : null;
 
     private static bool IsKandinsky(VideoRequest req) => LocalVideoModels.IsKandinsky(req.Model);
+    private static bool IsLtx(VideoRequest req) => LocalVideoModels.IsLtx(req.Model);
+
+    // Пропорция LTX — из формата сцены (без кадра её больше неоткуда взять); не задана — пейзаж
+    private static bool LtxPortrait(VideoRequest req) => req.Format?.Aspect == "9:16";
 
     private int? ShotEta(VideoRequest req) => media?.EtaSeconds(Shape(req));
     private int? UpscaleEta(VideoRequest req) => media?.UpscaleEtaSeconds(Shape(req));
     private int? TotalEta(VideoRequest req) =>
         WantsUpscale(req) ? (ShotEta(req) is { } a && UpscaleEta(req) is { } b ? a + b : null) : ShotEta(req);
+
+    private static string LtxSize(VideoRequest req) => LtxPortrait(req) ? "portrait" : "landscape";
 
     // Размер съёмки — ступень формата (half | full, «Макс» снимается full); формата нет — full, как раньше
     private static string SizeOf(VideoRequest req) => req.Format?.WireValue is "half" or "full" ? req.Format.WireValue : "full";
@@ -242,9 +267,10 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
                 return new VideoResult(VideoOutcome.Failed, null, Free, false, submitted.Ticket, "Локальная модель не вернула ролика");
 
             var kandinsky = IsKandinsky(req);
+            var ltx = IsLtx(req) ? (LtxPortrait(req) ? (Ltx25Landscape.Height, Ltx25Landscape.Width) : Ltx25Landscape) : ((int, int)?)null;
             var shotFile = new VideoFile(file.Bytes, file.ContentType, file.Extension, HasSound: file.HasSound,
-                Width: req.Format?.Width ?? (kandinsky ? Kandinsky6Size.Width : null),
-                Height: req.Format?.Height ?? (kandinsky ? Kandinsky6Size.Height : null));
+                Width: req.Format?.Width ?? (kandinsky ? Kandinsky6Size.Width : ltx?.Item1),
+                Height: req.Format?.Height ?? (kandinsky ? Kandinsky6Size.Height : ltx?.Item2));
             if (!upscale)
             {
                 progress.Report(new VideoProgress(VideoStage.Downloading, RemoteId: submitted.Ticket));
@@ -378,6 +404,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
     internal static (LocalVideoRequest? Run, string? Error) Compose(VideoRequest req)
     {
         if (IsKandinsky(req)) return ComposeKandinsky(req);
+        if (IsLtx(req)) return ComposeLtx(req);
         if (!string.Equals(req.Model, MiniMaxH3, StringComparison.OrdinalIgnoreCase))
             return (null, "Локальные модели так не умеют");
         if (req.FrameA is not { } first) return (null, "Локальной модели нужен первый кадр");
@@ -409,6 +436,19 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
             return (null, $"Неизвестный параметр {unknown}");
         var run = new LocalVideoRequest(req.Text, req.FrameA?.Bytes ?? [], null, Kandinsky6Seconds, "half", null, req.Seed,
             Model: Kandinsky6Lite);
+        return (WithOrigin(run, req), null);
+    }
+
+    // LTX-2.5: текст, кадр A необязателен; кадра B и частных параметров нет, длина 3–5 с, пропорция — из формата
+    private static (LocalVideoRequest? Run, string? Error) ComposeLtx(VideoRequest req)
+    {
+        if (req.FrameB is not null) return (null, "LTX-2.5 не берёт кадр B: только текст или кадр A");
+        if (!Ltx25Durations.Contains(req.DurationSec))
+            return (null, $"LTX-2.5 снимает ролик от {Ltx25Durations[0]} до {Ltx25Durations[^1]} секунд");
+        if (req.Params is { } p && p.FirstOrDefault() is { Key: { } unknown })
+            return (null, $"Неизвестный параметр {unknown}");
+        var run = new LocalVideoRequest(req.Text, req.FrameA?.Bytes ?? [], null, req.DurationSec, LtxSize(req), null, req.Seed,
+            Model: Ltx25);
         return (WithOrigin(run, req), null);
     }
 

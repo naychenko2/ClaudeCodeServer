@@ -4,6 +4,11 @@
 // «+ Этап», «Добавить этап». Высота читается из style отрендеренной кнопки (образец T10
 // из list.test): размер md кита Button даёт minHeight 40. Окружение — то же, что у
 // WorkflowTemplatesEditor.list.test: fakeDom, api и чужие хуки — заглушки.
+// Ф-2.12 (доработка D2): три смежные цели того же редактора, поднятые следом: «Загрузить
+// vN…» и «Сохранить мои правки новым шаблоном» (плашка 409) и «Создать проектный»
+// (плашка read-only в проектной области). Конфликт здесь — тот же контракт, что в
+// workflowEditorLogic.test: rejection saveTemplate с status 409; проектная область —
+// projectId у экрана и открытый глобальный шаблон (он read-only, кнопка есть).
 
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
@@ -54,6 +59,20 @@ const buttonByText = (root: ReturnType<typeof mount>['container'], text: string)
   walk(root);
   return hit;
 };
+const click = (btn: Node) => { act(() => { (reactProps(btn)?.onClick as (e: unknown) => void)({}); }); };
+// Высота — из style отрендеренной кнопки: React дописывает 'px' к размерным свойствам.
+const expectHeight = (root: ReturnType<typeof mount>['container'], label: string) => {
+  const btn = buttonByText(root, label);
+  expect(btn, label).not.toBeNull();
+  expect(parseFloat(btn!.style.minHeight), label).toBeGreaterThanOrEqual(40);
+};
+// useIsMobile читает matchMedia в начальном состоянии — намеренно «мобильная ширина».
+const asMobile = async (fn: () => Promise<void>) => {
+  const win = (globalThis as { window: { matchMedia: unknown } }).window;
+  const origMql = win.matchMedia;
+  win.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+  try { await fn(); } finally { win.matchMedia = origMql; }
+};
 
 afterEach(() => {
   if (mounted) act(() => mounted!.root.unmount());
@@ -64,23 +83,45 @@ afterAll(() => { uninstallFakeDom(); });
 describe('D2: тач-цели редактора шаблонов на мобильной ширине', () => {
   it('360 px, открыт «Полный цикл»: «‹ Процессы», «Сбросить к исходному», «+ Этап», «Добавить этап» — высота ≥40', async () => {
     installFakeDom();
-    const win = (globalThis as { window: { matchMedia: unknown } }).window;
-    const origMql = win.matchMedia;
-    // useIsMobile читает matchMedia в начальном состоянии — намеренно «мобильная ширина»
-    win.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
-    try {
+    await asMobile(async () => {
       vi.mocked(workflowTemplatesApi.listTemplates).mockResolvedValue([globalFull]);
       const { container } = mountEditor({ isAdmin: true });
       await flush();
       const row = buttonByText(container, 'Полный цикл');
       expect(row).not.toBeNull();
-      act(() => { (reactProps(row!)?.onClick as (e: unknown) => void)({}); });
+      click(row!);
       for (const label of ['‹ Процессы', 'Сбросить к исходному', '+ Этап', 'Добавить этап']) {
-        const btn = buttonByText(container, label);
-        expect(btn, label).not.toBeNull();
-        // React дописывает 'px' к размерным свойствам — читаем число из значения
-        expect(parseFloat(btn!.style.minHeight), label).toBeGreaterThanOrEqual(40);
+        expectHeight(container, label);
       }
-    } finally { win.matchMedia = origMql; }
+    });
+  });
+
+  it('360 px, 409: «Загрузить v4…» и «Сохранить мои правки новым шаблоном» — высота ≥40', async () => {
+    installFakeDom();
+    await asMobile(async () => {
+      vi.mocked(workflowTemplatesApi.listTemplates).mockResolvedValue([globalFull]);
+      // Тот же контракт отказа, что на живом REST (api.ts): Error с status 409.
+      vi.mocked(workflowTemplatesApi.saveTemplate).mockRejectedValue(
+        Object.assign(new Error('Версия шаблона устарела.'), { status: 409 }));
+      const { container } = mountEditor({ isAdmin: true });
+      await flush();
+      click(buttonByText(container, 'Полный цикл')!);
+      click(buttonByText(container, 'Сохранить')!);
+      await flush(); // отказ → плашка конфликта → перечитывание версии (conflictVersion = 4)
+      for (const label of ['Загрузить v4 — мои правки пропадут', 'Сохранить мои правки новым шаблоном']) {
+        expectHeight(container, label);
+      }
+    });
+  });
+
+  it('360 px, проектная область, открыт глобальный «Полный цикл»: «Создать проектный» — высота ≥40', async () => {
+    installFakeDom();
+    await asMobile(async () => {
+      vi.mocked(workflowTemplatesApi.listTemplates).mockResolvedValue([globalFull]);
+      const { container } = mountEditor({ projectId: 'p1', projectName: 'Тест', isAdmin: false });
+      await flush();
+      click(buttonByText(container, 'Полный цикл')!);
+      expectHeight(container, 'Создать проектный');
+    });
   });
 });

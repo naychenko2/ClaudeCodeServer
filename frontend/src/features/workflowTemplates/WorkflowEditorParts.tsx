@@ -26,7 +26,8 @@ export interface EditorNoticesProps {
 
 export function EditorNotices(p: EditorNoticesProps): React.ReactElement {
   const { failure } = p;
-  // Тач-цель на мобиле (D2): «Сбросить к исходному» — md (≥40 px), на десктопе без изменений.
+  // Тач-цели на мобиле (D2, Ф-2.12): «Сбросить к исходному» и обе кнопки конфликта —
+  // md (≥40 px), на десктопе без изменений.
   const isMobile = useIsMobile();
   return (
     <>
@@ -42,10 +43,10 @@ export function EditorNotices(p: EditorNoticesProps): React.ReactElement {
         <Notice tone="danger" icon={AlertTriangle} title={conflictTitle(p.conflictVersion)}
           action={(
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm }}>
-              <Button size="sm" variant="secondary" onClick={p.onReload}>
+              <Button size={isMobile ? 'md' : 'sm'} variant="secondary" onClick={p.onReload}>
                 {p.conflictVersion ? `Загрузить v${p.conflictVersion} — мои правки пропадут` : 'Загрузить версию сервера — мои правки пропадут'}
               </Button>
-              <Button size="sm" variant="secondary" onClick={p.onSaveAsNew}>Сохранить мои правки новым шаблоном</Button>
+              <Button size={isMobile ? 'md' : 'sm'} variant="secondary" onClick={p.onSaveAsNew}>Сохранить мои правки новым шаблоном</Button>
             </div>
           )}
         />

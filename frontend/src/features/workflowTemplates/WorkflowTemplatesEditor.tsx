@@ -438,7 +438,8 @@ export function WorkflowTemplatesEditor({
       {readOnly && (
         <Notice tone="info" icon={AlertTriangle}
           action={projectMode && sel.scope === 'global' && canWrite ? (
-            <Button size="sm" variant="secondary" onClick={() => open(forkToProject(draft), 'project', true)}>
+            /* «Создать проектный» — тач-цель на мобиле (Ф-2.12): md (≥40 px), на десктопе без изменений. */
+            <Button size={isMobile ? 'md' : 'sm'} variant="secondary" onClick={() => open(forkToProject(draft), 'project', true)}>
               Создать проектный
             </Button>
           ) : undefined}

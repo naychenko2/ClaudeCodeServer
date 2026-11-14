@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, Workflow } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
+import { useIsMobile } from '../../lib/breakpoints';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, Chip, EmptyState } from '../../components/ui';
 import type { Persona } from '../personas/types';
@@ -38,6 +39,8 @@ interface Props {
 export function WorkflowStageStrip({
   stages, readOnly, specialties, personas, errorsFor, onStagesChange, selectedKey, onSelectStage, fullCycleStages,
 }: Props): React.ReactElement {
+  // Тач-цели кнопок ленты на мобиле — md (≥40 px) (D2); на десктопе размеры не меняются.
+  const isMobile = useIsMobile();
   const [picking, setPicking] = useState(false);
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
   const dragRef = useRef<{ from: number; over: number } | null>(null);
@@ -137,7 +140,7 @@ export function WorkflowStageStrip({
         </div>
       )}
       <Button
-        variant="dashed" size="sm" fullWidth onClick={() => setPicking(p => !p)} aria-expanded={picking}
+        variant="dashed" size={isMobile ? 'md' : 'sm'} fullWidth onClick={() => setPicking(p => !p)} aria-expanded={picking}
         leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
       >Добавить этап</Button>
     </div>
@@ -154,9 +157,9 @@ export function WorkflowStageStrip({
           subtitle="Соберите маршрут из этапов или возьмите готовый состав."
           action={readOnly ? undefined : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, justifyContent: 'center' }}>
-              <Button size="sm" variant="primary" onClick={() => setPicking(true)}>Добавить этап</Button>
+              <Button size={isMobile ? 'md' : 'sm'} variant="primary" onClick={() => setPicking(true)}>Добавить этап</Button>
               {fullCycleStages && (
-                <Button size="sm" variant="ghost" onClick={() => onStagesChange(structuredClone(fullCycleStages))}>
+                <Button size={isMobile ? 'md' : 'sm'} variant="ghost" onClick={() => onStagesChange(structuredClone(fullCycleStages))}>
                   Взять состав «Полного цикла»
                 </Button>
               )}
@@ -172,7 +175,7 @@ export function WorkflowStageStrip({
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       <StripHeader
         action={readOnly ? undefined : (
-          <Button size="sm" variant="ghost" onClick={() => setPicking(p => !p)} aria-label="Добавить этап в шапке секции">
+          <Button size={isMobile ? 'md' : 'sm'} variant="ghost" onClick={() => setPicking(p => !p)} aria-label="Добавить этап в шапке секции">
             + Этап
           </Button>
         )}

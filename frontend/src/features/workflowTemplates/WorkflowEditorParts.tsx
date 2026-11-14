@@ -3,6 +3,7 @@
 
 import { AlertTriangle, Info, RotateCcw, Trash2 } from 'lucide-react';
 import { C, FS, SP } from '../../lib/design';
+import { useIsMobile } from '../../lib/breakpoints';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, Notice } from '../../components/ui';
 import {
@@ -25,12 +26,15 @@ export interface EditorNoticesProps {
 
 export function EditorNotices(p: EditorNoticesProps): React.ReactElement {
   const { failure } = p;
+  // Тач-цели на мобиле (D2, Ф-2.12): «Сбросить к исходному» и обе кнопки конфликта —
+  // md (≥40 px), на десктопе без изменений.
+  const isMobile = useIsMobile();
   return (
     <>
       {p.isBuiltIn && !p.readOnly && (
         <Notice tone="info" icon={Info}
           action={p.canReset ? (
-            <Button size="sm" variant="secondary" onClick={p.onReset}
+            <Button size={isMobile ? 'md' : 'sm'} variant="secondary" onClick={p.onReset}
               leftIcon={<RotateCcw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Сбросить к исходному</Button>
           ) : undefined}
         >{BUILTIN_NOTICE}</Notice>
@@ -39,10 +43,10 @@ export function EditorNotices(p: EditorNoticesProps): React.ReactElement {
         <Notice tone="danger" icon={AlertTriangle} title={conflictTitle(p.conflictVersion)}
           action={(
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm }}>
-              <Button size="sm" variant="secondary" onClick={p.onReload}>
+              <Button size={isMobile ? 'md' : 'sm'} variant="secondary" onClick={p.onReload}>
                 {p.conflictVersion ? `Загрузить v${p.conflictVersion} — мои правки пропадут` : 'Загрузить версию сервера — мои правки пропадут'}
               </Button>
-              <Button size="sm" variant="secondary" onClick={p.onSaveAsNew}>Сохранить мои правки новым шаблоном</Button>
+              <Button size={isMobile ? 'md' : 'sm'} variant="secondary" onClick={p.onSaveAsNew}>Сохранить мои правки новым шаблоном</Button>
             </div>
           )}
         />

@@ -187,7 +187,9 @@ public static class WorkflowRules
     // идёт по этой же метке.
     private static string StageLabel(WorkflowGraph.Node node, IReadOnlyList<WorkflowGraph.Node> nodes)
     {
-        if (!string.IsNullOrWhiteSpace(node.Title)) return $"этап «{node.Title}»";
+        // Закрывающая кавычка в Title удваивается («a»b» → «a»»b»): метка разбирается однозначно,
+        // тот же приём — во фронтовом stageLabel.
+        if (!string.IsNullOrWhiteSpace(node.Title)) return $"этап «{node.Title.Replace("»", "»»")}»";
         var repeated = nodes.Count(n => n.Role == node.Role) > 1;
         return repeated ? $"этап «{node.Role}» ({node.Id})" : $"этап «{node.Role}»";
     }

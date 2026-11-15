@@ -50,9 +50,25 @@ export function stageLabelParts(stages: WorkflowStage[], index: number): { name:
   return { name: role, suffix: ` (${id})`, key: `${role} (${id})` };
 }
 
+// Закрывающая кавычка " » " внутри имени удваивается («a»b» → «a»»b»): так метку можно
+// разобрать однозначно (в имени «»» встречается только парами). Тот же приём — на бэке (StageLabel).
+const escapeName = (name: string): string => name.replace(/»/g, '»»');
+
 export function stageLabel(stages: WorkflowStage[], index: number): string {
   const { name, suffix } = stageLabelParts(stages, index);
-  return `этап «${name}»${suffix}`;
+  return `этап «${escapeName(name)}»${suffix}`;
+}
+
+const STAGE_LABEL_RE = /^этап «((?:[^»]|»»)+)»( \([^()]+\))?:\s*(.*)$/;
+
+// Разбор строки ошибки с адресной меткой: label — метка как её строит stageLabel (точное
+// сравнение при привязке к строке), key — имя + «(id)» без кавычек (ключ SaveFailure.stageErrors),
+// message — текст после двоеточия. Не метка — null.
+export function parseStageLabel(line: string): { label: string; key: string; message: string } | null {
+  const m = STAGE_LABEL_RE.exec(line);
+  if (!m) return null;
+  const suffix = m[2] ?? '';
+  return { label: `этап «${m[1]}»${suffix}`, key: m[1].replace(/»»/g, '»') + suffix, message: m[3] };
 }
 
 export function isNonSkippable(role: string): boolean {

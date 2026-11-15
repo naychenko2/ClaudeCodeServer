@@ -3,7 +3,7 @@
 // сервера, форк глобального шаблона в проектный, разбор списков «через запятую».
 
 import { normalizeStages } from './workflowGraphModel';
-import { STAGE_ROLES, isNonSkippable, stageErrors, stageLabel, stageLabelParts } from './workflowTemplateModel';
+import { STAGE_ROLES, isNonSkippable, parseStageLabel, stageErrors, stageLabel } from './workflowTemplateModel';
 import type { WorkflowEntryMeta, WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from './types';
 
 // Список обёрток { scope, template } → области. Разбиение — по метке entry.scope, а не по id:
@@ -126,11 +126,11 @@ export interface SaveFailure {
   message: string;
   // Ошибки валидатора по ролям этапов (для показа у полей) и общие (не привязанные к этапу).
   stageErrors: Record<string, string[]>;
+  // Те же ошибки с точной меткой этапа (как её строит stageLabel): по ней сводка привязывает
+  // ошибку к строке, а ключ stageErrors для этого неоднозначен (Title «qa (b)» и роль qa с id b).
+  stageLines?: { label: string; message: string }[];
   generalErrors: string[];
 }
-
-// Метка этапа в тексте ошибки: этап «имя» или этап «роль» (id) при повторе роли (stageLabelParts).
-const STAGE_ERROR_RE = /^этап «([^»]+)»(?: \(([^()]+)\))?:\s*(.*)$/;
 
 // Раскладывает ошибку request(): 409 → «перечитать», 400 → ошибки валидатора по этапам
 // (сервер отдаёт { error, errors: string[] }, тексты те же, что у stageErrors), прочее — как есть.
@@ -142,14 +142,17 @@ export function classifySaveError(e: unknown): SaveFailure {
   if (err?.status === 400) {
     const raw = Array.isArray(err.body?.errors) ? (err.body!.errors as unknown[]).map(String) : [];
     const stageErrs: Record<string, string[]> = {};
+    const stageLines: { label: string; message: string }[] = [];
     const general: string[] = [];
     for (const line of raw) {
-      const m = STAGE_ERROR_RE.exec(line);
-      if (m) (stageErrs[m[2] ? `${m[1]} (${m[2]})` : m[1]] ??= []).push(m[3]);
-      else general.push(line);
+      const m = parseStageLabel(line);
+      if (m) {
+        (stageErrs[m.key] ??= []).push(m.message);
+        stageLines.push({ label: m.label, message: m.message });
+      } else general.push(line);
     }
     if (raw.length === 0) general.push(err.body?.error ?? err.message ?? 'Шаблон не прошёл проверку.');
-    return { kind: 'invalid', message: 'Шаблон не прошёл проверку.', stageErrors: stageErrs, generalErrors: general };
+    return { kind: 'invalid', message: 'Шаблон не прошёл проверку.', stageErrors: stageErrs, stageLines, generalErrors: general };
   }
   return {
     kind: 'failed', message: err?.message || 'Не удалось сохранить шаблон',
@@ -312,8 +315,8 @@ export function errorSummaryItems(draft: WorkflowTemplate, failure?: SaveFailure
   const norm = normalizeStages(draft.stages);
   // Привязка — по адресной метке (Title → роль → «роль (id)»): при двух этапах одной роли
   // ошибка попадает в свою строку, а не в первую по роли.
-  const indexOf = (key: string): number | null => {
-    const i = norm.findIndex((_, idx) => stageLabelParts(norm, idx).key === key);
+  const indexOf = (label: string): number | null => {
+    const i = norm.findIndex((_, idx) => stageLabel(norm, idx) === label);
     return i >= 0 ? i : null;
   };
   const items: ErrorItem[] = [];
@@ -321,16 +324,13 @@ export function errorSummaryItems(draft: WorkflowTemplate, failure?: SaveFailure
     if (!items.some(i => i.text === text && i.stageIndex === stageIndex)) items.push({ text, stageIndex });
   };
   for (const line of stageErrors(draft)) {
-    const m = STAGE_ERROR_RE.exec(line);
+    const m = parseStageLabel(line);
     const num = /^этап #(\d+):/.exec(line);
-    if (m) push(line, indexOf(m[2] ? `${m[1]} (${m[2]})` : m[1]));
+    if (m) push(line, indexOf(m.label));
     else if (num) push(line, Number(num[1]) - 1 < norm.length ? Number(num[1]) - 1 : null);
     else push(line, null);
   }
-  for (const [key, msgs] of Object.entries(failure?.stageErrors ?? {})) msgs.forEach(m => {
-    const i = indexOf(key);
-    push(`${i === null ? `этап «${key}»` : stageLabel(norm, i)}: ${m}`, i);
-  });
+  for (const { label, message } of failure?.stageLines ?? []) push(`${label}: ${message}`, indexOf(label));
   for (const g of failure?.generalErrors ?? []) push(g, null);
   return items;
 }

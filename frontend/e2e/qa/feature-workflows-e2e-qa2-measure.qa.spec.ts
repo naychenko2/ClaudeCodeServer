@@ -132,7 +132,9 @@ test('S9b: плашка конфликта и «Создать проектны�
     const entry = tpls.find(t => (t.template?.id ?? t.id) === tplId);
     const full = JSON.parse(JSON.stringify(entry?.template ?? entry));
     full.name = 'qa-e2e-qa2-conflict (внешняя правка)';
-    const ext = await client.put(`/api/workflow-templates/${tplId}`, { ...full, expectedVersion: full.version ?? 1 });
+    // Ответ PUT — сохранённый шаблон с новой version (контракт WorkflowTemplatesController):
+    // сузим тип ответа до него, чтобы лог версии проверялся типами, а не через unknown.
+    const ext = await client.put<{ version?: number }>(`/api/workflow-templates/${tplId}`, { ...full, expectedVersion: full.version ?? 1 });
     console.log('S9b внешняя правка: версия была', full.version, 'стала', ext?.version);
     await page.getByRole('button', { name: /^Сохранить$/ }).first().click({ timeout: 10000 });
     await page.waitForTimeout(3000);

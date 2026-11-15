@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileEntry } from '../../types';
-import { checkKey, defaultStem, nameStem, projectFolders, saveBlocked, suggestionStem, type SaveCheckState } from './saveAs';
+import { checkKey, defaultStem, foldersTarget, nameStem, projectFolders, saveBlocked, shownFolders, suggestionStem, type SaveCheckState } from './saveAs';
 
 const entry = (path: string, isDirectory = false): FileEntry =>
   ({ name: path.split('/').pop() ?? path, path, isDirectory, modified: '', isModified: false });
@@ -49,6 +49,27 @@ describe('«Сохранить как…»: кнопка', () => {
 });
 
 describe('«Сохранить как…»: папки', () => {
+  // Ф-1 «Медиа в личных чатах»: личная область просит дерево личных файлов, а не проекта
+  it('личная область — псевдо-id личных файлов чата, проект — свой id', () => {
+    expect(foldersTarget('personal', 'chat-1')).toBe('personal-files:chat-1');
+    expect(foldersTarget('p1', 's3')).toBe('p1');
+  });
+
+  it('текущая папка в списке, даже если дерево её не отдало', () => {
+    const list = shownFolders([{ path: 'images', files: 2 }], 'images/blog');
+    expect(list.map(f => f.path)).toEqual(['images/blog', 'images']);
+    expect(list[0]).toEqual({ path: 'images/blog', files: 0 });
+  });
+
+  it('папка, отданная деревом, не дублируется', () => {
+    const tree = [{ path: 'images', files: 2 }];
+    expect(shownFolders(tree, 'images')).toEqual(tree);
+  });
+
+  it('дерево ещё не пришло — список из одной текущей папки', () => {
+    expect(shownFolders(null, 'images')).toEqual([{ path: 'images', files: 0 }]);
+  });
+
   it('корень первым, число файлов прямо в папке', () => {
     const list = projectFolders([
       entry('README.md'), entry('images', true), entry('images/hero.png'), entry('images/logo.png'),

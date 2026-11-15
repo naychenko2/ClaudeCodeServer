@@ -1,6 +1,7 @@
 // Диалог «Сохранить как…» (ADR-018 §5, макет image-editor-v2): имя, папка проекта,
-// расширение справа по формату результата. У личной области папка одна — images/ «Личного»
-// (дерева файлов у неё нет, бэкенд принимает только images/**). Имя проверяется на лету через save/check;
+// расширение справа по формату результата. У личной области — то же дерево папок, только
+// личных файлов чата (скрытый проект «Личное», псевдо-id personalFilesId): выбор и сохранение
+// идут тем же путём, что у проекта. Имя проверяется на лету через save/check;
 // перезаписи нет — занятое имя блокирует кнопку и предлагает свободное рядом.
 // Тяжёлый файл (больше HeavyFileMb) — подсказка с кнопкой «Сжать в WebP» (ADR-018 §9).
 
@@ -10,7 +11,7 @@ import { Button, Field, Modal, ModalActions, TextField, ICON_SIZE, ICON_STROKE, 
 import { nameTakenSuggestion, type ImageEncodeFormat, type SaveCheckResponse } from './api';
 import { plural } from './format';
 import { isPersonalScope } from './scope';
-import { checkKey, FORMAT_EXT, nameStem, projectFolders, saveBlocked, suggestionStem, type SaveCheckState, type SaveFolder } from './saveAs';
+import { checkKey, FORMAT_EXT, foldersTarget, nameStem, projectFolders, saveBlocked, shownFolders, suggestionStem, type SaveCheckState, type SaveFolder } from './saveAs';
 import { formatBytes } from './transforms';
 
 export interface HeavyFile {
@@ -23,11 +24,13 @@ export interface HeavyFile {
 
 const FORMAT_LABEL: Record<ImageEncodeFormat, string> = { png: 'PNG', jpeg: 'JPEG', webp: 'WebP' };
 
-const folderLabel = (f: string) => (f ? `${f}/` : 'корень проекта');
+const folderLabel = (f: string, personal: boolean) => (f ? `${f}/` : personal ? 'корень «Личного»' : 'корень проекта');
 const pathOf = (folder: string, name: string) => (folder ? `${folder}/${name}` : name);
 
-export function SaveAsDialog({ projectId, sourcePath, defaultName, folder, format, onCheck, onSave, onClose, heavy }: {
+export function SaveAsDialog({ projectId, sessionId, sourcePath, defaultName, folder, format, onCheck, onSave, onClose, heavy }: {
   projectId: string;
+  // Чат, в котором открыт редактор: у личной области по нему берётся дерево личных файлов
+  sessionId: string;
   // Исходный файл в проекте; null — картинка нарисована с нуля
   sourcePath: string | null;
   // Имя без расширения: hero.v2
@@ -49,20 +52,17 @@ export function SaveAsDialog({ projectId, sourcePath, defaultName, folder, forma
 
   const personal = isPersonalScope(projectId);
 
+  // Дерево папок: проект — дерево проекта, личная область — дерево личных файлов чата
   useEffect(() => {
-    if (personal) return;
     let alive = true;
-    appApi.files.tree(projectId, '')
+    appApi.files.tree(foldersTarget(projectId, sessionId), '')
       .then(entries => { if (alive) setFolders(projectFolders(entries)); })
       .catch(() => { if (alive) setFolders([]); });
     return () => { alive = false; };
-  }, [projectId, personal]);
+  }, [projectId, sessionId]);
 
   // Текущая папка есть в списке, даже если дерево ещё не пришло или не отдало её
-  const shown = useMemo(() => {
-    const list = personal ? [] : (folders ?? []);
-    return list.some(f => f.path === folder) ? list : [{ path: folder, files: 0 }, ...list];
-  }, [folders, folder, personal]);
+  const shown = useMemo(() => shownFolders(folders, folder), [folders, folder]);
 
   const stem = nameStem(name);
   const key = checkKey(dir, stem, format);
@@ -151,16 +151,17 @@ export function SaveAsDialog({ projectId, sourcePath, defaultName, folder, forma
           }}>
             {shown.map(f => (
               <Button key={f.path} size="sm" fullWidth variant={f.path === dir ? 'ghostAccent' : 'ghost'}
-                title={folderLabel(f.path)} onClick={() => setDir(f.path)}
+                title={folderLabel(f.path, personal)} onClick={() => setDir(f.path)}
                 leftIcon={<Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
                 style={{ justifyContent: 'flex-start', fontWeight: f.path === dir ? 600 : 400, flexShrink: 0 }}>
-                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folderLabel(f.path)}</span>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folderLabel(f.path, personal)}</span>
                 <span style={{ marginLeft: 'auto', paddingLeft: SP.sm, fontSize: FS.xs, fontWeight: 400, color: C.textMuted, whiteSpace: 'nowrap' }}>
-                  {personal ? '' : `${f.path === folder ? 'здесь сейчас · ' : ''}${f.files} ${plural(f.files, 'файл', 'файла', 'файлов')}`}
+                  {/* «здесь сейчас» — только у проекта: у личной области folder это место сохранения по умолчанию, файл там ещё не лежит */}
+                  {`${!personal && f.path === folder ? 'здесь сейчас · ' : ''}${f.files} ${plural(f.files, 'файл', 'файла', 'файлов')}`}
                 </span>
               </Button>
             ))}
-            {!personal && !folders && <Hint>Загружаем папки проекта…</Hint>}
+            {!folders && <Hint>{personal ? 'Загружаем папки «Личного»…' : 'Загружаем папки проекта…'}</Hint>}
           </div>
         </Field>
         {status}

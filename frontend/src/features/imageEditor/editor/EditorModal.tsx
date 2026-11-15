@@ -560,7 +560,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
           onConfirm={() => { setBrushConfirm(false); faceSwap.clearAssignments(); startBrush(); }} />
       )}
       {saveAs && (
-        <SaveAsDialog projectId={projectId} sourcePath={thread.file}
+        <SaveAsDialog projectId={projectId} sessionId={sessionId} sourcePath={thread.file}
           defaultName={thread.file ? baseName : nameStem(baseName)} folder={folder} format={format}
           onCheck={(f, name) => api.saveCheck(projectId, { folder: f, name, format })}
           onSave={async v => { await saveAsInThread(projectId, sessionId, thread, v, undefined, viewedStep); setSaveAs(false); }}

@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { C, R, SP, FS, FONT, SHADOW } from '../../lib/design';
+import { C, R, SP, FS, FONT, SHADOW, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 import type { BriefActiveRow, BriefActiveView } from './FeatureBriefModel';
 
@@ -31,7 +31,7 @@ function ActiveRow({ row, isMobile, onOpen }: { row: BriefActiveRow; isMobile: b
   const held = row.state === 'held';
   const style: CSSProperties = {
     display: 'flex', alignItems: 'flex-start', gap: SP.sm, width: '100%', boxSizing: 'border-box',
-    padding: `${SP.xs}px ${SP.sm}px`, minHeight: isMobile ? 40 : undefined, borderRadius: R.md,
+    padding: `${SP.xs}px ${SP.sm}px`, minHeight: isMobile ? TB.iconHitMobile : undefined, borderRadius: R.md,
     border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.base,
     background: hover ? C.bgSelected : row.state === 'waiting_you' ? C.infoBg : 'transparent',
     boxShadow: focused ? SHADOW.focus : 'none',
@@ -90,7 +90,7 @@ export function ActiveList({ view, isMobile, onOpenTask, onOpenTasks }: {
           style={{
             background: 'transparent', border: 'none', color: C.accent, fontSize: FS.sm,
             alignSelf: 'flex-start', textAlign: 'left', height: 'auto',
-            minHeight: isMobile ? 40 : 24,
+            minHeight: isMobile ? TB.iconHitMobile : 24,
           }}
         >
           {view.tail}

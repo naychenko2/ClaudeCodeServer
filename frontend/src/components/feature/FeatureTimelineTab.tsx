@@ -3,7 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Info } from 'lucide-react';
 import { useFeatureStageFocus, clearFeatureStageFocus, focusFeatureStage } from '../../lib/featurePage';
 import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { stepProgressFromRun } from '../../lib/featureProgress';
 import { Tooltip } from '../ui/Tooltip';
@@ -347,7 +347,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                 data-testid="timeline-stage-duration"
                 style={{
                   fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap',
-                  cursor: 'help', minHeight: isMobile ? 40 : undefined, display: 'inline-flex', alignItems: 'center',
+                  cursor: 'help', minHeight: isMobile ? TB.iconHitMobile : undefined, display: 'inline-flex', alignItems: 'center',
                 }}
               >
                 {meta.duration}

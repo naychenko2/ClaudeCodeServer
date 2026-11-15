@@ -16,7 +16,7 @@
 
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, TB } from '../../lib/design';
 import { roleLabel } from '../../lib/roleLabel';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
@@ -202,7 +202,7 @@ function StatusTag({ tone, text, testId, isMobile }: { tone: TagTone; text: stri
       style={{
         fontSize: FS.xs, fontWeight: 600, padding: '0 6px', borderRadius: R.sm,
         lineHeight: '16px', whiteSpace: 'nowrap', flexShrink: 0,
-        minHeight: isMobile ? 40 : undefined, display: 'inline-flex', alignItems: 'center',
+        minHeight: isMobile ? TB.iconHitMobile : undefined, display: 'inline-flex', alignItems: 'center',
         ...tagStyle(tone),
       }}
     >
@@ -419,7 +419,7 @@ export function FeatureTasksTab({ run, featureId, marks: marksProp, isMobile = f
                 background: isActive ? C.accent : C.bgSelected,
                 color: isActive ? C.onAccent : C.textSecondary,
                 border: 'none',
-                minHeight: isMobile ? 40 : undefined,
+                minHeight: isMobile ? TB.iconHitMobile : undefined,
               }}
             >
               {chip.label} {chip.count}
@@ -539,7 +539,7 @@ export function FeatureTasksTab({ run, featureId, marks: marksProp, isMobile = f
             border: `1px solid ${C.border}`, background: C.bgSelected,
             borderRadius: R.md, padding: `${SP.xs}px ${SP.sm}px`,
             fontSize: FS.sm, color: C.textHeading,
-            minHeight: isMobile ? 40 : 32,
+            minHeight: isMobile ? TB.iconHitMobile : 32,
           }}
         >
           {expanded ? 'Свернуть' : `Показать все · ${total}`}

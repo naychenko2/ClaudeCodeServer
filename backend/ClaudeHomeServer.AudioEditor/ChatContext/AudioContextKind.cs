@@ -99,7 +99,11 @@ public sealed class AudioContextKind(
             (AudioContextRoles.Voice, "Голос", [VoiceKind], [AudioOp.Speak, AudioOp.Dialogue, AudioOp.ConvertVoice]),
             (AudioContextRoles.Reference, "Образец", [Kind, ProjectFileContextKind.Kind],
                 [AudioOp.CloneVoice, AudioOp.ConvertVoice, AudioOp.Cover, AudioOp.Master]),
-            (AudioContextRoles.Piece, "Кусок", [Kind, ProjectFileContextKind.Kind], [AudioOp.Concat]),
+            // Файл «Личного» — кусок склейки личного чата (Ф-9): читается той же веткой AudioConcatService,
+            // что файл проекта, когда у области есть папка «Личного». Образцом голоса он не бывает:
+            // там нужен звук, а не любой файл
+            (AudioContextRoles.Piece, "Кусок", [Kind, ProjectFileContextKind.Kind, PersonalFileContextKind.Kind],
+                [AudioOp.Concat]),
         };
         return
         [

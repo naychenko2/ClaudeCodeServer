@@ -125,6 +125,7 @@ public sealed class AudioContextRefsTests : IDisposable
         table.Single(r => r.Role == "voice").Kinds.Should().Equal("audio-voice");
         table.Single(r => r.Role == "voice").Ops.Should().Equal("speak", "dialogue", "convertVoice");
         table.Single(r => r.Role == "reference").Kinds.Should().Equal("audio", "project-file");
+        table.Single(r => r.Role == "piece").Kinds.Should().Equal("audio", "project-file", "personal-file");
         table.Single(r => r.Role == "piece").Ops.Should().Equal("concat");
     }
 
@@ -269,12 +270,16 @@ public sealed class AudioContextRefsTests : IDisposable
     public void Usedby_картинка_в_контексте_звука_серая_а_голос_берёт_операции_звука()
     {
         var voice = NewVoice();
-        var registry = new ContextKindRegistry([Kind(), new AnyPrimaryImageStub(), new ProjectFileContextKind()]);
+        var registry = new ContextKindRegistry([Kind(), new AnyPrimaryImageStub(), new ProjectFileContextKind(),
+            new PersonalFileContextKind()]);
         var state = new ChatContextState(1, Primary(NewThread()),
         [
             new ContextItem("img", "image", new JsonObject { ["threadId"] = "t" }, "style", ContextActor.Human, DateTime.UtcNow),
             new ContextItem("v", "audio-voice", Slug(voice), "voice", ContextActor.Human, DateTime.UtcNow),
             new ContextItem("v-stems", "audio-voice", Slug(voice), null, ContextActor.Human, DateTime.UtcNow),
+            // Файл «Личного»: кусок склейки — вход, образец голоса — роль, которой звук у него нет
+            new ContextItem("pf", "personal-file", new JsonObject { ["path"] = "audio/jingle.wav" }, "piece", ContextActor.Human, DateTime.UtcNow),
+            new ContextItem("pf-ref", "personal-file", new JsonObject { ["path"] = "audio/jingle.wav" }, "reference", ContextActor.Human, DateTime.UtcNow),
         ]);
 
         var dto = ChatContextDtoBuilder.Build(registry, Scope, state);
@@ -282,6 +287,8 @@ public sealed class AudioContextRefsTests : IDisposable
         dto.Refs.Single(r => r.Id == "img").UsedBy.Should().BeEmpty();
         dto.Refs.Single(r => r.Id == "v").UsedBy.Should().Equal("speak", "dialogue", "convertVoice");
         dto.Refs.Single(r => r.Id == "v-stems").UsedBy.Should().BeEmpty("голос при «Стемах» не вход");
+        dto.Refs.Single(r => r.Id == "pf").UsedBy.Should().Equal("concat");
+        dto.Refs.Single(r => r.Id == "pf-ref").UsedBy.Should().BeEmpty("образец из «Личного» звук не берёт");
     }
 
     // Вид «image», который принимает style при любом основном: наблюдает, у кого спросили роль

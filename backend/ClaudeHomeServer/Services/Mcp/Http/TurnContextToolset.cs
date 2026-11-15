@@ -60,12 +60,13 @@ public sealed class TurnContextToolset(
                     ["kind"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Вид объекта: project-file, image-character, audio-voice, image, audio",
+                        ["description"] = "Вид объекта: project-file, personal-file, image-character, audio-voice, image, audio",
                     },
                     ["ref"] = new JsonObject
                     {
                         ["type"] = "object",
-                        ["description"] = "Идентификатор объекта своего вида: {path} у project-file, {slug} у image-character "
+                        ["description"] = "Идентификатор объекта своего вида: {path} у project-file (от корня проекта) "
+                            + "и personal-file (от корня «Личного», только в личном чате), {slug} у image-character "
                             + "и audio-voice, {threadId, versionId?} у image и audio",
                     },
                     ["role"] = new JsonObject

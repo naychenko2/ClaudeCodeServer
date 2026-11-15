@@ -19,7 +19,8 @@ public sealed record AudioContextRead(
 
 // Входы операции, разложенные из контекста чата (ADR-023 §Д2.1): основной объект → нить и версия;
 // audio-voice → голос; reference → образец (версия нити или файл проекта); piece → куски склейки по
-// AddedAt. Референс, которого операция не берёт (AcceptedRefs по её имени), пропускается. VoiceKind
+// AddedAt (версия нити, файл проекта или файл «Личного» — путь от корня своей области). Референс,
+// которого операция не берёт (AcceptedRefs по её имени), пропускается. VoiceKind
 // выводится из голоса: образцы — клон, обученная модель — RVC
 public sealed record AudioContextInputs(
     ChatContextState State,
@@ -120,11 +121,14 @@ public sealed class AudioContextLaunch(
             AudioEditJobService.OpName(op)).VoiceRef;
     }
 
+    // Путь файла — от корня той области, которая читает кусок: у чата проекта это проект, у личного
+    // чата — «Личное» вызывающего (AudioConcatService берёт его из scope своей папкой)
     private static AudioConcatPiece? Piece(ContextItem item) => item.Kind switch
     {
         AudioContextKind.Kind when Text(item.Ref, "threadId") is { } thread =>
             new AudioConcatPiece(thread, Text(item.Ref, "versionId")),
         ProjectFileContextKind.Kind when Text(item.Ref, "path") is { } path => new AudioConcatPiece(ProjectFile: path),
+        PersonalFileContextKind.Kind when Text(item.Ref, "path") is { } path => new AudioConcatPiece(ProjectFile: path),
         _ => null,
     };
 

@@ -166,6 +166,28 @@ public sealed class TurnContextParityTests : IDisposable
         tail.Should().Contain("style.png [art/style.png]").And.Contain("Аня Ковалёва [anya]");
     }
 
+    // Личный вид (Ф-9): в хвосте своего чата файл «Личного» называется своим существительным и своим путём
+    [Fact]
+    public async Task Хвост_зовёт_файл_Личного_своим_видом()
+    {
+        var personalRoot = Path.Combine(_root, "personal");
+        Directory.CreateDirectory(personalRoot);
+        File.WriteAllText(Path.Combine(personalRoot, "jingle.wav"), "x");
+        var personal = new Mock<IPersonalProjects>();
+        personal.Setup(p => p.GetPersonalOf(Owner)).Returns(
+            new Project { Id = "personal-1", OwnerId = Owner, RootPath = personalRoot, Kind = ProjectKind.Personal });
+        var registry = new ContextKindRegistry([new ProjectFileContextKind(),
+            new PersonalFileContextKind(new PersonalFolderResolver(personal.Object))]);
+        var store = new ChatContextStore(Path.Combine(_root, "ctx-personal"), registry);
+        store.AddRef(Owner, Chat, Item("personal-file", new JsonObject { ["path"] = "jingle.wav" }, null, ContextActor.Human), null);
+        var services = new ServiceCollection().AddSingleton<IChatContextStore>(store).BuildServiceProvider();
+        var contributor = new TurnContextContributor(services, registry, new Mock<IProjectManager>().Object);
+
+        var tail = (await contributor.BuildAsync(Ctx(), "привет"))!.Sections.Single().Text;
+
+        tail.Should().Contain("jingle.wav [jingle.wav] — файл «Личного», для тебя (не вход генератора)");
+    }
+
     // Отключаемость (ADR-023 §4): вид выключенной вертикали не зарегистрирован — в хвост не идёт, в DTO остаётся
     [Fact]
     public async Task Элементы_без_провайдера_в_хвост_не_идут_а_в_DTO_остаются_missing()

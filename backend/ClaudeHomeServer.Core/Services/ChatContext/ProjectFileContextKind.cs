@@ -7,6 +7,7 @@ namespace ClaudeHomeServer.Services.ChatContext;
 
 // Встроенный вид «файл проекта» (ADR-023): Ref = {path} — относительный путь от корня проекта.
 // Основным объектом не бывает (CanBePrimary по умолчанию false): референсы не принимает, исполнителя не описывает.
+// Личный чат — не его область: файл «Личного» называется видом personal-file (PersonalFileContextKind).
 public sealed class ProjectFileContextKind : IContextKindProvider
 {
     public const string Kind = "project-file";

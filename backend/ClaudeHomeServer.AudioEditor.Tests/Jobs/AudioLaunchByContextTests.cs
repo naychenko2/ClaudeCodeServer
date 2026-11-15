@@ -48,7 +48,8 @@ public sealed class AudioLaunchByContextTests : IDisposable
         _session = new Session { Id = Chat, OwnerId = Owner, ProjectId = _project.Id };
         _threads = new AudioThreadStore(Path.Combine(_root, "threads"));
         _workspace = new AudioEditWorkspace(Path.Combine(_root, "work"));
-        _registry = new ContextKindRegistry([new AudioContextKind(_threads), new ProjectFileContextKind()]);
+        _registry = new ContextKindRegistry([new AudioContextKind(_threads), new ProjectFileContextKind(),
+            new PersonalFileContextKind()]);
         _store = new ChatContextStore(Path.Combine(_root, "ctx"), _registry);
         var directory = new Mock<ISessionDirectory>();
         directory.Setup(d => d.GetById(Chat)).Returns(_session);
@@ -126,6 +127,25 @@ public sealed class AudioLaunchByContextTests : IDisposable
         master.VoiceRef.Should().BeNull("мастеринг голос не берёт");
 
         AudioContextLaunch.Extract(_scope, state, "concat").Pieces.Should().Equal(new AudioConcatPiece(otherThread, otherVersion));
+    }
+
+    // Файл «Личного» (Ф-9): путь от корня «Личного» становится куском склейки той же раскладкой, что
+    // файл проекта; роль «образец» для него не вход и пропускается
+    [Fact]
+    public void Extract_куском_склейки_бьёт_и_файл_Личного_а_образцом_нет()
+    {
+        var threadId = NewThread();
+        var other = NewThread();
+        var t0 = new DateTime(2026, 11, 3, 10, 0, 0, DateTimeKind.Utc);
+        SetPrimary(threadId);
+        AddRef("personal-file", new JsonObject { ["path"] = "audio/jingle.wav" }, "piece", t0);
+        AddRef("audio", ThreadRef(other), "piece", t0.AddMinutes(1));
+        AddRef("personal-file", new JsonObject { ["path"] = "audio/voice.wav" }, "reference");
+
+        var state = _store.Get(Owner, Chat);
+        AudioContextLaunch.Extract(_scope, state, "concat").Pieces.Should().Equal(
+            new AudioConcatPiece(ProjectFile: "audio/jingle.wav"), new AudioConcatPiece(other));
+        AudioContextLaunch.Extract(_scope, state, "master").Reference.Should().BeNull("образец из «Личного» не берётся");
     }
 
     [Fact]

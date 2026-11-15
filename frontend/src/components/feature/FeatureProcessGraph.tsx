@@ -63,6 +63,8 @@ export interface FeatureProcessGraphProps {
 const NODE_H = 88;
 const NODE_MIN_W = 116;
 const NODE_W_MOBILE = 104;
+// Строк имени этапа в узле (при большем числе — многоточие, полное имя в title).
+const NAME_LINES = 3;
 // Ширина узла без замера (первый кадр, тесты без раскладки): прежний размер карточки.
 const NODE_W_DEFAULT = 152;
 // Зазор между колонками — пространство для рёбер (макет .link 20 + запас на кривую).
@@ -439,13 +441,15 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
               )}
               <span style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm }}>
                 <span style={{ marginTop: 1, display: 'inline-flex' }}><MarkerIcon stage={stage} /></span>
-                {/* Имя переносится целиком (без clamp): узел вмещает три строки.
-                    Полное имя — ещё и в title (тултип) и aria-label. */}
+                {/* Узел фиксированной высоты вмещает три строки имени: длиннее — многоточие
+                    (clamp 3), чтобы подпись не наезжала на мету и нижнюю строку. Полное
+                    имя не теряется: title (тултип) и aria-label. */}
                 <span
                   data-testid={`pgraph-title-${id}`}
                   title={nodeTitle(stage)}
                   style={{
                     flex: '1 1 auto', minWidth: 0, lineHeight: 1.25, overflowWrap: 'anywhere',
+                    display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: NAME_LINES, overflow: 'hidden',
                     // Заголовок proposed-узла — plan-text (макет .node.prop .nn, F33a).
                     fontSize: FS.sm, fontWeight: 600,
                     color: proposed ? C.planText : quiet ? C.textSecondary : C.textHeading,

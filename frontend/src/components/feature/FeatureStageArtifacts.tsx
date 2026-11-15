@@ -51,7 +51,7 @@ function CommitRow({ commit, state, open, isMobile, onToggle }: {
           {commit.subject}
         </span>
         {at && <span style={{ fontSize: FS.xs, color: C.textMuted }}>{at}</span>}
-        <Button size="xs" variant="ghost" style={isMobile ? { minHeight: 40 } : undefined}
+        <Button size="xs" variant="ghost" style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
           dataTestId={`stage-commit-toggle-${commit.sha}`}
           ariaLabel={`${open ? 'Скрыть' : 'Показать'} дифф коммита ${commit.shortSha}`}
           loading={state?.status === 'loading'}
@@ -290,7 +290,7 @@ function FilesArtifacts({ taskId, artifacts, files, isMobile }: {
             );
           })}
           {hidden > 0 && (
-            <Button size="xs" variant="ghost" dataTestId="stage-files-more" style={isMobile ? { minHeight: 40 } : undefined}
+            <Button size="xs" variant="ghost" dataTestId="stage-files-more" style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
               onClick={() => setExpanded(true)}>ещё {hidden} {filesWord(hidden)}</Button>
           )}
           {artifacts.commits.length > 0 && <CommitsList commits={artifacts.commits} style={{ marginTop: SP.sm }} />}
@@ -308,7 +308,7 @@ function FilesArtifacts({ taskId, artifacts, files, isMobile }: {
               <Notice tone="danger" icon={AlertTriangle} data-testid="stage-file-diff-error"
                 action={
                   <Button size="xs" variant="ghost" dataTestId="stage-file-diff-retry"
-                    style={isMobile ? { minHeight: 40 } : undefined}
+                    style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
                     onClick={() => setReloadNonce(n => n + 1)}>Повторить</Button>
                 }>{state.message}</Notice>
             )}

@@ -849,7 +849,7 @@ function HoldStateBlock({ run, feature, isMobile }: { run: FeatureRun; feature: 
             <Button
               size="xs"
               variant="primary"
-              style={{ background: C.bgWhite, minHeight: 40 }}
+              style={{ background: C.bgWhite, minHeight: TB.iconHitMobile }}
               loading={busy}
               dataTestId="feature-page-unpause"
               onClick={act}
@@ -860,7 +860,7 @@ function HoldStateBlock({ run, feature, isMobile }: { run: FeatureRun; feature: 
               <Button
                 size="xs"
                 variant="ghost"
-                style={{ background: C.bgWhite, minHeight: 40 }}
+                style={{ background: C.bgWhite, minHeight: TB.iconHitMobile }}
                 onClick={() => { void openChatById(keyChat); }}
               >
                 Открыть ключевой чат
@@ -1016,7 +1016,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
         key="primary"
         size="xs"
         variant="ghostFilled"
-        style={{ minHeight: 40 }}
+        style={{ minHeight: TB.iconHitMobile }}
         onClick={() => {
           if (effectivePrimary.kind === 'chat' && effectivePrimary.chatId) {
             recordFeatureReturn(fid, { kind: 'chat', id: effectivePrimary.chatId }, featureTitle);
@@ -1091,7 +1091,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
           key="keychat"
           size="xs"
           variant="ghost"
-          style={{ background: C.bgWhite, minHeight: 40 }}
+          style={{ background: C.bgWhite, minHeight: TB.iconHitMobile }}
           onClick={() => { void openChatById(keyChat); }}
         >
           Открыть ключевой чат
@@ -1176,7 +1176,7 @@ function RouteHeaderRow({ testId, tone, tag, children, actionLabel, onAction, is
       <span style={{ flex: '1 1 220px', minWidth: 0 }}>{children}</span>
       <Button
         variant={tone === 'plan' ? 'primary' : 'ghost'} size={isMobile ? 'sm' : 'xs'}
-        fullWidth={isMobile} style={isMobile ? { minHeight: 40 } : undefined}
+        fullWidth={isMobile} style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
         dataTestId={`${testId}-action`} onClick={onAction}
       >
         {actionLabel}

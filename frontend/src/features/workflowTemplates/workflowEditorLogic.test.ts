@@ -363,3 +363,42 @@ describe('F22: мета-строка элемента списка (T7, поля
     expect(draftMetaLine([1, 2].map(() => ({ role: 'step', presence: 'on' as const })))).toBe('2 этапа');
   });
 });
+
+describe('Р-Ф-2.39: привязка ошибок к строке по адресной метке', () => {
+  const long = 'x'.repeat(4001);
+  const twoQa = (): WorkflowTemplate => tpl({ stages: [
+    { role: 'qa', id: 'qa-a', presence: 'on' },
+    { role: 'qa', id: 'qa-b', presence: 'on', prompt: long },
+  ] });
+
+  it('локальная ошибка второго qa попадает в его строку, а не в первую по роли', () => {
+    const items = errorSummaryItems(twoQa());
+    const hit = items.find(i => i.text.startsWith('этап «qa» (qa-b)'));
+    expect(hit?.stageIndex).toBe(1);
+  });
+
+  it('ответ сервера с меткой «роль (id)» привязывается к своей строке', () => {
+    const failure = classifySaveError(Object.assign(new Error('bad'), {
+      status: 400, body: { errors: ['этап «qa» (qa-b): ошибка'] },
+    }));
+    expect(failure.stageErrors['qa (qa-b)']).toEqual(['ошибка']);
+    const items = errorSummaryItems(twoQa(), failure);
+    expect(items.find(i => i.text === 'этап «qa» (qa-b): ошибка')?.stageIndex).toBe(1);
+  });
+
+  it('голая роль при повторе роли никуда не привязывается (старого фолбэка «первый этап роли» нет)', () => {
+    const failure = { kind: 'invalid' as const, message: 'x', stageErrors: { qa: ['ошибка'] }, generalErrors: [] };
+    const items = errorSummaryItems(twoQa(), failure);
+    expect(items.find(i => i.text === 'этап «qa»: ошибка')?.stageIndex).toBeNull();
+  });
+
+  it('одинаковые по тексту ошибки с разными метками остаются двумя', () => {
+    const draft = tpl({ stages: [
+      { role: 'qa', id: 'qa-a', presence: 'on', prompt: long },
+      { role: 'qa', id: 'qa-b', presence: 'on', prompt: long },
+    ] });
+    const items = errorSummaryItems(draft).filter(i => i.text.includes('текст промпта'));
+    expect(items.map(i => i.stageIndex)).toEqual([0, 1]);
+    expect(new Set(items.map(i => i.text)).size).toBe(2);
+  });
+});

@@ -8,6 +8,7 @@
 // - без title (легаси и этап без имени) — как раньше: имя роли (stageName) + линия (laneWord)
 //   для параллельных этапов одной роли; без линии — просто имя роли;
 // - длинное имя этапа ограничено рамкой узла: multiline-clamp на 3 строки; полное имя остаётся в title и aria-label;
+// - перенос имени — по слогам со знаком (hyphens+break-word), а не по букве ('anywhere', дефект 20e96078);
 // - узел «предложено» по макету (F33a): рамка dashed c-plan и заголовок plan-text;
 //   пометка «предложено» в строке меты (при пустой мете — на её месте, при занятой —
 //   рядом через « · »), один раз и не в нижней строке; proposed=false (бэк шлёт false
@@ -30,6 +31,8 @@
 // и в рендере узла) — краснеет блок R-F33a.
 // (6) вернуть сырой proposed в цвете ребра и в условии легенды (без state) — краснеет
 //     тест рёбер и легенды (R-F33a·дельта).
+// (7) вернуть `overflowWrap: 'anywhere'` без `hyphens` в стиле подписи — краснеет
+//     «перенос имени — по слогам со знаком».
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -162,6 +165,17 @@ describe('FeatureProcessGraph: длинное имя этапа не выход�
     const c = longQaNode();
     expect(findNodeByAttr(c as never, 'data-testid', 'pgraph-node-qa-long')!.getAttribute('aria-label')).toBe(`${LONG_TITLE}: впереди`);
     expect(titleSpan(c).getAttribute('title')).toBe(LONG_TITLE);
+  });
+
+  it('перенос имени — по слогам со знаком, а не по букве (дефект 20e96078)', () => {
+    const style = (reactProps(titleSpan(longQaNode()) as never) as { style: Record<string, unknown> }).style;
+    // Меряется политика переноса подписи, а не ширина узла: 'anywhere' рвала слово по букве
+    // («Производст|во») — её быть не должно; перенос по слогам даёт hyphens (язык текста —
+    // lang="ru" в frontend/index.html:2), break-word — крайний случай для слов, которые
+    // не переносятся ни целиком, ни по слогам.
+    expect(style.hyphens).toBe('auto');
+    expect(style.overflowWrap).toBe('break-word');
+    expect(style.overflowWrap).not.toBe('anywhere');
   });
 });
 

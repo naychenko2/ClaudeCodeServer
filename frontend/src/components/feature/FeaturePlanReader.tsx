@@ -24,7 +24,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, FileText, RotateCw, Scissors, Palette, MessageCircle, ChevronDown, type LucideIcon } from 'lucide-react';
-import { C, R, FS, FONT, SP } from '../../lib/design';
+import { C, R, FS, FONT, SP, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Button } from '../ui/Button';
 import { MarkdownContent } from '../chat/MarkdownContent';
@@ -380,7 +380,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
               onClick={() => onOpenMockup?.(m.path)}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 4,
-                height: isMobile ? 40 : 26, padding: '0 8px',
+                height: isMobile ? TB.iconHitMobile : 26, padding: '0 8px',
                 border: `1px solid ${C.border}`, background: C.bgWhite, borderRadius: R.sm,
                 fontFamily: FONT.mono, fontSize: 12, color: C.accent, cursor: 'pointer',
               }}
@@ -444,7 +444,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                       width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer',
                       // Тач-цель на 360 — не меньше 40 px по обеим сторонам (высота). На десктопе
                       // строки остаются компактными: двухколоночная сетка от высоты не разъезжается.
-                      padding: isMobile ? '0 8px' : 0, minHeight: isMobile ? 40 : 0,
+                      padding: isMobile ? '0 8px' : 0, minHeight: isMobile ? TB.iconHitMobile : 0,
                       fontFamily: FONT.sans, fontSize: FS.sm, color: C.accent,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}
@@ -570,7 +570,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                           title={expanded ? 'Свернуть раздел' : 'Развернуть раздел'}
                           onClick={() => toggleSection(i, expanded)}
                           style={{
-                            width: isMobile ? 40 : 34, minHeight: isMobile ? 40 : 26, flexShrink: 0,
+                            width: isMobile ? TB.iconHitMobile : 34, minHeight: isMobile ? TB.iconHitMobile : 26, flexShrink: 0,
                             border: 'none', background: 'transparent', cursor: 'pointer',
                             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                             color: C.textSecondary,

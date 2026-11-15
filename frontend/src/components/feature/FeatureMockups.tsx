@@ -14,7 +14,7 @@
 
 import { useState } from 'react';
 import { ChevronDown, ExternalLink } from 'lucide-react';
-import { C, R, FS, FONT, SP } from '../../lib/design';
+import { C, R, FS, FONT, SP, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Button } from '../ui/Button';
 import { NavTargetButton } from './NavTargetButton';
@@ -416,7 +416,7 @@ export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replac
               title={f.exists ? f.path : `${f.path} (не в master)`}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 4,
-                height: isMobile ? 40 : 26, padding: '0 8px',
+                height: isMobile ? TB.iconHitMobile : 26, padding: '0 8px',
                 border: `1px solid ${C.border}`, background: C.bgWhite, borderRadius: R.sm,
                 fontFamily: FONT.mono, fontSize: 12, color: f.exists ? C.textSecondary : C.textMuted,
                 whiteSpace: 'nowrap',

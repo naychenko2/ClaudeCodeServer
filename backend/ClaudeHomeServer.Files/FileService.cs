@@ -799,6 +799,75 @@ public class FileService(
         NotifyMutated(rootPath, relativePath, FileMutationKind.Write);
     }
 
+    // Атомарная запись потока в путь (личные Upload/SaveFromUrl): тот же порядок, что у
+    // FilesController.WriteAtomic — содержимое во временный файл того же каталога, перенос прав,
+    // подмена. Читатель не видит недозаписанного файла: при отказе или сбое временный удалён,
+    // цель осталась как была. Предел maxBytes считается по копиям, а не по Content-Length
+    // (его может не быть): поток длиннее предела — временный удалён, возвращается false,
+    // это отказ, а не сбой (вызывающий превращает его в 413). Уведомление подписчиков явное:
+    // запись идёт мимо OpenForWrite. Гейт вики — тот же GuardNotWiki, что у WriteFileBytes:
+    // метод публичный и мутирующий, он в таблице FileServiceWikiGateTests.
+    public async Task<bool> WriteAtomicFromStreamAsync(string rootPath, string relativePath, Stream source,
+        long maxBytes, CancellationToken ct = default)
+    {
+        var path = SafeJoin(rootPath, relativePath);
+        GuardNotWiki(path);
+        var dir = Path.GetDirectoryName(path)!;
+        CreateDirectoryVerified(rootPath, dir);
+        var tmp = Path.Combine(dir, TreeExcludes.AtomicTempName(Path.GetFileName(path)));
+        try
+        {
+            var exceeded = false;
+            // CreateNew, а не Create: временного файла ещё нет, и открытие не должно усечь
+            // цель за подменённой ссылкой до сверки (тот же приём, что у OpenForWrite)
+            await using (var fs = Verified(rootPath, new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true)))
+            {
+                var buffer = new byte[81920];
+                long total = 0;
+                int read;
+                while ((read = await source.ReadAsync(buffer, ct)) > 0)
+                {
+                    total += read;
+                    if (total > maxBytes) { exceeded = true; break; }
+                    await fs.WriteAsync(buffer.AsMemory(0, read), ct);
+                }
+            }
+            if (exceeded)
+            {
+                File.Delete(tmp);
+                return false;
+            }
+            CopyFileAttributesToTemp(path, tmp);
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { /* временный файл best-effort */ }
+            throw;
+        }
+        NotifyMutated(rootPath, relativePath, FileMutationKind.Write);
+        return true;
+    }
+
+    // Перенос прав и атрибутов существующей цели на временный файл: то же правило, что у
+    // FilesController.CopyFileAttributesToTemp (S2c-1 п.1) — Move берёт права от tmp, а не от цели.
+    // Цели нет — переносить нечего: новый файл получает дефолт ОС.
+    private void CopyFileAttributesToTemp(string abs, string tmp)
+    {
+        if (!File.Exists(abs)) return;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+                File.SetAttributes(tmp, File.GetAttributes(abs));
+            else
+                File.SetUnixFileMode(tmp, File.GetUnixFileMode(abs));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger?.LogDebug(ex, "Не перенесли права файла при атомарной записи {Path}", abs);
+        }
+    }
+
     public void CreateFile(string rootPath, string relativePath) => CreateFile(rootPath, relativePath, "");
 
     // Создание с начальным содержимым (диаграммы из меню «+»: шаблон пишется одним

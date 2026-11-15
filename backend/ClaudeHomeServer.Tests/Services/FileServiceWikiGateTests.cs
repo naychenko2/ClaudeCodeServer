@@ -47,7 +47,7 @@ public class FileServiceWikiGateTests : IDisposable
     // обе стороны (как Move в NotesService): вынести из вики нельзя так же, как внести.
     private static readonly string[] GuardedMethods =
     [
-        "WriteFile", "WriteFileBytes", "CreateFile", "CreateDirectory", "Delete", "Rename", "RevertFile",
+        "WriteFile", "WriteFileBytes", "WriteAtomicFromStreamAsync", "CreateFile", "CreateDirectory", "Delete", "Rename", "RevertFile",
     ];
 
     // Всё остальное публичное — чтение, предикат или не способно записать под data/wiki/:
@@ -113,6 +113,8 @@ public class FileServiceWikiGateTests : IDisposable
     {
         yield return ("WriteFile", () => _sut.WriteFile(_dir, WikiRel("Write"), "тело"));
         yield return ("WriteFileBytes", () => _sut.WriteFileBytes(_dir, "wiki/u1/media/bytes.bin", new byte[] { 1 }));
+        // async-метод: исключение живёт в возвращённом Task, драйвер ждёт его здесь же
+        yield return ("WriteAtomicFromStreamAsync", () => _sut.WriteAtomicFromStreamAsync(_dir, "wiki/u1/media/поток.bin", new MemoryStream([1]), 10).GetAwaiter().GetResult());
         yield return ("CreateFile/без содержимого", () => _sut.CreateFile(_dir, WikiRel("Create")));
         yield return ("CreateFile/с содержимым", () => _sut.CreateFile(_dir, WikiRel("Create-контент"), "шаблон"));
         yield return ("CreateDirectory", () => _sut.CreateDirectory(_dir, "wiki/u1/pages/Папка"));
@@ -139,6 +141,8 @@ public class FileServiceWikiGateTests : IDisposable
     {
         Record.Exception(() => _sut.WriteFile(_dir, WikiRel("Write"), "тело"));
         Record.Exception(() => _sut.WriteFileBytes(_dir, "wiki/u1/media/bytes.bin", new byte[] { 1 }));
+        // предков метод не создаёт до гейта: под wiki не должна появиться ни папка, ни temp
+        Record.Exception(() => _sut.WriteAtomicFromStreamAsync(_dir, "wiki/u1/media/поток.bin", new MemoryStream([1]), 10).GetAwaiter().GetResult());
         Record.Exception(() => _sut.CreateFile(_dir, WikiRel("Create"), "шаблон"));
         Record.Exception(() => _sut.CreateDirectory(_dir, "wiki/u1/pages"));
 

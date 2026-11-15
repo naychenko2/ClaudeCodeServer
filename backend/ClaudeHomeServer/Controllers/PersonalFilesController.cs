@@ -20,7 +20,9 @@ namespace ClaudeHomeServer.Controllers;
 // Корень — PersonalFolderResolver.Find: GET папку не создаёт, без неё список пуст. Создают папку
 // только mkdir и create. Сервисы те же, что у проектных файлов (FileService, ProjectLinkGuard,
 // FileContentReader); путь обязан быть относительным и не идти через символическую ссылку.
-// Загрузки, правки текста, офисных форматов, git и WebDAV здесь нет (вне объёма Ф2-9).
+// Правки текста, офисных форматов, git и WebDAV здесь нет. Загрузка файла (upload) и сохранение
+// по URL (save-from-url, только в медиальные папки) — Ф-6, требование Андрея 15.11: созданный в
+// ходе контент должен быть чем сохранить в «Личное».
 [ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
@@ -30,8 +32,9 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
 {
     private const string SubClaim = "sub";
 
-    // Предел содержимого при создании файла: панель записывает текстовые файлы и диаграммы,
-    // загрузка документов — вне объёма Ф2-9. Отказ той же формы, что у save-from-url: 413 с размером
+    // Предел содержимого при создании файла: панель записывает текстовые файлы и диаграммы;
+    // двоичное тело идёт через upload или save-from-url, у них свои пределы. Отказ той же
+    // формы, что у них: 413 с размером
     private const int MaxContentBytes = 1024 * 1024; // 1 МБ
 
     private string? UserId => User.FindFirstValue(SubClaim);
@@ -223,6 +226,105 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
         catch (UnauthorizedAccessException) { return InvalidPath(); }
         catch (InvalidOperationException) { return Fail(StatusCodes.Status409Conflict, "exists", "Файл уже существует"); }
         catch (IOException) { return Fail(StatusCodes.Status409Conflict, "exists", "Не удалось создать файл"); }
+    }
+
+    // Пределы загрузки и выгрузки по URL — те же, что у проектных Upload (100 МБ) и SaveFromUrl
+    // (200 МБ, ради видео). RequestSizeLimit поднимает потолок тела над дефолтным для Kestrel 30 МБ,
+    // иначе отказом был бы даже разрешённый файл; сам предел файла держит подсчёт в
+    // FileService.WriteAtomicFromStreamAsync (Content-Length не доверяем: его может не быть)
+    private const long MaxUploadBytes = 100L * 1024 * 1024;
+    private const long MaxSaveFromUrlBytes = 200L * 1024 * 1024;
+
+    private IActionResult FileTooLarge(long limitBytes) => Fail(StatusCodes.Status413PayloadTooLarge,
+        "file_too_large", $"Файл больше {limitBytes / (1024 * 1024)} МБ");
+
+    // Загрузка файла в «Личное» (Ф-6): по образцу проектной Upload — multipart-поле file, имя через
+    // Path.GetFileName (путь-сегменты в имени отсекаются), атомарная запись через
+    // FileService.WriteAtomicFromStreamAsync. Журнала правок (git) здесь нет: уведомление
+    // подписчиков (синк знаний) делает сам FileService. Перезапись цели разрешена, как в проектной
+    // ручке (атомарная подмена, If-Match в личном маршруте нет); цель — файл, не корень.
+    [HttpPost("upload")]
+    [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
+    public async Task<IActionResult> Upload(string sessionId, [FromQuery] string path = "",
+        IFormFile? file = null, CancellationToken ct = default)
+    {
+        if (!TryChat(sessionId, out var session)) return ChatNotFound();
+        if (file is null || file.Length == 0)
+            return Fail(StatusCodes.Status400BadRequest, "no_file", "Файл не выбран или пустой");
+        // Предел по объявленной длине части — до любого эффекта (temp-записи и папки):
+        // RequestSizeLimit ловит тело на транспорте, здесь тот же отказ формой ручки
+        if (file.Length > MaxUploadBytes) return FileTooLarge(MaxUploadBytes);
+        var dir = Norm(path);
+        if (dir.Length > 0 && !SyntaxOk(dir)) return InvalidPath();
+        // Имя отсекаем до любого эффекта: «../evil» в имени файла — не имя
+        var name = Path.GetFileName(file.FileName);
+        if (name.Length == 0) return InvalidPath();
+        var (root, denied) = await RootForWriteAsync(session, ct);
+        if (root is null) return denied!;
+        var rel = dir.Length == 0 ? name : dir + "/" + name;
+        if (Resolve(root, rel, belowRoot: true) is null) return InvalidPath();
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            if (!await files.WriteAtomicFromStreamAsync(root, rel, stream, MaxUploadBytes, ct))
+                return FileTooLarge(MaxUploadBytes);
+        }
+        catch (UnauthorizedAccessException) { return InvalidPath(); }
+        return Ok(new { path = rel });
+    }
+
+    // Сохранение в «Личное» по URL (Ф-6): тот же SSRF-guard и стриминг, что у проектной SaveFromUrl,
+    // атомарная запись — через FileService. Путь ограничен медиальными папками: в «Личное»
+    // сохраняют только в папку своего вида (ADR-040 §5, PersonalMediaFolders). Путь проверяем
+    // до резолва адреса и до сети: отказанной цели не ради чего скачивать тело.
+    [HttpPost("save-from-url")]
+    [RequestSizeLimit(200 * 1024 * 1024)] // 200 МБ
+    public async Task<IActionResult> SaveFromUrl(string sessionId, [FromBody] SaveFromUrlRequest req,
+        [FromServices] IHttpClientFactory httpClientFactory, CancellationToken ct)
+    {
+        if (!TryChat(sessionId, out var session)) return ChatNotFound();
+        if (!Uri.TryCreate(req.Url, UriKind.Absolute, out var uri) || (uri.Scheme != "https" && uri.Scheme != "http"))
+            return Fail(StatusCodes.Status400BadRequest, "bad_url", "Некорректный URL");
+        var rel = Norm(req.Path);
+        var kind = MediaKindOf(rel);
+        if (kind is null || PersonalMediaFolders.Resolve(kind, rel, out _) is not null)
+            return Fail(StatusCodes.Status400BadRequest, "invalid_path",
+                "В «Личное» сохраняют только в папку «images», «audio» или «video»");
+        if (!await SsrfGuard.IsPubliclyRoutableAsync(uri, ct))
+            return Fail(StatusCodes.Status400BadRequest, "bad_url", "URL указывает на недопустимый адрес");
+        var (root, denied) = await RootForWriteAsync(session, ct);
+        if (root is null) return denied!;
+        if (Resolve(root, rel, belowRoot: true) is null) return InvalidPath();
+        try
+        {
+            var client = httpClientFactory.CreateClient("safe-download");
+            using var resp = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
+            resp.EnsureSuccessStatusCode();
+            // Content-Length проверяем до записи: папки ради заведомо отказанного тела не заводим
+            if (resp.Content.Headers.ContentLength is > MaxSaveFromUrlBytes) return FileTooLarge(MaxSaveFromUrlBytes);
+            await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+            if (!await files.WriteAtomicFromStreamAsync(root, rel, stream, MaxSaveFromUrlBytes, ct))
+                return FileTooLarge(MaxSaveFromUrlBytes);
+        }
+        catch (HttpRequestException ex) { return Fail(StatusCodes.Status502BadGateway, "fetch_failed", ex.Message); }
+        catch (TaskCanceledException) { return Fail(StatusCodes.Status502BadGateway, "fetch_failed", "Выгрузка не завершена: адрес не ответил или время вышло"); }
+        catch (UnauthorizedAccessException) { return InvalidPath(); }
+        return Ok(new { path = rel });
+    }
+
+    // Вид медиальной папки по первому сегменту пути; null — путь не в медиальной папке или
+    // это не файл («images» без имени — папка, не цель записи)
+    private static string? MediaKindOf(string rel)
+    {
+        var slash = rel.IndexOf('/');
+        if (slash <= 0) return null;
+        return rel[..slash] switch
+        {
+            PersonalMediaFolders.Images => PersonalMediaFolders.Images,
+            PersonalMediaFolders.Audio => PersonalMediaFolders.Audio,
+            PersonalMediaFolders.Video => PersonalMediaFolders.Video,
+            _ => null,
+        };
     }
 
     [HttpPost("rename")]

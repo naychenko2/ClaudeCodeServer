@@ -1006,7 +1006,15 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
     }
   }, [project.id]);
 
-  useEffect(() => { loadSyncMarks(project.id); loadDownloadedSet(project.id); }, [project.id]);
+  // Метки синхронизации и набор скачанных — механизм проекта: у личного псевдо-проекта
+  // маршрута /projects/…/sync нет, безусловный вызов давал лишний 404 на каждый маунт
+  // (дефект 6cdd1cf5). В личной панели контрол синхронизации не рисуется
+  // (offlineSync={!personalFiles} ниже), метки ей не нужны.
+  useEffect(() => {
+    if (personalFiles) return;
+    loadSyncMarks(project.id);
+    loadDownloadedSet(project.id);
+  }, [project.id]);
 
   useEffect(() => {
     return onFilesChanged(({ projectId, paths, full }) => {

@@ -14,9 +14,10 @@
 //
 // Окружение node (без jsdom), по образцу components/__tests__/FileExplorerRole.test.ts:
 // fakeDom + мок signalr (onFilesChanged подписка на маунте) + мок useOnline (в node
-// navigator.onLine не определён → «офлайн») + мок toast + localStorage (loadSortMode/
-// loadSyncMarks их читают) + заглушка DOMRect. ensureGit для personal-id сам пропускается
-// (lib/git.ts:147), ensureNotesLoaded гейтится подсистемой 'notes' (выключена) — их вызовов нет.
+// navigator.onLine не определён → «офлайн») + мок toast + localStorage (loadSortMode его
+// читает) + заглушка DOMRect. ensureGit для personal-id сам пропускается (lib/git.ts:147),
+// ensureNotesLoaded гейтится подсистемой 'notes' (выключена), loadSyncMarks/
+// loadDownloadedSet — гейтом по isPersonalFilesId (Х-13): их вызовов нет.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -97,12 +98,15 @@ describe('личная панель «Файлы»: корень без «Зам
   it('панель личного чата показывает корневые подпапки и запросит личный корень; «Заметок» среди них нет', async () => {
     const { root, container } = await mountPanel();
     // Панель спросила ровно личный корень чата: псевдо-id переключил файловую базу.
-    // Файловых запросов на /projects/… быть не должно (loadSyncMarks зовёт свой /sync —
-    // это не файловый листинг, его тут не проверяем)
+    // После Х-13 (дефект 6cdd1cf5) личная панель не ходит на проектные маршруты вовсе:
+    // loadSyncMarks/loadDownloadedSet гейтятся по isPersonalFilesId — прежний безусловный
+    // вызов давал лишний 404 /projects/personal-files:s1/sync на каждый маунт
+    // (снять гейт в FileExplorer.tsx → следующая проверка краснеет на этом запросе).
     const urls = request.mock.calls.map(c => String(c[0]));
     expect(urls, 'листинг ушёл на личный маршрут').toContain('/personal/chats/s1/files?path=');
     expect(urls.filter(u => u.includes('/files')), 'файловый запрос — только личный').toEqual(
       ['/personal/chats/s1/files?path=']);
+    expect(urls.some(u => u.includes('/projects/')), 'запросов на проектные маршруты нет').toBe(false);
     // Корневые подпапки из ответа бэка видны строками дерева — панель не сломана
     for (const name of ['images', 'audio', 'video', 'docs']) {
       expect(hasText(container, name), `папка «${name}» в дереве`).toBe(true);

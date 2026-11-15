@@ -9,7 +9,8 @@
 //   для параллельных этапов одной роли; без линии — просто имя роли;
 // - длинное имя этапа ограничено рамкой узла: multiline-clamp на 3 строки; полное имя остаётся в title и aria-label;
 // - перенос имени — по слогам со знаком (hyphens+break-word), а не по букве ('anywhere', дефект 20e96078);
-// - узел «предложено» по макету (F33a): рамка dashed c-plan и заголовок plan-text;
+// - узел «предложено» по макету (F33a): прозрачный фон (.node.prop), рамка dashed c-plan
+//   и заголовок plan-text; обычный узел — фон bgWhite (контроль в том же тесте);
 //   пометка «предложено» в строке меты (при пустой мете — на её месте, при занятой —
 //   рядом через « · »), один раз и не в нижней строке; proposed=false (бэк шлёт false
 //   у подтверждённого маршрута) — стиль прежний; строка легенды только при proposed-узле.
@@ -33,6 +34,8 @@
 //     тест рёбер и легенды (R-F33a·дельта).
 // (7) вернуть `overflowWrap: 'anywhere'` без `hyphens` в стиле подписи — краснеет
 //     «перенос имени — по слогам со знаком».
+// (8) вернуть `C.planLight` в фоне proposed-узла (доработка F33·фон по макету) — краснеет
+//     «proposed=true: фон прозрачный…».
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -256,12 +259,19 @@ describe('FeatureProcessGraph: узел «предложено» по макет
   const css = (n: unknown, key: string): string =>
     String((reactProps(n as never) as { style: Record<string, unknown> }).style[key]);
 
-  it('proposed=true: рамка dashed c-plan, заголовок plan-text', () => {
-    const c = render([{ ...mkStage('design', 'dz', 'design', 0, 'pending'), proposed: true }]);
+  it('proposed=true: фон прозрачный (не planLight), рамка dashed c-plan, заголовок plan-text', () => {
+    const c = render([
+      { ...mkStage('design', 'dz', 'design', 0, 'pending'), proposed: true },
+      mkStage('plan', 'pl', 'plan', 1, 'done', ['dz']),
+    ]);
     const node = get(c, 'pgraph-node-dz')!;
     expect(node.getAttribute('data-proposed')).toBe('true');
+    // Фон proposed-узла — transparent (макет .node.prop, feature-page.html:280): «призрак».
+    expect(css(node, 'background')).toBe('transparent');
     expect(css(node, 'border')).toBe('1px dashed var(--c-plan)');
     expect(css(get(c, 'pgraph-title-dz'), 'color')).toBe('var(--c-plan-text)');
+    // Контрольный сосед: обычный узел того же графа — фон как был (bgWhite).
+    expect(css(get(c, 'pgraph-node-pl'), 'background')).toBe('var(--c-bg-white)');
   });
 
   it('proposed=false (бэк шлёт false у подтверждённого маршрута): стиль и мета прежние', () => {

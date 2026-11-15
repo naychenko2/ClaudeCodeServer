@@ -444,7 +444,9 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                 boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center',
                 gap: SP.xs, padding: `${SP.xs}px ${SP.sm}px`, textAlign: 'left', cursor: 'pointer', zIndex: 1,
                 borderRadius: R.lg, font: 'inherit',
-                background: proposed ? C.planLight : quiet ? 'transparent' : C.bgWhite,
+                // Фон proposed-узла — прозрачный (макет .node.prop, feature-page.html:280):
+                // предложенный этап — «призрак» за пунктиром, а не залитая плашка.
+                background: proposed || quiet ? 'transparent' : C.bgWhite,
                 // Рамка proposed — «1px dashed c-plan» целиком (макет .node.prop, F33a).
                 border: proposed && !selected
                   ? `1px dashed ${C.plan}`

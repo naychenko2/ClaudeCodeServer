@@ -248,7 +248,9 @@ export function projectRequest<T>(url: string, options?: RequestInit & { timeout
   if (!m) return request<T>(url, options);
   const projectId = decodeURIComponent(m[1]);
   const route = projectRouteOf(projectId);
-  if (route === 'server') return request<T>(url, options);
+  // «Личное» — серверный маршрут: агент устройства о нём не знает, и уводить такой запрос в
+  // агента нельзя (иначе он ушёл бы к агенту или отказал «маршрут не умеет»)
+  if (route === 'server' || route === 'personal') return request<T>(url, options);
 
   const method = (options?.method ?? 'GET').toUpperCase();
   const path = m[2];
@@ -454,6 +456,13 @@ function subscribe(l: () => void): () => void {
   return () => { listeners.delete(l); };
 }
 
+// Ждёт ли этот маршрут агента устройства. Серверный — нет; «Личное» (ADR-040 Ф2-9) — тоже нет:
+// его файлы лежат на сервере, а гейт устройства на маршруте 'personal' показывал бы вечное
+// «Ищем агент AI Home на этом компьютере». Отдельная чистая функция — чтобы правило проверялось тестом.
+export function routeWaitsDeviceAgent(route: ProjectFilesRoute): boolean {
+  return route !== 'server' && route !== 'personal';
+}
+
 // Состояние связи с устройством для панели локального проекта. У серверного проекта — всегда
 // ready: ему агент не нужен. С машины проекта — состояние агента; с другого устройства — состояние
 // ретранслятора. Пока панель открыта у агента, билет перевыпускается заранее, чтобы запросы панели
@@ -463,7 +472,7 @@ export function useDeviceAgent(project: Project | null | undefined, enabled = tr
   const projectId = project?.id ?? '';
   useSyncExternalStore(subscribe, () => version);
   const route = projectFilesRoute(project, devicePresenceOf(projectId));
-  const deviceBound = enabled && route !== 'server';
+  const deviceBound = enabled && routeWaitsDeviceAgent(route);
   const viaAgent = deviceBound && route === 'agent';
 
   useEffect(() => {

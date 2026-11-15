@@ -23,16 +23,16 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { MediaBlock, type MediaItem } from '../MediaBlock';
 import { ChatProjectContext, ChatSessionContext } from '../contexts';
 import type { ProjectRoleView } from '../../../types';
-import { installFakeDom, uninstallFakeDom, mount, textNodes } from './fakeDom';
+import { installFakeDom, uninstallFakeDom, mount, textNodes, reactProps } from './fakeDom';
 // Конец цепочки личной записи (Ф-8): request() мокнут, цепка api → personalFilesBase настоящая
-// (тот же образец, что features/files/__tests__/personalFiles.test.ts)
+// (тот же образец, что features/files/__tests__/personalFiles.test.ts); цепочка проходит
+// через компонент (MediaBlock → api), не через прямой вызов filesApi
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('../../../lib/offline', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/offline')>();
   return { ...orig, request };
 });
-import { filesApi } from '../../../features/files/api';
-import { personalFilesId, personalFilesSupports } from '../../../features/files/personalFiles';
+import { personalFilesSupports } from '../../../features/files/personalFiles';
 
 const REMOTE: MediaItem = { kind: 'image', url: 'https://fal.media/img.png', width: 100, height: 100 };
 // Локальное медиа — строгий stream-URL: оно уже в проекте, save-from-url к нему не применяется
@@ -103,6 +103,20 @@ function mountPersonal(m: MediaItem = REMOTE, sessionId: string | null = 's1') {
   return { root, container };
 }
 
+// Диалог сохранения (Modal) — портал в document.body: его кнопки ищем обходом body,
+// кнопку самого блока — обходом контейнера mount (контейнер в body не пристёгнут)
+const body = () => (globalThis as { document: { body: unknown } }).document.body as never;
+const buttonByLabel = (from: unknown, label: string): never => {
+  let hit: never | null = null;
+  const walk = (x: { nodeType: number; nodeName: string; childNodes?: unknown[] }) => {
+    if (hit) return;
+    if (x.nodeType === 1 && x.nodeName === 'BUTTON' && textNodes(x as never).join('').includes(label)) hit = x as never;
+    for (const c of x.childNodes ?? []) walk(c);
+  };
+  walk(from as never);
+  return hit!;
+};
+
 describe('MediaBlock: «Сохранить в Личное» в личном чате (Ф-8)', () => {
   afterEach(uninstallFakeDom);
 
@@ -128,18 +142,31 @@ describe('MediaBlock: «Сохранить в Личное» в личном ч�
     await act(async () => { root.unmount(); });
   });
 
-  // Конец цепочки личной кнопки: doSave → saveFromUrlPersonal → личный маршрут чата,
-  // не /projects/…; тело {url, path} — контракт бэка (PersonalFilesController.SaveFromUrl)
-  it('личная запись идёт на личный маршрут чата: адрес, метод и тело — контракт ручки', async () => {
+  // Конец цепочки личной кнопки (вердикт Р-Ф-8): клик «Сохранить в Личное» → диалог
+  // с предлагаемой папкой → «Сохранить» → doSave → saveFromUrlPersonal → личный маршрут
+  // чата, не /projects/…. Панель «Файлы» закрыта (стора нет): doSave подставляет медиальную
+  // папку типа медиа, и path в теле запроса начинается с 'images/' — контракт бэка
+  // (PersonalFilesController.MediaKindOf). Мутация «resolveSaveDir для личной области
+  // возвращает ''» (MediaBlock.tsx) красит тест и на строке папки диалога, и на path.
+  it('клик «Сохранить в Личное»: диалог предлагает images/, тело запроса — path с images/', async () => {
     request.mockReset();
     request.mockResolvedValue({ path: 'images/img.png' });
     expect(personalFilesSupports('POST files/save-from-url'), 'личный маршрут объявляет save-from-url').toBe(true);
-    const res = await filesApi.files.saveFromUrlPersonal(
-      personalFilesId('s1'), 'https://fal.media/img.png', 'images/img.png');
-    expect(res.path).toBe('images/img.png');
+    const { root, container } = mountPersonal();
+    act(() => {
+      (reactProps(buttonByLabel(container, 'Сохранить в Личное'))!.onClick as (e: { stopPropagation: () => void }) => void)({ stopPropagation: () => {} });
+    });
+    // Диалог показывает предлагаемую папку: не пусто и не папку панели (панель закрыта) — медиальную
+    expect(textNodes(body()).join(''), 'диалог показывает медиальную папку').toContain('Папка: images/');
+    await act(async () => {
+      (reactProps(buttonByLabel(body(), 'Сохранить'))!.onClick as () => void)();
+    });
     const [url, init] = request.mock.calls[0] as [string, { method: string; body: string }];
     expect(url).toBe('/personal/chats/s1/files/save-from-url');
     expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body)).toEqual({ url: 'https://fal.media/img.png', path: 'images/img.png' });
+    const bodyJson = JSON.parse(init.body) as { url: string; path: string };
+    expect(bodyJson.url).toBe('https://fal.media/img.png');
+    expect(bodyJson.path.startsWith('images/'), 'path в теле запроса начинается с медиальной папки').toBe(true);
+    await act(async () => { root.unmount(); });
   });
 });

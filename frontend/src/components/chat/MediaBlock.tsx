@@ -68,6 +68,20 @@ export function mediaSrc(url: string): string {
   return token ? `${url}&access_token=${encodeURIComponent(token)}` : url;
 }
 
+// «Сохранить в Личное» (Ф-8, вердикт Р-Ф-8): бэк принимает только пути, начинающиеся
+// с медиальной папки (PersonalFilesController.MediaKindOf: первый сегмент images|audio|video,
+// PersonalMediaFolders.Resolve отсекает '.'/'..'). Панель «Файлы» может быть закрыта
+// (стора нет — '') или открыта в не-медиальной папке: такой путь бэк отвергает
+// invalid_path. Значит для личной записи медиальная папка типа медиа — предложение,
+// когда папка панели не медиальная; диалог показывает ровно то, что уйдёт в запрос.
+const PERSONAL_MEDIA_KIND_DIR: Record<'image' | 'video' | 'audio', 'images' | 'video' | 'audio'> = {
+  image: 'images', video: 'video', audio: 'audio',
+};
+function isPersonalMediaDir(dir: string): boolean {
+  const first = dir.replace(/\\/g, '/').split('/')[0];
+  return first === 'images' || first === 'audio' || first === 'video';
+}
+
 // JSON из результатов MCP-инструментов (fal/glif): форма заранее неизвестна и
 // не описывается контрактом, поэтому обходим её с проверками на каждом шаге
 // (unknown-глубь вместо any).
@@ -423,15 +437,25 @@ export function MediaBlock({
     }
   };
 
+  // Папка сохранения — один источник для диалога и doSave (показанное = отправленное).
+  // Проект — папка панели, как раньше (у проектного бэка медиального ограничения нет);
+  // личная область — папка панели, только если она медиальная, иначе медиальная папка
+  // типа медиа (контракт бэка, см. PERSONAL_MEDIA_KIND_DIR выше)
+  const resolveSaveDir = (target: string): string => {
+    const dir = getExplorerCreateInDir(target);
+    if (project) return dir;
+    return isPersonalMediaDir(dir) ? dir : PERSONAL_MEDIA_KIND_DIR[m.kind];
+  };
+
   const doSave = async (customName: string) => {
     if (!saveTarget) return;
-    const dir = getExplorerCreateInDir(saveTarget);
+    const dir = resolveSaveDir(saveTarget);
     const path = dir ? `${dir}/${customName}` : customName;
     setSaveState('saving');
     try {
       // Личная область — личный вариант записи: бэк принимает только медиальные папки
-      // «Личного» (images/|audio/|video/); чужая папка контекста — invalid_path,
-      // это отдельное решение, здесь не расширяем
+      // «Личного» (images/|audio/|video/); когда папка панели не медиальная (или панели
+      // нет), resolveSaveDir подставляет медиальную папку типа медиа
       if (project) await api.files.saveFromUrl(project.id, m.url, path);
       else await api.files.saveFromUrlPersonal(saveTarget, m.url, path);
       setSaveState('saved');
@@ -642,7 +666,9 @@ export function MediaBlock({
               )}
             </div>
             {(() => {
-              const dir = getExplorerCreateInDir(saveTarget);
+              // Личная область: dir здесь всегда медиальный (resolveSaveDir) — строка
+              // видна всегда; проект: как раньше — только когда панель открыта в папке
+              const dir = resolveSaveDir(saveTarget);
               return dir ? (
                 <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>
                   Папка: {dir}/

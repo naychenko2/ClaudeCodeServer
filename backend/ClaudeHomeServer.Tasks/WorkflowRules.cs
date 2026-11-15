@@ -66,8 +66,8 @@ public static class WorkflowRules
 
         for (var i = 0; i < stages.Count; i++)
         {
-            // Метка в тексте ошибки: роль этапа, если она известна (как у фронтового валидатора
-            // редактора — одно правило на обе стороны); иначе порядковый номер — «неизвестная роль» именем этапа не назвать.
+            // Метка в тексте ошибки — адресная (StageLabel, одно правило с фронтовым валидатором
+            // редактора); у неизвестной роли — порядковый номер: именем этапа её не назвать.
             var labelUnknown = $"этап #{i + 1}";
             if (stages[i] is not { } stage)
             {
@@ -83,7 +83,7 @@ public static class WorkflowRules
             var presence = node.Presence;
             var stallPolicy = stage.StallPolicy?.Trim() ?? "";
             var known = StageRoles.Contains(role);
-            var label = known ? StageLabel(role) : labelUnknown;
+            var label = known ? StageLabel(node, nodes) : labelUnknown;
 
             if (!known)
             {
@@ -181,9 +181,16 @@ public static class WorkflowRules
         return errors;
     }
 
-    // Подпись этапа в тексте ошибки — по роли, как «этап «{role}»» во фронтовом валидаторе
-    // (workflowTemplateModel.ts): человек видит один и тот же этап названным одинаково.
-    private static string StageLabel(string role) => $"этап «{role}»";
+    // Адресная метка этапа в тексте ошибки (одно правило с фронтовым валидатором, R-Ф-2.39):
+    // Title, если он задан; иначе роль; если роль встречается в маршруте (nodes) больше одного
+    // раза и Title нет — «роль (id)», например «этап «qa» (qa-b)». Привязка ошибки к строке
+    // идёт по этой же метке.
+    private static string StageLabel(WorkflowGraph.Node node, IReadOnlyList<WorkflowGraph.Node> nodes)
+    {
+        if (!string.IsNullOrWhiteSpace(node.Title)) return $"этап «{node.Title}»";
+        var repeated = nodes.Count(n => n.Role == node.Role) > 1;
+        return repeated ? $"этап «{node.Role}» ({node.Id})" : $"этап «{node.Role}»";
+    }
 
     // Имена этапов одной роли и линии (G7, решение контракта a5d0c76e по возврату R-C3a):
     // этапы с общей парой (Role, Lane) граф показывает одинаково подписанными узлами
@@ -211,7 +218,7 @@ public static class WorkflowRules
             var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var member in members)
             {
-                var label = StageLabel(member.Role);
+                var label = StageLabel(member, nodes);
                 if (member.Title is null)
                 {
                     errors.Add($"{label}: этап делит роль и линию с другим этапом — имя (Title) обязательно.");
@@ -233,10 +240,12 @@ public static class WorkflowRules
         // Сам шаблон целиком, ничего не снимая (в том числе off-этапы).
         var full = WorkflowGraph.Resolve(
             nodes.Select(n => n with { Presence = WorkflowStagePresence.On }).ToList(), []);
-        var roleById = nodes.GroupBy(n => n.Id, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.First().Role, StringComparer.Ordinal);
+        var nodeById = nodes.GroupBy(n => n.Id, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        // Этапы в тексте ошибки — той же адресной меткой (id, которого нет в шаблоне, остаётся как есть).
+        string Name(string id) => nodeById.TryGetValue(id, out var n) ? StageLabel(n, nodes) : id;
         foreach (var id in WorkflowGraph.DanglingIds(full))
-            errors.Add($"{StageLabel(roleById.GetValueOrDefault(id, id))}: на него никто не ссылается — ветка не сходится в общий сток.");
+            errors.Add($"{Name(id)}: на него никто не ссылается — ветка не сходится в общий сток.");
         if (errors.Count > 0 || nodes.Count > WorkflowGraph.MaxStages) return;
 
         var optional = nodes.Where(n => n.Presence == WorkflowStagePresence.Optional).Select(n => n.Id).ToList();
@@ -247,8 +256,8 @@ public static class WorkflowRules
             var dangling = WorkflowGraph.DanglingIds(WorkflowGraph.Resolve(nodes, skipped));
             if (dangling.Count == 0) continue;
             errors.Add(skipped.Count == 0
-                ? $"после снятия этапов off ветка не сходится в сток: висят {string.Join(", ", dangling)}."
-                : $"при снятии необязательных этапов {string.Join(", ", skipped)} ветка не сходится в сток: висят {string.Join(", ", dangling)}.");
+                ? $"после снятия этапов off ветка не сходится в сток: висят {string.Join(", ", dangling.Select(Name))}."
+                : $"при снятии необязательных этапов {string.Join(", ", skipped.Select(Name))} ветка не сходится в сток: висят {string.Join(", ", dangling.Select(Name))}.");
             return;
         }
     }

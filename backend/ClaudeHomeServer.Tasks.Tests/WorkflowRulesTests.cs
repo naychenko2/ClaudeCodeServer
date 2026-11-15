@@ -107,7 +107,31 @@ public class WorkflowRulesTests
         var errors = ValidateStages(WithId(TaskRoles.Merge, "first"), WithId(TaskRoles.Merge, "second"));
 
         errors.Should().ContainSingle().Which.Should().Be(
-            "этап «merge»: роль «merge» одиночная — в маршруте она встречается дважды.");
+            "этап «merge» (second): роль «merge» одиночная — в маршруте она встречается дважды.");
+    }
+
+    // R-Ф-2.39: Title этапа — его метка в ошибке (перед ролью и id).
+    [Fact]
+    public void МеткаЭтапа_СTitle_ВОшибкеTitle()
+    {
+        var errors = ValidateStages(
+            WithId(TaskRoles.Merge, "first", title: "Первый мерж"),
+            WithId(TaskRoles.Merge, "second", title: "Второй мерж"));
+
+        errors.Should().ContainSingle().Which.Should().Be(
+            "этап «Второй мерж»: роль «merge» одиночная — в маршруте она встречается дважды.");
+    }
+
+    // R-Ф-2.39: две одинаковые по тексту ошибки с разными метками (роль + id) не схлопываются.
+    [Fact]
+    public void МеткаЭтапа_ПовторРолиБезTitle_РазныеМеткиВОшибках()
+    {
+        var errors = ValidateStages(
+            WithId(TaskRoles.Qa, "qa-a"), WithId(TaskRoles.Qa, "qa-b", after: ["qa-a"]));
+
+        errors.Should().Equal(
+            "этап «qa» (qa-a): этап делит роль и линию с другим этапом — имя (Title) обязательно.",
+            "этап «qa» (qa-b): этап делит роль и линию с другим этапом — имя (Title) обязательно.");
     }
 
     [Fact]
@@ -117,7 +141,7 @@ public class WorkflowRulesTests
             WithId(TaskRoles.Qa, "qa-a"), WithId(TaskRoles.Qa, "qa-b", after: ["qa-a"]));
 
         errors.Should().HaveCount(2).And.OnlyContain(e =>
-            e.StartsWith("этап «qa»: этап делит роль и линию", StringComparison.Ordinal));
+            e.StartsWith("этап «qa» (qa-", StringComparison.Ordinal) && e.Contains("): этап делит роль и линию"));
     }
 
     [Fact]
@@ -202,7 +226,7 @@ public class WorkflowRulesTests
             WithId(TaskRoles.Plan, "w", after: ["a"], title: "План второй"),
             WithId(TaskRoles.Qa, "y", after: ["x", "w"], presence: WorkflowStagePresence.Optional));
 
-        errors.Should().ContainSingle().Which.Should().Contain("при снятии").And.Contain("y").And.Contain("не сходится");
+        errors.Should().ContainSingle().Which.Should().Contain("при снятии").And.Contain("этап «qa»").And.Contain("не сходится");
     }
 
     [Fact]
@@ -444,10 +468,10 @@ public class WorkflowRulesTests
     {
         var errors = ValidateStages(WithId(TaskRoles.Qa, "qa1"), WithId(TaskRoles.Qa, "qa2", after: ["qa1"]));
 
-        // Подпись — роль (общая у обоих этапов), поэтому ошибок ровно две, по одной на этап.
+        // Роль повторяется, Title нет — метка «роль (id)»: ошибок две, по одной на этап, различимы.
         errors.Should().Equal(
-            "этап «qa»: этап делит роль и линию с другим этапом — имя (Title) обязательно.",
-            "этап «qa»: этап делит роль и линию с другим этапом — имя (Title) обязательно.");
+            "этап «qa» (qa1): этап делит роль и линию с другим этапом — имя (Title) обязательно.",
+            "этап «qa» (qa2): этап делит роль и линию с другим этапом — имя (Title) обязательно.");
     }
 
     [Fact]
@@ -461,7 +485,7 @@ public class WorkflowRulesTests
         // Ошибка адресована второму этапу и называет его имя после обрезки («проверка» —
         // трим делает Normalize).
         errors.Should().ContainSingle().Which.Should().Be(
-            "этап «qa»: имя «проверка» повторяет имя другого этапа той же роли и линии.");
+            "этап «проверка»: имя «проверка» повторяет имя другого этапа той же роли и линии.");
     }
 
     [Fact]
@@ -480,7 +504,7 @@ public class WorkflowRulesTests
             WithId(TaskRoles.Qa, "qa2", after: ["qa1"], title: "Проверка"));
 
         errors.Should().ContainSingle().Which.Should().Be(
-            "этап «qa»: этап делит роль и линию с другим этапом — имя (Title) обязательно.");
+            "этап «qa» (qa1): этап делит роль и линию с другим этапом — имя (Title) обязательно.");
     }
 
     // Вне группы Title не обязателен и не мешает: одиночный этап той же роли проходит без него.

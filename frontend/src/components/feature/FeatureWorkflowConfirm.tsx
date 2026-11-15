@@ -70,6 +70,12 @@ interface SelectedKey { id: string; scope: WorkflowTemplateScope }
 const errText = (e: unknown): string =>
   e instanceof Error && e.message ? e.message : 'Не получилось, попробуйте ещё раз';
 
+// Ф-2.42 (замечание человека): фиолетовая карточка предложения не объясняла, что означает
+// цвет и почему этапы показаны до подтверждения. Одна строка — только в состоянии
+// предложения (тон plan); в подтверждённом и «предложения нет» её нет. Про запуск
+// исполнителей здесь не говорится — это строка шапки и подпись под кнопкой.
+const PLAN_HINT_TEXT = 'Фиолетовый цвет означает: это предложение модели. Пока маршрут не подтверждён, предложенные этапы не выполняются.';
+
 export function FeatureWorkflowConfirm({
   featureId, projectId, proposal, confirmed: confirmedState, isMobile, quiet, routeRequired, sheetOpenRequest, onSheetClosed,
 }: FeatureWorkflowConfirmProps): React.ReactElement {
@@ -519,6 +525,11 @@ export function FeatureWorkflowConfirm({
                 Подбор не ответил или ответ не прошёл проверку. Выберите шаблон сами, этапы появятся ниже.
               </div>
             )}
+            {showProposal && (
+              <div data-testid="feature-workflow-confirm-plan-hint" style={{ fontSize: FS.sm, color: C.textSecondary }}>
+                {PLAN_HINT_TEXT}
+              </div>
+            )}
             {updateCardOn && (
               <div data-testid="feature-workflow-confirm-update-text" style={{ fontSize: FS.sm, color: C.textSecondary }}>
                 <b>{`«${confirmedTemplate!.name || confirmed!.templateId}»: v${confirmed!.confirmedVersion} → v${confirmedTemplate!.version}. `}</b>
@@ -608,6 +619,12 @@ export function FeatureWorkflowConfirm({
           </span>
           <span style={{ flex: 1 }} />
           {!searching && recommendBtn}
+        </div>
+      )}
+
+      {showProposal && (
+        <div data-testid="feature-workflow-confirm-plan-hint" style={{ fontSize: FS.sm, color: C.textSecondary }}>
+          {PLAN_HINT_TEXT}
         </div>
       )}
 

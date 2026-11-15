@@ -25,7 +25,8 @@
 // done — подпись легенды макета (у done слова нет).
 //
 // Тач-цель узла — вся карточка 88 px высотой (≥40, контракт C3a); лента прокручивается внутри
-// блока — документ на 360 не переполняется.
+// блока — документ на 360 не переполняется. То, что лента обрезана краем, видно по самой
+// ленте: край-подсказка (дефект 1f6df093) — см. «Признак прокрутки» ниже.
 //
 // Узел (F06, макет feature-page.html P16–P22, materials-review-placement.html M14–M19):
 // имя переносится целиком, без обрезки (узел 152×88 вмещает до трёх строк имени вместе со
@@ -77,6 +78,14 @@ const PAR_LABEL_H = 14;
 // Дуга far-ребра под графом: отступ первой полосы и шаг между полосами.
 const ARC_GAP = 12;
 const ARC_STEP = 8;
+
+// Признак прокрутки (дефект 1f6df093): лента шире контейнера — невидимую часть обозначает
+// сам край: затухание к фону страницы и шеврон. Правый — пока не доехал до конца ленты,
+// левый — когда отъехал от начала. Тот же приём края, что у ленты чата (ChatPanel.tsx:111,
+// AgentContentBlocks.tsx:46), только по горизонтали. Без замера контейнера (первый кадр,
+// тесты без раскладки) признака нет: он говорит о фактической прокрутке, а не о предполагаемой.
+const EDGE_W = 24;
+const NO_EDGES = { left: false, right: false };
 
 // Тон активной стадии → цвет графа (см. шапку). null — тон не задан (active без tone —
 // бэк отдаёт tone только у active, но старый ответ может не несть): акцент, как run.
@@ -268,18 +277,36 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const nodeRefs = useRef(new Map<string, HTMLElement>());
   const [avail, setAvail] = useState<number | null>(null);
+  const [edgeHint, setEdgeHint] = useState<{ left: boolean; right: boolean }>(NO_EDGES);
 
-  // Ширина контейнера для растяжения колонок (десктоп). Нет замера (тест без раскладки) — прежняя ширина карточки.
+  // Ширина контейнера (для растяжения колонок, десктоп) и состояние краев ленты: что из неё
+  // выступает за левый и правый край. Нет замера (тест без раскладки) — прежняя ширина
+  // карточки и признака прокрутки нет.
+  const measure = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    if (el.clientWidth > 0) setAvail(el.clientWidth);
+    const over = el.scrollWidth - el.clientWidth;
+    const next = over > 1 ? { left: el.scrollLeft > 1, right: el.scrollLeft < over - 1 } : NO_EDGES;
+    setEdgeHint((p) => (p.left === next.left && p.right === next.right ? p : next));
+  };
+
+  // Мобила мерится так же, как десктоп: ширина узла на ленте задаётся не контейнером
+  // (NODE_W_MOBILE), а вот признак прокрутки нужен именно на ней.
   useEffect(() => {
     const el = wrapRef.current;
-    if (!el || isMobile) return undefined;
-    const measure = () => { if (el.clientWidth > 0) setAvail(el.clientWidth); };
+    if (!el) return undefined;
     measure();
-    if (typeof ResizeObserver === 'undefined') return undefined;
+    el.addEventListener('scroll', measure);
+    if (typeof ResizeObserver === 'undefined') return () => el.removeEventListener('scroll', measure);
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); el.removeEventListener('scroll', measure); };
   }, [isMobile]);
+
+  // Лента меняет ширину и без ресайза окна (пришли стадии, колонки растянулись под уже
+  // измеренный контейнер) — замер повторяем после каждого кадра раскладки.
+  useEffect(() => { measure(); });
 
   // Мобила: выбранный узел — в центр ленты.
   useEffect(() => {
@@ -305,6 +332,8 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
   const hasProposed = [...stagesById.values()].some(s => s.proposed === true && s.state !== 'done');
   let farLane = 0;
 
+  // Обёртка скроллера — та, чьим краем мерится прокрутка: она же держит край-подсказку
+  // (position:absolute внутри скроллера уехал бы вместе с лентой, а не остался на краю).
   return (
     <div data-testid="feature-process-section" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: SP.sm, flexWrap: 'wrap' }}>
@@ -315,6 +344,7 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
           {graphCaption(run, templateName)}
         </span>
       </div>
+    <div data-testid="pgraph-scroll" style={{ position: 'relative', minWidth: 0 }}>
     <div
       ref={wrapRef}
       data-testid="feature-process-graph"
@@ -500,6 +530,29 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
           );
         })}
       </div>
+    </div>
+      {edgeHint.right && (
+        <span
+          aria-hidden="true" data-testid="pgraph-scroll-right"
+          style={{
+            position: 'absolute', right: 0, top: 0, bottom: SP.xxs, width: EDGE_W, zIndex: 2, pointerEvents: 'none',
+            display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: `0 ${SP.xs}px`,
+            background: `linear-gradient(to right, transparent, ${C.bgMain})`,
+            fontFamily: FONT.mono, fontSize: FS.md, color: C.textMuted,
+          }}
+        >›</span>
+      )}
+      {edgeHint.left && (
+        <span
+          aria-hidden="true" data-testid="pgraph-scroll-left"
+          style={{
+            position: 'absolute', left: 0, top: 0, bottom: SP.xxs, width: EDGE_W, zIndex: 2, pointerEvents: 'none',
+            display: 'flex', alignItems: 'center', justifyContent: 'flex-start', padding: `0 ${SP.xs}px`,
+            background: `linear-gradient(to left, transparent, ${C.bgMain})`,
+            fontFamily: FONT.mono, fontSize: FS.md, color: C.textMuted,
+          }}
+        >‹</span>
+      )}
     </div>
       <div
         data-testid="pgraph-legend"

@@ -5,9 +5,12 @@
 //
 // Мутации (проверяются прогоном): (1) в isFarEdge поменять `> 1` на `> 5` — краснеет «дальнее
 // ребро…»; (2) убрать strokeDasharray у far — краснеет то же; (3) в graphCaption убрать ветку
-// proposal — краснеет «подпись шаблона»; (4) убрать scrollIntoView-эффект — краснеет «мобила».
+// proposal — краснеет «подпись шаблона»; (4) убрать scrollIntoView-эффект — краснеет «мобила»;
+// (5) сделать условие края несбыточным (`over > 1` → `over > 1e5`) — краснеют «контейнер 768…»
+// и «мобильная лента 328…»; (6) убрать перемер после кадра (useEffect без deps) — краснеют те же.
 
 import { createElement, act } from 'react';
+import { type Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../chat/__tests__/fakeDom';
 import { graphColumns, graphEdges, columnRanks, isFarEdge, graphCaption } from './FeatureProcessGraphModel';
@@ -158,5 +161,91 @@ describe('FeatureProcessGraph: раскладка (F07)', () => {
       expect(styleOf(byId(container, 'feature-process-section')).overflowX).toBeUndefined();
       expect(styleOf(byId(container, 'pgraph-legend')).overflowX).toBeUndefined();
     }
+  });
+});
+
+// Прокрутка ленты шире контейнера была молча: на 360 граф обрезалось по слову («Провер|ка
+// плана»), и ничего не говорило о том, что справа ещё узлы (дефект 1f6df093). Замер в
+// Chromium (1280/932/800/360, обе темы) дал границы: при контейнере 1248 и 900 лента
+// растягивается ровно под контейнер (1248 и 900) и за край не выходит; при 768 — 828
+// (min-ширина узлов 116), при 328 на мобильной ленте — 756. Ниже — те же контейнеры.
+describe('FeatureProcessGraph: прокрутка ленты обозначена краем (дефект 1f6df093)', () => {
+  // Данные пресета «Параллельный цикл» (10 этапов, 6 колонок; те же, что в
+  // FeatureProcessGraph.test.ts:72-86): имена — только у пары qa, как их отдаёт бэк.
+  const preset = () => mkRun([
+    mkStage('cut', 'cut', 'cut', 0, 'done'),
+    mkStage('design', 'design', 'design', 1, 'done', ['cut']),
+    mkStage('plan', 'plan', 'plan', 2, 'done', ['design']),
+    { ...mkStage('qa', 'qa-plan', 'qa', 2, 'pending', ['design']), title: 'Проверка плана' },
+    { ...mkStage('prod', 'step-back', 'step', 3, 'active', ['plan']), lane: 'back' },
+    { ...mkStage('prod', 'step-front', 'step', 3, 'pending', ['plan']), lane: 'front' },
+    { ...mkStage('qa', 'qa', 'qa', 3, 'pending', ['review', 'qa-plan']), title: 'Проверка' },
+    mkStage('review', 'review', 'review', 4, 'pending', ['step-back', 'step-front']),
+    mkStage('final', 'final', 'final', 4, 'pending', ['qa']),
+    mkStage('merge', 'merge', 'merge', 5, 'pending', ['final']),
+  ]);
+
+  // Контейнер и положение ленты в нём — то, что компонент читает с DOM (clientWidth,
+  // scrollWidth, scrollLeft). Фейк-DOM раскладки не считает: тест ставит числа на узле
+  // скроллера и перерисовывает — компонент перемеряет их после кадра (measure без deps);
+  // из узлов теста нужны только дети и родитель.
+  type El = { children: El[]; parentNode: El | null };
+  const setBox = (el: unknown, box: { clientWidth: number; scrollWidth: number; scrollLeft?: number }) =>
+    Object.assign(el as Record<string, unknown>, { scrollLeft: 0 }, box);
+  const relayout = (root: Root, r: FeatureRun) => act(() => { root.render(createElement(FeatureProcessGraph, { run: r })); });
+  const contentWidth = (container: unknown) => Number(styleOf((byId(container, 'feature-process-graph') as never as El).children[0]).width);
+
+  const mountPreset = () => {
+    const { root, container } = mount(createElement(FeatureProcessGraph, { run: preset() }));
+    return { root, container, sc: byId(container, 'feature-process-graph') as never as El };
+  };
+
+  it('контейнер 1248 (окно 1280): лента растягивается под контейнер, за край не выходит, признака нет', () => {
+    const { root, container, sc } = mountPreset();
+    setBox(sc, { clientWidth: 1248, scrollWidth: 1248 });
+    relayout(root, preset());
+    expect(contentWidth(container)).toBe(1248);
+    expect(byId(container, 'pgraph-scroll-right')).toBeNull();
+    expect(byId(container, 'pgraph-scroll-left')).toBeNull();
+  });
+
+  it('контейнер 768 (окно 800): лента 828 шире контейнера — есть правый край-подсказка, прокрутка остаётся внутри блока', () => {
+    const { root, container, sc } = mountPreset();
+    setBox(sc, { clientWidth: 768, scrollWidth: 828 });
+    relayout(root, preset());
+    expect(contentWidth(container)).toBe(828);
+    expect(styleOf(sc).overflowX).toBe('auto');
+    const hint = byId(container, 'pgraph-scroll-right');
+    expect(hint).not.toBeNull();
+    // Край-подсказка — вне скроллера: внутри она уехала бы вместе с лентой, а не осталась на краю.
+    expect((hint as never as El).parentNode).toBe(byId(container, 'pgraph-scroll'));
+    expect(byId(container, 'pgraph-scroll-left')).toBeNull();
+  });
+
+  it('мобильная лента 328: прокручивается 756 — правый край есть; доехал до конца — правый убран, появился левый', () => {
+    mobileFlag.value = true;
+    const { root, container, sc } = mountPreset();
+    setBox(sc, { clientWidth: 328, scrollWidth: 756 });
+    relayout(root, preset());
+    expect(contentWidth(container)).toBe(756);
+    expect(byId(container, 'pgraph-scroll-right')).not.toBeNull();
+    expect(byId(container, 'pgraph-scroll-left')).toBeNull();
+
+    setBox(sc, { clientWidth: 328, scrollWidth: 756, scrollLeft: 428 });
+    relayout(root, preset());
+    expect(byId(container, 'pgraph-scroll-right')).toBeNull();
+    expect(byId(container, 'pgraph-scroll-left')).not.toBeNull();
+
+    // Вернулся к началу — снова только правый.
+    setBox(sc, { clientWidth: 328, scrollWidth: 756, scrollLeft: 0 });
+    relayout(root, preset());
+    expect(byId(container, 'pgraph-scroll-right')).not.toBeNull();
+    expect(byId(container, 'pgraph-scroll-left')).toBeNull();
+  });
+
+  it('без замера контейнера (первый кадр, тест без раскладки) признака прокрутки нет', () => {
+    const { container } = mount(createElement(FeatureProcessGraph, { run: preset() }));
+    expect(byId(container, 'pgraph-scroll-right')).toBeNull();
+    expect(byId(container, 'pgraph-scroll-left')).toBeNull();
   });
 });

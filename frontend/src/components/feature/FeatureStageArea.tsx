@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Workflow } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { Badge, type BadgeTone } from '../ui/Badge';
 import { EmptyState } from '../ui/EmptyState';
@@ -96,7 +96,7 @@ function branchRows(tasks: FeatureTask[], sum: StageSummary | null): BranchRow[]
 
 function TaskRow({ row, isMobile, onOpenTask }: { row: BranchRow; isMobile: boolean; onOpenTask?: (id: string) => void }) {
   const [open, setOpen] = useState(false);
-  const touch = isMobile ? { minHeight: 40 } : undefined;
+  const touch = isMobile ? { minHeight: TB.iconHitMobile } : undefined;
   const caption = branchRowCaption(row);
   return (
     <div data-testid={`stage-task-${row.id}`} style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
@@ -242,7 +242,7 @@ export function FeatureStageAreaView({ stage, tasks, summary, questions, onAnswe
         )}
         {onOpenStage && tasks.length > 0 && (
           <Button size="sm" variant="primary" dataTestId="feature-stage-area-open"
-            style={{ marginLeft: 'auto', ...(isMobile ? { minHeight: 40 } : undefined) }} onClick={onOpenStage}>
+            style={{ marginLeft: 'auto', ...(isMobile ? { minHeight: TB.iconHitMobile } : undefined) }} onClick={onOpenStage}>
             Открыть этап →
           </Button>
         )}
@@ -283,7 +283,7 @@ export function FeatureStageAreaView({ stage, tasks, summary, questions, onAnswe
             {' '}Ревью стартует, когда закончатся обе
           </span>
           {onSelectStage && (
-            <Button size="xs" variant="ghost" style={isMobile ? { minHeight: 40 } : undefined}
+            <Button size="xs" variant="ghost" style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
               dataTestId="feature-stage-area-parallel-link" onClick={() => onSelectStage(note.stageId)}>
               Показать ветку
             </Button>

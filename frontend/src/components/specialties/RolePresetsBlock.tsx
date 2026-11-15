@@ -400,7 +400,7 @@ export function RolePresetsBlock({
     }
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-        <SectionTitle>Пресеты для роли</SectionTitle>
+        {showTitle && <SectionTitle>Пресеты для роли</SectionTitle>}
         <div style={{
           display: 'flex', flexDirection: 'column',
           gap: isMobile ? SP.xs : SP.sm,
@@ -450,7 +450,7 @@ export function RolePresetsBlock({
   if (visibleMeta.length === 0) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-        <SectionTitle>Пресеты для роли</SectionTitle>
+        {showTitle && <SectionTitle>Пресеты для роли</SectionTitle>}
         {heirsEl}
         <div style={{
           border: `1px dashed ${C.dashed}`, borderRadius: R.xl,
@@ -480,7 +480,7 @@ export function RolePresetsBlock({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-      <SectionTitle>Пресеты для роли</SectionTitle>
+      {showTitle && <SectionTitle>Пресеты для роли</SectionTitle>}
       {heirsEl}
       <div style={{
         display: 'flex', flexDirection: 'column',

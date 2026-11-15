@@ -7,13 +7,15 @@ namespace ClaudeHomeServer.Services.ImageEditor.Threads;
 // Нить идёт за файлом (ADR-019 §1): файл картинки переименовали или перенесли через файловый
 // API — пути нитей в чатах проектов этой папки переписываются следом, на папку — префиксом.
 // Сессию не трогает: UpdatedAt не двигается, в ленту ничего не пишется. Переименования мимо
-// файлового API (mv в ходе агента) трекер не видит.
+// файлового API (mv в ходе агента) трекер не видит. Корень «Личного» (ADR-040 Ф2-9, «Мои файлы»)
+// в проектах не числится: его нити — личные чаты (ProjectId == null) владельца этой папки.
 public sealed class ImageThreadPathTracker(
     IProjectManager projects,
     ISessionDirectory directory,
     ImageThreadStore store,
     ILogger<ImageThreadPathTracker> logger,
-    IProjectFiles? files = null) : IHostedService
+    IProjectFiles? files = null,
+    PersonalFolderResolver? personal = null) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -42,14 +44,27 @@ public sealed class ImageThreadPathTracker(
         if (from.Length == 0 || to.Length == 0 || from == to) return;
 
         var owners = projects.GetByRootPath(root).ToDictionary(p => p.Id, p => p.OwnerId);
-        if (owners.Count == 0) return;
+        if (owners.Count == 0 && personal is null) return;
+        var personalOwned = new Dictionary<string, bool>();
 
         foreach (var session in directory.GetAll())
         {
-            if (session.ProjectId is not { } pid || !owners.TryGetValue(pid, out var owner) || string.IsNullOrEmpty(owner)) continue;
+            string? owner;
+            if (session.ProjectId is { } pid) owners.TryGetValue(pid, out owner);
+            else owner = IsPersonalRootOf(session.OwnerId, root, personalOwned) ? session.OwnerId : null;
+            if (string.IsNullOrEmpty(owner)) continue;
             if (!File.Exists(store.StatePath(owner, session.Id))) continue;
             store.RewritePaths(owner, session.Id, p => Move(p, from, to));
         }
+    }
+
+    // Корень — папка «Личного» этого владельца; ответ по владельцу запоминается на один проход
+    private bool IsPersonalRootOf(string ownerId, string root, Dictionary<string, bool> known)
+    {
+        if (personal is null || string.IsNullOrEmpty(ownerId)) return false;
+        if (known.TryGetValue(ownerId, out var cached)) return cached;
+        var own = personal.Find(ownerId)?.RootPath;
+        return known[ownerId] = own is not null && PathGuards.IsInside(root, own) && PathGuards.IsInside(own, root);
     }
 
     // Путь файла или путь внутри переименованной папки — на новое место; прочее как было

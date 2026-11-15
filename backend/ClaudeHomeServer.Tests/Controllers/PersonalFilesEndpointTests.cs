@@ -312,6 +312,92 @@ public class PersonalFilesEndpointTests : IClassFixture<PersonalFilesEndpointTes
         (await _owner.DeleteAsync(Url(chat, "?" + Q("уже-нет")))).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    // ── Нормализация пути, родитель цели и размер содержимого (низкие пункты ревью Ф2-9) ──
+
+    [Fact]
+    public async Task Пробелы_по_краям_пути_снимаются_до_диска_и_файла_с_пробелами_не_появляется()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        // Запись идёт по тому же значению, что проверила SyntaxOk: на диске — без пробелов
+        (await _owner.PostAsJsonAsync(Url(chat, "/mkdir"), new { path = " docs/sub " })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path = "  notes2.txt  ", content = "x" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        Directory.Exists(Path.Combine(root, "docs", "sub")).Should().BeTrue();
+        File.Exists(Path.Combine(root, "notes2.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(root, "  notes2.txt  ")).Should().BeFalse();
+        Directory.Exists(Path.Combine(root, " docs ")).Should().BeFalse();
+
+        // Чтение по пути с пробелами — тот же файл, и в списке его имя без пробелов
+        (await _owner.GetAsync(Url(chat, "/content?" + Q("  notes2.txt  "))))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(await _owner.GetAsync(Url(chat)))).EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).Should().Contain("notes2.txt");
+
+        // Переименование и удаление — тоже по обрезанному: «  notes2.txt  » → docs/sub/n.txt.
+        // Пробел внутри сегмента («a b.txt») — законное имя файла, его не снимаем: Trim — по
+        // краям пути, не по сегментам
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = " notes2.txt ", newPath = " docs/sub/n.txt " }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        File.Exists(Path.Combine(root, "docs", "sub", "n.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(root, "notes2.txt")).Should().BeFalse();
+        (await _owner.DeleteAsync(Url(chat, "?" + Q(" docs/sub/n.txt ")))).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        File.Exists(Path.Combine(root, "docs", "sub", "n.txt")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Переименование_в_несуществующую_папку_даёт_404_и_источник_остаётся_целым()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        // Родителя цели нет — нет и цели: 404 «нет такого пути», а не 409 «имя занято»
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "notes.txt", newPath = "нет-папки/notes.txt" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        File.Exists(Path.Combine(root, "notes.txt")).Should().BeTrue();
+        Directory.Exists(Path.Combine(root, "нет-папки")).Should().BeFalse();
+
+        // Папку — тот же отказ, её содержимое цело
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "docs", newPath = "нет-папки/docs" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        File.Exists(Path.Combine(root, "docs", "readme.md")).Should().BeTrue();
+
+        // Занятая цель — по-прежнему 409: новый отказ её не подменил
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "notes.txt", newPath = "docs/readme.md" }))
+            .StatusCode.Should().Be(HttpStatusCode.Conflict);
+        File.Exists(Path.Combine(root, "notes.txt")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Содержимое_на_пределе_создаётся_а_больше_предела_даёт_413_без_файла()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+        const int limit = 1024 * 1024; // MaxContentBytes контроллера
+
+        // Ровно на пределе — ещё можно: интервал [0, limit]
+        (await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path = "at-limit.txt", content = new string('a', limit) }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        new FileInfo(Path.Combine(root, "at-limit.txt")).Length.Should().Be(limit);
+
+        // На байт больше — отказ с понятным кодом; кириллица считается её длиной в UTF-8
+        var resp = await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path = "over.txt", content = new string('а', limit) });
+        resp.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        (await Json(resp)).GetProperty("code").GetString().Should().Be("content_too_large");
+        File.Exists(Path.Combine(root, "over.txt")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Содержимое_больше_предела_отказано_до_создания_папки_Личного()
+    {
+        var chat = await Chat();
+
+        (await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path = "over.txt", content = new string('а', 1024 * 1024) }))
+            .StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        Directory.Exists(_host.Personal.RootOf(_ownerId)).Should().BeFalse();
+    }
+
     // ── Проектные маршруты «Личное» не открывают ─────────────────────────────────
 
     [Fact]

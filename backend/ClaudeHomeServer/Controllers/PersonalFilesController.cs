@@ -30,6 +30,10 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
 {
     private const string SubClaim = "sub";
 
+    // Предел содержимого при создании файла: панель записывает текстовые файлы и диаграммы,
+    // загрузка документов — вне объёма Ф2-9. Отказ той же формы, что у save-from-url: 413 с размером
+    private const int MaxContentBytes = 1024 * 1024; // 1 МБ
+
     private string? UserId => User.FindFirstValue(SubClaim);
 
     // Чат вне проекта и виден вызывающему (владелец чата). Иначе — отказ неотличим от «нет чата»
@@ -49,11 +53,18 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
 
     private IActionResult NotFoundFile() => Fail(StatusCodes.Status404NotFound, "file_not_found", "Файл не найден");
 
+    // Путь нормализуем один раз на входе ручки и передаём дальше уже нормализованным: иначе
+    // «  a.txt  » проходит проверку обрезанным, а на диск уходит с пробелами — Windows их молча
+    // снимает, Linux оставляет в имени, и те же вызовы дают разные файлы. Остальная нормализация
+    // (разделители, «..», абсолютный путь) — у Resolve/SyntaxOk ниже; Trim идемпотентен, повтор
+    // внутри них безвреден и держит эти помощники самостоятельными.
+    private static string Norm(string? rel) => rel?.Trim() ?? "";
+
     // Абсолютный путь внутри корня или null (абсолютный путь, «..», символическая ссылка, разделитель «\»,
     // недопустимые символы). Пустой путь — сам корень, если он разрешён (belowRoot: false)
     private static string? Resolve(string root, string? rel, bool belowRoot)
     {
-        rel = rel?.Trim() ?? "";
+        rel = Norm(rel);
         if (rel.Contains('\\')) return null;
         if (rel.Length == 0 || rel == ".") return belowRoot ? null : root;
         string? full;
@@ -80,6 +91,7 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     [HttpGet]
     public IActionResult List(string sessionId, [FromQuery] string path = "")
     {
+        path = Norm(path);
         if (!TryChat(sessionId, out var session)) return ChatNotFound();
         return Browse(session, path, (root, p) => files.List(root, p, false, UserId ?? ""));
     }
@@ -87,6 +99,7 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     [HttpGet("tree")]
     public IActionResult Tree(string sessionId, [FromQuery] string path = "")
     {
+        path = Norm(path);
         if (!TryChat(sessionId, out var session)) return ChatNotFound();
         return Browse(session, path, (root, p) => files.Tree(root, p, false, UserId ?? ""));
     }
@@ -114,6 +127,7 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     [HttpGet("content")]
     public IActionResult GetContent(string sessionId, [FromQuery] string path)
     {
+        path = Norm(path);
         if (!TryFile(sessionId, path, out var root, out var denied)) return denied;
         try { return Ok(FileContentReader.Read(files, root, path)); }
         catch (FileNotFoundException) { return NotFoundFile(); }
@@ -124,6 +138,7 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     [HttpGet("stream")]
     public IActionResult Stream(string sessionId, [FromQuery] string path)
     {
+        path = Norm(path);
         if (!TryFile(sessionId, path, out var root, out var denied)) return denied;
         Response.Headers["X-Content-Type-Options"] = "nosniff";
         Response.Headers["Content-Security-Policy"] = "sandbox";
@@ -133,6 +148,7 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     [HttpGet("download")]
     public IActionResult Download(string sessionId, [FromQuery] string path)
     {
+        path = Norm(path);
         if (!TryFile(sessionId, path, out var root, out var denied)) return denied;
         var full = Resolve(root, path, belowRoot: true)!;
         Response.Headers["X-Content-Type-Options"] = "nosniff";
@@ -169,13 +185,14 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     {
         if (!TryChat(sessionId, out var session)) return ChatNotFound();
         // Путь проверяем до создания папки «Личного»: отказ запроса не оставляет следов на диске
-        if (!SyntaxOk(req.Path)) return InvalidPath();
+        var path = Norm(req.Path);
+        if (!SyntaxOk(path)) return InvalidPath();
         var (root, denied) = await RootForWriteAsync(session, ct);
         if (root is null) return denied!;
-        if (Resolve(root, req.Path, belowRoot: true) is null) return InvalidPath();
+        if (Resolve(root, path, belowRoot: true) is null) return InvalidPath();
         try
         {
-            files.CreateDirectory(root, req.Path);
+            files.CreateDirectory(root, path);
             return Ok();
         }
         catch (UnauthorizedAccessException) { return InvalidPath(); }
@@ -186,13 +203,21 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     public async Task<IActionResult> CreateFile(string sessionId, [FromBody] CreateFileRequest req, CancellationToken ct)
     {
         if (!TryChat(sessionId, out var session)) return ChatNotFound();
-        if (!SyntaxOk(req.Path)) return InvalidPath();
+        var path = Norm(req.Path);
+        if (!SyntaxOk(path)) return InvalidPath();
+        // Предела добиваемся до любого эффекта: тело читаем в память целиком, и файл с ним
+        // не должен появиться, чтобы потом его удалить. Мера — байты UTF-8, не символы:
+        // кириллица в файл пишет вдвое больше, чем «считается» по длине строки
+        var content = req.Content ?? "";
+        if (System.Text.Encoding.UTF8.GetByteCount(content) > MaxContentBytes)
+            return Fail(StatusCodes.Status413PayloadTooLarge, "content_too_large",
+                $"Содержимое больше {MaxContentBytes / (1024 * 1024)} МБ");
         var (root, denied) = await RootForWriteAsync(session, ct);
         if (root is null) return denied!;
-        if (Resolve(root, req.Path, belowRoot: true) is null) return InvalidPath();
+        if (Resolve(root, path, belowRoot: true) is null) return InvalidPath();
         try
         {
-            files.CreateFile(root, req.Path, req.Content ?? "");
+            files.CreateFile(root, path, content);
             return Ok();
         }
         catch (UnauthorizedAccessException) { return InvalidPath(); }
@@ -205,18 +230,25 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     {
         if (!TryChat(sessionId, out var session)) return ChatNotFound();
         if (RootOf(session) is not { } root) return NotFoundFile();
+        var oldPath = Norm(req.OldPath);
+        var newPath = Norm(req.NewPath);
         // Оба конца внутри корня и не сам корень: «Личное» не переименовать и не вынести
-        if (Resolve(root, req.OldPath, belowRoot: true) is not { } src
-            || Resolve(root, req.NewPath, belowRoot: true) is not { } dst)
+        if (Resolve(root, oldPath, belowRoot: true) is not { } src
+            || Resolve(root, newPath, belowRoot: true) is not { } dst)
             return InvalidPath();
         if (!System.IO.File.Exists(src) && !Directory.Exists(src)) return NotFoundFile();
         if (System.IO.File.Exists(dst) || Directory.Exists(dst))
             return Fail(StatusCodes.Status409Conflict, "exists", "Файл или папка с таким именем уже есть");
+        // Родителя цели нет — нет и цели: тот же 404 «нет такого пути», что у отсутствующего
+        // источника, а не 409 «имя занято». Без этой проверки FileService бросает IOException
+        // из VerifyParent, и он читался бы как коллизия имени. Папку при переносе не создаём:
+        // перенос — не создание (create и mkdir свои недостающие предки заводят)
+        if (!Directory.Exists(Path.GetDirectoryName(dst)!)) return NotFoundFile();
         // Папку нельзя перенести внутрь себя
         if (Directory.Exists(src) && IsInside(dst, src)) return InvalidPath();
         try
         {
-            files.Rename(root, req.OldPath, req.NewPath);
+            files.Rename(root, oldPath, newPath);
             return Ok();
         }
         catch (UnauthorizedAccessException) { return InvalidPath(); }
@@ -227,6 +259,7 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     [DenyOnDelegatedTurn("Удаление файлов")]
     public IActionResult Delete(string sessionId, [FromQuery] string path)
     {
+        path = Norm(path);
         if (!TryChat(sessionId, out var session)) return ChatNotFound();
         if (RootOf(session) is not { } root) return NotFoundFile();
         if (Resolve(root, path, belowRoot: true) is not { } full) return InvalidPath();
@@ -243,7 +276,7 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     // Лексическая проверка пути до создания папки «Личного»: без диска и без корня
     private static bool SyntaxOk(string? rel)
     {
-        rel = rel?.Trim() ?? "";
+        rel = Norm(rel);
         if (rel.Length == 0 || rel == "." || rel.Contains('\\') || rel.Contains('\0')) return false;
         if (rel.StartsWith('/') || Path.IsPathRooted(rel)) return false;
         return !rel.Split('/').Any(s => s == "..");

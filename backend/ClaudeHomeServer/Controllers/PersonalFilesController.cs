@@ -70,7 +70,12 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
             SafePath.ComparisonFor(OperatingSystem.IsWindows()));
 
     // Корень «Личного» без побочных эффектов; null — папки ещё нет
-    private string? RootOf(Session session) => personal.Find(session.OwnerId)?.RootPath;
+    private string? RootOf(Session session)
+    {
+        var root = personal.Find(session.OwnerId)?.RootPath;
+        if (root is not null) files.RestrictRoot(root);
+        return root;
+    }
 
     [HttpGet]
     public IActionResult List(string sessionId, [FromQuery] string path = "")
@@ -152,7 +157,9 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     private async Task<(string? Root, IActionResult? Denied)> RootForWriteAsync(Session session, CancellationToken ct)
     {
         if (RootOf(session) is { } root) return (root, null);
-        return await personal.EnsureAsync(session.OwnerId, ct) is { } project
+        var created = await personal.EnsureAsync(session.OwnerId, ct);
+        if (created is not null) files.RestrictRoot(created.RootPath);
+        return created is { } project
             ? (project.RootPath, null)
             : (null, Fail(StatusCodes.Status409Conflict, PersonalFolderResolver.UnavailableCode, PersonalFolderResolver.UnavailableText));
     }

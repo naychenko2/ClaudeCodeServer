@@ -327,6 +327,54 @@ describe('App: диплинк #/project/{pid}/feature/{fid} — проект н�
   });
 });
 
+// ═══ Ф-2.20 (дефект bc99a48f): внешний hashchange на страницу фичи ══════════════════
+// Приложение живое (не первая загрузка), проект не открыт: человек вставляет адрес
+// #/project/{pid}/feature/{fid} или идёт по внешней ссылке. До правки ветка onHash
+// «проект без глубокой цели» открывала сайдбар проекта и теряла featureId из адреса —
+// сама страница фичи не открывалась (карточку «шаблон изменился» не видели именно потому,
+// что экран фичи не был открыт). Ключевое: featureId доезжает до снимка истории —
+// его читает инициализатор openFeatureId WorkspacePage при монтировании (тот же M1-канал).
+describe('App: внешний hashchange на #/project/{pid}/feature/{fid} — открывает страницу фичи', () => {
+  beforeEach(() => {
+    setupTestWindow();
+    store.clear(); sstore.clear();
+    flagsTest.reset();
+    store.set('cc_token', 't');
+    store.set('cc_server_url', 'http://x');
+    store.set('cc_username', 'u');
+    // Приложение на дашборде, проект не открыт: адрес фичи приходит ИЗВНЕ, на живой странице.
+    // initialHash этого файла — feature-диплинк (он берётся при импорте App, сменить его
+    // нельзя), поэтому начальный эффект диплинка нейтрализован пустым списком проектов и
+    // гасится до смены адреса; проект появляется только к внешнему hashchange. Иначе тест
+    // green'ил бы и без правки: navPush начального эффекта сам нёс бы feature (M1).
+    (globalThis as any).window.location.hash = '#/home';
+    mockData.projects = [];
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  it('hashchange: снимок и адрес несут featureId (мутация: убрать ветку onHash → краснеет)', async () => {
+    mount(createElement(App));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Начальный эффект диплинка отработал на пустом списке: проект не открыт, снимка с фичей нет
+    expect(getNav()?.feature ?? null).toBe(null);
+    // Проект доступен — и человек вставляет адрес фичи (как page.goto в e2e: меняется только
+    // hash, без перезагрузки)
+    mockData.projects = [project];
+    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
+    (globalThis as any).window.dispatchEvent(new CustomEvent('hashchange'));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // КЛЮЧЕВОЕ: featureId в снимке истории (WorkspacePage откроет по нему страницу при
+    // монтировании), адрес не схлопнулся в #/project/p1. Мутация «убрать ветку feature в
+    // onHash» красит тест: следующая ветка зовёт openProjectFromHome без featureId.
+    expect(getNav()?.feature, 'featureId потерян: страница фичи не открылась').toBe('f1');
+    expect((globalThis as any).window.location.hash).toContain('/feature/f1');
+  });
+});
+
 // ═══ Ф-хв (ревью Ф9b-д4, зам. 1 и 4): запасный переход из раздела «Чаты» ═══════════
 // Чип «← к фиче» вне воркспейса шлёт cc-open-project-feature с chatId: обработчик
 // открывает проект со страницей фичи И пишет чат в канал выбора cc_pending_project_chat

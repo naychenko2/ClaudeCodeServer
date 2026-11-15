@@ -881,6 +881,17 @@ export default function App() {
         window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: window.location.hash } }))
         return
       }
+      if (target.screen === 'project' && target.projectId && target.featureId) {
+        // Диплинк на страницу фичи (#/project/{pid}/feature/{fid}) из внешнего источника
+        // (вставка адреса, внешняя ссылка) — тем же каналом, что чат: без этой ветки следующая
+        // открывала бы сайдбар проекта и теряла featureId из адреса — сама страница фичи не
+        // открывалась (дефект bc99a48f: карточка «шаблон изменился» не показана на экране фичи —
+        // её не было видно именно потому, что экран не открылся). Обход истории пропускается
+        // тем же маркером, что у чата: снимок с feature уже восстановил popstate.
+        if (getNav() && historyTraversalRef.current) return
+        window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: window.location.hash } }))
+        return
+      }
       if (target.screen === 'project' && target.projectId) {
         // Диплинк на проект из внешнего источника (вставка URL в адресную строку).
         // Уже открытый этот же проект — выходим, чтобы не гонять api.projects.list.
@@ -928,14 +939,17 @@ export default function App() {
 
   // chatId — сразу запись чата, а не списка проекта: переход в чат чужого проекта кладёт
   // в историю одну запись, и «назад» из него возвращает в прежний чат
-  const openProject = (p: Project, chatId?: string) => {
+  const openProject = (p: Project, chatId?: string, featureId?: string | null) => {
     // Открыли другой проект — сообщение об отзыве больше не к месту
     setAccessNotice(null)
     recordRecentProject(p.id)
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
+    // featureId — в тот же снимок, что chatId: инициализатор openFeatureId WorkspacePage берёт
+    // getNav()?.feature, и без него диплинк на фичу схлопывался бы в #/project/{pid}
+    // (тот же M1-механизм, что у эффекта initialHash при первой загрузке).
     navPush(chatId
       ? { screen: 'project', project: p, view: 'chat', file: null, chatId }
-      : { screen: 'project', project: p, view: 'sidebar', file: null })
+      : { screen: 'project', project: p, view: 'sidebar', file: null, ...(featureId ? { feature: featureId } : {}) })
     setProject(p)
   }
   // Открыть проект с дашборда «Домой»: переключаем раздел на «Проекты» + открываем проект.
@@ -1199,6 +1213,36 @@ export default function App() {
           .catch(() => {})
       }
       return
+    }
+    // Диплинк на страницу фичи (#/project/{id}/feature/{fid}) — внешняя ссылка на фичу,
+    // вставка адреса. Тот же канал, что у чата/задачи: открываем страницу фичи, а не только
+    // проект (дефект bc99a48f: без этой ветки onHash вёл в сайдбар, featureId терялся).
+    if (target?.screen === 'project' && target.projectId && target.featureId) {
+      const pid = target.projectId
+      if (effectiveHubTab === 'projects' && project?.id === pid) {
+        // WorkspacePage этого проекта на экране: открываем страницу тем же каналом,
+        // что клик по телу группы в списке (fromChat=false: крошка ведёт в список, не в чат)
+        window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: target.featureId, fromChatId: null, fromChat: false } }))
+      } else if (project?.id === pid) {
+        // Проект «спит» в другой вкладке: возврат в «Проекты» смонтирует WorkspacePage —
+        // его openFeatureId прочитает фичу из снимка/хэша при монтировании (тот же M1-канал)
+        localStorage.setItem(HUB_TAB_KEY, 'projects')
+        setHubTab('projects')
+      } else {
+        api.projects.list()
+          .then(list => {
+            const p = list.find(x => x.id === pid)
+            if (p) {
+              localStorage.setItem(HUB_TAB_KEY, 'projects')
+              setHubTab('projects')
+              // featureId — в ту же запись истории, что chatId у чата: иначе navPush
+              // схлопнет адрес в #/project/{pid} до монтирования WorkspacePage
+              openProject(p, undefined, target.featureId)
+            }
+          })
+          .catch(() => {})
+      }
+      return;
     }
     // Диплинк на персону внутри проекта (#/project/{id}/persona/{personaId}) — бэйдж
     // автоматизации в чате проектной персоны. Тот же канал, что у задачи (cc_pending_task).

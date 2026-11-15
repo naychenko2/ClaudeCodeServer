@@ -610,11 +610,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // null — предложения нет или шаблон не найден (признак «по решению» тогда не отдаётся).
     public IReadOnlyDictionary<string, string>? ProposalPresence(TaskItem epic)
     {
-        var proposal = epic.WorkflowProposal;
-        if (proposal is null || _workflows is null) return null;
-        var scope = string.Equals(proposal.Scope, "project", StringComparison.Ordinal)
-            ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
-        var template = _workflows.Get(proposal.TemplateId, scope, epic.ProjectId);
+        var template = ProposalTemplate(epic);
         if (template is null) return null;
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var st in template.Stages)
@@ -632,12 +628,19 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // null — предложения нет или шаблон не найден.
     public IReadOnlyList<RouteStage>? ProposalRoute(TaskItem epic)
     {
+        var template = ProposalTemplate(epic);
+        return template is null ? null : WorkflowGraph.Resolve(template, []);
+    }
+
+    // Общий разбор шаблона предложения эпика (scope из предложения + поиск в хранилище).
+    // null — предложения нет, хранилища нет или шаблон не найден.
+    private WorkflowTemplate? ProposalTemplate(TaskItem epic)
+    {
         var proposal = epic.WorkflowProposal;
         if (proposal is null || _workflows is null) return null;
         var scope = string.Equals(proposal.Scope, "project", StringComparison.Ordinal)
             ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
-        var template = _workflows.Get(proposal.TemplateId, scope, epic.ProjectId);
-        return template is null ? null : WorkflowGraph.Resolve(template, []);
+        return _workflows.Get(proposal.TemplateId, scope, epic.ProjectId);
     }
 
     // Слепок: StageId/Lane/After — из маршрута эпика (замороженный граф), поля этапа (промпт, матрица…) —

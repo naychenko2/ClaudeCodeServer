@@ -2,6 +2,7 @@ using System.Reflection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Projector;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -57,6 +58,76 @@ public class TaskManagerWorkflowTests : IDisposable
         {
             Id = "e3", Role = TaskRoles.Feature, WorkflowProposal = new WorkflowProposal { TemplateId = "нет-такого" },
         }).Should().BeNull();
+    }
+
+    // Граф предложения: off убран, optional остался, After обходит убранный этап.
+    [Fact]
+    public void ProposalRoute_БыстрыйТрек_OffУбран_OptionalОстался_AfterОбходитУбранный()
+    {
+        var fast = _store.List(null).First(e => e.Template.BuiltInKey == WorkflowTemplateStore.FastTrackKey).Template;
+        var epic = new TaskItem
+        {
+            Id = "r1", Role = TaskRoles.Feature,
+            WorkflowProposal = new WorkflowProposal { TemplateId = fast.Id, Scope = "global" },
+        };
+        var route = _tasks.ProposalRoute(epic)!;
+        route.Should().NotBeNull();
+        route.Select(r => r.Role).Should().Equal(TaskRoles.Plan, TaskRoles.Step, TaskRoles.Review, TaskRoles.Final, TaskRoles.Merge);
+        route.Select(r => r.Role).Should().NotContain([TaskRoles.Cut, TaskRoles.Design, TaskRoles.Qa]);
+        // plan стоит после убранных cut/design: корень, а не ссылка на несуществующий этап.
+        route.First(r => r.Role == TaskRoles.Plan).After.Should().BeEmpty();
+        route.First(r => r.Role == TaskRoles.Final).After.Should().Equal(TaskRoles.Review);
+    }
+
+    [Fact]
+    public void ProposalRoute_ПредложенияИлиШаблонаНет_Null()
+    {
+        _tasks.ProposalRoute(new TaskItem { Id = "r2", Role = TaskRoles.Feature }).Should().BeNull();
+        _tasks.ProposalRoute(new TaskItem
+        {
+            Id = "r3", Role = TaskRoles.Feature, WorkflowProposal = new WorkflowProposal { TemplateId = "нет-такого" },
+        }).Should().BeNull();
+    }
+
+    // Scope берётся из предложения: шаблон проекта находится только при scope=project и ProjectId эпика.
+    [Fact]
+    public void ProposalRoute_ScopeИзПредложения_ШаблонПроектаНеВидногоВГлобальном()
+    {
+        var saved = _store.Save(Template(), WorkflowTemplateScope.Project, "p1");
+        TaskItem EpicWith(string scope) => new()
+        {
+            Id = "r4-" + scope, Role = TaskRoles.Feature, ProjectId = "p1",
+            WorkflowProposal = new WorkflowProposal { TemplateId = saved.Id, Scope = scope },
+        };
+
+        _tasks.ProposalRoute(EpicWith("project")).Should().NotBeNull();
+        _tasks.ProposalRoute(EpicWith("global")).Should().BeNull();
+    }
+
+    // Проводка tasks.ProposalRoute во все публичные пути проектора: забытый делегат в любой точке
+    // возвращает предложению легаси-колонку 0 (ложное «⇉ параллельно»).
+    [Fact]
+    public void FeatureProjector_ПубличныеПути_ПредложениеРисуетсяПоГрафуШаблона()
+    {
+        var fast = _store.List(null).First(e => e.Template.BuiltInKey == WorkflowTemplateStore.FastTrackKey).Template;
+        var epic = _tasks.Create(null, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
+        _tasks.SetWorkflowProposal(epic.Id, new WorkflowProposal { TemplateId = fast.Id, Scope = "global", ProposedAt = DateTime.UtcNow });
+        var projector = new FeatureProjector(_tasks);
+
+        var runs = new Dictionary<string, FeatureRun?>
+        {
+            ["Project"] = projector.Project(epic.Id, Owner),
+            ["ProjectFull"] = projector.ProjectFull(epic.Id, Owner),
+            ["ProjectAll"] = projector.ProjectAll(Owner).FirstOrDefault(r => r.FeatureId == epic.Id),
+        };
+
+        foreach (var (path, run) in runs)
+        {
+            run.Should().NotBeNull(path);
+            var columns = run!.Stages.Select(x => x.Column).ToList();
+            columns.Should().Equal(Enumerable.Range(0, columns.Count), path);
+            columns.Count.Should().BeGreaterThan(1, path);
+        }
     }
 
     private static WorkflowTemplate Template(string prompt = "p1") => new()

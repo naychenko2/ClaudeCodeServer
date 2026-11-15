@@ -534,6 +534,30 @@ public class PersonalFilesEndpointTests : IClassFixture<PersonalFilesEndpointTes
     }
 
     [Fact]
+    public async Task Загрузка_и_сохранение_по_URL_с_именем_существующей_папки_дают_409_exists_а_не_500()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        // Имя занято каталогом: File.Move в атомарной записи бросает IOException —
+        // тот же 409 «exists», что у create/mkdir/rename, а не 500
+        var resp = await _owner.PostAsync(Url(chat, "/upload"), Form([1, 2], "images"));
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict, await resp.Content.ReadAsStringAsync());
+        (await Json(resp)).GetProperty("code").GetString().Should().Be("exists");
+        Directory.Exists(Path.Combine(root, "images")).Should().BeTrue();
+        (await File.ReadAllBytesAsync(Path.Combine(root, "images", "a.png"))).Should().Equal([0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
+        Directory.GetFiles(root).Select(Path.GetFileName).Should().NotContain(n => n!.EndsWith(".tmp"));
+
+        // save-from-url: та же коллизия внутри медиальной папки — тоже 409 «exists», каталог цел
+        (await _owner.PostAsJsonAsync(Url(chat, "/mkdir"), new { path = "images/sub" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        var save = await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "http://8.8.8.8/small.png", path = "images/sub" });
+        save.StatusCode.Should().Be(HttpStatusCode.Conflict, await save.Content.ReadAsStringAsync());
+        (await Json(save)).GetProperty("code").GetString().Should().Be("exists");
+        Directory.Exists(Path.Combine(root, "images", "sub")).Should().BeTrue();
+        Directory.GetFiles(Path.Combine(root, "images")).Select(Path.GetFileName).Should().NotContain(n => n!.EndsWith(".tmp"));
+    }
+
+    [Fact]
     public async Task Сохранение_по_URL_пишет_в_медиальную_папку_а_вне_неё_400_до_создания_папки_Личного()
     {
         var chat = await Chat();

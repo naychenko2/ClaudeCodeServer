@@ -270,6 +270,9 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
                 return FileTooLarge(MaxUploadBytes);
         }
         catch (UnauthorizedAccessException) { return InvalidPath(); }
+        // Имя занято каталогом (или temp-имя вышло за предел имени файла): File.Move/FileStream
+        // бросает IOException — тот же 409 «exists», что у create/mkdir/rename, а не 500
+        catch (IOException) { return Fail(StatusCodes.Status409Conflict, "exists", "Не удалось записать файл"); }
         return Ok(new { path = rel });
     }
 
@@ -303,8 +306,14 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
             // Content-Length проверяем до записи: папки ради заведомо отказанного тела не заводим
             if (resp.Content.Headers.ContentLength is > MaxSaveFromUrlBytes) return FileTooLarge(MaxSaveFromUrlBytes);
             await using var stream = await resp.Content.ReadAsStreamAsync(ct);
-            if (!await files.WriteAtomicFromStreamAsync(root, rel, stream, MaxSaveFromUrlBytes, ct))
-                return FileTooLarge(MaxSaveFromUrlBytes);
+            // IOException ловится только вокруг записи: имя занято каталогом (или temp-имя вышло
+            // за предел имени файла) — 409 «exists», как в Upload; сетевые сбои остаются 502
+            try
+            {
+                if (!await files.WriteAtomicFromStreamAsync(root, rel, stream, MaxSaveFromUrlBytes, ct))
+                    return FileTooLarge(MaxSaveFromUrlBytes);
+            }
+            catch (IOException) { return Fail(StatusCodes.Status409Conflict, "exists", "Не удалось записать файл"); }
         }
         catch (HttpRequestException ex) { return Fail(StatusCodes.Status502BadGateway, "fetch_failed", ex.Message); }
         catch (TaskCanceledException) { return Fail(StatusCodes.Status502BadGateway, "fetch_failed", "Выгрузка не завершена: адрес не ответил или время вышло"); }

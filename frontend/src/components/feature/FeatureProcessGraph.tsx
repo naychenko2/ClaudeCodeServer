@@ -478,7 +478,11 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                   data-testid={`pgraph-title-${id}`}
                   title={nodeTitle(stage)}
                   style={{
-                    flex: '1 1 auto', minWidth: 0, lineHeight: 1.25, overflowWrap: 'anywhere',
+                    // Дефект 20e96078: 'anywhere' рвал слово по букве («Производст|во») без знака
+                    // переноса — это читается как опечатка. hyphens рвёт по слогам со знаком
+                    // (язык текста — lang="ru" в frontend/index.html:2); break-word — крайний
+                    // случай для слова, которое не переносится ни целиком, ни по слогам.
+                    flex: '1 1 auto', minWidth: 0, lineHeight: 1.25, overflowWrap: 'break-word', hyphens: 'auto',
                     display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: NAME_LINES, overflow: 'hidden',
                     // Заголовок proposed-узла — plan-text (макет .node.prop .nn, F33a).
                     fontSize: FS.sm, fontWeight: 600,

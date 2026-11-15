@@ -13,7 +13,7 @@
 
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { C, R, SP, FS, FONT } from '../../lib/design';
+import { C, R, SP, FS, FONT, TB } from '../../lib/design';
 import { GitBranch } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { ICON_STROKE } from '../ui/icons';
@@ -214,7 +214,7 @@ function TotalsRow({ stats, lead, onOpenStats, isMobile }: { stats: FeatureStats
         style={{
           background: 'transparent', border: 'none', color: C.accent,
           fontSize: FS.xs, whiteSpace: 'nowrap', flexShrink: 0,
-          minHeight: isMobile ? 40 : undefined,
+          minHeight: isMobile ? TB.iconHitMobile : undefined,
         }}
       >
         Статистика ›
@@ -374,7 +374,7 @@ function BranchRow({ branch, isMobile }: { branch: string; isMobile: boolean }) 
         onBlur={e => { e.currentTarget.style.background = 'transparent'; }}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0, maxWidth: '100%',
-          height: isMobile ? 40 : 24, padding: `0 ${SP.xs}px`, marginLeft: -SP.xs,
+          height: isMobile ? TB.iconHitMobile : 24, padding: `0 ${SP.xs}px`, marginLeft: -SP.xs,
           border: 'none', borderRadius: R.sm, background: 'transparent', cursor: 'pointer',
           fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
         }}

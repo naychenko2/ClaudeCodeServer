@@ -9,7 +9,7 @@
 // 32 (десктоп) / 36 (мобила), но кнопка 40 по высоте: тач-цель по конвенции.
 
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP, TB } from '../../lib/design';
 import { laneWord } from '../../lib/roleLabel';
 import { buildLadder } from '../../lib/workflowLadderModel';
 import { STAGE_ROLE_LABEL } from '../../features/workflowTemplates/WorkflowStageRow';
@@ -35,7 +35,7 @@ export interface WorkflowLadderProps {
 
 const CHIP_VISUAL_H = 32;
 const CHIP_VISUAL_H_MOBILE = 36;
-const TOUCH = 40;
+const TOUCH = TB.iconHitMobile;
 const SLOT_MIN_H = 158;
 
 interface ArcPath { key: string; d: string; ex: number; ey: number }

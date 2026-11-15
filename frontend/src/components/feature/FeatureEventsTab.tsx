@@ -15,7 +15,7 @@
 // Формулировка строится на фронте из `kind` + `stepRef`/`role` (бэк не подписывает).
 
 import { useMemo } from 'react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, TB } from '../../lib/design';
 import { getPersonaById } from '../../lib/personas';
 import { roleLabel } from '../../lib/roleLabel';
 import { dateOnly, hhmm } from '../chat/feature/featureTime';
@@ -299,7 +299,7 @@ export function FeatureEventsTab({ events, eventsTotal, featureId, featureTitle 
             size="xs"
             dataTestId="events-expand-retry"
             onClick={() => expandFeaturePageEvents(featureId)}
-            style={{ background: C.bgWhite, minHeight: isMobile ? 40 : 32 }}
+            style={{ background: C.bgWhite, minHeight: isMobile ? TB.iconHitMobile : 32 }}
           >
             Повторить
           </Button>
@@ -318,7 +318,7 @@ export function FeatureEventsTab({ events, eventsTotal, featureId, featureTitle 
             if (expanded) collapseFeaturePageEvents(featureId);
             else expandFeaturePageEvents(featureId);
           }}
-          style={{ marginTop: SP.sm, background: C.bgSelected, minHeight: isMobile ? 40 : 32 }}
+          style={{ marginTop: SP.sm, background: C.bgSelected, minHeight: isMobile ? TB.iconHitMobile : 32 }}
         >
           {expanded ? 'Свернуть' : `Показать все · ${eventsTotal}`}
         </Button>

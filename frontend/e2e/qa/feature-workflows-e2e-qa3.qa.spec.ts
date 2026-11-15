@@ -3,6 +3,8 @@ import { mkdirSync } from 'node:fs';
 import { login, api, alignEpicRoute, type Api } from './helpers';
 
 // QA-3 (задача a1b3e53f). Повторная приёмка «Процессов фичи» на master 52ea5e6d7.
+// Доработка QA-4 (задача 55314d7f): T4 дополнен замером переноса однословного имени
+// (дефект 20e96078 закрыт Ф-2.36); T6 — замер закрытия 604497e2.
 // Пункты, не покрытые спеками прошлой приёмки:
 // T1 = п.1: тач-цели на 360, обе темы: «Сменить»/«Почему так» строки маршрута, «из чего N ›»,
 //      вкладки карточки персоны, «Специальность: …» (цели редактора — S9a/S9b measure-спека).
@@ -282,6 +284,10 @@ test('T4: имена узлов с многоточием, шевроны кра
   }).catch(() => null);
   console.log('T4 лента @360:', JSON.stringify(strip));
   expect.soft(strip !== null && strip.scrollWidth > strip.clientWidth, 'лента шире контейнера — прокручивается').toBeTruthy();
+  // Ширина узла на мобиле (NODE_W_MOBILE=104): правка переноса её не меняла и менять не должна.
+  const nodeWidths = await page.locator('[data-testid^="pgraph-node-"]').evaluateAll((els: Element[]) => els.map((e) => Math.round((e as HTMLElement).getBoundingClientRect().width * 10) / 10));
+  console.log('T4 ширина узлов @360:', JSON.stringify(nodeWidths));
+  expect.soft(nodeWidths.length > 0 && nodeWidths.every((w) => w === 104), 'ширина узлов на мобиле 104 px (не изменилась)').toBeTruthy();
 
   const chevrons = async () => page.evaluate(() => {
     const vis = (sel: string) => { const e = document.querySelector(sel) as HTMLElement | null; return e ? (e.offsetParent !== null) : false; };
@@ -325,11 +331,12 @@ test('T4: имена узлов с многоточием, шевроны кра
   await ctx.close();
 
   // Длинное имя (40 символов, предел TitleLimit): на узкой колонке имя обязано резаться
-  // clamp'ом с многоточием, полное имя остаётся в title/aria. Слом по букве посреди слова —
-  // известный открытый дефект 20e96078, здесь не меряется.
+  // clamp'ом с многоточием, полное имя остаётся в title/aria. Перенос однословного имени —
+  // по слогам со знаком (дефект 20e96078 закрыт Ф-2.36, коммит 06c0f6556): меряется ниже.
   const LONG = 'Очень длинное название этапа процесса'; // 37 символов, в пределах TitleLimit=40
+  const WORD = 'Производственная'; // одно слово: в колонку 104 px целиком не влезает
   const tpl = await client.post<any>('/api/workflow-templates', {
-    name: 'qa-e2e-qa3-longname', stages: [{ role: 'qa', presence: 'on', title: LONG }, { role: 'review', presence: 'on' }],
+    name: 'qa-e2e-qa3-longname', stages: [{ role: 'qa', presence: 'on', title: LONG }, { role: 'review', presence: 'on', title: WORD }],
   });
   const tplId = tpl?.id ?? tpl?.template?.id ?? null;
   if (tplId) tplIds.push(tplId);
@@ -344,7 +351,77 @@ test('T4: имена узлов с многоточием, шевроны кра
   console.log('T4 длинное имя @360:', JSON.stringify(longTitle));
   expect.soft(longTitle !== null && longTitle.clamped, 'длинное имя обрезано (clamped)').toBeTruthy();
   expect.soft(longTitle?.fullInTitle, 'полное имя сохранено в title/aria').toBeTruthy();
+
+  // Перенос однословного имени (дефект 20e96078, Ф-2.36): политика — hyphens:auto +
+  // break-word (не 'anywhere'), lang='ru'. Разрыв по слогам со знаком меряется по знаку:
+  // чернила строки на скриншоте длиннее адванса текста на ширину дефиса. (Ширины сами по
+  // себе не различают политики: точка разрыва при hyphens и 'anywhere' здесь совпадает.)
+  const loc = p2.locator('[data-testid^="pgraph-title-"]').filter({ hasText: WORD }).first();
+  await loc.scrollIntoViewIfNeeded({ timeout: 15000 }).catch(() => undefined);
+  await p2.waitForTimeout(500);
+  const wrap = await measureWrap(p2, WORD);
+  console.log(`T4 перенос «${WORD}» @360:`, JSON.stringify(wrap));
+  expect.soft(wrap !== null && wrap.found, `узел с именем «${WORD}» найден`).toBeTruthy();
+  expect.soft(wrap?.style.overflowWrap, 'overflow-wrap — break-word').toBe('break-word');
+  expect.soft(wrap?.style.overflowWrap, 'overflow-wrap — не anywhere').not.toBe('anywhere');
+  expect.soft(wrap?.style.hyphens, 'hyphens — auto').toBe('auto');
+  expect.soft(wrap?.lang, 'lang страницы — ru (условие hyphens)').toBe('ru');
+  expect.soft((wrap?.lines ?? 0) >= 2, 'длинное слово перенесено на вторую строку').toBeTruthy();
+  expect.soft(wrap?.nextDoesNotFit, 'разрыв вынужденный: следующая буква не влезает').toBeTruthy();
+  // Знак переноса — по прямоугольнику строки: Blink включает отрисованный автодефис в rect
+  // текстового узла (пробник qa4-probe: правый край = ширина текста + дефис ровно; на
+  // скриншоте элемента это видно глазами: «Производ-ственная»). Пиксели скриншота для замера
+  // ненадёжны: элемент может быть обрезан лентой.
+  expect.soft(wrap !== null && wrap.lineRight - wrap.lineLeft >= wrap.wLine1 + 2, 'разрыв со знаком: прямоугольник строки длиннее текста на ширину дефиса').toBeTruthy();
   await p2.screenshot({ path: `${SHOTS}/qa3-t4-longname-360.png`, fullPage: true });
+
+  // Мутация чувствительности замера (правкой кода продукта не является): на живом элементе
+  // вернуть прежнюю политику 'anywhere' без hyphens — разрыв может остаться на том же месте,
+  // но знак обязан исчезнуть из rect'а; потом вернуть как было.
+  if (wrap) {
+    const mut = await p2.evaluate(([w]: string[]) => {
+      const el = [...document.querySelectorAll('[data-testid^="pgraph-title-"]')].find((e) => ((e as HTMLElement).textContent ?? '').trim().startsWith(w.slice(0, 12))) as HTMLElement | null;
+      if (!el) return null;
+      const prevOw = el.style.overflowWrap;
+      const prevHy = el.style.hyphens;
+      el.style.overflowWrap = 'anywhere';
+      el.style.hyphens = 'none';
+      const tn = [...el.childNodes].find((n) => n.nodeType === 3) as Text;
+      const rg = document.createRange();
+      rg.selectNodeContents(tn);
+      const rects = [...rg.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+      const lines: { top: number; left: number; right: number }[] = [];
+      for (const r of rects) {
+        const L = lines.find((l) => Math.abs(l.top - r.top) < 2);
+        if (L) { L.left = Math.min(L.left, r.left); L.right = Math.max(L.right, r.right); } else lines.push({ top: r.top, left: r.left, right: r.right });
+      }
+      let lo = 0;
+      let hi = tn.data.length;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        const r2 = document.createRange();
+        r2.setStart(tn, 0);
+        r2.setEnd(tn, mid);
+        const rs = [...r2.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+        if (rs.length && rs.every((r) => Math.abs(r.top - lines[0].top) < 2)) lo = mid; else hi = mid - 1;
+      }
+      const line1 = tn.data.slice(0, lo);
+      const cs = getComputedStyle(el);
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;'
+        + `font-family:${cs.fontFamily};font-size:${cs.fontSize};font-weight:${cs.fontWeight};font-style:${cs.fontStyle};letter-spacing:${cs.letterSpacing};`;
+      document.body.appendChild(probe);
+      probe.textContent = line1;
+      const wLine1 = Math.round(probe.getBoundingClientRect().width * 10) / 10;
+      probe.remove();
+      const res = { line1, wLine1, lineLeft: Math.round(lines[0].left * 10) / 10, lineRight: Math.round(lines[0].right * 10) / 10, lines: lines.length };
+      el.style.overflowWrap = prevOw;
+      el.style.hyphens = prevHy;
+      return res;
+    }, [WORD]).catch(() => null);
+    console.log(`T4 мутация «anywhere» без hyphens @360:`, JSON.stringify(mut));
+    expect.soft(mut !== null && mut.lineRight - mut.lineLeft < mut.wLine1 + 2, 'при «anywhere» без hyphens знака на строке нет (замер чувствителен к политике)').toBeTruthy();
+  }
   console.log('T4 ошибки консоли:', JSON.stringify([...new Set([...errs, ...e2])]));
   await p2.close();
   await ctx2.close();
@@ -368,6 +445,109 @@ async function page2Info(page: import('@playwright/test').Page, fullTitle: strin
   }, fullTitle).catch(() => null);
   return info;
 }
+
+// Замер переноса однословного имени (дефект 20e96078): строки layout'а, текст первой строки
+// (бинарный поиск по прямоугольникам диапазона), контрольные ширины «текст» / «текст+дефис» /
+// «текст+след. буква», знак в innerText, computed style и lang.
+type WrapMeasure = {
+  found: boolean;
+  clientWidth: number;
+  lines: number;
+  line1: string;
+  next: string;
+  wLine1: number;
+  wLine1Dash: number;
+  wLine1Next: number;
+  dashFits: boolean;
+  nextDoesNotFit: boolean;
+  innerTextDash: boolean;
+  // Прямоугольник первой строки текста: Blink включает в него отрисованный автодефис
+  // (пробник 2026-11-15: правый край = ширина текста + дефис ровно). Его длина против
+  // ширины текста — прямой признак знака; пиксели скриншота для этого ненадёжны
+  // (обрезка элемента лентой).
+  lineLeft: number;
+  lineRight: number;
+  style: { hyphens: string; overflowWrap: string; clamp: string | null };
+  lang: string | null;
+};
+
+const measureWrap = (page: import('@playwright/test').Page, word: string): Promise<WrapMeasure | null> =>
+  page.locator('[data-testid^="pgraph-title-"]').evaluateAll((els: Element[], word: string) => {
+    const mk = (found: boolean, el: HTMLElement | null, line1 = '', next = ''): WrapMeasure => ({
+      found,
+      clientWidth: el ? el.clientWidth : 0,
+      lines: 0,
+      line1,
+      next,
+      wLine1: 0,
+      wLine1Dash: 0,
+      wLine1Next: 0,
+      dashFits: false,
+      nextDoesNotFit: false,
+      innerTextDash: false,
+      lineLeft: 0,
+      lineRight: 0,
+      style: el ? { hyphens: getComputedStyle(el).hyphens, overflowWrap: getComputedStyle(el).overflowWrap, clamp: getComputedStyle(el).webkitLineClamp || null } : { hyphens: '', overflowWrap: '', clamp: null },
+      lang: el ? (el.closest('[lang]')?.getAttribute('lang') ?? document.documentElement.getAttribute('lang')) : null,
+    });
+    for (const e of els) {
+      const el = e as HTMLElement;
+      const text = (el.textContent ?? '').trim();
+      if (!text.startsWith(word.slice(0, 12))) continue;
+      const tn = [...el.childNodes].find((n) => n.nodeType === 3) as Text | undefined;
+      if (!tn) continue;
+      const rg = document.createRange();
+      rg.selectNodeContents(tn);
+      const rects = [...rg.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+      const lines: { top: number; left: number; right: number }[] = [];
+      for (const r of rects) {
+        const L = lines.find((l) => Math.abs(l.top - r.top) < 2);
+        if (L) { L.left = Math.min(L.left, r.left); L.right = Math.max(L.right, r.right); } else lines.push({ top: r.top, left: r.left, right: r.right });
+      }
+      if (lines.length < 2) return mk(true, el);
+      let lo = 0;
+      let hi = tn.data.length;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        const r2 = document.createRange();
+        r2.setStart(tn, 0);
+        r2.setEnd(tn, mid);
+        const rs = [...r2.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+        if (rs.length && rs.every((r) => Math.abs(r.top - lines[0].top) < 2)) lo = mid; else hi = mid - 1;
+      }
+      const line1 = tn.data.slice(0, lo);
+      const next = tn.data[lo] ?? '';
+      const cs = getComputedStyle(el);
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;'
+        + `font-family:${cs.fontFamily};font-size:${cs.fontSize};font-weight:${cs.fontWeight};font-style:${cs.fontStyle};letter-spacing:${cs.letterSpacing};`;
+      document.body.appendChild(probe);
+      const wOf = (s: string) => { probe.textContent = s; return probe.getBoundingClientRect().width; };
+      const wLine1 = wOf(line1);
+      const wLine1Dash = wOf(line1 + '-');
+      const wLine1Next = wOf(line1 + next);
+      probe.remove();
+      const inner = (el.innerText ?? '') as string;
+      return {
+        found: true,
+        clientWidth: el.clientWidth,
+        lines: lines.length,
+        line1,
+        next,
+        wLine1: Math.round(wLine1 * 10) / 10,
+        wLine1Dash: Math.round(wLine1Dash * 10) / 10,
+        wLine1Next: Math.round(wLine1Next * 10) / 10,
+        dashFits: wLine1Dash <= el.clientWidth,
+        nextDoesNotFit: wLine1Next > el.clientWidth,
+        innerTextDash: /-\s*\n/.test(inner),
+        lineLeft: Math.round(lines[0].left * 10) / 10,
+        lineRight: Math.round(lines[0].right * 10) / 10,
+        style: { hyphens: cs.hyphens, overflowWrap: cs.overflowWrap, clamp: cs.webkitLineClamp || null },
+        lang: el.closest('[lang]')?.getAttribute('lang') ?? document.documentElement.getAttribute('lang'),
+      };
+    }
+    return null;
+  }, word).catch(() => null);
 
 test('T5: метка этапа одинаковая: локальная подсказка редактора и серверный 400', async ({ browser }) => {
   test.setTimeout(180_000);

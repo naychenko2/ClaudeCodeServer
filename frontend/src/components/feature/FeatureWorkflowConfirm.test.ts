@@ -367,3 +367,45 @@ describe('FeatureWorkflowConfirm: состояния блока (F03)', () => {
     expect(selectOf(c)).not.toBeNull();
   });
 });
+
+describe('FeatureWorkflowConfirm: пояснение смысла предложения (Ф-2.42)', () => {
+  beforeEach(() => { installFakeDom(); });
+  afterEach(() => { uninstallFakeDom(); });
+
+  const hint = (c: ReturnType<typeof mount>['container']) =>
+    findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-plan-hint');
+
+  it('предложение модели: в карточке есть строка о смысле фиолетового цвета', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ proposal: { templateId: 'full-cycle', scope: 'global', skipped: [], state: 'proposed' } });
+    expect(hint(c)).not.toBeNull();
+    expect(text(c)).toContain('Фиолетовый цвет означает: это предложение модели');
+    expect(text(c)).toContain('Пока маршрут не подтверждён, предложенные этапы не выполняются.');
+  });
+
+  it('человек сменил шаблон (карточка всё ещё предложение): строка остаётся', async () => {
+    catalog.entries = [entry(fullCycle(3)), entry(fastTrack())];
+    const c = await renderBlock({ proposal: { templateId: 'full-cycle', scope: 'global', skipped: [], state: 'proposed' } });
+    await selectTemplate(c, 'global:fast-track');
+    expect(hint(c)).not.toBeNull();
+  });
+
+  it('подтверждено: строки нет — ни в полном блоке, ни в развёрнутом тихом', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c1 = await renderBlock({ confirmed: CONFIRMED });
+    expect(hint(c1)).toBeNull();
+    const c2 = await renderBlock({ confirmed: CONFIRMED, quiet: true });
+    await act(async () => { (reactProps(findNodeByAttr(c2, 'data-testid', 'feature-workflow-confirm-change')!)!.onClick as () => void)(); });
+    expect(hint(c2)).toBeNull();
+  });
+
+  it('«предложения нет» и «подбираем»: строки нет', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ proposal: { state: 'none', templateId: '', scope: 'global', skipped: [] }, routeRequired: true });
+    expect(hint(c)).toBeNull();
+    const c2 = await renderBlock({ routeRequired: true });
+    await act(async () => { (reactProps(findNodeByAttr(c2, 'data-testid', 'feature-workflow-confirm-recommend')!)!.onClick as () => void)(); });
+    expect(text(c2)).toContain('Подбираем маршрут');
+    expect(hint(c2)).toBeNull();
+  });
+});

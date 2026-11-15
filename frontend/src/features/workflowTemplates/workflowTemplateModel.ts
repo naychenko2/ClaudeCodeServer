@@ -35,6 +35,26 @@ export const PROMPT_LIMIT = 4000;
 // Лимит имени этапа (G7, решение контракта a5d0c76e; серверный WorkflowRules.TitleLimit).
 export const TITLE_LIMIT = 40;
 
+// Адресная метка этапа (Р-Ф-2.39, правило единое с бэком): Title этапа, если задан; иначе роль;
+// если роль встречается в маршруте больше одного раза и Title нет — роль + id этапа.
+// name — то, что стоит в кавычках, suffix — «(id)» после них; key — name + suffix без кавычек
+// (ключ привязки ошибки к строке и ключ SaveFailure.stageErrors).
+export function stageLabelParts(stages: WorkflowStage[], index: number): { name: string; suffix: string; key: string } {
+  const st = stages[index];
+  const title = (st?.title ?? '').trim();
+  const role = (st?.role ?? '').trim();
+  if (title) return { name: title, suffix: '', key: title };
+  const repeated = stages.filter(s => s && (s.role ?? '').trim() === role).length > 1;
+  if (!repeated) return { name: role, suffix: '', key: role };
+  const id = (st?.id ?? '').trim() || role;
+  return { name: role, suffix: ` (${id})`, key: `${role} (${id})` };
+}
+
+export function stageLabel(stages: WorkflowStage[], index: number): string {
+  const { name, suffix } = stageLabelParts(stages, index);
+  return `этап «${name}»${suffix}`;
+}
+
 export function isNonSkippable(role: string): boolean {
   return (NON_SKIPPABLE as readonly string[]).includes(role);
 }
@@ -48,7 +68,8 @@ function titleGroupKey(stage: WorkflowStage): string {
 
 // Нужен ли этому этапу Title (G7): он делит пару (Role, Lane) с другим этапом — без имени
 // граф показал бы две неотличимые «Проверки» (qa-plan и qa). Это ПОДСКАЗКА для поля редактора
-// до отправки; истина — за серверным валидатором (его тексты приходят с 400 по id этапа).
+// до отправки; истина — за серверным валидатором (его тексты приходят с 400 с той же адресной
+// меткой этапа: Title → роль → «роль (id)» при повторе роли, см. stageLabelParts).
 export function titleRequired(stages: WorkflowStage[], index: number): boolean {
   const cur = stages[index];
   if (!cur || !(STAGE_ROLES as readonly string[]).includes((cur.role ?? '').trim())) return false;
@@ -132,7 +153,7 @@ export function stageErrors(tpl: WorkflowTemplate | null | undefined): string[] 
     const presence = (stage.presence ?? '').trim();
     const stallPolicy = (stage.stallPolicy ?? '').trim();
     const known = (STAGE_ROLES as readonly string[]).includes(role);
-    const label = known ? `этап «${role}»` : labelUnknown;
+    const label = known ? stageLabel(stages, i) : labelUnknown;
 
     if (!known) {
       errors.push(`${label}: неизвестная роль этапа «${role}». Допустимы: ${STAGE_ROLES.join(', ')}.`);

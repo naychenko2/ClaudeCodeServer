@@ -3,7 +3,7 @@
 // сервера, форк глобального шаблона в проектный, разбор списков «через запятую».
 
 import { normalizeStages } from './workflowGraphModel';
-import { STAGE_ROLES, isNonSkippable, stageErrors } from './workflowTemplateModel';
+import { STAGE_ROLES, isNonSkippable, stageErrors, stageLabel, stageLabelParts } from './workflowTemplateModel';
 import type { WorkflowEntryMeta, WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from './types';
 
 // Список обёрток { scope, template } → области. Разбиение — по метке entry.scope, а не по id:
@@ -129,7 +129,8 @@ export interface SaveFailure {
   generalErrors: string[];
 }
 
-const STAGE_ERROR_RE = /^этап «([^»]+)»:\s*(.*)$/;
+// Метка этапа в тексте ошибки: этап «имя» или этап «роль» (id) при повторе роли (stageLabelParts).
+const STAGE_ERROR_RE = /^этап «([^»]+)»(?: \(([^()]+)\))?:\s*(.*)$/;
 
 // Раскладывает ошибку request(): 409 → «перечитать», 400 → ошибки валидатора по этапам
 // (сервер отдаёт { error, errors: string[] }, тексты те же, что у stageErrors), прочее — как есть.
@@ -144,7 +145,7 @@ export function classifySaveError(e: unknown): SaveFailure {
     const general: string[] = [];
     for (const line of raw) {
       const m = STAGE_ERROR_RE.exec(line);
-      if (m) (stageErrs[m[1]] ??= []).push(m[2]);
+      if (m) (stageErrs[m[2] ? `${m[1]} (${m[2]})` : m[1]] ??= []).push(m[3]);
       else general.push(line);
     }
     if (raw.length === 0) general.push(err.body?.error ?? err.message ?? 'Шаблон не прошёл проверку.');
@@ -309,11 +310,11 @@ export interface ErrorItem { text: string; stageIndex: number | null }
 
 export function errorSummaryItems(draft: WorkflowTemplate, failure?: SaveFailure | null): ErrorItem[] {
   const norm = normalizeStages(draft.stages);
+  // Привязка — по адресной метке (Title → роль → «роль (id)»): при двух этапах одной роли
+  // ошибка попадает в свою строку, а не в первую по роли.
   const indexOf = (key: string): number | null => {
-    const byId = norm.findIndex(s => s.id === key);
-    if (byId >= 0) return byId;
-    const byRole = norm.findIndex(s => s.role === key);
-    return byRole >= 0 ? byRole : null;
+    const i = norm.findIndex((_, idx) => stageLabelParts(norm, idx).key === key);
+    return i >= 0 ? i : null;
   };
   const items: ErrorItem[] = [];
   const push = (text: string, stageIndex: number | null) => {
@@ -322,11 +323,14 @@ export function errorSummaryItems(draft: WorkflowTemplate, failure?: SaveFailure
   for (const line of stageErrors(draft)) {
     const m = STAGE_ERROR_RE.exec(line);
     const num = /^этап #(\d+):/.exec(line);
-    if (m) push(line, indexOf(m[1]));
+    if (m) push(line, indexOf(m[2] ? `${m[1]} (${m[2]})` : m[1]));
     else if (num) push(line, Number(num[1]) - 1 < norm.length ? Number(num[1]) - 1 : null);
     else push(line, null);
   }
-  for (const [key, msgs] of Object.entries(failure?.stageErrors ?? {})) msgs.forEach(m => push(`этап «${key}»: ${m}`, indexOf(key)));
+  for (const [key, msgs] of Object.entries(failure?.stageErrors ?? {})) msgs.forEach(m => {
+    const i = indexOf(key);
+    push(`${i === null ? `этап «${key}»` : stageLabel(norm, i)}: ${m}`, i);
+  });
   for (const g of failure?.generalErrors ?? []) push(g, null);
   return items;
 }

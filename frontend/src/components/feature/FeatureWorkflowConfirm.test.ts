@@ -375,19 +375,25 @@ describe('FeatureWorkflowConfirm: пояснение смысла предлож
   const hint = (c: ReturnType<typeof mount>['container']) =>
     findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-plan-hint');
 
-  it('предложение модели: в карточке есть строка о смысле фиолетового цвета', async () => {
+  it('предложение модели: строка только про смысл цвета; фразы про невыполнение этапов в карточке нет (дубль убран)', async () => {
     catalog.entries = [entry(fullCycle(3))];
     const c = await renderBlock({ proposal: { templateId: 'full-cycle', scope: 'global', skipped: [], state: 'proposed' } });
     expect(hint(c)).not.toBeNull();
-    expect(text(c)).toContain('Фиолетовый цвет означает: это предложение модели');
-    expect(text(c)).toContain('Пока маршрут не подтверждён, предложенные этапы не выполняются.');
+    const t = text(c);
+    expect(t).toContain('Фиолетовый цвет означает: это предложение модели.');
+    // Про невыполнение этапов в карточке больше не говорится — это подпись под кнопкой, она осталась.
+    expect(t).not.toContain('Пока маршрут не подтверждён, предложенные этапы не выполняются.');
+    expect(t).toContain('Пока не подтвердите, исполнители фичи не стартуют.');
   });
 
-  it('человек сменил шаблон (карточка всё ещё предложение): строка остаётся', async () => {
+  it('человек сменил шаблон: строка есть, но про выбор человека, а не про модель', async () => {
     catalog.entries = [entry(fullCycle(3)), entry(fastTrack())];
     const c = await renderBlock({ proposal: { templateId: 'full-cycle', scope: 'global', skipped: [], state: 'proposed' } });
     await selectTemplate(c, 'global:fast-track');
     expect(hint(c)).not.toBeNull();
+    const t = text(c);
+    expect(t).toContain('Фиолетовый цвет означает: ваш выбор шаблона.');
+    expect(t).not.toContain('это предложение модели');
   });
 
   it('подтверждено: строки нет — ни в полном блоке, ни в развёрнутом тихом', async () => {

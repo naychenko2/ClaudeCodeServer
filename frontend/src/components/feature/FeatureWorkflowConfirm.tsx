@@ -70,11 +70,15 @@ interface SelectedKey { id: string; scope: WorkflowTemplateScope }
 const errText = (e: unknown): string =>
   e instanceof Error && e.message ? e.message : 'Не получилось, попробуйте ещё раз';
 
-// Ф-2.42 (замечание человека): фиолетовая карточка предложения не объясняла, что означает
-// цвет и почему этапы показаны до подтверждения. Одна строка — только в состоянии
-// предложения (тон plan); в подтверждённом и «предложения нет» её нет. Про запуск
-// исполнителей здесь не говорится — это строка шапки и подпись под кнопкой.
-const PLAN_HINT_TEXT = 'Фиолетовый цвет означает: это предложение модели. Пока маршрут не подтверждён, предложенные этапы не выполняются.';
+// Ф-2.42 (замечание человека): строка объяснения — только в состоянии предложения (тон
+// plan), текст по состоянию: в «сменили вы» про выбор человека, иначе противоречит бейджу.
+// В карточке — только смысл цвета: про запуск исполнителей уже сказано в подписи под
+// кнопкой, вторая фраза была дублем. В шторке про цвет не говорится (она нейтральная,
+// фиолетовый — в шапке, из которой в неё приходят), а про невыполнение — да: там дубля нет.
+const PLAN_HINT_MODEL = 'Фиолетовый цвет означает: это предложение модели.';
+const PLAN_HINT_EDITED = 'Фиолетовый цвет означает: ваш выбор шаблона.';
+const SHEET_HINT_MODEL = 'Это предложение модели. Пока маршрут не подтверждён, предложенные этапы не выполняются.';
+const SHEET_HINT_EDITED = 'Это ваш выбор шаблона. Пока маршрут не подтверждён, предложенные этапы не выполняются.';
 
 export function FeatureWorkflowConfirm({
   featureId, projectId, proposal, confirmed: confirmedState, isMobile, quiet, routeRequired, sheetOpenRequest, onSheetClosed,
@@ -527,7 +531,7 @@ export function FeatureWorkflowConfirm({
             )}
             {showProposal && (
               <div data-testid="feature-workflow-confirm-plan-hint" style={{ fontSize: FS.sm, color: C.textSecondary }}>
-                {PLAN_HINT_TEXT}
+                {edited ? SHEET_HINT_EDITED : SHEET_HINT_MODEL}
               </div>
             )}
             {updateCardOn && (
@@ -624,7 +628,7 @@ export function FeatureWorkflowConfirm({
 
       {showProposal && (
         <div data-testid="feature-workflow-confirm-plan-hint" style={{ fontSize: FS.sm, color: C.textSecondary }}>
-          {PLAN_HINT_TEXT}
+          {edited ? PLAN_HINT_EDITED : PLAN_HINT_MODEL}
         </div>
       )}
 

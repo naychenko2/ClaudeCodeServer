@@ -85,6 +85,23 @@ describe('FeatureWorkflowConfirm: мобильная строка и шторк�
     expect(byId(c, 'workflow-ladder')).not.toBeNull();
   });
 
+  it('шторка предложения: строка о смысле предложения есть, без слова про цвет (шторка нейтральная)', async () => {
+    catalog.entries = [entry(tpl(3))];
+    const c = await render({ proposal: { templateId: 'full-cycle', scope: 'global', skipped: [] } });
+    await open(c);
+    expect(byId(c, 'feature-workflow-confirm-plan-hint')).not.toBeNull();
+    const t = text(c);
+    expect(t).toContain('Это предложение модели. Пока маршрут не подтверждён, предложенные этапы не выполняются.');
+    expect(t).not.toContain('Фиолетовый');
+  });
+
+  it('шторка подтверждённого маршрута: строки предложения нет', async () => {
+    catalog.entries = [entry(tpl(3))];
+    const c = await render({ confirmed: CONFIRMED, sheetOpenRequest: true });
+    expect(byId(c, 'sheet')).not.toBeNull();
+    expect(byId(c, 'feature-workflow-confirm-plan-hint')).toBeNull();
+  });
+
   it('подтверждённый маршрут без перемен: тихая компактная строка, кнопки «Посмотреть» нет', async () => {
     catalog.entries = [entry(tpl(3))];
     const c = await render({ confirmed: CONFIRMED });

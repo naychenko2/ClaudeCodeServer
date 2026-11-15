@@ -5,11 +5,12 @@ import { C, FONT, SHADOW } from '../../lib/design';
 import { getEffectiveTheme } from '../../lib/themeMode';
 import { ImageLightbox, Modal, ModalActions } from '../ui';
 import { proxyUrl } from './MarkdownContent';
-import { ChatProjectContext } from './contexts';
+import { ChatProjectContext, ChatSessionContext } from './contexts';
 import { fmtCredits } from './glifStats';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 import { readStoredToken } from '../../lib/offline';
 import { canWriteContent } from '../../features/projects/members/contentRights';
+import { personalFilesId, personalFilesProject } from '../../features/files/personalFiles';
 
 export function mediaLabel(items: MediaItem[]): string {
   const imgCount = items.filter(m => m.kind === 'image').length;
@@ -359,7 +360,8 @@ export function extractMediaMeta(result: string, media?: MediaItem[]): MediaMeta
 }
 
 // Один медиа-блок (изображение или видео).
-// Футер: метаданные (размер, модель, время, цена) + кнопки «Скачать» и «В проект».
+// Футер: метаданные (размер, модель, время, цена) + кнопки «Скачать» и «В проект»
+// (в личном чате без проекта — «Сохранить в Личное», Ф-8).
 // Тач-устройства: тап по изображению открывает лайтбокс с навигацией назад.
 export function MediaBlock({
   m,
@@ -386,10 +388,22 @@ export function MediaBlock({
   online?: boolean;
 }) {
   const project = useContext(ChatProjectContext);
+  const sessionId = useContext(ChatSessionContext);
+  // Личный чат (Ф-8, требование Андрея 15.11): проекта нет, но есть личная область —
+  // тот же псевдо-проект, что у панели «Файлы» личного чата (features/files/personalFiles.ts).
+  // Им становится только чат без проекта: в проектном чате кнопка остаёт проектной
+  const personalId = !project && sessionId ? personalFilesId(sessionId) : null;
   // Дверь 'file.saveFromUrl' (S2c-F4i): редактору и читателю не обещаем то, что бэк
   // откажет (на бэке save-from-url остаётся на Write). Кнопка — единственный вход
   // в диалог и doSave: закрытая прячет всю цепочку записи, а не только себя.
-  const canSaveFromUrl = !!project && canWriteContent(project, 'file.saveFromUrl');
+  // У личной области ролей нет: бэк отдаёт личный чат только его владельцу
+  // (PersonalFilesController.TryChat) — дверь открыта тому же canWriteContent
+  // по псевдо-проекту без myRole
+  const canSaveFromUrl = !!project
+    ? canWriteContent(project, 'file.saveFromUrl')
+    : !!sessionId && canWriteContent(personalFilesProject(sessionId), 'file.saveFromUrl');
+  // Адрес кнопки и диалога: id проекта или псевдо-id личных файлов чата
+  const saveTarget = canSaveFromUrl ? (project ? project.id : personalId) : null;
   const [lightbox, setLightbox] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveDialog, setSaveDialog] = useState<{ baseName: string; ext: string } | null>(null);
@@ -410,12 +424,16 @@ export function MediaBlock({
   };
 
   const doSave = async (customName: string) => {
-    if (!project) return;
-    const dir = getExplorerCreateInDir(project.id);
+    if (!saveTarget) return;
+    const dir = getExplorerCreateInDir(saveTarget);
     const path = dir ? `${dir}/${customName}` : customName;
     setSaveState('saving');
     try {
-      await api.files.saveFromUrl(project.id, m.url, path);
+      // Личная область — личный вариант записи: бэк принимает только медиальные папки
+      // «Личного» (images/|audio/|video/); чужая папка контекста — invalid_path,
+      // это отдельное решение, здесь не расширяем
+      if (project) await api.files.saveFromUrl(project.id, m.url, path);
+      else await api.files.saveFromUrlPersonal(saveTarget, m.url, path);
       setSaveState('saved');
       setTimeout(() => setSaveState('idle'), 3000);
     } catch {
@@ -426,7 +444,7 @@ export function MediaBlock({
 
   const openSaveDialog = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!project || saveState === 'saving') return;
+    if (!saveTarget || saveState === 'saving') return;
     const dotIdx = filename.lastIndexOf('.');
     const baseName = dotIdx > 0 ? filename.slice(0, dotIdx) : filename;
     const ext = dotIdx > 0 ? filename.slice(dotIdx) : '';
@@ -463,7 +481,7 @@ export function MediaBlock({
   const saveBtnLabel =
     saveState === 'saved' ? '✓ Сохранено'
     : saveState === 'error' ? '✗ Ошибка'
-    : 'Добавить в проект';
+    : project ? 'Добавить в проект' : 'Сохранить в Личное';
 
   const renderButtons = (dark = false) => (
     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -566,10 +584,10 @@ export function MediaBlock({
         </ImageLightbox>
       )}
 
-      {/* Диалог «Добавить в проект» */}
-      {saveDialog && project && (
+      {/* Диалог «Добавить в проект» / «Сохранить в Личное» (личный чат) */}
+      {saveDialog && saveTarget && (
         <Modal
-          title="Добавить в проект"
+          title={project ? 'Добавить в проект' : 'Сохранить в Личное'}
           onClose={() => setSaveDialog(null)}
           footer={
             <ModalActions
@@ -624,7 +642,7 @@ export function MediaBlock({
               )}
             </div>
             {(() => {
-              const dir = getExplorerCreateInDir(project.id);
+              const dir = getExplorerCreateInDir(saveTarget);
               return dir ? (
                 <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>
                   Папка: {dir}/

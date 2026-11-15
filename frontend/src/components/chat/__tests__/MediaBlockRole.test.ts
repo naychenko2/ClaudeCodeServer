@@ -9,16 +9,30 @@
 // Мутация «убрать canWriteContent из canSaveFromUrl» красит тесты читателя и редактора;
 // «canSaveFromUrl = !!project» (дверь снята целиком) — то же.
 //
+// Ф-8 (требование Андрея 15.11): в личном чате (нет проекта, есть ChatSessionContext) кнопка
+// становится личной — «Сохранить в Личное», и её цепочка уходит на личный маршрут чата
+// (api.files.saveFromUrlPersonal → /personal/chats/{id}/files/save-from-url). Без сессии
+// (рендер вне ленты чата) личной области нет — кнопки нет вовсе.
+//
 // Окружение node (без jsdom), по образцу components/__tests__/FileExplorerRole.test.ts:
 // mount fakeDom. Стаб storage не нужен: readStoredToken (mediaSrc/proxyUrl) безопасен без
 // него — readFrom в lib/offline.ts закрыт try/catch и typeof-проверкой.
 
 import { act, createElement } from 'react';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { MediaBlock, type MediaItem } from '../MediaBlock';
-import { ChatProjectContext } from '../contexts';
+import { ChatProjectContext, ChatSessionContext } from '../contexts';
 import type { ProjectRoleView } from '../../../types';
 import { installFakeDom, uninstallFakeDom, mount, textNodes } from './fakeDom';
+// Конец цепочки личной записи (Ф-8): request() мокнут, цепка api → personalFilesBase настоящая
+// (тот же образец, что features/files/__tests__/personalFiles.test.ts)
+const { request } = vi.hoisted(() => ({ request: vi.fn() }));
+vi.mock('../../../lib/offline', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/offline')>();
+  return { ...orig, request };
+});
+import { filesApi } from '../../../features/files/api';
+import { personalFilesId, personalFilesSupports } from '../../../features/files/personalFiles';
 
 const REMOTE: MediaItem = { kind: 'image', url: 'https://fal.media/img.png', width: 100, height: 100 };
 // Локальное медиа — строгий stream-URL: оно уже в проекте, save-from-url к нему не применяется
@@ -73,5 +87,59 @@ describe('MediaBlock: «Добавить в проект» по роли (S2c-F4
     expect(hasText(container, 'Добавить в проект'), 'локальное медиа не копируют через save-from-url').toBe(false);
     expect(hasText(container, 'Скачать'), 'локальное медиа и «Скачать» на месте').toBe(true);
     await act(async () => { root.unmount(); });
+  });
+});
+
+// Личный чат: ChatProjectContext нет (ChatPanel не проведёт его без проекта), есть
+// ChatSessionContext — по нему блок опознаёт личную область и рисует личную кнопку
+function mountPersonal(m: MediaItem = REMOTE, sessionId: string | null = 's1') {
+  installFakeDom();
+  const { root, container } = mount(
+    createElement(
+      ChatSessionContext.Provider, { value: sessionId },
+      createElement(MediaBlock, { m, filename: 'img.png' }),
+    ),
+  );
+  return { root, container };
+}
+
+describe('MediaBlock: «Сохранить в Личное» в личном чате (Ф-8)', () => {
+  afterEach(uninstallFakeDom);
+
+  it('личный чат (нет проекта, сессия есть): кнопка «Сохранить в Личное» есть, проектной — нет', async () => {
+    const { root, container } = mountPersonal();
+    expect(hasText(container, 'Сохранить в Личное'), 'личная кнопка сохранения на месте').toBe(true);
+    expect(hasText(container, 'Добавить в проект'), 'проектной кнопки в личном чате нет').toBe(false);
+    expect(hasText(container, 'Скачать'), 'медиа и «Скачать» на месте').toBe(true);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('локальное медиа в личном чате: нет кнопки сохранения (тот же гейт isLocalStreamUrl)', async () => {
+    const { root, container } = mountPersonal(LOCAL);
+    expect(hasText(container, 'Сохранить в Личное'), 'локальное медиа не копируют в «Личное»').toBe(false);
+    expect(hasText(container, 'Скачать'), 'локальное медиа и «Скачать» на месте').toBe(true);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('без сессии (рендер вне ленты чата): личной области нет — кнопки нет', async () => {
+    const { root, container } = mountPersonal(REMOTE, null);
+    expect(hasText(container, 'Сохранить в Личное'), 'без сессии личной кнопки нет').toBe(false);
+    expect(hasText(container, 'Добавить в проект'), 'проектной кнопки тоже нет').toBe(false);
+    await act(async () => { root.unmount(); });
+  });
+
+  // Конец цепочки личной кнопки: doSave → saveFromUrlPersonal → личный маршрут чата,
+  // не /projects/…; тело {url, path} — контракт бэка (PersonalFilesController.SaveFromUrl)
+  it('личная запись идёт на личный маршрут чата: адрес, метод и тело — контракт ручки', async () => {
+    request.mockReset();
+    request.mockResolvedValue({ path: 'images/img.png' });
+    expect(personalFilesSupports('POST files/save-from-url'), 'личный маршрут объявляет save-from-url').toBe(true);
+    const res = await filesApi.files.saveFromUrlPersonal(
+      personalFilesId('s1'), 'https://fal.media/img.png', 'images/img.png');
+    expect(res.path).toBe('images/img.png');
+    const [url, init] = request.mock.calls[0] as [string, { method: string; body: string }];
+    expect(url).toBe('/personal/chats/s1/files/save-from-url');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ url: 'https://fal.media/img.png', path: 'images/img.png' });
   });
 });

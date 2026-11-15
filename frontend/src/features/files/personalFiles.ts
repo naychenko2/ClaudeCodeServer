@@ -20,7 +20,9 @@ export function personalFilesBase(id: string): string {
 // Маршруты, которые есть у личного маршрута сервера. Всё прочее (сохранение текста, git,
 // офисные форматы, заметки, офлайн) панель прячет — маршрута нет, контрола нет.
 // 'POST files/upload' — загрузка в панель «Файлы» личного чата (Ф-6/Ф-7): multipart-поле file,
-// необязательный ?path= каталога; перезапись цели разрешена (атомарная подмена на бэке)
+// необязательный ?path= каталога; перезапись цели разрешена (атомарная подмена на бэке).
+// 'POST files/save-from-url' — сохранение по URL из ленты личного чата (Ф-6/Ф-8): тело {url, path};
+// бэк принимает только медиальные папки images/|audio/|video/ (остальные пути — invalid_path)
 export const PERSONAL_FILES_ROUTES: readonly ProjectRoute[] = [
   'GET files',
   'GET files/tree',
@@ -31,6 +33,7 @@ export const PERSONAL_FILES_ROUTES: readonly ProjectRoute[] = [
   'POST files/mkdir',
   'POST files/rename',
   'POST files/upload',
+  'POST files/save-from-url',
   'DELETE files',
 ];
 

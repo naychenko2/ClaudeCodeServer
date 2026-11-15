@@ -202,6 +202,15 @@ export const filesApi = {
         method: 'POST',
         body: JSON.stringify({ url, path }),
       }),
+    // Сохранение в «Личное» по URL (Ф-8, требование Андрея 15.11): личный вариант saveFromUrl.
+    // Маршрут «Личного» обслуживает только сервер (агент устройства о нём не знает), поэтому
+    // request(), а не projectRequest(). Путь ограниченный медиальными папками images/|audio/|video/
+    // (invalid_path для прочих), предел 200 МБ (413) — держит бэк (PersonalFilesController.SaveFromUrl)
+    saveFromUrlPersonal: (personalId: string, url: string, path: string) =>
+      request<{ path: string }>(`${personalFilesBase(personalId)}/save-from-url`, {
+        method: 'POST',
+        body: JSON.stringify({ url, path }),
+      }),
     officeDiscard: (projectId: string, path: string) =>
       projectRequest<void>(`/projects/${projectId}/files/office-discard?path=${encodeURIComponent(path)}`, { method: 'POST' }),
     getOfficeVersion: (projectId: string, path: string) =>

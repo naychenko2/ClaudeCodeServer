@@ -269,6 +269,47 @@ public class PersonalFilesEndpointTests : IClassFixture<PersonalFilesEndpointTes
         Directory.Exists(Path.Combine(root, "notes")).Should().BeFalse();
     }
 
+    // ── Звук из Личного (Ф-2, закрепление после Х-9) ──────────────────────────────
+
+    private static readonly byte[] Wav = [.. "RIFF"u8, 0, 0, 0, 0, .. "WAVE"u8, 1, 2, 3];
+
+    // Панель «Звук из Личного» (PersonalSoundPanel) берёт всё дерево личного корня (/tree?path=)
+    // и отфильтровывает звуковые файлы на клиенте; «Работать с этим» и «В контекст» берут
+    // отдаваемый путь как есть. После Х-9 (корень без «Заметок») вход панели не изменился:
+    // audio/ принимается записью и чтением, листинг корня — только то, что на диске.
+    // Мутация «вернуть вставку «Заметки» в листинг личного корня» краснит Equal корня.
+    [Fact]
+    public async Task Звук_из_Личного_листит_папку_audio_и_корень_без_Заметок()
+    {
+        var chat = await Chat();
+
+        // audio/ принимается записью: upload создаёт папку вида и файл — вход панели
+        (await _owner.PostAsync(Url(chat, "/upload?path=audio"), Form(Wav, "qa-tone.wav")))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // запрос панели: всё дерево личного корня содержит звуковой файл
+        (await Json(await _owner.GetAsync(Url(chat, "/tree")))).EnumerateArray()
+            .Select(e => e.GetProperty("path").GetString()).Should().Contain("audio/qa-tone.wav");
+
+        // прямой листинг audio/ — тот файл (тот же путь, что панель отдаёт в контекст)
+        (await Json(await _owner.GetAsync(Url(chat, "?path=audio")))).EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).Should().Equal("qa-tone.wav");
+
+        // листинг корня — только то, что на диске: виртуальной «Заметки» нет (Х-9)
+        (await Json(await _owner.GetAsync(Url(chat)))).EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).Should().Equal("audio");
+
+        // guard заметок медиальные пути не задел: audio/… читается как обычно…
+        var stream = await _owner.GetAsync(Url(chat, "/stream?" + Q("audio/qa-tone.wav")));
+        stream.StatusCode.Should().Be(HttpStatusCode.OK);
+        stream.Content.Headers.ContentType!.MediaType.Should().Be("audio/wav");
+        (await _owner.GetAsync(Url(chat, "/download?" + Q("audio/qa-tone.wav"))))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // …а notes/… на том же корне остаётся 404
+        (await _owner.GetAsync(Url(chat, "?path=notes"))).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
     // ── Доступ ───────────────────────────────────────────────────────────────────
 
     [Fact]

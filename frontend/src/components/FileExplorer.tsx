@@ -7,6 +7,7 @@ import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
 import { useProjectRoutes } from '../lib/deviceAgent';
 import { OfflineError } from '../lib/offline';
 import { isPersonalFilesId } from '../features/files/personalFiles';
+import { PERSONAL_ROOT_LABELS, PROJECT_ROOT_LABELS } from '../lib/fileRootLabels';
 import { DIAGRAM_KINDS, DIAGRAM_META, diagramFileName, retargetDiagramExt, type DiagramKind } from '../lib/diagramTemplates';
 
 const KB_TEXT_EXT = new Set([
@@ -770,6 +771,8 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   const { can } = useProjectRoutes(project);
   // «Мои файлы» личного чата (ADR-040 Ф2-9): те же компоненты, маршруты — личные (features/files/personalFiles)
   const personalFiles = isPersonalFilesId(project.id);
+  // Подписи корня: у личной панели корень — папка «Личное», у проекта — корень проекта
+  const rootLabels = personalFiles ? PERSONAL_ROOT_LABELS : PROJECT_ROOT_LABELS;
   // Маршрут + право записи по роли (S2c-F4b): контрол записи есть, только если у проекта
   // есть маршрут И роль умеет эту дверь контента (contentRights.ts). Закрытый — ПРЯЧЕТ,
   // не отключён: решение живёт в одном месте, а не по каждому контролу.
@@ -1431,14 +1434,14 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
       if (n === 'notes') return 'Заметки';
       return n.startsWith('notes/') ? 'Заметки/' + p.slice('notes/'.length) : p;
     };
-    const dirs: Array<{ path: string; label: string }> = [{ path: '', label: '/ (корень проекта)' }];
+    const dirs: Array<{ path: string; label: string }> = [{ path: '', label: rootLabels.list }];
     for (const [, entries] of dirCache) {
       for (const e of entries) {
         if (e.isDirectory) dirs.push({ path: e.path, label: label(e.path) });
       }
     }
     return dirs.sort((a, b) => a.path.localeCompare(b.path));
-  }, [dirCache]);
+  }, [dirCache, rootLabels]);
 
   // === Long press (mobile) ===
   const handleTouchStart = useCallback((entry: FileEntry) => {
@@ -1747,14 +1750,14 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flex: 1, fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>
           <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           <span title={targetDir} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {targetDir ? notesDisplayPath(targetDir) : 'корень проекта'}
+            {targetDir ? notesDisplayPath(targetDir) : rootLabels.short}
           </span>
         </span>
         {/* Кнопка остаётся в потоке и в корне — просто прячется. Убирать её совсем
             значит менять ширину подвала, и меню дёргалось в размере под курсором */}
         <button
           onClick={() => { setCreateInDir(''); if (isMobile) setMobileDir(''); }}
-          title="Создавать в корне проекта"
+          title={rootLabels.inRootAction}
           style={{
             flexShrink: 0, border: 'none', background: 'none',
             cursor: targetDir ? 'pointer' : 'default',
@@ -1989,7 +1992,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
           subtitle={
             createInDir
               ? <>В папке <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{createInDir}/</span></>
-              : 'В корне проекта'
+              : rootLabels.inRoot
           }
           footer={
             <ModalActions
@@ -2020,7 +2023,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
           subtitle={
             createInDir
               ? <>В папке <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{createInDir}/</span></>
-              : 'В корне проекта'
+              : rootLabels.inRoot
           }
           footer={
             <ModalActions
@@ -2062,7 +2065,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
           subtitle={
             createInDir
               ? <>В папке <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{createInDir}/</span></>
-              : 'В корне проекта'
+              : rootLabels.inRoot
           }
           footer={
             <ModalActions

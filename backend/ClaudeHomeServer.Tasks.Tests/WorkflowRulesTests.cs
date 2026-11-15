@@ -99,6 +99,37 @@ public class WorkflowRulesTests
             Stages = [WithId(role, "first"), WithId(role, "second")],
         }).Should().ContainSingle().Which.Should().Contain("одиночная").And.Contain(role);
 
+    // Подпись этапа в ошибке — роль, а не id: фронтовый валидатор называет этап так же
+    // («этап «merge»»), человек не должен видеть один этап под двумя именами.
+    [Fact]
+    public void ПодписьЭтапаВОшибке_Роль_НеId()
+    {
+        var errors = ValidateStages(WithId(TaskRoles.Merge, "first"), WithId(TaskRoles.Merge, "second"));
+
+        errors.Should().ContainSingle().Which.Should().Be(
+            "этап «merge»: роль «merge» одиночная — в маршруте она встречается дважды.");
+    }
+
+    [Fact]
+    public void ПодписьЭтапаВОшибкеИмён_Роль_НеId()
+    {
+        var errors = ValidateStages(
+            WithId(TaskRoles.Qa, "qa-a"), WithId(TaskRoles.Qa, "qa-b", after: ["qa-a"]));
+
+        errors.Should().HaveCount(2).And.OnlyContain(e =>
+            e.StartsWith("этап «qa»: этап делит роль и линию", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ПодписьЭтапаВОшибкеГрафа_Роль_НеId()
+    {
+        var errors = ValidateStages(
+            WithId(TaskRoles.Step, "first", after: []), WithId(TaskRoles.Merge, "last", after: []));
+
+        errors.Should().ContainSingle().Which.Should().Be(
+            "этап «step»: на него никто не ссылается — ветка не сходится в общий сток.");
+    }
+
     private static WorkflowStage WithId(string role, string id, string[]? after = null, string? lane = null,
         string presence = WorkflowStagePresence.On, string? title = null) =>
         new() { Role = role, Id = id, After = after?.ToList(), Lane = lane, Presence = presence, Title = title };
@@ -147,7 +178,8 @@ public class WorkflowRulesTests
             WithId(TaskRoles.Plan, "plan"),
             WithId(TaskRoles.Step, "step-1", after: ["plan"], lane: "back"),
             WithId(TaskRoles.Review, "review", after: ["plan"]))
-            .Should().ContainSingle().Which.Should().Contain("«step-1»").And.Contain("не сходится");
+            .Should().ContainSingle().Which.Should().Be(
+                "этап «step»: на него никто не ссылается — ветка не сходится в общий сток.");
 
     // Явный After: [] у не первого этапа — ещё один корень; ветки сходятся в review — допустимо.
     [Fact]
@@ -412,9 +444,10 @@ public class WorkflowRulesTests
     {
         var errors = ValidateStages(WithId(TaskRoles.Qa, "qa1"), WithId(TaskRoles.Qa, "qa2", after: ["qa1"]));
 
-        errors.Should().HaveCount(2)
-            .And.Contain(e => e.Contains("qa1") && e.Contains("имя (Title) обязательно"))
-            .And.Contain(e => e.Contains("qa2") && e.Contains("имя (Title) обязательно"));
+        // Подпись — роль (общая у обоих этапов), поэтому ошибок ровно две, по одной на этап.
+        errors.Should().Equal(
+            "этап «qa»: этап делит роль и линию с другим этапом — имя (Title) обязательно.",
+            "этап «qa»: этап делит роль и линию с другим этапом — имя (Title) обязательно.");
     }
 
     [Fact]
@@ -427,8 +460,8 @@ public class WorkflowRulesTests
 
         // Ошибка адресована второму этапу и называет его имя после обрезки («проверка» —
         // трим делает Normalize).
-        errors.Should().ContainSingle().Which
-            .Should().Contain("qa2").And.Contain("повторяет имя").And.Contain("проверка");
+        errors.Should().ContainSingle().Which.Should().Be(
+            "этап «qa»: имя «проверка» повторяет имя другого этапа той же роли и линии.");
     }
 
     [Fact]
@@ -446,7 +479,8 @@ public class WorkflowRulesTests
             WithId(TaskRoles.Qa, "qa1", title: "  "),
             WithId(TaskRoles.Qa, "qa2", after: ["qa1"], title: "Проверка"));
 
-        errors.Should().ContainSingle().Which.Should().Contain("qa1").And.Contain("обязательно");
+        errors.Should().ContainSingle().Which.Should().Be(
+            "этап «qa»: этап делит роль и линию с другим этапом — имя (Title) обязательно.");
     }
 
     // Вне группы Title не обязателен и не мешает: одиночный этап той же роли проходит без него.

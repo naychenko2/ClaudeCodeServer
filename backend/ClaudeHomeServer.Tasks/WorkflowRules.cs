@@ -66,8 +66,8 @@ public static class WorkflowRules
 
         for (var i = 0; i < stages.Count; i++)
         {
-            // Метка в тексте ошибки: id этапа (у линейных он равен роли), если роль известна;
-            // иначе порядковый номер — «неизвестная роль» именем этапа не назвать.
+            // Метка в тексте ошибки: роль этапа, если она известна (как у фронтового валидатора
+            // редактора — одно правило на обе стороны); иначе порядковый номер — «неизвестная роль» именем этапа не назвать.
             var labelUnknown = $"этап #{i + 1}";
             if (stages[i] is not { } stage)
             {
@@ -83,7 +83,7 @@ public static class WorkflowRules
             var presence = node.Presence;
             var stallPolicy = stage.StallPolicy?.Trim() ?? "";
             var known = StageRoles.Contains(role);
-            var label = known ? $"этап «{node.Id}»" : labelUnknown;
+            var label = known ? StageLabel(role) : labelUnknown;
 
             if (!known)
             {
@@ -181,6 +181,10 @@ public static class WorkflowRules
         return errors;
     }
 
+    // Подпись этапа в тексте ошибки — по роли, как «этап «{role}»» во фронтовом валидаторе
+    // (workflowTemplateModel.ts): человек видит один и тот же этап названным одинаково.
+    private static string StageLabel(string role) => $"этап «{role}»";
+
     // Имена этапов одной роли и линии (G7, решение контракта a5d0c76e по возврату R-C3a):
     // этапы с общей парой (Role, Lane) граф показывает одинаково подписанными узлами
     // (qa-plan и qa — две неотличимые «Проверки»). У таких этапов Title обязателен у каждого
@@ -207,7 +211,7 @@ public static class WorkflowRules
             var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var member in members)
             {
-                var label = $"этап «{member.Id}»";
+                var label = StageLabel(member.Role);
                 if (member.Title is null)
                 {
                     errors.Add($"{label}: этап делит роль и линию с другим этапом — имя (Title) обязательно.");
@@ -229,8 +233,10 @@ public static class WorkflowRules
         // Сам шаблон целиком, ничего не снимая (в том числе off-этапы).
         var full = WorkflowGraph.Resolve(
             nodes.Select(n => n with { Presence = WorkflowStagePresence.On }).ToList(), []);
+        var roleById = nodes.GroupBy(n => n.Id, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First().Role, StringComparer.Ordinal);
         foreach (var id in WorkflowGraph.DanglingIds(full))
-            errors.Add($"этап «{id}»: на него никто не ссылается — ветка не сходится в общий сток.");
+            errors.Add($"{StageLabel(roleById.GetValueOrDefault(id, id))}: на него никто не ссылается — ветка не сходится в общий сток.");
         if (errors.Count > 0 || nodes.Count > WorkflowGraph.MaxStages) return;
 
         var optional = nodes.Where(n => n.Presence == WorkflowStagePresence.Optional).Select(n => n.Id).ToList();

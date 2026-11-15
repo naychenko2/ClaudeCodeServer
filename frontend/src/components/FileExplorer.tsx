@@ -7,7 +7,7 @@ import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
 import { useProjectRoutes } from '../lib/deviceAgent';
 import { OfflineError } from '../lib/offline';
 import { isPersonalFilesId } from '../features/files/personalFiles';
-import { PERSONAL_ROOT_LABELS, PROJECT_ROOT_LABELS } from '../lib/fileRootLabels';
+import { PERSONAL_ROOT_LABELS, PROJECT_ROOT_LABELS, type FileRootLabels } from '../lib/fileRootLabels';
 import { DIAGRAM_KINDS, DIAGRAM_META, diagramFileName, retargetDiagramExt, type DiagramKind } from '../lib/diagramTemplates';
 
 const KB_TEXT_EXT = new Set([
@@ -224,7 +224,10 @@ function FilesTip({ icon, title, text, extra }: { icon: ReactNode; title: string
   );
 }
 
-function FilesRootEmptyState({ onCreateFile, personal }: { onCreateFile?: () => void; personal?: boolean }) {
+// Пустое состояние дерева. Тексты — из lib/fileRootLabels.ts: у проекта «Проект пуст»
+// и подсказка про структуру проекта, у личной панели «Личное пусто» и подсказка про
+// папку «Личного». Слово «проект» личному чату показывать нельзя.
+function FilesRootEmptyState({ onCreateFile, personal, labels }: { onCreateFile?: () => void; personal?: boolean; labels: FileRootLabels }) {
   const [copied, setCopied] = useState(false);
   const webdavUrl = `${window.location.origin}/projects/`;
   const handleCopyWebdav = () => {
@@ -235,21 +238,31 @@ function FilesRootEmptyState({ onCreateFile, personal }: { onCreateFile?: () => 
   // «Мои файлы» личного чата: без советов про проект, офлайн и WebDAV — у «Личного» их нет
   if (personal) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 10 }}>
-        <div style={{ width: 48, height: 48, borderRadius: 14, background: C.bgInset, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Folder size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />
-        </div>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Здесь пока пусто</div>
-          <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
-            Сюда попадает то, что вы сохраняете из генерации: картинки, звук, видео, персонажи и голоса («Сохранить»).
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 48, height: 48, borderRadius: 14, background: C.bgInset, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Folder size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />
           </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>{labels.emptyTitle}</div>
+            <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>{labels.emptyHint}</div>
+          </div>
+          {onCreateFile && (
+            <Button variant="primary" size="md" glow leftIcon={<Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={onCreateFile}>
+              Создать файл
+            </Button>
+          )}
         </div>
-        {onCreateFile && (
-          <Button variant="primary" size="md" glow leftIcon={<Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={onCreateFile}>
-            Создать файл
-          </Button>
-        )}
+
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+          <FilesTip
+            icon={
+              <Monitor size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            }
+            title={labels.filesTipTitle}
+            text={labels.filesTipText}
+          />
+        </div>
       </div>
     );
   }
@@ -260,8 +273,8 @@ function FilesRootEmptyState({ onCreateFile, personal }: { onCreateFile?: () => 
           <Folder size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />
         </div>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Проект пуст</div>
-          <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>Здесь пока нет файлов</div>
+          <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>{labels.emptyTitle}</div>
+          <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>{labels.emptyHint}</div>
         </div>
         {onCreateFile && (
           <Button
@@ -281,8 +294,8 @@ function FilesRootEmptyState({ onCreateFile, personal }: { onCreateFile?: () => 
           icon={
             <Monitor size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           }
-          title="Файлы и структура проекта"
-          text="Создавайте и загружайте файлы, организуйте их по папкам. Ассистент видит всю структуру проекта при работе над задачами."
+          title={labels.filesTipTitle}
+          text={labels.filesTipText}
         />
         <FilesTip
           icon={
@@ -1896,7 +1909,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
                 title="Нет изменённых файлов"
                 subtitle="Активен фильтр «Только изменённые»"
               />
-            ) : mobileDir === '' ? <FilesRootEmptyState personal={personalFiles} onCreateFile={online ? () => { setCreateInDir(mobileDir); setShowCreateFile(true); } : undefined} /> : (
+            ) : mobileDir === '' ? <FilesRootEmptyState personal={personalFiles} labels={rootLabels} onCreateFile={online ? () => { setCreateInDir(mobileDir); setShowCreateFile(true); } : undefined} /> : (
               <EmptyState
                 icon={<Folder size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
                 title="Папка пуста"
@@ -1921,7 +1934,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
               subtitle="Активен фильтр «Только изменённые»"
             />
           ) : (
-            <FilesRootEmptyState personal={personalFiles} onCreateFile={online ? () => { setCreateInDir(''); setShowCreateFile(true); } : undefined} />
+            <FilesRootEmptyState personal={personalFiles} labels={rootLabels} onCreateFile={online ? () => { setCreateInDir(''); setShowCreateFile(true); } : undefined} />
           )
         ) : (
           // width: max-content — строки растягиваются под самое длинное имя,

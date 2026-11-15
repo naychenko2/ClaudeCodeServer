@@ -627,6 +627,19 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return result;
     }
 
+    // Граф ПРЕДЛОЖЕНИЯ эпика: этапы шаблона без off (optional остаются — «по решению»), After уже
+    // обойдены через убранные. Та же WorkflowGraph.Resolve, что строит подтверждаемый маршрут.
+    // null — предложения нет или шаблон не найден.
+    public IReadOnlyList<RouteStage>? ProposalRoute(TaskItem epic)
+    {
+        var proposal = epic.WorkflowProposal;
+        if (proposal is null || _workflows is null) return null;
+        var scope = string.Equals(proposal.Scope, "project", StringComparison.Ordinal)
+            ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
+        var template = _workflows.Get(proposal.TemplateId, scope, epic.ProjectId);
+        return template is null ? null : WorkflowGraph.Resolve(template, []);
+    }
+
     // Слепок: StageId/Lane/After — из маршрута эпика (замороженный граф), поля этапа (промпт, матрица…) —
     // из ТЕКУЩЕЙ версии шаблона по id этапа. Шаблон удалён/этап убран — слепок без полей этапа (логируем).
     private StageSnapshot BuildStageSnapshot(FeatureWorkflow route, string stageId, string? projectId)

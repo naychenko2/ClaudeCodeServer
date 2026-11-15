@@ -4,7 +4,7 @@
 // полоса из пяти плиток. Всё рисуется по данным выбранной задачи (stageSummary), фронт только
 // подписывает: «доработка» — по роли задачи, а не по умолчанию (противоречие §2.3 п.2 макета).
 
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP, TB } from '../../lib/design';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { plural } from '../../lib/plural';
@@ -130,7 +130,7 @@ export function StageTaskPicker({ tasks, activeId, marks, isMobile, onPick }: {
     <div data-testid="stage-screen-picker" role="group" aria-label="Задача этапа" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
       {tasks.map(t => (
         <Button key={t.id} size="xs" variant={t.id === activeId ? 'primary' : 'ghost'}
-          style={isMobile ? { minHeight: 40 } : undefined}
+          style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
           dataTestId={`stage-screen-pick-${t.id}`}
           onClick={() => onPick(t.id)}>
           {(t.stepRef || t.title) + taskMark(marks?.find(m => m.taskId === t.id)?.state)}

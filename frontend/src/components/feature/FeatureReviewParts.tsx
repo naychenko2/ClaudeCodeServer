@@ -4,7 +4,7 @@
 // прокрутку к якорю — FS-FR. Здесь нет данных и состояния: только раскладка.
 
 import { type CSSProperties, type ReactNode } from 'react';
-import { C, FS, SP, FONT } from '../../lib/design';
+import { C, FS, SP, FONT, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 
 // === Секции ===
@@ -114,7 +114,7 @@ export function ReviewAnchors({ items, onJump, isMobile = false }: ReviewAnchors
           variant="ghost"
           pill
           dataTestId={'review-anchor-' + it.id}
-          style={{ flexShrink: 0, ...(isMobile ? { minHeight: 40 } : {}) }}
+          style={{ flexShrink: 0, ...(isMobile ? { minHeight: TB.iconHitMobile } : {}) }}
           onClick={() => onJump(it.id)}
         >
           {it.label}

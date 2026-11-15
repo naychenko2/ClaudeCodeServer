@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, TB } from '../../lib/design';
 import { plural } from '../../lib/plural';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { STAGE_NAME } from '../../lib/chatGroups';
@@ -348,7 +348,7 @@ export function ModelChip({ label, full, isMobile = false }: { label: string; fu
         fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700,
         color: C.textSecondary, background: C.bgSelected,
         borderRadius: R.sm, padding: '0 4px', whiteSpace: 'nowrap', flexShrink: 0,
-        minHeight: isMobile ? 40 : undefined,
+        minHeight: isMobile ? TB.iconHitMobile : undefined,
         display: 'inline-flex', alignItems: 'center',
         cursor: 'pointer',
       }}
@@ -527,7 +527,7 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
         style={{
           display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
           padding: `${SP.xxs}px ${SP.xs}px`, fontFamily: FONT.sans, borderRadius: R.md,
-          minHeight: isMobile ? 40 : undefined,
+          minHeight: isMobile ? TB.iconHitMobile : undefined,
           background: open ? C.bgSelected : undefined,
         }}
       >
@@ -608,7 +608,7 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
           <span
             aria-hidden
             style={{
-              width: isMobile ? 40 : 20, height: isMobile ? 40 : 20, flexShrink: 0,
+              width: isMobile ? TB.iconHitMobile : 20, height: isMobile ? TB.iconHitMobile : 20, flexShrink: 0,
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted,
             }}
           >
@@ -653,7 +653,7 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
                   dataTestId="timeline-eval-link"
                   onClick={() => openEvalTask(t.taskId)}
                   ariaLabel={`Открыть задачу ${t.title}`}
-                  style={isMobile ? { minHeight: 40 } : undefined}
+                  style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
                 >
                   {t.title}
                   {t.statusLabel && (

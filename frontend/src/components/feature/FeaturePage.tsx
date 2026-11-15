@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Inbox, Workflow } from 'lucide-react';
-import { C, R, FS, SP } from '../../lib/design';
+import { C, R, FS, SP, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useFeaturePage, refetchFeaturePage, useFeatureMainTab, setFeatureMainTab, stepsTabCount, featureMainTabLabel, hasRouteOfRun, hasProposalGraph, type FeatureBrief } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
@@ -311,7 +311,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
         titleSize={FS.lg}
         subtitle="Эпик удалён в «Задачах». Чаты остались на месте и снова живут без фичи."
         action={
-          <Button size="sm" variant="ghost" style={isMobile ? { minHeight: 40 } : undefined}
+          <Button size="sm" variant="ghost" style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
             onClick={() => onBack({ kind: 'list' })}>
             К списку чатов
           </Button>

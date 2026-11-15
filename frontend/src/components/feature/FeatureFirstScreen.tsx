@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, RotateCw } from 'lucide-react';
-import { C, R, SP } from '../../lib/design';
+import { C, R, SP, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import type { FeatureBrief, FeatureMainTab } from '../../lib/featurePage';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
@@ -76,7 +76,7 @@ export function FeatureFirstScreen({
         title="Не загрузилось"
         action={
           <Button size="xs" variant="ghost" disabled={retrying} dataTestId="first-screen-retry"
-            style={{ background: C.bgWhite, ...(isMobile ? { minHeight: 40 } : {}) }} onClick={retry}>
+            style={{ background: C.bgWhite, ...(isMobile ? { minHeight: TB.iconHitMobile } : {}) }} onClick={retry}>
             <RotateCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             Повторить
           </Button>

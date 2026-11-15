@@ -6,7 +6,7 @@
 // Коды шагов в тексте становятся ссылками только если токен точно равен stepRef из run.stepChains.
 
 import type { CSSProperties, ReactNode } from 'react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, TB } from '../../lib/design';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Notice } from '../ui/Notice';
@@ -99,7 +99,7 @@ function renderItem(item: string, refs: Set<string>, run: FeatureRun, isMobile: 
       style={{
         background: 'none', border: 'none', padding: 0, cursor: 'pointer',
         fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.accent,
-        ...(isMobile ? { minHeight: 40 } : {}),
+        ...(isMobile ? { minHeight: TB.iconHitMobile } : {}),
       }}
     >
       {token}
@@ -123,7 +123,7 @@ export function FeatureAnalysisSummary({
 
   // Тач-цель 40 на 360 (спека §«Мобильная 360»): размер остаётся sm/xs, высота — 40.
   // Один стиль на все кнопки компонента (вердикт W5-R-F2c, п.3).
-  const btnStyle: CSSProperties | undefined = isMobile ? { minHeight: 40 } : undefined;
+  const btnStyle: CSSProperties | undefined = isMobile ? { minHeight: TB.iconHitMobile } : undefined;
 
   // «Идёт»: текст-подсказка + три полосы-скелета, действие — «Остановить».
   if (phase === 'running') {

@@ -17,7 +17,7 @@
 // «хвост после мержа»: это не обычная работа стадии (живой контракт GC-F7).
 
 import { type CSSProperties, type ReactElement } from 'react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { axisFrac, type LaneAxis } from './FeatureLaneModel';
 import { formatClock, formatDateTime } from './FeatureStatsBits';
@@ -143,7 +143,7 @@ function ResultBlock({ taskId, isMobile }: { taskId: string; isMobile: boolean }
           {/* отказ — текстом, а не пустотой (GC-R-F7) */}
           <span data-testid="step-result-error" style={{ fontSize: FS.sm, color: C.textSecondary }}>итог не загрузился</span>
           {/* на мобильном цель не меньше 40 px (макет §360; тот же приём, что у «Показать интервалы») */}
-          <Button variant="ghost" size="xs" dataTestId="step-result-retry" onClick={retry} style={isMobile ? { minHeight: 40 } : undefined}>Повторить</Button>
+          <Button variant="ghost" size="xs" dataTestId="step-result-retry" onClick={retry} style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}>Повторить</Button>
         </span>
       )}
       {state === 'ready' && (
@@ -228,7 +228,7 @@ export function FeatureStepDetails({
           dataTestId="step-show-intervals"
           onClick={onShowIntervals}
           ariaLabel="Подсветить интервалы этого шага на дорожке «Производства»"
-          style={isMobile ? { minHeight: 40 } : undefined}
+          style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
         >
           Показать интервалы на дорожке ↑
         </Button>

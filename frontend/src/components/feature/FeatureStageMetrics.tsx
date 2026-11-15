@@ -11,7 +11,7 @@
 import { type CSSProperties, type ReactNode } from 'react';
 import { Info } from 'lucide-react';
 import { Notice } from '../ui/Notice';
-import { C, FS, SP, R, FONT } from '../../lib/design';
+import { C, FS, SP, R, FONT, TB } from '../../lib/design';
 import { ReviewKv, type ReviewKvRow } from './FeatureReviewParts';
 import { NO_DATA } from './FeatureLabels';
 import { formatDuration, formatDateTime, minutesSince } from './FeatureStatsBits';
@@ -166,7 +166,7 @@ export function FeatureStageMetrics({ metrics, nowMs }: FeatureStageMetricsProps
 
   const details = (
     <details data-testid="stage-metrics-details">
-      <summary style={{ ...CAPTION, cursor: 'pointer', minHeight: 40, display: 'flex', alignItems: 'center' }}>Подробности: цена, модели, кэш</summary>
+      <summary style={{ ...CAPTION, cursor: 'pointer', minHeight: TB.iconHitMobile, display: 'flex', alignItems: 'center' }}>Подробности: цена, модели, кэш</summary>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: SP.md }}>
         <Card id="executor" title="Исполнитель" rows={shareRows(ex, approx)} />
         {rv && <Card id="review" title="Ревью" rows={shareRows(rv, approx)} />}

@@ -12,7 +12,7 @@
 // запросы отменяются, а ответ отменённого запроса не применяется.
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Notice } from '../ui/Notice';
@@ -276,7 +276,7 @@ function FilesArtifacts({ taskId, artifacts, files, isMobile }: {
                 onClick={() => { setSelPath(f.path); setModeId('all'); }}
                 style={{
                   display: 'flex', flexDirection: 'column', gap: SP.xxs, textAlign: 'left', cursor: 'pointer',
-                  padding: SP.sm, minHeight: isMobile ? 40 : undefined, minWidth: 0,
+                  padding: SP.sm, minHeight: isMobile ? TB.iconHitMobile : undefined, minWidth: 0,
                   background: active ? C.accentLight : C.bgCard, borderRadius: R.md,
                   border: `1px solid ${active ? C.accent : C.borderLight}`, fontFamily: FONT.sans,
                 }}>

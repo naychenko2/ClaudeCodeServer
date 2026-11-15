@@ -20,7 +20,7 @@
 // на десктопе — справа от текста (приём action в Notice). Внешний отступ блока —
 // забота страницы (FS-FS), здесь его нет.
 
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { formatDuration } from '../../lib/chatGroups';
 import { useNow } from '../../lib/useNow';
@@ -97,7 +97,7 @@ export function FeatureAskBlock({ ask, nameOf, isMobile, onAnswer }: FeatureAskB
           variant="primary"
           fullWidth={isMobile}
           dataTestId="feature-ask-answer"
-          style={isMobile ? { minHeight: 40 } : { marginLeft: 'auto', flexShrink: 0 }}
+          style={isMobile ? { minHeight: TB.iconHitMobile } : { marginLeft: 'auto', flexShrink: 0 }}
           onClick={onAnswer}
         >
           {buttonLabel}

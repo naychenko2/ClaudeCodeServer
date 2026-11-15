@@ -31,14 +31,16 @@ public sealed class FeatureProjector(TaskManager tasks)
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
         Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
         Func<string, string?>? personaName = null,
-        Func<TaskItem, IReadOnlyDictionary<string, string>?>? proposalPresence = null)
-        => SlimRun(BuildCore(epic, featureTasks, now, sessions, modelResolver, personaName, proposalPresence));
+        Func<TaskItem, IReadOnlyDictionary<string, string>?>? proposalPresence = null,
+        Func<TaskItem, IReadOnlyList<RouteStage>?>? proposalRoute = null)
+        => SlimRun(BuildCore(epic, featureTasks, now, sessions, modelResolver, personaName, proposalPresence, proposalRoute));
 
     internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
         Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
         Func<string, string?>? personaName = null,
-        Func<TaskItem, IReadOnlyDictionary<string, string>?>? proposalPresence = null)
+        Func<TaskItem, IReadOnlyDictionary<string, string>?>? proposalPresence = null,
+        Func<TaskItem, IReadOnlyList<RouteStage>?>? proposalRoute = null)
     {
         var nowUtc = now ?? DateTime.UtcNow;
         ArgumentNullException.ThrowIfNull(epic);
@@ -236,7 +238,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         var proposalPresenceByKey = proposedRoute ? proposalPresence?.Invoke(epic) : null;
 
         var stageDefs = FilterProposalStages(
-            BuildStageDefs(epic, cut, design, plan, steps, reviews, qa, final, merge),
+            BuildStageDefs(epic, cut, design, plan, steps, reviews, qa, final, merge,
+                proposedRoute ? proposalRoute?.Invoke(epic) : null),
             proposedRoute, proposalPresenceByKey);
         var graph = epic.Workflow is { } confirmed ? confirmed.Stages : null;
 
@@ -822,7 +825,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         List<TaskItem> tasks)[] BuildStageDefs(
         TaskItem epic,
         List<TaskItem> cut, List<TaskItem> design, List<TaskItem> plan, List<TaskItem> steps,
-        List<TaskItem> reviews, List<TaskItem> qa, TaskItem? final, TaskItem? merge)
+        List<TaskItem> reviews, List<TaskItem> qa, TaskItem? final, TaskItem? merge,
+        IReadOnlyList<RouteStage>? proposedStages = null)
     {
         var byKey = new Dictionary<string, List<TaskItem>>(StringComparer.Ordinal)
         {
@@ -838,9 +842,14 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // Подтверждённый маршрут читаем буквально: пустой (или null) граф — пустой
         // конвейер, не откат к легаси: легаси — только отсутствие Workflow.
-        if (epic.Workflow is { } confirmed)
+        // Предложение (Workflow == null) с известным составом шаблона рисуется настоящим
+        // маршрутом: колонки и After — из графа шаблона (WorkflowGraph.Resolve), а не легаси-цепью
+        // в одной колонке, которую фронт читает как «параллельно» (дефект a5bca2c5). Без состава
+        // шаблона (шаблон не найден) — прежний легаси-список.
+        var routeStages = epic.Workflow?.Stages ?? (proposedStages is { Count: > 0 } ? proposedStages : null);
+        if (routeStages is not null)
         {
-            var route = confirmed.Stages;
+            var route = routeStages;
             var columns = WorkflowGraph.Columns(route);
             // Задача → этап (разрез 2 §1.7): id этапа; null — роль вне графа, задача вне
             // проекции (как раньше).
@@ -1600,7 +1609,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner), null, sessions, proposalPresence: tasks.ProposalPresence), owner);
+        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner), null, sessions, proposalPresence: tasks.ProposalPresence, proposalRoute: tasks.ProposalRoute), owner);
     }
 
     // Одна фича по id эпика — ПОЛНЫЙ (необлегчённый) run: для страницы фичи (GetFeature).
@@ -1616,7 +1625,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : WithQueue(BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence), owner);
+        return epic is null ? null : WithQueue(BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence, tasks.ProposalRoute), owner);
     }
 
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.
@@ -1631,7 +1640,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var owner = tasks.GetByOwner(ownerId).ToList();
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature)
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence, tasks.ProposalRoute))
             .ToList();
         ApplyQueue(runs, owner);
         return runs;
@@ -1657,7 +1666,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             featureIds.UnionWith(links.Keys);
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature && featureIds.Contains(t.Id))
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName, tasks.ProposalPresence, tasks.ProposalRoute))
             .ToList();
         ApplyQueue(runs, owner);
         var ordered = OrderRuns(runs);

@@ -236,6 +236,70 @@ public class TaskSchedulerServiceTests
         }
     }
 
+    // Ф-2.24 (хвост Ф-2.22/Ф-2.23): оба отказа — штатные и тихие, но запись называет, что
+    // именно отказало: отказ гейта маршрута не должен называться в логе «паузой фичи» —
+    // читающий лог в расследовании искал бы паузу, которой нет. Мутация: убрать ветку
+    // FeatureRouteLaunchException в ProcessClaudeAutoStartAsync — краснеет первая проверка:
+    // отказ маршрута уходит в текст про паузу, и «по паузе фичи» становится два.
+    [Fact]
+    public async Task AutoStart_RouteGateRefusal_LogsRouteGate_NotPause()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "sched_route_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var tasks = new TaskManager(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build());
+        try
+        {
+            // Две фичи: первая на паузе (её шаг отказывает гейт удержания), вторая без паузы,
+            // но шаг по ней отказывает гейт маршрута (маршрут не подтверждён).
+            var heldEpic = tasks.Create(null, "u", new CreateTaskRequest("эпик на паузе", Role: TaskRoles.Feature));
+            tasks.SetHold(heldEpic.Id, FeatureHoldReasons.Manual);
+            var heldStep = tasks.Create(null, "u", new CreateTaskRequest("шаг на паузе",
+                FeatureId: heldEpic.Id, Role: TaskRoles.Step, Assignee: TaskItemAssignee.Claude,
+                DueDate: "2026-07-03", DueTime: "12:00"));
+            var routeEpic = tasks.Create(null, "u", new CreateTaskRequest("эпик без паузы", Role: TaskRoles.Feature));
+            var routeStep = tasks.Create(null, "u", new CreateTaskRequest("шаг без маршрута",
+                FeatureId: routeEpic.Id, Role: TaskRoles.Step, Assignee: TaskItemAssignee.Claude,
+                DueDate: "2026-07-03", DueTime: "12:00"));
+
+            var logs = new List<(LogLevel Level, string Text, Exception? Ex)>();
+            var scheduler = new TaskSchedulerService(
+                tasks,
+                MockedUsers(),
+                new Mock<ISessionBroadcaster>().Object,
+                new ThrowingExecutor(new()
+                {
+                    [heldStep.Id] = new FeatureHoldException("Фича на паузе, снимите паузу на странице фичи."),
+                    [routeStep.Id] = new FeatureRouteLaunchException("маршрут фичи не подтверждён — подтвердите его на странице фичи"),
+                }),
+                new Mock<IDailyBriefingRunner>().Object,
+                new Mock<IPersonaAutomationRunner>().Object,
+                new Mock<ITaskNotificationDispatcher>().Object,
+                new RecordingLogger<TaskSchedulerService>(logs));
+
+            await scheduler.TickAsync(Now);
+
+            // Оба отказа — правило, а не поломка: ни одной тревожной записи, ни трейса.
+            logs.Should().NotContain(l => l.Level == LogLevel.Warning);
+            logs.Should().OnlyContain(l => l.Ex == null);
+
+            var texts = logs.Select(l => l.Text).ToList();
+            texts.Should().ContainSingle(t => t.Contains("по паузе фичи"))
+                .Which.Should().NotContain("гейту маршрута");
+            texts.Should().ContainSingle(t => t.Contains("по гейту маршрута"))
+                .Which.Should().NotContain("паузе");
+        }
+        finally
+        {
+            tasks.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     private static IUserStore MockedUsers()
     {
         var users = new Mock<IUserStore>();

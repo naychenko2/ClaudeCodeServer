@@ -89,10 +89,11 @@ public class TaskSchedulerService(
         return dueUtc is not null && dueUtc <= nowUtc && nowUtc - dueUtc <= AutoStartWindow;
     }
 
-    // Отличает отказ по паузе (W4-HOLD-G) от падения автозапуска (R-HOLD-G, находка 6; W4-HOLD-I):
-    // по источнику — типу, который поднимает сам гейт, — а не пересчётом предиката: plain
-    // InvalidOperationException («У задачи нет владельца») рядом с удержанной фичей — не отказ по
-    // правилу, и не должен попадать в тихую ветку.
+    // Отличает отказ по правилу (пауза или гейт маршрута — W4-HOLD-G, B3) от падения автозапуска
+    // (R-HOLD-G, находка 6; W4-HOLD-I): по источнику — типу, который поднимает сам гейт, — а не
+    // пересчётом предиката: plain InvalidOperationException («У задачи нет владельца») рядом с
+    // удержанной фичей — не отказ по правилу, и не должен попадать в тихую ветку. Два отказа по
+    // правилу различаются в логе по типу (Ф-2.24): лог не должен называть отказ маршрута паузой.
     internal static bool IsHoldRefusal(Exception ex) => ex is FeatureHoldException or FeatureRouteLaunchException;
 
     // Автозапуск Claude-исполнителя в момент срока: assignee=Claude, ещё не запускалась.
@@ -111,10 +112,16 @@ public class TaskSchedulerService(
         {
             if (IsHoldRefusal(ex))
             {
-                // Пауза — правило, а не поломка: задачу не запускаем намеренно. Тихий лог
-                // без трейса, чтобы штатные отказы не тонили реальные провалы автозапуска.
-                log.LogInformation("Автозапуск пропущен по паузе фичи: задача {TaskId} «{Title}» — {Reason}",
-                    task.Id, task.Title, ex.Message);
+                // Оба отказа — правило, а не поломка: задачу не запускаем намеренно, лог тихий
+                // и без трейса, чтобы штатные отказы не тонили реальные провалы автозапуска.
+                // Но запись называет, что именно отказало: отказ по гейту маршрута — не пауза,
+                // звать его паузой значит врать в расследовании (Ф-2.24).
+                if (ex is FeatureRouteLaunchException)
+                    log.LogInformation("Автозапуск пропущен по гейту маршрута фичи: задача {TaskId} «{Title}» — {Reason}",
+                        task.Id, task.Title, ex.Message);
+                else
+                    log.LogInformation("Автозапуск пропущен по паузе фичи: задача {TaskId} «{Title}» — {Reason}",
+                        task.Id, task.Title, ex.Message);
             }
             else
             {

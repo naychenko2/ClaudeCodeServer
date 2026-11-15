@@ -115,4 +115,24 @@ describe('«Сохранить как…»: папки личной област
       { path: 'images/blog', files: 0 },
     ]);
   });
+
+  // Х-9 (дефект 44718bbf) убрал виртуальную «Заметки» из личного корня на источнике
+  // (PersonalFilesController.cs:115 зовёт List с withNotesRoot: false). Диалог не должен
+  // предлагать «Заметки» даже если такая папка вернётся в листинге: список ⊆ images/**.
+  it('папка notes/ в личном корне не предлагается — ни виртуальная, ни физическая', () => {
+    const tree = projectFolders([
+      entry('notes', true), entry('notes/idea.md'),
+      entry('images', true), entry('images/hero.png'),
+    ]);
+    expect(tree.map(f => f.path)).toEqual(['', 'images', 'notes']);
+    const shown = shownFolders(personalImageFolders(tree), 'images');
+    expect(shown.map(f => f.path)).toEqual(['images']);
+  });
+
+  // «Личное пусто» — достижимое состояние (пункт 3 возврата QA-2): пустой корень не даёт
+  // ни «Заметок», ни корня; диалог предлагает только медиальную папку сохранения images/
+  it('пустой личный корень: список — предлагаемая images/, ничего больше', () => {
+    const shown = shownFolders(personalImageFolders(projectFolders([])), 'images');
+    expect(shown).toEqual([{ path: 'images', files: 0 }]);
+  });
 });

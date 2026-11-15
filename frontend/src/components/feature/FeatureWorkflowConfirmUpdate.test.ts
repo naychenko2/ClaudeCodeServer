@@ -87,6 +87,34 @@ describe('FeatureWorkflowConfirm: карточка «шаблон изменил
     expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-submit')).toBeNull();
   });
 
+  it('снятие этапа маршрута (presence «off») — перемена состава: карточка есть (дефект bc99a48f)', async () => {
+    // Форма дефекта: подтверждённый маршрут — полная цепочка этапов, «Проверка» (qa) В составе
+    // (та же форма, что у фичи с уже выполненными этапами: блок не знает о шагах и не гасится
+    // из-за них). Текущий шаблон — тот же состав, но qa выключен («off»).
+    const confirmedWithQa: ConfirmedRoute = {
+      templateId: 'full-cycle', scope: 'global', confirmedVersion: 1, skipped: [],
+      stages: [
+        { id: 'plan', role: 'plan', after: [] },
+        { id: 'step', role: 'step', lane: 'back', after: ['plan'] },
+        { id: 'qa', role: 'qa', after: ['step'] },
+        { id: 'final', role: 'final', after: ['qa'] },
+        { id: 'merge', role: 'merge', after: ['final'] },
+      ],
+    };
+    const qaOff: WorkflowTemplate = {
+      ...tpl(2),
+      stages: tpl(2).stages.map(s => (s.role === 'qa' ? { ...s, presence: 'off' } : s)),
+    };
+    api.entries = [entry(qaOff)];
+    const c = await render(confirmedWithQa);
+    // Карточка с обоими решениями человека — как в сценарии «добавленный этап».
+    expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-update')).not.toBeNull();
+    expect(text(c)).toContain('Обновить маршрут до v2');
+    expect(text(c)).toContain('Оставить v1');
+    // Пояснение: новых этапов нет (сняттый — не «новый»), говорит про состав.
+    expect(text(c)).toContain('В v2 состав этапов изменился.');
+  });
+
   it('«Обновить маршрут до v2» подтверждает с прежним skipped из confirmed', async () => {
     api.entries = [entry(tpl(2, [NEW_REVIEW]))];
     const c = await render(CONFIRMED);

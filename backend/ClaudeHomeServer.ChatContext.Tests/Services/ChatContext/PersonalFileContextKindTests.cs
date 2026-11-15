@@ -13,6 +13,8 @@ public sealed class PersonalFileContextKindTests : IDisposable
 {
     private const string Owner = "owner-1";
     private const string Other = "owner-2";
+    // Текст отказа вида для не-медийного пути (тот же, что в PersonalFileContextKind)
+    private const string NonMedia = "В контекст кладут только файлы папок «images», «audio» или «video»";
 
     private readonly string _base = Path.Combine(Path.GetTempPath(), "ctx-personal-" + Guid.NewGuid().ToString("N"));
     private readonly string _root; // «Личное» Owner
@@ -26,9 +28,11 @@ public sealed class PersonalFileContextKindTests : IDisposable
         _outside = Path.Combine(_base, "outside");
         Directory.CreateDirectory(Path.Combine(_root, "audio"));
         Directory.CreateDirectory(Path.Combine(_otherRoot, "audio"));
+        Directory.CreateDirectory(Path.Combine(_root, "docs"));
         Directory.CreateDirectory(_outside);
         File.WriteAllText(Path.Combine(_root, "audio", "jingle.wav"), "x");
         File.WriteAllText(Path.Combine(_otherRoot, "audio", "other.wav"), "y");
+        File.WriteAllText(Path.Combine(_root, "docs", "x.txt"), "d");
         File.WriteAllText(Path.Combine(_outside, "secret.wav"), "s");
     }
 
@@ -95,6 +99,14 @@ public sealed class PersonalFileContextKindTests : IDisposable
     public void Путь_вне_Личного_отклоняется(string path) =>
         Kind().Validate(Scope(), "personal-file", Ref(path)).Should().Be("Путь вне «Личного»");
 
+    // Хвост ревью Р-Ф-9: путь, допустимый правилами личной папки, но не-медийный (docs/x.txt),
+    // редактор не прочитает — отказ на этапе Validate, а не на склейке
+    [Theory]
+    [InlineData("docs/x.txt")]
+    [InlineData("notes.md")]
+    public void Не_медийный_путь_отклоняется_до_склейки(string path) =>
+        Kind().Validate(Scope(), "personal-file", Ref(path)).Should().Be(NonMedia);
+
     [Fact]
     public void Символическая_ссылка_наружу_отклоняется()
     {
@@ -123,11 +135,12 @@ public sealed class PersonalFileContextKindTests : IDisposable
         kind.Validate(other, "personal-file", Ref("audio/other.wav")).Should().BeNull("свой — годится");
     }
 
-    // Тот же субъект приватности, что у проектных путей: чужое private не подтверждаем даже существованием
+    // Тот же субъект приватности, что у проектных путей: чужое private не подтверждаем даже существованием.
+    // Своё private — тоже отказ, но как не-медийный путь: вложение не файл медиальной папки (Х-8)
     [Theory]
     [InlineData("other-user", "owner-1", "Путь вне «Личного»")]
     [InlineData("owner-1", "other-user", "Путь вне «Личного»")]
-    [InlineData("owner-1", "owner-1", null)]
+    [InlineData("owner-1", "owner-1", NonMedia)]
     [InlineData("owner-1", null, "Путь вне «Личного»")]
     public void Private_внутри_Личного_судит_вызывающий(string fileOf, string? actor, string? expected)
     {

@@ -11,10 +11,14 @@ namespace ClaudeHomeServer.Services.ChatContext;
 // PersonalFolderResolver по OwnerId вызывающего — чужой владелец чужой папки не получает по
 // построению, своего файла он не увидит даже по верному пути. Основным объектом не бывает
 // (CanBePrimary по умолчанию false): только референс; из редакторов его берёт звук, роль «Кусок»
-// склейки (AudioContextRoles.Piece).
+// склейки (AudioContextRoles.Piece). В контекст кладутся только файлы медиальных подпапок
+// (images/audio/video) — тот же источник правил, что у панели «Личного» и входов Start/Concat:
+// не-медийный путь отказывается здесь, а не на склейке (хвост ревью Р-Ф-9).
 public sealed class PersonalFileContextKind(PersonalFolderResolver? personal = null) : IContextKindProvider
 {
     public const string Kind = "personal-file";
+
+    private const string NonMediaRefusal = "В контекст кладут только файлы папок «images», «audio» или «video»";
 
     public IReadOnlyList<string> Kinds { get; } = [Kind];
 
@@ -25,7 +29,11 @@ public sealed class PersonalFileContextKind(PersonalFolderResolver? personal = n
         if (RootOf(scope) is not { } root) return Refusal(scope);
         if (PathOf(reference) is not { } path) return "Не указан путь файла";
         // Владелец проверяется как у проектных путей: чужое private не подтверждаем даже существованием
-        if (ProjectLinkGuard.ResolveInsideAs(root, path, scope.ActorId) is not null) return null;
+        if (ProjectLinkGuard.ResolveInsideAs(root, path, scope.ActorId) is not null)
+            // Внутри «Личного» годится только медиальная подпапка: тот же источник правил, что у панели
+            // «Личного» и входов Start/Concat. Не-медийный путь (docs/x.txt) редактор не прочитает —
+            // отказ здесь, а не на склейке
+            return PersonalMediaFolders.AllowsAll([path]) ? null : NonMediaRefusal;
         if (PrivateAttachments.IsForeignResolved(root, path, scope.ActorId)) return "Путь вне «Личного»";
         // Отказ двух родов: лексически путь вне корня — или внутри, но идёт через ссылку
         return LiesInsideLexically(root, path)

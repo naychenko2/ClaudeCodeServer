@@ -295,6 +295,25 @@ public class FileServiceTests : IDisposable
     }
 
     [Fact]
+    public void List_БезКорняЗаметок_ВиртуальнойВставкиНет_aNotesКакОтсутствующийКаталог()
+    {
+        // Х-9 (дефект 44718bbf): корень без заметок (личный «Личное») — ни виртуальной вставки,
+        // ни пустого раскрытия: несозданная notes/ отказывается как любой отсутствующий каталог
+        _svc.List(_root, withNotesRoot: false).Should().BeEmpty();
+        var act = () => _svc.List(_root, "notes", withNotesRoot: false).ToList();
+        act.Should().Throw<DirectoryNotFoundException>();
+
+        // Физическая notes/ — обычное содержимое: свой листинг, в корень ничего не добавляется
+        Directory.CreateDirectory(Path.Combine(_root, "notes"));
+        File.WriteAllText(Path.Combine(_root, "notes", "x.md"), "x");
+        _svc.List(_root, withNotesRoot: false).Should().ContainSingle(e => e.IsDirectory && e.Name == "notes");
+        _svc.List(_root, "notes", withNotesRoot: false).Select(e => e.Name).Should().Equal("x.md");
+
+        // Поведение проекта (default) не изменилось: физическая папка и с параметром не дублируется
+        _svc.List(_root).Count(e => e.Name == "notes").Should().Be(1);
+    }
+
+    [Fact]
     public void List_SubPath_ListsSubdirContents()
     {
         Directory.CreateDirectory(Path.Combine(_root, "sub"));

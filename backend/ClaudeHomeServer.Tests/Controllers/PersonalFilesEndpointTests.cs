@@ -200,6 +200,75 @@ public class PersonalFilesEndpointTests : IClassFixture<PersonalFilesEndpointTes
         (await _owner.GetAsync(Url(chat, "/download?" + Q("docs")))).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    // ── Заметки (Х-9, дефект 44718bbf) ─────────────────────────────────────────────
+
+    // Кейс приёмки дефекта: «Личное» существует и пусто — корень пуст, мёртвой «Заметки» нет,
+    // пустое состояние «Личное пусто» достижимо
+    [Fact]
+    public async Task Пустой_личный_корень_не_содержит_папку_Заметки()
+    {
+        await _host.Personal.EnsurePersonalAsync(_ownerId);
+        var chat = await Chat();
+
+        (await Json(await _owner.GetAsync(Url(chat)))).GetArrayLength()
+            .Should().Be(0, "виртуальная «notes» листа корня проекта в личный корень не вставляется");
+        (await Json(await _owner.GetAsync(Url(chat, "/tree")))).GetArrayLength().Should().Be(0);
+    }
+
+    public static TheoryData<string> NotesPaths() => new()
+    {
+        "notes", "notes/Заметка.md", "Notes/Заметка.md", "notes/под/Глубокая.md",
+    };
+
+    // Путь заметок недоступен вовсе: явный 404 на чтении, а запись и перенос не создают
+    // мёртвую папку — ни следа на диске
+    [Theory]
+    [MemberData(nameof(NotesPaths))]
+    public async Task Путь_Заметки_отказан_404_на_чтении_и_не_создаётся_записью(string path)
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        var list = await _owner.GetAsync(Url(chat, "?" + Q(path)));
+        list.StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        (await Json(list)).GetProperty("code").GetString().Should().Be("notes_unavailable", path);
+        (await _owner.GetAsync(Url(chat, "/tree?" + Q(path)))).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        (await _owner.GetAsync(Url(chat, "/content?" + Q(path)))).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        (await _owner.GetAsync(Url(chat, "/download?" + Q(path)))).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+
+        (await _owner.PostAsJsonAsync(Url(chat, "/mkdir"), new { path })).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        (await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path, content = "x" })).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        // каталог из query: загрузка не создаёт мёртвую папку
+        (await _owner.PostAsync(Url(chat, "/upload?" + Q(path)), Form([1], "a.bin"))).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        // перенос в мёртвую папку — тоже нет
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "docs", newPath = path })).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+
+        Directory.Exists(Path.Combine(root, "notes")).Should().BeFalse("отказ не оставляет следа на диске");
+    }
+
+    // Наследная физическая notes/ (создана до правки или мимо API): прямая ссылка по-прежнему
+    // отказана, переименование — ни в неё, ни из неё; снести её может только delete
+    [Fact]
+    public async Task Наследная_физическая_папка_Заметки_недоступна_по_ссылке_но_удаляется()
+    {
+        var root = await Seeded();
+        Directory.CreateDirectory(Path.Combine(root, "notes"));
+        await File.WriteAllTextAsync(Path.Combine(root, "notes", "Старая.md"), "# старая");
+        var chat = await Chat();
+
+        var list = await _owner.GetAsync(Url(chat, "?path=notes"));
+        list.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await Json(list)).GetProperty("code").GetString().Should().Be("notes_unavailable");
+        (await _owner.GetAsync(Url(chat, "/content?" + Q("notes/Старая.md")))).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "notes", newPath = "docs2" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        Directory.Exists(Path.Combine(root, "notes")).Should().BeTrue();
+
+        (await _owner.DeleteAsync(Url(chat, "?path=notes"))).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        Directory.Exists(Path.Combine(root, "notes")).Should().BeFalse();
+    }
+
     // ── Доступ ───────────────────────────────────────────────────────────────────
 
     [Fact]

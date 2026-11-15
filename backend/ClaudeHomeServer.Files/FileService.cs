@@ -265,17 +265,23 @@ public class FileService(
     /// отдаёт их содержимое — поэтому фильтр стоит по записям, а не по стартовому каталогу.
     /// Названный путь идёт на диск: «L» → .cc-attachments — тот же контейнер, и чужесть его
     /// содержимого решается по каноническому относительному пути (дефект d07d7054, см. ClosedPrefixOf).
+    /// withNotesRoot — знает ли корень хранилище заметок (Х-9, дефект 44718bbf): по умолчанию true —
+    /// поведение проекта, «notes» в листинге корня есть всегда. false — корень без заметок (личный
+    /// «Личное»): виртуальной вставки нет, и несозданная notes/ отказывается как любой другой
+    /// отсутствующий каталог — в «Личном» своих заметок нет, личный vault вне файлов (ADR-040 §5).
     /// </summary>
     public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false,
-        string? viewerUserId = null)
+        string? viewerUserId = null, bool withNotesRoot = true)
     {
         var dir = SafeJoin(rootPath, relativePath);
         if (!Directory.Exists(dir))
         {
             // Виртуальная папка заметок: показываем notes/ в дереве всегда, физически
             // она появляется при первой заметке (NotesService.Create). Раскрытие
-            // несозданной папки — пустой список, не 404.
-            if (IsNotesPath(relativePath)) return [];
+            // несозданной папки — пустой список, не 404. Корень без заметок
+            // (withNotesRoot: false) не знает и виртуальной notes/: отказ как по любому
+            // отсутствующему каталогу (Х-9).
+            if (withNotesRoot && IsNotesPath(relativePath)) return [];
             throw new DirectoryNotFoundException();
         }
 
@@ -353,8 +359,11 @@ public class FileService(
         }
 
         // Папка заметок в корне проекта присутствует всегда (даже если ещё не создана
-        // физически) — vault проекта виден и до первой заметки.
-        if (string.IsNullOrEmpty(relativePath) &&
+        // физически) — vault проекта виден и до первой заметки. Корень без заметок
+        // (withNotesRoot: false — личный «Личное», Х-9/дефект 44718bbf) не получает вставку:
+        // личных заметок в «Личном» нет, их хранилище вне файлов (data/notes/{userId}, ADR-040 §5),
+        // и мёртвая папка в пустом корне делает пустое состояние недостижимым.
+        if (withNotesRoot && string.IsNullOrEmpty(relativePath) &&
             !entries.Any(e => e.IsDirectory && e.Name.Equals("notes", StringComparison.OrdinalIgnoreCase)))
         {
             entries.Insert(0, new FileEntry("notes", "notes", true, null, DateTime.UtcNow, false));

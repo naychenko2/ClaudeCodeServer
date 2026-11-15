@@ -20,7 +20,10 @@ namespace ClaudeHomeServer.Controllers;
 // Корень — PersonalFolderResolver.Find: GET папку не создаёт, без неё список пуст. Создают папку
 // только mkdir и create. Сервисы те же, что у проектных файлов (FileService, ProjectLinkGuard,
 // FileContentReader); путь обязан быть относительным и не идти через символическую ссылку.
-// Правки текста, офисных форматов, git и WebDAV здесь нет. Загрузка файла (upload) и сохранение
+// Правки текста, офисных форматов, git и WebDAV здесь нет. Заметок здесь тоже нет (Х-9,
+// дефект 44718bbf): путь «notes» или «notes/…» — 404 на чтении и записи, виртуальная «notes»
+// листа корня проекта в личный корень не вставляется — личный vault вне файлов (ADR-040 §5).
+// Загрузка файла (upload) и сохранение
 // по URL (save-from-url, только в медиальные папки) — Ф-6, требование Андрея 15.11: созданный в
 // ходе контент должен быть чем сохранить в «Личное».
 [ProjectCapability(ProjectCapabilityArea.Platform)]
@@ -55,6 +58,16 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     private IActionResult InvalidPath() => Fail(StatusCodes.Status400BadRequest, "invalid_path", "Недопустимый путь");
 
     private IActionResult NotFoundFile() => Fail(StatusCodes.Status404NotFound, "file_not_found", "Файл не найден");
+
+    // В «Личном» нет заметок (Х-9, дефект 44718bbf): их хранилище вне файлов — data/notes/{userId},
+    // ADR-040 §5. Путь «notes» или «notes/…» отказывается как несуществующий — 404, а не пустой
+    // список: мёртвая папка не должна быть достижима прямой ссылкой и создаваема записью.
+    private static bool IsNotesPath(string? rel) =>
+        rel is not null && (rel.Equals("notes", StringComparison.OrdinalIgnoreCase) ||
+                            rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase));
+
+    private IActionResult NotesUnavailable() => Fail(StatusCodes.Status404NotFound, "notes_unavailable",
+        "В «Личном» нет заметок: их хранилище вне файлов");
 
     // Путь нормализуем один раз на входе ручки и передаём дальше уже нормализованным: иначе
     // «  a.txt  » проходит проверку обрезанным, а на диск уходит с пробелами — Windows их молча
@@ -96,7 +109,10 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     {
         path = Norm(path);
         if (!TryChat(sessionId, out var session)) return ChatNotFound();
-        return Browse(session, path, (root, p) => files.List(root, p, false, UserId ?? ""));
+        if (IsNotesPath(path)) return NotesUnavailable();
+        // Личный корень не получает виртуальную «notes» листа корня проекта (Х-9):
+        // здесь нет хранилища заметок, мёртвая папка делает пустое состояние недостижимым
+        return Browse(session, path, (root, p) => files.List(root, p, false, UserId ?? "", withNotesRoot: false));
     }
 
     [HttpGet("tree")]
@@ -104,6 +120,7 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
     {
         path = Norm(path);
         if (!TryChat(sessionId, out var session)) return ChatNotFound();
+        if (IsNotesPath(path)) return NotesUnavailable();
         return Browse(session, path, (root, p) => files.Tree(root, p, false, UserId ?? ""));
     }
 
@@ -166,6 +183,7 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
         if (!TryChat(sessionId, out var session)) { denied = ChatNotFound(); return false; }
         if (RootOf(session) is not { } folder) { denied = NotFoundFile(); return false; }
         if (Resolve(folder, path, belowRoot: true) is not { } full) { denied = InvalidPath(); return false; }
+        if (IsNotesPath(path)) { denied = NotesUnavailable(); return false; }
         if (!System.IO.File.Exists(full)) { denied = NotFoundFile(); return false; }
         root = folder;
         denied = null;
@@ -190,6 +208,9 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
         // Путь проверяем до создания папки «Личного»: отказ запроса не оставляет следов на диске
         var path = Norm(req.Path);
         if (!SyntaxOk(path)) return InvalidPath();
+        // notes/ не создаётся и не раскрывается: мёртвая папка не должна вернуться
+        // на диск или в корень (Х-9)
+        if (IsNotesPath(path)) return NotesUnavailable();
         var (root, denied) = await RootForWriteAsync(session, ct);
         if (root is null) return denied!;
         if (Resolve(root, path, belowRoot: true) is null) return InvalidPath();
@@ -208,6 +229,7 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
         if (!TryChat(sessionId, out var session)) return ChatNotFound();
         var path = Norm(req.Path);
         if (!SyntaxOk(path)) return InvalidPath();
+        if (IsNotesPath(path)) return NotesUnavailable(); // notes/ не создаётся записью (Х-9)
         // Предела добиваемся до любого эффекта: тело читаем в память целиком, и файл с ним
         // не должен появиться, чтобы потом его удалить. Мера — байты UTF-8, не символы:
         // кириллица в файл пишет вдвое больше, чем «считается» по длине строки
@@ -259,9 +281,11 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
         // Имя отсекаем до любого эффекта: «../evil» в имени файла — не имя
         var name = Path.GetFileName(file.FileName);
         if (name.Length == 0) return InvalidPath();
+        var rel = dir.Length == 0 ? name : dir + "/" + name;
+        // Путь заметок отказан до любого эффекта: загрузка не создаёт мёртвую папку (Х-9)
+        if (IsNotesPath(rel)) return NotesUnavailable();
         var (root, denied) = await RootForWriteAsync(session, ct);
         if (root is null) return denied!;
-        var rel = dir.Length == 0 ? name : dir + "/" + name;
         if (Resolve(root, rel, belowRoot: true) is null) return InvalidPath();
         try
         {
@@ -347,6 +371,9 @@ public class PersonalFilesController(ISessionDirectory directory, PersonalFolder
         if (Resolve(root, oldPath, belowRoot: true) is not { } src
             || Resolve(root, newPath, belowRoot: true) is not { } dst)
             return InvalidPath();
+        // notes/ недоступна на обоих концах переноса: нельзя ни внести её обратно,
+        // ни вынести её содержимое — наследную физическую папку сносит delete (Х-9)
+        if (IsNotesPath(oldPath) || IsNotesPath(newPath)) return NotesUnavailable();
         if (!System.IO.File.Exists(src) && !Directory.Exists(src)) return NotFoundFile();
         if (System.IO.File.Exists(dst) || Directory.Exists(dst))
             return Fail(StatusCodes.Status409Conflict, "exists", "Файл или папка с таким именем уже есть");

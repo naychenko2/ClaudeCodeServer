@@ -1172,7 +1172,12 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                     var current = IsEtaggableText(root, relativePath, safePath) ? CanonicalSha256OfTextFile(safePath) : null;
                     if (current != ifMatch) return Conflict(FileConflictBodyFor(root, relativePath, safePath, current));
                 }
-                await WriteAtomicFromFileAsync(root, relativePath, safePath, file);
+                // Х-10 (тот же класс, что починен в личном маршруте Х-7, коммит 2a7899b74):
+                // имя занято каталогом — File.Move в атомарной записи бросает IOException,
+                // раньше это выходило 500. Тот же 409 «exists», что у create/rename. Ловуем
+                // ровно вокруг записи: до и после неё — прежнее поведение.
+                try { await WriteAtomicFromFileAsync(root, relativePath, safePath, file); }
+                catch (IOException) { return Conflict(new { error = "exists" }); }
             }
             finally { sem.Release(); }
             RecordHumanEdit(projectId, root, relativePath);   // S3-3b: загрузка записана
@@ -1608,6 +1613,11 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                     new { error = $"Файл больше {MaxSaveFromUrlBytes / (1024 * 1024)} МБ" });
 
             Directory.CreateDirectory(Path.GetDirectoryName(safePath)!);
+            // Х-10: имя занято каталогом — прямой FileStream бросает при этом не IOException,
+            // а UnauthorizedAccessException (раньше это выходило 403). Явная проверка цели,
+            // как в Rename: коллизия с каталогом — 409 «exists», та же форма, что у create;
+            // настоящий отказ права записи остаётся 403.
+            if (Directory.Exists(safePath)) return Conflict(new { error = "exists" });
             var exceeded = false;
             await using (var src = await resp.Content.ReadAsStreamAsync(ct))
             await using (var fs = new FileStream(safePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))

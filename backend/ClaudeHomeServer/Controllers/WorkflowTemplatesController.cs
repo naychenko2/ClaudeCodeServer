@@ -33,8 +33,10 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/workflow-templates")]
 public class WorkflowTemplatesController(
     WorkflowTemplateStore templates,
-    // Для usageCount; null — счётчик нулевой
-    TaskManager? tasks = null,
+    // Для usageCount. Зависимость обязательна (R-B08): опциональный TaskManager давал
+    // молчаливый ноль в списке, когда регистрации нет, — человек верил неверным данным.
+    // Теперь отсутствие регистрации — сбой DI при активации контроллера, а не врание в ответ.
+    TaskManager tasks,
     // Явный резолв доступа к проекту — та же точка, что у ProjectTasksController (сверяем не
     // OwnerId инлайном); null — fail-closed (проект недоступен)
     IProjectAccess? access = null) : ControllerBase
@@ -60,11 +62,8 @@ public class WorkflowTemplatesController(
         // Эпики, доступные вызывающему: свои плюс (при доступном проекте) проектные. Считаем
         // фичи с подтверждённым маршрутом по ключу (область, шаблон).
         var epics = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
-        if (tasks is not null)
-        {
-            foreach (var t in tasks.GetByOwner(UserId)) epics[t.Id] = t;
-            if (pid is not null) foreach (var t in tasks.GetByProject(pid)) epics[t.Id] = t;
-        }
+        foreach (var t in tasks.GetByOwner(UserId)) epics[t.Id] = t;
+        if (pid is not null) foreach (var t in tasks.GetByProject(pid)) epics[t.Id] = t;
         var used = epics.Values
             .Where(t => t.Role == TaskRoles.Feature && t.Workflow is not null)
             .GroupBy(t => (t.Workflow!.TemplateId, Project: string.Equals(t.Workflow.Scope, "project", StringComparison.Ordinal)))

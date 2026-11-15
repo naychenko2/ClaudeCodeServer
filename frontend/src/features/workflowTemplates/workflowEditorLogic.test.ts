@@ -387,7 +387,8 @@ describe('Р-Ф-2.39: привязка ошибок к строке по адр�
   });
 
   it('голая роль при повторе роли никуда не привязывается (старого фолбэка «первый этап роли» нет)', () => {
-    const failure = { kind: 'invalid' as const, message: 'x', stageErrors: { qa: ['ошибка'] }, generalErrors: [] };
+    const failure = { kind: 'invalid' as const, message: 'x', stageErrors: { qa: ['ошибка'] },
+      stageLines: [{ label: 'этап «qa»', message: 'ошибка' }], generalErrors: [] };
     const items = errorSummaryItems(twoQa(), failure);
     expect(items.find(i => i.text === 'этап «qa»: ошибка')?.stageIndex).toBeNull();
   });
@@ -400,5 +401,39 @@ describe('Р-Ф-2.39: привязка ошибок к строке по адр�
     const items = errorSummaryItems(draft).filter(i => i.text.includes('текст промпта'));
     expect(items.map(i => i.stageIndex)).toEqual([0, 1]);
     expect(new Set(items.map(i => i.text)).size).toBe(2);
+  });
+  it('Title с «»» внутри: ошибка (локальная и от сервера) привязана к своей строке', () => {
+    const draft = tpl({ stages: [
+      { role: 'plan', id: 'plan', presence: 'on' },
+      { role: 'step', id: 'step', title: 'a»b', presence: 'on', prompt: long },
+    ] });
+    const local = errorSummaryItems(draft).find(i => i.text.includes('текст промпта'));
+    expect(local?.text.startsWith('этап «a»»b»: ')).toBe(true);
+    expect(local?.stageIndex).toBe(1);
+
+    const failure = classifySaveError(Object.assign(new Error('bad'), {
+      status: 400, body: { errors: ['этап «a»»b»: ошибка'] },
+    }));
+    expect(failure.generalErrors).toEqual([]);
+    expect(failure.stageErrors['a»b']).toEqual(['ошибка']);
+    expect(errorSummaryItems(draft, failure).find(i => i.text === 'этап «a»»b»: ошибка')?.stageIndex).toBe(1);
+  });
+
+  it('Title «qa (b)» и этап роли qa с id b: ошибка привязана к своей строке, а не к первой', () => {
+    const draft = tpl({ stages: [
+      { role: 'qa', id: 'qa-x', title: 'qa (b)', presence: 'on', prompt: long },
+      { role: 'qa', id: 'b', presence: 'on', prompt: long },
+    ] });
+    const items = errorSummaryItems(draft).filter(i => i.text.includes('текст промпта'));
+    expect(items.map(i => [i.text.split(':')[0], i.stageIndex])).toEqual([
+      ['этап «qa (b)»', 0], ['этап «qa» (b)', 1],
+    ]);
+
+    const failure = classifySaveError(Object.assign(new Error('bad'), {
+      status: 400, body: { errors: ['этап «qa» (b): ошибка', 'этап «qa (b)»: другая'] },
+    }));
+    const srv = errorSummaryItems(draft, failure);
+    expect(srv.find(i => i.text === 'этап «qa» (b): ошибка')?.stageIndex).toBe(1);
+    expect(srv.find(i => i.text === 'этап «qa (b)»: другая')?.stageIndex).toBe(0);
   });
 });

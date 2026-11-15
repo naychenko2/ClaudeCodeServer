@@ -489,6 +489,18 @@ public class WorkflowRulesTests
     }
 
     [Fact]
+    public void ИмяСЗакрывающейКавычкой_УдваиваетсяВМеткеОшибки()
+    {
+        // «»» внутри Title удваивается — фронт разбирает метку однозначно (одно правило на обе стороны).
+        var errors = ValidateStages(
+            WithId(TaskRoles.Qa, "qa1", title: "a»b"),
+            WithId(TaskRoles.Qa, "qa2", after: ["qa1"], title: " A»B "));
+
+        errors.Should().ContainSingle().Which.Should().Be(
+            "этап «A»»B»: имя «A»B» повторяет имя другого этапа той же роли и линии.");
+    }
+
+    [Fact]
     public void ДваЭтапаОднойРолиСРазнымиИменами_Проходит()
     {
         ValidateStages(

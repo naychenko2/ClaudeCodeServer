@@ -51,7 +51,7 @@ public sealed class ImageThreadPathTracker(
         {
             string? owner;
             if (session.ProjectId is { } pid) owners.TryGetValue(pid, out owner);
-            else owner = IsPersonalRootOf(session.OwnerId, root, personalOwned) ? session.OwnerId : null;
+            else owner = session.OwnerId is { Length: > 0 } sessionOwner && IsPersonalRootOf(sessionOwner, root, personalOwned) ? sessionOwner : null;
             if (string.IsNullOrEmpty(owner)) continue;
             if (!File.Exists(store.StatePath(owner, session.Id))) continue;
             store.RewritePaths(owner, session.Id, p => Move(p, from, to));

@@ -361,3 +361,36 @@ describe('api — отказ различим по коду (Контракт к
     expect(await workflowTemplatesApi.confirmWorkflow('e1', { templateId: 't1', scope: 'project', skipped: [] })).toBeNull();
   });
 });
+
+describe('Р-Ф-2.39: адресная метка этапа в ошибках', () => {
+  const longPrompt = 'x'.repeat(4001);
+
+  it('Title задан — метка по Title', () => {
+    const e = stageErrors(tpl([stage({ role: 'step', title: 'Бэк', prompt: longPrompt })]));
+    expect(e[0]).toMatch(/^этап «Бэк»: /);
+  });
+
+  it('Title нет, роль одна — метка по роли', () => {
+    const e = stageErrors(tpl([stage({ role: 'plan', prompt: longPrompt })]));
+    expect(e[0]).toMatch(/^этап «plan»: /);
+  });
+
+  it('две роли qa без Title — «роль (id)», метки различаются', () => {
+    const e = stageErrors(tpl([
+      stage({ role: 'qa', id: 'qa-a', prompt: longPrompt }),
+      stage({ role: 'qa', id: 'qa-b', prompt: longPrompt }),
+    ]));
+    expect(e).toHaveLength(2);
+    expect(e[0]).toMatch(/^этап «qa» \(qa-a\): /);
+    expect(e[1]).toMatch(/^этап «qa» \(qa-b\): /);
+  });
+
+  it('повтор роли, но у этапа есть Title — Title без id', () => {
+    const e = stageErrors(tpl([
+      stage({ role: 'qa', id: 'qa-a', title: 'Приёмка', prompt: longPrompt }),
+      stage({ role: 'qa', id: 'qa-b', prompt: longPrompt }),
+    ]));
+    expect(e[0]).toMatch(/^этап «Приёмка»: /);
+    expect(e[1]).toMatch(/^этап «qa» \(qa-b\): /);
+  });
+});

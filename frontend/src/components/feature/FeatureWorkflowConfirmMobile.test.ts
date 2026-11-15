@@ -130,4 +130,12 @@ describe('FeatureWorkflowConfirm: мобильная строка и шторк�
     expect(minH('feature-workflow-confirm-submit')).toBeGreaterThanOrEqual(40);
     expect(minH('feature-workflow-confirm-recommend')).toBeGreaterThanOrEqual(40);
   });
+
+  it('тач-цели строки подтверждённого маршрута: «Сменить» и «Почему так» высотой не меньше 40', async () => {
+    catalog.entries = [entry(tpl(3))];
+    const c = await render({ confirmed: CONFIRMED });
+    const minH = (id: string) => (reactProps(byId(c, id)!)!.style as { minHeight?: number }).minHeight;
+    expect(minH('feature-workflow-confirm-change')).toBeGreaterThanOrEqual(40);
+    expect(minH('feature-workflow-confirm-why')).toBeGreaterThanOrEqual(40);
+  });
 });

@@ -5,7 +5,7 @@ import { IconButton } from '../../components/ui';
 import type { Persona, PersonaBinding, PersonaMemoryEntry, Session, TtsVoiceInfo } from '../../types';
 import { api } from '../../lib/api';
 import { previewVoice, isSpeaking, VoicePreviewError } from '../../lib/tts';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP, TB } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { ensureTasksLoaded, useTasks } from '../../lib/tasks';
@@ -413,7 +413,7 @@ const specialtyBridge = (persona.specialty && persona.specialty !== 'none' && on
         <SectionLabel style={{ marginBottom: 8 }}>Специальность</SectionLabel>
         <button type="button" onClick={onOpenSpecialties} style={{
           ...linkBtn, display: 'inline-flex', alignItems: 'center', gap: 6,
-          padding: '7px 10px', background: C.bgWhite,
+          padding: '7px 10px', minHeight: isMobile ? TB.iconHitMobile : undefined, background: C.bgWhite,
           border: `1px solid ${C.border}`, borderRadius: R.lg,
           fontSize: 13, fontWeight: 600, color: C.textHeading, marginTop: 0,
         }}>

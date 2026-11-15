@@ -4,7 +4,7 @@
 
 import type { CSSProperties } from 'react';
 import { Button } from '../ui/Button';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP, TB } from '../../lib/design';
 import { plural } from '../../lib/plural';
 import type { StepProgress } from '../../lib/featureProgress';
 
@@ -98,8 +98,8 @@ export function FeatureVolumeCard({ progress, isMobile, onOpenSteps }: FeatureVo
             dataTestId="volume-open-steps"
             onClick={onOpenSteps}
             style={{
-              border: 'none', color: C.accent, padding: isMobile ? '7px 8px' : '4px 8px',
-              minHeight: isMobile ? 32 : undefined, display: 'inline-flex',
+              border: 'none', color: C.accent, padding: isMobile ? '11px 8px' : '4px 8px',
+              minHeight: isMobile ? TB.iconHitMobile : undefined, display: 'inline-flex',
             }}
           >
             {`из чего ${total} ›`}

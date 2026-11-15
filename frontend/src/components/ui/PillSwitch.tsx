@@ -281,6 +281,8 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
               minHeight: iconsOnly ? (isMobile ? TB.iconHitMobile : TB.iconHitDesktop)
                 : effectiveCompact ? TB.iconHitMobile
                 : isMobile ? TB.iconHitMobile : TB.iconHitDesktop,
+              // Тач-цель: в компакте неактивный сегмент — одна иконка, без minWidth он уже 40
+              minWidth: effectiveCompact ? TB.iconHitMobile : undefined,
               borderRadius: TB.pillRadius - 2, border: 'none', cursor: 'pointer',
               fontSize: effectiveCompact ? FS.sm : FS.base, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
               transition: 'color 0.15s, background 0.15s',

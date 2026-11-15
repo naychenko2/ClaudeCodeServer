@@ -11,7 +11,7 @@ import { Button, Field, Modal, ModalActions, TextField, ICON_SIZE, ICON_STROKE, 
 import { nameTakenSuggestion, type ImageEncodeFormat, type SaveCheckResponse } from './api';
 import { plural } from './format';
 import { isPersonalScope } from './scope';
-import { checkKey, FORMAT_EXT, foldersTarget, nameStem, projectFolders, saveBlocked, shownFolders, suggestionStem, type SaveCheckState, type SaveFolder } from './saveAs';
+import { checkKey, FORMAT_EXT, foldersTarget, nameStem, personalImageFolders, projectFolders, saveBlocked, shownFolders, suggestionStem, type SaveCheckState, type SaveFolder } from './saveAs';
 import { formatBytes } from './transforms';
 
 export interface HeavyFile {
@@ -24,7 +24,9 @@ export interface HeavyFile {
 
 const FORMAT_LABEL: Record<ImageEncodeFormat, string> = { png: 'PNG', jpeg: 'JPEG', webp: 'WebP' };
 
-const folderLabel = (f: string, personal: boolean) => (f ? `${f}/` : personal ? 'корень «Личного»' : 'корень проекта');
+// Корень в личной области не подписываем: список личной области ⊆ images/** (personalImageFolders),
+// корня в нём нет — «корень» остаётся только у проекта
+const folderLabel = (f: string) => (f ? `${f}/` : 'корень проекта');
 const pathOf = (folder: string, name: string) => (folder ? `${folder}/${name}` : name);
 
 export function SaveAsDialog({ projectId, sessionId, sourcePath, defaultName, folder, format, onCheck, onSave, onClose, heavy }: {
@@ -56,7 +58,7 @@ export function SaveAsDialog({ projectId, sessionId, sourcePath, defaultName, fo
   useEffect(() => {
     let alive = true;
     appApi.files.tree(foldersTarget(projectId, sessionId), '')
-      .then(entries => { if (alive) setFolders(projectFolders(entries)); })
+      .then(entries => { if (alive) setFolders(personal ? personalImageFolders(projectFolders(entries)) : projectFolders(entries)); })
       .catch(() => { if (alive) setFolders([]); });
     return () => { alive = false; };
   }, [projectId, sessionId]);
@@ -151,10 +153,10 @@ export function SaveAsDialog({ projectId, sessionId, sourcePath, defaultName, fo
           }}>
             {shown.map(f => (
               <Button key={f.path} size="sm" fullWidth variant={f.path === dir ? 'ghostAccent' : 'ghost'}
-                title={folderLabel(f.path, personal)} onClick={() => setDir(f.path)}
+                title={folderLabel(f.path)} onClick={() => setDir(f.path)}
                 leftIcon={<Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
                 style={{ justifyContent: 'flex-start', fontWeight: f.path === dir ? 600 : 400, flexShrink: 0 }}>
-                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folderLabel(f.path, personal)}</span>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folderLabel(f.path)}</span>
                 <span style={{ marginLeft: 'auto', paddingLeft: SP.sm, fontSize: FS.xs, fontWeight: 400, color: C.textMuted, whiteSpace: 'nowrap' }}>
                   {/* «здесь сейчас» — только у проекта: у личной области folder это место сохранения по умолчанию, файл там ещё не лежит */}
                   {`${!personal && f.path === folder ? 'здесь сейчас · ' : ''}${f.files} ${plural(f.files, 'файл', 'файла', 'файлов')}`}

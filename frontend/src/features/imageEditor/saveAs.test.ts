@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileEntry } from '../../types';
-import { checkKey, defaultStem, foldersTarget, nameStem, projectFolders, saveBlocked, shownFolders, suggestionStem, type SaveCheckState } from './saveAs';
+import { checkKey, defaultStem, foldersTarget, nameStem, personalImageFolders, projectFolders, saveBlocked, shownFolders, suggestionStem, type SaveCheckState } from './saveAs';
 
 const entry = (path: string, isDirectory = false): FileEntry =>
   ({ name: path.split('/').pop() ?? path, path, isDirectory, modified: '', isModified: false });
@@ -80,6 +80,39 @@ describe('«Сохранить как…»: папки', () => {
       { path: 'images', files: 2 },
       { path: 'images/blog', files: 0 },
       { path: 'images/generated', files: 1 },
+    ]);
+  });
+});
+
+describe('«Сохранить как…»: папки личной области ⊆ допуску бэка', () => {
+  // Бэк (PersonalMediaFolders.Resolve) принимает только images и images/**: остальное — 400,
+  // а корень молча маппит в images/. Диалог не должен предлагать то, что сервер отвергнет.
+  it('из дерева личной области остаются только images и её подпапки', () => {
+    const tree = projectFolders([
+      entry('notes.txt'), entry('audio', true), entry('audio/song.mp3'),
+      entry('video', true), entry('video/clip.mp4'),
+      entry('images', true), entry('images/hero.png'), entry('images/hero.v2.png'),
+      entry('images/blog', true), entry('images/blog/post.png'),
+    ]);
+    expect(tree.map(f => f.path)).toEqual(['', 'audio', 'images', 'images/blog', 'video']);
+    expect(personalImageFolders(tree).map(f => f.path)).toEqual(['images', 'images/blog']);
+  });
+
+  it('корень «Личного» не предлагается: бэк маппит пустой путь в images/, подпись лжёт', () => {
+    const tree = projectFolders([entry('notes.txt'), entry('images', true), entry('images/hero.png')]);
+    expect(personalImageFolders(tree).map(f => f.path)).toEqual(['images']);
+  });
+
+  it('похожая по имени папка не проходит: images-archive — не подпапка images/', () => {
+    const tree = projectFolders([entry('images-archive', true), entry('images-archive/a.png')]);
+    expect(personalImageFolders(tree)).toEqual([]);
+  });
+
+  it('файлы в images/ считаются в своей папке, фильтр счёт не теряет', () => {
+    const tree = projectFolders([entry('images', true), entry('images/hero.png'), entry('images/blog', true)]);
+    expect(personalImageFolders(tree)).toEqual([
+      { path: 'images', files: 1 },
+      { path: 'images/blog', files: 0 },
     ]);
   });
 });

@@ -70,9 +70,15 @@ public class LocalVideoEngineEnhanceTests
     [Fact]
     public async Task Cancel_by_the_human_returns_cancelled_without_a_clip()
     {
-        var media = Seam(new LocalVideoPoll(LocalVideoState.Running, 0, null, null),
-            new LocalVideoPoll(LocalVideoState.Failed, null, null, "interrupted"));
-        media.Setup(m => m.CancelAsync("t-enh", It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        var media = Seam();
+        // Как настоящий адаптер: прогон «падает» только после того, как карте сказали отменить, а не по таймингу опроса
+        var cancelled = false;
+        media.Setup(m => m.PollAsync("t-enh", It.IsAny<CancellationToken>()))
+            .Returns(() => Task.FromResult(Volatile.Read(ref cancelled)
+                ? new LocalVideoPoll(LocalVideoState.Failed, null, null, "interrupted")
+                : new LocalVideoPoll(LocalVideoState.Running, 0, null, null)));
+        media.Setup(m => m.CancelAsync("t-enh", It.IsAny<CancellationToken>()))
+            .Callback(() => Volatile.Write(ref cancelled, true)).ReturnsAsync(true);
         var engine = Fast(media.Object);
         var progress = new Recorder();
         var run = engine.EnhanceAsync(new EnhanceRequest(Clip, 2), progress, default);

@@ -39,7 +39,9 @@ async function editTemplate(id: string, mutate: (t: any) => void): Promise<numbe
   const entry = list.find(t => (t.template?.id ?? t.id) === id);
   const full = JSON.parse(JSON.stringify(entry?.template ?? entry));
   mutate(full);
-  const res = await client.put(`/api/workflow-templates/${id}`, { ...full, expectedVersion: full.version });
+  // Ответ PUT — сохранённый шаблон с новой version (контракт WorkflowTemplatesController):
+  // сузим тип ответа до него; фолбэк full.version + 1 остаётся на случай пустого тела.
+  const res = await client.put<{ version?: number }>(`/api/workflow-templates/${id}`, { ...full, expectedVersion: full.version });
   return res?.version ?? full.version + 1;
 }
 

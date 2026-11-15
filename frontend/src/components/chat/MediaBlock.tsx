@@ -77,9 +77,15 @@ export function mediaSrc(url: string): string {
 const PERSONAL_MEDIA_KIND_DIR: Record<'image' | 'video' | 'audio', 'images' | 'video' | 'audio'> = {
   image: 'images', video: 'video', audio: 'audio',
 };
-function isPersonalMediaDir(dir: string): boolean {
-  const first = dir.replace(/\\/g, '/').split('/')[0];
-  return first === 'images' || first === 'audio' || first === 'video';
+
+// Чистая функция предложения папки (экспортирована для теста, как mediaLabel/isLocalStreamUrl
+// выше): папка панели используется только если она медиальная (с вложенностью), иначе —
+// медиальная папка типа медиа
+export function personalSaveDir(kind: MediaItem['kind'], explorerDir: string): string {
+  const dir = explorerDir.replace(/\\/g, '/');
+  const first = dir.split('/')[0];
+  const isMediaDir = first === 'images' || first === 'audio' || first === 'video';
+  return isMediaDir ? dir : PERSONAL_MEDIA_KIND_DIR[kind];
 }
 
 // JSON из результатов MCP-инструментов (fal/glif): форма заранее неизвестна и
@@ -444,7 +450,7 @@ export function MediaBlock({
   const resolveSaveDir = (target: string): string => {
     const dir = getExplorerCreateInDir(target);
     if (project) return dir;
-    return isPersonalMediaDir(dir) ? dir : PERSONAL_MEDIA_KIND_DIR[m.kind];
+    return personalSaveDir(m.kind, dir);
   };
 
   const doSave = async (customName: string) => {

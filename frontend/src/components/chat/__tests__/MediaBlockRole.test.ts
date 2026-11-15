@@ -20,7 +20,7 @@
 
 import { act, createElement } from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { MediaBlock, type MediaItem } from '../MediaBlock';
+import { MediaBlock, personalSaveDir, type MediaItem } from '../MediaBlock';
 import { ChatProjectContext, ChatSessionContext } from '../contexts';
 import type { ProjectRoleView } from '../../../types';
 import { installFakeDom, uninstallFakeDom, mount, textNodes, reactProps } from './fakeDom';
@@ -140,6 +140,21 @@ describe('MediaBlock: «Сохранить в Личное» в личном ч�
     expect(hasText(container, 'Сохранить в Личное'), 'без сессии личной кнопки нет').toBe(false);
     expect(hasText(container, 'Добавить в проект'), 'проектной кнопки тоже нет').toBe(false);
     await act(async () => { root.unmount(); });
+  });
+
+  // Предложение папки при личной записи (вердикт Р-Ф-8): панель закрыта ('') или открыта
+  // в не-медиальной папке — медиальная папка типа медиа; медиальная папка панели (с
+  // вложенностью) — своя: бэк принимает первый сегмент images|audio|video (MediaKindOf)
+  it('предложение папки: не-медиальная или закрытая панель → папка типа медиа; медиальная — своя', () => {
+    expect(personalSaveDir('image', ''), 'панель закрыта — нет стора').toBe('images');
+    expect(personalSaveDir('image', 'docs'), 'панель в не-медиальной папке').toBe('images');
+    expect(personalSaveDir('image', 'заметки/2026'), 'русская не-медиальная папка').toBe('images');
+    expect(personalSaveDir('video', 'docs'), 'видео → video/').toBe('video');
+    expect(personalSaveDir('audio', 'docs'), 'аудио → audio/').toBe('audio');
+    // медиальная папка панели — своя, включая вложенность: бэк её принимает
+    expect(personalSaveDir('image', 'images')).toBe('images');
+    expect(personalSaveDir('image', 'images/sub'), 'вложенность внутри медиальной').toBe('images/sub');
+    expect(personalSaveDir('image', 'video/sub'), 'чужая медиальная — остаётся').toBe('video/sub');
   });
 
   // Конец цепочки личной кнопки (вердикт Р-Ф-8): клик «Сохранить в Личное» → диалог

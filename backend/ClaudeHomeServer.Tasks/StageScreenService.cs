@@ -158,13 +158,14 @@ public sealed class StageScreenService(
     // (нет FeatureId, эпик пропал) — metrics = null: считать нечего, экран остальное отдаёт.
     // claimed — ревью, уже учтённые в KPI этапа: общее ревью (ReviewOf из нескольких задач) входит в
     // агрегат ровно один раз, у первой задачи, которая его встретила; null — одиночный экран задачи.
-    private StageMetrics? BuildMetrics(TaskItem task, HashSet<string>? claimed = null)
+    // all — слепок задач, снятый один раз на экран; null — снимаем сами (одиночный вызов)
+    private StageMetrics? BuildMetrics(TaskItem task, HashSet<string>? claimed = null, IReadOnlyList<TaskItem>? all = null)
     {
         if (task.FeatureId is null) return null;
         var epic = tasks.GetById(task.FeatureId);
         if (epic is null || epic.OwnerId is not { } ownerId || ownerId != task.OwnerId) return null;
 
-        var reviews = tasks.GetAll()
+        var reviews = (all ?? tasks.GetAll())
             .Where(t => t.Role == TaskRoles.Review && t.OwnerId == task.OwnerId && t.FeatureId == task.FeatureId
                 && t.ReviewOf?.Contains(task.Id) == true)
             .OrderBy(t => t.CreatedAt)
@@ -192,7 +193,9 @@ public sealed class StageScreenService(
     private StageSummary BuildStageSummary(TaskItem task, string actorId)
     {
         var epic = task.FeatureId is { } fid ? tasks.GetById(fid) : null;
-        var members = StageMembers(task);
+        // Список задач снимаем один раз на экран: метрики, ревью и соседняя ветка считаются по нему
+        var all = tasks.GetAll();
+        var members = StageMembers(task, all);
         var byStep = members.GroupBy(t => t.StepRef ?? t.Id).ToList();
 
         var rows = new List<StageSummaryTask>();
@@ -202,7 +205,7 @@ public sealed class StageScreenService(
         {
             var main = group.OrderBy(t => t.Role == TaskRoles.Step ? 0 : 1).ThenBy(t => t.CreatedAt).First();
             var chain = group.ToList();
-            var reviews = ReviewsOf(chain);
+            var reviews = ReviewsOf(chain, all);
             var returns = reviews.Count(r => r.Verification?.Verdict == TaskVerdicts.Returned);
             var last = reviews.LastOrDefault(r => r.Verification?.Verdict is not null)?.Verification?.Verdict;
             var verdict = last switch
@@ -214,7 +217,7 @@ public sealed class StageScreenService(
             int? minutes = null;
             foreach (var t in chain)
             {
-                var m = BuildMetrics(t, claimedReviews);
+                var m = BuildMetrics(t, claimedReviews, all);
                 if (m is null) continue;
                 metrics.Add(m);
                 if (m.Executor.Minutes is { } em) minutes = (minutes ?? 0) + em;
@@ -242,24 +245,24 @@ public sealed class StageScreenService(
 
         return new StageSummary(
             BuildExecutor(task), TemplateName(task, epic), task.Stage?.TemplateVersion ?? 0,
-            rows.Sum(r => r.Returns), kpi, rows, BuildParallelNote(task, epic), ExecutorSessionId(task, actorId));
+            rows.Sum(r => r.Returns), kpi, rows, BuildParallelNote(task, epic, all), ExecutorSessionId(task, actorId));
     }
 
     // Задачи этапа: тот же stage.id в одной фиче одного арендатора (шаги и доработки); без id — цепочка шага
-    private List<TaskItem> StageMembers(TaskItem task)
+    private List<TaskItem> StageMembers(TaskItem task, IReadOnlyList<TaskItem> all)
     {
         var id = task.Stage?.StageId;
-        if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(task.FeatureId)) return Chain(task);
+        if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(task.FeatureId)) return Chain(task, all);
         var list = new List<TaskItem> { task };
-        list.AddRange(tasks.GetAll().Where(t => t.Id != task.Id && t.OwnerId == task.OwnerId && t.FeatureId == task.FeatureId
+        list.AddRange(all.Where(t => t.Id != task.Id && t.OwnerId == task.OwnerId && t.FeatureId == task.FeatureId
             && t.Role is TaskRoles.Step or TaskRoles.Rework && t.Stage?.StageId == id));
         return list;
     }
 
-    private List<TaskItem> ReviewsOf(List<TaskItem> chain)
+    private static List<TaskItem> ReviewsOf(List<TaskItem> chain, IReadOnlyList<TaskItem> all)
     {
         var ids = chain.Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
-        return tasks.GetAll()
+        return all
             .Where(t => t.Role == TaskRoles.Review && t.OwnerId == chain[0].OwnerId && t.ReviewOf?.Any(ids.Contains) == true)
             .OrderBy(t => t.CreatedAt)
             .ToList();
@@ -309,7 +312,7 @@ public sealed class StageScreenService(
 
     // Соседняя ветка: другой шаг маршрута, не связанный с этапом ни предком, ни потомком. Из них —
     // та, где ещё идёт работа, иначе первая; у ветки без задач показывать нечего — null
-    private StageSummaryParallel? BuildParallelNote(TaskItem task, TaskItem? epic)
+    private StageSummaryParallel? BuildParallelNote(TaskItem task, TaskItem? epic, IReadOnlyList<TaskItem> all)
     {
         var stages = epic?.Workflow?.Stages;
         var myId = task.Stage?.StageId;
@@ -331,7 +334,7 @@ public sealed class StageScreenService(
         foreach (var s in stages.Where(s => s.Role == TaskRoles.Step && s.Id != myId))
         {
             if (mine.Contains(s.Id) || Ancestors(s.Id).Contains(myId)) continue;
-            var own = tasks.GetAll().Where(t => t.OwnerId == task.OwnerId && t.FeatureId == task.FeatureId
+            var own = all.Where(t => t.OwnerId == task.OwnerId && t.FeatureId == task.FeatureId
                 && t.Role is TaskRoles.Step or TaskRoles.Rework && t.Stage?.StageId == s.Id).ToList();
             if (own.Count > 0) candidates.Add((s, own));
         }
@@ -466,11 +469,11 @@ public sealed class StageScreenService(
 
     // Цепочка версий артефакта: сам шаг и его доработки (rework того же stepRef), в одной фиче одного
     // арендатора. Задача без stepRef — цепочка из неё одной
-    private List<TaskItem> Chain(TaskItem task)
+    private List<TaskItem> Chain(TaskItem task, IReadOnlyList<TaskItem>? all = null)
     {
         var chain = new List<TaskItem> { task };
         if (string.IsNullOrEmpty(task.StepRef) || string.IsNullOrEmpty(task.FeatureId)) return chain;
-        chain.AddRange(tasks.GetAll().Where(t =>
+        chain.AddRange((all ?? tasks.GetAll()).Where(t =>
             t.Id != task.Id && t.OwnerId == task.OwnerId && t.FeatureId == task.FeatureId
             && t.StepRef == task.StepRef && t.Role is TaskRoles.Step or TaskRoles.Rework));
         return chain;

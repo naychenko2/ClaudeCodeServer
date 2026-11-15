@@ -57,6 +57,7 @@ public class FileServiceWikiGateTests : IDisposable
         ["SafeJoinPublic"] = "валидатор пути, ничего не пишет",
         ["WithOpenedPathGuard"] = "копия сервиса с другим сверщиком дескрипторов, ничего не пишет",
         ["NotifyMutated"] = "уведомление подписчиков, ничего не пишет",
+        ["RestrictRoot"] = "помечает корень ограниченным (без git, без обхода ссылок), ничего не пишет на диск",
         ["List"] = "чтение",
         ["Search"] = "чтение",
         ["Tree"] = "чтение",

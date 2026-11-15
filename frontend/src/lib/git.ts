@@ -7,6 +7,7 @@ import type { GitStatus, GitBranchInfo, GitLogEntry, GitStashEntry, GitRemoteInf
 import { api, getGitSessionContext } from './api';
 import { readStoredUserId } from './offline';
 import { plural } from './plural';
+import { isPersonalFilesId } from '../features/files/personalFiles';
 import { joinUser, onFilesChanged, onGitStatusChanged, onReconnected } from './signalr';
 
 export interface GitProjectState {
@@ -142,6 +143,8 @@ let _lastFocusRefresh = 0;   // троттл refresh по фокусу окна
 // refresh — перечитать статус даже при уже инициализированном сторе (смена
 // worktree-контекста активного чата: закешированный статус — от другого дерева)
 export function ensureGit(projectId: string, refresh = false): void {
+  // «Мои файлы» личного чата — не git-проект: статус не запрашиваем
+  if (isPersonalFilesId(projectId)) return;
   wireRealtime();
   joinUserGroup();
   if (!_state.has(projectId)) {

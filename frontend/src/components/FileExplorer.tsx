@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
 import { useProjectRoutes } from '../lib/deviceAgent';
 import { OfflineError } from '../lib/offline';
+import { isPersonalFilesId } from '../features/files/personalFiles';
 import { DIAGRAM_KINDS, DIAGRAM_META, diagramFileName, retargetDiagramExt, type DiagramKind } from '../lib/diagramTemplates';
 
 const KB_TEXT_EXT = new Set([
@@ -222,7 +223,7 @@ function FilesTip({ icon, title, text, extra }: { icon: ReactNode; title: string
   );
 }
 
-function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
+function FilesRootEmptyState({ onCreateFile, personal }: { onCreateFile?: () => void; personal?: boolean }) {
   const [copied, setCopied] = useState(false);
   const webdavUrl = `${window.location.origin}/projects/`;
   const handleCopyWebdav = () => {
@@ -230,6 +231,27 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+  // «Мои файлы» личного чата: без советов про проект, офлайн и WebDAV — у «Личного» их нет
+  if (personal) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 10 }}>
+        <div style={{ width: 48, height: 48, borderRadius: 14, background: C.bgInset, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Folder size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Здесь пока пусто</div>
+          <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
+            Сюда попадает то, что вы сохраняете из генерации: картинки, звук, видео, персонажи и голоса («Сохранить»).
+          </div>
+        </div>
+        {onCreateFile && (
+          <Button variant="primary" size="md" glow leftIcon={<Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={onCreateFile}>
+            Создать файл
+          </Button>
+        )}
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 16 }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
@@ -462,6 +484,8 @@ interface FileRowProps {
   renaming: boolean;
   // Переименование и перенос мышью: нет маршрута files/rename (другое устройство) — строка их не предлагает
   canRename: boolean;
+  // Офлайн-синхронизация (облачко): у «Мои файлы» личного чата её нет
+  offlineSync: boolean;
   isDropTarget: boolean;
   dragging: boolean;
   pressing: boolean;
@@ -526,7 +550,7 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
 
   // Тоггл офлайн-синхронизации: состояние важнее наведения — залитое облачко
   // видно всегда, пустое проявляется под курсором (на тач-раскладке — постоянно)
-  const syncControl = (() => {
+  const syncControl = !p.offlineSync ? null : (() => {
     const btnStyle: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0 };
     if (p.pendingDownload || p.folderSyncing) {
       if (online && p.syncState === 'direct') {
@@ -744,6 +768,8 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // Контрол записи рисуется, только если у проекта сейчас есть его маршрут: у агента — не все,
   // с другого устройства (ретранслятор) — ни одного. Список маршрутов — deviceAgentRoutes.ts
   const { can } = useProjectRoutes(project);
+  // «Мои файлы» личного чата (ADR-040 Ф2-9): те же компоненты, маршруты — личные (features/files/personalFiles)
+  const personalFiles = isPersonalFilesId(project.id);
   // Маршрут + право записи по роли (S2c-F4b): контрол записи есть, только если у проекта
   // есть маршрут И роль умеет эту дверь контента (contentRights.ts). Закрытый — ПРЯЧЕТ,
   // не отключён: решение живёт в одном месте, а не по каждому контролу.
@@ -758,11 +784,11 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   const canDeleteDir = can('DELETE files') && canWriteContent(project, 'dir.delete');
   // Пункты заметок («Заметка»/«Новая заметка»/«Заметка о файле») — дверь 'note.create':
   // читателю скрыты, редактору и владельцу есть (S2c-F4k).
-  const canNoteCreate = canWriteContent(project, 'note.create');
+  const canNoteCreate = !personalFiles && canWriteContent(project, 'note.create');
   // Пункты картинок («Редактировать картинку»/«Нарисовать картинку») — дверь 'media.edit':
   // шлюзы медиа-редакторов на бэке под полным Write на проект (ImageEditScopeGate),
   // участник пишет через них 404 — скрыты и редактору, и читателю.
-  const canMediaEdit = canWriteContent(project, 'media.edit');
+  const canMediaEdit = !personalFiles && canWriteContent(project, 'media.edit');
   const canCreate = canCreateFile || canMkdir || canUpload;
   const hasPanelHeader = useHasPanelHeader();
   const marks = useSyncMarks(project.id);
@@ -1555,6 +1581,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         loading={loadingDirs.has(entry.path)}
         renaming={renamingPath === entry.path}
         canRename={canRename}
+        offlineSync={!personalFiles}
         isDropTarget={dropTarget === entry.path}
         dragging={dragPath === entry.path}
         pressing={pressingPath === entry.path}
@@ -1866,7 +1893,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
                 title="Нет изменённых файлов"
                 subtitle="Активен фильтр «Только изменённые»"
               />
-            ) : mobileDir === '' ? <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(mobileDir); setShowCreateFile(true); } : undefined} /> : (
+            ) : mobileDir === '' ? <FilesRootEmptyState personal={personalFiles} onCreateFile={online ? () => { setCreateInDir(mobileDir); setShowCreateFile(true); } : undefined} /> : (
               <EmptyState
                 icon={<Folder size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
                 title="Папка пуста"
@@ -1891,7 +1918,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
               subtitle="Активен фильтр «Только изменённые»"
             />
           ) : (
-            <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(''); setShowCreateFile(true); } : undefined} />
+            <FilesRootEmptyState personal={personalFiles} onCreateFile={online ? () => { setCreateInDir(''); setShowCreateFile(true); } : undefined} />
           )
         ) : (
           // width: max-content — строки растягиваются под самое длинное имя,
@@ -2149,7 +2176,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         const { entry } = contextMenu;
         const sstate = computeSyncState(marks, entry.path);
         const close = () => setContextMenu(null);
-        const canToggleOffline = online && sstate !== 'inherited';
+        const canToggleOffline = online && !personalFiles && sstate !== 'inherited';
         const isKb = indexedFileNames?.has(entry.path);
 
         const items: ReactNode[] = [];

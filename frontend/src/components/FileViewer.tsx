@@ -21,6 +21,7 @@ import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project, GitBlameLine, GitLogEntry, ChangedBySession } from '../types';
 import { api } from '../lib/api';
+import { isPersonalFilesId } from '../features/files/personalFiles';
 import { basename } from '../lib/paths';
 import { conflictCopyName } from '../lib/conflictCopyName';
 import { lineDiff } from '../lib/lineDiff';
@@ -549,6 +550,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // путь; с другого устройства — ретранслятор сервера, и тогда у файла нет ни одного действия
   // записи. Каждое такое действие рисуется только при своём маршруте (deviceAgentRoutes.ts)
   const { route: filesRoute, can } = useProjectRoutes(project);
+  // «Мои файлы» личного чата: только просмотр, скачивание и удаление; офлайн-синхронизации нет
+  const personalFiles = isPersonalFilesId(project.id);
   const viaAgent = filesRoute === 'agent';
   // Файл из корня проекта (основного дерева): только с него разрешены правка, откат, дифф и
   // история — они пишут и читают корень, а не дерево чата. branch в ответе непуст у любого
@@ -1268,6 +1271,14 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   };
 
   const handleDownload = () => {
+    // Личный чат: сервер отдаёт файл сам (любого размера и вида), а не из base64 предпросмотра
+    if (personalFiles) {
+      const a = document.createElement('a');
+      a.href = api.files.downloadUrl(project.id, filePath);
+      a.download = fileName;
+      a.click();
+      return;
+    }
     if (!fileContent?.base64) return;
     const blob = new Blob([base64ToBytes(fileContent.base64)], { type: fileContent.mimeType ?? 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
@@ -1720,7 +1731,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         },
       });
     }
-    if (!loadError && online && !editing && !isHostMode) {
+    if (!loadError && online && !editing && !isHostMode && !personalFiles) {
       const cloud = <CloudGlyph filled={syncState === 'direct'} />;
       if (pending) {
         secondary.push(syncState === 'direct'
@@ -1765,7 +1776,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         });
       }
     }
-    if (!editing && (fileContent?.base64 || isMidiViewing)) {
+    if (!editing && (fileContent?.base64 || isMidiViewing || (personalFiles && !loadError && fileContent))) {
       const download = isMidiViewing ? downloadMidi : handleDownload;
       secondary.push({
         key: 'download',

@@ -472,6 +472,7 @@ public class FileService(
                     foreach (var m in Matches(d, prefix)) yield return m;
                     continue;
                 }
+                if (IsRestricted(rootPath)) continue; // ограниченный корень: ссылки наружу не обходятся
                 var target = SafePath.Canonical(d);
                 if (target is null || !openChain.Add(target)) continue; // неразрешимый или цикл: не спускаемся
                 try
@@ -571,6 +572,7 @@ public class FileService(
                 if (viewerUserId is not null &&
                     (prefix is null || PrivateAttachments.IsForeign(prefix.Length == 0 ? relDir : prefix, viewerUserId))) continue;
                 result.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
+                if (isLink && IsRestricted(rootPath)) continue;
                 Walk(d, prefix);
             }
 
@@ -988,6 +990,14 @@ public class FileService(
     // одинаковую работу независимо.
     private static readonly Dictionary<string, Lazy<(HashSet<string> modified, HashSet<string> @new)>>
         _statusInFlight = new();
+    // Корни с ограниченным доверием (папка «Личного»): репозитория там нет, а .git внутри мог подложить кто угодно
+    // (его конфиг исполняется git на хосте), и ссылки наружу не обходятся ни в дереве, ни в поиске
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _restrictedRoots = new(StringComparer.Ordinal);
+
+    public void RestrictRoot(string rootPath) => _restrictedRoots[rootPath] = 0;
+
+    private bool IsRestricted(string rootPath) => _restrictedRoots.ContainsKey(rootPath);
+
     private static readonly Lock _cacheLock = new();
 
     // Подмена вычислителя git-статуса в тестах (счётчик вызовов для single-flight);
@@ -1019,8 +1029,8 @@ public class FileService(
     private (HashSet<string> modified, HashSet<string> @new) GetGitStatus(string rootPath)
     {
         // Не git-репо — не спавним git (иначе на каждый листинг летит
-        // `fatal: not a git repository` в stderr и плодятся процессы)
-        if (!IsGitRepo(rootPath))
+        // `fatal: not a git repository` в stderr и плодятся процессы); ограниченный корень git не видит вовсе
+        if (IsRestricted(rootPath) || !IsGitRepo(rootPath))
             return (new HashSet<string>(StringComparer.OrdinalIgnoreCase),
                     new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 

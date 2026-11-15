@@ -18,6 +18,7 @@ import type {
 } from '../types';
 import { ProjectFeature } from '../types';
 import { agentSupports, relaySupports, type ProjectRoute } from './deviceAgentRoutes';
+import { isPersonalFilesId, personalFilesSupports } from '../features/files/personalFiles';
 
 // Состав групп возможностей — зеркало ProjectFeatures.FileBound/Platform/ServerContent
 // на бэке. Менять синхронно с ProjectFeatures.cs при расширении.
@@ -141,7 +142,8 @@ export function featureReason(project: Project | null | undefined, feature: Proj
 // Куда ходят запросы файлов, git, сервисов и навыков проекта: на сервер, в агента устройства на этой
 // машине или через ретранслятор сервера (проект открыт с другого устройства, только чтение).
 // ЕДИНСТВЕННОЕ место этого решения — api.ts берёт его отсюда через deviceAgent.ts.
-export type ProjectFilesRoute = 'server' | 'agent' | 'relay';
+// 'personal' — «Мои файлы» личного чата (ADR-040 Ф2-9): запросы идут на личный маршрут сервера, список действий свой.
+export type ProjectFilesRoute = 'server' | 'agent' | 'relay' | 'personal';
 
 // Где браузер относительно машины проекта. Узнать это можно только у агента: here — агент на этом
 // компьютере ответил; elsewhere — не ответил или это агент другого устройства; unknown — ещё не
@@ -149,6 +151,7 @@ export type ProjectFilesRoute = 'server' | 'agent' | 'relay';
 export type DevicePresence = 'unknown' | 'here' | 'elsewhere';
 
 export function projectFilesRoute(project: Project | null | undefined, presence: DevicePresence = 'unknown'): ProjectFilesRoute {
+  if (isPersonalFilesId(project?.id)) return 'personal';
   if (getProjectCapabilities(project).host !== 'device') return 'server';
   return presence === 'elsewhere' ? 'relay' : 'agent';
 }
@@ -158,6 +161,7 @@ export function projectFilesRoute(project: Project | null | undefined, presence:
 // получается «ни одного контрола записи» с другого устройства без проверок в самих панелях
 export function routeSupports(filesRoute: ProjectFilesRoute, route: ProjectRoute): boolean {
   if (filesRoute === 'server') return true;
+  if (filesRoute === 'personal') return personalFilesSupports(route);
   return filesRoute === 'relay' ? relaySupports(route) : agentSupports(route);
 }
 

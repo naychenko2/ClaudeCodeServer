@@ -313,7 +313,8 @@ export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
 // значка в рельсе чата быть не должно (решение Софьи по ревью Ф6; в проекте он
 // видит панель по-прежнему). Точка состояния на значке — там, где виден сам значок:
 // её даёт indicator фичи, и она молчит у не-админа (тот не спрашивает состояние).
-export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'chatContext', 'localModel'];
+// «Файлы» (ADR-040 Ф2-9): папка «Личного» этого пользователя — «Мои файлы» личного чата.
+export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'chatContext', 'files', 'localModel'];
 
 // Панель подсистемы в правом рельсе личного чата: «Локальные модели» — только
 // админу (см. выше); остальное решает сама фича (isAvailable, которым ChatsPage

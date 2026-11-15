@@ -30,6 +30,7 @@ import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels } from './workspace/panelStackState';
 import { CHAT_KEYS, CHAT_RIGHT_KEYS, chatPanelDefAllowed, keyAllowed, type PanelKey } from './workspace/panelCatalog';
 import { ContextPanelHost } from '../components/generation/ContextPanelHost';
+import { PersonalFilesPanel } from '../features/files/PersonalFilesPanel';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
 import type { RevealPanelDetail, WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
 import { isGenPanelKey, markGenPanelDismissed } from '../lib/genPanelDismissed';
@@ -644,6 +645,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 ))),
                 chatContext: <ContextPanelHost session={activeChat} project={null}
                   onClose={() => { markGenPanelDismissed(activeChat.id, 'chatContext'); closePanelKey('chatContext'); }} />,
+                files: <PersonalFilesPanel sessionId={activeChat.id} />,
               }}
               // Точка «Локальных моделей» — та же, что в рельсе проекта (Ф6): у
               // не-админа геттер молчит (он не спрашивает состояние второй дорожки),

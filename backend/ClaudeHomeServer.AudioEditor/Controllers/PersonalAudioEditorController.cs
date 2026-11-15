@@ -131,14 +131,18 @@ public class PersonalAudioEditorController(
     }
 
     // Сохранить версию в «Личное»: Personal/audio/, только новыми файлами. Работает и для старых личных версий:
-    // файлы версии копируются из рабочей папки
+    // файлы версии копируются из рабочей папки. Корень «Личного» создаёт хук EnsurePersonalRootAsync внутри
+    // SaveIn, на записи: отказ по mode/folder/thread не оставляет папки на диске
     [HttpPost("threads/{threadId}/save")]
     public async Task<IActionResult> Save(string sessionId, string threadId, [FromBody] AudioSaveRequest req, CancellationToken ct)
     {
         if (!Gate(sessionId, out var scope, out var denied)) return denied;
-        scope = await gate.WithFolderAsync(scope, ct);
-        return await SaveIn(scope, sessionId, threadId, req);
+        return await SaveIn(scope, sessionId, threadId, req, null, ct);
     }
+
+    // Пишущий путь личной области: «Личное» создаётся лениво, только когда SaveIn дошёл до записи
+    protected override Task<AudioEditScope> EnsurePersonalRootAsync(AudioEditScope scope, CancellationToken ct) =>
+        gate.WithFolderAsync(scope, ct);
 
     private bool Gate(string sessionId, [NotNullWhen(true)] out AudioEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>

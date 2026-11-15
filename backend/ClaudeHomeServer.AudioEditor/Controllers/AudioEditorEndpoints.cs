@@ -478,11 +478,18 @@ public abstract class AudioEditorEndpoints(
     private IActionResult UnknownJoint() =>
         Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Стык — butt, pause или crossfade");
 
+    // Корень «Личного» на пишущем пути: база отдаёт область как есть (у проекта «Личного» нет), личный
+    // контроллер переопределяет её ленивым гейтом. Точка вызова — запись, после всех проверок запроса:
+    // отказ не оставляет папки на диске (ADR-040, решение 2)
+    protected virtual Task<AudioEditScope> EnsurePersonalRootAsync(AudioEditScope scope, CancellationToken ct) =>
+        Task.FromResult(scope);
+
     // Сохранить версию на диск: у проекта — следующая версия рядом с исходником или «Сохранить как»; у личной
-    // области — только в Personal/audio/ (ADR-040 §5), папка создаётся здесь, на пишущем пути. Только новыми
+    // области — только в Personal/audio/ (ADR-040 §5), корень «Личного» создаёт хук EnsurePersonalRootAsync
+    // на пишущем пути, после всех проверок запроса. Только новыми
     // файлами; занятое имя «Сохранить как» — 409 name_taken с подсказкой. files — уведомление проекта о новых файлах
     protected async Task<IActionResult> SaveIn(AudioEditScope scope, string sessionId, string threadId, AudioSaveRequest req,
-        IProjectFiles? files = null)
+        IProjectFiles? files = null, CancellationToken ct = default)
     {
         var mode = string.IsNullOrWhiteSpace(req.Mode) ? AudioProjectSaver.NextVersion : req.Mode.Trim();
         if (mode is not (AudioProjectSaver.NextVersion or AudioProjectSaver.As))
@@ -514,7 +521,10 @@ public abstract class AudioEditorEndpoints(
         }
 
         // Версия «Личного» читается из рабочей папки (Resolve выше), а запись идёт в папку «Личного»:
-        // создаём её только теперь, когда есть что сохранять
+        // корень создаётся хуком только здесь, когда уже есть что сохранять — отказ по mode/folder/thread
+        // остался позади и не оставляет папки на диске (ADR-040, решение 2)
+        if (scope.IsPersonal)
+            scope = await EnsurePersonalRootAsync(scope, ct);
         if (scope.IsPersonal && scope.Project is null)
             return Error(StatusCodes.Status503ServiceUnavailable, PersonalFolderResolver.UnavailableCode, PersonalFolderResolver.UnavailableText);
         var project = scope.Project!;

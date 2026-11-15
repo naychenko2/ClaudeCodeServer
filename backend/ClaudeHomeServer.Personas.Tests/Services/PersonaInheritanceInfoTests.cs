@@ -169,6 +169,30 @@ public class PersonaInheritanceInfoTests : IDisposable
     }
 
     [Fact]
+    public void ТаЖеСпециальностьИлиБезСмены_БазуСекцийНеСбрасывает()
+    {
+        var p = Create();
+        var seen = _sut.MarkSectionsSeen(p.Id, Owner).SectionsSeenVersion;
+        seen.Should().NotBeNullOrEmpty();
+
+        // Та же специальность в Update: «смены» нет — база и признак «обновилось» остаются.
+        // Мутация «сбрасывать при любом Update» краснеет на этой строке.
+        _sut.Update(p.Id, Owner, null, null, null, null, null, null, null, null, null, null, null,
+            null, null, null, null, specialty: PersonaSpecialty.Reviewer);
+        var same = _sut.Get(p.Id, Owner)!;
+        same.SectionsSeenVersion.Should().Be(seen, "та же специальность — не смена, сброса нет");
+        same.ChangedByAdminSince.Should().BeFalse("база цела — приглашения перечитать нет");
+
+        // Правка вовсе без specialty (null — «не менять»): другая правка сменой не считается
+        _sut.Update(p.Id, Owner, "Переименованная", null, null, null, null, null,
+            null, null, null, null, null);
+        var after = _sut.Get(p.Id, Owner)!;
+        after.Name.Should().Be("Переименованная", "предусловие: правка прошла");
+        after.SectionsSeenVersion.Should().Be(seen, "без смены специальности база та же");
+        after.ChangedByAdminSince.Should().BeFalse();
+    }
+
+    [Fact]
     public void AccessDiffCount_НеCustomЗаписьСЗапретамиНаДиске_ЛишнейЕдиницыНет()
     {
         // Запись мимо SetGlobal: NormalizeTemplate обнулил бы запреты не-Custom шаблона,

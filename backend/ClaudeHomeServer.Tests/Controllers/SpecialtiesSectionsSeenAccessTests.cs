@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 
@@ -65,16 +66,41 @@ public class SpecialtiesSectionsSeenAccessTests : IClassFixture<TestWebApplicati
     }
 
     [Fact]
-    public async Task MarkSectionsSeen_ЧужомуВладельцу_404_Своему_БазаПишется()
+    public async Task MarkSectionsSeen_ЧужомуВладельцу_404()
     {
-        var id = await CreatePersonaAsync(_owner, "Моя для отметки");
+        var id = await CreatePersonaAsync(_owner, "Моя для границы");
 
         (await _other.PostAsync($"/api/personas/{id}/sections-seen", null)).StatusCode
             .Should().Be(HttpStatusCode.NotFound, "чужая персона не видна — базу отметки со стороны не сбросить");
+    }
+
+    [Fact]
+    public async Task MarkSectionsSeen_СвоемуВладельцу_БазаПишется()
+    {
+        var id = await CreatePersonaAsync(_owner, "Моя для базы");
 
         var mine = await _owner.PostAsync($"/api/personas/{id}/sections-seen", null);
         mine.StatusCode.Should().Be(HttpStatusCode.OK);
         (await mine.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("sectionsSeenVersion")
             .GetString().Should().NotBeNullOrEmpty("база отметки — у своего владельца");
+    }
+
+    // Отказ чужому владельцу держится на двух слоях: политике атрибута [ProjectScope] и проверке
+    // «персона не найдена» в теле действия. Этот тест различает их по форме тела: 404 атрибута
+    // несёт машинный код project_scope (ProjectScopeAttribute.cs:114), NotFound() тела
+    // (PersonasController.cs:323) — пустое. Снятие атрибута краснит этот тест (без резолва
+    // GetRequestScope бросает, RequestScopeHttpContextExtensions.cs:16); снятие проверки тела
+    // оставляет его зелёным — до тела запрос не доходит, тело fail-closed на гонку и
+    // недостижимо из HTTP: резолв уже гарантирует владельца (ProjectAccessService.cs:65,70).
+    [Fact]
+    public async Task MarkSectionsSeen_ЧужомуВладельцу_ОтказНесётКодProjectScope()
+    {
+        var id = await CreatePersonaAsync(_owner, "Моя для формы отказа");
+
+        var response = await _other.PostAsync($"/api/personas/{id}/sections-seen", null);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString()
+            .Should().Be(ProjectScopeAttribute.ErrorCode,
+                "отказ рождает политика атрибута, а не проверка «персона не найдена» в теле");
     }
 }

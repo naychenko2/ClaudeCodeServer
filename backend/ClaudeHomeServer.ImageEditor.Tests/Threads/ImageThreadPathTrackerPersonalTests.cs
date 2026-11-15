@@ -9,10 +9,12 @@ using Moq;
 namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 
 // ADR-040 Ф2-9 («Мои файлы»): корень «Личного» в проектах не числится, поэтому его нити — личные
-// чаты (ProjectId == null) того же владельца. Мутация через файловый API «Личного» доходит до трекера
-// тем же путём, что и проектная (FileService.OnMutated → IProjectFiles.OnMutated → здесь), и пути
-// нитей личного чата переписываются следом. Что здесь не проверялось: чужая папка того же пути не
-// касается, без резолвера personal-нить не трогается вовсе, мутация не-Rename — не повод писать стор.
+// чаты (ProjectId == null) того же владельца: их путь переписывается на папку этого владельца.
+// Здесь IProjectFiles — мок и событие поднимается напрямую (_files.Raise): проверяется поведение
+// трекера, а не доставка события. Настоящая цепочка FileService.OnMutated → ProjectFiles.OnMutated
+// → трекер — в ImageThreadPathTrackerFilesChainTests (ClaudeHomeServer.Tests). Что здесь не
+// проверялось: чужая папка того же пути не касается, без резолвера personal-нить не трогается
+// вовсе, мутация не-Rename — не повод писать стор.
 public sealed class ImageThreadPathTrackerPersonalTests : IDisposable
 {
     private const string Owner = "owner-1";
@@ -66,7 +68,7 @@ public sealed class ImageThreadPathTrackerPersonalTests : IDisposable
         return new PersonalFolderResolver(personal.Object);
     }
 
-    // Трекер подписан на событие файлового API — та же цепочка, что на сервере
+    // Тот же подписчик, что ставит на сервере регистрация трекера; саму цепочку — другой файл
     private void Subscribe(PersonalFolderResolver? personal)
     {
         var tracker = new ImageThreadPathTracker(

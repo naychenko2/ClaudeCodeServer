@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
@@ -216,6 +217,41 @@ public class PersonalChatEndpointTests : IClassFixture<PersonalChatEndpointTests
         byFile.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         inFolder.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         Store.Get(_ownerId, chat.Id).Threads.Should().BeEmpty();
+    }
+
+    // «Личное» создаётся только если все пути входа допустимы (ADR-040 §1.2): запрос с заведомо
+    // негодным путём получает отказ, не оставив папки. Снятие «&& PersonalMediaFolders.AllowsAll(...)»
+    // в Start и Transform краснит этот тест — резолвер вызвался бы и по негодному пути
+    [Fact]
+    public async Task Негодный_путь_во_входах_отказ_а_папка_Личного_не_создана()
+    {
+        var owner = OwnerOf(TestWebApplicationFactory.SecondUsername);
+        var client = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        var chat = await PersonalChat(owner);
+        var personal = _factory.Services.GetRequiredService<IPersonalProjects>();
+        personal.GetPersonalOf(owner).Should().BeNull("предпосылка: «Личного» у второго пользователя ещё нет");
+
+        var start = await client.PostAsync($"{Personal(chat.Id)}/jobs", new MultipartFormDataContent
+        {
+            { new StringContent("q-1"), "quoteId" },
+            { new StringContent("нарисовать кота"), "prompt" },
+            { new StringContent(chat.Id), "sessionId" },
+            { new StringContent("images/../secret.png"), "referencePaths" },
+        });
+        var transform = await client.PostAsJsonAsync($"{Personal(chat.Id)}/transform",
+            new { @base = new { path = "images/../secret.png" }, ops = new object[] { new { type = "rotate", degrees = 90 } } });
+
+        ((int)start.StatusCode).Should().BeInRange(400, 499, "отказ по входу, а не пропуск в личную область");
+        ((int)transform.StatusCode).Should().BeInRange(400, 499, await transform.Content.ReadAsStringAsync());
+        personal.GetPersonalOf(owner).Should().BeNull("папка «Личного» не создана: отказ случился до пишущего пути");
+
+        // Положительная половина: с допустимым путём ленивое создание доходит до дела — значит,
+        // выше отказ был именно по пути, а не по устройству ручки
+        var allowed = await client.PostAsJsonAsync($"{Personal(chat.Id)}/transform",
+            new { @base = new { path = "images/hero.png" }, ops = new object[] { new { type = "rotate", degrees = 90 } } });
+        ((int)allowed.StatusCode).Should().BeInRange(400, 499, "файла «Личного» нет — отказ тот же, но он уже по другому");
+        personal.GetPersonalOf(owner).Should().NotBeNull("допустимый путь создал «Личное»");
+        Directory.Exists(personal.GetPersonalOf(owner)!.RootPath).Should().BeTrue();
     }
 
     [Fact]

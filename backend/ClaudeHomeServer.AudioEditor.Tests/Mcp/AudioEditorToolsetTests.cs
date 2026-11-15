@@ -66,7 +66,8 @@ public sealed class AudioEditorToolsetTests : IDisposable
 
     private AudioEditorToolset Toolset(IAudioEngine[]? engines = null, bool agentLaunch = true, bool withGate = true,
         IAudioDsp? dsp = null, VoiceLibrary? library = null, bool withEdits = false,
-        AudioContextLaunch? context = null, ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null)
+        AudioContextLaunch? context = null, ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null,
+        PersonalFolderResolver? personalFolder = null)
     {
         engines ??= [new FakeEngine("fal")];
         _ctxStore = new ChatContextStore(Path.Combine(_dir, "chat-context"),
@@ -89,7 +90,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
         return new AudioEditorToolset(accessor.Object, projects.Object, engines, threads, _jobs, _prefs,
             _workspace, withGate ? _turnGate.Object : null, concat,
             edits: withEdits ? new AudioAgentEdits(new DspAudioEngine(threads, _workspace, NullLogger<DspAudioEngine>.Instance, dsp)) : null,
-            library: library, events: _bus, config: config, context: context, turnActors: turnActors);
+            library: library, events: _bus, config: config, context: context, turnActors: turnActors, personalFolder: personalFolder);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -562,6 +563,64 @@ public sealed class AudioEditorToolsetTests : IDisposable
         focus.IsError.Should().BeTrue();
         draft.IsError.Should().BeTrue();
         _store.Get(Owner, PersonalChat).Threads.Should().BeEmpty();
+    }
+
+    // «Личное» с созданием папки на Ensure: «не создали» видно как отсутствие папки
+    private sealed class PersonalStore(string root) : IPersonalProjects
+    {
+        private Project? _project;
+
+        public string Root => root;
+
+        public Project? GetPersonalOf(string ownerId) => _project;
+
+        public Task<Project> EnsurePersonalAsync(string ownerId, CancellationToken ct = default)
+        {
+            Directory.CreateDirectory(root);
+            return Task.FromResult(_project ??= new Project
+                { Id = "personal", OwnerId = ownerId, RootPath = root, Kind = ProjectKind.Personal });
+        }
+
+        public Project? GetByIdIncludingPersonal(string id) => null;
+
+        public IReadOnlyCollection<Project> GetAllPersonal() => _project is null ? [] : [_project];
+
+        public bool DeleteOf(string ownerId) => false;
+    }
+
+    // «Личное» создаётся, только если все пути входа допустимы (ADR-040 §1.2): негодный путь — отказ,
+    // папки нет. Снятие «&& PersonalMediaFolders.AllowsAll(...)» в любой ветке NeedsDisk краснит
+    // этот тест: резолвер вызвался бы и по негодному пути
+    [Fact]
+    public async Task Личный_вход_с_негодным_путём_отказ_а_папка_Личного_не_создана()
+    {
+        var personal = new PersonalStore(Path.Combine(_dir, "personal"));
+        var toolset = Toolset(personalFolder: new PersonalFolderResolver(personal));
+
+        var focus = await Call(toolset, AudioEditorToolset.ToolFocus,
+            new JsonObject { ["file"] = "images/../x.wav" }, Ctx(tail: PersonalChat));
+        var concat = await Call(toolset, AudioEditorToolset.ToolConcat, new JsonObject
+        {
+            ["pieces"] = new JsonArray(
+                new JsonObject { ["file"] = "audio/intro.wav" },
+                new JsonObject { ["file"] = "audio/../x.wav" }),
+        }, Ctx(tail: PersonalChat));
+        var generate = await Call(toolset, AudioEditorToolset.ToolGenerate, new JsonObject
+        {
+            ["threadId"] = Draft(PersonalChat),
+            ["params"] = new JsonObject { ["voiceModelPath"] = "audio/../model.rvc" },
+        }, Ctx(tail: PersonalChat));
+
+        focus.IsError.Should().BeTrue(focus.Text);
+        concat.IsError.Should().BeTrue(concat.Text);
+        generate.IsError.Should().BeTrue(generate.Text);
+        Directory.Exists(personal.Root).Should().BeFalse("ни один отказ не имел права создать папку");
+
+        // Положительная половина: с допустимым путём ленивое создание доходит до дела
+        var allowed = await Call(toolset, AudioEditorToolset.ToolFocus,
+            new JsonObject { ["file"] = "audio/intro.wav" }, Ctx(tail: PersonalChat));
+        allowed.IsError.Should().BeTrue("файла в «Личном» нет — отказ по делу, а не по пути");
+        Directory.Exists(personal.Root).Should().BeTrue("допустимый вход — тот, ради которого папку и создают");
     }
 
     [Fact]

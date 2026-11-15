@@ -372,15 +372,41 @@ public class PersonalFilesEndpointTests : IClassFixture<PersonalFilesEndpointTes
         (await Json(await _owner.GetAsync(Url(chat)))).EnumerateArray()
             .Select(e => e.GetProperty("name").GetString()).Should().Contain("notes2.txt");
 
-        // Переименование и удаление — тоже по обрезанному: «  notes2.txt  » → docs/sub/n.txt.
-        // Пробел внутри сегмента («a b.txt») — законное имя файла, его не снимаем: Trim — по
-        // краям пути, не по сегментам
+        // Переименование и удаление — тоже по обрезанному: «  notes2.txt  » → docs/sub/n.txt
         (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = " notes2.txt ", newPath = " docs/sub/n.txt " }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
         File.Exists(Path.Combine(root, "docs", "sub", "n.txt")).Should().BeTrue();
         File.Exists(Path.Combine(root, "notes2.txt")).Should().BeFalse();
         (await _owner.DeleteAsync(Url(chat, "?" + Q(" docs/sub/n.txt ")))).StatusCode.Should().Be(HttpStatusCode.NoContent);
         File.Exists(Path.Combine(root, "docs", "sub", "n.txt")).Should().BeFalse();
+    }
+
+    // Trim — по краям пути, не по сегментам: «a b.txt» — законное имя, оно пишется, читается,
+    // перечисляется, переносится и удаляется как есть
+    [Fact]
+    public async Task Пробел_внутри_сегмента_имени_не_снимается_файл_живёт_под_ним()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+        (await _owner.PostAsJsonAsync(Url(chat, "/mkdir"), new { path = "docs/sub" })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path = "a b.txt", content = "x" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK, "имя с пробелом внутри — законное");
+        File.Exists(Path.Combine(root, "a b.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(root, "ab.txt")).Should().BeFalse("пробелы внутри имени не вырезаются");
+
+        (await _owner.GetAsync(Url(chat, "/content?" + Q("a b.txt")))).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(await _owner.GetAsync(Url(chat)))).EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).Should().Contain("a b.txt");
+
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "a b.txt", newPath = "docs/sub/a b.txt" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        File.Exists(Path.Combine(root, "docs", "sub", "a b.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(root, "a b.txt")).Should().BeFalse();
+        (await _owner.GetAsync(Url(chat, "/content?" + Q("docs/sub/a b.txt")))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await _owner.DeleteAsync(Url(chat, "?" + Q("docs/sub/a b.txt")))).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        File.Exists(Path.Combine(root, "docs", "sub", "a b.txt")).Should().BeFalse();
     }
 
     [Fact]

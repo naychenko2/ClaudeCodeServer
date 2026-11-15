@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -20,8 +21,10 @@ public class PersonalProjectAccessGuardTests
     private static readonly Regex Call = new(
         @"\.\s*(GetByIdIncludingPersonal|GetAllPersonal)\b", RegexOptions.Compiled);
 
-    private static readonly Regex BlockComment = new(@"/\*.*?\*/", RegexOptions.Compiled | RegexOptions.Singleline);
-    private static readonly Regex LineComment = new(@"//.*$", RegexOptions.Compiled | RegexOptions.Multiline);
+    // Комментарий вырезается только ВНЕ строковых литералов: «/*» внутри строки не открывает блок,
+    // «*/» внутри строки его не закрывает, «//» внутри строки не начинает строковый комментарий.
+    // Иначе литерал «"**/*"» открывал «блочный комментарий» и стирал код до следующей «*/» — вызов
+    // под таким литералом пропадал из снимка. Сам литерал остаётся в тексте скана: он не комментарий.
 
     [Fact]
     public void ВызовыДоступаКЛичному_ВнеСнимка_Отсутствуют()
@@ -63,12 +66,99 @@ public class PersonalProjectAccessGuardTests
     [InlineData("personal?.GetAllPersonal()", true)]
     [InlineData("// personal.GetAllPersonal()", false)]
     [InlineData("/* personal\n.GetAllPersonal() */", false)]
+    // Строковый литерал не маскирует вызов под ним: «/*» внутри строки не открывает блок, и код
+    // до следующей «*/» не стирается. Спрятать вызов в настоящем комментарии по-прежнему можно
+    [InlineData("var g = \"**/*\";\npersonal.GetAllPersonal();", true)]
+    [InlineData("var g = \"**/*\";\npersonal.GetAllPersonal();\n/* настоящий блок */", true)]
+    [InlineData("var u = \"https://example.com\"; personal.GetAllPersonal();", true)]
+    [InlineData("var g = @\"C:\\images\\**/*\"; personal.GetAllPersonal(); /* блок */", true)]
+    [InlineData("var g = \"**/*\";\n// personal.GetAllPersonal()", false)]
     public void Шаблон_ЛовитВызовыНоНеОбъявления(string text, bool expected) =>
         CountCalls(text).Should().Be(expected ? 1 : 0);
 
     // Вызовы в тексте файла целиком, без комментариев (в том числе блочных, растянутых на несколько строк)
-    private static int CountCalls(string text) =>
-        Call.Matches(LineComment.Replace(BlockComment.Replace(text, ""), "")).Count;
+    private static int CountCalls(string text) => Call.Matches(StripComments(text)).Count;
+
+    // Текст без комментариев, строковые литералы — как были. Однопроходный сканер, а не регулярка:
+    // у регулярки нет способа отличить «/*» в строке от начала блока, не разбирая саму строку
+    private static string StripComments(string text)
+    {
+        var sb = new StringBuilder(text.Length);
+        for (var i = 0; i < text.Length;)
+        {
+            if (text[i] is '@' or '$' or '"' && TryStringLiteral(text, i, out var end))
+            {
+                sb.Append(text, i, end - i);
+                i = end;
+                continue;
+            }
+            if (text[i] == '/' && i + 1 < text.Length && text[i + 1] == '/')
+            {
+                while (i < text.Length && text[i] != '\n') i++;
+                continue;
+            }
+            if (text[i] == '/' && i + 1 < text.Length && text[i + 1] == '*')
+            {
+                var close = text.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                i = close < 0 ? text.Length : close + 2;
+                continue;
+            }
+            sb.Append(text[i]);
+            i++;
+        }
+        return sb.ToString();
+    }
+
+    // i — на начале литерала («@», «$» или «"»); при true end — за его закрывающей кавычкой.
+    // Обычный "...", verbatim @"..."", raw """…""" (и их префиксы $). Не закрытый литерал — false:
+    // строка остаётся в скане как код, дальше скан идёт с того же символа
+    private static bool TryStringLiteral(string text, int i, out int end)
+    {
+        end = i;
+        var p = i;
+        var verbatim = false;
+        while (p < text.Length && (text[p] == '@' || text[p] == '$'))
+        {
+            verbatim |= text[p] == '@';
+            p++;
+        }
+        if (p >= text.Length || text[p] != '"') return false;
+
+        var quotes = 0;
+        while (p < text.Length && text[p] == '"')
+        {
+            quotes++;
+            p++;
+        }
+        if (quotes >= 3)
+        {
+            var close = text.IndexOf(new string('"', quotes), p, StringComparison.Ordinal);
+            if (close < 0) return false;
+            end = close + quotes;
+            return true;
+        }
+
+        while (p < text.Length)
+        {
+            if (text[p] == '"')
+            {
+                if (verbatim && p + 1 < text.Length && text[p + 1] == '"')
+                {
+                    p += 2;
+                    continue;
+                }
+                end = p + 1;
+                return true;
+            }
+            if (!verbatim && text[p] == '\\')
+            {
+                p += 2;
+                continue;
+            }
+            p++;
+        }
+        return false;
+    }
 
     private static Dictionary<string, int> ScanCode(string root)
     {

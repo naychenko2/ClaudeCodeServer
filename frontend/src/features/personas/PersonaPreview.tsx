@@ -411,7 +411,7 @@ const specialtyBridge = (persona.specialty && persona.specialty !== 'none' && on
     return (
       <div style={section}>
         <SectionLabel style={{ marginBottom: 8 }}>Специальность</SectionLabel>
-        <button type="button" onClick={onOpenSpecialties} style={{
+        <button type="button" onClick={onOpenSpecialties} data-testid="persona-specialty-open" style={{
           ...linkBtn, display: 'inline-flex', alignItems: 'center', gap: 6,
           padding: '7px 10px', minHeight: isMobile ? TB.iconHitMobile : undefined, background: C.bgWhite,
           border: `1px solid ${C.border}`, borderRadius: R.lg,

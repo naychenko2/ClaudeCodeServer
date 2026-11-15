@@ -16,8 +16,6 @@ test.beforeAll(async ({ playwright, baseURL }) => {
 });
 test.afterAll(async () => { await request?.dispose(); });
 
-const flat = (s: string) => s.replace(/\n/g, ' | ');
-
 test('С10v2: наследование в форме персоны', async ({ context }) => {
   test.setTimeout(120_000);
   for (const old of (await client.get<any[]>('/api/personas')).filter(x => x.name === NAME)) await client.del(`/api/personas/${old.id}`);

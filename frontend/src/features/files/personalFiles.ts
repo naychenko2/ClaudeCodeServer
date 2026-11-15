@@ -2,7 +2,7 @@
 // но маршруты — личные: api/personal/chats/{sessionId}/files. «Проекта» у личного чата нет, поэтому UI
 // получает псевдо-проект с id вида `personal-files:{sessionId}`; api-слой (features/files/api.ts) по этому
 // префиксу переключает базу пути, а набор доступных действий (маршрут 'personal') — только то, что умеет
-// бэкенд: просмотр, скачивание, создание папки и файла, переименование и перенос, удаление.
+// бэкенд: просмотр, скачивание, загрузка файла, создание папки и файла, переименование и перенос, удаление.
 import type { Project } from '../projects/types';
 import type { ProjectRoute } from '../../lib/deviceAgentRoutes';
 
@@ -17,8 +17,10 @@ export function personalFilesBase(id: string): string {
   return `/personal/chats/${encodeURIComponent(id.slice(PREFIX.length))}/files`;
 }
 
-// Маршруты, которые есть у личного маршрута сервера. Всё прочее (сохранение текста, загрузка, git,
-// офисные форматы, заметки, офлайн) панель прячет — маршрута нет, контрола нет
+// Маршруты, которые есть у личного маршрута сервера. Всё прочее (сохранение текста, git,
+// офисные форматы, заметки, офлайн) панель прячет — маршрута нет, контрола нет.
+// 'POST files/upload' — загрузка в панель «Файлы» личного чата (Ф-6/Ф-7): multipart-поле file,
+// необязательный ?path= каталога; перезапись цели разрешена (атомарная подмена на бэке)
 export const PERSONAL_FILES_ROUTES: readonly ProjectRoute[] = [
   'GET files',
   'GET files/tree',
@@ -28,6 +30,7 @@ export const PERSONAL_FILES_ROUTES: readonly ProjectRoute[] = [
   'POST files/create',
   'POST files/mkdir',
   'POST files/rename',
+  'POST files/upload',
   'DELETE files',
 ];
 

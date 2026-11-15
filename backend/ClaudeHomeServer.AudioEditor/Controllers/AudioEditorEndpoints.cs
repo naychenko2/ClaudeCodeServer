@@ -273,7 +273,9 @@ public abstract class AudioEditorEndpoints(
     protected IActionResult ThreadsIn(AudioEditScope scope, string sessionId) => Ok(threads.View(Owner(scope), sessionId));
 
     // Взять звук в работу: ровно одно из file и draftFolder. Нить по этому файлу уже есть — фокус на
-    // неё, второй не будет. Файл и папка черновика — только у проекта
+    // неё, второй не будет. Файл и папка черновика — внутри корня области: у проекта это корень проекта,
+    // у личной области — «Личное» (гейт кладёт его в scope.Project через PersonalFolderResolver, как на
+    // других личных путах). Без папки читать нечего: OpenIn — читающий путь, отказ до диска, папку не создаёт
     protected async Task<IActionResult> OpenIn(AudioEditScope scope, string sessionId, AudioThreadOpenRequest req,
         CancellationToken ct)
     {
@@ -286,17 +288,17 @@ public abstract class AudioEditorEndpoints(
         string? file = null, folder = null;
         if (req.File is not null)
         {
-            if (scope.Project is not { } project) return NoProjectFiles();
-            if (ProjectLinkGuard.ResolveInsideAs(project.RootPath, req.File, UserId) is not { } full || !System.IO.File.Exists(full))
-                return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Файл не найден в проекте");
-            file = Relative(project.RootPath, full);
+            if (scope.Project is not { } root) return NotFoundFile(scope);
+            if (ProjectLinkGuard.ResolveInsideAs(root.RootPath, req.File, UserId) is not { } full || !System.IO.File.Exists(full))
+                return NotFoundFile(scope);
+            file = Relative(root.RootPath, full);
         }
         else if (req.DraftFolder!.Trim().Trim('/', '\\').Length > 0)
         {
-            if (scope.Project is not { } project) return NoProjectFiles();
-            if (ProjectLinkGuard.ResolveInside(project.RootPath, req.DraftFolder) is not { } full || !Directory.Exists(full))
-                return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Папка не найдена в проекте");
-            folder = Relative(project.RootPath, full);
+            if (scope.Project is not { } root) return NotFoundFolder(scope);
+            if (ProjectLinkGuard.ResolveInside(root.RootPath, req.DraftFolder) is not { } full || !Directory.Exists(full))
+                return NotFoundFolder(scope);
+            folder = Relative(root.RootPath, full);
         }
         else folder = "";
 
@@ -594,6 +596,16 @@ public abstract class AudioEditorEndpoints(
     private IActionResult NoProjectFiles() =>
         Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
             "У чата вне проекта нет файлов проекта: только новый звук и загрузка");
+
+    // Отказ OpenIn называет корень своей области: у личного чата проекта нет, и «в проекте» там —
+    // текст, который вводит в заблуждение (дефект e3b442e5)
+    private IActionResult NotFoundFile(AudioEditScope scope) =>
+        Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
+            scope.IsPersonal ? "Файл не найден в «Личном»" : "Файл не найден в проекте");
+
+    private IActionResult NotFoundFolder(AudioEditScope scope) =>
+        Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
+            scope.IsPersonal ? "Папка не найдена в «Личном»" : "Папка не найдена в проекте");
 
     private IActionResult TooLarge() =>
         Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,

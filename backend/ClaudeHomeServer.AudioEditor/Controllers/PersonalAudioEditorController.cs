@@ -77,7 +77,8 @@ public class PersonalAudioEditorController(
     public IActionResult Threads(string sessionId) =>
         Gate(sessionId, out var scope, out var denied) ? ThreadsIn(scope, sessionId) : denied;
 
-    // Только черновик в корне: файл и папка черновика — 400, файлов проекта у личного чата нет
+    // Файл или папка черновика — внутри «Личного» (тот же корень, что отдаёт панель «Звук из Личного»),
+    // или черновик в корне: файлов проекта у личного чата нет
     [HttpPost("threads")]
     public async Task<IActionResult> Open(string sessionId, [FromBody] AudioThreadOpenRequest req, CancellationToken ct) =>
         Gate(sessionId, out var scope, out var denied) ? await OpenIn(scope, sessionId, req, ct) : denied;

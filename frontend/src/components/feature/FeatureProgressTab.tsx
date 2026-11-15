@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { C, FS, FONT, SP } from '../../lib/design';
+import { C, FS, FONT, SP, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { formatDuration } from '../../lib/chatGroups';
 import { plural } from '../../lib/plural';
@@ -81,7 +81,7 @@ export function FeatureProgressTab({
                 ariaExpanded={stepsOpen}
                 onClick={() => setStepsOpen(v => !v)}
                 style={{
-                  alignSelf: 'flex-start', height: 'auto', minHeight: 40,
+                  alignSelf: 'flex-start', height: 'auto', minHeight: TB.iconHitMobile,
                   background: 'transparent', border: 'none', color: C.accent, fontSize: FS.sm,
                 }}
               >

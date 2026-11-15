@@ -36,7 +36,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FocusEvent, ReactElement } from 'react';
 import { MessageCircle, FileText, Check, Clock, Minus, ChevronDown } from 'lucide-react';
-import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
+import { C, R, FS, SP, FONT, SHADOW, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Menu, MenuItem } from '../ui/Menu';
 import { Tooltip } from '../ui/Tooltip';
@@ -63,7 +63,7 @@ import type { FeatureRun, FeatureStepChain, FeatureStageExecutor, FeatureTask } 
 // = 7 px; OVERHANG = 10 — раскладочная константа (отступы и зазор считаются от неё),
 // она больше фактического вылета — зоны соседних строк переноса не соприкасаются
 // с запасом. Отступ цепочки от шапки (12 px) тоже больше фактического вылета.
-const TOUCH_H = 40;
+const TOUCH_H = TB.iconHitMobile;
 const NODE_H = 20; // раскладочная высота узла (отступы компенсируют вылет)
 const OVERHANG = (TOUCH_H - NODE_H) / 2; // 10 — раскладочный, фактический вылет 7
 
@@ -218,7 +218,7 @@ function StepCode({ card, chain, featureId, featureTitle, projectId, marks, isMo
     borderRadius: R.sm,
     padding: `0 ${SP.xs}px`,
     cursor: 'pointer',
-    ...(isMobile ? { minWidth: 40, minHeight: 40, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' } : null),
+    ...(isMobile ? { minWidth: TB.iconHitMobile, minHeight: TB.iconHitMobile,display: 'inline-flex', alignItems: 'center', justifyContent: 'center' } : null),
     ...(open ? { background: C.bgSelected } : null),
   };
 

@@ -9,7 +9,7 @@
 // Высота карточки постоянна при любом числе ревью: значков на виток нет.
 
 import { type CSSProperties, useState } from 'react';
-import { C, R, SP, FS, FONT, SHADOW } from '../../lib/design';
+import { C, R, SP, FS, FONT, SHADOW, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 import type { FeatureVerdicts } from '../../types/featureRun';
 
@@ -75,7 +75,7 @@ const CHIP: CSSProperties = {
   background: C.bgWhite, border: `1px solid ${C.borderLight}`, color: C.textPrimary, fontWeight: 400,
 };
 const CHIP_SELECTED: CSSProperties = { background: C.bgSelected, border: `1px solid ${C.textSecondary}` };
-const CHIP_MOBILE: CSSProperties = { width: '100%', minHeight: 40 };
+const CHIP_MOBILE: CSSProperties = { width: '100%', minHeight: TB.iconHitMobile };
 const DOT: CSSProperties = { width: 8, height: 8, borderRadius: R.max, flexShrink: 0 };
 const COUNT: CSSProperties = { color: C.textHeading, fontWeight: 600, fontVariantNumeric: 'tabular-nums' };
 const PCT: CSSProperties = { marginLeft: 'auto', paddingLeft: SP.sm, color: C.textMuted, fontVariantNumeric: 'tabular-nums' };

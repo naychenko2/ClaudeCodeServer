@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
 import { anchorFor, nextFileTaskAnchor, type FileTaskAnchor } from '../lib/featureOpenFile';
-import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug, Users, type LucideIcon } from 'lucide-react';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug, Users, Settings, type LucideIcon } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
 import { ProjectFeature } from '../types';
@@ -1350,6 +1350,13 @@ const windowWidth = useWindowWidth();
       icon: <Users size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
       onClick: openMembersSettings,
     }] : []),
+    // Шестерёнка из крошки HubHeader на телефоне не рисуется (шапки там нет) — вход в
+    // настройки проекта живёт здесь, тем же колбэком, что и на десктопе
+    {
+      key: 'project-settings', label: 'Настройки проекта',
+      icon: <Settings size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
+      onClick: openProjectSettings,
+    },
     {
       key: 'models-spend', label: 'Модели и расход',
       icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,

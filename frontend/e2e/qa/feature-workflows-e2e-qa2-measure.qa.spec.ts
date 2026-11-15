@@ -185,10 +185,12 @@ test('S9c: «Создать проектный» на 360 — настройки
   await page.waitForTimeout(4000);
   // На мобиле пункт настроек может быть свёрнут в «Ещё».
   if (await page.getByRole('button', { name: /Настройки проекта/ }).count() === 0) {
-    await page.getByRole('button', { name: 'Ещё' }).first().click({ timeout: 8000 }).catch(() => undefined);
+    // force: точка-индикатор «Ещё» анимирована — по «стабильности» Playwright кнопку не дожидается
+    await page.getByRole('button', { name: 'Ещё' }).first().click({ timeout: 8000, force: true }).catch(() => undefined);
     await page.waitForTimeout(1500);
   }
-  await page.getByRole('button', { name: /Настройки проекта/ }).first().click({ timeout: 15000 });
+  // Пункт «Ещё» — role=menuitem, шестерёнка десктопной крошки — button
+  await page.getByRole('button', { name: /Настройки проекта/ }).or(page.getByRole('menuitem', { name: /Настройки проекта/ })).first().click({ timeout: 15000 });
   await page.waitForTimeout(3000);
   const sect = page.getByText('Процессы', { exact: true }).first();
   console.log('S9c секция «Процессы» в настройках:', await sect.count());

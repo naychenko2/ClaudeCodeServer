@@ -1,40 +1,43 @@
 // Панель «Звук из Личного» личного чата: список звуковых файлов папки «Личного» (дерево личных файлов
-// чата) и вход в контекст хода. «Работать с этим» делает файл основным звуком, «В контекст» кладёт его
-// референсом с ролью «Кусок склейки» (роль берёт вид основного объекта — rolesFor).
+// чата) и вход в контекст хода. «Работать с этим» делает файл основным звуком. Кнопки «В контекст» нет:
+// проектный вид ссылки в личном чате бэкенд отвергает, личный вид (Ф-9) ещё не заведён.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FileAudio, Target } from 'lucide-react';
 import {
-  Button, ContextAddButton, EmptyState, GenerationPanel, request, showToast, C, FS, SP, ICON_SIZE, ICON_STROKE,
+  Button, EmptyState, GenerationPanel, request, showToast, C, FS, SP, ICON_SIZE, ICON_STROKE,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
 import { audioRefOfPath } from '../context/opener';
 import { workWithInContext } from '../context/work';
-import { PERSONAL_SCOPE, personalFilesPath, personalSoundFiles, type PersonalFileEntry } from '../scope';
+import { personalFilesPath, personalSoundFiles, type PersonalFileEntry } from '../scope';
 
 export const PERSONAL_SOUND_KEY = 'personal-sound';
-
-const PROJECT_FILE_KIND = 'project-file';
 
 export function PersonalSoundPanel({ ctx, layout = 'column' }: { ctx: WorkspacePanelDefCtx; layout?: 'column' | 'sheet' }) {
   const { sessionId } = ctx;
   const [files, setFiles] = useState<PersonalFileEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
+  const [reloadKey, setReloadKey] = useState(0);
+  const load = () => setReloadKey(k => k + 1);
+
+  useEffect(() => {
     if (!sessionId) return;
+    // Поздний ответ прежнего чата не должен перезаписать список нового
+    let stale = false;
+    setFiles(null);
     setError(null);
     request<PersonalFileEntry[]>(`${personalFilesPath(sessionId)}/tree?path=`, { live: true })
-      .then(list => setFiles(personalSoundFiles(list)))
-      .catch((e: Error) => setError(e.message || 'Не удалось получить файлы «Личного»'));
-  }, [sessionId]);
-
-  useEffect(() => { setFiles(null); load(); }, [load]);
+      .then(list => { if (!stale) setFiles(personalSoundFiles(list)); })
+      .catch((e: Error) => { if (!stale) setError(e.message || 'Не удалось получить файлы «Личного»'); });
+    return () => { stale = true; };
+  }, [sessionId, reloadKey]);
 
   const work = async (path: string) => {
     if (!sessionId) return;
     try {
-      const ref = await audioRefOfPath(PERSONAL_SCOPE, sessionId, path);
+      const ref = await audioRefOfPath(null, sessionId, path);
       if (ref) await workWithInContext(sessionId, String(ref.ref.threadId), null, !ctx.isMobile);
     } catch (e) {
       showToast('Не удалось взять файл в работу', (e as Error).message, 'error');
@@ -70,7 +73,6 @@ export function PersonalSoundPanel({ ctx, layout = 'column' }: { ctx: WorkspaceP
               title="Звук станет основным в контексте хода" onClick={() => { void work(f.path); }}>
               Работать с этим
             </Button>
-            {sessionId && <ContextAddButton sessionId={sessionId} projectId={null} candidate={{ kind: PROJECT_FILE_KIND, ref: { path: f.path } }} size="sm" />}
           </div>
         ))}
       </div>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Check, GitBranch, ListChecks, ListEnd, ListX, MessageSquare, Pause, Play, RotateCcw, Zap } from 'lucide-react';
-import { C, R, FS, SP, FONT, MODAL_W } from '../../lib/design';
+import { C, R, FS, SP, FONT, MODAL_W, TB } from '../../lib/design';
 import { refetchFeaturePage } from '../../lib/featurePage';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
@@ -1038,7 +1038,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
         key={`silent-chat-${i}`}
         size="xs"
         variant="secondary"
-        style={{ background: C.bgWhite, minHeight: isMobile ? 40 : undefined }}
+        style={{ background: C.bgWhite, minHeight: isMobile ? TB.iconHitMobile : undefined }}
         onClick={() => {
           recordFeatureReturn(fid, { kind: 'chat', id: sid }, featureTitle);
           void openChatById(sid);

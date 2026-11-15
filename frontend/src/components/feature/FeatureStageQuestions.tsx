@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP, TB } from '../../lib/design';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
@@ -83,7 +83,7 @@ function OpenCard({ q, taskId, isMobile, onAnswered }: { q: StageQuestion; taskI
       {error && <div data-testid="stage-question-error" role="alert" style={{ fontSize: FS.xs, color: C.dangerText }}>{error}</div>}
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <Button size="sm" variant="primary" dataTestId="stage-question-send" loading={sending}
-          disabled={!text.trim()} style={isMobile ? { minHeight: 40 } : undefined} onClick={send}>
+          disabled={!text.trim()} style={isMobile ? { minHeight: TB.iconHitMobile } : undefined} onClick={send}>
           Ответить
         </Button>
       </div>

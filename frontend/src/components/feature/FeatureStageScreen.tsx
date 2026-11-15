@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { SP, FS, C } from '../../lib/design';
+import { SP, FS, C, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { StageHead, StagePlates, StageTaskPicker } from './FeatureStageHead';
 import { Notice } from '../ui/Notice';
@@ -171,7 +171,7 @@ function StageBody({ taskId, isMobile, stageTitle, onChat, onOpenChat }: { taskI
   if (state.status === 'error') {
     return (
       <Notice tone="danger" icon={AlertTriangle} data-testid="stage-screen-error"
-        action={<Button size="xs" variant="ghost" style={isMobile ? { minHeight: 40 } : undefined} onClick={() => setAttempt(n => n + 1)}>Повторить</Button>}>
+        action={<Button size="xs" variant="ghost" style={isMobile ? { minHeight: TB.iconHitMobile } : undefined} onClick={() => setAttempt(n => n + 1)}>Повторить</Button>}>
         {state.message}
       </Notice>
     );
@@ -225,7 +225,7 @@ export function FeatureStageScreen({ tasks, isMobile, chrome }: { tasks: StageSc
   if (tasks.length === 0 && !chrome) return null;
   const taskId = tasks.length === 0 ? null : tasks.some(t => t.id === picked) ? picked! : tasks[0].id;
   const executorChat = chat && chat.taskId === taskId ? chat.sessionId : null;
-  const touch = isMobile ? { minHeight: 40 } : undefined;
+  const touch = isMobile ? { minHeight: TB.iconHitMobile } : undefined;
   return (
     <div data-testid="stage-screen" style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minWidth: 0 }}>
       {chrome && (

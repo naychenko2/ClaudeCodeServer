@@ -4,7 +4,7 @@
 // «Раз / Последний» у инструментов считаются на клиенте по списку вызовов (бэк их не отдаёт).
 
 import { useState, type CSSProperties } from 'react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { ReviewKv, type ReviewKvRow } from './FeatureReviewParts';
@@ -112,7 +112,7 @@ function Collapsible({ id, title, children, isMobile, hint, badge, defaultOpen =
         <span style={SEC_LABEL}>{title}</span>
         {badge && <span data-testid={`${id}-badge`}><Chip dense>{badge}</Chip></span>}
         {hint && <span style={{ fontSize: FS.xs, color: C.textMuted }}>{hint}</span>}
-        <Button size="xs" variant="ghost" style={isMobile ? { minHeight: 40, marginLeft: 'auto' } : { marginLeft: 'auto' }}
+        <Button size="xs" variant="ghost" style={isMobile ? { minHeight: TB.iconHitMobile, marginLeft: 'auto' } : { marginLeft: 'auto' }}
           dataTestId={`${id}-toggle`} ariaLabel={`${open ? 'Скрыть' : 'Показать'}: ${title}`}
           onClick={() => setOpen(v => !v)}>
           {open ? 'Скрыть' : 'Показать'}
@@ -230,7 +230,7 @@ export function FeatureStageInput({ input, isMobile, templateName, executorSessi
       )}
       {executorSessionId && onOpenChat && (
         <div>
-          <Button size="sm" variant="ghost" style={isMobile ? { minHeight: 40 } : undefined}
+          <Button size="sm" variant="ghost" style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
             dataTestId="stage-input-open-chat" onClick={() => onOpenChat(executorSessionId)}>
             Весь транскрипт в чате исполнителя →
           </Button>

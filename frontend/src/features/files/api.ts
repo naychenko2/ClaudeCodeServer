@@ -7,6 +7,12 @@ import { conflictBodyOf, readStoredToken, request } from '../../lib/offline';
 import type { ConflictBody, EtagRef, FileConflictAuthor, FileConflictSource } from '../../lib/offline';
 import { assertServerRoute, projectRequest, projectRouteOf } from '../../lib/deviceAgent';
 import type { ChangedBySession, FileEntry, SyncMark } from '../../types';
+import { isPersonalFilesId, personalFilesBase } from './personalFiles';
+
+// База файлового API: у проекта — api/projects/{id}/files, у «Мои файлы» личного чата (псевдо-id) — личный маршрут чата.
+// Остальные методы ниже зовутся только из контролов, которых у личного маршрута нет (маршрут 'personal')
+const filesBase = (projectId: string): string =>
+  isPersonalFilesId(projectId) ? personalFilesBase(projectId) : `/projects/${projectId}/files`;
 
 // Конфликт сохранения файла (S2c-F2a, К8): 409 с телом {code:'file_changed', …} на
 // PUT files/content с If-Match. Поля — тело 409 как есть: актуальное состояние файла на
@@ -61,7 +67,20 @@ export const filesApi = {
     // а не из анкера проекта; параметр необязательный — старые вызовы не меняются.
     // taskId (FS-F1a, бэк FS-B1b): анкер — дерево задачи; два анкера сразу сервер
     // отвергает 400, поэтому при taskId sessionId не шлётся.
+    // Скачивание личного файла (Content-Disposition: attachment)
+    downloadUrl: (projectId: string, path: string): string => {
+      const token = readStoredToken();
+      const params = new URLSearchParams({ path });
+      if (token) params.set('access_token', token);
+      return `/api${filesBase(projectId)}/download?${params}`;
+    },
     fileUrl: (projectId: string, path: string, sessionId?: string, taskId?: string): string => {
+      if (isPersonalFilesId(projectId)) {
+        const token = readStoredToken();
+        const params = new URLSearchParams({ path });
+        if (token) params.set('access_token', token);
+        return `/api${filesBase(projectId)}/stream?${params}`;
+      }
       // Локальный проект: поток отдаёт агент по узкому билету на путь, а его выдача
       // асинхронна — синхронного URL нет (точка — agentStreamUrl в deviceAgent.ts).
       // Основной билет проекта в URL не кладём никогда
@@ -77,11 +96,11 @@ export const filesApi = {
       return `/api/projects/${encodeURIComponent(projectId)}/${base}?${params}`;
     },
     list: (projectId: string, path = '') =>
-      projectRequest<FileEntry[]>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`),
+      projectRequest<FileEntry[]>(`${filesBase(projectId)}?path=${encodeURIComponent(path)}`),
     tree: (projectId: string, path = '', showHidden?: boolean) =>
-      projectRequest<FileEntry[]>(`/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}${showHidden ? '&showHidden=true' : ''}`),
+      projectRequest<FileEntry[]>(`${filesBase(projectId)}/tree?path=${encodeURIComponent(path)}${showHidden ? '&showHidden=true' : ''}`),
     search: (projectId: string, q: string) =>
-      projectRequest<FileEntry[]>(`/projects/${projectId}/files/search?q=${encodeURIComponent(q)}`),
+      projectRequest<FileEntry[]>(`${filesBase(projectId)}/search?q=${encodeURIComponent(q)}`),
     // Где путь реально лежит в деревьях проекта (анкер + worktree). paths ≤ 50,
     // иначе сервер 400; в ответе только найденные пути. Формат — DTO endpoints
     // files/locate (не TreeHit: TreeHit — внутренний тип локатора, без path и
@@ -109,7 +128,7 @@ export const filesApi = {
       const etagRef: EtagRef = {};
       const query = `path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.taskId ? `&taskId=${encodeURIComponent(opts.taskId)}` : opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`;
       try {
-        const data = await projectRequest<FileContentResult>(`/projects/${projectId}/files/content?${query}`, { etagRef });
+        const data = await projectRequest<FileContentResult>(`${filesBase(projectId)}/content?${query}`, { etagRef });
         return { ...data, etag: etagRef.etag };
       } catch (e) {
         // Форма ошибки — request() (offline.ts) и agentRequest() (deviceAgent.ts): status + body.
@@ -168,16 +187,16 @@ export const filesApi = {
     revert: (projectId: string, path: string) =>
       projectRequest<void>(`/projects/${projectId}/files/revert`, { method: 'POST', body: JSON.stringify({ path }) }),
     createFile: (projectId: string, path: string, content?: string) =>
-      projectRequest<void>(`/projects/${projectId}/files/create`, { method: 'POST', body: JSON.stringify({ path, content }) }),
+      projectRequest<void>(`${filesBase(projectId)}/create`, { method: 'POST', body: JSON.stringify({ path, content }) }),
     mkdir: (projectId: string, path: string) =>
-      projectRequest<void>(`/projects/${projectId}/files/mkdir`, { method: 'POST', body: JSON.stringify({ path }) }),
+      projectRequest<void>(`${filesBase(projectId)}/mkdir`, { method: 'POST', body: JSON.stringify({ path }) }),
     rename: (projectId: string, oldPath: string, newPath: string) =>
-      projectRequest<void>(`/projects/${projectId}/files/rename`, {
+      projectRequest<void>(`${filesBase(projectId)}/rename`, {
         method: 'POST',
         body: JSON.stringify({ oldPath, newPath }),
       }),
     delete: (projectId: string, path: string) =>
-      projectRequest<void>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+      projectRequest<void>(`${filesBase(projectId)}?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
     saveFromUrl: (projectId: string, url: string, path: string) =>
       projectRequest<{ path: string }>(`/projects/${projectId}/files/save-from-url`, {
         method: 'POST',

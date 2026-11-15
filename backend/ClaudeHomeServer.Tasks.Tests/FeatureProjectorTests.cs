@@ -2750,6 +2750,77 @@ public class FeatureProjectorTests
         run.Stages.Select(x => x.Key).Should().NotContain(["cut", "design", "plan", "review", "final", "merge"]);
     }
 
+    // Дефект a5bca2c5: у предложения с известным составом шаблона стадии рисуются настоящим
+    // маршрутом — колонки по графу, After по рёбрам; прежде все лежали в колонке 0 с пустым After,
+    // и фронт обводил их рамкой «параллельно».
+    [Fact]
+    public void Build_Stages_ПредложениеЛинейныйШаблон_КолонкиИAfterПоГрафу()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem
+        {
+            Id = "e-a5bca2c5-l", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-1) },
+        };
+        IReadOnlyList<RouteStage> route =
+        [
+            new() { Id = "cut", Role = TaskRoles.Cut, After = [] },
+            new() { Id = "plan", Role = TaskRoles.Plan, After = ["cut"] },
+            new() { Id = "step", Role = TaskRoles.Step, After = ["plan"] },
+            new() { Id = "review", Role = TaskRoles.Review, After = ["step"] },
+        ];
+        IReadOnlyDictionary<string, string> presence = new Dictionary<string, string>
+            { ["cut"] = "on", ["plan"] = "on", ["prod"] = "on", ["review"] = "on" };
+
+        var run = FeatureProjector.BuildCore(epic, [epic], t, proposalPresence: _ => presence, proposalRoute: _ => route);
+
+        run.Stages.Select(x => x.Column).Should().Equal(0, 1, 2, 3);
+        run.Stages.Select(x => x.Key).Should().Equal("cut", "plan", "prod", "review");
+        run.Stages.Select(x => string.Join(",", x.After)).Should().Equal("", "cut", "plan", "step");
+        run.Stages.Should().OnlyContain(s => s.Proposed);
+    }
+
+    [Fact]
+    public void Build_Stages_ПредложениеПараллельныйШаблон_ОбщаяКолонкаУВетвей()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem
+        {
+            Id = "e-a5bca2c5-p", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-1) },
+        };
+        IReadOnlyList<RouteStage> route =
+        [
+            new() { Id = "plan", Role = TaskRoles.Plan, After = [] },
+            new() { Id = "back", Role = TaskRoles.Step, Lane = "back", After = ["plan"] },
+            new() { Id = "front", Role = TaskRoles.Step, Lane = "front", After = ["plan"] },
+            new() { Id = "review", Role = TaskRoles.Review, After = ["back", "front"] },
+        ];
+        IReadOnlyDictionary<string, string> presence = new Dictionary<string, string>
+            { ["plan"] = "on", ["prod"] = "on", ["review"] = "on" };
+
+        var run = FeatureProjector.BuildCore(epic, [epic], t, proposalPresence: _ => presence, proposalRoute: _ => route);
+
+        run.Stages.Select(x => x.Column).Should().Equal(0, 1, 1, 2);
+        run.Stages.Select(x => x.Id).Should().Equal("plan", "back", "front", "review");
+    }
+
+    // Без состава шаблона (шаблон не найден) предложение остаётся легаси-списком — как раньше.
+    [Fact]
+    public void Build_Stages_ПредложениеБезСоставаШаблона_ЛегасиКолонкаНоль()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem
+        {
+            Id = "e-a5bca2c5-n", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-1) },
+        };
+
+        var run = FeatureProjector.BuildCore(epic, [epic], t, proposalRoute: _ => null);
+
+        run.Stages.Should().OnlyContain(s => s.Column == 0 && s.After.Count == 0);
+    }
+
     [Fact]
     public void Build_ByDecision_ЛегасиИПодтверждённый_ПризнакаНет()
     {

@@ -118,9 +118,14 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         events?.OnNotification<TurnCompleted>(OnTurnCompleted, "ImageEditorToolset.ResetLaunches");
     }
 
-    private static bool NeedsDisk(string tool, JsonObject args) =>
-        (tool == ToolFocus && Str(args, "file") is not null)
-        || (tool == ToolGenerate && args["references"] is JsonArray { Count: > 0 });
+    // «Личное» создаётся, только если пути допустимы (ADR-040 §1.2): запрос с негодным путём получит отказ, не оставив папку
+    private static bool NeedsDisk(string tool, JsonObject args) => tool switch
+    {
+        ToolFocus => Str(args, "file") is { } file && PersonalMediaFolders.AllowsAll([file]),
+        ToolGenerate => args["references"] is JsonArray { Count: > 0 } refs
+            && PersonalMediaFolders.AllowsAll(refs.Select(r => r is JsonObject o ? Str(o, "path") : null)),
+        _ => false,
+    };
 
     // Актор приватности — тот, кто запустил ход, а не арендатор (ownerId). Неизвестен (реестра нет, рестарт) —
     // null: чужим считается любое private, как в WorkspaceToolset (fail-closed)

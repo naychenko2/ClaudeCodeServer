@@ -166,14 +166,30 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         };
     }
 
+    // «Личное» создаётся, только если все пути допустимы (ADR-040 §1.2): негодный путь — отказ без папки
     private static bool NeedsDisk(string tool, JsonObject args) => tool switch
     {
-        ToolFocus => Str(args, "file") is not null,
-        ToolConcat => args["pieces"] is JsonArray pieces && pieces.Any(p => p is JsonObject o && Str(o, "file") is not null),
+        ToolFocus => Str(args, "file") is { } file && PersonalMediaFolders.AllowsAll([file]),
+        ToolConcat => args["pieces"] is JsonArray pieces
+            && pieces.OfType<JsonObject>().Select(o => Str(o, "file")).Where(f => f is not null).ToList() is { Count: > 0 } files
+            && PersonalMediaFolders.AllowsAll(files),
         ToolGenerate => args["params"] is JsonObject fields
-            && fields.Any(kv => kv.Key.Contains("path", StringComparison.OrdinalIgnoreCase)),
+            && PathParams(fields) is { Count: > 0 } paths && PersonalMediaFolders.AllowsAll(paths),
         _ => false,
     };
+
+    // Значения полей с «path» в имени: строка или массив строк; всё иное даёт null-путь — недопустимый
+    private static List<string?> PathParams(JsonObject fields)
+    {
+        var paths = new List<string?>();
+        foreach (var (key, value) in fields)
+        {
+            if (!key.Contains("path", StringComparison.OrdinalIgnoreCase)) continue;
+            if (value is JsonArray array) paths.AddRange(array.Select(item => item is JsonValue v && v.TryGetValue<string>(out var s) ? s : null));
+            else paths.Add(value is JsonValue single && single.TryGetValue<string>(out var text) ? text : null);
+        }
+        return paths;
+    }
 
     // ── audio_focus и audio_new ────────────────────────────────────────────────
 

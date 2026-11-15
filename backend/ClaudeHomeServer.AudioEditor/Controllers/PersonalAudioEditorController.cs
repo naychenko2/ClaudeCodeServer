@@ -57,9 +57,10 @@ public class PersonalAudioEditorController(
     {
         if (!Gate(sessionId, out var scope, out var denied)) return denied;
         // Входы из файлов «Личного» — вход, которому нужен диск: папку создаём здесь, а не на GET
-        if (!string.IsNullOrWhiteSpace(form.ReferencePath) || form.ClipPaths is { Count: > 0 }
-            || !string.IsNullOrWhiteSpace(form.VoiceModelPath) || !string.IsNullOrWhiteSpace(form.VoiceIndexPath)
-            || !string.IsNullOrWhiteSpace(form.VideoPath))
+        // и только когда все пути допустимы (негодный путь — отказ без создания папки)
+        var paths = (form.ClipPaths ?? []).Concat([form.ReferencePath, form.VoiceModelPath, form.VoiceIndexPath, form.VideoPath])
+            .Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+        if (paths.Count > 0 && PersonalMediaFolders.AllowsAll(paths))
             scope = await gate.WithFolderAsync(scope, ct);
         return await StartIn(scope, form, ct);
     }
@@ -122,7 +123,9 @@ public class PersonalAudioEditorController(
     public async Task<IActionResult> Concat(string sessionId, [FromBody] AudioConcatRequest? req, CancellationToken ct)
     {
         if (!Gate(sessionId, out var scope, out var denied)) return denied;
-        if (req?.Pieces?.Any(p => !string.IsNullOrWhiteSpace(p.ProjectFile)) == true)
+        // Папку «Личного» создаём, только если все файловые куски допустимы: негодный путь — отказ без папки
+        var pieceFiles = req?.Pieces?.Where(p => !string.IsNullOrWhiteSpace(p.ProjectFile)).Select(p => p.ProjectFile).ToList() ?? [];
+        if (pieceFiles.Count > 0 && PersonalMediaFolders.AllowsAll(pieceFiles))
             scope = await gate.WithFolderAsync(scope, ct);
         return await ConcatIn(scope, sessionId, req, ct);
     }

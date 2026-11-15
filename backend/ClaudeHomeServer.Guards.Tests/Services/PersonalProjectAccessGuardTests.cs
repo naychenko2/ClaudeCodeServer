@@ -14,9 +14,14 @@ public class PersonalProjectAccessGuardTests
     private const string AllowListPath =
         "backend/ClaudeHomeServer.Guards.Tests/Services/PersonalProjectAccessAllowList.txt";
 
-    // Точка обязательна: объявления методов (без точки) вызовами не считаются
+    // Точка обязательна: объявления методов (без точки) вызовами не считаются. Скобки не требуем: группа методов
+    // («personal.GetAllPersonal» как делегат) — тоже путь к «Личному». \s пересекает перенос строки, поэтому
+    // скан идёт по тексту файла целиком: вызов, разорванный по строкам («personal\n    .GetAllPersonal()»), виден
     private static readonly Regex Call = new(
-        @"\.\s*(GetByIdIncludingPersonal|GetAllPersonal)\s*\(", RegexOptions.Compiled);
+        @"\.\s*(GetByIdIncludingPersonal|GetAllPersonal)\b", RegexOptions.Compiled);
+
+    private static readonly Regex BlockComment = new(@"/\*.*?\*/", RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex LineComment = new(@"//.*$", RegexOptions.Compiled | RegexOptions.Multiline);
 
     [Fact]
     public void ВызовыДоступаКЛичному_ВнеСнимка_Отсутствуют()
@@ -52,8 +57,18 @@ public class PersonalProjectAccessGuardTests
     [InlineData("Project? GetByIdIncludingPersonal(string id);", false)]
     [InlineData("public IReadOnlyCollection<Project> GetAllPersonal()", false)]
     [InlineData("personal.GetPersonalOf(ownerId)", false)]
-    public void Шаблон_ЛовитВызовыНоНеОбъявления(string line, bool expected) =>
-        Call.IsMatch(line).Should().Be(expected);
+    [InlineData("var all = personal.GetAllPersonal;", true)]
+    [InlineData("personal\n    .GetByIdIncludingPersonal(id)", true)]
+    [InlineData("personal.\n    GetAllPersonal\n    ()", true)]
+    [InlineData("personal?.GetAllPersonal()", true)]
+    [InlineData("// personal.GetAllPersonal()", false)]
+    [InlineData("/* personal\n.GetAllPersonal() */", false)]
+    public void Шаблон_ЛовитВызовыНоНеОбъявления(string text, bool expected) =>
+        CountCalls(text).Should().Be(expected ? 1 : 0);
+
+    // Вызовы в тексте файла целиком, без комментариев (в том числе блочных, растянутых на несколько строк)
+    private static int CountCalls(string text) =>
+        Call.Matches(LineComment.Replace(BlockComment.Replace(text, ""), "")).Count;
 
     private static Dictionary<string, int> ScanCode(string root)
     {
@@ -62,8 +77,7 @@ public class PersonalProjectAccessGuardTests
         {
             var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
             if (rel.Contains("Tests") || rel.Contains("/obj/") || rel.Contains("/bin/")) continue;
-            var count = File.ReadAllLines(file)
-                .Count(l => Call.IsMatch(Regex.Replace(l, @"//.*$", "")));
+            var count = CountCalls(File.ReadAllText(file));
             if (count > 0) result[rel] = count;
         }
         return result;

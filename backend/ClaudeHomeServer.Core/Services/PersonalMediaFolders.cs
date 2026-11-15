@@ -36,6 +36,23 @@ public static class PersonalMediaFolders
     public static bool Allows(string kind, string? relative) => Resolve(kind, relative, out _) is null;
 
     /// <summary>
+    /// Все пути лежат внутри подпапки какого-либо вида (images/audio/video). Предусловие создания «Личного»
+    /// на входах из файлов: папка создаётся, только если запрос вообще мог бы пройти; пустой набор и пустые
+    /// пути — false (нечего читать с диска). Точная проверка вида — у потребителя пути.
+    /// </summary>
+    public static bool AllowsAll(IEnumerable<string?> paths)
+    {
+        var any = false;
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            if (!Allows(Images, path) && !Allows(Audio, path) && !Allows(Video, path)) return false;
+            any = true;
+        }
+        return any;
+    }
+
+    /// <summary>
     /// Создаёт подпапку (вместе с вложенными) и отдаёт её полный путь. null — путь вне корня или через
     /// символическую ссылку, либо папку создать нельзя.
     /// </summary>

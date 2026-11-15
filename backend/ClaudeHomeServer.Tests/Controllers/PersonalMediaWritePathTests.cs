@@ -148,6 +148,18 @@ public class PersonalMediaWritePathTests : IDisposable
         PersonalMediaFolders.Allows(PersonalMediaFolders.Images, requested).Should().BeFalse();
     }
 
+    // Предусловие создания «Личного» на входах из файлов: негодный путь — папку не создаём
+    [Theory]
+    [InlineData(true, "images/a.png")]
+    [InlineData(true, "audio/sub/a.wav", "video/clip.mp4")]
+    [InlineData(false, "notes/a.png")]
+    [InlineData(false, "images/../secret")]
+    [InlineData(false, "audio/a.wav", "../etc")]
+    [InlineData(false, "")]
+    [InlineData(false)]
+    public void AllowsAll_пускает_только_пути_внутри_подпапок_видов(bool expected, params string[] paths) =>
+        PersonalMediaFolders.AllowsAll(paths).Should().Be(expected);
+
     [Fact]
     public void EnsureDirectory_создаёт_вложенную_папку_внутри_корня()
     {

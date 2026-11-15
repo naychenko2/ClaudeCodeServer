@@ -7,8 +7,7 @@
 //   (пункт Major вердикта: раньше оба назывались «Проверка»);
 // - без title (легаси и этап без имени) — как раньше: имя роли (stageName) + линия (laneWord)
 //   для параллельных этапов одной роли; без линии — просто имя роли;
-// - длинное имя этапа (как в шагах воспроизведения дефекта) ограничено рамкой узла:
-//   multiline-clamp на 2 строки; полное имя остаётся в title и aria-label;
+// - длинное имя этапа ограничено рамкой узла: multiline-clamp на 3 строки; полное имя остаётся в title и aria-label;
 // - узел «предложено» по макету (F33a): рамка dashed c-plan и заголовок plan-text;
 //   пометка «предложено» в строке меты (при пустой мете — на её месте, при занятой —
 //   рядом через « · »), один раз и не в нижней строке; proposed=false (бэк шлёт false
@@ -139,18 +138,24 @@ describe('FeatureProcessGraph: подпись узла — имя этапа с 
   });
 });
 
-describe('FeatureProcessGraph: длинное имя этапа переносится без обрезки', () => {
+describe('FeatureProcessGraph: длинное имя этапа не выходит за рамку узла', () => {
   const LONG_TITLE = 'Проверка плана и макетов перед работами';
 
   const longQaNode = () => render([mkStage('qa', 'qa-long', 'qa', 0, 'pending', [], undefined, LONG_TITLE)]);
   const titleSpan = (c: unknown) => findNodeByAttr(c as never, 'data-testid', 'pgraph-title-qa-long')!;
 
-  it('подпись без clamp и overflow hidden, сжимается по ширине узла', () => {
+  it('подпись ограничена тремя строками с многоточием и сжимается по ширине узла', () => {
     const style = (reactProps(titleSpan(longQaNode()) as never) as { style: Record<string, unknown> }).style;
-    expect(style.WebkitLineClamp).toBeUndefined();
-    expect(style.overflow).toBeUndefined();
+    expect(style.WebkitLineClamp).toBe(3);
+    expect(style.overflow).toBe('hidden');
+    expect(style.display).toBe('-webkit-box');
     expect(style.minWidth).toBe(0);
     expect(textNodes(titleSpan(longQaNode()) as never).join('')).toBe(LONG_TITLE);
+  });
+
+  it('короткое имя — тот же стиль, текст не меняется', () => {
+    const c = render([mkStage('qa', 'qa-long', 'qa', 0, 'pending', [], undefined, 'Проверка')]);
+    expect(textNodes(titleSpan(c) as never).join('')).toBe('Проверка');
   });
 
   it('полное имя доступно: aria-label и title', () => {

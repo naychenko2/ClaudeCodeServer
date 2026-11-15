@@ -17,6 +17,9 @@ backend/ClaudeHomeServer/WebDav/WebDavHandler.cs|1
 backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|2
 backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|2
 backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|2
+# ADR-040 «Мои файлы»: личный чат вне проекта (ProjectId проверен в условии), CanSee — владение самим чатом;
+# проект не участвует, роль и рубильник общих проектов неприменимы (тот же вердикт, что у гейтов редакторов)
+backend/ClaudeHomeServer/Controllers/PersonalFilesController.cs|1
 # Выбор оверлея личного состояния: нужна лишь классификация роли Editor/Reader; доступ к чату уже решён
 # контроллером/конвертером через IProjectAccess, сама проверка ничего не открывает (вердикт FINAL-1)
 backend/ClaudeHomeServer/Services/ChatUserStateService.cs|1

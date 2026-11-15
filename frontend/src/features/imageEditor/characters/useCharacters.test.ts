@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Личный чат вне проекта (ADR-040 Ф2-4): useCharacters('personal') ходит на личные ручки
@@ -98,5 +100,35 @@ describe('useCharacters: выход из аккаунта', () => {
     resetCharactersCache();
 
     expect(useCharacters('personal').list).toBeNull();
+  });
+});
+
+// Проводка в App.tsx (Х-4, по вердикту Р-предок-3): сам сброс проверен выше, но дефект
+// был именно в App — вызов продублирован в одном пути и отсутствовал в другом. Тест
+// обязан краснеть на любую из этих мутаций, иначе проводка снова уедет в прод сломанной.
+describe('App.tsx: runLogoutResets на обоих путях выхода', () => {
+  const src = readFileSync(fileURLToPath(new URL('../../../App.tsx', import.meta.url)), 'utf8');
+
+  // Тело функции берём по балансу скобок (паттерн featureFlags.contract.test.ts):
+  // первая '}' внутри вложенного блока обрезала бы тело и молча теряла вызовы после него.
+  function bodyOf(header: string): string {
+    const start = src.indexOf(header);
+    expect(start, `в App.tsx нет «${header}»`).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = src.indexOf('{', start); i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
+    }
+    throw new Error(`App.tsx: не найден конец «${header}»`);
+  }
+
+  const callsOf = (body: string) => body.match(/runLogoutResets\(\)/g)?.length ?? 0;
+
+  it('cc-unauthorized: ровно один вызов (дубль — тот, что убран в Х-4)', () => {
+    expect(callsOf(bodyOf('const onUnauthorized = () => {'))).toBe(1);
+  });
+
+  it('logout: ровно один вызов (снятие его из logout краснит этот тест)', () => {
+    expect(callsOf(bodyOf('const logout = () => {'))).toBe(1);
   });
 });

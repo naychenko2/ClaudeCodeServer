@@ -70,6 +70,25 @@ export function toInherited(): { inheritsAccess: true } {
   return { inheritsAccess: true };
 }
 
+// Права в теле создания/сохранения мастера. Со специальностью и без ручных правок — только
+// флаг true (права не копируются, правки специальности дойдут до персоны); без специальности
+// либо после ручной правки — своё: флаг false вместе с копией значений формы.
+export interface WizardAccessFields {
+  inheritsAccess: boolean;
+  tools?: string[];
+  access?: PersonaAccess;
+  disallowedTools?: string[];
+}
+
+export function wizardAccessFields(
+  specialty: string,
+  rightsTouched: boolean,
+  own: { tools: string[]; access: PersonaAccess; disallowedTools: string[] },
+): WizardAccessFields {
+  if (specialty !== 'none' && !rightsTouched) return { inheritsAccess: true };
+  return { inheritsAccess: false, ...own };
+}
+
 // ── Ячейки матрицы моделей ───────────────────────────────────────────────────────────
 
 // Ячейка матрицы (персона или шаблон специальности): значение — id модели или

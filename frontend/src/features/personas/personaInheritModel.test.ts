@@ -8,6 +8,7 @@ import {
   accessMode,
   toInherited,
   toggleToolKey,
+  wizardAccessFields,
   toOwn,
   tierCellView,
 } from './personaInheritModel';
@@ -144,5 +145,25 @@ describe('toggleToolKey — чекбокс возможности меняет t
     expect(toggleToolKey(['tasks'], 'web', true)).toEqual(['tasks', 'web']);
     expect(toggleToolKey(['tasks', 'web'], 'web', true)).toEqual(['tasks', 'web']);
     expect(toggleToolKey(['tasks', 'web'], 'web', false)).toEqual(['tasks']);
+  });
+});
+
+describe('wizardAccessFields — права в теле мастера', () => {
+  const own = { tools: ['Read'], access: 'custom' as const, disallowedTools: ['WebSearch'] };
+
+  it('«С нуля» + специальность без ручных правок → inheritsAccess=true, права не скопированы', () => {
+    const r = wizardAccessFields('analyst', false, own);
+    expect(r).toEqual({ inheritsAccess: true });
+    expect(r).not.toHaveProperty('access');
+    expect(r).not.toHaveProperty('tools');
+    expect(r).not.toHaveProperty('disallowedTools');
+  });
+
+  it('без специальности → копия значений формы, inheritsAccess=false', () => {
+    expect(wizardAccessFields('none', false, own)).toEqual({ inheritsAccess: false, ...own });
+  });
+
+  it('специальность, но права правили руками («своё») → копия доступна', () => {
+    expect(wizardAccessFields('analyst', true, own)).toEqual({ inheritsAccess: false, ...own });
   });
 });

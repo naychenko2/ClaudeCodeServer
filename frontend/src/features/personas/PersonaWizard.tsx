@@ -21,6 +21,7 @@ import type {
   PersonaSpecialty, PantheonTemplate, Project,
 } from '../../types';
 import { api } from '../../lib/api';
+import { wizardAccessFields } from './personaInheritModel';
 import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { bumpPersonas, usePersonas } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
@@ -258,10 +259,11 @@ export function PersonaWizard({ scope, projectId, sphereId, projects, onOpenStud
       color,
       greeting: greeting.trim() || undefined,
       memoryEnabled,
-      tools,
-      access,
+      // Со специальностью и без ручных правок права наследуются (только флаг), иначе — своё
+      ...wizardAccessFields(specialty, rightsTouched, {
+        tools, access, disallowedTools: access === 'custom' ? parseDisallowed(disallowedText) : [],
+      }),
       specialty,
-      disallowedTools: access === 'custom' ? parseDisallowed(disallowedText) : [],
       // Ячейки уровней (модель и цепочка). Пустая строка — сброс на наследование
       tierStrong: tierStrong || undefined,
       tierMedium: tierMedium || undefined,
@@ -291,6 +293,8 @@ export function PersonaWizard({ scope, projectId, sphereId, projects, onOpenStud
     setAccess(p.access ?? 'full');
     setDisallowedText((p.disallowedTools ?? []).join(', '));
     setMemoryEnabled(p.memoryEnabled ?? true);
+    // Уже свои права у персоны со специальностью — не превращаем их обратно в наследование
+    setRightsTouched((p.specialty ?? 'none') !== 'none' && p.inheritsAccess === false);
   }
 
   // Предзаполнение из шаблона роли (наш каталог или Пантеон OmO)

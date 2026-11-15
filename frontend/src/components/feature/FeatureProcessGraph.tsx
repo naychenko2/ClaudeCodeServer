@@ -344,222 +344,222 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
           {graphCaption(run, templateName)}
         </span>
       </div>
-    <div data-testid="pgraph-scroll" style={{ position: 'relative', minWidth: 0 }}>
-    <div
-      ref={wrapRef}
-      data-testid="feature-process-graph"
-      style={{
-        // Колонки растянуты на ширину страницы; не влезают (min 116) или мобильная лента —
-        // прокрутка внутри блока, документ не переполняется.
-        overflowX: 'auto', paddingBottom: SP.xxs,
-      }}
-    >
-      <div style={{ position: 'relative', width: lay.width, height: lay.height }}>
-        <svg
-          data-testid="feature-process-graph-edges"
-          aria-hidden="true"
-          width={lay.width}
-          height={lay.height}
-          style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
+      <div data-testid="pgraph-scroll" style={{ position: 'relative', minWidth: 0 }}>
+        <div
+          ref={wrapRef}
+          data-testid="feature-process-graph"
+          style={{
+            // Колонки растянуты на ширину страницы; не влезают (min 116) или мобильная лента —
+            // прокрутка внутри блока, документ не переполняется.
+            overflowX: 'auto', paddingBottom: SP.xxs,
+          }}
         >
-          {edges.map((e) => {
-            const a = lay.pos.get(e.from);
-            const b = lay.pos.get(e.to);
-            if (!a || !b) return null; // нессылающийся id — не рисуется (фильтр модели — второй раз)
-            const from = stagesById.get(e.from);
-            // Пройденное ребро — зелёное (макет .link.done): источник done — поток прошёл.
-            const done = from?.state === 'done';
-            // Ребро предложенного маршрута (макет P26) — фиолетовый пунктир: ещё не подтверждено.
-            // R-F33a·дельта: та же формула, что у узла (см. рендер узла): «предложено» только
-            // у незавершённой цели — к завершённому узлу предложенного маршрута ребро обычное
-            // (макет :374).
-            const to = stagesById.get(e.to);
-            const proposed = to?.proposed === true && to.state !== 'done';
-            const far = isFarEdge(ranks, e);
-            return (
-              <path
-                key={`${e.from}->${e.to}`}
-                data-testid={`pgraph-edge-${e.from}-${e.to}`}
-                data-far={far ? 'true' : undefined}
-                d={edgePath(a, b, nodeW, far ? { bottom: lay.bottom, lane: farLane++ } : null)}
-                fill="none"
-                data-proposed={proposed ? 'true' : undefined}
-                stroke={proposed ? C.planBorder : done ? C.success : C.progressTrack}
-                strokeWidth={2}
-                strokeDasharray={proposed || far ? '5 4' : undefined}
-              />
-            );
-          })}
-        </svg>
-
-        {lay.groups.map((g, i) => (
-          // Группа параллельных стадий колонки (макет P23): на десктопе — пунктирная рамка,
-          // на мобиле — скобка (левая грань с отворотами); подпись «⇉ параллельно» везде.
-          <span key={`grp-${i}`} aria-hidden="true" data-testid={`pgraph-group-${i}`} data-kind={isMobile ? 'bracket' : 'frame'}>
-            <span
-              style={{
-                position: 'absolute', left: g.x, top: g.y, width: g.w, height: g.h, boxSizing: 'border-box',
-                borderRadius: R.lg, border: `1px dashed ${C.textMuted}`,
-                ...(isMobile ? { borderStyle: 'solid', borderRightStyle: 'none', borderRadius: `${R.sm}px 0 0 ${R.sm}px` } : {}),
-              }}
-            />
-            <span
-              style={{
-                position: 'absolute', left: g.x + SP.sm, top: g.y - PAR_LABEL_H / 2, height: PAR_LABEL_H,
-                padding: `0 ${SP.xs}px`, display: 'inline-flex', alignItems: 'center', fontFamily: FONT.mono,
-                fontSize: FS.xxs, color: C.textMuted, whiteSpace: 'nowrap', background: C.bgMain,
-              }}
+          <div style={{ position: 'relative', width: lay.width, height: lay.height }}>
+            <svg
+              data-testid="feature-process-graph-edges"
+              aria-hidden="true"
+              width={lay.width}
+              height={lay.height}
+              style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
             >
-              {PARALLEL_LABEL}
-            </span>
-          </span>
-        ))}
+              {edges.map((e) => {
+                const a = lay.pos.get(e.from);
+                const b = lay.pos.get(e.to);
+                if (!a || !b) return null; // нессылающийся id — не рисуется (фильтр модели — второй раз)
+                const from = stagesById.get(e.from);
+                // Пройденное ребро — зелёное (макет .link.done): источник done — поток прошёл.
+                const done = from?.state === 'done';
+                // Ребро предложенного маршрута (макет P26) — фиолетовый пунктир: ещё не подтверждено.
+                // R-F33a·дельта: та же формула, что у узла (см. рендер узла): «предложено» только
+                // у незавершённой цели — к завершённому узлу предложенного маршрута ребро обычное
+                // (макет :374).
+                const to = stagesById.get(e.to);
+                const proposed = to?.proposed === true && to.state !== 'done';
+                const far = isFarEdge(ranks, e);
+                return (
+                  <path
+                    key={`${e.from}->${e.to}`}
+                    data-testid={`pgraph-edge-${e.from}-${e.to}`}
+                    data-far={far ? 'true' : undefined}
+                    d={edgePath(a, b, nodeW, far ? { bottom: lay.bottom, lane: farLane++ } : null)}
+                    fill="none"
+                    data-proposed={proposed ? 'true' : undefined}
+                    stroke={proposed ? C.planBorder : done ? C.success : C.progressTrack}
+                    strokeWidth={2}
+                    strokeDasharray={proposed || far ? '5 4' : undefined}
+                  />
+                );
+              })}
+            </svg>
 
-        {[...lay.pos.entries()].map(([id, p]) => {
-          const stage = stagesById.get(id)!;
-          const selected = selectedId === id;
-          const active = stage.state === 'active';
-          const quiet = stage.state !== 'done' && !active; // pending/absent/skipped
-          // R-F33a: оформление proposed — только у незавершённой стадии; рамка и цвет узла
-          // читают его состояние: завершённый узел предложенного маршрута — обычный done.
-          const proposed = stage.proposed === true && stage.state !== 'done';
-          const returns = stage.returns ?? 0;
-          const meta = nodeMeta(stage);
-          const line = laneWord(stage.line ?? null);
-          const seg = stage.taskSegments;
-          return (
-            <button
-              key={id}
-              type="button"
-              ref={(el) => { if (el) nodeRefs.current.set(id, el); else nodeRefs.current.delete(id); }}
-              data-testid={`pgraph-node-${id}`}
-              data-state={stage.state}
-              data-proposed={proposed ? 'true' : undefined}
-              data-tone={active ? stage.tone ?? 'run' : undefined}
-              aria-pressed={selected}
-              aria-label={nodeAria(stage)}
-              onClick={() => onSelect?.(id)}
-              style={{
-                position: 'absolute', left: p.x, top: p.y, width: nodeW, height: NODE_H,
-                boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center',
-                gap: SP.xs, padding: `${SP.xs}px ${SP.sm}px`, textAlign: 'left', cursor: 'pointer', zIndex: 1,
-                borderRadius: R.lg, font: 'inherit',
-                // Фон proposed-узла — прозрачный (макет .node.prop, feature-page.html:280):
-                // предложенный этап — «призрак» за пунктиром, а не залитая плашка.
-                background: proposed || quiet ? 'transparent' : C.bgWhite,
-                // Рамка proposed — «1px dashed c-plan» целиком (макет .node.prop, F33a).
-                border: proposed && !selected
-                  ? `1px dashed ${C.plan}`
-                  : `1px ${(quiet || proposed) && !selected ? 'dashed' : 'solid'} ${
-                    selected ? C.accent
-                      : active ? toneColor(stage.tone)
-                        : quiet ? C.dashed
-                          : C.borderLight}`,
-                ...(selected ? { boxShadow: SHADOW.focus } : {}),
-              }}
-            >
-              {returns > 0 && (
+            {lay.groups.map((g, i) => (
+              // Группа параллельных стадий колонки (макет P23): на десктопе — пунктирная рамка,
+              // на мобиле — скобка (левая грань с отворотами); подпись «⇉ параллельно» везде.
+              <span key={`grp-${i}`} aria-hidden="true" data-testid={`pgraph-group-${i}`} data-kind={isMobile ? 'bracket' : 'frame'}>
                 <span
-                  data-testid={`pgraph-returns-${id}`}
-                  title={`возвратов на доработку: ${returns}`}
                   style={{
-                    position: 'absolute', top: -8, right: SP.sm, padding: `0 ${SP.xs}px`, borderRadius: R.full,
-                    background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warning,
-                    fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700, lineHeight: '14px',
+                    position: 'absolute', left: g.x, top: g.y, width: g.w, height: g.h, boxSizing: 'border-box',
+                    borderRadius: R.lg, border: `1px dashed ${C.textMuted}`,
+                    ...(isMobile ? { borderStyle: 'solid', borderRightStyle: 'none', borderRadius: `${R.sm}px 0 0 ${R.sm}px` } : {}),
+                  }}
+                />
+                <span
+                  style={{
+                    position: 'absolute', left: g.x + SP.sm, top: g.y - PAR_LABEL_H / 2, height: PAR_LABEL_H,
+                    padding: `0 ${SP.xs}px`, display: 'inline-flex', alignItems: 'center', fontFamily: FONT.mono,
+                    fontSize: FS.xxs, color: C.textMuted, whiteSpace: 'nowrap', background: C.bgMain,
                   }}
                 >
-                  ↺{returns}
-                </span>
-              )}
-              <span style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm }}>
-                <span style={{ marginTop: 1, display: 'inline-flex' }}><MarkerIcon stage={stage} /></span>
-                {/* Узел фиксированной высоты вмещает три строки имени: длиннее — многоточие
-                    (clamp 3), чтобы подпись не наезжала на мету и нижнюю строку. Полное
-                    имя не теряется: title (тултип) и aria-label. */}
-                <span
-                  data-testid={`pgraph-title-${id}`}
-                  title={nodeTitle(stage)}
-                  style={{
-                    // Дефект 20e96078: 'anywhere' рвал слово по букве («Производст|во») без знака
-                    // переноса — это читается как опечатка. hyphens рвёт по слогам со знаком
-                    // (язык текста — lang="ru" в frontend/index.html:2); break-word — крайний
-                    // случай для слова, которое не переносится ни целиком, ни по слогам.
-                    flex: '1 1 auto', minWidth: 0, lineHeight: 1.25, overflowWrap: 'break-word', hyphens: 'auto',
-                    display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: NAME_LINES, overflow: 'hidden',
-                    // Заголовок proposed-узла — plan-text (макет .node.prop .nn, F33a).
-                    fontSize: FS.sm, fontWeight: 600,
-                    color: proposed ? C.planText : quiet ? C.textSecondary : C.textHeading,
-                  }}
-                >
-                  {nodeTitle(stage)}
+                  {PARALLEL_LABEL}
                 </span>
               </span>
-              {meta && (
-                <span
-                  data-testid={`pgraph-meta-${id}`}
-                  style={{ fontSize: FS.xs, color: meta.color, lineHeight: 1.2, overflowWrap: 'anywhere' }}
+            ))}
+
+            {[...lay.pos.entries()].map(([id, p]) => {
+              const stage = stagesById.get(id)!;
+              const selected = selectedId === id;
+              const active = stage.state === 'active';
+              const quiet = stage.state !== 'done' && !active; // pending/absent/skipped
+              // R-F33a: оформление proposed — только у незавершённой стадии; рамка и цвет узла
+              // читают его состояние: завершённый узел предложенного маршрута — обычный done.
+              const proposed = stage.proposed === true && stage.state !== 'done';
+              const returns = stage.returns ?? 0;
+              const meta = nodeMeta(stage);
+              const line = laneWord(stage.line ?? null);
+              const seg = stage.taskSegments;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  ref={(el) => { if (el) nodeRefs.current.set(id, el); else nodeRefs.current.delete(id); }}
+                  data-testid={`pgraph-node-${id}`}
+                  data-state={stage.state}
+                  data-proposed={proposed ? 'true' : undefined}
+                  data-tone={active ? stage.tone ?? 'run' : undefined}
+                  aria-pressed={selected}
+                  aria-label={nodeAria(stage)}
+                  onClick={() => onSelect?.(id)}
+                  style={{
+                    position: 'absolute', left: p.x, top: p.y, width: nodeW, height: NODE_H,
+                    boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center',
+                    gap: SP.xs, padding: `${SP.xs}px ${SP.sm}px`, textAlign: 'left', cursor: 'pointer', zIndex: 1,
+                    borderRadius: R.lg, font: 'inherit',
+                    // Фон proposed-узла — прозрачный (макет .node.prop, feature-page.html:280):
+                    // предложенный этап — «призрак» за пунктиром, а не залитая плашка.
+                    background: proposed || quiet ? 'transparent' : C.bgWhite,
+                    // Рамка proposed — «1px dashed c-plan» целиком (макет .node.prop, F33a).
+                    border: proposed && !selected
+                      ? `1px dashed ${C.plan}`
+                      : `1px ${(quiet || proposed) && !selected ? 'dashed' : 'solid'} ${
+                        selected ? C.accent
+                          : active ? toneColor(stage.tone)
+                            : quiet ? C.dashed
+                              : C.borderLight}`,
+                    ...(selected ? { boxShadow: SHADOW.focus } : {}),
+                  }}
                 >
-                  {meta.text}
-                  {meta.text && meta.proposed ? ' · ' : ''}
-                  {meta.proposed === true && (
-                    <span data-testid={`pgraph-proposed-${id}`} style={{ color: C.textMuted }}>предложено</span>
-                  )}
-                </span>
-              )}
-              <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
-                {stage.role && (
-                  <span data-testid={`pgraph-role-${id}`} style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>
-                    {stage.role}
-                  </span>
-                )}
-                {line && (
-                  <span
-                    data-testid={`pgraph-line-${id}`}
-                    style={{
-                      padding: `0 ${SP.xs}px`, borderRadius: R.full, border: `1px solid ${C.border}`,
-                      fontSize: FS.xxs, color: C.textSecondary, lineHeight: '14px',
-                    }}
-                  >
-                    {line}
-                  </span>
-                )}
-                {seg && seg.total > 0 && (
-                  <>
-                    <SegmentBar done={seg.done} running={seg.running} total={seg.total} />
-                    <span data-testid={`pgraph-segcount-${id}`} style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>
-                      {seg.done}/{seg.total}
+                  {returns > 0 && (
+                    <span
+                      data-testid={`pgraph-returns-${id}`}
+                      title={`возвратов на доработку: ${returns}`}
+                      style={{
+                        position: 'absolute', top: -8, right: SP.sm, padding: `0 ${SP.xs}px`, borderRadius: R.full,
+                        background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warning,
+                        fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700, lineHeight: '14px',
+                      }}
+                    >
+                      ↺{returns}
                     </span>
-                  </>
-                )}
-              </span>
-            </button>
-          );
-        })}
+                  )}
+                  <span style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm }}>
+                    <span style={{ marginTop: 1, display: 'inline-flex' }}><MarkerIcon stage={stage} /></span>
+                    {/* Узел фиксированной высоты вмещает три строки имени: длиннее — многоточие
+                        (clamp 3), чтобы подпись не наезжала на мету и нижнюю строку. Полное
+                        имя не теряется: title (тултип) и aria-label. */}
+                    <span
+                      data-testid={`pgraph-title-${id}`}
+                      title={nodeTitle(stage)}
+                      style={{
+                        // Дефект 20e96078: 'anywhere' рвал слово по букве («Производст|во») без знака
+                        // переноса — это читается как опечатка. hyphens рвёт по слогам со знаком
+                        // (язык текста — lang="ru" в frontend/index.html:2); break-word — крайний
+                        // случай для слова, которое не переносится ни целиком, ни по слогам.
+                        flex: '1 1 auto', minWidth: 0, lineHeight: 1.25, overflowWrap: 'break-word', hyphens: 'auto',
+                        display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: NAME_LINES, overflow: 'hidden',
+                        // Заголовок proposed-узла — plan-text (макет .node.prop .nn, F33a).
+                        fontSize: FS.sm, fontWeight: 600,
+                        color: proposed ? C.planText : quiet ? C.textSecondary : C.textHeading,
+                      }}
+                    >
+                      {nodeTitle(stage)}
+                    </span>
+                  </span>
+                  {meta && (
+                    <span
+                      data-testid={`pgraph-meta-${id}`}
+                      style={{ fontSize: FS.xs, color: meta.color, lineHeight: 1.2, overflowWrap: 'anywhere' }}
+                    >
+                      {meta.text}
+                      {meta.text && meta.proposed ? ' · ' : ''}
+                      {meta.proposed === true && (
+                        <span data-testid={`pgraph-proposed-${id}`} style={{ color: C.textMuted }}>предложено</span>
+                      )}
+                    </span>
+                  )}
+                  <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+                    {stage.role && (
+                      <span data-testid={`pgraph-role-${id}`} style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>
+                        {stage.role}
+                      </span>
+                    )}
+                    {line && (
+                      <span
+                        data-testid={`pgraph-line-${id}`}
+                        style={{
+                          padding: `0 ${SP.xs}px`, borderRadius: R.full, border: `1px solid ${C.border}`,
+                          fontSize: FS.xxs, color: C.textSecondary, lineHeight: '14px',
+                        }}
+                      >
+                        {line}
+                      </span>
+                    )}
+                    {seg && seg.total > 0 && (
+                      <>
+                        <SegmentBar done={seg.done} running={seg.running} total={seg.total} />
+                        <span data-testid={`pgraph-segcount-${id}`} style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>
+                          {seg.done}/{seg.total}
+                        </span>
+                      </>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {edgeHint.right && (
+          <span
+            aria-hidden="true" data-testid="pgraph-scroll-right"
+            style={{
+              position: 'absolute', right: 0, top: 0, bottom: SP.xxs, width: EDGE_W, zIndex: 2, pointerEvents: 'none',
+              display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: `0 ${SP.xs}px`,
+              background: `linear-gradient(to right, transparent, ${C.bgMain})`,
+              fontFamily: FONT.mono, fontSize: FS.md, color: C.textMuted,
+            }}
+          >›</span>
+        )}
+        {edgeHint.left && (
+          <span
+            aria-hidden="true" data-testid="pgraph-scroll-left"
+            style={{
+              position: 'absolute', left: 0, top: 0, bottom: SP.xxs, width: EDGE_W, zIndex: 2, pointerEvents: 'none',
+              display: 'flex', alignItems: 'center', justifyContent: 'flex-start', padding: `0 ${SP.xs}px`,
+              background: `linear-gradient(to left, transparent, ${C.bgMain})`,
+              fontFamily: FONT.mono, fontSize: FS.md, color: C.textMuted,
+            }}
+          >‹</span>
+        )}
       </div>
-    </div>
-      {edgeHint.right && (
-        <span
-          aria-hidden="true" data-testid="pgraph-scroll-right"
-          style={{
-            position: 'absolute', right: 0, top: 0, bottom: SP.xxs, width: EDGE_W, zIndex: 2, pointerEvents: 'none',
-            display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: `0 ${SP.xs}px`,
-            background: `linear-gradient(to right, transparent, ${C.bgMain})`,
-            fontFamily: FONT.mono, fontSize: FS.md, color: C.textMuted,
-          }}
-        >›</span>
-      )}
-      {edgeHint.left && (
-        <span
-          aria-hidden="true" data-testid="pgraph-scroll-left"
-          style={{
-            position: 'absolute', left: 0, top: 0, bottom: SP.xxs, width: EDGE_W, zIndex: 2, pointerEvents: 'none',
-            display: 'flex', alignItems: 'center', justifyContent: 'flex-start', padding: `0 ${SP.xs}px`,
-            background: `linear-gradient(to left, transparent, ${C.bgMain})`,
-            fontFamily: FONT.mono, fontSize: FS.md, color: C.textMuted,
-          }}
-        >‹</span>
-      )}
-    </div>
       <div
         data-testid="pgraph-legend"
         style={{ display: 'flex', flexWrap: 'wrap', gap: `${SP.xs}px ${SP.md}px`, fontSize: FS.xxs, color: C.textMuted }}

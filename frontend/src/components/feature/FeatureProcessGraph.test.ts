@@ -22,6 +22,10 @@
 //   ребро к завершённому proposed-узлу обычное (не фиолетовое и не пунктирное), строка
 //   легенды «предложено» только при незавершённом proposed-узле; незавершённый
 //   proposed-конец — фиолетовый пунктир и легенда на месте (макет :374).
+// - признак прокрутки по факту прокрутки (дефект 1f6df093): тест прокручивает контейнер
+//   программно — задаёт элементы реальные метрики прокрутки и поднимает слушателя 'scroll'
+//   на контейнере (путь браузера, не имитация через ре-рендер); шевроны следуют scrollLeft:
+//   в начале ленты только правый, в конце только левый, в середине оба, прокрутка обратно — наоборот.
 // Колонки, рёбра и состояния компонент не пересчитывает — это покрыто в FeatureProcessGraphModel.test.ts.
 //
 // Мутации (проверяются прогоном): (1) убрать `if (stage.title)` в nodeTitle — краснеет
@@ -36,8 +40,10 @@
 //     «перенос имени — по слогам со знаком».
 // (8) вернуть `C.planLight` в фоне proposed-узла (доработка F33·фон по макету) — краснеет
 //     «proposed=true: фон прозрачный…».
+// (9) убрать подписку `el.addEventListener('scroll', measure)` в эффекте — краснеет
+//     «прокрутка вправо — правый шеврон исчезает…» (слушателя на контейнере нет).
 
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../chat/__tests__/fakeDom';
 import { FeatureProcessGraph } from './FeatureProcessGraph';
@@ -396,5 +402,47 @@ describe('FeatureProcessGraph: завершённый узел предложе�
     expect(openProps.stroke).toBe('var(--c-plan-border)');
     expect(openProps.strokeDasharray).toBe('5 4');
     expect(get(openEnd, 'pgraph-legend-proposed')).not.toBeNull();
+  });
+});
+
+describe('FeatureProcessGraph: признак края следует фактической прокрутке (дефект 1f6df093)', () => {
+  const get = (c: unknown, tid: string) => findNodeByAttr(c as never, 'data-testid', tid);
+
+  it('прокрутка вправо — правый шеврон исчезает, левый появляется; прокрутка обратно — наоборот', () => {
+    const c = render(parallelCycle(true));
+    // Слушатель 'scroll' висит на контейнере ленты (feature-process-graph). Тест не имитирует
+    // перемер ре-рендером, а повторяет путь браузера: даёт элементу фактические метрики
+    // прокрутки, меняет scrollLeft и поднимает слушателя 'scroll' элемента — measure() читает
+    // их заново, и шеврон следует фактической позиции прокрутки, а не пересборке компонента.
+    const el = get(c, 'feature-process-graph') as unknown as {
+      clientWidth: number; scrollWidth: number; scrollLeft: number;
+      listeners: Record<string, Set<(e: unknown) => void>>;
+    };
+    el.clientWidth = 400; el.scrollWidth = 1000; el.scrollLeft = 0;
+    const handlers = [...(el.listeners['scroll'] ?? [])];
+    expect(handlers.length, 'на контейнере ленты нет слушателя «scroll»').toBe(1);
+    const scrollTo = (to: number) => act(() => { el.scrollLeft = to; handlers.forEach((fn) => fn({})); });
+    const right = () => get(c, 'pgraph-scroll-right');
+    const left = () => get(c, 'pgraph-scroll-left');
+
+    // Начало ленты: выступ только справа — один правый шеврон.
+    scrollTo(0);
+    expect(right()).not.toBeNull();
+    expect(left()).toBeNull();
+
+    // Доехали до конца ленты (over = 1000 − 400): выступ слева — правый пропал, левый появился.
+    scrollTo(600);
+    expect(right()).toBeNull();
+    expect(left()).not.toBeNull();
+
+    // Середина ленты: обрезаны оба края — оба шеврона.
+    scrollTo(300);
+    expect(right()).not.toBeNull();
+    expect(left()).not.toBeNull();
+
+    // Прокрутка обратно к началу — наоборот.
+    scrollTo(0);
+    expect(right()).not.toBeNull();
+    expect(left()).toBeNull();
   });
 });

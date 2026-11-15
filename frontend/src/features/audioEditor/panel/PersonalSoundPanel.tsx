@@ -1,14 +1,18 @@
 // Панель «Звук из Личного» личного чата: список звуковых файлов папки «Личного» (дерево личных файлов
-// чата) и вход в контекст хода. «Работать с этим» делает файл основным звуком. Кнопки «В контекст» нет:
-// проектный вид ссылки в личном чате бэкенд отвергает, личный вид (Ф-9) ещё не заведён.
+// чата) и вход в контекст хода. «Работать с этим» делает файл основным звуком, «В контекст» кладёт его
+// референсом личного вида «personal-file» (Ф-9) с ролью «Кусок склейки». Пока основного звука нет,
+// кнопки нет: роль «Кусок склейки» принимает только звуковой основной объект, и сервер такую роль
+// при другом основном не примет (400 role_not_accepted).
 
 import { useEffect, useState } from 'react';
 import { FileAudio, Target } from 'lucide-react';
 import {
-  Button, EmptyState, GenerationPanel, request, showToast, C, FS, SP, ICON_SIZE, ICON_STROKE,
+  Button, ContextAddButton, EmptyState, GenerationPanel, request, showToast, useChatContext,
+  C, FS, SP, ICON_SIZE, ICON_STROKE,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../lib/subsystems/registryCore';
 import { audioRefOfPath } from '../context/opener';
+import { personalFileCandidate, personalFileRoles } from '../context/roles';
 import { workWithInContext } from '../context/work';
 import { personalFilesPath, personalSoundFiles, type PersonalFileEntry } from '../scope';
 
@@ -44,6 +48,11 @@ export function PersonalSoundPanel({ ctx, layout = 'column' }: { ctx: WorkspaceP
     }
   };
 
+  // Кнопка «В контекст» есть только когда основной объект — звук: роль «Кусок склейки» принимает
+  // лишь звуковой основной объект, и при другом основном сервер ответил бы 400 role_not_accepted
+  const state = useChatContext(sessionId);
+  const canAddToContext = !!sessionId && personalFileRoles(state.primary?.kind).length > 0;
+
   return (
     <GenerationPanel
       title="Звук из Личного"
@@ -73,6 +82,10 @@ export function PersonalSoundPanel({ ctx, layout = 'column' }: { ctx: WorkspaceP
               title="Звук станет основным в контексте хода" onClick={() => { void work(f.path); }}>
               Работать с этим
             </Button>
+            {canAddToContext && sessionId && (
+              <ContextAddButton sessionId={sessionId} projectId={null}
+                candidate={personalFileCandidate(f.path)} size="sm" />
+            )}
           </div>
         ))}
       </div>

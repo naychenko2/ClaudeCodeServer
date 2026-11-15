@@ -19,8 +19,9 @@
 // объект удалён — бэк ставит Missing=true по второй причине, и плашка назовёт «выключен».
 // Это требует двух неисправностей сразу; отдельного текста на такую пару продукт не согласовал.
 //
-// Исключение — вид файла «project-file»: кита у него нет by design (владелец вида — бэковый
-// ProjectFileContextKind, фронт рисует его файлом-заглушкой), это не «выключенный раздел».
+// Исключение — виды файлов «project-file» и «personal-file»: кита у них нет by design (владелец вида —
+// бэковый ProjectFileContextKind / PersonalFileContextKind, фронт рисует их файлом-заглушкой),
+// это не «выключенный раздел».
 
 import { SUBSYSTEM_DISABLED_REASON } from '../subsystems';
 import type { ChatContextPrimary, ChatContextRef, ContextKindApi } from './types';
@@ -29,8 +30,11 @@ import type { ChatContextPrimary, ChatContextRef, ContextKindApi } from './types
 // включён, но фронтовый MF-remote вертикали не загрузился.
 export type DisabledKindReason = 'admin' | 'notLoaded';
 
+// Виды, чей провайдер живёт на бэкенде, а фронтового кита у них нет by design
+const BACKEND_ONLY_KINDS = new Set(['project-file', 'personal-file']);
+
 export const isKindDisabled = (kind: string, registry: ReadonlyMap<string, ContextKindApi>): boolean =>
-  kind !== 'project-file' && !registry.has(kind);
+  !BACKEND_ONLY_KINDS.has(kind) && !registry.has(kind);
 
 // Причина для неактивного вида: по признаку «бэковый провайдер описывает объект».
 // itemMissing — поле `missing` DTO этого объекта: false — провайдер есть и объект жив
@@ -53,7 +57,7 @@ export const disabledKindText = (reason: DisabledKindReason): string =>
 
 // Проводка объекта строки контекста (S2b-3a): неактивный вид получает вместо label текст причины,
 // версию (на плашке с текстом-пояснением она только шум) и missing=true — по нему вью гасит чип
-// (ContextRowView → RowChip: opacity). Активный вид и файл «project-file» — как есть.
+// (ContextRowView → RowChip: opacity). Активный вид и файлы «project-file»/«personal-file» — как есть.
 export const dimmedKindItem = <T extends ChatContextPrimary | ChatContextRef>(
   item: T,
   registry: ReadonlyMap<string, ContextKindApi>,

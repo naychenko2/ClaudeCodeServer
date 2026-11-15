@@ -62,10 +62,10 @@ describe('FeatureVolumeCard', () => {
     expect(html(progress({ planState: 'done' }))).not.toContain('план разрезан не весь');
   });
 
-  it('ссылка «из чего N ›» — только при onOpenSteps; мобила — тач-цель ≥32', () => {
+  it('ссылка «из чего N ›» — только при onOpenSteps; мобила — тач-цель ≥40', () => {
     expect(html(progress())).not.toContain('volume-open-steps');
     expect(html(progress(), true, () => {})).toContain('из чего 12 ›');
-    expect(html(progress(), true, () => {})).toContain('min-height:32px');
+    expect(html(progress(), true, () => {})).toContain('min-height:40px');
   });
 
   it('мобила: число крупностью FS.xl (18), десктоп — FS.h2 (22)', () => {

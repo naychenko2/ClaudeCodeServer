@@ -25,7 +25,7 @@
 // Встраивание в шапку страницы фичи и мини-граф — вне этого шага (C3b / хвосты).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP, TB } from '../../lib/design';
 import { Badge, Button, Select } from '../../components/ui';
 import { WorkflowLadder } from './WorkflowLadder';
 import { WorkflowRouteSheet } from './WorkflowRouteSheet';
@@ -307,13 +307,13 @@ export function FeatureWorkflowConfirm({
         <span style={{ flex: 1 }} />
         <Button
           variant="ghost" size={isMobile ? 'sm' : 'xs'} dataTestId="feature-workflow-confirm-why"
-          ariaExpanded={whyOpen} style={isMobile ? { minHeight: 40 } : undefined}
+          ariaExpanded={whyOpen} style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
           onClick={() => setWhyOpen(v => !v)}
         >
           Почему так
         </Button>
         {withChange && (
-          <Button variant="ghost" size={isMobile ? 'sm' : 'xs'} style={isMobile ? { minHeight: 40 } : undefined} dataTestId="feature-workflow-confirm-change" onClick={() => setExpanded(true)}>
+          <Button variant="ghost" size={isMobile ? 'sm' : 'xs'} style={isMobile ? { minHeight: TB.iconHitMobile } : undefined} dataTestId="feature-workflow-confirm-change" onClick={() => setExpanded(true)}>
             Сменить
           </Button>
         )}
@@ -370,7 +370,7 @@ export function FeatureWorkflowConfirm({
   // Карточка «шаблон изменился» (R28–R32): ждёт решения человека, обычный редактор под ней молчит.
   const updateCardOn = !!updateText && !!confirmed && !!confirmedTemplate;
   const showEditor = !searching && !updateCardOn && (!isConfirmed || !quiet || expanded);
-  const touch = isMobile ? { minHeight: 40 } : undefined;
+  const touch = isMobile ? { minHeight: TB.iconHitMobile } : undefined;
   const updateCard = updateCardOn ? (
     <div
       data-testid="feature-workflow-confirm-update"
@@ -416,7 +416,7 @@ export function FeatureWorkflowConfirm({
   const recommendBtn = (
     <Button
       variant="ghost" size={isMobile ? 'sm' : 'xs'} loading={busyRecommend}
-      style={isMobile ? { minHeight: 40 } : undefined}
+      style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
       dataTestId="feature-workflow-confirm-recommend" onClick={onRecommend}
     >
       {recommendLabel}
@@ -444,7 +444,7 @@ export function FeatureWorkflowConfirm({
     const closeSheet = () => { setSheetOpen(false); setInfoOpen(false); onSheetClosed?.(); };
     // Подвал по состоянию (R36–R38): подтвердить + подобрать заново / обновить + оставить /
     // закрыть; в «Подбираем» и «нет предложения» — «Подобрать заново» (на десктопе подпись другая).
-    const fb = { fullWidth: true, style: { minHeight: 40 } } as const;
+    const fb = { fullWidth: true, style: { minHeight: TB.iconHitMobile } } as const;
     const redo = (
       <Button variant="ghost" size="sm" {...fb} loading={busyRecommend} disabled={loading}
         dataTestId="feature-workflow-confirm-recommend" onClick={onRecommend}>
@@ -495,7 +495,7 @@ export function FeatureWorkflowConfirm({
             >
               {rowText}
             </span>
-            <Button variant="primary" size="sm" style={{ minHeight: 40, flexShrink: 0 }}
+            <Button variant="primary" size="sm" style={{ minHeight: TB.iconHitMobile, flexShrink: 0 }}
               dataTestId="feature-workflow-confirm-mobile-open" onClick={() => setSheetOpen(true)}>
               Посмотреть
             </Button>
@@ -558,7 +558,7 @@ export function FeatureWorkflowConfirm({
             )}
             {rationaleText && !updateCardOn && !isConfirmed && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-                <Button variant="ghost" size="sm" style={{ minHeight: 40, alignSelf: 'flex-start' }}
+                <Button variant="ghost" size="sm" style={{ minHeight: TB.iconHitMobile, alignSelf: 'flex-start' }}
                   ariaExpanded={infoOpen} dataTestId="feature-workflow-confirm-info"
                   onClick={() => setInfoOpen(v => !v)}>
                   ⓘ Почему так
@@ -623,7 +623,7 @@ export function FeatureWorkflowConfirm({
             Модель обычно отвечает до полуминуты: она читает название и описание фичи и выбирает из шаблонов проекта и глобальных.
           </div>
           <Button
-            variant="ghost" size={isMobile ? 'sm' : 'xs'} style={isMobile ? { minHeight: 40 } : undefined}
+            variant="ghost" size={isMobile ? 'sm' : 'xs'} style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
             dataTestId="feature-workflow-confirm-manual" onClick={() => setManual(true)}
           >
             Выбрать вручную
@@ -698,7 +698,7 @@ export function FeatureWorkflowConfirm({
             loading={busyConfirm}
             disabled={!canConfirm}
             fullWidth={isMobile}
-            style={isMobile ? { minHeight: 40 } : undefined}
+            style={isMobile ? { minHeight: TB.iconHitMobile } : undefined}
             dataTestId="feature-workflow-confirm-submit"
             onClick={onConfirm}
           >

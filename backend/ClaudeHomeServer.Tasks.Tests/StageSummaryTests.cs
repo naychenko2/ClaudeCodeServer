@@ -85,6 +85,55 @@ public class StageSummaryTests : IDisposable
         return r;
     }
 
+    private sealed class CountingTasks(IConfiguration config) : TaskManager(config)
+    {
+        public int GetAllCalls;
+        public override IReadOnlyList<TaskItem> GetAll() { GetAllCalls++; return base.GetAll(); }
+    }
+
+    // Число обходов стора на экран не зависит от числа задач этапа: список снимается один раз,
+    // а не на каждую задачу (BuildMetrics/ReviewsOf) и каждую соседнюю ветку (BuildParallelNote)
+    [Theory]
+    [InlineData(1)]
+    [InlineData(8)]
+    public void Сводка_этапа_снимает_список_задач_один_раз_а_не_на_каждую_задачу(int steps)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "count.json") })
+            .Build();
+        using var counting = new CountingTasks(config);
+        var epic = counting.Create(null, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
+        epic.Workflow = new FeatureWorkflow
+        {
+            TemplateId = "t", ConfirmedVersion = 3,
+            Stages =
+            [
+                new RouteStage { Id = "plan", Role = TaskRoles.Plan, After = [] },
+                new RouteStage { Id = "back", Role = TaskRoles.Step, After = ["plan"] },
+                new RouteStage { Id = "front", Role = TaskRoles.Step, After = ["plan"] },
+            ]
+        };
+        TaskItem? first = null;
+        for (var i = 0; i < steps + 2; i++)
+        {
+            var stage = i < steps ? "back" : "front";
+            var wf = epic.Workflow; epic.Workflow = null;
+            var t = counting.Create(null, Owner, new CreateTaskRequest("шаг", FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "S" + i));
+            t.Stage = new StageSnapshot { TemplateId = "t", TemplateVersion = 3, StageId = stage, Role = TaskRoles.Step };
+            first ??= t;
+            var rv = counting.Create(null, Owner, new CreateTaskRequest("ревью", FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [t.Id]));
+            epic.Workflow = wf;
+            rv.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted, VerifiedAt = DateTime.UtcNow };
+        }
+        var sut = new StageScreenService(counting, personas: new FakePersonas(_tim, _kira));
+        counting.GetAllCalls = 0;
+
+        sut.Build(first!.Id, Owner).Value.Should().NotBeNull();
+
+        // константа (6) не растёт с числом шагов: Chain, снимок этапа, метрики и ревью экрана, коммиты
+        counting.GetAllCalls.Should().Be(6);
+    }
+
     [Fact]
     public void Этап_с_двумя_задачами_возвратом_и_соседней_веткой()
     {

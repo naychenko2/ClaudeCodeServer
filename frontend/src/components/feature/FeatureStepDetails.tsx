@@ -23,6 +23,7 @@ import { axisFrac, type LaneAxis } from './FeatureLaneModel';
 import { formatClock, formatDateTime } from './FeatureStatsBits';
 import { useEnsureFullTask, useTasks } from '../../lib/tasks';
 import { useNow } from '../../lib/useNow';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import type { AcceptanceCriterion, AcceptanceEvidence, Task } from '../../types';
 
 // Ход на полосе шага. Вызывающий собирает ходы из stats.timeline.intervalsByStage:
@@ -100,7 +101,7 @@ function AcceptanceBlock({ taskId, acceptance, evidence, verdictLine }: {
             </span>
             {/* состояние — словом, рядом с глифом (GC-R-F7): скринридеру «подтверждён/не подтверждён» */}
             <span data-testid="step-crit-state" style={SR_ONLY}>{ok ? 'подтверждён' : 'не подтверждён'}</span>
-            <span style={{ fontSize: FS.sm, color: C.textPrimary, minWidth: 0, overflowWrap: 'anywhere' }}>{c.text}</span>
+            <span style={{ fontSize: FS.sm, color: C.textPrimary, minWidth: 0, overflowWrap: 'anywhere' }}>{markdownToPlain(c.text)}</span>
           </div>
         );
       })}
@@ -130,7 +131,8 @@ function ResultBlock({ taskId, isMobile }: { taskId: string; isMobile: boolean }
   const { state, retry } = useEnsureFullTask(knownNoResult ? { ...stored!, listItem: false } : stored ?? notInStore(taskId));
   const full = stored && !stored.listItem ? stored : undefined;
   // Первая непустая строка итога; полный текст — на странице задачи (макет).
-  const firstLine = (full?.resultMarkdown ?? '').split(/\r?\n/).find(l => l.trim() !== '') ?? '';
+  // Чистим markdown ДО выбора строки: иначе первой окажется «## »-рамка или «- »-маркер.
+  const firstLine = markdownToPlain((full?.resultMarkdown ?? '').split(/\r?\n/).find(l => markdownToPlain(l) !== '') ?? '');
   if (knownNoResult || (state === 'ready' && !firstLine)) return null;
   return (
     <div data-testid="step-result">

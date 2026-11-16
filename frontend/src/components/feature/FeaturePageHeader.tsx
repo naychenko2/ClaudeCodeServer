@@ -27,6 +27,7 @@ import { useTemplateName } from './FeatureProcessGraphSection';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { minutesSince } from './FeatureStatsBits';
 import { useNow } from '../../lib/useNow';
+import { markdownToPlain } from '../../lib/markdownPlain';
 
 // Статусный тег живёт в FeatureStatusTag.tsx (W5-F3a): шапка и строка анализа зовут
 // его оттуда — модель больше не тянет модуль шапки, цикл FeaturePageHeader ⇄
@@ -993,7 +994,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
   } else if (a) {
     head = `${view!.text}${dur ? ` · ${dur}` : ''}`;
     // На 360 причина во фразу не лезет (alarmView) — идёт второй строкой.
-    reason = isMobile ? a.reason ?? null : null;
+    reason = isMobile ? markdownToPlain(a.reason ?? '') || null : null;
   } else {
     head = 'Фича ещё не начата';
     reason = 'Запустить её можно из ключевого чата — куратор начнёт с разреза.';

@@ -27,6 +27,13 @@ const html = (a: FeatureAsk | null, isMobile = false, onAnswer?: () => void): st
 const buttonCount = (h: string): number => (h.match(/<button/g) ?? []).length;
 
 describe('FeatureAskBlock', () => {
+  it('markdown в тексте запроса выводится плоским текстом, без символов разметки', () => {
+    const h = html(ask({ text: '## Нужен **ответ** по `объёму`\n- пункт' }));
+    expect(h).toContain('Нужен ответ по объёму пункт');
+    expect(h).not.toContain('##');
+    expect(h).not.toContain('**');
+  });
+
   it('ask = null: спокойный вид — «От тебя», «Ничего не нужно — работа идёт», 0 кнопок', () => {
     const h = html(null);
     expect(h).toContain('От тебя');

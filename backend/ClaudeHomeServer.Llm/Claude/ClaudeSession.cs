@@ -888,6 +888,73 @@ public class ClaudeSession : ILlmSessionAdapter
     // Id снимка текущего хода: пишет поток хода (RunTurnAsync), читает поток stdout-ридера,
     // дописывающий в снимок состав инструментов из system/init. Отсюда volatile.
     private volatile string? _currentSnapshotId;
+
+    // Замеры фаз старта хода для паспорта (TurnStartTimings). -1 — фаза не наблюдалась (null в
+    // паспорте), 0 — настоящий ноль. Сброс — BeginStartTimings под _turnLock; пишут поток хода и
+    // читатель событий CLI, читает адаптер уже после конца хода, поэтому Volatile.
+    private long _turnStartTs;
+    private long _turnQueueWaitMs = -1;
+    private long _turnPromptAssemblyMs = -1;
+    private long _turnSpawnTs;
+    private long _turnSpawnToInitMs = -1;
+    private long _turnInitTs;
+    private long _turnInitToFirstEventMs = -1;
+    private volatile IReadOnlyDictionary<string, long>? _turnSlowSections;
+
+    private static long ElapsedMs(long fromTs) => (long)System.Diagnostics.Stopwatch.GetElapsedTime(fromTs).TotalMilliseconds;
+
+    // Начало обработки хода (мы уже под _turnLock): очередь отстояла, дальше идут фазы старта.
+    private void BeginStartTimings(long queuedTs)
+    {
+        Volatile.Write(ref _turnQueueWaitMs, ElapsedMs(queuedTs));
+        Volatile.Write(ref _turnStartTs, System.Diagnostics.Stopwatch.GetTimestamp());
+        Volatile.Write(ref _turnPromptAssemblyMs, -1);
+        Volatile.Write(ref _turnSpawnTs, 0);
+        Volatile.Write(ref _turnSpawnToInitMs, -1);
+        Volatile.Write(ref _turnInitTs, 0);
+        Volatile.Write(ref _turnInitToFirstEventMs, -1);
+        _turnSlowSections = null;
+    }
+
+    // Замеры последнего хода для паспорта; повторный спавн в ретрае перезаписывает фазы последней попытки.
+    internal TurnStartTimings GetStartTimings()
+    {
+        static long? N(long v) => v < 0 ? null : v;
+        return new TurnStartTimings(
+            N(Volatile.Read(ref _turnQueueWaitMs)), N(Volatile.Read(ref _turnPromptAssemblyMs)),
+            N(Volatile.Read(ref _turnSpawnToInitMs)), N(Volatile.Read(ref _turnInitToFirstEventMs)),
+            _turnSlowSections);
+    }
+
+    // Спавн процесса на этом ходу: начало фазы «запуск CLI». Повторный спавн в ретрае
+    // (DiedEmpty) относится к последней попытке: сбрасываем защёлки NoteInit/NoteFirstEvent,
+    // иначе «init'ом» остался бы первый процесс и фазы мерились бы от него (хвост bc852f0e).
+    private void NoteSpawn(long spawnStartTs)
+    {
+        Volatile.Write(ref _turnSpawnTs, spawnStartTs);
+        Volatile.Write(ref _turnSpawnToInitMs, -1);
+        Volatile.Write(ref _turnInitTs, 0);
+        Volatile.Write(ref _turnInitToFirstEventMs, -1);
+    }
+
+    // system/init процесса, спавненного на ЭТОМ ходу: фаза «запуск CLI». Повторный init того
+    // же процесса (продолжение хода, same-process) не пересчитывается; после повторного спавна
+    // защёлка снята в NoteSpawn — init меряется от нового процесса.
+    private void NoteInit()
+    {
+        var spawnTs = Volatile.Read(ref _turnSpawnTs);
+        if (spawnTs == 0 || Volatile.Read(ref _turnInitTs) != 0) return;
+        Volatile.Write(ref _turnSpawnToInitMs, ElapsedMs(spawnTs));
+        Volatile.Write(ref _turnInitTs, System.Diagnostics.Stopwatch.GetTimestamp());
+    }
+
+    // Первый stream_event/assistant основного агента после init.
+    private void NoteFirstEvent(JsonElement root)
+    {
+        var initTs = Volatile.Read(ref _turnInitTs);
+        if (initTs == 0 || Volatile.Read(ref _turnInitToFirstEventMs) >= 0 || HasParentToolUseId(root)) return;
+        Volatile.Write(ref _turnInitToFirstEventMs, ElapsedMs(initTs));
+    }
     // MCP-сервер персон: CRUD из любого чата + @упоминания/persona_ask
     private readonly PersonasMcpContext? _personasMcp;
     // MCP-сервер рабочего пространства: проекты/файлы/знания/поиск владельца
@@ -2681,7 +2748,10 @@ public class ClaudeSession : ILlmSessionAdapter
             try
             {
                 if (_cts.IsCancellationRequested) return;
+                var queuedTs = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (_turnLock.CurrentCount == 0) await EmitStartPhaseAsync("queued");
                 await _turnLock.WaitAsync(_cts.Token);
+                BeginStartTimings(queuedTs);
                 try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token, turnModelOverride); }
                 catch (OperationCanceledException) { /* остановка сессии — штатно */ }
                 // Адаптер снесли из-под хода (закрытие сессии, реанимация чата) — это остановка,
@@ -3305,11 +3375,31 @@ public class ClaudeSession : ILlmSessionAdapter
         return joinedRecall + "\n\n---\n\n" + text;
     }
 
+    // Фаза старта хода для строки статуса в ленте (TurnStartPhaseMessage). Лёгкое эфемерное
+    // событие: сбой доставки не должен ронять ход. «done» шлём один раз после показанной фазы.
+    // Флаг пер-ходовый по построению: его взводит только «context» (внутри _turnLock, у самого
+    // хода), а «queued» — нет: ход в очереди не владеет флагом, и события идущего хода его
+    // строку «В очереди» не снимают.
+    private volatile bool _startPhaseShown;
+
+    private async Task EmitStartPhaseAsync(string phase)
+    {
+        if (phase == "done")
+        {
+            if (!_startPhaseShown) return;
+            _startPhaseShown = false;
+        }
+        else if (phase != "queued") _startPhaseShown = true;
+        try { await _onMessage(new TurnStartPhaseMessage(phase)); }
+        catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] Фаза старта хода не доставлена: {ex.Message}"); }
+    }
+
     private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, int agentDepth,
         bool suppressTasksExecute, CancellationToken ct, string? turnModelOverride = null)
     {
         // Глубина делегирования действует ровно на этот ход (внутри _turnLock):
         // MCP-конфиг ниже собирается уже с учётом анти-рекурсии, сброс — в finally
+        await EmitStartPhaseAsync("context");
         _currentTurnAgentDepth = agentDepth;
         _currentTurnSuppressTasksExecute = suppressTasksExecute;
         // Явная модель хода (голосовой ход на модели места chat-voice): действует ровно на этот
@@ -3804,6 +3894,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 try
                 {
                     await _events.ApplyAsync(assembling);
+                    _turnSlowSections = TurnStartTimings.SelectSlow(assembling.ContributorTimingsMs);
                 }
                 catch
                 {
@@ -4706,6 +4797,7 @@ public class ClaudeSession : ILlmSessionAdapter
             PublishPromptSnapshot(sections, args, mcpServerNames,
                 applied: false, inheritedFromId: existing.PromptSnapshotId,
                 truncated: truncatedSections);
+            await EmitStartPhaseAsync("waiting");
             await existing.TurnTcs.Task.WaitAsync(ct);
             // Прогон умер, не выдав ни одного события хода (TOCTOU: фоновые агенты кончились,
             // CLI завершается сразу после успешной записи в stdin) — гонка same-process, а не
@@ -4774,6 +4866,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var turnSnapshotId = PublishPromptSnapshot(sections, args, mcpServerNames,
             applied: true, inheritedFromId: null,
             truncated: truncatedSections);
+        await EmitStartPhaseAsync("launching");
 
         // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную
         // OEM code page (напр. CP866 на русской Windows) → кракозябры в ответах.
@@ -4789,6 +4882,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // системного промпта); env-оверрайды собраны выше — они входят в сигнатуру прогона.
         // OTel: дочерний спан запуска процесса (родитель — активный chat.turn).
         Process process;
+        var spawnStartTs = System.Diagnostics.Stopwatch.GetTimestamp();
         using (var procActivity = TurnTelemetry.StartProcessSpan(
                    kind: TurnTelemetry.ExecutionKind(_launcher.IsSandboxed),
                    command: _launcher.ClaudeCliCommand,
@@ -4825,6 +4919,7 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
         _currentProcess = process;
+        NoteSpawn(spawnStartTs);
 
         CliRun run;
         try
@@ -5524,6 +5619,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // null/пусто → обычный ход, поля в снимке не будет.
         IReadOnlyList<PromptSectionDto>? truncated = null)
     {
+        // Промпт готов — конец фазы сборки (замер не зависит от шины событий)
+        Volatile.Write(ref _turnPromptAssemblyMs, ElapsedMs(Volatile.Read(ref _turnStartTs)));
         if (_events is null) return null;
 
         // id генерируем ДО шины: UI-кнопке нужен синхронный id, а Notification через
@@ -6266,12 +6363,22 @@ public class ClaudeSession : ILlmSessionAdapter
             _turnActivity?.SetTag("model", cliModel);
         }
 
+        // «done» — только по событию самого хода: хвост продолжения (SkipResults>0) чужой
+        if (typeProp.GetString() != "system" && Volatile.Read(ref run.SkipResults) == 0)
+        {
+            var wasShown = _startPhaseShown;
+            await EmitStartPhaseAsync("done");
+            // За идущим ходом стоят ещё ходы — их «В очереди» снял этот done, вернём строку
+            if (wasShown && Volatile.Read(ref _queuedTurns) > 1) await EmitStartPhaseAsync("queued");
+        }
+
         switch (typeProp.GetString())
         {
             case "system":
                 var sysSubtype = root.TryGetProperty("subtype", out var sst) ? sst.GetString() : null;
                 if (sysSubtype == "init" && root.TryGetProperty("session_id", out var sid))
                 {
+                    NoteInit();
                     var isResume = Info.ClaudeSessionId is not null;
                     Info.ClaudeSessionId = sid.GetString();
                     var model = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
@@ -6317,6 +6424,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         }
                     }
 
+                    await EmitStartPhaseAsync("waiting");
                     var worktree = ResolveTurnWorktree(cwd, _rootPath, _launcher);
                     await _onMessage(new SessionStartedMessage(
                         Info.ClaudeSessionId!, isResume, model, Info.Mode.ToWireToken(), cwd, toolCount, mcp,
@@ -6417,6 +6525,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 break;
 
             case "stream_event":
+                NoteFirstEvent(root);
                 if (!HasParentToolUseId(root)) run.PreEchoResultLine = null;
                 // Контент ОСНОВНОГО агента после конца хода — CLI начал ход-продолжение
                 // (ответ на task-notification); его result не должен завершить будущий ход
@@ -6432,6 +6541,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 break;
 
             case "assistant":
+                NoteFirstEvent(root);
                 if (!HasParentToolUseId(root)) run.PreEchoResultLine = null;
                 if (run is { TurnDone: true, ContinuationActive: false } && !HasParentToolUseId(root))
                 {

@@ -213,6 +213,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             context.EnqueueBypass, context.OrchestrationDone,
             contextSource: BuildContextSource(claudeSession),
             cliRetryStats: () => claudeSession.CliRetryStats(),
+            startTimings: () => claudeSession.GetStartTimings(),
             egress: _egress, events: context.Events,
             localProbe: _localProbe,
             transcriptOnServer: context.TranscriptOnServer,

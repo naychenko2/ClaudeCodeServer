@@ -785,6 +785,13 @@ public record LocalModelTurnStatsMessage(double? GenTps, double? PrefillTps,
 public record LocalTurnQueueMessage(int Position, int Active, int Limit)
     : ServerMessage("local_turn_queue");
 
+// Фаза старта хода — для строки статуса в ленте, пока от хода нет ни одного события ответа.
+// Phase: queued (ход стоит в очереди сессии) | context (промпт собирается) | launching
+// (промпт собран, CLI ещё не прислал init) | waiting (init пришёл, ответа модели ещё нет) |
+// done (пришло первое событие ответа — строку снять). Эфемерное: в history.json не пишется
+// (нет case в OnMessageAsync и StoredMessage).
+public record TurnStartPhaseMessage(string Phase) : ServerMessage("turn_start_phase");
+
 // Сообщения от клиента к серверу
 public record ClientMessage([property: JsonPropertyName("type")] string Type);
 

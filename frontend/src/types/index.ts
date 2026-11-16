@@ -737,7 +737,13 @@ export type ServerMessage = { sessionId: string } & (
   // position=0 — ожидание кончилось (ход допущен/отказан/остановлен): строку снять.
   // Эфемерное: в историю не пишется, свою строку ленты снимает и на конце хода (редьюсер).
   | { type: 'local_turn_queue'; position: number; active: number; limit: number }
+  // Фаза старта хода (строка статуса, пока нет событий ответа): queued | context | launching | waiting;
+  // done — пришло первое событие ответа, строку снять. Эфемерное, в историю не пишется.
+  | { type: 'turn_start_phase'; phase: string }
 );
+
+// Фазы старта хода, которые показывает строка статуса в ленте
+export type StartPhase = 'queued' | 'context' | 'launching' | 'waiting';
 
 // Снимок промпта хода (GET /api/sessions/{id}/prompt/{snapshotId})
 export interface PromptSection {
@@ -1008,6 +1014,8 @@ export type ChatItem =
   // position — позиция в очереди (1-based), active/limit — «заняты N из M». Live-only:
   // событие эфемерное, в историю не пишется; снимается position=0 или концом хода (редьюсер).
   | { kind: 'local_turn_queue'; position: number; active: number; limit: number }
+  // Строка статуса старта хода (событие turn_start_phase). Live-only; снимается первым событием ответа или концом хода.
+  | { kind: 'turn_start_phase'; phase: StartPhase }
   // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error).
   // action — признак предлагаемого действия под карточкой: сейчас только "window-1m-drop"
   // (кнопка «Продолжить в стандартном окне» под карточкой отказа Window1MUnavailable).

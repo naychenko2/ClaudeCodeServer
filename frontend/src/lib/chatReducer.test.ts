@@ -73,6 +73,7 @@ describe('возврат в чат посреди идущего хода', () =
       promptChars: 0, responseChars: 0,
     }],
     ['local_turn_queue', { type: 'local_turn_queue', position: 2, active: 3, limit: 3 }],
+    ['turn_start_phase', { type: 'turn_start_phase', phase: 'context' }],
   ];
 
   it.each(liveOnlyEvents)('%s в ленте не блокирует снимок', (_name, event) => {
@@ -566,5 +567,32 @@ describe('context_usage: живое заполнение контекста по
     expect(s.liveContextTokens).toBeUndefined();
     // в ленту транзитное событие не попадает
     expect(s.items.some(it => (it as { kind: string }).kind === 'context_usage')).toBe(false);
+  });
+});
+
+// Строка статуса старта хода: фазы приходят событием turn_start_phase, первое событие ответа
+// (бэк шлёт done) снимает строку.
+describe('applyServerMessage: turn_start_phase — статус старта хода', () => {
+  const phases = (s: ChatState) => s.items.filter(i => i.kind === 'turn_start_phase');
+
+  it('фазы идут по очереди и обновляют одну строку, а не плодят новые', () => {
+    let s = feed(initialChatState(), { type: 'user_message', text: 'привет' });
+    for (const phase of ['queued', 'context', 'launching', 'waiting']) {
+      s = applyServerMessage(s, { sessionId: SID, type: 'turn_start_phase', phase } as ServerMessage);
+      expect(phases(s)).toEqual([{ kind: 'turn_start_phase', phase }]);
+    }
+  });
+
+  it('done снимает строку; без строки состояние не трогает', () => {
+    const shown = feed(initialChatState(), { type: 'turn_start_phase', phase: 'waiting' });
+    const gone = applyServerMessage(shown, { sessionId: SID, type: 'turn_start_phase', phase: 'done' } as ServerMessage);
+    expect(phases(gone)).toHaveLength(0);
+    expect(applyServerMessage(gone, { sessionId: SID, type: 'turn_start_phase', phase: 'done' } as ServerMessage)).toBe(gone);
+  });
+
+  it('строка не переживает ход: result и error её снимают', () => {
+    const shown = feed(initialChatState(), { type: 'turn_start_phase', phase: 'launching' });
+    const r = applyServerMessage(shown, { sessionId: SID, type: 'error', text: 'сбой' } as ServerMessage);
+    expect(phases(r)).toHaveLength(0);
   });
 });

@@ -80,6 +80,70 @@ public class TurnRunLogTests
         none.CliRetryLastStatus.Should().BeNull("без повторов — null");
     }
 
+    // Замеры фаз старта хода: аддитивные nullable-поля — в файл едут только заполненные
+    // (старые записи без них читаются как раньше), null не превращается в 0.
+    [Fact]
+    public void Паспорт_ЗамерыСтарта_ПишутсяТолькоЗаполненные()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs-turn-runs-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var log = new TurnRunLog(dir, retainDays: 14);
+            log.Record(Passport("plain", "success") with { });
+            log.Record(Passport("timed", "success") with
+            {
+                QueueWaitMs = 12,
+                PromptAssemblyMs = 8800,
+                SpawnToInitMs = null,
+                InitToFirstEventMs = 0,
+                SlowSections = new Dictionary<string, long> { ["code-graph"] = 7000 },
+            });
+
+            var lines = File.ReadAllLines(Path.Combine(dir, $"turn-runs-{DateTime.UtcNow:yyyyMMdd}.jsonl"));
+            lines[0].Should().NotContain("promptAssemblyMs").And.NotContain("slowSections");
+            lines[1].Should().Contain("\"queueWaitMs\":12").And.Contain("\"promptAssemblyMs\":8800")
+                .And.Contain("\"initToFirstEventMs\":0").And.Contain("\"slowSections\":{\"code-graph\":7000}")
+                .And.NotContain("spawnToInitMs", "повторно используемый процесс — null, а не 0");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* временный каталог */ }
+        }
+    }
+
+    // Запись прежнего формата (без замеров старта) читается без ошибок: новые поля — null.
+    [Fact]
+    public void СтарыйПаспортБезЗамеровСтарта_ЧитаетсяБезОшибок()
+    {
+        const string old = "{\"sessionId\":\"s1\",\"startedAt\":\"2026-11-01T10:00:00Z\",\"endedAt\":\"2026-11-01T10:00:30Z\","
+            + "\"durationSeconds\":30,\"outcome\":\"success\",\"startModel\":\"opus\",\"startProvider\":\"claude\","
+            + "\"finalModel\":\"opus\",\"finalProvider\":\"claude\",\"attempts\":1,\"substitutions\":0,\"egressRetries\":0,"
+            + "\"chain\":[\"opus\"],\"contextTokens\":120000,\"recordedAt\":\"2026-11-01T10:00:30Z\","
+            + "\"cliRetries\":2,\"cliRetryWaitMs\":900}";
+
+        var p = System.Text.Json.JsonSerializer.Deserialize<TurnRunPassport>(old,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+        p.Should().NotBeNull();
+        p!.SessionId.Should().Be("s1");
+        p.CliRetryWaitMs.Should().Be(900);
+        p.QueueWaitMs.Should().BeNull();
+        p.PromptAssemblyMs.Should().BeNull();
+        p.SpawnToInitMs.Should().BeNull();
+        p.InitToFirstEventMs.Should().BeNull();
+        p.SlowSections.Should().BeNull();
+    }
+
+    // Порог медленной секции — строго больше 500 мс: ровно на границе не пишем; пусто → null.
+    [Fact]
+    public void SelectSlow_ГраницаПорогаИПустойВвод()
+    {
+        TurnStartTimings.SelectSlow(new Dictionary<string, long>()).Should().BeNull();
+        TurnStartTimings.SelectSlow(new Dictionary<string, long> { ["a"] = 500, ["b"] = 499 }).Should().BeNull();
+        TurnStartTimings.SelectSlow(new Dictionary<string, long> { ["a"] = 500, ["b"] = 501 })
+            .Should().BeEquivalentTo(new Dictionary<string, long> { ["b"] = 501 });
+    }
+
     [Fact]
     public void ПишетДневнойФайлРядомССервернымЛогом()
     {

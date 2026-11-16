@@ -1,4 +1,5 @@
 import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
+import { TurnStartStatus } from '../ui/TurnStartStatus';
 import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, Camera, MonitorSmartphone, Hourglass } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
@@ -2119,6 +2120,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         </div>
       );
     }
+
+    case 'turn_start_phase':
+      return <TurnStartStatus phase={item.phase} />;
 
     case 'local_turn_queue': {
       // Ход ждёт свободный слот локальной модели (гейт допуска). Янтарная предупреждающая

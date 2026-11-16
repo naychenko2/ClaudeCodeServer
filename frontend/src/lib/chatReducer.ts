@@ -3,7 +3,7 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
+import type { ChatItem, StartPhase, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
 import { handsStatusFeedLine } from './localHands';
 import { isBgLaunchResult } from './agentTail';
 import { RUN_TESTS_TOOL, testRunKindLabel } from './toolLabels';
@@ -505,9 +505,8 @@ export function retryableInterruptedIndex(items: ChatItem[]): number {
 // конец хода (result/error/exited) снимает её как failsafe. Без строки возвращает
 // тот же массив (подписчиков не будит лишний раз).
 function dropLocalTurnQueue(items: ChatItem[]): ChatItem[] {
-  return items.some(it => it.kind === 'local_turn_queue')
-    ? items.filter(it => it.kind !== 'local_turn_queue')
-    : items;
+  const live = (it: ChatItem) => it.kind === 'local_turn_queue' || it.kind === 'turn_start_phase';
+  return items.some(live) ? items.filter(it => !live(it)) : items;
 }
 
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
@@ -1221,6 +1220,21 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         return withItems(items);
       }
       return withItems([...prev.items, { kind: 'local_turn_queue', position: msg.position, active: msg.active, limit: msg.limit }]);
+    }
+
+    case 'turn_start_phase': {
+      // Статус старта хода: живёт, пока от хода нет событий ответа. «done» (первое событие)
+      // снимает строку; смена фазы обновляет стоящую, а не плодит новую. Конец хода снимает
+      // её failsafe-ом (dropLocalTurnQueue).
+      const at = prev.items.findLastIndex(it => it.kind === 'turn_start_phase');
+      if (msg.phase === 'done') return at >= 0 ? withItems(prev.items.filter(it => it.kind !== 'turn_start_phase')) : prev;
+      const phase = msg.phase as StartPhase;
+      if (at >= 0) {
+        const items = prev.items.slice();
+        items[at] = { kind: 'turn_start_phase', phase };
+        return withItems(items);
+      }
+      return withItems([...prev.items, { kind: 'turn_start_phase', phase }]);
     }
 
     case 'prompt_suggestion':

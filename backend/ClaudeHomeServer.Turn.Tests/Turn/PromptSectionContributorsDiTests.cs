@@ -168,6 +168,57 @@ public class PromptSectionContributorsDiTests
         prompt.Sections.Select(s => s.Text).Should().Equal(new[] { "ранняя", "средняя", "поздняя" });
     }
 
+    // Замер для паспорта хода: обёртка реестра пишет длительность каждого СРАБОТАВШЕГО
+    // контрибьютора; выключенный (IsEnabled=false) в замеры не попадает.
+    [Fact]
+    public async Task RegisterAll_RecordsDurationOnlyForEnabledContributors()
+    {
+        var bus = new TurnEventBus(NullLogger<TurnEventBus>.Instance);
+        PromptSectionContributorsRegistration.RegisterAll(bus, new IPromptSectionContributor[]
+        {
+            new TimedContributor("slow", 100, enabled: true, delayMs: 80),
+            new TimedContributor("off", 200, enabled: false, delayMs: 80),
+        });
+        var session = new Session { OwnerId = "owner-1" };
+        var ctx = new PromptSessionContext(session, "owner-1", Persona: null, RootPath: null,
+            HasNotesMcp: false, HasMemoryMcp: false, HasWorkspaceMcp: false,
+            WorkspaceSections: Array.Empty<string>());
+        var prompt = new PromptAssembling(new TurnContext("session-1", "owner-1", 1, 0), ctx);
+
+        await bus.ApplyAsync(prompt);
+
+        prompt.ContributorTimingsMs.Should().ContainKey("slow");
+        prompt.ContributorTimingsMs["slow"].Should().BeGreaterThanOrEqualTo(50);
+        prompt.ContributorTimingsMs.Should().NotContainKey("off");
+    }
+
+    // Сквозной замер для slowSections: контрибьютор с задержкой 1 с попадает в выборку паспорта
+    // со значением ≥ 1000, быстрый — нет.
+    [Fact]
+    public async Task SlowContributor_LandsInSlowSections_FastDoesNot()
+    {
+        var bus = new TurnEventBus(NullLogger<TurnEventBus>.Instance);
+        PromptSectionContributorsRegistration.RegisterAll(bus, new IPromptSectionContributor[]
+        {
+            new TimedContributor("slow", 100, enabled: true, delayMs: 1000),
+            new TimedContributor("fast", 200, enabled: true, delayMs: 0),
+        });
+        var session = new Session { OwnerId = "owner-1" };
+        var ctx = new PromptSessionContext(session, "owner-1", Persona: null, RootPath: null,
+            HasNotesMcp: false, HasMemoryMcp: false, HasWorkspaceMcp: false,
+            WorkspaceSections: Array.Empty<string>());
+        var prompt = new PromptAssembling(new TurnContext("session-1", "owner-1", 1, 0), ctx);
+
+        await bus.ApplyAsync(prompt);
+        var slow = TurnStartTimings.SelectSlow(prompt.ContributorTimingsMs);
+
+        slow.Should().NotBeNull();
+        var map = slow!;
+        map.Should().ContainKey("slow");
+        map["slow"].Should().BeGreaterThanOrEqualTo(1000);
+        map.Should().NotContainKey("fast");
+    }
+
     // Тест 4 (НЕГАТИВНЫЙ): без регистрации контрибьюторов ApplyAsync даёт пустые Sections.
     // Доказательство, что тест 5 реально сторожит: если убрать вызов из Program.cs, в
     // проде шина будет пустой и секции промпта не появятся.
@@ -408,5 +459,20 @@ public class PromptSectionContributorsDiTests
             Task.FromResult<PromptSectionContribution?>(
                 new PromptSectionContribution([new PromptSection(Key, _text)]));
         private readonly string _text;
+    }
+
+    private sealed class TimedContributor(string key, int order, bool enabled, int delayMs) : IPromptSectionContributor
+    {
+        public string Key => key;
+        public string Title => key;
+        public int Order => order;
+        public string Group => "test";
+        public bool IsEnabled(PromptSessionContext sessionContext) => enabled;
+        public async Task<PromptSectionContribution?> BuildAsync(
+            PromptSessionContext sessionContext, string? turnText)
+        {
+            await Task.Delay(delayMs);
+            return new PromptSectionContribution([new PromptSection(key, key)]);
+        }
     }
 }

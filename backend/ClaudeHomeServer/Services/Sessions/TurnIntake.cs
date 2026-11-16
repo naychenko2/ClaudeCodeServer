@@ -1021,7 +1021,9 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
     // По истечении — НЕ fail-open (вернуло бы гонку) и НЕ честная ошибка (доставка нужна):
     // прерываем доживающий прогон (фоновые агенты гибнут, добиваются в следующем ходе через
     // notification — как при смене окружения) и коротко ждём его финализации.
-    private async Task AwaitPreviousTurnExitAsync(string sessionId, SessionEntry entry)
+    // Возвращает true, если разослали фазу «queued» (ждать пришлось): тогда выходы доставки
+    // без старта хода обязаны снять строку фазой «done».
+    private async Task<bool> AwaitPreviousTurnExitAsync(string sessionId, SessionEntry entry)
     {
         var ceiling = int.TryParse(_config["Delivery:AwaitProcessExitSeconds"], out var s) && s >= 0
             ? s : 8;
@@ -1034,13 +1036,25 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
                 _log.LogWarning(
                     "Delivery:AwaitProcessExitSeconds={Ceiling} — сериализация отложенной доставки выключена (opt-out)",
                     ceiling);
-            return;
+            return false;
         }
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(ceiling);
+        // Предыдущий прогон уже мёртв — ждать нечего, строку «В очереди» не показываем.
+        if (!SessionStore.Busy(entry.Process)) return false;
+
+        // Карточка очереди к этому моменту уже снята (pending_messages), а баллон сообщения
+        // появится только после ожидания: без фазы человек ~секунды видит пустоту.
+        // Эфемерное событие в группу сессии — в history.json не пишется.
+        await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("queued"));
+
+        var started = DateTime.UtcNow;
+        var orchestration = entry.Process?.OrchestrationActive == true && entry.Process?.HasLiveTurn != true;
+        var ceilingHit = false;
+        var deadline = started + TimeSpan.FromSeconds(ceiling);
         while (SessionStore.Busy(entry.Process))
         {
             if (DateTime.UtcNow >= deadline)
             {
+                ceilingHit = true;
                 _log.LogInformation(
                     "Ожидание смерти прогона {Session} истекло ({Ceiling} с) — прерываю доживание ради отложенной доставки",
                     sessionId, ceiling);
@@ -1053,6 +1067,11 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
             }
             await Task.Delay(50);
         }
+        // orchestration=true — прогон мёртв, держит только фолбэк-оркестрация (OrchestrationActive).
+        _log.LogInformation(
+            "Ожидание прогона {Session} перед отложенной доставкой: waitedMs={WaitedMs} ceilingHit={CeilingHit} orchestration={Orchestration}",
+            sessionId, (long)(DateTime.UtcNow - started).TotalMilliseconds, ceilingHit, orchestration);
+        return true;
     }
 
     // Доставка конкретного сообщения из очереди обычным ходом (без повторных гейтов очереди).
@@ -1068,7 +1087,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         // умрёт (HasLiveTurn=false) И фолбэк-оркестрация снимется (OrchestrationActive=false) — тогда
         // _turnLock свободен, транзрипт закрыт, новый ход стартует свежим процессом. Только для
         // отложенной доставки (из Pending): свежий ход человека через SendDirectAsync сюда не попадает.
-        await AwaitPreviousTurnExitAsync(sessionId, entry);
+        var queuedShown = await AwaitPreviousTurnExitAsync(sessionId, entry);
 
         // F2-O3 доработка 2 (дельта-ревью 627bd324): гонка «отзыв против уже начатой доставки».
         // Сообщение изымается из очереди под PendingLock (DrainNextPendingAsync), а доставляется
@@ -1090,6 +1109,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
             // ОтзывВОкнеДоставки_АктивныйЦиклИМаркерСнятыСтопом_ХодСиротаНеПоднят).
             if (entry.Info.WorkLoop is not null)
                 lock (entry.PendingLock) entry.LoopTurnInFlight = false;
+            if (queuedShown) await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
             return false;
         }
 
@@ -1126,6 +1146,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
             if (entry.Info.WorkLoop is not null)
                 lock (entry.PendingLock) entry.LoopTurnInFlight = false;
             Console.Error.WriteLine($"[SessionManager] Доставка отложенного сообщения ({sessionId}): {ex.Message}");
+            if (queuedShown) await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
             return false;
         }
     }

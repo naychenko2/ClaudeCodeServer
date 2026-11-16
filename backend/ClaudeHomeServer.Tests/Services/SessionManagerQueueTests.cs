@@ -1275,6 +1275,61 @@ public class SessionManagerQueueTests : SessionManagerTestBase
             "доставка из очереди донесла глубину хода — потолок глубины запуска не фиктивный");
     }
 
+    private static QueuedMessage UserQueued(string text) =>
+        new(Guid.NewGuid().ToString("N"), text, null, null, 0, DateTime.UtcNow, Kind: PendingKind.User);
+
+    // TS-5: очередь живёт в TurnIntake, и пока доживает прогон предыдущего хода, у человека
+    // нет ни карточки очереди (уже снята), ни баллона (ещё не показан) — «queued» закрывает дыру.
+    [Fact]
+    public async Task Очередь_ПредыдущийПрогонЖив_QueuedРаньшеБаллонаСообщения()
+    {
+        EnableAwaitPreviousExit(5);
+        var session = await MkBusySessionAsync("queued-phase", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        var alive = true;
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(() => Volatile.Read(ref alive));
+        SetProcess(entry, adapter.Object);
+        // Прогон «умирает» сразу после рассылки queued — ожидание заканчивается без потолка
+        _broadcaster.Gate = msg =>
+        {
+            if (msg is TurnStartPhaseMessage { Phase: "queued" }) Volatile.Write(ref alive, false);
+            return Task.CompletedTask;
+        };
+        try
+        {
+            var method = typeof(SessionManager).GetMethod("DeliverPendingAsync",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            await (Task)method.Invoke(_sut, [session.Id, entry, UserQueued("второе сообщение")])!;
+        }
+        finally { _broadcaster.Gate = null; }
+
+        List<ServerMessage> all;
+        lock (_sentMessagesLock) all = _sentMessages.ToList();
+        var queuedAt = all.FindIndex(m => m is TurnStartPhaseMessage { Phase: "queued" });
+        var balloonAt = all.FindIndex(m => m is UserMessageMessage { Text: "второе сообщение" });
+        queuedAt.Should().BeGreaterThanOrEqualTo(0, "ждали смерти прогона — строка «В очереди» обязана появиться");
+        balloonAt.Should().BeGreaterThan(queuedAt, "queued идёт раньше пользовательского баллона");
+    }
+
+    [Fact]
+    public async Task Очередь_ПредыдущийПрогонУжеМёртв_QueuedНеШлётся()
+    {
+        EnableAwaitPreviousExit(5);
+        var session = await MkBusySessionAsync("queued-dead", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        SetProcess(entry, adapter.Object);
+
+        var method = typeof(SessionManager).GetMethod("DeliverPendingAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)method.Invoke(_sut, [session.Id, entry, UserQueued("без ожидания")])!;
+
+        Sent<TurnStartPhaseMessage>().Should().NotContain(p => p.Phase == "queued",
+            "ждать нечего — строка мигнула бы зря");
+    }
+
     [Fact]
     public async Task ContinueWorkLoop_ПользовательскоеСообщениеВОчереди_НеШлётДирективуПродолжения()
     {

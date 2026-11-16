@@ -88,6 +88,23 @@ function render(farm: HardwareFarm, selected: string | null = null, isMobile = f
   );
 }
 
+// Цвета поддерева элемента смонтированного дерева: значения его inline-style и атрибутов
+// (сам элемент включён): рамка и значение карточки живут в inline-style, точка — в атрибутах
+// circle. Для проверок «окраска именно в этой карточке», а не по всему документу.
+type FNode = NonNullable<ReturnType<typeof findNodeByAttr>>;
+function subtreeColorStrings(el: FNode): string[] {
+  const out: string[] = [];
+  const walk = (n: FNode) => {
+    if (n.nodeType === 1) {
+      for (const v of Object.values(n.attributes)) out.push(v);
+      for (const v of Object.values(n.style)) if (typeof v === 'string') out.push(v);
+    }
+    for (const c of n.childNodes) walk(c);
+  };
+  walk(el);
+  return out;
+}
+
 // === 1. Роли словами (чистая функция и разметка карточек) ===
 
 describe('farmRolesLabel — роли словами', () => {
@@ -121,7 +138,7 @@ describe('карточка «Ферма» — состав и роли', () => {
 // === 2. Молчащий узел: статус, кольцо, плашка «узел молчит» ===
 
 describe('молчащий узел (down/stale/incompatible)', () => {
-  it('down: «не отвечает с HH:MM:SS» (локальное время из since), точка-кольцо, плашка «узел молчит», «всё в норме» нет', () => {
+  it('down: «не отвечает с HH:MM:SS» (локальное время из since), точка-кольцо, плашка «узел молчит», «всё в норме» нет, рамка не окрашена', () => {
     const html = render(farmSilent());
     expect(html).toContain(`не отвечает с ${hms(SINCE)}`);
     // точка-кольцо: заполнение C.track, обводка C.textMuted
@@ -129,8 +146,19 @@ describe('молчащий узел (down/stale/incompatible)', () => {
     expect(html).toContain('stroke="var(--c-text-muted)"');
     expect(html).toContain('узел молчит');
     expect(html).not.toContain('всё в норме');
-    // тревогой не красится: карточка ai без warning/danger-рамки
-    expect(html).not.toContain('var(--c-danger-bg)');
+    // Тревогой не красится — по поддереву самой карточки, а не по документу: рамка молчащего
+    // это tone() → C.borderLight (о нештатности говорят status/since, не цвет). Точка и
+    // значение молчащего идут мимо tone() (тернарники NodeCard), поэтому из tone() в карточку
+    // попадает только рамка — мутация tone() (border: C.warning) красит ровно этот тест.
+    const { container } = mount(
+      createElement(FarmSummaryCard, { farm: farmSilent(), selected: null, onSelect: () => {}, isMobile: false }),
+    );
+    const card = findNodeByAttr(container, 'aria-label', `Узел ai: не отвечает с ${hms(SINCE)}`);
+    expect(card).not.toBeNull();
+    const colors = subtreeColorStrings(card!).join(' ');
+    expect(colors).toContain('var(--c-border-light)');
+    expect(colors).not.toContain('var(--c-warning)');
+    expect(colors).not.toContain('var(--c-danger-border)');
   });
   it('incompatible: «версия агента не подходит», не «не отвечает»', () => {
     const farm: HardwareFarm = {

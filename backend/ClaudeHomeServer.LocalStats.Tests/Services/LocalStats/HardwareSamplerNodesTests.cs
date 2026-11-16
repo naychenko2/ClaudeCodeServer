@@ -62,6 +62,8 @@ public class HardwareSamplerNodesTests
         public Task<NodeReading> ReadAsync(CancellationToken ct = default) => throw new InvalidOperationException("кривой срез");
     }
 
+    public static IEnumerable<object[]> Repeats() => Enumerable.Range(0, 20).Select(i => new object[] { i });
+
     private static FakeNodeSource WithCpu(string tctl)
     {
         var s = new FakeNodeSource();
@@ -145,6 +147,7 @@ public class HardwareSamplerNodesTests
         await enough.Task.WaitAsync(TimeSpan.FromSeconds(10));
         s.ForNode("bad")!.Status.Should().Be("down");
         s.RingCount("worker").Should().BeGreaterThan(0, "исключение чужого узла не останавливает цикл");
+        s.ExecuteTask!.IsCompleted.Should().BeFalse("исключение разбора узла не роняет ExecuteAsync");
         cts.Cancel();
         await s.StopAsync(CancellationToken.None);
     }
@@ -166,7 +169,7 @@ public class HardwareSamplerNodesTests
                 await Task.Delay(150, ct);
                 return;
             }
-            if (w.Reads >= 5 && v.Reads >= 5 && hung.Reads >= 2) done.TrySetResult();
+            if (s.RingCount("worker") >= 10 && s.RingCount("video") >= 10 && hung.Reads >= 2) done.TrySetResult();
             await Task.Delay(1, ct);
         };
         using var cts = new CancellationTokenSource();
@@ -175,15 +178,19 @@ public class HardwareSamplerNodesTests
         cts.Cancel();
         await s.StopAsync(CancellationToken.None);
 
-        s.RingCount("worker").Should().BeGreaterThanOrEqualTo(4, "worker получает снимок каждый тик");
-        s.RingCount("video").Should().BeGreaterThanOrEqualTo(4);
+        s.RingCount("worker").Should().BeGreaterThanOrEqualTo(10, "worker получает снимок каждый тик");
+        s.RingCount("video").Should().BeGreaterThanOrEqualTo(10);
         s.RingCount("ai").Should().Be(0, "опоздавший/неполученный срез в кольцо не попадает");
         s.ForNode("ai")!.Status.Should().Be("down");
+        s.ForNode("ai")!.Since.Should().NotBeNull("у down есть Since");
     }
 
-    [Fact]
-    public async Task ConcurrentReadWhileWrite_NoExceptions_RingBounded()
+    // 20 повторов: гонка без блокировки ловится не всегда, на мутации хватает одного красного.
+    [Theory]
+    [MemberData(nameof(Repeats))]
+    public async Task ConcurrentReadWhileWrite_NoExceptions_RingBounded(int repeat)
     {
+        _ = repeat;
         var time = new ManualTime();
         var s = Build(time, ("worker", WithCpu("70000")));
         var view = s.ForNode("worker")!;
@@ -202,5 +209,70 @@ public class HardwareSamplerNodesTests
         stop.Cancel();
         await Task.WhenAll(readers); // исключение читателя всплывёт здесь
         s.RingCount("worker").Should().Be(1_800, "кольцо не больше 1800 и заполнено до потолка");
+    }
+
+    [Fact]
+    public async Task CpuLoad_FirstSnapshotNull_SecondFromJiffiesDelta()
+    {
+        var time = new ManualTime();
+        var src = WithCpu("70000");
+        src.Files["/proc/stat"] = "cpu  100 0 100 800 0 0 0 0 0 0\n";   // total 1000, idle 800
+        var s = Build(time, ("worker", src));
+        await s.PollNodeAsync("worker");
+        s.ForNode("worker")!.Current!.CpuLoadPerc.Should().BeNull("prev нет");
+        src.Files["/proc/stat"] = "cpu  450 0 500 1050 0 0 0 0 0 0\n";   // total 2000, idle 1050: Δ1000 / Δ250
+        time.Advance(TimeSpan.FromSeconds(2));
+        await s.PollNodeAsync("worker");
+        s.ForNode("worker")!.Current!.CpuLoadPerc.Should().Be(75);
+        s.ForNode("worker")!.Current!.UptimeS.Should().Be(1234, "целая часть /proc/uptime");
+    }
+
+    // Эталон снят на master (f49fc4d24) старым сэмплером на той же фикстуре; ручка не меняется.
+    [Fact]
+    public async Task Report_WorkerRegression_JsonMatchesMasterBaseline()
+    {
+        var time = new ManualTime();
+        time.Advance(new DateTimeOffset(2026, 10, 18, 12, 0, 0, TimeSpan.Zero) - time.GetUtcNow()); // дата эталона
+        var dir = Path.Combine(Path.GetTempPath(), "gold_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var helper = Path.Combine(dir, "temps.json");
+            File.WriteAllText(helper, $"{{\"v\":1,\"at\":{time.GetUtcNow().ToUnixTimeMilliseconds()},\"gpus\":[{{\"busId\":\"0000:0b:00.0\",\"deviceId\":\"0x2204\",\"memTempC\":68,\"hotspotTempC\":75}}]}}");
+            var src = new FakeNodeSource(new OneGpu(), helper);
+            var f = src.Files;
+            const string R = "/sys/class/hwmon/";
+            f[R + "hwmon0/name"] = "k10temp\n";
+            f[R + "hwmon0/temp1_input"] = "76250"; f[R + "hwmon0/temp1_label"] = "Tctl";
+            f[R + "hwmon0/temp3_input"] = "78000"; f[R + "hwmon0/temp3_label"] = "Tccd1";
+            f[R + "hwmon0/temp4_input"] = "49750"; f[R + "hwmon0/temp4_label"] = "Tccd2";
+            f[R + "hwmon6/name"] = "asusec\n";
+            f[R + "hwmon6/temp1_input"] = "78000"; f[R + "hwmon6/temp1_label"] = "Chipset";
+            f[R + "hwmon6/temp5_input"] = "53000"; f[R + "hwmon6/temp5_label"] = "VRM";
+            f[R + "hwmon6/fan2_input"] = "1159"; f[R + "hwmon6/fan2_label"] = "Chipset";
+            f[R + "hwmon1/name"] = "nct6798\n";
+            f[R + "hwmon1/fan2_input"] = "1159"; f[R + "hwmon1/fan7_input"] = "4821";
+            f["/proc/meminfo"] = "MemTotal:       67108864 kB\nMemAvailable:   33554432 kB\n";
+            var s = Build(time, ("worker", src));
+            s.NodeKeys.Should().Equal("worker");
+            await s.PollNodeAsync("worker");
+
+            var json = System.Text.Json.JsonSerializer.Serialize(new HardwareReportService(s).Build(TimeSpan.FromMinutes(5)),
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            json.Should().Be(File.ReadAllText(BaselinePath()));
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    private static string BaselinePath([System.Runtime.CompilerServices.CallerFilePath] string self = "") =>
+        Path.Combine(Path.GetDirectoryName(self)!, "Fixtures", "hardware-report-worker-master.json");
+
+    private sealed class OneGpu : IGpuSampler
+    {
+        public Task<IReadOnlyList<GpuSample>> ReadAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<GpuSample>>([new GpuSample
+            {
+                Index = 0, Uuid = "GPU-1", Name = "RTX 3090", Temperature = 70, BusId = "00000000:0B:00.0", SwPowerCap = true,
+            }]);
     }
 }

@@ -43,6 +43,7 @@ import { Tooltip } from '../ui/Tooltip';
 import { PressableArea } from '../ui/PressableArea';
 import { LiveDot } from '../ui/LiveDot';
 import { Button } from '../ui/Button';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { ExecutorAvatar, ModelChip, stepModel, buildTaskMap } from './FeatureTimelineBits';
 import { buildProdCards, type ProdCard, type ProdCardState, type ProdNode } from './FeatureProdCards';
 import { FeatureStepDetails, type StepDetailTurn } from './FeatureStepDetails';
@@ -552,9 +553,10 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, project
           {card.returnReason && (
             <div
               data-testid="prod-reason"
-              style={{ marginTop: SP.xs, fontSize: FS.xs, color: C.textSecondary, paddingLeft: SP.sm, borderLeft: `2px solid ${C.warning}`, overflowWrap: 'anywhere' }}
+              style={{ marginTop: SP.xs, fontSize: FS.xs, color: C.textSecondary, paddingLeft: SP.sm, borderLeft: `2px solid ${C.warning}`, overflowWrap: 'anywhere', display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+              title={card.returnReason}
             >
-              {card.returnReason}
+              {markdownToPlain(card.returnReason)}
             </div>
           )}
 

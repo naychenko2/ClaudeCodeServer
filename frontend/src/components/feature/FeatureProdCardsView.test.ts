@@ -232,7 +232,7 @@ describe('обычный цикл', () => {
 // === Возврат и доработка ===
 
 describe('возврат и доработка', () => {
-  const returnedRun = (loops: number) => run({
+  const returnedRun = (loops: number, reason = 'нет пустого состояния') => run({
     steps: [
       task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }),
       task({ id: 's2', status: 'done', role: 'rework', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T12:00:00Z' }),
@@ -240,7 +240,7 @@ describe('возврат и доработка', () => {
     stages: [prodStage([{ taskId: 's2', chatId: 'chat-kira-2' }])],
     stepChains: [chain({
       stepRef: 'Ш1', title: 'Сделать X', personaId: 'p-kira', taskIds: ['s1', 's2'], status: 'вернул', outcome: 'returned', loops, chatId: 'chat-kira',
-      rounds: [round({ n: 1, verdict: 'returned', personaId: 'p-gleb', reviewChatId: 'chat-gleb', reason: 'нет пустого состояния' })],
+      rounds: [round({ n: 1, verdict: 'returned', personaId: 'p-gleb', reviewChatId: 'chat-gleb', reason })],
     })],
   });
 
@@ -253,6 +253,16 @@ describe('возврат и доработка', () => {
     expect(textNodes(reason)[0]).toBe('нет пустого состояния');
     expect(styleOf(reason).borderLeft).toBe(`2px solid ${C.warning}`);
     expect(styleOf(reason).color).toBe(C.textSecondary);
+  });
+
+  it('причина возврата в markdown — выжимкой без разметки, в клампе, полный текст в title', () => {
+    const md = '**Нет** пустого состояния\n\n- см. `Foo.tsx`';
+    const { container } = mount(createElement(FeatureProdCardsView, { run: returnedRun(1, md), featureId: 'F' }));
+    expand(container, 'Ш1');
+    const reason = findNodeByAttr(container, 'data-testid', 'prod-reason')!;
+    expect(textNodes(reason).join('')).toBe('Нет пустого состояния см. Foo.tsx');
+    expect(styleOf(reason).WebkitLineClamp).toBe(4);
+    expect(reactProps(reason).title).toBe(md);
   });
 
   it('клик по узлу возврата открывает reviewChatId этого витка', async () => {

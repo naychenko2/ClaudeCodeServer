@@ -38,6 +38,9 @@ public class ClaudeSessionStartPhaseTests : IDisposable
     private static readonly MethodInfo StopIncompatibleM =
         typeof(ClaudeSession).GetMethod("StopIncompatibleRunAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
+    private static readonly FieldInfo TurnLockField =
+        typeof(ClaudeSession).GetField("_turnLock", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
     // Лаунчер-заглушка: Kill ничего не убивает (процесс в тесте — пустой), остальное тесту не нужно.
     private sealed class StubLauncher : ClaudeHomeServer.Services.Execution.IProcessLauncher
     {
@@ -395,5 +398,41 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         await Emit(s, "context");
         await LineRaw(s, run, ToolResultLine);
         phases.Should().Equal(new[] { "context", "done" });
+    }
+
+    // ——— TS-16: щель отмены адаптера: «В очереди» не переживает отменённый ход ———
+    // Реанимация/закрытие убивают адаптер под запаркованным на _turnLock ходом: RunTurnAsync по
+    // нему не начнётся никогда — ни result, ни exited по этому ходу нет, а их «done» на фронте
+    // строку не снял бы и в обычном пути (queued переживает их по keepQueued). Проверка — на
+    // уровне адаптера: окно отмены живёт внутри QueueTurnAsync, и мок-адаптер теста очереди его
+    // не воспроизводит (_cts — внутренний примитив ClaudeSession, наружу не отдаётся).
+
+    [Fact]
+    public async Task ОтменаПодЗапаркованнымХодом_QueuedЗакрываетсяDone()
+    {
+        var (s, phases) = NewSession();
+        // Чужой прогон держит _turnLock: постановка показывает «В очереди» и встаёт на замок —
+        // то же состояние отложенной доставки, что бывает по живому ещё предыдущему прогону
+        var turnLock = (SemaphoreSlim)TurnLockField.GetValue(s)!;
+        turnLock.Wait();
+        await s.SendMessageAsync("отменённый ход");
+        for (var i = 0; i < 200; i++)
+        {
+            lock (phases) if (phases.Count > 0) break;
+            await Task.Delay(10);
+        }
+        lock (phases) phases.Should().Equal(new[] { "queued" }, "окно отмены открыто: строка показана, ход ждёт замок");
+
+        // Закрытие/реанимация: DisposeAsync отменяет адаптер под запаркованным ходом —
+        // WaitAsync(_cts.Token) бросает, RunTurnAsync не начат никогда
+        await s.DisposeAsync();
+        // Внутренняя постановка — fire-and-forget (QueueTurnAsync сразу возвращает CompletedTask):
+        // её конец ждём по снятию счётчика очереди — finally идёт после «done», поэтому к этому
+        // моменту рассылка уже состоялась.
+        for (var i = 0; i < 200 && s.HasQueuedTurn; i++) await Task.Delay(10);
+        s.HasQueuedTurn.Should().BeFalse("постановка вышла по отмене");
+
+        lock (phases) phases.Should().Equal(new[] { "queued", "done" },
+            "отмена между показом «В очереди» и стартом хода обязана снять строку: по этому ходу больше никто её не закроет");
     }
 }

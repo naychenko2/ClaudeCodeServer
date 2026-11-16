@@ -20,7 +20,11 @@ public sealed record IpmiReading(
 // (`degrees C`), entity смотрятся только для вентиляторов (29).
 public static class IpmiSdrParser
 {
-    private const int MaxLines = 512;  // Разбирается не больше строк, остальные отбрасываются.
+    // Разбирается не больше строк, остальные отбрасываются. Это вторая, независимая граница: сам
+    // текст ipmi ограничен выше по стеку (NodeSliceLimits.MaxIpmiBytes, 16 КБ — NodeSlice.cs),
+    // поэтому Split всегда работает по ограниченному входу; потолок строк держит другой случай —
+    // много коротких строк (16 КБ девятибайтовых — около 1800 строк).
+    private const int MaxLines = 512;
     private const int MaxSockets = 8;  // Потолок длины SocketTempsC/Vrms.
     private const int MinTempC = -50;
     private const int MaxTempC = 200;  // Температура вне диапазона → null в поле (ADR-029 «Потолки»).
@@ -28,6 +32,9 @@ public static class IpmiSdrParser
     private static readonly Regex SocketRe = Pattern(@"^CPU(\d+) Temp$");
     private static readonly Regex VrmCpuSocRe = Pattern(@"^VRM(?:Cpu|Soc)(\d+) Temp$");
     private static readonly Regex VrmGroupRe = Pattern(@"^VRMP(\d+)[A-H]+ Temp$");
+    // Неразведённый VRM — имя ПО ШАБЛОНУ: начинается с VRM и заканчивается «Temp». Подстрока
+    // не годится: «NVRM…» и «xvrm» — не VRM-датчики (Р-Ш2д3).
+    private static readonly Regex BoardVrmRe = Pattern(@"^VRM.* Temp$");
     private static readonly Regex TempValueRe = Pattern(@"^(-?\d+) degrees C$");
     private static readonly Regex RpmValueRe = Pattern(@"^(\d+) RPM$");
 
@@ -99,7 +106,7 @@ public static class IpmiSdrParser
                     continue;
                 }
 
-                if (name.Contains("VRM", StringComparison.OrdinalIgnoreCase))
+                if (BoardVrmRe.IsMatch(name))
                     boardVrm = Max(boardVrm, ParseTemp(value)); // Неразведённый VRM — на плату, сокету не приписывается.
                 else if (name == "System Temp")
                     boardTemp = Max(boardTemp, ParseTemp(value));

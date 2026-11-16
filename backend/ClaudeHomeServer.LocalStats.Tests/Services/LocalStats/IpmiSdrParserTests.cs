@@ -58,12 +58,30 @@ public class IpmiSdrParserTests
     }
 
     // VRM с именем вне двух шаблонов — на плату (максимум), сокету не приписывается.
+    // Признак — шаблон имени (начинается с VRM, заканчивается «Temp»), а не подстрока: имя должно
+    // именно им быть. Мутация «по подстроке Contains("VRM")» краснит тест ниже.
     [Fact]
     public void Parse_VrmOutsidePatterns_BoardVrm_NotSocket()
     {
         var r = IpmiSdrParser.Parse("VRMX9 Temp     | 90h | ok  |  8.9 | 70 degrees C");
         r.Should().NotBeNull();
         r!.BoardVrm.Should().Be(70);
+        r.SocketTempsC.Should().BeEmpty();
+        r.Vrms.Should().BeEmpty();
+    }
+
+    // «VRM» ВНУТРИ имени — не VRM-датчик: «NVRM…», «xvrm», «CPU VRMX» — не начинаются с VRM,
+    // на плату не идут (Р-Ш2д3). Мутация «name.Contains("VRM")» краснит этот тест на всех трёх
+    // случаях (BoardVrm стал бы 70).
+    [Theory]
+    [InlineData("NVRM1 Temp     | 91h | ok  |  8.10 | 70 degrees C")]
+    [InlineData("xvrm Temp      | 92h | ok  |  8.11 | 70 degrees C")]
+    [InlineData("CPU VRMX Temp  | 93h | ok  |  8.12 | 70 degrees C")]
+    public void Parse_VrmAsSubstring_NotBoardVrm(string line)
+    {
+        var r = IpmiSdrParser.Parse(line);
+        r.Should().NotBeNull();
+        r!.BoardVrm.Should().BeNull();
         r.SocketTempsC.Should().BeEmpty();
         r.Vrms.Should().BeEmpty();
     }
@@ -186,9 +204,11 @@ public class IpmiSdrParserTests
         r!.SocketTempsC.Should().Equal(new int?[] { null });
     }
 
-    // Потолок строк: разобрано не больше 512, последующие отбрасываются. Признак различим:
-    // первые 512 строк дают сокету 1 значение 100, последующие — 150. Результат 100 — последующие
-    // отброшены; 150 — потолок не работает. Граница: 512 строк разбираются все, 513-я — уже нет.
+    // Потолок строк закреплён с обеих сторон: 512-я строка разбирается, 513-я — нет. Признак
+    // различим по значению: строки 1..511 дают сокету 1 значение 100, 512-я — 120, последующие — 150
+    // (разбор берёт максимум). Результат 120 — разобраны ровно первые 512. 100 — потолок НИЖЕ 512
+    // (512-я отброшена); 150 — потолок не работает (разобрана 513-я). Мутация MaxLines 512→511
+    // краснит этот тест на всех трёх случаях.
     [Theory]
     [InlineData(512)]
     [InlineData(513)]
@@ -196,8 +216,8 @@ public class IpmiSdrParserTests
     public void Parse_TooManyLines_OnlyFirst512Parsed(int total)
     {
         var sdr = string.Join('\n', Enumerable.Range(1, total)
-            .Select(n => $"CPU1 Temp      | 01h | ok  |  3.1 | {(n <= 512 ? 100 : 150)} degrees C"));
+            .Select(n => $"CPU1 Temp      | 01h | ok  |  3.1 | {(n < 512 ? 100 : n == 512 ? 120 : 150)} degrees C"));
         var r = IpmiSdrParser.Parse(sdr);
-        r!.SocketTempsC.Should().Equal(new int?[] { 100 });
+        r!.SocketTempsC.Should().Equal(new int?[] { 120 });
     }
 }

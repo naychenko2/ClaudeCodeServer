@@ -4,7 +4,7 @@
 // Уровень (level) и пороги считает БЕКЕНД (HardwareReport.cs); фронт только
 // красит по level и не дублирует пороги. Здесь — только текст и выбор.
 
-import type { HardwareBrief, HardwareGpu, HardwareNode, HardwareReport, HwLevel } from './hardwareTypes';
+import type { HardwareBrief, HardwareFarm, HardwareFarmNode, HardwareGpu, HardwareNode, HardwareReport, HwLevel } from './hardwareTypes';
 
 // === Числа ===
 
@@ -248,4 +248,58 @@ export function hwScalePos(v: number): number {
 // Уровень карты по памяти (для окраски значения памяти).
 export function hwGpuMemLevel(gpu: HardwareGpu): HwLevel {
   return gpu.levels.mem;
+}
+
+// === Сводка фермы (карточка «Ферма», макет А) ===
+// Нештатный узел (down/stale/incompatible) — «молчит»: его последние значения
+// не участвуют в сводке фермы (о нештатности говорят status/since, level при
+// ней 'ok' — HardwareReport.cs:5-6, 242-243).
+
+// Молчит ли узел: не отвечает (down/stale) или версия агента не подходит (incompatible).
+export function farmNodeSilent(n: HardwareFarmNode): boolean {
+  return n.status !== 'ok';
+}
+
+// Сколько узлов молчит (плашка «узел молчит» и статус строки карточки).
+export function farmSilentCount(farm: HardwareFarm): number {
+  return farm.farmNodes.filter(farmNodeSilent).length;
+}
+
+// Роли узла словами: 'text' → «LLM», 'media' → «медиа»; при обеих — «медиа и LLM»
+// (у узла video главное — медиа, LLM вторым: wording §«Что общее» предложения к макету v3);
+// ролей нет вовсе (worker без движков и без секции) → «CCS».
+export function farmRolesLabel(roles: string[]): string {
+  const parts: string[] = [];
+  if (roles.includes('media')) parts.push('медиа');
+  if (roles.includes('text')) parts.push('LLM');
+  return parts.length ? parts.join(' и ') : 'CCS';
+}
+
+// Самый горячий измеренный показатель среди ОТВЕЧАЮЩИХ узлов: худший level,
+// при равенстве — более высокая температура. Молчащие узлы исключены (их hottest —
+// последние значения, не текущие). null — сообщить нечего.
+export function farmHottest(farm: HardwareFarm): { node: HardwareFarmNode; hottest: NonNullable<HardwareFarmNode['hottest']> } | null {
+  const live = farm.farmNodes.filter(n => !farmNodeSilent(n) && n.hottest?.tempC != null);
+  if (live.length === 0) return null;
+  let best = live[0];
+  for (const n of live.slice(1)) {
+    const r = RANK[n.hottest!.level] - RANK[best.hottest!.level];
+    if (r > 0 || (r === 0 && n.hottest!.tempC! > best.hottest!.tempC!)) best = n;
+  }
+  return { node: best, hottest: best.hottest! };
+}
+
+// Слово строки «горячо» по уровню показателя (wording farmSum в макете):
+// ok — «Ближе всех к пределу», warn — «Горячо», danger — «Опасно».
+export function farmHottestWord(level: HwLevel): string {
+  return level === 'danger' ? 'Опасно' : level === 'warn' ? 'Горячо' : 'Ближе всех к пределу';
+}
+
+// Строка-сводка фермы без разметки: «Горячо — ai · карта 2: 98 °C». Имя узла и
+// подпись показателя — как их отдаёт бэк; «.» в слове меняет farmHottestWord.
+// '' — сообщить нечего (все узлы молчат или ни один не измерен).
+export function farmHottestLine(farm: HardwareFarm): string {
+  const h = farmHottest(farm);
+  if (!h) return '';
+  return `${farmHottestWord(h.hottest.level)} — ${h.node.title} · ${h.hottest.label.toLowerCase()}: ${hwTemp(h.hottest.tempC)}`;
 }

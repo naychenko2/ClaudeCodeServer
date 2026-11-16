@@ -529,3 +529,18 @@ describe('ChatItemView — строка ожидания слота локаль
     }
   });
 });
+
+// Строка статуса старта хода (turn_start_phase): тексты фаз без таймера.
+describe('ChatItemView: turn_start_phase', () => {
+  it.each([
+    ['queued', 'В очереди'],
+    ['context', 'Собираю контекст'],
+    ['launching', 'Запускаю'],
+    ['waiting', 'Жду ответ модели'],
+  ] as const)('фаза %s → «%s»', (phase, text) => {
+    const html = renderItem({ kind: 'turn_start_phase', phase });
+    expect(html).toContain(text);
+    expect(html).toContain('data-testid="turn-start-status"');
+    expect(html, 'таймера с секундами нет').not.toMatch(/\d\s*с\b/);
+  });
+});

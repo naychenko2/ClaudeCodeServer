@@ -2681,6 +2681,7 @@ public class ClaudeSession : ILlmSessionAdapter
             try
             {
                 if (_cts.IsCancellationRequested) return;
+                if (_turnLock.CurrentCount == 0) await EmitStartPhaseAsync("queued");
                 await _turnLock.WaitAsync(_cts.Token);
                 try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token, turnModelOverride); }
                 catch (OperationCanceledException) { /* остановка сессии — штатно */ }
@@ -3305,11 +3306,28 @@ public class ClaudeSession : ILlmSessionAdapter
         return joinedRecall + "\n\n---\n\n" + text;
     }
 
+    // Фаза старта хода для строки статуса в ленте (TurnStartPhaseMessage). Лёгкое эфемерное
+    // событие: сбой доставки не должен ронять ход. «done» шлём один раз после показанной фазы.
+    private volatile bool _startPhaseShown;
+
+    private async Task EmitStartPhaseAsync(string phase)
+    {
+        if (phase == "done")
+        {
+            if (!_startPhaseShown) return;
+            _startPhaseShown = false;
+        }
+        else _startPhaseShown = true;
+        try { await _onMessage(new TurnStartPhaseMessage(phase)); }
+        catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] Фаза старта хода не доставлена: {ex.Message}"); }
+    }
+
     private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, int agentDepth,
         bool suppressTasksExecute, CancellationToken ct, string? turnModelOverride = null)
     {
         // Глубина делегирования действует ровно на этот ход (внутри _turnLock):
         // MCP-конфиг ниже собирается уже с учётом анти-рекурсии, сброс — в finally
+        await EmitStartPhaseAsync("context");
         _currentTurnAgentDepth = agentDepth;
         _currentTurnSuppressTasksExecute = suppressTasksExecute;
         // Явная модель хода (голосовой ход на модели места chat-voice): действует ровно на этот
@@ -4706,6 +4724,7 @@ public class ClaudeSession : ILlmSessionAdapter
             PublishPromptSnapshot(sections, args, mcpServerNames,
                 applied: false, inheritedFromId: existing.PromptSnapshotId,
                 truncated: truncatedSections);
+            await EmitStartPhaseAsync("waiting");
             await existing.TurnTcs.Task.WaitAsync(ct);
             // Прогон умер, не выдав ни одного события хода (TOCTOU: фоновые агенты кончились,
             // CLI завершается сразу после успешной записи в stdin) — гонка same-process, а не
@@ -4774,6 +4793,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var turnSnapshotId = PublishPromptSnapshot(sections, args, mcpServerNames,
             applied: true, inheritedFromId: null,
             truncated: truncatedSections);
+        await EmitStartPhaseAsync("launching");
 
         // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную
         // OEM code page (напр. CP866 на русской Windows) → кракозябры в ответах.
@@ -6266,6 +6286,8 @@ public class ClaudeSession : ILlmSessionAdapter
             _turnActivity?.SetTag("model", cliModel);
         }
 
+        if (typeProp.GetString() != "system") await EmitStartPhaseAsync("done");
+
         switch (typeProp.GetString())
         {
             case "system":
@@ -6317,6 +6339,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         }
                     }
 
+                    await EmitStartPhaseAsync("waiting");
                     var worktree = ResolveTurnWorktree(cwd, _rootPath, _launcher);
                     await _onMessage(new SessionStartedMessage(
                         Info.ClaudeSessionId!, isResume, model, Info.Mode.ToWireToken(), cwd, toolCount, mcp,

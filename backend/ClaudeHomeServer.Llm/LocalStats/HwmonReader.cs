@@ -17,6 +17,8 @@ public sealed record HwmonCpu
 public sealed record HwmonBoard
 {
     public int? Chipset { get; init; }
+    // Температура материнской платы (метка Motherboard); null — датчика нет или он не подключён.
+    public int? Motherboard { get; init; }
     public int? Vrm { get; init; }
     // Вентилятор чипсета, об/мин; null — датчика нет.
     public int? ChipsetFanRpm { get; init; }
@@ -153,6 +155,7 @@ public sealed class HwmonReader
         return new HwmonBoard
         {
             Chipset = ReadTempByLabel(dir, "Chipset"),
+            Motherboard = ConnectedProbe(ReadTempByLabel(dir, "Motherboard")),
             Vrm = ReadTempByLabel(dir, "VRM"),
             ChipsetFanRpm = ReadFanByLabel(dir, "Chipset"),
             Water = ConnectedProbe(ReadTempByLabel(dir, "T_Sensor")),

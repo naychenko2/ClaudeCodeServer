@@ -26,6 +26,9 @@ public sealed record NodeReading
     // Текст /run/ccs-ipmi/sdr.json дословно; null — файла нет или он больше потолка.
     // Толкование — Ш2d4, здесь только перенос.
     public string? Ipmi { get; init; }
+    // Настенные часы узла (unix-мс) момента среза — база свежести ipmi (метка "at" ставится часами узла).
+    // null — источник локальный: берутся часы сэмплера.
+    public long? ClockMs { get; init; }
     // Возраст среза, мс: у локального источника 0 (снимок свежий по построению);
     // у агента — ageMs из ответа (monotonic-часы агента).
     public long AgeMs { get; init; }

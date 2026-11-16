@@ -57,6 +57,13 @@ public sealed record HardwareSample
     public HwmonFan[]? CaseFans { get; init; }
     public long? RamUsedGb { get; init; }
     public long? RamTotalGb { get; init; }
+    // Плата: hwmon asusec Motherboard (ai), иначе IPMI System Temp (worker); есть оба — hwmon.
+    public int? BoardTempC { get; init; }
+    // IPMI Peripheral Temp; только IPMI.
+    public int? PeripheralTempC { get; init; }
+    // На узле есть источник платы: чип asusec или текст IPMI (любой свежести). true при null-значениях —
+    // «нет данных», false — «датчика нет».
+    public bool BoardProbe { get; init; }
 }
 
 // Вид одного узла сэмплера: текущий снимок, статус, кольцо. Читается параллельно записи
@@ -118,6 +125,9 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
     // Предупреждение о нескольких чипах платы с одним name — не чаще раза в 5 мин на узел.
     private static readonly TimeSpan AmbiguousWarnEvery = TimeSpan.FromMinutes(5);
 
+    // Предупреждение о несовпадении числа сокетов k10temp и IPMI — не чаще раза в 5 мин на узел.
+    private static readonly TimeSpan IpmiWarnEvery = TimeSpan.FromMinutes(5);
+
     // Число точек кольца: 1 ч / 2 с = 1800.
     private static int MaxSamples => (int)Math.Ceiling(HistoryWindow.TotalSeconds / SampleInterval.TotalSeconds);
 
@@ -130,6 +140,9 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
     // Ожидание: по умолчанию Task.Delay; тест подменяет (гонит цикл без реальных пауз).
     // Им же меряется тайм-аут тика — тест различает их по значению delay.
     internal Func<TimeSpan, CancellationToken, Task>? WaitFunc { get; set; }
+
+    // Разбор SDR: по умолчанию IpmiSdrParser.Parse; тест подменяет (бросающий разбор).
+    internal Func<string?, IpmiReading?> IpmiParse { get; set; } = IpmiSdrParser.Parse;
 
     public HardwareSampler(
         IOptionsMonitor<LocalModelStatsOptions> options,
@@ -292,7 +305,7 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
         else
             vrms = boardVrm is null && cpus is null ? null : [boardVrm];
 
-        return new HardwareSample
+        var baseSample = new HardwareSample
         {
             At = now,
             UptimeS = ProcStatReader.ParseUptimeS(files.ReadText("/proc/uptime")),
@@ -308,6 +321,74 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
             CaseFans = hw?.CaseFans,
             RamUsedGb = mem?.UsedGb,
             RamTotalGb = mem?.TotalGb,
+            BoardTempC = hw?.Board?.Motherboard,
+            BoardProbe = hw?.Board is not null || reading.Ipmi is not null,
+        };
+
+        // IPMI: несвежий, пустой или неразобранный текст даёт null — ни одно IPMI-значение не попадает в снимок.
+        IpmiReading? ipmi = null;
+        try
+        {
+            var clockMs = reading.ClockMs ?? now.ToUnixTimeMilliseconds();
+            if (new NodeSlice { Ipmi = reading.Ipmi, ClockMs = clockMs }.TryReadIpmi() is { } fresh)
+                ipmi = IpmiParse(fresh.sdr);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Сэмплер «Железо»: сбой разбора IPMI узла {Node}", node.Key);
+            ipmi = null;
+        }
+
+        if (ipmi is not null && ipmi.SocketTempsC.Length != (baseSample.Cpus?.Length ?? 0)
+            && node.ShouldWarnIpmi(now, IpmiWarnEvery))
+            _log.LogWarning("Узел {Node}: сокетов IPMI {Ipmi}, k10temp {Cpu} — VRM сокетов уходят в BoardVrm",
+                node.Key, ipmi.SocketTempsC.Length, baseSample.Cpus?.Length ?? 0);
+
+        return MergeIpmi(baseSample, ipmi);
+    }
+
+    // Слияние IPMI в снимок (чистая функция). ipmi == null — снимок как есть (hwmon-значения не трогаются).
+    // Температуры сокетов остаются из k10temp; из IPMI идут VRM, вентиляторы и плата.
+    internal static HardwareSample MergeIpmi(HardwareSample hw, IpmiReading? ipmi)
+    {
+        if (ipmi is null)
+            return hw;
+
+        var cpuCount = hw.Cpus?.Length ?? 0;
+        var vrms = hw.Vrms;
+        var boardVrm = hw.BoardVrm;
+        if (hw.Cpus is not null && ipmi.SocketTempsC.Length == cpuCount)
+        {
+            // Номера совпадают: CPU<n> ↔ сокет n−1, VRM по сокетам.
+            if (vrms is not null)
+            {
+                vrms = (int?[])vrms.Clone();
+                for (var i = 0; i < vrms.Length && i < ipmi.Vrms.Length; i++)
+                    vrms[i] ??= ipmi.Vrms[i];
+            }
+            boardVrm ??= ipmi.BoardVrm;
+        }
+        else
+        {
+            // Нумерация не сверяется: VRM сокетов складываем в общий VRM платы (максимум).
+            if (boardVrm is null)
+            {
+                var all = ipmi.Vrms.Append(ipmi.BoardVrm).Where(v => v is not null).Select(v => v!.Value).ToArray();
+                boardVrm = all.Length > 0 ? all.Max() : null;
+            }
+        }
+
+        var fans = hw.CaseFans;
+        if (ipmi.Fans.Length > 0)
+            fans = [.. hw.CaseFans ?? [], .. ipmi.Fans];
+
+        return hw with
+        {
+            Vrms = vrms,
+            BoardVrm = boardVrm,
+            CaseFans = fans,
+            BoardTempC = hw.BoardTempC ?? ipmi.BoardTempC,
+            PeripheralTempC = ipmi.PeripheralTempC,
         };
     }
 
@@ -410,6 +491,18 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
             if (status != _lastStatus || _statusSince is null)
                 _statusSince = now;
             _lastStatus = status;
+        }
+
+        private DateTimeOffset? _lastIpmiWarn;
+
+        public bool ShouldWarnIpmi(DateTimeOffset now, TimeSpan every)
+        {
+            lock (_gate)
+            {
+                if (_lastIpmiWarn is { } w && now - w < every) return false;
+                _lastIpmiWarn = now;
+                return true;
+            }
         }
 
         public bool ShouldWarnAmbiguous(DateTimeOffset now, TimeSpan every)

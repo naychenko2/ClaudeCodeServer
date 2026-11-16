@@ -62,9 +62,8 @@ public sealed record HwmonSnapshot
 // Любой сбой чтения → null-поле (недоверенный источник, не роняем BackgroundService).
 public sealed class HwmonReader
 {
-    // Доступ к размеру файловой системы (DriveInfo точки монтирования): всего и свободно (байты).
-    // Func, чтобы тест подменил DriveInfo и не зависел от ФС реальной машины.
-    private readonly Func<string, (long total, long free)> _fsSize;
+    // Источник файлов: диск (DiskFileSource, размер ФС — DriveInfo/подмена в тестах) или срез агента.
+    private readonly ISysFileSource _fs;
 
     private const long GiB = 1024L * 1024 * 1024;
 
@@ -80,20 +79,22 @@ public sealed class HwmonReader
     {
         _hwmonRoot = hwmonRoot;
         _mountinfoPath = mountinfoPath;
-        _fsSize = fsSize ?? DefaultFsSize;
+        _fs = new DiskFileSource(fsSize);
     }
 
-    // По умолчанию: DriveInfo точки монтирования.
-    private static (long total, long free) DefaultFsSize(string mountPoint)
+    // Разбор по произвольному источнику файлов (срез агента); корни — стандартные.
+    public HwmonReader(ISysFileSource source,
+        string hwmonRoot = "/sys/class/hwmon", string mountinfoPath = "/proc/self/mountinfo")
     {
-        var d = new DriveInfo(mountPoint);
-        return (d.TotalSize, d.TotalFreeSpace);
+        _hwmonRoot = hwmonRoot;
+        _mountinfoPath = mountinfoPath;
+        _fs = source;
     }
 
     // Читает снимок. null — hwmonRoot не существует (чужая машина) — все поля null/пусто.
     public HwmonSnapshot? Read()
     {
-        if (!Directory.Exists(_hwmonRoot))
+        if (!_fs.Exists(_hwmonRoot))
             return null;
 
         var (kvController, kvFs) = FindKvDisk();
@@ -197,7 +198,7 @@ public sealed class HwmonReader
 
     // Предел диска (БЕЗ root): temp*_max (WCTEMP контроллера), иначе temp*_crit; округление
     // до целого (83,85 → 84); null — не сообщает (пороги 70/80).
-    private static int? ReadCrit(string dir)
+    private int? ReadCrit(string dir)
     {
         foreach (var pattern in new[] { "temp*_max", "temp*_crit" })
         {
@@ -259,9 +260,9 @@ public sealed class HwmonReader
         var result = new List<string>();
         try
         {
-            foreach (var dir in Directory.EnumerateDirectories(_hwmonRoot))
+            foreach (var dir in _fs.EnumerateDirectories(_hwmonRoot))
             {
-                if (File.Exists(Path.Combine(dir, "name")))
+                if (_fs.Exists(Path.Combine(dir, "name")))
                     result.Add(dir);
             }
         }
@@ -269,21 +270,20 @@ public sealed class HwmonReader
         return result;
     }
 
-    private static string? ReadName(string dir)
+    private string? ReadName(string dir)
     {
-        try { return File.ReadAllText(Path.Combine(dir, "name")).Trim(); }
-        catch { return null; }
+        return _fs.ReadText(Path.Combine(dir, "name"))?.Trim();
     }
 
     // Значение датчика temp*_input (милли-°C) → °C; null — нет/не число.
-    private static int? ReadTemp(string dir, string sensor)
+    private int? ReadTemp(string dir, string sensor)
     {
         var f = Path.Combine(dir, sensor + "_input");
         return ReadMilliC(f);
     }
 
     // Датчик по метке (temp*_label == label): ищет tempN, у которого label совпадает.
-    private static int? ReadTempByLabel(string dir, string label)
+    private int? ReadTempByLabel(string dir, string label)
     {
         foreach (var f in EnumerateFiles(dir, "temp*_input"))
         {
@@ -294,7 +294,7 @@ public sealed class HwmonReader
     }
 
     // Вентилятор по метке (fan*_label == label): об/мин; null — нет.
-    private static int? ReadFanByLabel(string dir, string label)
+    private int? ReadFanByLabel(string dir, string label)
     {
         foreach (var f in EnumerateFiles(dir, "fan*_input"))
         {
@@ -305,7 +305,7 @@ public sealed class HwmonReader
     }
 
     // Все датчики temp*_input (милли-°C → °C), в порядке номеров.
-    private static List<int?> ReadAllTemps(string dir)
+    private List<int?> ReadAllTemps(string dir)
     {
         var result = new List<int?>();
         foreach (var f in EnumerateFiles(dir, "temp*_input"))
@@ -314,21 +314,15 @@ public sealed class HwmonReader
     }
 
     // Метка датчика/вентилятора (temp*_label / fan*_label); null — нет метки.
-    private static string? ReadLabel(string inputPath)
+    private string? ReadLabel(string inputPath)
     {
         var labelPath = inputPath.Replace("_input", "_label");
-        try
-        {
-            if (File.Exists(labelPath))
-                return File.ReadAllText(labelPath).Trim();
-        }
-        catch { }
-        return null;
+        return _fs.ReadText(labelPath)?.Trim();
     }
 
     // Файлы dir, имя которых совпадает с glob-подобным шаблоном (поддержка *), по возрастанию
     // числового суффикса (temp1, temp2, …; fan1, fan2, …).
-    private static IEnumerable<string> EnumerateFiles(string dir, string pattern)
+    private IEnumerable<string> EnumerateFiles(string dir, string pattern)
     {
         var star = pattern.IndexOf('*');
         var prefix = pattern.Substring(0, star);
@@ -336,7 +330,7 @@ public sealed class HwmonReader
         var candidates = new List<(int num, string path)>();
         try
         {
-            foreach (var f in Directory.EnumerateFiles(dir))
+            foreach (var f in _fs.EnumerateFiles(dir))
             {
                 var name = Path.GetFileName(f);
                 if (name.Length < prefix.Length + suffix.Length || !name.StartsWith(prefix) || !name.EndsWith(suffix))
@@ -352,12 +346,12 @@ public sealed class HwmonReader
     }
 
     // Контроллер nvme (nvme0/nvme1/…) по каталогу hwmon: через device-ссылку → nvmeX.
-    private static string? ResolveNvmeController(string dir)
+    private string? ResolveNvmeController(string dir)
     {
         try
         {
             var deviceLink = Path.Combine(dir, "device");
-            var target = new DirectoryInfo(deviceLink).LinkTarget; // "../../nvmeX"
+            var target = _fs.LinkTarget(deviceLink); // "../../nvmeX"
             if (target is null) return null;
             var name = Path.GetFileName(target); // "nvmeX"
             return name.StartsWith("nvme") ? name : null;
@@ -372,8 +366,7 @@ public sealed class HwmonReader
     {
         try
         {
-            if (!File.Exists(_mountinfoPath)) return (null, null);
-            foreach (var line in File.ReadAllLines(_mountinfoPath))
+            foreach (var line in ReadMountinfoLines())
             {
                 // Формат mountinfo: … <mountpoint> … - <fstype> <source> <opts>
                 // Ищем mountpoint = /home/an/llm/kvdisk, source = /dev/nvmeXn1p1.
@@ -398,8 +391,7 @@ public sealed class HwmonReader
         (long total, long free)? best = null;
         try
         {
-            if (!File.Exists(_mountinfoPath)) return null;
-            foreach (var line in File.ReadAllLines(_mountinfoPath))
+            foreach (var line in ReadMountinfoLines())
             {
                 var fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (fields.Length < 8) continue;
@@ -422,7 +414,7 @@ public sealed class HwmonReader
     {
         try
         {
-            var (total, free) = _fsSize(mountpoint);
+            var (total, free) = _fs.FsSize(mountpoint);
             if (total <= 0) return null;
             return (total, free);
         }
@@ -431,18 +423,19 @@ public sealed class HwmonReader
 
     // ─── Чтение чисел ──────────────────────────────────────────────────────────────
 
-    private static int? ReadInt(string path)
+    private int? ReadInt(string path)
     {
-        try
-        {
-            if (!File.Exists(path)) return null;
-            return int.TryParse(File.ReadAllText(path).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : null;
-        }
-        catch { return null; }
+        var text = _fs.ReadText(path);
+        if (text is null) return null;
+        return int.TryParse(text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : null;
     }
 
+    // Строки mountinfo; нет файла — пусто (как ReadAllLines: разделители \n и \r\n).
+    private IEnumerable<string> ReadMountinfoLines() =>
+        _fs.ReadText(_mountinfoPath)?.Split('\n').Select(l => l.TrimEnd('\r')) ?? [];
+
     // милли-°C → °C.
-    private static int? ReadMilliC(string path)
+    private int? ReadMilliC(string path)
     {
         var milli = ReadInt(path);
         return milli is null ? null : milli / 1000;

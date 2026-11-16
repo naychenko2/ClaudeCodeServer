@@ -23,31 +23,41 @@ public sealed class MeminfoReader
         try
         {
             if (!File.Exists(_path)) return null;
-            long? total = null;
-            long? available = null;
-            foreach (var line in File.ReadAllLines(_path))
-            {
-                if (line.StartsWith("MemTotal:"))
-                    total = ParseKb(line);
-                else if (line.StartsWith("MemAvailable:"))
-                    available = ParseKb(line);
-            }
-            if (total is null) return null;
-            var used = total.Value - (available ?? 0);
-            return new MeminfoSnapshot
-            {
-                UsedGb = used / 1024 / 1024,
-                TotalGb = total.Value / 1024 / 1024,
-            };
+            return Parse(File.ReadAllText(_path));
         }
         catch { return null; }
     }
 
-    // "MemTotal:       127341452 kB" → 127341452.
+    // Чистая функция: разбор ТЕКСТА /proc/meminfo (тот же разбор для текста с локального диска
+    // и из среза агента). Недоверенный вход: null/пусто/мусор/отрицательные числа/переполнение
+    // long → null, без исключений.
+    public static MeminfoSnapshot? Parse(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        long? total = null;
+        long? available = null;
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.StartsWith("MemTotal:"))
+                total = ParseKb(line);
+            else if (line.StartsWith("MemAvailable:"))
+                available = ParseKb(line);
+        }
+        if (total is null) return null;
+        var used = total.Value - (available ?? 0);
+        return new MeminfoSnapshot
+        {
+            UsedGb = used / 1024 / 1024,
+            TotalGb = total.Value / 1024 / 1024,
+        };
+    }
+
+    // "MemTotal:       127341452 kB" → 127341452. Отрицательное или вне long → null (мусор).
     private static long? ParseKb(string line)
     {
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length >= 2 && long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+        if (parts.Length >= 2 && long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) && v >= 0)
             return v;
         return null;
     }

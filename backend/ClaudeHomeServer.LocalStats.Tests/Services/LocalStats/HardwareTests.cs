@@ -91,7 +91,7 @@ public class HardwareTests : IDisposable
         // будущего за окном — сдвиг часов или битое значение, с односторонней проверкой такой
         // файл казался бы свежим, пока часы не догонят метку.
         var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(11)), t.GetUtcNow());
-        r!.Value.fresh.Should().BeFalse("отрицательный возраст — не свежесть");
+        r!.Value.fresh.Should().BeFalse("метка впереди часов отбора дальше окна — не свежесть");
     }
 
     [Theory]

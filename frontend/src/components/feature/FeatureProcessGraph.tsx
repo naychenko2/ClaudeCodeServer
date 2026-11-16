@@ -31,9 +31,17 @@
 // Узел (F06, макет feature-page.html P16–P22, materials-review-placement.html M14–M19):
 // имя переносится целиком, без обрезки (узел 152×88 вмещает до трёх строк имени вместе со
 // строками меты); вторая строка — «Персона · время» / «ждёт ответа вас» (warning) /
-// «ждёт обе ветки»; третья — метка роли mono, чип линии (бэк/фронт), полоска задач ветки и
+// «ждёт обе ветки»; третья — чип линии (бэк/фронт), метка роли mono, полоска задач ветки и
 // «2/3»; бейдж «↺N» над узлом при возвратах. Всё рисуется по данным бэка (B01): состояние
 // «ждёт» берётся из stage.waiting, а не из примера макета. Полное имя — ещё и в title/aria-label.
+//
+// Дефект «данные не помещаются в узел» (жалоба по «Производство»: 7 исполнителей, бейдж «↺3»,
+// метка роли под каждым узлом): в мете не больше MAX_META_NAMES имён, остальное — «+N», а
+// полный список — в подсказке узла (title); под бейдж возвратов резервируется место справа в
+// строке заголовка — имя больше не рвётся под ним; метка роли — только у роли, которая
+// повторяется в маршруте (макет feature-page.html:431-444: «qa» стоит у «Проверка плана» и
+// «QA», у прочих узлов его нет; тот же адресный признак, что repeated в stageLabelParts,
+// workflowTemplateModel.ts:47).
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
@@ -68,6 +76,16 @@ const NODE_W_MOBILE = 104;
 const NAME_LINES = 3;
 // Ширина узла без замера (первый кадр, тесты без раскладки): прежний размер карточки.
 const NODE_W_DEFAULT = 152;
+// Имен исполнителей в строке меты: сверх этого — только «+N» (полный список — в title узла).
+// Семь имён растягивали мету на три строки и выталкивали нижнюю строку узла за край.
+const MAX_META_NAMES = 2;
+// Резерв под бейдж «↺N» в строке заголовка: бейдж висит над правым краем узла (top:-8) и
+// наезжал на первую строку имени — «Производство» читалось как «Производст». Ширина — по
+// разметке бейджа: «↺» и цифры mono при FS.xxs=10 (~7 px на знак), padding 2×SP.xs, рамка 2×1.
+const BADGE_RESERVE_EXTRA_W = 12;
+const BADGE_RESERVE_CHAR_W = 7;
+const badgeReserveW = (returns: number): number =>
+  BADGE_RESERVE_EXTRA_W + BADGE_RESERVE_CHAR_W * (1 + String(returns).length);
 // Зазор между колонками — пространство для рёбер (макет .link 20 + запас на кривую).
 const GAP_X = 24;
 // Зазор между стадиями внутри колонки.
@@ -190,6 +208,20 @@ function nodeAria(stage: FeatureStage): string {
 // завершённый узел предложенного маршрута в этой пометке не нуждается; вместо неё в мете
 // суффикс «до маршрута» (макет feature-page.html:447): с исполнителем — после « · »,
 // без него — просто суффикс, без висящего разделителя.
+// Имена в мете: первые MAX_META_NAMES и «+N» за ними («Александр, Денис +5»). Скрытые имена
+// не теряются: полный список даёт подсказка узла (nodeNamesFull).
+const namesMetaText = (names: string[]): string =>
+  names.length <= MAX_META_NAMES
+    ? names.join(', ')
+    : `${names.slice(0, MAX_META_NAMES).join(', ')} +${names.length - MAX_META_NAMES}`;
+
+// Подсказка узла с полным списком исполнителей — только когда в мете он не весь: иначе title
+// повторял бы строку, которая и так на экране.
+const nodeNamesFull = (stage: FeatureStage): string | null => {
+  const names = (stage.personaNames ?? []).filter(Boolean);
+  return names.length > MAX_META_NAMES ? names.join(', ') : null;
+};
+
 export function nodeMeta(
   stage: FeatureStage,
 ): { text: string; color: string; proposed?: boolean } | null {
@@ -198,12 +230,27 @@ export function nodeMeta(
   if (stage.waiting === 'branches') return { text: 'ждёт обе ветки', color: C.textMuted, proposed: asProposed };
   const parts: string[] = [];
   const names = (stage.personaNames ?? []).filter(Boolean);
-  if (names.length > 0) parts.push(names.join(', '));
+  if (names.length > 0) parts.push(namesMetaText(names));
   if (stage.elapsedMinutes != null) parts.push(formatDuration(stage.elapsedMinutes));
   if (stage.proposed === true && stage.state === 'done') parts.push('до маршрута');
   if (parts.length > 0) return { text: parts.join(' · '), color: C.textSecondary, proposed: asProposed };
   // Мета пуста, но есть пометка — строка нужна ради неё (цвет .nm макета — text-muted).
   return asProposed ? { text: '', color: C.textMuted, proposed: true } : null;
+}
+
+// Роли, которые встречаются в маршруте больше одного раза: код роли нужен, чтобы различить
+// такие стадии (тот же адресный признак, что repeated в stageLabelParts: метка «роль (id)»
+// появляется только при повторе). У единственной роли код — шум в нижней строке узла
+// (макет feature-page.html:431-444: «qa» стоит у «Проверка плана» и «QA», у прочих узлов — нет).
+function repeatedRoles(stages: FeatureStage[]): Set<string> {
+  const count = new Map<string, number>();
+  for (const s of stages) {
+    const r = (s.role ?? '').trim();
+    if (r) count.set(r, (count.get(r) ?? 0) + 1);
+  }
+  const repeated = new Set<string>();
+  count.forEach((n, r) => { if (n > 1) repeated.add(r); });
+  return repeated;
 }
 
 // Сегменты полоски задач ветки: готово (success) → в работе (accent) → остальное (трек).
@@ -326,6 +373,8 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
   for (const col of cols) {
     for (const s of col.stages) stagesById.set(stageNodeId(s), s);
   }
+  // Код роли в узле — только у стадий, чья роль повторяется в маршруте (см. repeatedRoles).
+  const repeatedRole = repeatedRoles([...stagesById.values()]);
   // Строка легенды «предложено» — только при незавершённом proposed-узле на графе
   // (F33a, макет :463; R-F33a·дельта: та же формула, что у узла и ребра — «предложено»
   // только у незавершённых; при полностью выполненном маршруте фиолетовых узлов нет).
@@ -427,6 +476,9 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
               const meta = nodeMeta(stage);
               const line = laneWord(stage.line ?? null);
               const seg = stage.taskSegments;
+              const role = (stage.role ?? '').trim();
+              // Полный список исполнителей — в подсказке узла, когда в мете их не все.
+              const namesFull = nodeNamesFull(stage);
               return (
                 <button
                   key={id}
@@ -438,6 +490,8 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                   data-tone={active ? stage.tone ?? 'run' : undefined}
                   aria-pressed={selected}
                   aria-label={nodeAria(stage)}
+                  // Имена, скрытые в мете («+N»), — здесь: полный список виден по наведению на узел.
+                  title={namesFull ?? undefined}
                   onClick={() => onSelect?.(id)}
                   style={{
                     position: 'absolute', left: p.x, top: p.y, width: nodeW, height: NODE_H,
@@ -489,6 +543,9 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                         // Заголовок proposed-узла — plan-text (макет .node.prop .nn, F33a).
                         fontSize: FS.sm, fontWeight: 600,
                         color: proposed ? C.planText : quiet ? C.textSecondary : C.textHeading,
+                        // Дефект «данные не помещаются в узел»: под висящий справа бейдж «↺N»
+                        // резервируется колонка — имя не уходит под бейдж (см. badgeReserveW).
+                        ...(returns > 0 ? { paddingRight: badgeReserveW(returns) } : {}),
                       }}
                     >
                       {nodeTitle(stage)}
@@ -507,9 +564,11 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                     </span>
                   )}
                   <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
-                    {stage.role && (
+                    {/* Код роли — только у повторяющейся в маршруте роли (см. repeatedRoles):
+                        у единственной роли он не отличает ничего. */}
+                    {repeatedRole.has(role) && (
                       <span data-testid={`pgraph-role-${id}`} style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>
-                        {stage.role}
+                        {role}
                       </span>
                     )}
                     {line && (

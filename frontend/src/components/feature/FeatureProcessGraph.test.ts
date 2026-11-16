@@ -26,6 +26,11 @@
 //   программно — задаёт элементы реальные метрики прокрутки и поднимает слушателя 'scroll'
 //   на контейнере (путь браузера, не имитация через ре-рендер); шевроны следуют scrollLeft:
 //   в начале ленты только правый, в конце только левый, в середине оба, прокрутка обратно — наоборот.
+// - дефект «данные не помещаются в узел» (жалоба по «Производство»: 7 исполнителей, бейдж «↺3»):
+//   в мете не больше двух имён, за ними «+N», полный список — в title узла (при двух имён
+//   подсказки нет: скрывать нечего); под бейдж «↺N» резервируется место справа в строке
+//   заголовка, при returns=0 резерва нет; код роли — только у роли, повторяющейся в маршруте
+//   (макет feature-page.html:431-444), у единственной роли его нет.
 // Колонки, рёбра и состояния компонент не пересчитывает — это покрыто в FeatureProcessGraphModel.test.ts.
 //
 // Мутации (проверяются прогоном): (1) убрать `if (stage.title)` в nodeTitle — краснеет
@@ -42,6 +47,13 @@
 //     «proposed=true: фон прозрачный…».
 // (9) убрать подписку `el.addEventListener('scroll', measure)` в эффекте — краснеет
 //     «прокрутка вправо — правый шеврон исчезает…» (слушателя на контейнере нет).
+// (10) вернуть склейку всех имён в nodeMeta (`names.join(', ')` без MAX_META_NAMES) — краснеет
+//      «мета: не больше двух имён…» (7 имён вместо «Александр, Денис +5»).
+// (11) убрать резерв под бейдж (`...(returns > 0 ? { paddingRight } : {})` из стиля подписи) —
+//      краснеет «под бейджем возврата зарезервировано место…» (paddingRight → undefined).
+// (12) показывать код роли безусловно (`{stage.role && …}` вместо repeatedRole.has(role)) —
+//      краснеют «уникальная роль — кода нет…», «повтор роли…» (проверка единственной «plan»)
+//      и две правки роли в блоке «данные узла B01» — всего 4 теста.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -208,9 +220,11 @@ describe('FeatureProcessGraph: данные узла B01 (F06)', () => {
     expect((reactProps(br as never) as { style: { color: string } }).style.color).not.toBe('var(--c-warning)');
   });
 
-  it('метка роли и чип линии — всегда; без данных меты строки нет', () => {
+  it('чип линии — всегда; метки роли у единственной роли в графе нет; без данных меты строки нет', () => {
     const c = one({ line: 'front' });
-    expect(txt(get(c, 'pgraph-role-rv'))).toBe('review');
+    // Роль «review» в этом графе одна — её код ничего не отличает (правило — в блоке
+    // «код роли — только у повторяющейся роли»).
+    expect(get(c, 'pgraph-role-rv')).toBeNull();
     expect(txt(get(c, 'pgraph-line-rv'))).toBe('фронт');
     expect(get(c, 'pgraph-meta-rv')).toBeNull();
     expect(get(c, 'pgraph-returns-rv')).toBeNull();
@@ -228,11 +242,11 @@ describe('FeatureProcessGraph: данные узла B01 (F06)', () => {
     expect(bar.children.map((x) => x.getAttribute('data-kind'))).toEqual(['done', 'run', 'todo']);
   });
 
-  it('{2,1,3} → «2/3» и три сегмента; role=qa → метка «qa»; returns=0 → бейджа нет', () => {
+  it('{2,1,3} → «2/3» и три сегмента; единственная роль «qa» — метки нет; returns=0 → бейджа нет', () => {
     const c = render([{ ...mkStage('qa', 'q', 'qa', 0, 'active'), returns: 0, taskSegments: { done: 2, running: 1, total: 3 } }]);
     expect(txt(get(c, 'pgraph-segcount-q'))).toBe('2/3');
     expect((get(c, 'pgraph-segments') as unknown as { children: unknown[] }).children).toHaveLength(3);
-    expect(txt(get(c, 'pgraph-role-q'))).toBe('qa');
+    expect(get(c, 'pgraph-role-q')).toBeNull();
     expect(get(c, 'pgraph-returns-q')).toBeNull();
   });
 
@@ -250,11 +264,14 @@ describe('FeatureProcessGraph: данные узла B01 (F06)', () => {
   it('proposed: пометка «предложено» только у узла с признаком', () => {
     const c = render([
       { ...mkStage('review', 'rv', 'review', 0, 'pending'), proposed: true },
-      mkStage('final', 'fn', 'final', 1, 'pending', ['rv']),
+      { ...mkStage('review', 'rv2', 'review', 1, 'pending'), proposed: true },
+      mkStage('final', 'fn', 'final', 2, 'pending', ['rv', 'rv2']),
     ]);
     expect(txt(get(c, 'pgraph-proposed-rv'))).toBe('предложено');
     expect(get(c, 'pgraph-proposed-fn')).toBeNull();
+    // Роль «review» в маршруте повторяется (rv и rv2) — её код на месте у обеих.
     expect(txt(get(c, 'pgraph-role-rv'))).toBe('review');
+    expect(txt(get(c, 'pgraph-role-rv2'))).toBe('review');
   });
 });
 
@@ -305,10 +322,14 @@ describe('FeatureProcessGraph: узел «предложено» по макет
   });
 
   it('в нижней строке с ролью пометки нет: во всем узле она встречается ровно один раз', () => {
-    const c = render([{ ...mkStage('review', 'rv', 'review', 0, 'pending'), proposed: true, line: 'front' }]);
+    const c = render([
+      { ...mkStage('review', 'rv', 'review', 0, 'pending'), proposed: true, line: 'front' },
+      { ...mkStage('review', 'rv2', 'review', 1, 'pending') },
+    ]);
     const whole = txt(get(c, 'pgraph-node-rv'));
     expect((whole.match(/предложено/g) ?? []).length).toBe(1);
-    // Роль и линия на своих местах — пометка их не вытеснила.
+    // Роль и линия на своих местах — пометка их не вытеснила (код роли здесь есть:
+    // «review» повторяется в маршруте — rv и rv2).
     expect(txt(get(c, 'pgraph-role-rv'))).toBe('review');
     expect(txt(get(c, 'pgraph-line-rv'))).toBe('фронт');
   });
@@ -402,6 +423,71 @@ describe('FeatureProcessGraph: завершённый узел предложе�
     expect(openProps.stroke).toBe('var(--c-plan-border)');
     expect(openProps.strokeDasharray).toBe('5 4');
     expect(get(openEnd, 'pgraph-legend-proposed')).not.toBeNull();
+  });
+});
+
+describe('FeatureProcessGraph: данные узла не выходят за рамку (дефект «Производство», 7 имён)', () => {
+  const get = (c: unknown, tid: string) => findNodeByAttr(c as never, 'data-testid', tid);
+  const txt = (n: unknown) => textNodes(n as never).join('');
+  const style = (n: unknown): Record<string, unknown> =>
+    (reactProps(n as never) as { style: Record<string, unknown> }).style;
+  // Узел из жалобы: «Производство» — семь исполнителей, 65 минут, три возврата на доработку.
+  const SEVEN = ['Александр', 'Денис', 'Тимур', 'Кузьма', 'Марк', 'Кира', 'Полина'];
+  const prod = (extra: Partial<FeatureStage>) => render([{
+    ...mkStage('prod', 'step-back', 'step', 0, 'active', [], 'back'),
+    personaNames: SEVEN, elapsedMinutes: 65, returns: 3, ...extra,
+  }]);
+
+  it('мета: не больше двух имён, за ними «+N»; полный список — в title узла', () => {
+    const c = prod({});
+    expect(txt(get(c, 'pgraph-meta-step-back'))).toBe('Александр, Денис +5 · 1 ч 05 мин');
+    // Скрытые имена не потеряны: весь список — в подсказке узла.
+    expect(get(c, 'pgraph-node-step-back')!.getAttribute('title')).toBe(SEVEN.join(', '));
+  });
+
+  it('два имени — как есть, без «+N» и без подсказки: скрывать нечего', () => {
+    const c = prod({ personaNames: ['Александр', 'Денис'] });
+    expect(txt(get(c, 'pgraph-meta-step-back'))).toBe('Александр, Денис · 1 ч 05 мин');
+    expect(get(c, 'pgraph-node-step-back')!.getAttribute('title')).toBeNull();
+  });
+
+  it('под бейджем возврата зарезервировано место в строке заголовка; без возвратов — нет', () => {
+    // Резерв меряется по стилю подписи: при бейдже справа должна быть свободная колонка
+    // (иначе «↺3» ляжет на первую строку имени — «Производст»), без бейджа — нет.
+    const withBadge = style(get(prod({}), 'pgraph-title-step-back'));
+    expect(Number(withBadge.paddingRight)).toBeGreaterThan(0);
+    const noBadge = style(get(prod({ returns: 0 }), 'pgraph-title-step-back'));
+    expect(noBadge.paddingRight).toBeUndefined();
+    expect(get(prod({ returns: 0 }), 'pgraph-returns-step-back')).toBeNull();
+  });
+});
+
+describe('FeatureProcessGraph: код роли — только у повторяющейся в маршруте роли', () => {
+  const get = (c: unknown, tid: string) => findNodeByAttr(c as never, 'data-testid', tid);
+  const txt = (n: unknown) => textNodes(n as never).join('');
+
+  it('повтор роли: код есть у обеих стадий (макет: «qa» у «Проверка плана» и «QA»)', () => {
+    const c = render([
+      mkStage('plan', 'plan', 'plan', 0, 'done'),
+      mkStage('qa', 'qa-plan', 'qa', 1, 'pending', ['plan'], undefined, 'Проверка плана'),
+      mkStage('qa', 'qa', 'qa', 2, 'pending', ['plan'], undefined, 'Проверка'),
+    ]);
+    expect(txt(get(c, 'pgraph-role-qa-plan'))).toBe('qa');
+    expect(txt(get(c, 'pgraph-role-qa'))).toBe('qa');
+    // Единственная роль в маршруте — кода нет: он ничего не отличает.
+    expect(get(c, 'pgraph-role-plan')).toBeNull();
+  });
+
+  it('уникальная роль — кода нет ни у одной стадии; узел от этого не беднее', () => {
+    const c = render([
+      mkStage('prod', 'step-back', 'step', 0, 'active', [], 'back'),
+      mkStage('review', 'review', 'review', 1, 'pending', ['step-back']),
+    ]);
+    expect(get(c, 'pgraph-role-step-back')).toBeNull();
+    expect(get(c, 'pgraph-role-review')).toBeNull();
+    // Имя и состояние по-прежнему доступны: aria-label и подпись узла прежние.
+    expect(get(c, 'pgraph-node-review')!.getAttribute('aria-label')).toBe('Ревью: впереди');
+    expect(txt(get(c, 'pgraph-title-review'))).toBe('Ревью');
   });
 });
 

@@ -24,7 +24,10 @@ WT="${1:-.}"
 cd "$WT"
 
 # Основной (primary) worktree — первая запись `git worktree list --porcelain`.
-MAIN_TREE="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
+# awk дочитывает вывод до конца и печатает только первую запись: без раннего
+# exit git не получает SIGPIPE — под `set -o pipefail` он падал с 141 и ронял
+# весь скрипт, symlink не создавался.
+MAIN_TREE="$(git worktree list --porcelain | awk '/^worktree /{if (!seen) {print $2; seen=1}}')"
 
 if [ -z "$MAIN_TREE" ]; then
   echo "ошибка: не определён основной worktree (git worktree list пуст)" >&2

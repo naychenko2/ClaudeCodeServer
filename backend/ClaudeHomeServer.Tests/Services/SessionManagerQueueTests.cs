@@ -1504,6 +1504,43 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     }
 
     [Fact]
+    public async Task Очередь_СбойРассылкиDone_ИсходнаяОшибкаОжиданияСохраняется()
+    {
+        // TS-15 (п.2): сбой самой уборочной рассылки «done» не должен подменять исходную ошибку
+        // ожидания — без гарда в catch её исключение заменило бы причину в стексе вызывающего.
+        EnableAwaitPreviousExit(5);
+        var session = await MkBusySessionAsync("await-done-fail", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        int calls = 0;
+        // Как в тесте выше: второй вызов — первый опрос цикла ожидания, исключение ВНУТРИ ожидания.
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(() =>
+        {
+            if (++calls == 2) throw new InvalidOperationException("сбой чтения занятости");
+            return true;
+        });
+        SetProcess(entry, adapter.Object);
+        // И уборочная рассылка «done» тоже бросает — её исключение не должно всплыть вместо исходного.
+        _broadcaster.Gate = msg =>
+        {
+            if (msg is TurnStartPhaseMessage { Phase: "done" })
+                throw new InvalidOperationException("сбой рассылки done");
+            return Task.CompletedTask;
+        };
+        try
+        {
+            var act = () => InvokeDeliverPendingAsync(session.Id, entry, UserQueued("сбой"));
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("сбой чтения занятости", "исходная причина ожидания, не ошибка уборочной рассылки");
+        }
+        finally { _broadcaster.Gate = null; }
+
+        // Неудачная уборочная рассылка не считается доставленной (запись — только после гейта):
+        // «done» в потоке нет, «queued» остался — строку погасить нечем, это и есть задокументированный отказ.
+        Sent<TurnStartPhaseMessage>().Select(p => p.Phase).Should().Equal(["queued"]);
+    }
+
+    [Fact]
     public async Task ContinueWorkLoop_ПользовательскоеСообщениеВОчереди_НеШлётДирективуПродолжения()
     {
         // Без двойной отправки (п.4): при user-pending в очереди директива продолжения НЕ шлётся —

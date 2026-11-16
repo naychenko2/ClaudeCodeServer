@@ -303,8 +303,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         if (_settings.ZoneRefusalForTurn(entry) is { } refusal)
         {
             await RefuseTurnAsync(sessionId, entry, refusal);
-            // Ход не стартует — снять строку «В очереди», сама ClaudeSession фазу не закроет
-            if (queuedShown) await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
+            await CloseQueuedPhaseAsync(sessionId, queuedShown);
             return;
         }
 
@@ -328,7 +327,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
                 SuppressTasksExecute: suppressTasksExecute, StaffNote: staffNote,
                 AttachedPaths: attachedPaths.Count > 0 ? attachedPaths : null, Mode: mode,
                 SenderUserId: senderUserId));
-            if (queuedShown) await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
+            await CloseQueuedPhaseAsync(sessionId, queuedShown);
             return;
         }
 
@@ -1109,10 +1108,30 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         catch
         {
             RecordAwaitExit(); // исключение в момент ожидания — запись всё равно делается, одна: флаг не даёт повторить
-            await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
-            throw;
+            // Уборочная рассылка не должна подменять исходную ошибку: без гарда её исключение
+            // заменило бы причину ожидания в стексе вызывающего (причина терялась совсем).
+            try
+            {
+                await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
+            }
+            catch (Exception cleanupEx)
+            {
+                _log.LogWarning(
+                    "Не удалось закрыть фазу «В очереди» после сбоя ожидания {Session}: {Error}",
+                    sessionId, cleanupEx.Message);
+            }
+            throw; // пробрасываем исходное исключение ожидания
         }
         return true;
+    }
+
+    // «В очереди» была показана, а ход не стартует (отказ по зоне, парковка устройства,
+    // отзыв автора, сбой доставки): снять строку фазой «done» — ClaudeSession до старта
+    // не дойдёт и фазу не закроет (TS-5).
+    private async Task CloseQueuedPhaseAsync(string sessionId, bool queuedShown)
+    {
+        if (!queuedShown) return;
+        await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
     }
 
     // Доставка конкретного сообщения из очереди обычным ходом (без повторных гейтов очереди).
@@ -1150,7 +1169,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
             // ОтзывВОкнеДоставки_АктивныйЦиклИМаркерСнятыСтопом_ХодСиротаНеПоднят).
             if (entry.Info.WorkLoop is not null)
                 lock (entry.PendingLock) entry.LoopTurnInFlight = false;
-            if (queuedShown) await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
+            await CloseQueuedPhaseAsync(sessionId, queuedShown);
             return false;
         }
 
@@ -1187,7 +1206,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
             if (entry.Info.WorkLoop is not null)
                 lock (entry.PendingLock) entry.LoopTurnInFlight = false;
             Console.Error.WriteLine($"[SessionManager] Доставка отложенного сообщения ({sessionId}): {ex.Message}");
-            if (queuedShown) await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
+            await CloseQueuedPhaseAsync(sessionId, queuedShown);
             return false;
         }
     }

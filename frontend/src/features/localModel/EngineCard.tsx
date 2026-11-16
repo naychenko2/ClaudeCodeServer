@@ -4,7 +4,8 @@
 // в очереди». Нет значения — «нет данных» (курсив C.textMuted), не «0» и не прочерк;
 // stats/media = null — всё тело карточки «нет данных» (заголовок остаётся: карточка опознаваема).
 // stale — цифры приглушены, под заголовком строка «последние данные · HH:MM:SS».
-// Строки kv и шапка карточки — как в GpuDetailCard; полоса KV-кэша — ui/ProgressBar.
+// Строки kv — как в GpuDetailCard; заголовок — как заголовки секций «Стенд»/«Видеокарты»/«Температуры»;
+// полоса KV-кэша — ui/ProgressBar.
 
 import { C, FONT, FS, R, SP } from 'aihome_shell/kit';
 import { ProgressBar } from '../../components/ui/ProgressBar';
@@ -98,17 +99,17 @@ function ComfyBody({ media, stale }: { media: LocalModelMedia; stale: boolean })
 
 export function EngineCard(props: EngineCardProps) {
   const stale = props.stale ?? false;
-  const title = props.kind === 'vllm' && props.title
-    ? `Движок · vLLM · ${props.title}`
-    : props.kind === 'vllm' ? 'Движок · vLLM' : 'Движок · ComfyUI';
+  // Имя движка/модели — в mono-спане без капса (как .nn в «Узел <ключ>»): капс исказил бы идентификатор.
+  const name = props.kind === 'vllm' ? (props.title ? `vLLM · ${props.title}` : 'vLLM') : 'ComfyUI';
   // Причина относится к скорости генерации — метрики скорости есть только у vLLM.
   const th = props.kind === 'vllm' ? props.throttled ?? null : null;
 
   return (
-    <div style={{ background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: SP.sm, minWidth: 0 }}>
-      <div style={{ fontSize: FS.sm, fontWeight: 700, color: C.textHeading, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {title}
-      </div>
+    <div style={{ background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md, minWidth: 0 }}>
+      {/* Заголовок — как секции «Стенд»/«Видеокарты»/«Температуры»: префикс капсом textSecondary, имя — mono-спан textHeading */}
+      <h3 style={{ margin: `0 0 ${SP.sm}px`, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textSecondary, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {'Движок · '}<span style={{ fontFamily: FONT.mono, textTransform: 'none', letterSpacing: 0, color: C.textHeading }}>{name}</span>
+      </h3>
 
       {stale && (
         <div style={{ fontSize: FS.xs, color: C.textMuted, margin: `0 0 ${SP.xs}px`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -116,14 +117,26 @@ export function EngineCard(props: EngineCardProps) {
         </div>
       )}
 
-      {th && (
+      {/* thermal — частоту реально сбросило: тревожная строка с глифом «↓». */}
+      {th === 'thermal' && (
         <div style={{
           display: 'flex', alignItems: 'flex-start', gap: SP.xs, margin: `0 0 ${SP.xs}px`,
-          background: THROTTLE[th].bg, color: THROTTLE[th].fg, borderRadius: R.lg,
+          background: THROTTLE.thermal.bg, color: THROTTLE.thermal.fg, borderRadius: R.lg,
           padding: `${SP.xs}px ${SP.sm}px`, fontSize: FS.xs, fontWeight: 600, lineHeight: 1.35,
         }}>
           <span aria-hidden style={{ flexShrink: 0 }}>↓</span>
-          <span>{THROTTLE[th].text}</span>
+          <span>{THROTTLE.thermal.text}</span>
+        </div>
+      )}
+      {/* powerCap — упор в лимит мощности это штатный режим, не поломка: пилюля info без глифа
+          (R.max, как Badge в GpuDetailCard); «↓» читался бы как «стало хуже». */}
+      {th === 'powerCap' && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', margin: `0 0 ${SP.xs}px` }}>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', background: THROTTLE.powerCap.bg, color: THROTTLE.powerCap.fg,
+            borderRadius: R.max, padding: `2px ${SP.sm}px`, fontSize: FS.xs, fontWeight: 600,
+            whiteSpace: 'normal', lineHeight: 1.3,
+          }}>{THROTTLE.powerCap.text}</span>
         </div>
       )}
 

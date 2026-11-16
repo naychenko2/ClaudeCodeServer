@@ -44,13 +44,15 @@ function comfyMedia(over: Partial<LocalModelMedia> = {}): LocalModelMedia {
 
 const html = (props: Parameters<typeof EngineCard>[0]) => renderToStaticMarkup(createElement(EngineCard, props));
 const count = (hay: string, needle: string) => hay.split(needle).length - 1;
+// Текст разметки без тегов: заголовок теперь составной (префикс + span имени) — проверяем, что он читается строкой.
+const plain = (hay: string) => hay.replace(/<[^>]*>/g, '');
 
 // === 1. vLLM: строки нагрузки, доли kv → проценты ===
 
 describe('EngineCard — vLLM', () => {
   it('заголовок и строки: «3 / 1», KV 42 %, префикс 67 %, скорость 71, вытеснения 2', () => {
     const h = html({ kind: 'vllm', title: 'HyperQwen', stats: vllmStats(), throttled: null, stale: false });
-    expect(h).toContain('Движок · vLLM · HyperQwen');
+    expect(plain(h)).toContain('Движок · vLLM · HyperQwen');
     expect(h).toContain('В работе / в очереди');
     expect(h).toContain('3 / 1');
     expect(h).toContain('KV-кэш');
@@ -63,6 +65,17 @@ describe('EngineCard — vLLM', () => {
     expect(h).toContain('Скорость, ток/с');
     expect(h).toContain('71');
     expect(h).toContain('Вытеснения за 15 мин');
+  });
+
+  // Заголовок — общий заголовок секции (как «Стенд»/«Видеокарты»), не вложенная карточка:
+  // префикс капсом textSecondary, имя движка/модели — mono-спан без капса (textHeading).
+  // «до/после»: на старом оформлении (одна div, всё textHeading, строка одним блоком) эти проверки краснеют.
+  it('заголовок-секция: префикс «Движок ·» капсом textSecondary, имя — в mono-спане без капса (textHeading)', () => {
+    const h = html({ kind: 'vllm', title: 'Qwen3.8-27B', stats: vllmStats(), throttled: null, stale: false });
+    expect(h).toContain('text-transform:uppercase');
+    expect(h).toContain('text-transform:none');
+    expect(plain(h)).toContain('Движок · vLLM · Qwen3.8-27B');
+    expect(h).not.toContain('Движок · vLLM · Qwen3.8-27B');
   });
 
   it('нет kv.prefixHitPerc — «нет данных», и ни одного «0 %» в разметке', () => {
@@ -81,7 +94,7 @@ describe('EngineCard — vLLM', () => {
 
   it('stats=null — всё тело «нет данных», заголовок остаётся', () => {
     const h = html({ kind: 'vllm', title: 'HyperQwen', stats: null, throttled: null, stale: false });
-    expect(h).toContain('Движок · vLLM · HyperQwen');
+    expect(plain(h)).toContain('Движок · vLLM · HyperQwen');
     expect(count(h, 'нет данных')).toBe(1);
     expect(h).not.toContain('3 / 1');
     expect(h).not.toContain('42 %');
@@ -89,8 +102,8 @@ describe('EngineCard — vLLM', () => {
 
   it('без title — заголовок без пустого сегмента', () => {
     const h = html({ kind: 'vllm', title: '', stats: vllmStats(), throttled: null, stale: false });
-    expect(h).toContain('Движок · vLLM');
-    expect(h).not.toContain('vLLM · ');
+    expect(plain(h)).toContain('Движок · vLLM');
+    expect(plain(h)).not.toContain('vLLM · ');
   });
 });
 
@@ -99,7 +112,7 @@ describe('EngineCard — vLLM', () => {
 describe('EngineCard — ComfyUI', () => {
   it('2 в работе, 3 в очереди → «2 / 3»', () => {
     const h = html({ kind: 'comfy', media: comfyMedia(), throttled: null, stale: false });
-    expect(h).toContain('Движок · ComfyUI');
+    expect(plain(h)).toContain('Движок · ComfyUI');
     expect(h).toContain('В работе / в очереди');
     expect(h).toContain('2 / 3');
   });
@@ -113,7 +126,7 @@ describe('EngineCard — ComfyUI', () => {
 
   it('media=null — «нет данных»', () => {
     const h = html({ kind: 'comfy', media: null, throttled: null, stale: false });
-    expect(h).toContain('Движок · ComfyUI');
+    expect(plain(h)).toContain('Движок · ComfyUI');
     expect(count(h, 'нет данных')).toBe(1);
     expect(h).not.toContain('2 / 3');
   });
@@ -127,6 +140,8 @@ describe('EngineCard — строка-причина', () => {
     expect(h).toContain('Скорость упала: карта сбрасывает частоту от перегрева');
     expect(h).toContain('var(--c-danger-bg)');
     expect(h).toContain('var(--c-danger-text)');
+    // частоту реально сбросило — глиф «↓» остаётся
+    expect(h).toContain('↓');
   });
 
   // по решению дизайна (spec.md:56, макеты «p-info»): информационная плашка, не warning
@@ -138,6 +153,9 @@ describe('EngineCard — строка-причина', () => {
     expect(h).toContain('var(--c-info)');
     expect(h).not.toContain('var(--c-warning-bg)');
     expect(h).not.toContain('var(--c-danger-bg)');
+    // упор в лимит — штатный режим: пилюля без глифа («↓» читался бы как «стало хуже»), полная скруглённость
+    expect(h).not.toContain('↓');
+    expect(h).toContain('border-radius:999px');
   });
 
   it('throttled=null — строки-причины нет вовсе', () => {

@@ -153,8 +153,12 @@ public static class TranscriptMigrator
     // флаша CLI», либо профиль подмены пуст/повреждён), безусловный overwrite затёр бы полную
     // историю усечённой. При true — пропускаем копию, если приёмник длиннее источника, и
     // возвращаем true (приёмник уже полнее, цели достигнуты), причину — в error для лога.
+    //
+    // waitIfBusy=false — для горячего пути старта хода: занятый файл не ждём бэкофом до 8 с, а
+    // сразу отдаём false с причиной (ход полагается на --resume и не простаивает).
     public static bool TryMigrate(string srcRoot, string dstRoot, string cwd,
-        string claudeSessionId, out string? error, bool preserveLongerDestination = false)
+        string claudeSessionId, out string? error, bool preserveLongerDestination = false,
+        bool waitIfBusy = true)
     {
         error = null;
         try
@@ -186,11 +190,11 @@ public static class TranscriptMigrator
                     return true;
                 }
             }
-            CopyFileShared(src, dstFile);
+            CopyFileShared(src, dstFile, waitIfBusy);
 
             var srcSessionDir = Path.Combine(Path.GetDirectoryName(src)!, claudeSessionId);
             if (Directory.Exists(srcSessionDir))
-                CopyDirectory(srcSessionDir, Path.Combine(dstDir, claudeSessionId));
+                CopyDirectory(srcSessionDir, Path.Combine(dstDir, claudeSessionId), waitIfBusy);
             return true;
         }
         catch (Exception ex)
@@ -248,10 +252,10 @@ public static class TranscriptMigrator
     // падает IOException до тех пор, пока процесс не умрёт. Бэкоф 100→800мс с потолком 8с
     // покрывает выход убитого процесса с запасом; по истечении — ошибка уходит наверх, кандидат
     // пропускается (fail-open: подмена срывается, остаёмся на исходной паре — ход должен идти).
-    private static void CopyFileShared(string src, string dst)
+    private static void CopyFileShared(string src, string dst, bool waitIfBusy = true)
     {
         const int bufferSize = 81920;
-        const int deadlineMs = 8000;
+        var deadlineMs = waitIfBusy ? 8000 : 0;
         const int initialDelayMs = 100;
         const int maxDelayMs = 800;
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -281,7 +285,7 @@ public static class TranscriptMigrator
     }
 
     // Папка сессии (сабагенты и пр.) — без неё resume работает, поэтому ошибки глотаем
-    private static void CopyDirectory(string src, string dst)
+    private static void CopyDirectory(string src, string dst, bool waitIfBusy = true)
     {
         try
         {
@@ -290,7 +294,7 @@ public static class TranscriptMigrator
             {
                 var target = Path.Combine(dst, Path.GetRelativePath(src, file));
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                CopyFileShared(file, target);
+                CopyFileShared(file, target, waitIfBusy);
             }
         }
         catch (Exception ex)

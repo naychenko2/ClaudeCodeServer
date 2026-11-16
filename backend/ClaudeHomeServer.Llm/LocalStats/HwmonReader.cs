@@ -465,13 +465,16 @@ public sealed class HwmonReader
         return best;
     }
 
-    // Заполненность ФС (DriveInfo точки монтирования): всего и свободно (байты); null — не читается.
+    // Заполненность ФС (statvfs точки монтирования): всего и свободно (байты); null — не читается
+    // или значения противоречивы: free вне [0, total] — недоверенный источник (срез агента),
+    // из него UsedGb = total − free дал бы отрицательное или больше total.
     private (long total, long free)? ReadFsUsage(string mountpoint)
     {
         try
         {
             var (total, free) = _fs.FsSize(mountpoint);
             if (total <= 0) return null;
+            if (free < 0 || free > total) return null;
             return (total, free);
         }
         catch { return null; }

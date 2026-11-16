@@ -31,6 +31,9 @@
 //   подсказки нет: скрывать нечего); под бейдж «↺N» резервируется место справа в строке
 //   заголовка, при returns=0 резерва нет; код роли — только у роли, повторяющейся в маршруте
 //   (макет feature-page.html:431-444), у единственной роли его нет.
+// - дефект «бейдж ↺N срезан сверху» (жалоба с прода, релиз b0ac0a8c): бейдж висит над верхним
+//   краем узла (top<0), а контейнер ленты (overflowX:auto) режет по padding box — поэтому его
+//   верхняя половина исчезала. Проверено соотношение: отступ контейнера сверху ≥ вылет бейджа.
 // Колонки, рёбра и состояния компонент не пересчитывает — это покрыто в FeatureProcessGraphModel.test.ts.
 //
 // Мутации (проверяются прогоном): (1) убрать `if (stage.title)` в nodeTitle — краснеет
@@ -54,6 +57,8 @@
 // (12) показывать код роли безусловно (`{stage.role && …}` вместо repeatedRole.has(role)) —
 //      краснеют «уникальная роль — кода нет…», «повтор роли…» (проверка единственной «plan»)
 //      и две правки роли в блоке «данные узла B01» — всего 4 теста.
+// (13) убрать `paddingTop` у контейнера ленты (`feature-process-graph`) — краснеет
+//      «отступ контейнера сверху ≥ вылет бейджа» (верх бейджа «↺N» снова срезан краем прокрутки).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -459,6 +464,26 @@ describe('FeatureProcessGraph: данные узла не выходят за р
     const noBadge = style(get(prod({ returns: 0 }), 'pgraph-title-step-back'));
     expect(noBadge.paddingRight).toBeUndefined();
     expect(get(prod({ returns: 0 }), 'pgraph-returns-step-back')).toBeNull();
+  });
+});
+
+describe('FeatureProcessGraph: бейдж «↺N» не срезан верхним краем контейнера прокрутки (дефект «↺8», b0ac0a8c)', () => {
+  const get = (c: unknown, tid: string) => findNodeByAttr(c as never, 'data-testid', tid);
+  const style = (n: unknown): Record<string, unknown> =>
+    (reactProps(n as never) as { style: Record<string, unknown> }).style;
+  // Узел с возвратами: бейдж висит абсолютно над верхним краем узла (top < 0).
+  const withBadge = () =>
+    render([{ ...mkStage('prod', 'step-back', 'step', 0, 'active', [], 'back'), returns: 8 }]);
+
+  it('отступ контейнера сверху ≥ вылет бейджа: его верх остаётся внутри области прокрутки', () => {
+    const c = withBadge();
+    // Вылет меряется по факту рендера, а не числом из константы: бейдж обязан висеть выше узла.
+    const badgeTop = Number(style(get(c, 'pgraph-returns-step-back')).top);
+    expect(badgeTop, 'бейдж возврата висит выше верхнего края узла').toBeLessThan(0);
+    // Контейнер ленты (overflowX:auto ⇒ браузер делает и overflow-y:auto) режет по padding box:
+    // без отступа сверху верх бейджа, выходящий за ленту, срезан — как на проде.
+    const padTop = Number(style(get(c, 'feature-process-graph')).paddingTop);
+    expect(padTop, 'контейнер прокрутки обязан иметь отступ сверху под вылет бейджа').toBeGreaterThanOrEqual(-badgeTop);
   });
 });
 

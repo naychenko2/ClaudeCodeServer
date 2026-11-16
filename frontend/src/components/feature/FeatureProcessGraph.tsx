@@ -86,6 +86,12 @@ const BADGE_RESERVE_EXTRA_W = 12;
 const BADGE_RESERVE_CHAR_W = 7;
 const badgeReserveW = (returns: number): number =>
   BADGE_RESERVE_EXTRA_W + BADGE_RESERVE_CHAR_W * (1 + String(returns).length);
+// Вылет бейджа «↺N» над верхним краем узла (бейдж стоит абсолютно: top = −вылет). Ленту
+// прокручивает контейнер с overflowX:auto — браузер выставляет и overflow-y:auto, и всё выше
+// его верхней границы обрезается (дефект «↺8» на проде, релиз b0ac0a8c). Тот же вылет задаёт
+// отступ контейнера сверху: overflow режет по padding box, поэтому отступ ровно накрывает вылет.
+// Одно число держит оба конца — сдвинешь вылет бейджа, отступ сдвинется с ним.
+const RETURNS_BADGE_OVERHANG = SP.sm; // 8 px
 // Зазор между колонками — пространство для рёбер (макет .link 20 + запас на кривую).
 const GAP_X = 24;
 // Зазор между стадиями внутри колонки.
@@ -399,8 +405,11 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
           data-testid="feature-process-graph"
           style={{
             // Колонки растянуты на ширину страницы; не влезают (min 116) или мобильная лента —
-            // прокрутка внутри блока, документ не переполняется.
-            overflowX: 'auto', paddingBottom: SP.xxs,
+            // прокрутка внутри блока, документ не переполняется. Отступ сверху = вылет бейджа
+            // «↺N»: overflow-x:auto неявно делает overflow-y:auto и режет по padding box — без
+            // отступа верх бейджа срезан (дефект «↺8» на проде). Шевроны на внешнем обёртке
+            // (pgraph-scroll), их выравнивание по краям ленты это не меняет.
+            overflowX: 'auto', paddingTop: RETURNS_BADGE_OVERHANG, paddingBottom: SP.xxs,
           }}
         >
           <div style={{ position: 'relative', width: lay.width, height: lay.height }}>
@@ -517,7 +526,7 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
                       data-testid={`pgraph-returns-${id}`}
                       title={`возвратов на доработку: ${returns}`}
                       style={{
-                        position: 'absolute', top: -8, right: SP.sm, padding: `0 ${SP.xs}px`, borderRadius: R.full,
+                        position: 'absolute', top: -RETURNS_BADGE_OVERHANG, right: SP.sm, padding: `0 ${SP.xs}px`, borderRadius: R.full,
                         background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warning,
                         fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700, lineHeight: '14px',
                       }}

@@ -5851,7 +5851,6 @@ public class ClaudeSession : ILlmSessionAdapter
 
         try
         {
-            if (TranscriptMigrator.FindTranscript(turnRoot, _rootPath, csid) is not null) return; // уже в приёмнике
             if (TranscriptMigrator.FindTranscript(ownRoot, _rootPath, csid) is null) return; // копировать неоткуда
 
             // У container-владельца DockerProcessRunner.RewriteProfileEnv переписывает CLAUDE_CONFIG_DIR
@@ -5867,12 +5866,22 @@ public class ClaudeSession : ILlmSessionAdapter
                 dst = SafePath.Join(parent, folder);
             }
 
-            if (!TranscriptMigrator.TryMigrate(ownRoot, dst, _rootPath, csid, out var error))
+            // Проверка — в ВЫЧИСЛЕННОМ приёмнике: у песочницы он не turnRoot, а sandbox-profiles/{owner}/…,
+            // и транскрипт там уже лежит (его ведёт CLI). Существующий приёмник не перезаписываем
+            // вовсе: он живой и мог уйти вперёд источника, старая копия отрезала бы хвост истории.
+            if (TranscriptMigrator.FindTranscript(dst, _rootPath, csid) is not null) return;
+
+            // waitIfBusy=false: занятый файл не ждём (прежний бэкоф до 8 с стоял на горячем пути
+            // старта хода); при провале ход идёт дальше и полагается на --resume.
+            var sw = Stopwatch.StartNew();
+            var copied = TranscriptMigrator.TryMigrate(ownRoot, dst, _rootPath, csid, out var error, waitIfBusy: false);
+            var ms = (long)sw.Elapsed.TotalMilliseconds;
+            if (!copied)
                 Console.Error.WriteLine(
-                    $"[ClaudeSession] Транскрипт {csid} не скопирован в {dst}: {error} (session {Info.Id})");
+                    $"[ClaudeSession] Транскрипт {csid} не скопирован в {dst}: {error} за {ms} мс (session {Info.Id})");
             else
                 Console.Error.WriteLine(
-                    $"[ClaudeSession] Транскрипт {csid} скопирован из профиля сессии {ownRoot} в профиль хода {dst} (session {Info.Id})");
+                    $"[ClaudeSession] Транскрипт {csid} скопирован из профиля сессии {ownRoot} в профиль хода {dst} за {ms} мс (session {Info.Id})");
         }
         catch (Exception ex)
         {

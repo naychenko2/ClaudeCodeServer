@@ -59,10 +59,10 @@ public class ClaudeSessionSubscriptionTranscriptCopyTests : IDisposable
     }
 
     // «CLI», который просто стартовал и молчит: нужен момент старта — копия обязана случиться ДО него.
-    private sealed class SilentCliLauncher(List<Process> processes, TaskCompletionSource started)
-        : IProcessLauncher
+    private sealed class SilentCliLauncher(List<Process> processes, TaskCompletionSource started,
+        bool sandboxed = false) : IProcessLauncher
     {
-        public bool IsSandboxed => false;
+        public bool IsSandboxed => sandboxed;
         public bool TargetIsWindows => OperatingSystem.IsWindows();
         public IPathMapper Paths => IdentityPathMapper.Instance;
         public string ClaudeCliCommand => "fake-claude";
@@ -107,13 +107,13 @@ public class ClaudeSessionSubscriptionTranscriptCopyTests : IDisposable
     // сторонняя, ClaudeSessionId есть, CliConfigRoot — профиль подписки (как его передаёт
     // SessionManager.ConfigRootFor по Info.Provider).
     private async Task RunResumedTurnAsync(LlmProviderRegistry providers, ClaudeSubscriptionPool pool,
-        string root)
+        string root, string? ownRootOverride = null, bool sandboxed = false)
     {
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Directory.CreateDirectory(root);
 
-        var launcher = new SilentCliLauncher(_processes, started);
+        var launcher = new SilentCliLauncher(_processes, started, sandboxed);
         var context = new LlmSessionContext(
             RootPath: root,
             OnMessage: m =>
@@ -125,7 +125,7 @@ public class ClaudeSessionSubscriptionTranscriptCopyTests : IDisposable
             PermissionRules: null,
             TasksMcp: null,
             Launcher: launcher,
-            CliConfigRoot: providers.GetProfileDir("sub-" + SubKey));
+            CliConfigRoot: ownRootOverride ?? providers.GetProfileDir("sub-" + SubKey));
         var session = new ClaudeSession(
             new Session { Model = ExternalModel, Provider = SubKey, ClaudeSessionId = ClaudeSessionId },
             context, providers: providers, subscriptionPool: pool);
@@ -189,5 +189,82 @@ public class ClaudeSessionSubscriptionTranscriptCopyTests : IDisposable
             TranscriptMigrator.FlattenCwd(root), ClaudeSessionId + ".jsonl");
         File.Exists(subFile).Should().BeFalse(
             "обратной копии нет: приёмник уже содержит файл, копия односторонняя");
+    }
+
+    // Песочница: собственный корень сессии — sandbox-profiles/{owner}/sub-{key}, приёмник копии —
+    // сосед с папкой профиля хода (sandbox-profiles/{owner}/{папка turnRoot}).
+    private (string OwnRoot, string Dst) SandboxRoots(LlmProviderRegistry providers)
+    {
+        var parent = Path.Combine(_tempDir, "sandbox-profiles", "owner1");
+        var folder = Path.GetFileName(providers.GetProfileDir(ExternalProviderKey).TrimEnd('/', '\\'));
+        return (Path.Combine(parent, "sub-" + SubKey), Path.Combine(parent, folder));
+    }
+
+    private static void WriteTranscript(string profile, string root, string body)
+    {
+        var dir = Path.Combine(profile, "projects", TranscriptMigrator.FlattenCwd(root));
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, ClaudeSessionId + ".jsonl"), body);
+    }
+
+    private static string TranscriptPath(string profile, string root) =>
+        Path.Combine(profile, "projects", TranscriptMigrator.FlattenCwd(root), ClaudeSessionId + ".jsonl");
+
+    /// <summary>
+    /// TS-17: у песочницы приёмник уже содержит транскрипт — копии нет, живой файл не перезаписан
+    /// (старый источник не отрезает хвост истории). Мутация: вернуть проверку в turnRoot вместо dst.
+    /// </summary>
+    [Fact]
+    public async Task Песочница_ПриёмникУжеСодержитТранскрипт_КопииНет()
+    {
+        var (providers, pool) = BuildConfig();
+        var root = Path.Combine(_tempDir, "root-sb1");
+        var (ownRoot, dst) = SandboxRoots(providers);
+        WriteTranscript(ownRoot, root, "{\"v\":\"old\"}\n");
+        const string live = "{\"v\":\"old\"}\n{\"v\":\"newer-tail\"}\n";
+        WriteTranscript(dst, root, live);
+
+        await RunResumedTurnAsync(providers, pool, root, ownRoot, sandboxed: true);
+
+        File.ReadAllText(TranscriptPath(dst, root)).Should().Be(live,
+            "существующий транскрипт приёмника не перезаписывается старой копией");
+    }
+
+    /// <summary>TS-17: приёмник пуст — копия выполняется в sandbox-profiles/{owner}/{папка хода}.</summary>
+    [Fact]
+    public async Task Песочница_ПриёмникПуст_КопияВыполняется()
+    {
+        var (providers, pool) = BuildConfig();
+        var root = Path.Combine(_tempDir, "root-sb2");
+        var (ownRoot, dst) = SandboxRoots(providers);
+        const string body = "{\"v\":1}\n";
+        WriteTranscript(ownRoot, root, body);
+
+        await RunResumedTurnAsync(providers, pool, root, ownRoot, sandboxed: true);
+
+        File.ReadAllText(TranscriptPath(dst, root)).Should().Be(body);
+    }
+
+    /// <summary>
+    /// TS-17: занятый приёмник не блокирует ход ожиданием бэкофа (прежний потолок — 8 с).
+    /// Приёмник держим открытым без разделения; TryMigrate обязан вернуть false сразу.
+    /// </summary>
+    [Fact]
+    public void TryMigrate_БезОжидания_ЗанятыйПриёмникНеБлокирует()
+    {
+        var src = Path.Combine(_tempDir, "src-profile");
+        var dst = Path.Combine(_tempDir, "dst-profile");
+        var root = Path.Combine(_tempDir, "root-busy");
+        WriteTranscript(src, root, "{}\n");
+        WriteTranscript(dst, root, "{}\n");
+
+        using var hold = new FileStream(TranscriptPath(dst, root), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var sw = Stopwatch.StartNew();
+        var ok = TranscriptMigrator.TryMigrate(src, dst, root, ClaudeSessionId, out var error, waitIfBusy: false);
+        sw.Stop();
+
+        ok.Should().BeFalse();
+        error.Should().NotBeNullOrEmpty();
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2), "ход не ждёт занятый файл бэкофом до 8 с");
     }
 }

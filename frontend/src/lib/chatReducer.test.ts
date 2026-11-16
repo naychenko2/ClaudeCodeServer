@@ -633,4 +633,12 @@ describe('applyServerMessage: turn_start_phase — статус старта х�
     const s = applyServerMessage(queuedBehindBusy(), { sessionId: SID, type: 'turn_start_phase', phase: 'context' } as ServerMessage);
     expect(phases(s)).toEqual([{ kind: 'turn_start_phase', phase: 'context' }]);
   });
+
+  it('неизвестная фаза игнорируется: стоящую строку не меняет, новой не плодит', () => {
+    // фаза, которой нет среди известных (например, добавлена на бэке раньше фронта)
+    const shown = feed(initialChatState(), { type: 'turn_start_phase', phase: 'waiting' });
+    expect(applyServerMessage(shown, { sessionId: SID, type: 'turn_start_phase', phase: 'rendering' } as ServerMessage)).toBe(shown);
+    const empty = initialChatState();
+    expect(applyServerMessage(empty, { sessionId: SID, type: 'turn_start_phase', phase: 'rendering' } as ServerMessage)).toBe(empty);
+  });
 });

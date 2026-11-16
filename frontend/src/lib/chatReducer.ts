@@ -515,6 +515,12 @@ function dropLocalTurnQueue(items: ChatItem[], keepQueued = false): ChatItem[] {
   return items.some(live) ? items.filter(it => !live(it)) : items;
 }
 
+// Известные фазы старта хода (StartPhase, без «done» — он снимает строку отдельно).
+// Неизвестная фаза от сервера (например, новая добавлена на бэке раньше фронта)
+// игнорируется: строка не меняется и не добавляется — иначе лента показала бы
+// точку с пустой подписью.
+const KNOWN_START_PHASES: ReadonlySet<string> = new Set(['queued', 'context', 'launching', 'waiting']);
+
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
 // если сообщение состояние не меняет (подписчиков можно не будить).
 // Generic: работает и с ChatState, и с расширяющим его SessionState хука.
@@ -1238,6 +1244,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // её failsafe-ом (dropLocalTurnQueue).
       const at = prev.items.findLastIndex(it => it.kind === 'turn_start_phase');
       if (msg.phase === 'done') return at >= 0 ? withItems(prev.items.filter(it => it.kind !== 'turn_start_phase')) : prev;
+      if (!KNOWN_START_PHASES.has(msg.phase)) return prev; // неизвестная фаза — лента остаётся как есть
       const phase = msg.phase as StartPhase;
       if (at >= 0) {
         const items = prev.items.slice();

@@ -57,6 +57,11 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
     public int Order => 300;
     public string Group => "persona";
 
+    // TS-18: параллельно с recall-notes (соседний Order). Состояния общего нет:
+    // кеш якорей — собственный, под своим _anchorLock; поиск памяти — свой на ход.
+    // Внутренний таймаут (Persona:RecallTimeoutMs) и исключения — как раньше.
+    public bool ParallelSafe => true;
+
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.HasMemoryMcp && sessionContext.OwnerId is not null && sessionContext.Persona is not null;
 

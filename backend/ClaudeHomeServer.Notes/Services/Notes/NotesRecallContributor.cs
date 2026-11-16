@@ -47,6 +47,12 @@ public sealed class NotesRecallContributor : IPromptSectionContributor
     public int Order => 200;
     public string Group => "recall";
 
+    // TS-18: параллельно с recall-memory (соседний Order). Состояния общего нет:
+    // поиск, снимок WikiReadsStore и учёт чтений — свои на ход; записи в событие
+    // (Sections/ManifestItems/замеры) делает реестр одним потоком после WhenAll.
+    // Внутренний таймаут поиска (Notes:AutoRecallTimeoutMs) и исключения — как раньше.
+    public bool ParallelSafe => true;
+
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.HasNotesMcp && sessionContext.OwnerId is not null
         // S2a-4 (разрез И.3, решение 29.10): в узкой рамке общего проекта личный vault в подборку

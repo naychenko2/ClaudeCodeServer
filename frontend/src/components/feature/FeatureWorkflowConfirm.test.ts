@@ -326,6 +326,13 @@ describe('FeatureWorkflowConfirm: состояния блока (F03)', () => {
     expect(text(c)).toContain('Бэк и экраны — подходит этот шаблон');
   });
 
+  it('обоснование маршрута выводится без markdown', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ proposal: proposed({ rationale: 'Фича **меняет** `бэкенд`' }) });
+    expect(text(c)).toContain('Фича меняет бэкенд');
+    expect(text(c)).not.toContain('**');
+  });
+
   it('подтверждено моделью: тег «авто» и «выбрано моделью автоматически — выбор был очевиден»; без снятых — «все этапы»', async () => {
     catalog.entries = [entry(fullCycle(3))];
     const c = await renderBlock({ confirmed: { ...CONFIRMED, skipped: [], autoConfirmed: true }, quiet: true });

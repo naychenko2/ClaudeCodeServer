@@ -224,6 +224,11 @@ describe('analysisLineState — состояния', () => {
     expect(st.actions[0].kind).toBe('openChat');
   });
 
+  it('attention: markdown в причине очищается', () => {
+    const st = analysisLineState(mkRun({ attention: { kind: 'wait', reason: '## Нужно **решение**' } }), NOW);
+    expect(st.strong).toBe('Ждёт вас · Нужно решение');
+  });
+
   it('attention merge — причина «мерж», даже если reason пуст', () => {
     const st = analysisLineState(mkRun({ attention: { kind: 'merge' } }), NOW);
     expect(st.strong).toBe('Ждёт вас · мерж');

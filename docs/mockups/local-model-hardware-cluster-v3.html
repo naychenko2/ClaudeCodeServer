@@ -383,9 +383,12 @@ function engLine(n) { // одна строка движка для карточ�
 }
 function engineCard(info, e) {
   const n = info.n, slow = e.kind === 'vllm' && e.tps < 60 && n.gpus.some(g => g.thermal);
-  const title = e.kind === 'vllm' && e.name ? `Движок · ${ENGNAME[e.kind]} · ${e.name}` : `Движок · ${ENGNAME[e.kind]}`;
+  // Заголовок секции (.ch h3, как «Узел»/«Видеокарты»); имена движка и модели — .nn: капс исказил бы идентификатор
+  const cap = !slow && e.kind === 'vllm' && n.gpus.some(g => g.powerCap);
+  const title = `Движок · <span class="nn">${ENGNAME[e.kind]}${e.kind === 'vllm' && e.name ? ' · ' + e.name : ''}</span>`;
   return `<div class="card ${info.down ? 'stale' : ''}"><div class="ch"><h3>${title}</h3></div>
     ${slow ? '<div class="banner" style="margin-bottom:8px;background:var(--c-danger-bg);color:var(--c-danger-text)"><span>↓</span><span>Скорость упала: карта 2 сбрасывает частоту от перегрева.</span></div>' : ''}
+    ${cap ? '<div class="badges" style="margin:0 0 8px"><span class="pill p-info">Упирается в лимит мощности</span></div>' : ''}
     ${info.down ? `<div class="meta">последние данные · <b>${n.since}</b></div>` : ''}
     <div class="eng2"><div>${engRows(n, e)}</div></div></div>`;
 }

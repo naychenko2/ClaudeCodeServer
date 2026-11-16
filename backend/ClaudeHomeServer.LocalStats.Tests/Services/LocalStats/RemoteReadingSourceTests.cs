@@ -202,6 +202,23 @@ public class RemoteReadingSourceTests
         reading.Status.Should().Be(NodeReadingStatus.Down);
     }
 
+    // Опоздавший таймер: ответ уже пришёл, ReadAsync вернулся и освободил свой CTS, а колбэк
+    // тайм-аута, поставленный в очередь пула до Dispose таймера, срабатывает только теперь
+    // (ITimer.Dispose не ждёт колбэк в полёте). Колбэк не должен бросать: исключение в потоке
+    // таймера — необработанное и гасит весь процесс (инцидент прода 16.11.2026: load 368,
+    // голодный пул, ObjectDisposedException из Cancel() → SIGABRT бэкенда).
+    // Мутация «Cancel() на освобождённом связанном CTS из своего колбэка» — краснеет здесь.
+    [Fact]
+    public async Task ReadAsync_TimerFiresAfterReturn_DoesNotThrow()
+    {
+        var time = new ManualTimerTime();
+        var reading = await SourceOf(new FakeHandler(SliceJson()), time).ReadAsync();
+        reading.Status.Should().Be(NodeReadingStatus.Ok);
+
+        var fireLate = () => time.Fire(); // колбэк после возврата и Dispose
+        fireLate.Should().NotThrow();
+    }
+
     // Отмена ct вызывающего — не сбой узла: OperationCanceledException уходит вызывающему
     // (тот же контракт, что у VllmMetricsSource), а не статус.
     [Fact]

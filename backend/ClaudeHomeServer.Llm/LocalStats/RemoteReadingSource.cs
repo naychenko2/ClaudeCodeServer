@@ -27,11 +27,14 @@ public sealed class RemoteReadingSource : INodeReadingSource
     public async Task<NodeReading> ReadAsync(CancellationToken ct = default)
     {
         // Связанный CTS: отмена вызывающего или тайм-аут — один токен; ответ после
-        // тайм-аута отбрасывается отменой, вызов не ждёт сеть. Таймер — через TimeProvider
+        // тайм-аута отбрасывается отменой, вызов не ждёт сеть. Тайм-аут — CTS с TimeProvider
         // (тесты гоняют срабатывание на фейковых часах, без реальных 1,5 с и Task.Delay).
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        using var timer = _time.CreateTimer(
-            static state => ((CancellationTokenSource)state!).Cancel(), cts, RequestTimeout, Timeout.InfiniteTimeSpan);
+        // Свой таймер с Cancel() в колбэке здесь НЕЛЬЗЯ: ITimer.Dispose не ждёт колбэк,
+        // уже стоящий в очереди пула, тот зовёт Cancel() на освобождённом CTS, и
+        // ObjectDisposedException в потоке таймера гасит весь процесс (прод 16.11.2026).
+        // Колбэк таймера самого CTS к освобождению устойчив.
+        using var timeoutCts = new CancellationTokenSource(RequestTimeout, _time);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         byte[] body;
         try

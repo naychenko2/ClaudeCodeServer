@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -43,6 +44,9 @@ public class HardwareTests : IDisposable
         Directory.CreateDirectory(p);
         return p;
     }
+
+    // Реестра HardwareNodes нет → ровно один узел «worker» с ролью карт ["text"] (побайтно сегодняшнее).
+    private static IConfiguration NoNodes() => new ConfigurationBuilder().Build();
 
     private static void Put(string dir, string file, string text) => File.WriteAllText(Path.Combine(dir, file), text);
 
@@ -369,7 +373,7 @@ public class HardwareTests : IDisposable
             "[{\"busId\":\"0000:0b:00.0\",\"deviceId\":\"0x2204\",\"memTempC\":96,\"hotspotTempC\":75}]"));
         await s.PollNodeAsync("worker");
 
-        var report = new HardwareReportService(s).Build(TimeSpan.FromMinutes(15));
+        var report = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(15))!;
         var g = report.Gpus.Single();
         g.MemTempC.Should().Be(96, "связка helper↔nvidia-smi по каноническому busId");
         g.Level.Should().Be("warn");
@@ -393,7 +397,7 @@ public class HardwareTests : IDisposable
         File.WriteAllText(file, HelperJson(time.GetUtcNow().AddSeconds(-30)));
         await s.PollNodeAsync("worker");
 
-        var g = new HardwareReportService(s).Build(TimeSpan.FromMinutes(1)).Gpus.Single();
+        var g = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(1))!.Gpus.Single();
         g.MemTempC.Should().BeNull();
         g.HotspotTempC.Should().BeNull();
         g.CoreTempC.Should().Be(70, "остальное работает");
@@ -407,7 +411,7 @@ public class HardwareTests : IDisposable
         await s.PollNodeAsync("worker");
         time.Advance(TimeSpan.FromSeconds(30));
 
-        var report = new HardwareReportService(s).Build(TimeSpan.FromMinutes(1));
+        var report = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(1))!;
         report.Status.Should().Be("stale");
         report.Level.Should().Be("ok", "при stale уровни не красятся");
         report.Gpus.Single().Level.Should().Be("ok");
@@ -440,7 +444,7 @@ public class HardwareTests : IDisposable
                 new HwmonDisk { Controller = "nvme0", Role = "system", TempC = 59 },
             ],
         };
-        var report = new HardwareReportService(new FixedSampler(sample)).Build(TimeSpan.FromMinutes(15));
+        var report = new HardwareReportService(new FixedSampler(sample), NoNodes()).Build(TimeSpan.FromMinutes(15))!;
 
         var water = report.Nodes.Single(n => n.Key == "water");
         water.TempC.Should().Be(52);
@@ -450,7 +454,7 @@ public class HardwareTests : IDisposable
 
         var kv = report.Nodes.Single(n => n.Detail.Role == "kv");
         kv.TempC.Should().BeNull("датчики диска кэша врут — температуру не показываем");
-        kv.Level.Should().Be("none");
+        kv.Level.Should().Be("ok", "75 % заполненности — ниже порога 85 (порог заполненности теперь участвует)");
         kv.DangerC.Should().BeNull();
         kv.Detail.Temp2C.Should().BeNull();
         kv.Detail.UsedGb.Should().Be(370);
@@ -458,7 +462,7 @@ public class HardwareTests : IDisposable
         kv.Spark15m.Should().Equal([75], "мини-график диска кэша — занято, %");
         report.Series.Should().NotContain(x => x.Key == "disk-nvme1");
         report.Series.Should().Contain(x => x.Key == "disk-nvme0");
-        report.Level.Should().Be("warn", "уровень стенда — по воде, диск кэша не участвует");
+        report.Level.Should().Be("warn", "уровень стенда — по воде; кэш 75 % и плата без данных — не тревога");
 
         var ram = report.Nodes.Single(n => n.Key == "ram");
         ram.Detail.UsedPerc.Should().Be(50);
@@ -470,7 +474,7 @@ public class HardwareTests : IDisposable
     public void Report_NoSources_EmptyOk()
     {
         var (s, _, _) = BuildSampler();
-        var report = new HardwareReportService(s).Build(TimeSpan.FromMinutes(5));
+        var report = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(5))!;
         report.Status.Should().Be("ok");
         report.Nodes.Should().BeEmpty();
         report.Gpus.Should().BeEmpty();

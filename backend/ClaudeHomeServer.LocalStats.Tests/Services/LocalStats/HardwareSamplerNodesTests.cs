@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -257,15 +258,32 @@ public class HardwareSamplerNodesTests
             s.NodeKeys.Should().Equal("worker");
             await s.PollNodeAsync("worker");
 
-            var json = System.Text.Json.JsonSerializer.Serialize(new HardwareReportService(s).Build(TimeSpan.FromMinutes(5)),
+            // Реестра узлов нет → ровно один «worker» (побайтно сегодняшняя ручка).
+            var report = new HardwareReportService(s, new ConfigurationBuilder().Build()).Build(TimeSpan.FromMinutes(5));
+            report.Should().NotBeNull("узла worker при отсутствии реестра");
+            var json = System.Text.Json.JsonSerializer.Serialize(report,
                 new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
-            json.Should().Be(File.ReadAllText(BaselinePath()));
+            StripNewFields(json).Should().Be(File.ReadAllText(BaselinePath()),
+                "отличается ровно node/uptimeS/cpuLoadPerc и плитка+ряд board");
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
     private static string BaselinePath([System.Runtime.CompilerServices.CallerFilePath] string self = "") =>
         Path.Combine(Path.GetDirectoryName(self)!, "Fixtures", "hardware-report-worker-master.json");
+
+    // Из ответа убирается ровно то, что добавилось к эталону Ш2c: три поля узла (node, uptimeS,
+    // cpuLoadPerc) и плитка+ряд платы. Остальное сравнивается строка в строку — порядок ключей и
+    // экранирование при этом не меняются (JsonNode хранит то, что было в тексте).
+    private static string StripNewFields(string json)
+    {
+        var root = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
+        foreach (var key in new[] { "node", "uptimeS", "cpuLoadPerc" }) root.Remove(key);
+        foreach (var arr in new[] { root["nodes"]!.AsArray(), root["series"]!.AsArray() })
+            for (var i = arr.Count - 1; i >= 0; i--)
+                if (arr[i]!["key"]!.GetValue<string>() == "board") arr.RemoveAt(i);
+        return root.ToJsonString(new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+    }
 
     private sealed class OneGpu : IGpuSampler
     {

@@ -357,6 +357,44 @@ public class HardwareTests : IDisposable
         s.Since.Should().Be(at.ToUnixTimeMilliseconds());
     }
 
+    [Fact]
+    public async Task Ring_StaleReading_AtIsDataTime_NotNow()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+
+        // Ok-срез — контроль: метка = время получения (былое поведение).
+        await sampler.PollNodeAsync("worker");
+        var t0 = time.GetUtcNow();
+        s.Current!.At.Should().Be(t0, "Ok-срез (AgeMs = 0) метится временем получения");
+
+        // Stale-срез возрастом 12 с: в кольцо он идёт со временем данных, не получения.
+        src.Status = NodeReadingStatus.Stale;
+        src.AgeMs = 12_000;
+        await sampler.PollNodeAsync("worker");
+        var t1 = time.GetUtcNow();
+        s.Status.Should().Be("stale");
+        s.Current!.At.Should().Be(t1 - TimeSpan.FromSeconds(12),
+            "Stale-срез метится временем данных (now − AgeMs), а не now");
+        sampler.RingCount("worker").Should().Be(2);
+
+        // Читатели кольца не видят «живого» устаревшего: снимок попадает в бакет своих данных
+        // ([t1−20с, t1−10с)), текущий бакет — пустой разрыв.
+        var pts = s.Aggregate(x => x.Cpus?[0].Tctl, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(10));
+        pts.Count(p => p.value is not null).Should().Be(1);
+        pts.Single(p => p.value is not null).value.Should().Be(50);
+        pts.Last().value.Should().BeNull("текущий бакет пуст: устаревшее не выглядит живым");
+
+        // Порядок кольца не ломается: следующий Ok-срез метится своим временем (позже Stale-метки).
+        src.Status = NodeReadingStatus.Ok;
+        src.AgeMs = 0;
+        src.Files[CpuDir + "temp1_input"] = "60000";
+        time.Advance(TimeSpan.FromSeconds(2));
+        await sampler.PollNodeAsync("worker");
+        s.Current!.At.Should().Be(t1 + TimeSpan.FromSeconds(2), "после Stale-среза метки кольца не убывают");
+    }
+
     // ─── Отчёт ───────────────────────────────────────────────────────────────────
 
     private static GpuSample Gpu(int temp, string bus = "00000000:0B:00.0") => new()

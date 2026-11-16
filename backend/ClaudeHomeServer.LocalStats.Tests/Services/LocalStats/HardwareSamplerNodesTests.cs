@@ -12,6 +12,8 @@ internal sealed class FakeNodeSource(IGpuSampler? gpu = null, string? gddr6File 
 {
     public Dictionary<string, string> Files { get; } = new();
     public NodeReadingStatus Status { get; set; } = NodeReadingStatus.Ok;
+    // Возраст среза, мс (0 — свежий; тесты Stale ставят возраст явно).
+    public long AgeMs { get; set; }
     public int Reads;
 
     public async Task<NodeReading> ReadAsync(CancellationToken ct = default)
@@ -26,6 +28,7 @@ internal sealed class FakeNodeSource(IGpuSampler? gpu = null, string? gddr6File 
             Files = new SliceFileSource(new Dictionary<string, string>(Files)),
             Gpus = gpus,
             Gddr6 = gddr6File is not null && File.Exists(gddr6File) ? File.ReadAllText(gddr6File) : null,
+            AgeMs = AgeMs,
         };
     }
 }

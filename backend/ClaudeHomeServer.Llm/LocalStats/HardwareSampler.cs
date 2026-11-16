@@ -305,9 +305,16 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
         else
             vrms = boardVrm is null && cpus is null ? null : [boardVrm];
 
+        // Возраст Stale-среза известен (AgeMs — monotonic-часы агента, NodeReadingSource.cs:33):
+        // в кольцо снимок идёт с временем данных, а не получения — устаревшее не должно выглядеть
+        // живым. Ok-срез метится временем получения, как раньше.
+        var sampleAt = reading.Status == NodeReadingStatus.Stale
+            ? now - TimeSpan.FromMilliseconds(reading.AgeMs)
+            : now;
+
         var baseSample = new HardwareSample
         {
-            At = now,
+            At = sampleAt,
             UptimeS = ProcStatReader.ParseUptimeS(files.ReadText("/proc/uptime")),
             CpuLoadPerc = load,
             Gpus = gpus.Count > 0 ? gpus.ToArray() : null,

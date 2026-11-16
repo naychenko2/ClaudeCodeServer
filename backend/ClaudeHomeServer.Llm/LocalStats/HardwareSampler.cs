@@ -85,6 +85,9 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
 
     // Последний снимок старше этого → статус "stale" (цикл не успевает / источник завис).
     public static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(10);
+    // Тот же порог в мс — для ageMs удалённого среза (RemoteReadingSource, ADR-029 «Версии и статусы узла»:
+    // stale по ageMs > 10 000 — «порог тот же, что у локального status:"stale"»).
+    public const long StaleAfterMs = 10_000;
 
     // Число точек кольца: 1 ч / 2 с = 1800.
     private static int MaxSamples => (int)Math.Ceiling(HistoryWindow.TotalSeconds / SampleInterval.TotalSeconds);

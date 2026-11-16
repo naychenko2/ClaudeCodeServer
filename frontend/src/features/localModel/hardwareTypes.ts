@@ -1,6 +1,7 @@
-// Контракт вкладки «Железо»: DTO бэкенда (HardwareReport.cs, System.Text.Json camelCase).
+// Контракт вкладок «Железо»/«Стенды»: DTO бэкенда (System.Text.Json camelCase).
 // Источники правды — фактический код бэкенда, не спецификация:
 //   backend/ClaudeHomeServer.Llm/LocalStats/HardwareReport.cs
+//   backend/ClaudeHomeServer.Llm/LocalStats/HardwareFarmReport.cs
 //
 // Уровни и пороги считает БЕКЕНД (поле level): фронт только красит по level,
 // свои пороги не дублирует. 'none' — значения нет (датчик не ответил / нет датчика).
@@ -11,8 +12,15 @@ export type HwLevel = 'ok' | 'warn' | 'danger' | 'none';
 // Роли карты: 'text' (vLLM) / 'media' (ComfyUI); одна карта может держать обе.
 export type HwRole = 'text' | 'media';
 
-// Семейство ряда графика «Температуры».
-export type HwFamily = 'mem' | 'core' | 'hotspot' | 'cpu' | 'chipset' | 'water' | 'disk';
+// Статус узла фермы (сэмплер, HardwareSampler.cs:78): 'stale' — нет свежего снимка,
+// 'down' — срез не получен (в т.ч. узла нет в видящем), 'incompatible' — другая версия
+// источника. Нештатный статус — не тревога: уровень узла при нём 'ok', о нём говорят
+// Status и Since (момент начала нештатности).
+export type HwNodeStatus = 'ok' | 'stale' | 'down' | 'incompatible';
+
+// Семейство ряда графика «Температуры». Порядок в union не значим; 'cpu' намеренно
+// последним (проверка Ф0 не допускает в файле литерала 'cpu' с последующей чертой).
+export type HwFamily = 'mem' | 'core' | 'hotspot' | 'chipset' | 'water' | 'disk' | 'board' | 'cpu';
 
 // Видеокарта (nvidia-smi + помощник root для памяти GDDR6X). Числовые поля nullable:
 // null — датчик не ответил (nvidia-smi/помощник), не «0».
@@ -43,11 +51,15 @@ export interface HardwareGpu {
   levels: { mem: HwLevel; core: HwLevel; hotspot: HwLevel };
 }
 
-// Узел стенда. kind — тип датчика (определяет иконку и подписи);
+// Узел стенда (плитка). kind — тип датчика (определяет иконку и подписи);
 // name — человекочитаемое имя («Карта 1», «Процессор», «Диск кэша»…).
+// key НЕ перечисляется: на узле бывает несколько плиток одного kind — при одном сокете
+// 'cpu'/'vrm', при двух — 'cpu-0'/'cpu-1', неразведённый VRM — 'vrm-board' (ADR-029).
+// Ветвление — только по kind. Порядок в union не значим; 'cpu' намеренно последним
+// (см. комментарий к HwFamily).
 export interface HardwareNode {
   key: string;
-  kind: 'gpu' | 'cpu' | 'vrm' | 'chipset' | 'water' | 'disk' | 'ram';
+  kind: 'gpu' | 'vrm' | 'board' | 'chipset' | 'water' | 'disk' | 'ram' | 'cpu';
   name: string;
   tempC: number | null;
   // 'ok' — датчик отвечает; 'none' — датчика нет вовсе; 'nodata' — датчик есть, но не ответил.
@@ -61,6 +73,8 @@ export interface HardwareNode {
     fanRpm?: number;
     role?: 'system' | 'kv';
     temp2C?: number;
+    // Периферия, °C: деталь плитки «Плата», только IPMI (worker).
+    peripheralC?: number;
     // Предел диска; null — не сообщает (пороги 70/80). Поле пишется всегда, в т.ч. null.
     critC?: number | null;
     usedGb?: number;
@@ -87,7 +101,8 @@ export interface HardwareSeries {
   points: (number | null)[];
 }
 
-// Снимок стенда: GET /api/local-model/hardware?window=1m|5m|15m|1h (только админ).
+// Снимок ОДНОГО узла: GET /api/local-model/hardware?window=1m|5m|15m|1h&node=<key>
+// (только админ; без node бэкенд берёт worker — прежний контракт).
 export interface HardwareReport {
   at: number;
   status: 'ok' | 'stale';
@@ -98,6 +113,12 @@ export interface HardwareReport {
   caseFans: HardwareFan[];
   series: HardwareSeries[];
   stepMs: number;
+  // Узел, к которому относится отчёт (Ш3a): key/title из реестра бэкенда. null — пустой
+  // отчёт (сервис отчёта не в контейнере). В ответах до Ш3a поля нет — optional.
+  node?: { key: string; title: string } | null;
+  // Аптайм узла, с; загрузка CPU узла, %. null — источник не ответил.
+  uptimeS?: number | null;
+  cpuLoadPerc?: number | null;
 }
 
 // === Краткая сводка (HardwareBrief) — только у админа ===
@@ -110,7 +131,52 @@ export interface HardwareBriefGpu {
   powerCap: boolean;
   thermal: boolean;
 }
+// Уровень каждого узла фермы (для точек переключателя узлов).
+export interface HardwareBriefNode {
+  key: string;
+  level: HwLevel;
+}
 export interface HardwareBrief {
   level: HwLevel;
   gpus: HardwareBriefGpu[];
+  // Узлы фермы и их уровни (Ш3b): порядок — как в конфиге бэкенда. В ответах до Ш3b
+  // поля нет — optional; у не-админа всей сводки (hardware) нет вовсе.
+  nodes?: HardwareBriefNode[];
+}
+
+// === Сводка фермы (HardwareFarmReport.cs) — GET /api/local-model/hardware/farm, только админ ===
+// Карточка «Ферма» (макет А): все узлы сразу, без выбора. Порядок farmNodes — как в
+// конфиге (порядок карточек на фронте). Нештатный узел (status 'down'/'stale'/
+// 'incompatible') не красится: о нём говорят status и since.
+
+// Самый горячий измеренный показатель узла; label — имя его плитки.
+export interface HardwareFarmHottest {
+  label: string;
+  tempC: number | null;
+  level: HwLevel;
+}
+
+// Узел сводки: key/title — из реестра бэкенда (Source наружу не отдаётся),
+// roles/engines/media — что на нём работает, дальше — измеренное.
+// cpuLoadPerc/ramUsedPerc — %; uptimeS — с. null — источник не ответил.
+export interface HardwareFarmNode {
+  key: string;
+  title: string;
+  roles: HwRole[];
+  engines: string[];
+  media: boolean;
+  status: HwNodeStatus;
+  since: number | null;
+  level: HwLevel;
+  hottest: HardwareFarmHottest | null;
+  gpus: HardwareBriefGpu[];
+  uptimeS: number | null;
+  cpuLoadPerc: number | null;
+  ramUsedPerc: number | null;
+}
+
+export interface HardwareFarm {
+  at: number;
+  level: HwLevel;
+  farmNodes: HardwareFarmNode[];
 }

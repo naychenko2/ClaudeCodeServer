@@ -24,12 +24,12 @@ function renderMediaTab(data: Parameters<typeof MediaTab>[0]['data']): string {
 }
 
 describe('MediaTab: scope=self скрывает видеокарту', () => {
-  // GpuCard ушёл на «Железо» (GpuDetailCard); на «Медиа» у админа — только
-  // строка-ссылка HwLinkRow (title «Видеокарта»/«Видеокарты» + «Железо →»).
+  // GpuCard ушёл на «Стенды» (GpuDetailCard); на «Медиа» у админа — только
+  // строка-ссылка HwLinkRow (title «Видеокарта»/«Видеокарты» + «Стенды →»).
   it('all — строка-ссылка «Видеокарта» есть, карточек карт нет', () => {
     const html = renderMediaTab(mockLocalModelMedia('run'));
     expect(html).toContain('Видеокарта');
-    expect(html).toContain('Железо →');
+    expect(html).toContain('Стенды →');
   });
   it('self — ни строки-ссылки, ни слова «Видеокарта»', () => {
     // Инвариант приватности (ADR-030): у не-админа видеокарт нет вовсе.
@@ -37,7 +37,7 @@ describe('MediaTab: scope=self скрывает видеокарту', () => {
     // мутация (убрать guard) рендерит строку и тест краснеет.
     const html = renderMediaTab(mockLocalModelMediaSelf('run'));
     expect(html).not.toContain('Видеокарта');
-    expect(html).not.toContain('Железо →');
+    expect(html).not.toContain('Стенды →');
   });
 });
 

@@ -7,7 +7,12 @@
 // масштабе Windows (125/150%) маленький CSS-круг 6–8px кладётся между пиксельной
 // сеткой и часть точек выходит овалом — векторный <circle> растеризуется по геометрии
 // с антиалиасингом и остаётся круглым на любом DPR.
-export function Dot({ color, size = 8 }: { color: string; size?: number }) {
+// Необязательная обводка — «точка-кольцо» молчащего узла (заполнение C.track,
+// обводка C.textMuted): та же векторная геометрия, что у заливной точки. viewBox
+// уже оставлен на strokeWidth=1; больший обводок пока нет.
+export function Dot({ color, size = 8, stroke, strokeWidth = 1 }: {
+  color: string; size?: number; stroke?: string; strokeWidth?: number;
+}) {
   const r = size / 2;
   return (
     <svg
@@ -16,7 +21,7 @@ export function Dot({ color, size = 8 }: { color: string; size?: number }) {
       aria-hidden
       style={{ display: 'inline-block', flexShrink: 0, verticalAlign: 'middle' }}
     >
-      <circle cx={r} cy={r} r={r} fill={color} />
+      <circle cx={r} cy={r} r={r} fill={color} stroke={stroke} strokeWidth={strokeWidth} />
     </svg>
   );
 }

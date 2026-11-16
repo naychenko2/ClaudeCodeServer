@@ -1,4 +1,4 @@
-// Тесты вкладки «Железо»: видимость вкладки (админ/не-админ/сохранённая hardware),
+// Тесты вкладки «Стенды»: видимость вкладки (админ/не-админ/сохранённая hardware),
 // опрос только при активной вкладке, окраска плитки по level, null в sparkline,
 // «датчика нет» без графика, лимит 3 семейств, строка-ссылка, stale.
 //
@@ -82,7 +82,7 @@ function brief(over: Partial<HardwareBrief> = {}): HardwareBrief {
 
 // === 1. Видимость вкладки: админ / не-админ / сохранённая hardware ===
 
-describe('resolveTab — видимость вкладки «Железо»', () => {
+describe('resolveTab — видимость вкладки «Стенды»', () => {
   it('админ: сохранённая hardware → hardware', () => {
     expect(resolveTab(true, 'hardware')).toBe('hardware');
   });
@@ -222,12 +222,12 @@ describe('familyChipDisabled — лимит трёх семейств', () => {
 // === 7. Строка-ссылка: худший уровень, память, плашки, role=button ===
 
 describe('HwLinkRow — строка-ссылка «Видеокарты»', () => {
-  it('role=button + aria-label + «Железо →» + «память 68° · 81°»', () => {
+  it('role=button + aria-label + «Стенды →» + «память 68° · 81°»', () => {
     const html = renderToStaticMarkup(createElement(HwLinkRow, { brief: brief(), onOpen: () => {} }));
     expect(html).toContain('role="button"');
     expect(html).toContain('Видеокарты');
     expect(html).toContain('память 68° · 81°');
-    expect(html).toContain('Железо →');
+    expect(html).toContain('Стенды →');
   });
   it('powerCap → плашка «в лимите мощности»', () => {
     const html = renderToStaticMarkup(createElement(HwLinkRow, { brief: brief(), onOpen: () => {} }));
@@ -241,13 +241,13 @@ describe('HwLinkRow — строка-ссылка «Видеокарты»', () 
   it('hwBriefMem — «память N° · M°»', () => {
     expect(hwBriefMem(brief())).toBe('память 68° · 81°');
   });
-  it('hwBriefLevel — уровень стенда (точка на вкладке «Железо»)', () => {
+  it('hwBriefLevel — уровень стенда (точка на вкладке «Стенды»)', () => {
     expect(hwBriefLevel(brief({ level: 'warn' }))).toBe('warn');
     expect(hwBriefLevel(brief({ level: 'danger' }))).toBe('danger');
   });
   it('hwBriefGpusLevel — худший уровень КАРТ (точка строки-ссылки), не стенда', () => {
     // Диск danger (уровень стенда danger), но карты ok → строка-ссылка зелёная,
-    // а вкладка «Железо» — красная.
+    // а вкладка «Стенды» — красная.
     const b = brief({ level: 'danger' });
     expect(hwBriefGpusLevel(b)).toBe('ok');
     expect(hwBriefLevel(b)).toBe('danger');
@@ -310,7 +310,7 @@ describe('hwTileView — модели плиток', () => {
     expect(v.detail).toBe('ядро 61 · гор. точка 75');
   });
   it('cpu: деталь «кристаллы 71 и 58»', () => {
-    const v = hwTileView(makeReport()).find(x => x.key === 'cpu')!;
+    const v = hwTileView(makeReport()).find(x => x.name === 'Процессор')!;
     expect(v.detail).toBe('кристаллы 71 и 58');
   });
   it('chipset: деталь «вентилятор 3846 об/мин» (неразрывный пробел: число+единика неделимые)', () => {

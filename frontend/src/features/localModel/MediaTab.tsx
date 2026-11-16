@@ -116,8 +116,8 @@ function LoadedModelLine({ media }: { media: LocalModelMedia }) {
   );
 }
 
-// === Видеокарта медиа: строка-ссылка на «Железо» (только админ) ===
-// GpuCard ушёл на «Железо»; здесь — строка-ссылка только по картам с ролью media
+// === Видеокарта медиа: строка-ссылка на «Стенды» (только админ) ===
+// GpuCard ушёл на «Стенды»; здесь — строка-ссылка только по картам с ролью media
 // (пересечение hardware-сводки и media.gpus по uuid). Не-админу (scope=self)
 // строки нет: gpus=null и hardware-сводки нет (ADR-030).
 function MediaGpuCard({ media, onOpenHardware }: { media: LocalModelMedia; onOpenHardware: () => void }) {

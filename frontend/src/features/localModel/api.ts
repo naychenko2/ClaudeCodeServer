@@ -50,11 +50,18 @@ export const localModelApi = {
       if (engine != null) qs.set('engine', engine);
       return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`, { live: true });
     },
-    // GET /api/local-model/hardware?window=1m|5m|15m|1h — вкладка «Железо» (только админ;
-    // 403 не-админу, 404 без флага). window — окно графика «Температуры» (дефолт 15m).
+    // GET /api/local-model/hardware?window=1m|5m|15m|1h&node=<key> — снимок ОДНОГО узла
+    // (вкладки «Железо»/«Стенды»; только админ: 403 не-админу, 404 без флага). window — окно
+    // графика «Температуры» (дефолт 15m). node — ключ узла из реестра бэкенда; без node
+    // берётся worker — URL и ответ прежние (обратная совместимость). Неизвестный node — 404.
     // Тип ответа — в feature-слое (hardwareTypes.ts); type-only импорт, без цикла рантайма.
-    hardware: (window: '1m' | '5m' | '15m' | '1h' = '15m') =>
-      request<import('./hardwareTypes').HardwareReport>(`/local-model/hardware?window=${window}`),
+    hardware: (window: '1m' | '5m' | '15m' | '1h' = '15m', node?: string) => {
+      const nodeQs = node != null ? `&node=${encodeURIComponent(node)}` : '';
+      return request<import('./hardwareTypes').HardwareReport>(`/local-model/hardware?window=${window}${nodeQs}`);
+    },
+    // GET /api/local-model/hardware/farm — сводка всех узлов фермы (карточка «Ферма»,
+    // макет А; только админ). Порядок farmNodes — как в конфиге бэкенда.
+    hardwareFarm: () => request<import('./hardwareTypes').HardwareFarm>('/local-model/hardware/farm'),
     // GET /api/sessions/{id}/local-model: lastTurn — null, если ходов не было
     // Статистика последнего хода — по-чатовой класс: в офлайне она полезна («где шёл ход»),
     // а весит меньше сотни байт.

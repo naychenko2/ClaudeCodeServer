@@ -1,10 +1,10 @@
-// Чистые функции вкладки «Железо»: форматирование значений, подписи, выбор
+// Чистые функции вкладки «Стенды»: форматирование значений, подписи, выбор
 // «самой горячей» точки, сводка, модель представления плитки. Юнит-тесты без React/DOM.
 //
 // Уровень (level) и пороги считает БЕКЕНД (HardwareReport.cs); фронт только
 // красит по level и не дублирует пороги. Здесь — только текст и выбор.
 
-import type { HardwareBrief, HardwareGpu, HardwareNode, HardwareReport, HwLevel } from './hardwareTypes';
+import type { HardwareBrief, HardwareFarm, HardwareFarmNode, HardwareGpu, HardwareNode, HardwareReport, HwLevel } from './hardwareTypes';
 
 // === Числа ===
 
@@ -27,6 +27,7 @@ export function hwIcon(kind: HardwareNode['kind']): string {
     case 'gpu': return 'Gpu';
     case 'cpu': return 'Cpu';
     case 'vrm': return 'Zap';
+    case 'board': return 'Thermometer';
     case 'chipset': return 'CircuitBoard';
     case 'water': return 'Droplet';
     case 'disk': return 'HardDrive';
@@ -75,6 +76,9 @@ export function hwTileView(report: HardwareReport): HwTileView[] {
       if (ccd.length) detail = `кристаллы ${ccd.map(v => Math.round(v)).join(' и ')}`;
     } else if (node.kind === 'vrm') {
       sensorLabel = 'цепи питания на плате';
+    } else if (node.kind === 'board') {
+      sensorLabel = 'на плате';
+      if (node.detail.peripheralC != null) detail = `периферия ${Math.round(node.detail.peripheralC)} °C`;
     } else if (node.kind === 'chipset') {
       // Неразрывный пробел: «3859 об/мин» — неделимое, перенос (если не
       // помещается) — перед «вентилятор», не внутри единицы «об/мин».
@@ -204,7 +208,7 @@ export function hwBriefMem(brief: HardwareBrief): string {
   return `память ${parts.join(' · ')}`;
 }
 
-// Уровень всего стенда по сводке (для точки на самой вкладке «Железо»:
+// Уровень всего стенда по сводке (для точки на самой вкладке «Стенды»:
 // там красная верна, если, например, перегрет диск кэша).
 export function hwBriefLevel(brief: HardwareBrief): HwLevel {
   return brief.level;
@@ -248,4 +252,96 @@ export function hwScalePos(v: number): number {
 // Уровень карты по памяти (для окраски значения памяти).
 export function hwGpuMemLevel(gpu: HardwareGpu): HwLevel {
   return gpu.levels.mem;
+}
+
+// === Сводка фермы (карточка «Ферма», макет А) ===
+// Нештатный узел (down/stale/incompatible) — «молчит»: его последние значения
+// не участвуют в сводке фермы (о нештатности говорят status/since, level при
+// ней 'ok' — HardwareReport.cs:5-6, 242-243).
+
+// Молчит ли узел: не отвечает (down/stale) или версия агента не подходит (incompatible).
+export function farmNodeSilent(n: HardwareFarmNode): boolean {
+  return n.status !== 'ok';
+}
+
+// Сколько узлов молчит (плашка «узел молчит» и статус строки карточки).
+export function farmSilentCount(farm: HardwareFarm): number {
+  return farm.farmNodes.filter(farmNodeSilent).length;
+}
+
+// Роли узла словами: 'text' → «LLM», 'media' → «медиа»; при обеих — «медиа и LLM»
+// (у узла video главное — медиа, LLM вторым: wording §«Что общее» предложения к макету v3);
+// ролей нет вовсе (worker без движков и без секции) → «CCS».
+export function farmRolesLabel(roles: string[]): string {
+  const parts: string[] = [];
+  if (roles.includes('media')) parts.push('медиа');
+  if (roles.includes('text')) parts.push('LLM');
+  return parts.length ? parts.join(' и ') : 'CCS';
+}
+
+// Самый горячий измеренный показатель среди ОТВЕЧАЮЩИХ узлов: худший level,
+// при равенстве — более высокая температура. Молчащие узлы исключены (их hottest —
+// последние значения, не текущие). null — сообщить нечего.
+export function farmHottest(farm: HardwareFarm): { node: HardwareFarmNode; hottest: NonNullable<HardwareFarmNode['hottest']> } | null {
+  const live = farm.farmNodes.filter(n => !farmNodeSilent(n) && n.hottest?.tempC != null);
+  if (live.length === 0) return null;
+  let best = live[0];
+  for (const n of live.slice(1)) {
+    const r = RANK[n.hottest!.level] - RANK[best.hottest!.level];
+    if (r > 0 || (r === 0 && n.hottest!.tempC! > best.hottest!.tempC!)) best = n;
+  }
+  return { node: best, hottest: best.hottest! };
+}
+
+// Слово строки «горячо» по уровню показателя (wording farmSum в макете):
+// ok — «Ближе всех к пределу», warn — «Горячо», danger — «Опасно».
+export function farmHottestWord(level: HwLevel): string {
+  return level === 'danger' ? 'Опасно' : level === 'warn' ? 'Горячо' : 'Ближе всех к пределу';
+}
+
+// Строка-сводка фермы без разметки: «Горячо — ai · карта 2: 98 °C». Имя узла и
+// подпись показателя — как их отдаёт бэк; «.» в слове меняет farmHottestWord.
+// '' — сообщить нечего (все узлы молчат или ни один не измерен).
+export function farmHottestLine(farm: HardwareFarm): string {
+  const h = farmHottest(farm);
+  if (!h) return '';
+  return `${farmHottestWord(h.hottest.level)} — ${h.node.title} · ${h.hottest.label.toLowerCase()}: ${hwTemp(h.hottest.tempC)}`;
+}
+
+// === Вкладка «Стенды»: выбор узла, счётчик «без данных», причина падения скорости ===
+
+// Какой узел показывать: выбор человека, если такой узел ещё есть в ферме; иначе —
+// узел с худшим уровнем, при равенстве первый по порядку фермы. Нештатный узел
+// (down/stale) уровня не имеет ('ok'), поэтому по умолчанию выбирается лишь при равенстве.
+// null — фермы нет (ещё не ответила / пуста).
+export function farmPickNode(farm: HardwareFarm | null, chosen: string | null): string | null {
+  if (!farm || farm.farmNodes.length === 0) return null;
+  if (chosen != null && farm.farmNodes.some(n => n.key === chosen)) return chosen;
+  let best = farm.farmNodes[0];
+  for (const n of farm.farmNodes.slice(1)) {
+    if (RANK[n.level] > RANK[best.level]) best = n;
+  }
+  return best.key;
+}
+
+// Сколько плиток узла «датчик есть, но не ответил» (sensor='nodata'); «датчика нет» ('none') не считается.
+export function hwNoDataCount(report: Pick<HardwareReport, 'nodes'>): number {
+  return report.nodes.filter(n => n.sensor === 'nodata').length;
+}
+
+// «1 показатель без данных» / «2 показателя …» / «5 показателей …»; 0 — пусто.
+export function hwNoDataCountLabel(n: number): string {
+  if (n <= 0) return '';
+  const m10 = n % 10;
+  const m100 = n % 100;
+  const word = m10 === 1 && m100 !== 11 ? 'показатель'
+    : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 'показателя' : 'показателей';
+  return `${n} ${word} без данных`;
+}
+
+// Причина падения скорости по картам узла: перегрев важнее упора в лимит мощности.
+export function hwThrottled(report: Pick<HardwareReport, 'gpus'>): 'thermal' | 'powerCap' | null {
+  if (report.gpus.some(g => g.throttle.thermal)) return 'thermal';
+  if (report.gpus.some(g => g.throttle.powerCap)) return 'powerCap';
+  return null;
 }

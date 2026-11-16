@@ -1,14 +1,14 @@
 // Карточка «Температуры»: линейный график рядов по времени.
 //
 // Окна 1 мин · 5 мин · 15 мин · 1 ч (своё состояние, дефолт 15 мин, не общее с LLM).
-// Чипы семейств: память карт · ядро карт · горячая точка · процессор · чипсет · вода · диски.
+// Чипы семейств: память карт · ядро карт · горячая точка · процессор · плата · чипсет · вода · диски.
 // По умолчанию выбрано ТОЛЬКО «память карт»; не больше 3 семейств сразу, остальные
 // чипы disabled с подсказкой. Карты различаются начертанием: первая — сплошная,
 // вторая — пунктир «4 3». При ОДНОМ выбранном семействе пунктиром C.warning рисуется
 // его порог предупреждения (у дисков — порог системного диска).
 //
 // Цвета рядов — только существующие токены (spec): mem C.accent, core C.info,
-// hotspot C.plan, cpu C.success, chipset C.textSecondary, water C.rose, disk C.warning.
+// hotspot C.plan, cpu C.success, board C.textMuted, chipset C.textSecondary, water C.rose, disk C.warning.
 // При stale правый хвост закрыт C.bgInset 60 % с подписью «нет связи».
 
 import { useState } from 'react';
@@ -26,11 +26,12 @@ const FAMILY_META: Record<HwFamily, { color: string; label: string; thr?: number
   core:    { color: C.info,          label: 'Ядро карт',     thr: 85,  thrTxt: 'горячо' },
   hotspot: { color: C.plan,          label: 'Горячая точка', thr: 100, thrTxt: 'опасность' },
   cpu:     { color: C.success,       label: 'Процессор',     thr: 85,  thrTxt: 'горячо' },
+  board:   { color: C.textMuted,     label: 'Плата',         thr: 80,  thrTxt: 'горячо' },
   chipset: { color: C.textSecondary, label: 'Чипсет',        thr: 85,  thrTxt: 'горячо' },
   water:   { color: C.rose,          label: 'Вода СЖО',      thr: 50,  thrTxt: 'горячо для воды' },
   disk:    { color: C.warning,       label: 'Диски' },
 };
-const FAMILY_ORDER: HwFamily[] = ['mem', 'core', 'hotspot', 'cpu', 'chipset', 'water', 'disk'];
+const FAMILY_ORDER: HwFamily[] = ['mem', 'core', 'hotspot', 'cpu', 'board', 'chipset', 'water', 'disk'];
 const MAX_FAMILIES = 3;
 
 // Подписи осей времени по окну (как в макете).

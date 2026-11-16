@@ -28,6 +28,10 @@ public sealed class LocalModelStatsOptions
     // Путь по умолчанию — как в deploy/systemd/ccs-gddr6.service (RuntimeDirectory=ccs-gddr6).
     public string Gddr6HelperFile { get; set; } = "/run/ccs-gddr6/temps.json";
 
+    // Файл помощника ccs-ipmi (SDR платы через IPMI, root-служба). Читает только local-источник;
+    // нет файла или он больше 16 КБ — null в чтении (толкование — Ш2d4).
+    public string IpmiHelperFile { get; set; } = "/run/ccs-ipmi/sdr.json";
+
     // Окно, за которое считаем дельту счётчика preemptions в снимке Current.
     public TimeSpan PreemptionsWindow { get; set; } = TimeSpan.FromMinutes(15);
 }

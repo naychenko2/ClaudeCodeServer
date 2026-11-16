@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Локальные модели · «Стенды» трёх узлов (worker · ai · video) · макет v3</title>
+<!--
+  Привязка: задача 4aaa6de5 (макеты для выбора). Эпика (featureId) и шаги (stepRef) пока не нарезаны —
+  проставит Софья после выбора варианта. Предложение: local-model-hardware-cluster-v3-proposal.md.
+  Образец стиля и плотности — local-model-hardware-v2.html. Новых цветов нет: ниже — значения из
+  frontend/src/lib/theme.css под именами C.* из design.ts. В разметке — только var(--c-*).
+  Контролы на проде: InlineSegmented (переключатели), Card, Badge (плашки), Dot, ProgressBar, PressableArea
+  (кликабельная карточка узла), Notice (баннер), Tooltip; плитки — HwTile + Sparkline, карты — GpuDetailCard.
+-->
+<style>
+[data-theme="light"] {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-track:#453F37;
+  --c-success:#7CB86A; --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+}
+* { box-sizing:border-box; }
+body { margin:0; font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.5; }
+
+/* ===== Обвязка макета (не продукт): светлая тема, вне data-theme ===== */
+.bar { position:sticky; top:0; z-index:50; display:flex; gap:8px 16px; flex-wrap:wrap; align-items:center;
+  padding:10px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); color:var(--c-text-heading); }
+.bar h1 { margin:0; font-size:15px; font-weight:600; flex:1 1 260px; }
+.bar label { font-size:11px; color:var(--c-text-secondary); margin-right:4px; }
+.tog { display:inline-flex; flex-wrap:wrap; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; vertical-align:middle; }
+.tog button { font:inherit; font-size:12px; padding:5px 11px; cursor:pointer; background:transparent; border:none; color:var(--c-text-secondary); }
+.tog button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.cols { display:flex; flex-wrap:wrap; }
+.col { flex:1 1 440px; background:var(--c-bg-main); color:var(--c-text-primary); padding:24px; }
+.col h2 { font-family:"PT Serif",Georgia,serif; font-size:20px; font-weight:600; color:var(--c-text-heading); margin:0 0 4px; }
+.col p.note { margin:0 0 16px; color:var(--c-text-secondary); max-width:80ch; font-size:12px; }
+.pcap { font-size:11px; color:var(--c-text-muted); margin:6px 2px 0; max-width:380px; }
+
+/* ===== Остров панели: C.bgPanel, рамка C.borderLight, R.xxl (14), SHADOW.island; на мобиле — лист, R.sheet (22) ===== */
+.isl { background:var(--c-bg-panel); border:1px solid var(--c-border-light); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; }
+.isl.sheet { border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); }
+.isl .hd { height:40px; display:flex; align-items:center; gap:8px; padding:0 12px; background:var(--c-bg-inset); font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.isl.sheet .hd { background:transparent; }
+.isl .hd .x { margin-left:auto; color:var(--c-text-muted); font-weight:400; }
+.isl .grab { width:36px; height:4px; border-radius:999px; background:var(--c-track); margin:8px auto 0; }
+.body { padding:12px; display:flex; flex-direction:column; gap:12px; }
+
+/* InlineSegmented: активная C.accentLight / C.accent; вариант sm — C.bgCard / C.textHeading */
+.seg { display:inline-flex; background:var(--c-bg-inset); border-radius:10px; padding:2px; font-size:12px; max-width:100%; }
+.seg span { padding:3px 10px; border-radius:8px; color:var(--c-text-secondary); white-space:nowrap; display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
+.seg .on { background:var(--c-accent-light); color:var(--c-accent); font-weight:600; }
+.seg.node { display:flex; width:100%; }
+.seg.node span { flex:1; justify-content:center; font-family:"JetBrains Mono",monospace; padding:5px 6px; min-height:32px; }
+.seg.node .on { background:var(--c-bg-card); color:var(--c-text-heading); }
+.tabdot { width:6px; height:6px; border-radius:50%; display:inline-block; }
+.ic { display:inline-block; vertical-align:-2px; }
+
+/* Card: C.bgCard, рамка C.borderLight, R.xl (12), паддинг SP.md (12) */
+.card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; padding:12px; min-width:0; }
+.ch { display:flex; align-items:center; gap:8px; margin-bottom:8px; min-width:0; }
+.ch h3 { margin:0; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--c-text-muted); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ch h3 .nn { font-family:"JetBrains Mono",monospace; text-transform:none; letter-spacing:0; color:var(--c-text-heading); }
+.stub { padding:10px 12px; } .stub .ch { margin:0; } .stub .ch i { font-style:normal; font-size:11px; color:var(--c-text-muted); }
+.meta { font-size:11px; color:var(--c-text-muted); margin:-4px 0 8px; }
+.meta b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-secondary); }
+
+.dot { width:8px; height:8px; border-radius:50%; display:inline-block; flex:none; }
+.d-ok { background:var(--c-success); } .d-warn { background:var(--c-warning); } .d-danger { background:var(--c-danger); } .d-none, .d-down { background:var(--c-track); }
+.d-down { box-shadow:inset 0 0 0 2px var(--c-text-muted); }
+.pill { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; border-radius:999px; padding:1px 8px; white-space:nowrap; }
+.p-warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.p-danger { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.p-info { background:var(--c-info-bg); color:var(--c-info); }
+.p-mute { background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.t-ok, .t-none { color:var(--c-text-heading); } .t-warn { color:var(--c-warning-text); } .t-danger { color:var(--c-danger-text); }
+.na { color:var(--c-text-muted); font-style:italic; font-weight:400; font-family:"Hanken Grotesk",sans-serif; }
+.sum { font-size:12px; color:var(--c-text-secondary); margin:-2px 0 8px; }
+.sum b { font-family:"JetBrains Mono",monospace; color:var(--c-text-heading); white-space:nowrap; }
+
+/* Notice-баннер «узел не отвечает»: C.warningBg / C.warningText, R.lg */
+.banner { display:flex; gap:8px; align-items:flex-start; background:var(--c-warning-bg); color:var(--c-warning-text); border-radius:10px; padding:8px 10px; font-size:12px; }
+.banner a { color:inherit; font-weight:600; cursor:pointer; text-decoration:underline; }
+.stale .tv, .stale .hero .v, .stale .kv > span:last-child, .stale .sum b, .stale .big, .stale .wl b { color:var(--c-text-muted) !important; }
+.stale .bar4 > i, .stale .scale > i { background:var(--c-text-muted) !important; }
+.stale .dot:not(.d-down) { background:var(--c-track) !important; }
+.stale .tile { background:var(--c-bg-white) !important; border-color:var(--c-border-light) !important; }
+
+/* ===== Плитка HwTile — как в v2 ===== */
+.heat { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px; }
+.tile { position:relative; overflow:hidden; border:1px solid var(--c-border-light); background:var(--c-bg-white); border-radius:10px; padding:8px; min-width:0; }
+.tile.warn { background:var(--c-warning-bg); border-color:var(--c-warning); }
+.tile.danger { background:var(--c-danger-bg); border-color:var(--c-danger-border); }
+.tile .wm { position:absolute; top:4px; right:-6px; width:52px; height:52px; color:var(--c-text-muted); opacity:.12; pointer-events:none; }
+.tile > *:not(.wm) { position:relative; }
+.tile .tn { display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; }
+.tile .tn span:last-child { overflow:hidden; text-overflow:ellipsis; }
+.tile .tv { font-family:"JetBrains Mono",monospace; font-size:20px; font-weight:600; line-height:1.2; margin:2px 0 0; white-space:nowrap; }
+.tile .tv .na { font-size:13px; }
+.tile .tl { font-size:10px; color:var(--c-text-secondary); margin-bottom:2px; }
+.tile .td { font-size:11px; color:var(--c-text-secondary); line-height:1.35; margin-top:2px; }
+.tile .td b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-primary); }
+.spark { display:block; width:100%; height:24px; margin:2px 0 0; }
+.spark-na { height:24px; margin-top:2px; border-radius:4px; background:var(--c-bg-inset); }
+.nogpu { font-size:11px; color:var(--c-text-muted); margin-top:8px; }
+
+/* ===== GpuDetailCard — как в v2 (без «Подробнее») ===== */
+.gpus { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:8px; }
+.gpu { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:10px; padding:8px; min-width:0; }
+.gpu.warn { border-color:var(--c-warning); } .gpu.danger { border-color:var(--c-danger-border); background:var(--c-danger-bg); }
+.gh { display:flex; align-items:center; gap:6px; font-size:12px; font-weight:700; color:var(--c-text-heading); min-width:0; }
+.gh > span.n { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+.gsub { font-size:11px; color:var(--c-text-muted); margin:0 0 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.hero { display:flex; align-items:baseline; gap:6px; }
+.hero .v { font-family:"JetBrains Mono",monospace; font-size:22px; font-weight:600; line-height:1.1; }
+.hero .l { font-size:11px; color:var(--c-text-secondary); }
+.scale { position:relative; height:6px; background:var(--c-track); border-radius:999px; margin:6px 0 2px; }
+.scale > i { position:absolute; left:0; top:0; bottom:0; border-radius:999px; background:var(--c-success); }
+.scale > i.warn { background:var(--c-warning); } .scale > i.danger { background:var(--c-danger); }
+.scale > u { position:absolute; top:-3px; width:2px; height:12px; background:var(--c-text-heading); border-radius:1px; }
+.scap { display:flex; justify-content:space-between; font-size:10px; color:var(--c-text-muted); margin-bottom:6px; white-space:nowrap; }
+.scap b { font-family:"JetBrains Mono",monospace; color:var(--c-text-secondary); }
+.badges { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0; }
+.badges .pill { white-space:normal; line-height:1.3; padding:2px 8px; }
+.kv { display:flex; justify-content:space-between; gap:4px; font-size:11px; padding:1px 0; min-width:0; }
+.kv > span:first-child { color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.kv > span:last-child { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-primary); white-space:nowrap; }
+.kv > span:last-child.na { font-family:inherit; font-weight:400; }
+.kv > span:last-child.t-warn { color:var(--c-warning-text); } .kv > span:last-child.t-danger { color:var(--c-danger-text); }
+.bar4 { height:4px; background:var(--c-track); border-radius:999px; overflow:hidden; margin:0 0 4px; }
+.bar4 > i { display:block; height:100%; border-radius:999px; background:var(--c-accent); }
+.eng2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0 16px; }
+.subh { font-size:11px; font-weight:700; color:var(--c-text-secondary); margin:8px 0 2px; }
+
+/* ===== Вариант А: карточки узлов (PressableArea внутри Card). Выбран — C.accentLight + рамка C.accentMuted ===== */
+.farm { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; }
+.farm.list { grid-template-columns:1fr; gap:6px; }
+.nc { position:relative; text-align:left; font:inherit; color:inherit; border:1px solid var(--c-border-light); background:var(--c-bg-white); border-radius:10px; padding:8px; min-width:0; cursor:pointer; min-height:44px; }
+.nc:hover { background:var(--c-bg-selected); }
+.nc:focus-visible { outline:2px solid var(--c-accent); outline-offset:1px; }
+.nc.sel { background:var(--c-accent-light); border-color:var(--c-accent-muted); }
+.nc.warn { border-color:var(--c-warning); } .nc.danger { border-color:var(--c-danger-border); }
+.nc.sel.warn, .nc.sel.danger { box-shadow:inset 0 0 0 1px var(--c-accent-muted); }
+.nc .nh { display:flex; align-items:center; gap:6px; font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:700; color:var(--c-text-heading); min-width:0; }
+.nc .role { font-size:10px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.nc .big { font-family:"JetBrains Mono",monospace; font-size:18px; font-weight:600; line-height:1.2; margin-top:4px; white-space:nowrap; }
+.nc .big .na { font-size:12px; }
+.nc .what { font-size:10px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.nc .eng { font-size:10px; color:var(--c-text-muted); margin-top:4px; padding-top:4px; border-top:1px solid var(--c-border-light); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.nc .eng b { font-family:"JetBrains Mono",monospace; color:var(--c-text-secondary); }
+.farm.list .nc { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:0 8px; align-items:center; padding:6px 8px; }
+.farm.list .nc .big { margin:0; font-size:16px; grid-row:1 / span 2; grid-column:2; text-align:right; }
+.farm.list .nc .what { grid-column:1; }
+.farm.list .nc .eng { grid-column:1 / span 2; }
+.chev { font-size:11px; color:var(--c-text-muted); margin-top:-2px; }
+
+/* ===== Вариант Б: строка «Ещё на ферме» ===== */
+.others { display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; font-size:11px; color:var(--c-text-secondary); margin-top:-4px; }
+.others .pill { cursor:pointer; }
+/* Роли узлов словами — под узлами сводной карточки «Ферма» */
+.roles { display:flex; flex-wrap:wrap; gap:2px 12px; font-size:11px; color:var(--c-text-secondary); margin-top:8px; }
+.roles b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-heading); }
+
+/* ===== Вариант В: стены узлов ===== */
+.walls { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; }
+.walls.scroll { display:flex; overflow-x:auto; scroll-snap-type:x mandatory; gap:8px; margin:0 -12px; padding:0 12px 4px; }
+.walls.scroll .wall { flex:0 0 78%; scroll-snap-align:start; }
+.wall { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; padding:8px; min-width:0; }
+.wall.warn { border-color:var(--c-warning); } .wall.danger { border-color:var(--c-danger-border); }
+.wall .wh { display:flex; align-items:center; gap:6px; font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:700; color:var(--c-text-heading); }
+.wall .role { font-size:10px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:4px; }
+.wall .st { margin:2px 0 6px; } .wall .st .pill { font-size:10px; padding:0 6px; }
+.wsec { border-top:1px solid var(--c-border-light); padding-top:4px; margin-top:4px; }
+.wsec > .wt { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--c-text-muted); }
+.wl { display:flex; justify-content:space-between; gap:4px; font-size:11px; color:var(--c-text-secondary); min-width:0; line-height:1.45; }
+.wl > span:first-child { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.wl b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-heading); white-space:nowrap; }
+.wl b.t-warn { color:var(--c-warning-text); } .wl b.t-danger { color:var(--c-danger-text); }
+.walls:not(.scroll) .wl { flex-direction:column; gap:0; line-height:1.25; margin-bottom:3px; }
+.walls:not(.scroll) .wl > span:first-child { font-size:10px; }
+.swipe { font-size:11px; color:var(--c-text-muted); margin-top:-4px; }
+</style>
+</head>
+<body>
+<div class="bar" data-theme="light">
+  <h1>«Стенды» трёх узлов · макет v3 (три варианта для выбора)</h1>
+  <span><label>Вариант</label><span class="tog" id="tV"></span></span>
+  <span><label>Состояние</label><span class="tog" id="tSt"></span></span>
+  <span><label>Тема</label><span class="tog" id="tTh"></span></span>
+  <span><label>Ширина</label><span class="tog" id="tW"></span></span>
+</div>
+<div class="cols" id="root"></div>
+<script>
+// ===== Иконки lucide 1.24 (узлы из frontend/node_modules/lucide-react) =====
+const ICONS = {
+  Gpu: '<path d="M2 17h18a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H2"/><path d="M2 21V3"/><path d="M7 17v3a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-3"/><circle cx="16" cy="11" r="2"/><circle cx="8" cy="11" r="2"/>',
+  Cpu: '<path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
+  HardDrive: '<path d="M10 16h.01"/><path d="M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M21.946 12.013H2.054"/><path d="M6 16h.01"/>',
+  MemoryStick: '<path d="M12 12v-2"/><path d="M12 18v-2"/><path d="M16 12v-2"/><path d="M16 18v-2"/><path d="M2 11h1.5"/><path d="M20 18v-2"/><path d="M20.5 11H22"/><path d="M4 18v-2"/><path d="M8 12v-2"/><path d="M8 18v-2"/><rect x="2" y="6" width="20" height="10" rx="2"/>',
+  MessageSquareText: '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="M7 11h10"/><path d="M7 15h6"/><path d="M7 7h8"/>',
+  Clapperboard: '<path d="m12.296 3.464 3.02 3.956"/><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m6.18 5.276 3.1 3.899"/>',
+};
+const icon = (name, size, cls = 'ic', sw = 2) => `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+
+// ===== Ферма в норме. Что не подтверждено (есть ли карта у worker) — помечено в предложении =====
+const GPU = (i, roles, mem, core, hot, util, used) => ({ i, name:'RTX 3090', roles, mem, core, hot, util, used, tot:24576, fan:52, pw:212, pl:220, powerCap:util > 95, thermal:false });
+const BASE = {
+  worker: { key:'worker', role:'CCS · веб-морда, задачи', short:'CCS', up:'12 д 4 ч', status:'ok',
+    cpu:{ t:58, load:23 }, ram:{ used:21, tot:64 }, disks:[{ name:'Системный диск', t:41, crit:null, used:46 }], gpus:[],
+    eng:{ kind:'ccs', turns:3, queue:1, waitLlm:2, procMem:2.4 } },
+  ai: { key:'ai', role:'vLLM · текст, TP=2', short:'LLM', up:'3 д 19 ч', status:'ok',
+    cpu:{ t:62, load:9 }, ram:{ used:58, tot:128 }, disks:[{ name:'Диск моделей', t:52, crit:84, used:71 }, { name:'Системный диск', t:44, crit:null, used:38 }],
+    gpus:[GPU(0, ['text'], 68, 61, 75, 100, 24022), GPU(1, ['text'], 78, 64, 76, 99, 24022)],
+    eng:{ kind:'vllm', run:3, wait:0, kv:61, prefix:84, tps:96, ttft:0.8, preempt:0 } },
+  video: { key:'video', role:'ComfyUI · медиа + LLM', short:'медиа и LLM', up:'6 д 2 ч', status:'ok',
+    cpu:{ t:55, load:31 }, ram:{ used:40, tot:64 }, disks:[{ name:'Диск моделей', t:47, crit:null, used:74 }],
+    gpus:[GPU(0, ['media'], 72, 66, 79, 87, 19800)],
+    eng:{ kind:'comfy', status:'работает', queue:2, run:1, models:'Qwen-Image', err:null },
+    eng2:{ kind:'vllm', name:'HyperQwen vLLM 27B', addr:':18020', run:1, wait:0, kv:34, prefix:82, tps:71, ttft:0.6, preempt:0 } },
+};
+const ORDER = ['worker', 'ai', 'video'];
+const clone = o => JSON.parse(JSON.stringify(o));
+
+const STATES = {
+  norm: { title:'Норма', make: () => clone(BASE),
+    cap:'Вся ферма в норме: все точки зелёные, плашка «всё в норме». У worker видеокарт нет — это факт узла, а не пропуск данных.' },
+  warn: { title:'Предупреждение', make: () => { const f = clone(BASE); f.ai.gpus[1].mem = 98; f.video.disks[0].used = 88; return f; },
+    cap:'Синтетика: на ai память карты 2 — 98 °C (≥ 95, замедляется), на video диск моделей заполнен на 88 % (≥ 85). Два узла жёлтые, worker зелёный.' },
+  danger: { title:'Опасность', make: () => { const f = clone(BASE); Object.assign(f.ai.gpus[1], { mem:106, hot:101, core:93, thermal:true, powerCap:false });
+      f.ai.eng.tps = 41; f.ai.eng.preempt = 3; f.video.disks[0].used = 88; return f; },
+    cap:'Синтетика: на ai карта 2 сбрасывает частоту от перегрева (память 106 °C, горячая точка 101 °C) — и скорость движка упала до 41 ток/с: связь «медленно — вот почему» видна на одном экране. На video — жёлтый диск.' },
+  down: { title:'Узел не отвечает', make: () => { const f = clone(BASE); f.video.status = 'down'; f.video.since = '14:32:10'; return f; },
+    cap:'Агент video молчит с 14:32:10. Узел не красим по последним значениям — они устарели: точка-кольцо, «не отвечает», цифры приглушены, баннер в деталях. Сводка фермы считается только по живым узлам и прямо пишет «1 узел молчит».' },
+  nodata: { title:'Без данных (датчика нет)', make: () => { const f = clone(BASE);
+      f.worker.cpu.t = null; f.worker.cpu.noSensor = true;
+      f.video.gpus[0].mem = null; f.video.gpus[0].hot = null; f.video.disks[0].t = null; f.video.disks[0].noSensor = true;
+      f.ai.eng.prefix = null; return f; },
+    cap:'Узлы живы, но часть показателей недоступна. worker — виртуальная машина: температуры процессора у неё нет («датчика нет»). На video не стоит помощник памяти карт — «нет данных» по памяти и горячей точке; диск не отдаёт SMART — «датчика нет». vLLM на ai не отдаёт префикс-кэш — «нет данных». Пропуски не красим и не считаем тревогой, но считаем: «2 показателя без данных».' },
+};
+
+// ===== Пороги [warn, danger]; на проде уровни считает бэкенд =====
+const TH = { mem:[95,105], core:[85,92], hot:[null,100], cpu:[85,95] };
+const FILL = [85, 95]; // заполненность диска, % — предложение порогов, согласовать
+const diskTh = crit => crit == null ? [70, 80] : [crit - 10, crit - 3];
+const lvlBy = (th, v) => { if (v == null) return 'none'; const [w, d] = th;
+  if (d != null && v >= d) return 'danger'; if (w != null && v >= w) return 'warn'; return 'ok'; };
+const lvl = (k, v) => lvlBy(TH[k], v);
+const RANK = { none:-1, ok:0, warn:1, danger:2 };
+const worst = ls => ls.reduce((a, b) => RANK[b] > RANK[a] ? b : a, 'none');
+const n1 = v => (Math.round(v * 10) / 10).toString().replace('.', ',');
+const tC = v => v == null ? '<span class="na">нет данных</span>' : `${Math.round(v)} °C`;
+const gpuLvl = g => worst([lvl('mem', g.mem), lvl('core', g.core), lvl('hot', g.hot)]);
+
+const S = { v:'A', st:'warn', th:'both', w:380, node:'ai' };
+
+// ===== Показатели узла: плитки (порядок фиксирован), уровень, «ближе всех к пределу», счётчик пропусков =====
+function sensors(n) {
+  const out = [];
+  n.gpus.forEach(g => { const memOk = g.mem != null;
+    out.push({ name:`Карта ${g.i + 1}`, short:`К${g.i + 1}`, ic:'Gpu', label: memOk ? 'память' : 'ядро · память: нет данных', v: memOk ? g.mem : g.core,
+      lv:gpuLvl(g), th: memOk ? TH.mem : TH.core, seed:g.i + 1, unit:'°C',
+      det:`ядро <b>${Math.round(g.core)}</b> · гор. точка <b>${g.hot == null ? '—' : Math.round(g.hot)}</b>`, miss:(g.mem == null) + (g.hot == null) }); });
+  out.push({ name:'Процессор', short:'ЦП', ic:'Cpu', label: n.cpu.t == null ? '' : 'общая', v:n.cpu.t, lv:lvl('cpu', n.cpu.t), th:TH.cpu, seed:3, unit:'°C',
+    noSensor:n.cpu.noSensor, det:`загрузка <b>${n.cpu.load}</b> %`, miss: n.cpu.t == null ? 1 : 0 });
+  out.push({ name:'Оперативная память', short:'ОЗУ', ic:'MemoryStick', label:'занято', v:Math.round(n.ram.used / n.ram.tot * 100), unit:'%', lv:'ok', th:null, seed:4,
+    det:`<b>${n.ram.used}</b> из ${n.ram.tot} ГБ · температура: датчика нет`, miss:0, pct:true });
+  n.disks.forEach((d, j) => { const tl = lvlBy(diskTh(d.crit), d.t), fl = lvlBy(FILL, d.used);
+    out.push({ name:d.name, short: j ? 'Сист.' : 'Диск', ic:'HardDrive', label:'заполнен', v:d.used, unit:'%', lv:worst([tl, fl]), th:FILL, seed:5 + j, pct:true,
+      det: d.t == null ? (d.noSensor ? 'температура: датчика нет' : 'температура: нет данных') : `температура <b>${Math.round(d.t)}</b> °C`,
+      temp:d.t, tempLv:tl, miss: d.t == null ? 1 : 0 }); });
+  return out;
+}
+function engMiss(n) { return engines(n).reduce((a, e) => a + (e.kind === 'vllm' && e.prefix == null ? 1 : 0), 0); }
+function nodeInfo(n) {
+  const ss = sensors(n), down = n.status === 'down';
+  const lv = down ? 'down' : worst(ss.map(x => x.lv).filter(l => l !== 'none'));
+  // Ближе всех к пределу: худший уровень, при равенстве — меньший запас; в норме — горячий датчик, а не процент диска
+  const cs = ss.filter(x => x.v != null && x.th && x.th[1] != null)
+    .sort((a, b) => (RANK[b.lv] - RANK[a.lv]) || ((a.th[1] - a.v) - (b.th[1] - b.v)));
+  const c = cs[0] && cs[0].lv === 'ok' ? (cs.find(x => x.unit === '°C') ?? cs[0]) : cs[0];
+  const miss = ss.reduce((a, x) => a + x.miss, 0) + engMiss(n);
+  return { n, ss, lv, c, miss, down };
+}
+const fmtV = x => x.v == null ? (x.noSensor ? '<span class="na">датчика нет</span>' : '<span class="na">нет данных</span>') : `${Math.round(x.v)} ${x.unit}`;
+const LVTXT = { ok:'в норме', warn:'горячо', danger:'опасность', down:'не отвечает', none:'нет данных' };
+const lvPill = (lv, short) => lv === 'danger' ? `<span class="pill p-danger">${short ? 'опасность' : 'есть опасность'}</span>`
+  : lv === 'warn' ? `<span class="pill p-warn">${short ? 'внимание' : 'есть горячие узлы'}</span>`
+  : lv === 'down' ? '<span class="pill p-mute">не отвечает</span>' : lv === 'ok' ? `<span class="pill p-mute">${short ? 'норма' : 'всё в норме'}</span>` : '';
+const missTxt = m => m ? `${m} ${m === 1 ? 'показатель' : m < 5 ? 'показателя' : 'показателей'} без данных` : '';
+
+// ===== Мини-график (Sparkline) — как в v2 =====
+function hist(cur, seed, n, rise, off) {
+  const f = i => 1.6 * Math.sin(i / (n / 9) + seed) + 0.8 * Math.sin(i / 2.3 + seed * 1.7) + (rise ? (i / (n - 1) - 1) * rise : 0);
+  const cut = Math.round(n * 0.86), last = off ? cut - 1 : n - 1;
+  return Array.from({ length:n }, (_, i) => off && i >= cut ? null : cur + f(i) - f(last));
+}
+function spark(x, off) {
+  if (x.v == null) return '<div class="spark-na"></div>';
+  const N = 90, W = 120, H = 24, rise = x.lv === 'danger' ? 7 : x.lv === 'warn' ? 4 : 0;
+  const pts = hist(x.v, x.seed, N, rise, off), vs = pts.filter(v => v != null), lo = Math.min(...vs) - 1, hi = Math.max(...vs) + 1;
+  const X = i => i * W / (N - 1), Y = v => H - 2 - (v - lo) / (hi - lo) * (H - 4);
+  const col = off ? '--c-text-muted' : x.lv === 'danger' ? '--c-danger' : x.lv === 'warn' ? '--c-warning' : '--c-success';
+  const li = pts.reduce((a, v, i) => v != null ? i : a, 0);
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="за 15 минут">
+    <polyline points="${pts.map((v, i) => v == null ? null : `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).filter(Boolean).join(' ')}" fill="none" stroke="var(${col})" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    <circle cx="${X(li)}" cy="${Y(pts[li])}" r="2.5" fill="var(${col})" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function tile(x, off) {
+  const l = off ? 'none' : x.lv, tint = l === 'warn' || l === 'danger' ? l : '';
+  const tt = x.th ? (x.pct ? `Предупреждение с ${x.th[0]} %, опасность с ${x.th[1]} %` : `Предупреждение с ${x.th[0] ?? '—'} °C, опасность с ${x.th[1]} °C`) : '';
+  return `<div class="tile ${tint}" title="${tt}">${icon(x.ic, 52, 'wm', 1.5)}
+    <div class="tn"><span class="dot d-${l}"></span><span>${x.name}</span></div>
+    <div class="tv t-${l}">${fmtV(x)}</div>${x.label ? `<div class="tl">${x.label}</div>` : ''}
+    ${spark(x, off)}${x.det ? `<div class="td">${x.det}</div>` : ''}</div>`;
+}
+
+// ===== GpuDetailCard (сокращённо, как в v2) =====
+const ROLE = { text:'текст', media:'медиа' };
+function gpuCard(g, total) {
+  const L = gpuLvl(g), lm = lvl('mem', g.mem), mg = g.mem == null ? null : 95 - g.mem;
+  const pos = v => Math.max(0, Math.min(100, (v - 30) / 80 * 100));
+  const kvT = (label, k) => `<div class="kv"><span>${label}</span><span class="${g[k] == null ? 'na' : 't-' + lvl(k, g[k])}">${tC(g[k])}</span></div>`;
+  const b = [];
+  if (g.thermal) b.push('<span class="pill p-danger">Сбрасывает частоту от перегрева</span>');
+  if (g.powerCap) b.push('<span class="pill p-info">Упирается в лимит мощности</span>');
+  return `<div class="gpu ${L === 'warn' || L === 'danger' ? L : ''}">
+    <div class="gh"><span class="dot d-${L}"></span><span class="n">${g.name} · ${g.roles.map(r => ROLE[r]).join(' · ')}</span></div>
+    <div class="gsub">карта ${g.i + 1} из ${total} · 24 ГБ</div>
+    <div class="hero"><span class="v t-${lm}">${g.mem == null ? '<span class="na" style="font-size:13px">нет данных</span>' : Math.round(g.mem) + ' °C'}</span><span class="l">память карты</span></div>
+    ${g.mem == null ? '<div class="scap" style="margin-top:4px"><span>помощник памяти карт не установлен</span></div>' : `
+    <div class="scale"><i class="${lm}" style="width:${pos(g.mem)}%"></i><u style="left:${pos(95)}%"></u></div>
+    <div class="scap"><span>${mg > 0 ? `запас до замедления <b>${mg} °C</b>` : 'память замедляется'}</span><span>95</span></div>`}
+    ${b.length ? `<div class="badges">${b.join('')}</div>` : ''}
+    ${kvT('Ядро', 'core')}${kvT('Горячая точка', 'hot')}
+    <div class="kv"><span>Загрузка</span><span>${g.util} %</span></div><div class="bar4"><i style="width:${g.util}%"></i></div>
+    <div class="kv"><span>Видеопамять</span><span>${n1(g.used / 1024)}/24 ГБ</span></div>
+    <div class="kv"><span>Мощность</span><span>${g.pw}/${g.pl} Вт</span></div></div>`;
+}
+
+// ===== Движок узла =====
+// У узла может быть два движка: media (ComfyUI) и LLM (vLLM) — video работает с обоими.
+const ENGNAME = { ccs:'CCS', vllm:'vLLM', comfy:'ComfyUI' };
+const nd = '<span class="na">нет данных</span>';
+const engines = n => n.eng2 ? [n.eng, n.eng2] : [n.eng];
+function engRows(n, e) {
+  const kv = (l, v, c = '') => `<div class="kv"><span>${l}</span><span class="${c}">${v}</span></div>`;
+  if (e.kind === 'ccs') return kv('Активные ходы', e.turns) + kv('Задачи в очереди', e.queue) + kv('Ждут ответа LLM', e.waitLlm) + kv('Память процесса CCS', `${n1(e.procMem)} ГБ`);
+  if (e.kind === 'vllm') return (e.name ? kv('Модель', e.name) + kv('Адрес', e.addr) : '')
+    + kv('В работе / в очереди', `${e.run} / ${e.wait}`) + kv('KV-кэш', `${e.kv} %`) + `<div class="bar4"><i style="width:${e.kv}%"></i></div>`
+    + kv('Префикс-кэш, попадания', e.prefix == null ? nd : `${e.prefix} %`, e.prefix == null ? 'na' : '')
+    + kv('Скорость', `${e.tps} ток/с`, e.tps < 60 ? 't-warn' : '') + kv('До первого токена', `${n1(e.ttft)} с`)
+    + kv('Вытеснения за 15 мин', e.preempt, e.preempt ? 't-warn' : '');
+  const llm = n.eng2;
+  return kv('Статус', e.status) + kv('В работе / в очереди', `${e.run} / ${e.queue}`) + kv('Загружена модель', e.models)
+    + kv('Последняя ошибка', e.err ?? '—')
+    + `<div class="subh">LLM на узле</div>`
+    + (llm ? kv('Движок', `${llm.name} · ${llm.addr}`)
+      : kv('Движок', 'не подключён — адреса нет в конфиге', 'na'));
+}
+function engLine(n) { // одна строка движка для карточки узла (А) и стены (В)
+  const e = n.eng;
+  if (e.kind === 'ccs') return `ходы <b>${e.turns}</b> · ждут <b>${e.waitLlm}</b>`;
+  if (e.kind === 'vllm') return `<b>${e.tps}</b> ток/с · KV <b>${e.kv}</b> %`;
+  const llm = n.eng2;
+  return `очередь <b>${e.queue}</b> · идёт <b>${e.run}</b>` + (llm ? ` · LLM KV <b>${llm.kv}</b> %` : '');
+}
+function engineCard(info, e) {
+  const n = info.n, slow = e.kind === 'vllm' && e.tps < 60 && n.gpus.some(g => g.thermal);
+  // Заголовок секции (.ch h3, как «Узел»/«Видеокарты»); имена движка и модели — .nn: капс исказил бы идентификатор
+  const cap = !slow && e.kind === 'vllm' && n.gpus.some(g => g.powerCap);
+  const title = `Движок · <span class="nn">${ENGNAME[e.kind]}${e.kind === 'vllm' && e.name ? ' · ' + e.name : ''}</span>`;
+  return `<div class="card ${info.down ? 'stale' : ''}"><div class="ch"><h3>${title}</h3></div>
+    ${slow ? '<div class="banner" style="margin-bottom:8px;background:var(--c-danger-bg);color:var(--c-danger-text)"><span>↓</span><span>Скорость упала: карта 2 сбрасывает частоту от перегрева.</span></div>' : ''}
+    ${cap ? '<div class="badges" style="margin:0 0 8px"><span class="pill p-info">Упирается в лимит мощности</span></div>' : ''}
+    ${info.down ? `<div class="meta">последние данные · <b>${n.since}</b></div>` : ''}
+    <div class="eng2"><div>${engRows(n, e)}</div></div></div>`;
+}
+
+// ===== Детали одного узла — то же, что сегодняшняя вкладка, плюс движок =====
+const banner = n => `<div class="banner"><span>⚠</span><span><b>Узел ${n.key} не отвечает</b> с ${n.since}. Показаны последние данные — они могут быть неверны.</span></div>`;
+function nodeDetail(info, titleIn) {
+  const n = info.n, off = info.down, c = info.c;
+  const sum = off ? `<div class="sum">нет свежих данных с <b>${n.since}</b></div>`
+    : !c ? '' : info.lv === 'ok' ? `<div class="sum">Ближе всех к пределу — ${c.name.toLowerCase()}: <b>${fmtV(c)}</b></div>`
+    : `<div class="sum">${info.lv === 'danger' ? 'Опасно' : 'Горячо'} — ${c.name.toLowerCase()}: <b>${fmtV(c)}</b>, опасно с <b>${c.th[1]} ${c.unit}</b></div>`;
+  return `${off ? banner(n) : ''}
+    <div class="card ${off ? 'stale' : ''}"><div class="ch"><h3>${titleIn ? `Узел <span class="nn">${n.key}</span>` : 'Узел'}</h3>${off ? '' : lvPill(info.lv)}</div>
+      <div class="meta">${n.role} · аптайм <b>${n.up}</b>${info.miss && !off ? ` · ${missTxt(info.miss)}` : ''}</div>${sum}
+      <div class="heat">${info.ss.map(x => tile(x, off)).join('')}</div>
+      ${n.gpus.length ? '' : '<div class="nogpu">Видеокарт на узле нет.</div>'}</div>
+    <div class="card stub"><div class="ch"><h3>Температуры</h3><i>как сегодня · ряды узла ${n.key}</i></div></div>
+    ${engines(n).map(e => engineCard(info, e)).join('')}
+    ${n.gpus.length ? `<div class="card ${off ? 'stale' : ''}"><div class="ch"><h3>${n.gpus.length > 1 ? 'Видеокарты' : 'Видеокарта'}</h3></div>
+      <div class="gpus">${n.gpus.map(g => gpuCard(g, n.gpus.length)).join('')}</div></div>` : ''}`;
+}
+
+// ===== Сводка фермы (общая для А и шапки Б) =====
+function farmSum(infos) {
+  const live = infos.filter(i => !i.down), dn = infos.length - live.length;
+  const L = worst(live.map(i => i.lv).filter(l => l !== 'none'));
+  const top = live.filter(i => i.c).sort((a, b) => (RANK[b.lv] - RANK[a.lv]) || ((a.c.th[1] - a.c.v) - (b.c.th[1] - b.c.v)))[0];
+  const miss = live.reduce((a, i) => a + i.miss, 0);
+  const parts = [];
+  if (top) parts.push(`${L === 'ok' ? 'Ближе всех к пределу' : L === 'danger' ? 'Опасно' : 'Горячо'} — <b>${top.n.key}</b> · ${top.c.name.toLowerCase()}: <b>${fmtV(top.c)}</b>`);
+  if (dn) parts.push(`${dn === 1 ? '1 узел молчит' : dn + ' узла молчат'}`);
+  if (miss) parts.push(missTxt(miss));
+  return { L, html:`<div class="sum">${parts.join(' · ')}</div>`, dn };
+}
+
+// Молчащий узел не даёт плашке сказать «всё в норме»: живые в норме, но ферма — нет
+const farmPill = fs => fs.dn && fs.L !== 'danger' ? `<span class="pill p-warn">${fs.dn === 1 ? 'узел молчит' : 'узлы молчат'}</span>` : lvPill(fs.L);
+
+// ===== Вариант А · сводка + детализация =====
+function nodeCard(info, list) {
+  const n = info.n, off = info.down, sel = S.node === n.key, l = info.lv;
+  const big = off ? '<span class="na">не отвечает</span>' : info.c ? `<span class="t-${info.c.lv}">${fmtV(info.c)}</span>` : '<span class="na">нет данных</span>';
+  const what = off ? `с ${n.since}` : info.c ? info.c.name.toLowerCase() : '';
+  return `<button class="nc ${l === 'warn' || l === 'danger' ? l : ''} ${sel ? 'sel' : ''} ${off ? 'stale' : ''}" data-node="${n.key}" aria-pressed="${sel}"
+      aria-label="Узел ${n.key}: ${LVTXT[l]}">
+    <div class="nh"><span class="dot d-${l}"></span><span>${n.key}</span></div>
+    ${list ? '' : `<div class="role">${n.role}</div>`}
+    <div class="big">${big}</div><div class="what">${list ? `${n.role.split(' · ')[0]} · ` : ''}${what}</div>
+    <div class="eng">${off ? 'данные устарели' : engLine(n)}</div>
+    ${info.miss && !off ? `<div class="role na"${list ? ' style="grid-column:1 / span 2"' : ''}>${info.miss} без данных</div>` : ''}</button>`;
+}
+const rolesLine = infos => `<div class="roles">${infos.map(i => `<span><b>${i.n.key}</b> — ${i.n.short}</span>`).join('')}</div>`;
+function variantA(infos) {
+  const fs = farmSum(infos), list = S.w < 360, sel = infos.find(i => i.n.key === S.node);
+  return `<div class="card"><div class="ch"><h3>Ферма</h3>${farmPill(fs)}</div>${fs.html}
+      <div class="farm ${list ? 'list' : ''}" role="group" aria-label="Узлы фермы">${infos.map(i => nodeCard(i, list)).join('')}</div>
+      ${rolesLine(infos)}</div>
+    <div class="chev">▾ подробно — узел <b>${sel.n.key}</b></div>
+    ${nodeDetail(sel, true)}`;
+}
+
+// ===== Вариант Б · вкладка на узел =====
+function variantB(infos) {
+  const fs = farmSum(infos), sel = infos.find(i => i.n.key === S.node);
+  const seg = `<span class="seg node" role="tablist" aria-label="Узел">${infos.map(i => `<span role="tab" class="${i.n.key === S.node ? 'on' : ''}" data-node="${i.n.key}" aria-selected="${i.n.key === S.node}"><i class="dot d-${i.lv}"></i>${i.n.key}</span>`).join('')}</span>`;
+  const others = infos.filter(i => i.n.key !== S.node && (i.lv === 'warn' || i.lv === 'danger' || i.down));
+  const oth = others.length ? `<div class="others">Ещё на ферме:${others.map(i => `<span class="pill ${i.down ? 'p-mute' : i.lv === 'danger' ? 'p-danger' : 'p-warn'}" data-node="${i.n.key}" role="button" tabindex="0">${i.n.key} — ${LVTXT[i.lv]} →</span>`).join('')}</div>` : '';
+  return `${seg}${oth}${nodeDetail(sel, false)}`;
+}
+
+// ===== Вариант В · стены узлов =====
+function wall(info, wide) {
+  const n = info.n, off = info.down, l = info.lv;
+  const line = (lab, val, lv) => `<div class="wl"><span>${lab}</span><b class="t-${off ? 'none' : lv}">${val}</b></div>`;
+  const gp = n.gpus.length ? n.gpus.map(g => { const x = info.ss.find(s => s.name === `Карта ${g.i + 1}`);
+      return line(`Карта ${g.i + 1} · ${x.v != null && g.mem == null ? 'ядро' : 'память'}`, `${Math.round(x.v)}°${g.thermal && !off ? ' ↓' : ''}`, x.lv); }).join('')
+    : '<div class="wl"><span class="na">карт нет</span></div>';
+  const cpu = info.ss.find(s => s.name === 'Процессор'), ram = info.ss.find(s => s.name === 'Оперативная память');
+  const disks = info.ss.filter(s => s.ic === 'HardDrive');
+  return `<div class="wall ${!off && (l === 'warn' || l === 'danger') ? l : ''} ${off ? 'stale' : ''}">
+    <div class="wh"><span class="dot d-${l}"></span>${n.key}</div><div class="role">${n.role}</div>
+    <div class="st">${off ? `<span class="pill p-mute">молчит с ${n.since.slice(0, 5)}</span>` : lvPill(l, true)}</div>
+    <div class="wsec"><div class="wt">Карты</div>${gp}</div>
+    <div class="wsec"><div class="wt">Узел</div>
+      ${line('Процессор', cpu.v == null ? '<span class="na">датчика нет</span>' : `${Math.round(cpu.v)}° · ${n.cpu.load} %`, cpu.lv)}
+      ${line('ОЗУ', `${ram.v} %`, 'ok')}
+      ${disks.map(d => line(wide ? d.name : d.short, `${d.v} %`, d.lv)).join('')}</div>
+    <div class="wsec"><div class="wt">${n.eng2 ? `${ENGNAME[n.eng.kind]} + LLM` : ENGNAME[n.eng.kind]}</div><div class="wl"><span>${off ? '<span class="na">данные устарели</span>' : engLine(n).replace(/ · /g, '<br>')}</span></div></div>
+    ${info.miss && !off ? `<div class="wsec"><div class="wl"><span class="na">${info.miss} без данных</span></div></div>` : ''}</div>`;
+}
+function variantC(infos) {
+  const fs = farmSum(infos), scroll = S.w < 380;
+  return `<div class="card" style="padding:10px 12px"><div class="ch" style="margin:0"><h3>Ферма</h3>${farmPill(fs)}</div>${fs.html.replace('class="sum"', 'class="sum" style="margin:2px 0 0"')}</div>
+    ${scroll ? '<div class="swipe">Листайте вбок — узлы не помещаются рядом</div>' : ''}
+    <div class="walls ${scroll ? 'scroll' : ''}">${infos.map(i => wall(i, scroll)).join('')}</div>
+    ${rolesLine(infos)}
+    <div class="card stub"><div class="ch"><h3>Подробно</h3><i>касание стены → карточки карт и график узла</i></div></div>`;
+}
+
+// ===== Обвязка панели =====
+const TABS = [['LLM','MessageSquareText'], ['Медиа','Clapperboard'], ['Стенды','Cpu']];
+function island(body, dot) {
+  const mob = S.w < 380;
+  const tabs = `<span class="seg">${TABS.map(([t, ic]) => `<span class="${t === 'Стенды' ? 'on' : ''}">${icon(ic, 12)}${t}${t === 'Стенды' && dot ? `<i class="tabdot d-${dot}"></i>` : ''}</span>`).join('')}</span>`;
+  return `<div class="isl ${mob ? 'sheet' : ''}" style="width:${S.w}px">${mob ? '<div class="grab"></div>' : ''}
+    <div class="hd">${mob ? 'Локальные модели' : tabs}<span class="x">✕</span></div>
+    <div class="body">${mob ? `<div>${tabs}</div>` : ''}${body}</div></div>`;
+}
+const VARIANTS = {
+  A: { title:'А · сводка + детализация', fn:variantA,
+    cap:'Сверху карточка «Ферма»: три карточки узлов (точка, ближайший к пределу показатель, строка движка). Касание узла — ниже раскрываются его детали: та же раскладка, что у сегодняшней вкладки, плюс карточка движка. На 320 карточки узлов идут списком.' },
+  B: { title:'Б · вкладка на узел', fn:variantB,
+    cap:'Под вкладками — переключатель узлов с точкой уровня у каждого. Содержимое — сегодняшняя вкладка для выбранного узла плюс движок. Чтобы не пропустить чужую тревогу, под переключателем строка «Ещё на ферме: ai — опасность →».' },
+  C: { title:'В · стены рядом', fn:variantC,
+    cap:'Три стены узлов в ряд, в каждой — короткий список: карты, процессор, ОЗУ, диски, движок. На рельсе 380 колонка — около 110 px, подписи уходят над значением. На телефоне стены не помещаются — лента с прокруткой вбок. Подробности — по касанию стены (тот же экран, что в А).' },
+};
+function render() {
+  const st = STATES[S.st], farm = st.make(), infos = ORDER.map(k => nodeInfo(farm[k]));
+  const L = worst(infos.filter(i => !i.down).map(i => i.lv).filter(l => l !== 'none'));
+  const dot = L === 'warn' || L === 'danger' ? L : null, V = VARIANTS[S.v];
+  const ths = S.th === 'both' ? ['light', 'dark'] : [S.th];
+  document.getElementById('root').innerHTML = ths.map(th => `<div class="col" data-theme="${th}">
+    <h2>${V.title} — ${th === 'light' ? 'светлая' : 'тёмная'} тема</h2>
+    <p class="note"><b>${st.title}.</b> ${st.cap}<br>${S.w < 380 ? `Мобильный лист ${S.w} CSS px: вкладки — строкой в теле.` : 'Остров рельса 380 px.'}</p>
+    <div>${island(V.fn(infos), dot)}<p class="pcap">${V.cap}</p></div></div>`).join('');
+  document.querySelectorAll('[data-node]').forEach(b => b.onclick = () => { S.node = b.dataset.node; render(); });
+  bar();
+}
+function tog(id, key, opts) {
+  document.getElementById(id).innerHTML = opts.map(([v, t]) => `<button class="${S[key] === v ? 'on' : ''}" data-v="${v}">${t}</button>`).join('');
+  document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => { S[key] = key === 'w' ? +b.dataset.v : b.dataset.v; render(); });
+}
+function bar() {
+  tog('tV', 'v', Object.entries(VARIANTS).map(([k, v]) => [k, v.title.split(' · ')[0]]));
+  tog('tSt', 'st', Object.entries(STATES).map(([k, v]) => [k, v.title]));
+  tog('tTh', 'th', [['light','Светлая'], ['dark','Тёмная'], ['both','Обе']]);
+  tog('tW', 'w', [[380,'Рельс 380'], [360,'Телефон 360'], [320,'Узкий 320']]);
+}
+render();
+</script>
+</body>
+</html>

@@ -38,13 +38,14 @@ import {
 import { isLocalModelConfiguredAny } from './useLocalModelWatcher';
 import { useLocalModelMedia } from './useLocalModelMedia';
 import { useLocalModelEngines } from './useLocalModelEngines';
-import { useLocalModelHardware, DEFAULT_HARDWARE_WINDOW, type HardwareWindow } from './useLocalModelHardware';
+import { useLocalModelHardware, useLocalModelFarm, DEFAULT_HARDWARE_WINDOW, type HardwareWindow } from './useLocalModelHardware';
+import { farmPickNode } from './hardwareFormat';
 import { TextTab } from './TextTab';
 import { MediaTab } from './MediaTab';
 import { HardwareTab } from './HardwareTab';
 import { DEFAULT_WINDOW, type Window as StatsWindow } from './ThroughputChart';
 
-// Вкладка запоминается на устройство (localStorage): «LLM · Медиа · Железо» — выбор
+// Вкладка запоминается на устройство (localStorage): «LLM · Медиа · Стенды» — выбор
 // человека, не состояние сессии.
 const TAB_KEY = 'cc_local_model_tab';
 type Tab = 'text' | 'media' | 'hardware';
@@ -65,8 +66,8 @@ export function resolveTab(isAdmin: boolean, stored: Tab): Tab {
   return stored === 'hardware' ? 'text' : 'media';
 }
 
-// Переключатель «LLM · Медиа · Железо»: InlineSegmented, активный C.accentLight/C.accent.
-// Точка (tabdot) 6 px на «Железо» при warn/danger — видна с любой вкладки; при stale нет.
+// Переключатель «LLM · Медиа · Стенды»: InlineSegmented, активный C.accentLight/C.accent.
+// Точка (tabdot) 6 px на «Стенды» при warn/danger — видна с любой вкладки; при stale нет.
 function TabSwitch({ value, onChange, isMobile, dotLevel }: {
   value: Tab; onChange: (t: Tab) => void; isMobile: boolean; dotLevel?: 'warn' | 'danger' | null;
 }) {
@@ -79,7 +80,7 @@ function TabSwitch({ value, onChange, isMobile, dotLevel }: {
         { value: 'text', label: 'LLM', icon: <MessageSquareText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
         { value: 'media', label: 'Медиа', icon: <Clapperboard size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
         {
-          value: 'hardware', label: 'Железо',
+          value: 'hardware', label: 'Стенды',
           icon: (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
               <Cpu size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -121,7 +122,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // Дефолт 5m (DEFAULT_WINDOW): выбор не персистентен, новый пользователь видит 5m.
   const [window, setWindow] = useState<StatsWindow>(DEFAULT_WINDOW);
 
-  // Окно графика «Температуры» вкладки «Железо»: своё, не общее с LLM; дефолт 15m.
+  // Окно графика «Температуры» вкладки «Стенды»: своё, не общее с LLM; дефолт 15m.
   const [hwWindow, setHwWindow] = useState<HardwareWindow>(DEFAULT_HARDWARE_WINDOW);
 
   // Движок: список с сервера и выбор человека — стор Ф1 (useLocalModelEngines,
@@ -131,16 +132,28 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const { engines, engine, setEngine } = useLocalModelEngines(visible && tab === 'text');
 
   // Тяжёлый 2-с опрос — только АКТИВНОЙ вкладки (неактивная на паузе):
-  // «LLM» — stats, «Медиа» — media, «Железо» — hardware; переключение — немедленный снимок.
+  // «LLM» — stats, «Медиа» — media, «Стенды» — hardware; переключение — немедленный снимок.
   const { data: textData, loading: textLoading, error: textError, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window, engine);
   const { data: mediaData, loading: mediaLoading, refetch: mediaRefetch } = useLocalModelMedia(visible && tab === 'media');
-  const { data: hwData, loading: hwLoading } = useLocalModelHardware(visible && tab === 'hardware', hwWindow);
+  // Выбор узла на вкладке «Стенды»: ключ, который коснулся человек (null — не выбирал);
+  // показываемый узел — farmPickNode (выбор, если он ещё в ферме, иначе худший уровень, при
+  // равенстве первый). Быстрые касания A → B → A: в состоянии последний выбор.
+  const [chosenNode, setChosenNode] = useState<string | null>(null);
+  const hwActive = visible && tab === 'hardware';
+  const { data: farm, loading: farmLoading } = useLocalModelFarm(hwActive);
+  const nodeKey = farmPickNode(farm, chosenNode);
+  const node = farm?.farmNodes.find(n => n.key === nodeKey) ?? null;
+  const { data: hwData, loading: hwLoading } = useLocalModelHardware(hwActive, hwWindow, nodeKey ?? undefined);
+  // Движок выбранного узла — первый ключ node.engines; медиа — только у узла с media.
+  // Поздний ответ уже не выбранного движка отбрасывает createStatsPoller (engineRef).
+  const nodeEngine = node?.engines[0];
+  const { data: nodeStats } = useLocalModelStats(hwActive && nodeEngine != null, window, nodeEngine ?? 'main');
+  const { data: nodeMedia } = useLocalModelMedia(hwActive && node?.media === true);
 
-  // Точка на вкладке «Железо» (6 px, C.warning/C.danger): при warn/danger, видна с
-  // любой вкладки; при stale — нет.
+  // Точка на вкладке «Стенды» (6 px, C.warning/C.danger): по уровню фермы, видна с любой
+  // вкладки; при warn/danger. Молчащий узел уровня не имеет (level 'ok'), точки не даёт.
   const dotLevel: 'warn' | 'danger' | null =
-    hwData && hwData.status !== 'stale' && (hwData.level === 'warn' || hwData.level === 'danger')
-      ? hwData.level : null;
+    farm && (farm.level === 'warn' || farm.level === 'danger') ? farm.level : null;
 
   // Клик по строке «Кто на модели»: открыть чат; на мобиле после перехода лист
   // закрывается (макет: «клик открывает чат (на мобиле лист закрывается)»)
@@ -162,7 +175,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
       {tab === 'text'
         ? <TextTab data={textData} loading={textLoading} error={textError} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} onOpenHardware={() => changeTab('hardware')} onOpenMedia={() => changeTab('media')} window={window} onWindowChange={setWindow} engines={engines} engine={engine} onEngineChange={setEngine} />
         : tab === 'hardware'
-          ? <HardwareTab data={hwData} loading={hwLoading} isMobile={ctx.isMobile} window={hwWindow} onWindowChange={setHwWindow} />
+          ? <HardwareTab farm={farm} farmLoading={farmLoading} selected={nodeKey} onSelect={setChosenNode} report={hwData} loading={hwLoading} stats={nodeStats} media={nodeMedia} isMobile={ctx.isMobile} window={hwWindow} onWindowChange={setHwWindow} />
           : <MediaTab data={mediaData} loading={mediaLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={mediaRefetch} onOpenHardware={() => changeTab('hardware')} />}
     </div>
   );

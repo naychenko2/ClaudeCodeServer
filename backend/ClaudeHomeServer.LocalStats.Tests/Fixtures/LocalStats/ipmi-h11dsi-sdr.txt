@@ -1,0 +1,54 @@
+CPU1 Temp        | 01h | ok  |  3.1 | 49 degrees C
+CPU2 Temp        | 02h | ok  |  3.2 | 35 degrees C
+System Temp      | 0Bh | ok  |  7.1 | 27 degrees C
+Peripheral Temp  | 0Ch | ok  |  7.2 | 37 degrees C
+MB_10G Temp      | 0Dh | ns  |  7.4 | No Reading
+VRMCpu1 Temp     | 10h | ok  |  8.1 | 47 degrees C
+VRMCpu2 Temp     | 11h | ok  |  8.2 | 50 degrees C
+VRMSoc1 Temp     | 12h | ok  |  8.3 | 45 degrees C
+VRMSoc2 Temp     | 13h | ok  |  8.4 | 39 degrees C
+VRMP1ABCD Temp   | 14h | ok  |  8.5 | 46 degrees C
+VRMP1EFGH Temp   | 16h | ok  |  8.6 | 47 degrees C
+VRMP2ABCD Temp   | 15h | ok  |  8.7 | 49 degrees C
+VRMP2EFGH Temp   | 17h | ok  |  8.8 | 38 degrees C
+P1-DIMMA1 Temp   | B0h | ns  | 32.64 | No Reading
+P1-DIMMB1 Temp   | B1h | ns  | 32.65 | No Reading
+P1-DIMMC1 Temp   | B2h | ok  | 32.66 | 46 degrees C
+P1-DIMMD1 Temp   | B3h | ok  | 32.67 | 47 degrees C
+P1-DIMME1 Temp   | B4h | ns  | 32.68 | No Reading
+P1-DIMMF1 Temp   | B5h | ns  | 32.69 | No Reading
+P1-DIMMG1 Temp   | B6h | ns  | 32.70 | No Reading
+P1-DIMMH1 Temp   | B7h | ns  | 32.71 | No Reading
+P2-DIMMA1 Temp   | D0h | ns  | 32.80 | No Reading
+P2-DIMMB1 Temp   | D1h | ns  | 32.81 | No Reading
+P2-DIMMC1 Temp   | D2h | ok  | 32.82 | 45 degrees C
+P2-DIMMD1 Temp   | D3h | ok  | 32.83 | 48 degrees C
+P2-DIMME1 Temp   | D4h | ns  | 32.84 | No Reading
+P2-DIMMF1 Temp   | D5h | ns  | 32.85 | No Reading
+P2-DIMMG1 Temp   | D6h | ns  | 32.86 | No Reading
+P2-DIMMH1 Temp   | D7h | ns  | 32.87 | No Reading
+FAN1             | 41h | ns  | 29.1 | No Reading
+FAN2             | 42h | ns  | 29.2 | No Reading
+FAN3             | 43h | ok  | 29.3 | 600 RPM
+FAN4             | 44h | ok  | 29.4 | 900 RPM
+FAN5             | 45h | ok  | 29.5 | 800 RPM
+FAN6             | 46h | ok  | 29.6 | 900 RPM
+FANA             | 47h | ns  | 29.7 | No Reading
+FANB             | 48h | ok  | 29.8 | 900 RPM
+12V              | 30h | ok  |  7.17 | 12.04 Volts
+5VCC             | 31h | ok  |  7.18 | 5.12 Volts
+3.3VCC           | 32h | ok  |  7.19 | 3.36 Volts
+VBAT             | 33h | ok  | 40.0 | Presence Detected
+P1_VDDCR         | 34h | ok  |  3.3 | 1.08 Volts
+P1_VMEMABCD      | 35h | ok  |  3.4 | 1.26 Volts
+P2_VDDCR         | 36h | ok  | 32.33 | 0.79 Volts
+P1_VMEMEFGH      | 37h | ok  | 32.34 | 1.26 Volts
+VDD_5_DUAL       | 38h | ok  | 32.35 | 5.09 Volts
+VDD_33_DUAL      | 39h | ok  | 32.36 | 3.35 Volts
+P2_VMEMABCD      | 3Ah | ok  |  7.21 | 1.25 Volts
+P2_VMEMEFGH      | 3Bh | ok  |  7.22 | 1.25 Volts
+P1_SOCRUN        | 3Ch | ok  |  7.23 | 0.91 Volts
+P2_SOCRUN        | 3Dh | ok  |  7.24 | 0.89 Volts
+P1_SOCDUAL       | 3Eh | ok  |  7.25 | 0.91 Volts
+P2_SOCDUAL       | 3Fh | ok  |  7.26 | 0.91 Volts
+Chassis Intru    | AAh | ok  | 23.1 | 

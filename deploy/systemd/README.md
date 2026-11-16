@@ -24,6 +24,7 @@ Unit-файлы, drop-in'ы и sysctl для машины, на которой �
 | `install-system-tuning.sh` | Раскладка root-части (`/etc/systemd/system/user@.service.d/`, `/etc/sysctl.d/`). |
 | `ccs-tmp-cleanup.sh` + `.service` + `.timer` | Суточная (04:30) уборка `/tmp`: брошенные review-worktree и мусор сборок. Скрипт ставится в `~/.local/bin`, таймер включает `install-user-units.sh`. См. раздел «Уборка /tmp» ниже. |
 | `ccs-gddr6.service` | **root.** Помощник температуры памяти GDDR6X и hotspot видеокарт — см. раздел «ccs-gddr6» ниже; ставится `../gddr6-helper/install.sh`. |
+| `ccs-ipmi.service` | **root.** Помощник датчиков BMC (VRM, вентиляторы, System Temp) через `ipmitool` — см. раздел «ccs-ipmi» ниже; ставится `../ipmi-helper/install.sh`. |
 
 `ccs.slice` и `ccs-agents.slice` как файлы отсутствуют: они создаются на лету
 при первом `systemd-run --slice=ccs-agents.slice`, а свойства держатся в
@@ -250,3 +251,60 @@ python3 -I deploy/gddr6-helper/test_ccs_gddr6_helper.py   # unittest, без ж�
   (`FallbackSettingsStoreTests`, `LocalActionOverridesStoreTests`), `ClaudeHomeServer.Images.Tests/Images/`
   (`LocalMediaLoraTrainTests`, `LocalImageMediaAdapterTests`, `LocalImageMediaInputsCleanupTests`),
   `TestConfig.cs` в `Reader.Tests`, `Yandex.Tests`, `CodeGraph.Tests`, `Video.Tests` и `TestKit`.
+
+## ccs-ipmi: датчики BMC — VRM, вентиляторы, System Temp (root-помощник)
+
+На worker (H11DSi-NT, BMC ATEN) VRM, вентиляторы и System Temp видны только через
+BMC, hwmon их не отдаёт ([ADR-029](../../docs/adr/ADR-029-local-model-stats.md), «Узел — набор устройств»).
+`/dev/ipmi0` — `crw------- root root`, поэтому схема та же, что у `ccs-gddr6`:
+
+- `ccs-ipmi-helper.py` (Python 3, только stdlib, запуск `python3 -I`) в цикле
+  запускает `/usr/bin/ipmitool -I open -d 0 sdr elist full` (абсолютный путь, без
+  оболочки, тайм-аут 10 с) и атомарно пишет `/run/ccs-ipmi/sdr.json` (`0644`):
+  `{"at":<unix мс часов узла>,"sdr":"<stdout ipmitool дословно>"}`. Помощник
+  **ничего не толкует** — строки SDR разбирает бэкенд.
+- **Период 15 с, запуски строго последовательные:** пауза `stop.wait(15)` идёт
+  после записи, то есть следующий опрос стартует через 15 с после **конца**
+  предыдущего. Опрос идёт 1,4…4,5 с, два `ipmitool` к одному BMC не ходят.
+  Фактический шаг метки `at` — 16–17 с.
+- **Устройство задано явно (`-d 0`):** на worker два KCS-интерфейса,
+  `/dev/ipmi0` и `/dev/ipmi1`, умолчанию `ipmitool` доверять нельзя.
+- Метка `at` ставится **после** завершения `ipmitool`. Устарела (служба стоит,
+  BMC молчит) — бэкенд считает IPMI-значения недоступными (`clockMs − at > 30 000`).
+- **Отказы:** код ≠ 0, тайм-аут, нет `ipmitool`, вывод больше 16 КБ (размер
+  итогового файла) — файл **не перезаписывается**, в stderr строка, цикл живёт.
+  Ошибка записи удаляет tmp. `Restart=on-failure` — страховка, не механизм.
+- Запись — через `sdr.json.<pid>.tmp` в том же каталоге + `os.replace`: читатель
+  (агент `ccs-node-stats`, бэкенд) видит либо старый целый файл, либо новый целый.
+
+**Почему root:** `/dev/ipmi0` принадлежит root и закрыт на `0600`; давать группе
+или бэкенду доступ к BMC (а через него — к питанию, прошивке, пользователям BMC)
+несоизмеримо шире, чем узкая служба, умеющая выполнить один фиксированный запрос.
+
+**Чем ограничена:** `CapabilityBoundingSet=` **пуст** — владения root над
+`/dev/ipmi0` хватает, ни `CAP_SYS_RAWIO`, ни `CAP_DAC_OVERRIDE` не нужны
+(проверено на worker: служба работает с пустым набором). `DevicePolicy=closed` +
+`DeviceAllow=/dev/ipmi0 rw` (запись нужна: IPMI-запрос — это `ioctl`/`write` в
+устройство; `/dev/ipmi1` недоступен), `PrivateNetwork=yes` (`-I open` — ядро, не
+LAN), `ProtectSystem=strict`, `NoNewPrivileges`, фильтр системных вызовов,
+`MemoryMax=64M`. `systemd-analyze security ccs-ipmi` → **1.6 OK**.
+Оговорка: само устройство принимает любые IPMI-команды, включая управляющие, —
+ограничение здесь в том, что запускается только фиксированный `sdr elist full`
+из скрипта, который принадлежит root.
+
+```bash
+sudo ./deploy/ipmi-helper/install.sh             # установка / обновление (идемпотентно)
+sudo ./deploy/ipmi-helper/install.sh --dry-run   # показать шаги
+sudo ./deploy/ipmi-helper/install.sh --remove    # удалить службу и скрипт
+```
+
+Установка отказывает внятно, если нет `/usr/bin/ipmitool` или `/dev/ipmi0`.
+
+Проверка:
+
+```bash
+systemctl status ccs-ipmi
+cat /run/ccs-ipmi/sdr.json                    # «at» меняется каждые 15–20 с, читается без root
+systemd-analyze security ccs-ipmi
+python3 -I deploy/ipmi-helper/test_ccs_ipmi_helper.py   # unittest, без root и без ipmitool
+```

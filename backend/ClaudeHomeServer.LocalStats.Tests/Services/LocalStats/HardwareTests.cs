@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -44,6 +45,9 @@ public class HardwareTests : IDisposable
         return p;
     }
 
+    // Реестра HardwareNodes нет → ровно один узел «worker» с ролью карт ["text"] (побайтно сегодняшнее).
+    private static IConfiguration NoNodes() => new ConfigurationBuilder().Build();
+
     private static void Put(string dir, string file, string text) => File.WriteAllText(Path.Combine(dir, file), text);
 
     // ─── Файл помощника ──────────────────────────────────────────────────────────
@@ -55,7 +59,7 @@ public class HardwareTests : IDisposable
     public void Helper_Fresh_ParsesValues()
     {
         var t = new ManualTime();
-        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(-3)));
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(-3)), t.GetUtcNow());
         r.Should().NotBeNull();
         r!.Value.fresh.Should().BeTrue();
         r.Value.gpus.Should().ContainSingle().Which.MemTempC.Should().Be(68);
@@ -66,8 +70,28 @@ public class HardwareTests : IDisposable
     public void Helper_Stale_NotFresh()
     {
         var t = new ManualTime();
-        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(-11)));
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(-11)), t.GetUtcNow());
         r!.Value.fresh.Should().BeFalse("метка at старше 10 с — данных нет");
+    }
+
+    [Fact]
+    public void Helper_AtExactlyNow_IsFresh()
+    {
+        var t = new ManualTime();
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow()), t.GetUtcNow());
+        r!.Value.fresh.Should().BeTrue("возраст ровно 0 — граница свежести включительна");
+    }
+
+    [Fact]
+    public void Helper_MarkInFuture_NotFresh()
+    {
+        var t = new ManualTime();
+        // Метка "at" впереди часов отбора дальше окна → не свежесть (для локального файла
+        // часы узла и есть часы сэмплера). Окно двустороннее ±StaleAfter (ADR-029): метка из
+        // будущего за окном — сдвиг часов или битое значение, с односторонней проверкой такой
+        // файл казался бы свежим, пока часы не догонят метку.
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(11)), t.GetUtcNow());
+        r!.Value.fresh.Should().BeFalse("метка впереди часов отбора дальше окна — не свежесть");
     }
 
     [Theory]
@@ -76,13 +100,84 @@ public class HardwareTests : IDisposable
     [InlineData("")]
     public void Helper_Broken_ReturnsNull(string text)
     {
-        new Gddr6HelperReader(new ManualTime()).Parse(text).Should().BeNull();
+        var t = new ManualTime();
+        new Gddr6HelperReader(t).Parse(text, t.GetUtcNow()).Should().BeNull();
     }
 
     [Fact]
     public void Helper_MissingFile_ReturnsNull()
     {
         new Gddr6HelperReader(new ManualTime()).Read(Path.Combine(_root, "нет.json")).Should().BeNull();
+    }
+
+    // Часы удалённого узла фермы идут впереди часов worker (обычный NTP-дрейф): свежесть gddr6
+    // решается по часам узла (NodeReading.ClockMs), а не по часам worker (ADR-029, NodeSlice:55).
+    // Мутация «взять в Parse _time.GetUtcNow() вместо now» краснит случай −11: с часами worker
+    // возраст +6 с — в окне ±StaleAfter (свежесть), а по часам узла +11 с — за окном.
+    [Theory]
+    [InlineData(-1, true)] // возраст 1 с по часам узла — свежий
+    [InlineData(1, true)] // метка на 1 с впереди часов узла — в окне ±StaleAfter: свежая (односторонняя
+                          // проверка давала бы mem/hotspot = nodata на живом узле)
+    [InlineData(11, false)] // метка на 11 с впереди часов узла — за окном — не свежесть (нижняя граница возраста)
+    [InlineData(-11, false)] // метка на 11 с старше часов узла — протухло (StaleAfter = 10 с)
+    public void Helper_FreshnessIsByNodeClock_NotWorkerClock(int atOffsetSec, bool expected)
+    {
+        var t = new ManualTime();
+        var nodeClock = t.GetUtcNow().AddSeconds(5);
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(nodeClock.AddSeconds(atOffsetSec)), nodeClock);
+        r!.Value.fresh.Should().Be(expected);
+    }
+
+    // Срез удалённого узла: текст помощника + настенные часы узла (как у RemoteReadingSource).
+    private sealed class RemoteNodeSource(string? gddr6, long? clockMs, IGpuSampler gpu) : INodeReadingSource
+    {
+        public async Task<NodeReading> ReadAsync(CancellationToken ct = default) => new()
+        {
+            Status = NodeReadingStatus.Ok,
+            Gpus = await gpu.ReadAsync(ct),
+            Gddr6 = gddr6,
+            ClockMs = clockMs,
+        };
+    }
+
+    private HardwareSampler BuildRemoteSampler(ManualTime time, string helperText, DateTimeOffset nodeClock)
+    {
+        var src = new RemoteNodeSource(helperText, nodeClock.ToUnixTimeMilliseconds(), new FakeGpu(Gpu(70)));
+        return new HardwareSampler(new FakeOptions(new LocalModelStatsOptions { Enabled = true }),
+            [new HardwareSamplerNode("video", src)], new Gddr6HelperReader(time), time);
+    }
+
+    // Тот же сдвиг часов сквозом через сэмплер: файл помощника возрастом 1 с ПО ЧАСАМ УЗЛА —
+    // свежий, mem/hotspot на месте. Сдвиг узла взят 15 с — больше окна ±StaleAfter, иначе
+    // двустороннее окно делает выбор часов неразличимым. Мутация «передать в сэмплере
+    // _time.GetUtcNow()» краснит этот тест: по часам worker возраст −14 с — за окном.
+    [Fact]
+    public async Task RemoteNode_ClockAheadOfWorker_Gddr6StaysFresh()
+    {
+        var time = new ManualTime();
+        var nodeClock = time.GetUtcNow().AddSeconds(15);
+        var s = await BuildRemoteSampler(time, HelperJson(nodeClock.AddSeconds(-1)), nodeClock).PollNodeAsync("video");
+
+        var g = s!.Gpus!.Single();
+        g.MemTempC.Should().Be(68, "свежесть по часам узла, а не worker");
+        g.HotspotTempC.Should().Be(75);
+        g.CoreTempC.Should().Be(70);
+    }
+
+    // Метка на 11 с старше часов узла — протухло: mem/hotspot = null, остальное работает.
+    // Мутация «передать в сэмплере _time.GetUtcNow()» краснит этот тест: при сдвиге узла 15 с
+    // возраст по часам worker +4 с — в окне (свежесть), а по часам узла +11 с — за окном.
+    [Fact]
+    public async Task RemoteNode_Gddr6StaleByNodeClock_MemNullCoreWorks()
+    {
+        var time = new ManualTime();
+        var nodeClock = time.GetUtcNow().AddSeconds(15);
+        var s = await BuildRemoteSampler(time, HelperJson(nodeClock.AddSeconds(-11)), nodeClock).PollNodeAsync("video");
+
+        var g = s!.Gpus!.Single();
+        g.MemTempC.Should().BeNull();
+        g.HotspotTempC.Should().BeNull();
+        g.CoreTempC.Should().Be(70);
     }
 
     // ─── hwmon ───────────────────────────────────────────────────────────────────
@@ -105,7 +200,9 @@ public class HardwareTests : IDisposable
 
         var cpu = Dir("hwmon", "hwmon0");
         Put(cpu, "name", "k10temp\n");
-        Put(cpu, "temp1_input", "76250"); Put(cpu, "temp3_input", "78000"); Put(cpu, "temp4_input", "49750");
+        Put(cpu, "temp1_input", "76250"); Put(cpu, "temp1_label", "Tctl");
+        Put(cpu, "temp3_input", "78000"); Put(cpu, "temp3_label", "Tccd1");
+        Put(cpu, "temp4_input", "49750"); Put(cpu, "temp4_label", "Tccd2");
 
         var board = Dir("hwmon", "hwmon6");
         Put(board, "name", "asusec\n");
@@ -134,8 +231,8 @@ public class HardwareTests : IDisposable
         var (reader, _) = BuildFakeHwmon();
         var snap = reader.Read()!;
 
-        snap.Cpu!.Tctl.Should().Be(76);
-        snap.Cpu.Tccd1.Should().Be(78);
+        snap.Cpus!.Should().ContainSingle().Which.Tctl.Should().Be(76);
+        snap.Cpus![0].Ccd.Should().Equal(78, 49);
         snap.Board!.Vrm.Should().Be(53);
         snap.Board.Chipset.Should().Be(78);
         snap.Board.ChipsetFanRpm.Should().Be(1159);
@@ -304,28 +401,31 @@ public class HardwareTests : IDisposable
 
     // ─── Сэмплер: кольцо, бакеты, свежесть ───────────────────────────────────────
 
-    private (HardwareSampler sampler, ManualTime time, string cpuDir) BuildSampler(IGpuSampler? gpu = null, string? helperFile = null)
+    private const string CpuDir = "/sys/class/hwmon/hwmon0/";
+
+    private (HardwareSampler sampler, ManualTime time, FakeNodeSource src) BuildSampler(IGpuSampler? gpu = null, string? helperFile = null)
     {
         var time = new ManualTime();
-        var hw = Dir("hw2");
-        var cpu = Dir("hw2", "hwmon0");
-        Put(cpu, "name", "k10temp");
-        var opts = new LocalModelStatsOptions { Enabled = true, Gddr6HelperFile = helperFile ?? Path.Combine(_root, "none.json") };
-        var sampler = new HardwareSampler(new FakeOptions(opts), gpu, new Gddr6HelperReader(time),
-            new HwmonReader(hw, Dir("block2"), Path.Combine(_root, "mi")), new MeminfoReader(Path.Combine(_root, "mem")), time);
-        return (sampler, time, cpu);
+        var src = new FakeNodeSource(gpu, helperFile);
+        src.Files["/sys/class/hwmon/hwmon0/name"] = "k10temp\n";
+        src.Files[CpuDir + "temp1_label"] = "Tctl\n";
+        var opts = new LocalModelStatsOptions { Enabled = true };
+        var sampler = new HardwareSampler(new FakeOptions(opts), [new HardwareSamplerNode("worker", src)],
+            new Gddr6HelperReader(time), time);
+        return (sampler, time, src);
     }
 
     [Fact]
     public async Task Ring_BucketTakesMax_NullBreaks_NotZero()
     {
-        var (s, time, cpu) = BuildSampler();
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
         // t0: 60 °C, +2 с: 50 °C (максимум не последний!), +4 с: датчик исчез (null).
-        Put(cpu, "temp1_input", "60000"); await s.PollOnceAsync(); time.Advance(TimeSpan.FromSeconds(2));
-        Put(cpu, "temp1_input", "50000"); await s.PollOnceAsync(); time.Advance(TimeSpan.FromSeconds(2));
-        File.Delete(Path.Combine(cpu, "temp1_input")); await s.PollOnceAsync(); time.Advance(TimeSpan.FromSeconds(2));
+        src.Files[CpuDir + "temp1_input"] = "60000"; await sampler.PollNodeAsync("worker"); time.Advance(TimeSpan.FromSeconds(2));
+        src.Files[CpuDir + "temp1_input"] = "50000"; await sampler.PollNodeAsync("worker"); time.Advance(TimeSpan.FromSeconds(2));
+        src.Files.Remove(CpuDir + "temp1_input"); await sampler.PollNodeAsync("worker"); time.Advance(TimeSpan.FromSeconds(2));
 
-        var pts = s.Aggregate(x => x.Cpu?.Tctl, TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(10));
+        var pts = s.Aggregate(x => x.Cpus?[0].Tctl, TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(10));
         pts.Should().HaveCount(6, "окно 1 мин / шаг 10 с");
         pts.Where(p => p.value is not null).Should().ContainSingle().Which.value.Should().Be(60,
             "в бакете максимум (50, 60), снимок с null значения не вносит");
@@ -335,16 +435,201 @@ public class HardwareTests : IDisposable
     [Fact]
     public async Task Status_StaleAfter10s_NotBefore()
     {
-        var (s, time, cpu) = BuildSampler();
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
         s.Status.Should().Be("ok", "снимков ещё нет — не stale");
-        Put(cpu, "temp1_input", "50000");
-        await s.PollOnceAsync();
+        src.Files[CpuDir + "temp1_input"] = "50000";
+        await sampler.PollNodeAsync("worker");
         var at = time.GetUtcNow();
         time.Advance(TimeSpan.FromSeconds(9));
         s.Status.Should().Be("ok");
         time.Advance(TimeSpan.FromSeconds(2));
         s.Status.Should().Be("stale");
-        s.StaleSince.Should().Be(at.ToUnixTimeMilliseconds());
+        s.Since.Should().Be(at.ToUnixTimeMilliseconds());
+    }
+
+    // (а) Метка Stale-снимка = время данных (now − AgeMs), не время получения; в кольцо он кладётся,
+    // только когда его время данных новее последнего снимка.
+    [Fact]
+    public async Task Ring_StaleSample_AtIsDataTime_NotNow()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+
+        // Ok-срез в t0 — контроль: метка = время получения (былое поведение).
+        await sampler.PollNodeAsync("worker");
+        var t0 = time.GetUtcNow();
+        s.Current!.At.Should().Be(t0, "Ok-срез (AgeMs = 0) метится временем получения");
+
+        // Stale-срез возрастом 12 с через +14 с после t0: время данных (t0+2 с) новее Ok-среза → в кольцо.
+        src.Status = NodeReadingStatus.Stale;
+        src.AgeMs = 12_000;
+        time.Advance(TimeSpan.FromSeconds(14));
+        await sampler.PollNodeAsync("worker");
+        var t1 = time.GetUtcNow();
+        s.Status.Should().Be("stale");
+        s.Current!.At.Should().Be(t1 - TimeSpan.FromSeconds(12),
+            "Stale-срез метится временем данных (now − AgeMs), а не now");
+        sampler.RingCount("worker").Should().Be(2, "Stale-срез с более свежим временем данных — в кольцо");
+
+        // Читатели кольца не видят «живого» устаревшего: Stale-снимок попадает в бакет своих данных
+        // ([t1−20с, t1−10с)), а не в текущий — тот пустой разрыв.
+        var pts = s.Aggregate(x => x.Cpus?[0].Tctl, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(10));
+        pts.Count(p => p.value is not null).Should().Be(1);
+        pts.Single(p => p.value is not null).value.Should().Be(50);
+        pts.Last().value.Should().BeNull("текущий бакет пуст: устаревшее не выглядит живым");
+    }
+
+    // (б) Порядок кольца после возврата в Ok: метки не убывают, Ok-срез метится своим временем.
+    [Fact]
+    public async Task Ring_AfterStaleReturnToOk_MarksAscending()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+        await sampler.PollNodeAsync("worker");
+
+        // Stale-срез со временем данных t0+2 с (возраст 12 с через +14 с после Ok-среза в t0).
+        src.Status = NodeReadingStatus.Stale;
+        src.AgeMs = 12_000;
+        time.Advance(TimeSpan.FromSeconds(14));
+        await sampler.PollNodeAsync("worker");
+        var staleAt = time.GetUtcNow() - TimeSpan.FromSeconds(12);
+
+        // Возврат в Ok: следующий срез метится своим временем (позже Stale-метки), статус — ok.
+        src.Status = NodeReadingStatus.Ok;
+        src.AgeMs = 0;
+        src.Files[CpuDir + "temp1_input"] = "60000";
+        time.Advance(TimeSpan.FromSeconds(2));
+        await sampler.PollNodeAsync("worker");
+        var cur = s.Current!;
+        cur.At.Should().Be(staleAt + TimeSpan.FromSeconds(14), "после Stale-среза метки кольца не убывают");
+        cur.Cpus![0].Tctl.Should().Be(60);
+        s.Status.Should().Be("ok", "свежий Ok-срез — статус ok");
+        s.Since.Should().BeNull();
+        sampler.RingCount("worker").Should().Be(3);
+    }
+
+    // Since у stale = время данных последнего снимка в кольце (Current.At), а не время последнего тика:
+    // агент отдаёт тот же старый срез раз в 2 с — метка не едет вместе с тиками (api.md «staleSince —
+    // момент последнего живого снимка»). Мутация «Since = _lastSampleTime (как было)» краснит тест:
+    // после первого тика метка = время получения, дальше сдвигается на 2 с каждый тик.
+    [Fact]
+    public async Task Status_SinceStale_IsLastSampleDataTime_NotTickTime()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+
+        // Ok-срез в t0, затем тот же срез от агента: в t0+2k с с возрастом 2k с — время данных всегда t0.
+        await sampler.PollNodeAsync("worker");
+        var t0 = time.GetUtcNow();
+        src.Status = NodeReadingStatus.Stale;
+        for (var k = 1; k <= 3; k++)
+        {
+            src.AgeMs = 2_000 * k;
+            time.Advance(TimeSpan.FromSeconds(2));
+            await sampler.PollNodeAsync("worker");
+            s.Status.Should().Be("stale");
+            s.Since.Should().Be(t0.ToUnixTimeMilliseconds(),
+                $"Since после Stale-тика {k} — время данных последнего снимка (t0), не время тика");
+        }
+    }
+
+    // Stale-срез с временем данных не новее последнего снимка кольца в кольцо не кладётся: обновляется
+    // только статус. Мутация «убрать проверку sample.At ≤ At последнего» краснит тест: RingCount 4
+    // вместо 1 — в кольце три дубли одного среза.
+    [Fact]
+    public async Task Ring_RepeatedStaleSlice_NotDuplicated()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+        await sampler.PollNodeAsync("worker");
+        var t0 = time.GetUtcNow();
+
+        // Три Stale-тика одного среза (возраст растёт на 2000, время данных всегда t0): кольцо выросло
+        // ровно на 1 (Ok-срез), а не на 3.
+        src.Status = NodeReadingStatus.Stale;
+        for (var k = 1; k <= 3; k++)
+        {
+            src.AgeMs = 2_000 * k;
+            time.Advance(TimeSpan.FromSeconds(2));
+            await sampler.PollNodeAsync("worker");
+        }
+        sampler.RingCount("worker").Should().Be(1, "тот же Stale-срез не дублируется в кольце");
+        s.Current!.At.Should().Be(t0, "последний снимок кольца — Ok-срез, его метка не тронута");
+        s.Since.Should().Be(t0.ToUnixTimeMilliseconds(), "Since указывает на тот же снимок");
+    }
+
+    // Джиттер ageMs на стороне агента: ageMs пересчитывается в момент отправки (ccs_node_stats.py),
+    // поэтому время данных одного и того же среза At = now − AgeMs гуляет на единицы–десятки мс
+    // в обе стороны. С допуском (половина интервала опроса) дублей нет. Мутация «вернуть строгое
+    // > без допуска» краснит этот тест: на первом же тике с At = t0+3 мс кольцо растёт до 2,
+    // Current смещается, Since дрогает на 3 мс.
+    [Fact]
+    public async Task Ring_StaleJitterWithinTolerance_NotDuplicated()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+        await sampler.PollNodeAsync("worker");
+        var t0 = time.GetUtcNow();
+
+        // Шесть Stale-тиков одного среза: AgeMs = 2000k ± 3 мс, знаки чередуются — At = t0 ∓ 3 мс.
+        src.Status = NodeReadingStatus.Stale;
+        for (var k = 1; k <= 6; k++)
+        {
+            src.AgeMs = 2_000 * k + (k % 2 == 1 ? -3 : 3);
+            time.Advance(TimeSpan.FromSeconds(2));
+            await sampler.PollNodeAsync("worker");
+            s.Since.Should().Be(t0.ToUnixTimeMilliseconds(),
+                $"Since после джиттер-тика {k} — не двигается, срез тот же");
+        }
+        sampler.RingCount("worker").Should().Be(1, "джиттер в пределах допуска — дублей в кольце нет");
+        s.Current!.At.Should().Be(t0, "Current не смещается джиттер-тиками");
+    }
+
+    // Новый срез агента: его время данных новее последнего в кольце на интервал сборки агента
+    // (≥ интервала опроса) — новая запись кольца, Since переезжает на неё. Граница «ровно
+    // интервал опроса» — тоже новая запись (строгий ≥ по постановке). Граница допуска: ровно
+    // 1 с (допуск) — не считается новой: ни кольцо, ни Current не тронуты.
+    [Fact]
+    public async Task Ring_NewerStaleSliceByInterval_AddedAndSinceMoves()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+        await sampler.PollNodeAsync("worker");
+        var t0 = time.GetUtcNow();
+
+        // Stale-тик того же среза: ни кольцо, ни Since не меняются.
+        src.Status = NodeReadingStatus.Stale;
+        src.AgeMs = 2_000;
+        time.Advance(TimeSpan.FromSeconds(2));
+        await sampler.PollNodeAsync("worker");
+        sampler.RingCount("worker").Should().Be(1);
+        s.Since.Should().Be(t0.ToUnixTimeMilliseconds());
+
+        // Новый срез: в t0+16 с его время данных t0+2 с — ровно на интервал опроса новее
+        // последнего в кольце.
+        src.AgeMs = 14_000;
+        time.Advance(TimeSpan.FromSeconds(14));
+        await sampler.PollNodeAsync("worker");
+        var newAt = t0 + TimeSpan.FromSeconds(2);
+        sampler.RingCount("worker").Should().Be(2, "срез, новее на интервал опроса, — новая запись кольца");
+        s.Current!.At.Should().Be(newAt);
+        s.Since.Should().Be(newAt.ToUnixTimeMilliseconds(), "Since — время данных нового среза");
+
+        // Граница допуска: в t0+18 с время данных t0+3 с — ровно на допуск (1 с) новее —
+        // не считается новым.
+        src.AgeMs = 15_000;
+        time.Advance(TimeSpan.FromSeconds(2));
+        await sampler.PollNodeAsync("worker");
+        sampler.RingCount("worker").Should().Be(2, "ровно допуск — не новый срез");
+        s.Current!.At.Should().Be(newAt, "Current остаётся предыдущая запись");
+        s.Since.Should().Be(newAt.ToUnixTimeMilliseconds(), "Since не двигается");
     }
 
     // ─── Отчёт ───────────────────────────────────────────────────────────────────
@@ -361,9 +646,9 @@ public class HardwareTests : IDisposable
         var (s, time, _) = BuildSampler(new FakeGpu(Gpu(70)), file);
         File.WriteAllText(file, HelperJson(time.GetUtcNow(),
             "[{\"busId\":\"0000:0b:00.0\",\"deviceId\":\"0x2204\",\"memTempC\":96,\"hotspotTempC\":75}]"));
-        await s.PollOnceAsync();
+        await s.PollNodeAsync("worker");
 
-        var report = new HardwareReportService(s).Build(TimeSpan.FromMinutes(15));
+        var report = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(15))!;
         var g = report.Gpus.Single();
         g.MemTempC.Should().Be(96, "связка helper↔nvidia-smi по каноническому busId");
         g.Level.Should().Be("warn");
@@ -385,9 +670,9 @@ public class HardwareTests : IDisposable
         var file = Path.Combine(_root, "temps.json");
         var (s, time, _) = BuildSampler(new FakeGpu(Gpu(70)), file);
         File.WriteAllText(file, HelperJson(time.GetUtcNow().AddSeconds(-30)));
-        await s.PollOnceAsync();
+        await s.PollNodeAsync("worker");
 
-        var g = new HardwareReportService(s).Build(TimeSpan.FromMinutes(1)).Gpus.Single();
+        var g = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(1))!.Gpus.Single();
         g.MemTempC.Should().BeNull();
         g.HotspotTempC.Should().BeNull();
         g.CoreTempC.Should().Be(70, "остальное работает");
@@ -398,21 +683,24 @@ public class HardwareTests : IDisposable
     {
         var file = Path.Combine(_root, "temps.json");
         var (s, time, _) = BuildSampler(new FakeGpu(Gpu(95)), file);
-        await s.PollOnceAsync();
+        await s.PollNodeAsync("worker");
         time.Advance(TimeSpan.FromSeconds(30));
 
-        var report = new HardwareReportService(s).Build(TimeSpan.FromMinutes(1));
+        var report = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(1))!;
         report.Status.Should().Be("stale");
         report.Level.Should().Be("ok", "при stale уровни не красятся");
         report.Gpus.Single().Level.Should().Be("ok");
         report.Nodes.Single(n => n.Kind == "gpu").Level.Should().Be("ok");
     }
 
-    private sealed class FixedSampler(HardwareSample cur) : IHardwareSampler
+    private sealed class FixedSampler(HardwareSample cur) : IHardwareSampler, INodeHardwareView
     {
+        public IReadOnlyList<string> NodeKeys => ["worker"];
+        public INodeHardwareView? ForNode(string key) => key == "worker" ? this : null;
+        public string Key => "worker";
         public HardwareSample? Current => cur;
         public string Status => "ok";
-        public long? StaleSince => null;
+        public long? Since => null;
         public IReadOnlyList<(long t, int? value)> Aggregate(Func<HardwareSample, int?> selector, TimeSpan window, TimeSpan step) =>
             [(0, selector(cur))];
     }
@@ -431,7 +719,7 @@ public class HardwareTests : IDisposable
                 new HwmonDisk { Controller = "nvme0", Role = "system", TempC = 59 },
             ],
         };
-        var report = new HardwareReportService(new FixedSampler(sample)).Build(TimeSpan.FromMinutes(15));
+        var report = new HardwareReportService(new FixedSampler(sample), NoNodes()).Build(TimeSpan.FromMinutes(15))!;
 
         var water = report.Nodes.Single(n => n.Key == "water");
         water.TempC.Should().Be(52);
@@ -441,7 +729,7 @@ public class HardwareTests : IDisposable
 
         var kv = report.Nodes.Single(n => n.Detail.Role == "kv");
         kv.TempC.Should().BeNull("датчики диска кэша врут — температуру не показываем");
-        kv.Level.Should().Be("none");
+        kv.Level.Should().Be("ok", "75 % заполненности — ниже порога 85 (порог заполненности теперь участвует)");
         kv.DangerC.Should().BeNull();
         kv.Detail.Temp2C.Should().BeNull();
         kv.Detail.UsedGb.Should().Be(370);
@@ -449,7 +737,7 @@ public class HardwareTests : IDisposable
         kv.Spark15m.Should().Equal([75], "мини-график диска кэша — занято, %");
         report.Series.Should().NotContain(x => x.Key == "disk-nvme1");
         report.Series.Should().Contain(x => x.Key == "disk-nvme0");
-        report.Level.Should().Be("warn", "уровень стенда — по воде, диск кэша не участвует");
+        report.Level.Should().Be("warn", "уровень стенда — по воде; кэш 75 % и плата без данных — не тревога");
 
         var ram = report.Nodes.Single(n => n.Key == "ram");
         ram.Detail.UsedPerc.Should().Be(50);
@@ -461,7 +749,7 @@ public class HardwareTests : IDisposable
     public void Report_NoSources_EmptyOk()
     {
         var (s, _, _) = BuildSampler();
-        var report = new HardwareReportService(s).Build(TimeSpan.FromMinutes(5));
+        var report = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(5))!;
         report.Status.Should().Be("ok");
         report.Nodes.Should().BeEmpty();
         report.Gpus.Should().BeEmpty();

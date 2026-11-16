@@ -4,6 +4,11 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+    <!-- Server GC (в .NET 10 с DATAS: число куч подстраивается под нагрузку) едет в runtimeconfig,
+         с которым стартует testhost. Workstation GC разбирал кучу в 4 ГиБ одним потоком: паузы
+         занимали до 40 % времени прогона. Замер 17.11.2026 на worker (2 шарда, 6 потоков):
+         297 с → 187 с, пик дерева шардов 8,7 → 7,1 ГиБ; с 12 потоками — 148 с и 8,3 ГиБ -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

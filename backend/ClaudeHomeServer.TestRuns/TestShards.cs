@@ -144,8 +144,9 @@ public static class AdaptiveShards
     public const double PeakMargin = 1.2;
     public const long PeakFloorBytes = GiB;
     // Ядер на шард: N ≤ max(1, floor(nproc / 4)). У каждого шарда свой testhost с xunit
-    // maxParallelThreads=6; меньше ~4 ядер на шард — процессы делят одни ядра и только мешают друг
-    // другу (24 потока — 6, 8 — 2, 4 — 1)
+    // maxParallelThreads=12 (тесты больше ждут, чем считают: замер 17.11.2026 — 16 и 24 потока не
+    // быстрее 12, только тяжелее); меньше ~4 ядер на шард — процессы делят одни ядра и только мешают
+    // друг другу (24 потока — 6, 8 — 2, 4 — 1)
     public const int CoresPerShard = 4;
 
     // Память на шард для правила: прошлый пик × 1,2 (не ниже 1 ГиБ) или запасные 3,5 ГиБ

@@ -99,8 +99,17 @@ var subsystemsPath = SubsystemOverridesFile.PathFor(builder.Configuration);
 // такой источник пропускаем (состав подсистем — по умолчанию, как без файла) и говорим
 // причину в stderr: человек чинит файл руками, панель на нём до починки отвечает 503.
 var subsystemsLoadError = SubsystemOverridesFile.DescribeConfigurationLoadError(subsystemsPath);
+// Провайдер файлов этого источника (PhysicalFileProvider с FileSystemWatcher под reloadOnChange)
+// AddJsonFile создаёт сам для абсолютного пути, и освобождать его некому — освобождаем на
+// остановке хоста. Поток наблюдателя несёт ExecutionContext старта хоста, а с ним — весь граф
+// приложения: в тестах каждый утилизированный хост оставался в памяти (замер 16.11.2026:
+// testhost монолита рос до 17 ГиБ, 232 живых потока «.NET File Watcher»)
+IDisposable? subsystemsFiles = null;
 if (subsystemsLoadError is null)
+{
     builder.Configuration.AddJsonFile(subsystemsPath, optional: true, reloadOnChange: true);
+    subsystemsFiles = (builder.Configuration.Sources[^1] as FileConfigurationSource)?.FileProvider as IDisposable;
+}
 else
     Console.Error.WriteLine(
         $"{subsystemsPath} не подключён источником конфигурации: {subsystemsLoadError} " +
@@ -940,6 +949,7 @@ if (builder.Configuration.GetValue<bool>("InspectionMode"))
 }
 
 var app = builder.Build();
+if (subsystemsFiles is not null) app.Lifetime.ApplicationStopped.Register(subsystemsFiles.Dispose);
 
 // Пост-билд шаг подсистем: для каждой подсистемы, реализующей IAppPhaseSubsystem,
 // зовём ConfigureApp(app) в порядке регистрации. Вызываем ДО любых других

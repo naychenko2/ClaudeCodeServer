@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -14,8 +15,10 @@ public class HardwareSamplerIpmiTests
 
     private sealed class ManualTime : TimeProvider
     {
-        private readonly DateTimeOffset _now = new(2026, 11, 16, 12, 0, 0, TimeSpan.Zero);
+        private DateTimeOffset _now = new(2026, 11, 16, 12, 0, 0, TimeSpan.Zero);
         public override DateTimeOffset GetUtcNow() => _now;
+        // Тесты троттлинга двигают время тиками, без Task.Delay.
+        public void Advance(TimeSpan d) => _now += d;
     }
 
     private sealed class Opts : IOptionsMonitor<LocalModelStatsOptions>
@@ -47,6 +50,13 @@ public class HardwareSamplerIpmiTests
         "Peripheral Temp  | 06h | ok  |  7.1 | 41 degrees C\n" +
         "FAN3             | 07h | ok  | 29.1 | 1500 RPM\n";
 
+    // Односокетный IPMI при двух сокетах k10temp: несовпадение нумерации — путь предупреждения
+    // «сокетов IPMI N, k10temp M» (HardwareSampler.cs:359-362).
+    private const string SdrOneSocket =
+        "CPU1 Temp        | 01h | ok  |  3.1 | 49 degrees C\n" +
+        "VRMCpu1 Temp     | 03h | ok  |  3.1 | 47 degrees C\n" +
+        "FAN3             | 07h | ok  | 29.1 | 1500 RPM\n";
+
     // Два сокета k10temp (без ссылок device — порядок по номеру hwmon) + вентилятор nct6798 в hwmon.
     private static Dictionary<string, string> TwoSockets()
     {
@@ -64,14 +74,41 @@ public class HardwareSamplerIpmiTests
         return f;
     }
 
-    private static HardwareSampler Build(INodeReadingSource src, ManualTime time) =>
-        new(new Opts(), [new HardwareSamplerNode("w", src)], new Gddr6HelperReader(time), time);
+    private static HardwareSampler Build(INodeReadingSource src, ManualTime time, CapturingLogger<HardwareSampler>? log = null) =>
+        new(new Opts(), [new HardwareSamplerNode("w", src)], new Gddr6HelperReader(time), time, log);
 
     private static Source Worker(string? ipmi, long? clock = Clock)
     {
         var files = TwoSockets();
         return new Source(files, ipmi, clock);
     }
+
+    // IPMI-срез всегда свежий: «at» и clockMs ставятся в момент чтения текущими часами теста —
+    // троттлинг меряется по тикам, а не по протуханию среза (оно молча убило бы предупреждение на t+5m01s).
+    private sealed class LiveIpmiSource(Dictionary<string, string> files, string sdr, ManualTime time) : INodeReadingSource
+    {
+        public Task<NodeReading> ReadAsync(CancellationToken ct = default)
+        {
+            var nowMs = time.GetUtcNow().ToUnixTimeMilliseconds();
+            return Task.FromResult(new NodeReading
+            {
+                Status = NodeReadingStatus.Ok,
+                Files = new SliceFileSource(files),
+                Ipmi = Wrap(nowMs - 15_000, sdr),
+                ClockMs = nowMs,
+            });
+        }
+    }
+
+    // Сэмплер с двумя узлами на одном расхождении: проверка «отметка троттлинга — на узел».
+    private static HardwareSampler BuildTwo(Dictionary<string, string> files, string sdr, ManualTime time, CapturingLogger<HardwareSampler> log) =>
+        new(new Opts(),
+            [new HardwareSamplerNode("w1", new LiveIpmiSource(files, sdr, time)),
+             new HardwareSamplerNode("w2", new LiveIpmiSource(files, sdr, time))],
+            new Gddr6HelperReader(time), time, log);
+
+    private static int IpmiWarns(CapturingLogger<HardwareSampler> log) =>
+        log.Entries.Count(e => e.Level == LogLevel.Warning && e.Message.Contains("сокетов IPMI"));
 
     [Fact]
     public async Task FreshIpmi_MergesVrmFansBoardPeripheral()
@@ -143,6 +180,78 @@ public class HardwareSamplerIpmiTests
         sampler.ForNode("w")!.Status.Should().Be("ok");
         s!.PeripheralTempC.Should().BeNull();
         s.Cpus.Should().HaveCount(2);
+        // Порядок вентиляторов снимка точный (Equal по порядку, не Contain): при сбое разбора
+        // в снимке ровно hwmon-«Case», IPMI-«FAN3» в него не попал.
+        s.CaseFans!.Select(f => f.Label).Should().Equal("Case");
+
+        // Цикл сэмплера жив после тика с боем разбора: ExecuteTask не завершён.
+        // Мутация: снять обе защиты — inner catch в BuildSample (:353-357) и outer catch(Exception)
+        // в NodeLoopAsync (:192-197): сбой разбора выходит из PollNodeAsync, тест краснеет на первом
+        // же сбойном тике. Снять только outer — сбой гасит inner, узел становится down, цикл жив:
+        // контракт сохранён, тест остаётся зелёным.
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        sampler.WaitFunc = async (delay, ct) =>
+        {
+            if (delay == HardwareSampler.SampleInterval)
+            {
+                gate.TrySetResult(); // цикл дошёл до паузы после тика — тик сбоем отработан
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            else
+            {
+                await Task.Delay(delay, ct); // тайм-аут тика — как в проде, тик мгновенный
+            }
+        };
+        using var cts = new CancellationTokenSource();
+        await sampler.StartAsync(cts.Token);
+        // Сторож: если цикл упал на тике — паузы нет; тест краснеет здесь, а не виснет.
+        (await Task.WhenAny(gate.Task, Task.Delay(5000))).Should().Be(gate.Task);
+        sampler.ExecuteTask!.IsCompleted.Should().BeFalse();
+        cts.Cancel();
+        await sampler.ExecuteTask!; // нормальная остановка цикла
+    }
+
+    // Троттлинг предупреждения «сокетов IPMI N, k10temp M» — не чаще раза в 5 мин на узел
+    // (IpmiWarnEvery, HardwareSampler.cs:130; отметка _lastIpmiWarn — на состоянии узла, :522-531).
+    // Окно half-open [t, t+5m): тики t, t+2s, t+4m59s — одно предупреждение; тик t+5m01s — второе.
+    // Мутация «now - w > every» вместо «<» (:528) краснит этот тест: на t+4m59s появляется второе.
+    [Fact]
+    public async Task IpmiWarn_PerNode_OncePerFiveMinutes()
+    {
+        var time = new ManualTime();
+        var log = new CapturingLogger<HardwareSampler>();
+        var sampler = Build(new LiveIpmiSource(TwoSockets(), SdrOneSocket, time), time, log);
+
+        await sampler.PollNodeAsync("w"); // t — предупреждение 1
+        time.Advance(TimeSpan.FromSeconds(2));
+        await sampler.PollNodeAsync("w"); // t+2s — молчание
+        time.Advance(TimeSpan.FromMinutes(4) + TimeSpan.FromSeconds(57));
+        await sampler.PollNodeAsync("w"); // t+4m59s — молчание (последняя точка внутри окна)
+        IpmiWarns(log).Should().Be(1);
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        await sampler.PollNodeAsync("w"); // t+5m01s — окно истекло, предупреждение 2
+        IpmiWarns(log).Should().Be(2);
+    }
+
+    // Отметка троттлинга — на узел, не на сервис: два узла с одним расхождением, тики обоих
+    // в один момент — по предупреждению на узел; повторные тики обоих молчат.
+    // Мутация «private static DateTimeOffset? _lastIpmiWarn» в NodeState (:522, отметка общая
+    // на весь сервис) краснит этот тест: второй узел видит отметку первого — одно вместо двух.
+    [Fact]
+    public async Task IpmiWarn_TwoNodes_EachWarnsOnce()
+    {
+        var time = new ManualTime();
+        var log = new CapturingLogger<HardwareSampler>();
+        var sampler = BuildTwo(TwoSockets(), SdrOneSocket, time, log);
+
+        await sampler.PollNodeAsync("w1");
+        await sampler.PollNodeAsync("w2");
+        IpmiWarns(log).Should().Be(2); // по одному на узел
+
+        await sampler.PollNodeAsync("w1");
+        await sampler.PollNodeAsync("w2");
+        IpmiWarns(log).Should().Be(2); // оба узла в окне молчания
     }
 
     [Fact]
@@ -232,5 +341,18 @@ public class HardwareSamplerIpmiTests
         var r = HardwareSampler.MergeIpmi(hw, new IpmiReading([], [], null, [], null, null));
         r.BoardTempC.Should().Be(36);
         r.CaseFans.Should().BeNull();
+    }
+
+    // Логгер, пишущий записи в список: для проверки частоты Warning (тот же образец, что в LocalModelStatsPollerTests).
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
     }
 }

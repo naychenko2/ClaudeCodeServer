@@ -54,11 +54,12 @@ function NoBody() {
   return <div style={{ fontSize: FS.xs, fontStyle: 'italic', color: C.textMuted, padding: `${SP.xs}px 0` }}>{NO_DATA}</div>;
 }
 
-// Текст строки-причины. Оба варианта — продолжение одной фразы («Скорость упала: …»),
-// разные тона: thermal — тревожный (danger), powerCap — предупредительный (warning).
+// Строка-причины: thermal — продолжение фразы «Скорость упала» тревожным тоном (danger);
+// powerCap — информационная плашка «Упирается в лимит мощности» (info): упор в лимит — не
+// поломка, по решению дизайна (docs/mockups/local-model-hardware-spec.md:56, макеты v2/v3 «p-info»).
 const THROTTLE: Record<'thermal' | 'powerCap', { text: string; bg: string; fg: string }> = {
   thermal: { text: 'Скорость упала: карта сбрасывает частоту от перегрева', bg: C.dangerBg, fg: C.dangerText },
-  powerCap: { text: 'Скорость упала: карта упёрлась в лимит мощности', bg: C.warningBg, fg: C.warningText },
+  powerCap: { text: 'Упирается в лимит мощности', bg: C.infoBg, fg: C.info },
 };
 
 // HH:MM:SS локальных часов узла (снимок чужих часов — ложная точность, как в «Дежурстве»).

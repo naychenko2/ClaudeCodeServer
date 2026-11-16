@@ -1,5 +1,5 @@
 // Тесты карточки «Движок» (EngineCard): строки нагрузки vLLM и ComfyUI, проценты из долей kv,
-// пропуски как «нет данных» (не «0 %»), строка-причина падения скорости (danger/warning),
+// пропуски как «нет данных» (не «0 %»), строка-причина падения скорости (danger/info),
 // приглушение цифр и подпись «последние данные» при stale, строка движка для сводки (engineLine).
 //
 // Окружение node (без jsdom): renderToStaticMarkup — как HwTile/GpuDetailCard в hardware.test.ts.
@@ -104,6 +104,13 @@ describe('EngineCard — ComfyUI', () => {
     expect(h).toContain('2 / 3');
   });
 
+  // пустые списки — обязательные поля ответа: это настоящий ноль, а не пропуск данных
+  it('пустые running/queue — «0 / 0», не «нет данных»', () => {
+    const h = html({ kind: 'comfy', media: comfyMedia({ running: [], queue: [] }), throttled: null, stale: false });
+    expect(h).toContain('0 / 0');
+    expect(h).not.toContain('нет данных');
+  });
+
   it('media=null — «нет данных»', () => {
     const h = html({ kind: 'comfy', media: null, throttled: null, stale: false });
     expect(h).toContain('Движок · ComfyUI');
@@ -122,11 +129,14 @@ describe('EngineCard — строка-причина', () => {
     expect(h).toContain('var(--c-danger-text)');
   });
 
-  it('powerCap — та же фраза на warningBg/warningText', () => {
+  // по решению дизайна (spec.md:56, макеты «p-info»): информационная плашка, не warning
+  it('powerCap — «Упирается в лимит мощности» на infoBg/info, без «Скорость упала»', () => {
     const h = html({ kind: 'vllm', title: 'HyperQwen', stats: vllmStats(), throttled: 'powerCap', stale: false });
-    expect(h).toContain('Скорость упала: карта упёрлась в лимит мощности');
-    expect(h).toContain('var(--c-warning-bg)');
-    expect(h).toContain('var(--c-warning-text)');
+    expect(h).toContain('Упирается в лимит мощности');
+    expect(h).not.toContain('Скорость упала');
+    expect(h).toContain('var(--c-info-bg)');
+    expect(h).toContain('var(--c-info)');
+    expect(h).not.toContain('var(--c-warning-bg)');
     expect(h).not.toContain('var(--c-danger-bg)');
   });
 

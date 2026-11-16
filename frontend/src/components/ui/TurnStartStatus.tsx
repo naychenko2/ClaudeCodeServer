@@ -1,4 +1,4 @@
-import type { StartPhase } from '../../types';
+import type { StartPhase } from '../../features/chat/types';
 import { C, FS, SP } from '../../lib/design';
 import { LiveDot } from './LiveDot';
 

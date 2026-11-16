@@ -3,7 +3,8 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, StartPhase, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
+import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
+import type { StartPhase } from '../features/chat/types';
 import { handsStatusFeedLine } from './localHands';
 import { isBgLaunchResult } from './agentTail';
 import { RUN_TESTS_TOOL, testRunKindLabel } from './toolLabels';

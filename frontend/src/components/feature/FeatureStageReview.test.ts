@@ -1,7 +1,9 @@
 // Блок «Ревью» (F14): раунды, блокеры file:line, ожидание раунда 2, легаси, пусто, откат на старый сервер.
 //
 // Мутации (в отчёте): (1) не рисовать запись pending → тест «раунд 2 запустится сам» красный;
-// (2) не склеивать file:line → тест «блокеры» красный; (3) не показывать подсказку легаси → тест «легаси» красный.
+// (2) не склеивать file:line → тест «блокеры» красный; (3) не показывать подсказку легаси → тест «легаси» красный;
+// (4) заметки обратно в plain pre-wrap → тест «заметки» красный; (5) снять markdownToPlain у блокера/замечания →
+//     тест «блокеры и замечания» красный.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, afterEach } from 'vitest';
@@ -92,5 +94,39 @@ describe('FeatureStageReview', () => {
     });
     expect(findNodeByAttr(container, 'data-testid', 'stage-review-r1')).not.toBeNull();
     expect(text(container)).toContain('блокер');
+  });
+
+  // === Markdown (Ф-2.46b): заметки — общий рендер (как в ленте), строки блокеров/замечаний — плоская версия ===
+  it('заметки: markdown рендерится разметкой (список/strong/code), сырых «**» и кавычек нет', () => {
+    const { container } = render(rev([], null, {
+      reviews: [{
+        taskId: 'r1', title: 'ревью', role: 'review', status: 'done',
+        verdict: 'accepted_with_remarks', returnReason: null, blocker: false, verifiedAt: null,
+        notes: '- пункт **один** `code`\n- второй',
+      }],
+    }));
+    const notes = findNodeByAttr(container, 'data-testid', 'stage-review-notes');
+    expect(notes).not.toBeNull();
+    // Обёртка заметок обязана переносить длинные пути file:line (ревью 1abfa5e5): без этого
+    // карточка разъезжается на 360.
+    expect(notes!.style.overflowWrap, 'обёртка заметок не защищена от переполнения').toBe('anywhere');
+    // Рендер даёт настоящие li/strong/code: обычный наивный вывод этих узлов не даст.
+    expect(container.querySelectorAll('li,strong,code').length).toBeGreaterThanOrEqual(3);
+    const t = text(container);
+    expect(t).toContain('пункт один code');
+    expect(t).not.toContain('**');
+    expect(t).not.toContain('`');
+  });
+
+  it('блокеры и замечания: одиночные строки без символов разметки', () => {
+    const { container } = render(rev([round({
+      blockers: [{ tag: 'блокер', file: 'Svc.cs', line: 412, text: '**важно** `x`' }],
+      remarks: ['**важно** `y`'],
+    })]));
+    const t = text(container);
+    expect(t).toContain('Svc.cs:412 — важно x');
+    expect(t).toContain('важно y');
+    expect(t).not.toContain('**');
+    expect(t).not.toContain('`');
   });
 });

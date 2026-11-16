@@ -12,6 +12,7 @@ import { type CSSProperties, type ReactNode } from 'react';
 import { Info } from 'lucide-react';
 import { Notice } from '../ui/Notice';
 import { C, FS, SP, R, FONT, TB } from '../../lib/design';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { ReviewKv, type ReviewKvRow } from './FeatureReviewParts';
 import { NO_DATA } from './FeatureLabels';
 import { formatDuration, formatDateTime, minutesSince } from './FeatureStatsBits';
@@ -62,6 +63,7 @@ function shareRows(s: StageMetricsShare, approx: boolean): ReviewKvRow[] {
 function humanRows(h: StageMetricsHuman, nowMs: number): ReviewKvRow[] {
   const waiting = h.waitingNow;
   const sinceMin = waiting ? minutesSince(waiting.since, nowMs) : null;
+  const waitReason = markdownToPlain(waiting?.reason ?? '');
   return [
     { label: 'Ожидание', value: h.minutes == null ? NO_DATA : formatDuration(h.minutes) },
     { label: 'Ожиданий', value: h.waits == null ? null : String(h.waits) },
@@ -69,7 +71,7 @@ function humanRows(h: StageMetricsHuman, nowMs: number): ReviewKvRow[] {
     {
       label: 'Ждёт сейчас',
       value: waiting
-        ? `${sinceMin != null ? formatDuration(sinceMin) : formatDateTime(waiting.since)}${waiting.reason ? ` · ${waiting.reason}` : ''}`
+        ? `${sinceMin != null ? formatDuration(sinceMin) : formatDateTime(waiting.since)}${waitReason ? ` · ${waitReason}` : ''}`
         : null,
     },
   ];

@@ -23,6 +23,7 @@
 import { C } from '../../../lib/design';
 import { trackerPercent, type StepProgress } from '../../../lib/featureProgress';
 import { roleLabel } from '../../../lib/roleLabel';
+import { markdownToPlain } from '../../../lib/markdownPlain';
 import { stepDisplayName } from '../../../lib/stepRef';
 import { formatClock, formatDuration, minutesSince } from '../../feature/FeatureStatsBits';
 // readyAtText — общий со страницей фичи (FeatureBriefModel): один момент готовности —
@@ -104,9 +105,10 @@ export interface AlarmView { tone: 'warn' | 'stop'; text: string; actionLabel: s
 
 export function alarmView(state: string, reason: string | null, personName: string | null, isMobile: boolean): AlarmView {
   if (state === 'waiting') {
+    const plainReason = markdownToPlain(reason ?? '') || null;
     const text = isMobile
       ? (personName ? `Ждёт вас · ${personName}` : 'Ждёт вас')
-      : `Ждёт вас · ${reason ?? personName ?? 'нужен ваш ответ'}`;
+      : `Ждёт вас · ${plainReason ?? personName ?? 'нужен ваш ответ'}`;
     return { tone: 'warn', text, actionLabel: 'Ответить' };
   }
   if (state === 'merge_pending') return { tone: 'warn', text: 'Ждёт согласия на мерж', actionLabel: 'К мержу' };

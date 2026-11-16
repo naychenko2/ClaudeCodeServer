@@ -313,6 +313,12 @@ describe('«Готовность | Срок»', () => {
     expect(findNodeByAttr(c, 'data-testid', 'brief-estimate-why')).toBeNull();
   });
 
+  it('«почему» в markdown — плоской строкой без разметки', () => {
+    const b = brief({ estimate: HIST, note: note({ etaMinutes: 360, agreement: 'above', why: '**добавился** шаг `4б`', etaEndsAt: at(25, 20, 10) }) });
+    const { c } = render({ brief: b, nameOf });
+    expect(joined(c, 'brief-estimate-why')).toBe('добавился шаг 4б');
+  });
+
   it('расхождение — метка на C.warningBg и «почему» с кромкой C.warning', () => {
     const b = brief({ estimate: HIST, note: note({ etaMinutes: 360, agreement: 'above', why: 'добавился шаг 4б', etaEndsAt: at(25, 20, 10) }) });
     const { c } = render({ brief: b, nameOf });
@@ -477,6 +483,14 @@ describe('Голос оркестратора', () => {
     expect(all).toContain('Идём по плану');
     expect(all).toContain('— Софья, ведущая · 14 мин назад');
     expect(findNodeByAttr(c, 'data-testid', 'brief-voice-stale'), 'метки устаревшего нет').toBeNull();
+  });
+
+  it('текст голоса — markdown-рендер: без сырых «**» и маркеров списка', () => {
+    const { c } = render({ brief: brief({ note: { ...fresh, text: '**Важно:** идём\n\n- пункт один' } }), nameOf });
+    const t = textNodes(findNodeByAttr(c, 'data-testid', 'brief-voice-text')!).join(' ');
+    expect(t).toContain('Важно:');
+    expect(t).toContain('пункт один');
+    expect(t).not.toContain('**');
   });
 
   it('устаревший в паузе — метка «до паузы» рядом с подписью, текст не спрятан (макет hold)', () => {

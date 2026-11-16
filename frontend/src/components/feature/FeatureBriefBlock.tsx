@@ -27,6 +27,8 @@ import { ActiveList } from './FeatureBriefActive';
 import { SummaryRow } from './FeatureBriefTimeline';
 import { FeatureTrackerBar, trackerBarAria } from '../chat/feature/FeatureTrackerBar';
 import { featureTruthBar } from '../chat/feature/featureTruthModel';
+import { MarkdownContent } from '../chat/MarkdownContent';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import type { StepProgress } from '../../lib/featureProgress';
 import { stageLabel } from './FeatureStatsBits';
 import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
@@ -305,7 +307,7 @@ function EtaColumn({ view }: { view: BriefEstimateView }) {
       )}
       {view.why && (
         <div data-testid="brief-estimate-why" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs, paddingLeft: SP.sm, borderLeft: `2px solid ${C.warning}` }}>
-          {view.why}
+          {markdownToPlain(view.why)}
         </div>
       )}
     </div>
@@ -335,7 +337,7 @@ function VoiceBlock({ note, kind, nameOf, genderOf, nowMs }: { note: NonNullable
         </span>
       )}
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: FS.base, color: C.textPrimary }}>{note.text}</div>
+        <div data-testid="brief-voice-text" style={{ fontSize: FS.base, color: C.textPrimary, overflowWrap: 'anywhere' }}><MarkdownContent text={note.text} compact /></div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: `${SP.xs}px ${SP.sm}px`, alignItems: 'center', marginTop: 2, fontSize: FS.xs, color: C.textMuted }}>
           <span data-testid="brief-voice-by">{sig}</span>
           {stale && (

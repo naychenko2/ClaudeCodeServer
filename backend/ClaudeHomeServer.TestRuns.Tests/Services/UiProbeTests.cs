@@ -675,12 +675,17 @@ public class UiProbeTests : IDisposable
             + "<button style=\"height:50px;width:80px\">ok</button>"
             + "<script>let w=240;const t=setInterval(()=>{w+=40;document.getElementById('in').style.width=w+'px';if(w>=1000)clearInterval(t)},400)</script></body>",
         // Экран входа: форма из двух полей и кнопка
+        // Малые кнопки (20 px) по localStorage: 3 — роль admin из /api/auth/me, +4 — cc_tab=hardware из storage
+        "seed" => "<body><button style=\"height:50px;width:80px\">ok</button><script>const n=(localStorage.cc_role==='admin'?3:0)+(localStorage.cc_tab==='hardware'?4:0)"
+            + "+(localStorage.cc_user_id==='u-adm'&&localStorage.cc_username==='admin'?10:0);"
+            + "for(let i=0;i<n;i++){const b=document.createElement('button');b.style.height='20px';b.textContent='s'+i;document.body.appendChild(b)}</script></body>",
         "login" => "<body><input type=\"text\" autocomplete=\"username\"><input type=\"password\" autocomplete=\"current-password\"><button>Войти</button></body>",
         _ => "<body>ok</body>",
     };
 
     // Поднимает страницу и мерит её настоящим скриптом; null и Skip — если браузера нет
-    private async Task<(string? Json, string? Refusal)> ProbeRealAsync(string page, int settleMs = UiProbeScript.SettleTimeoutMs)
+    private async Task<(string? Json, string? Refusal)> ProbeRealAsync(string page, int settleMs = UiProbeScript.SettleTimeoutMs,
+        string? token = null, IReadOnlyDictionary<string, string>? storage = null)
     {
         var modules = PlaywrightModules();
         Skip.If(modules is null, "frontend/node_modules/playwright не найден");
@@ -698,21 +703,29 @@ public class UiProbeTests : IDisposable
             {
                 System.Net.HttpListenerContext ctx;
                 try { ctx = await http.GetContextAsync(); } catch { return; }
-                var body = System.Text.Encoding.UTF8.GetBytes(ctx.Request.Url!.AbsolutePath == "/" ? "<body>ok</body>" : Page(page));
-                ctx.Response.ContentType = "text/html; charset=utf-8";
+                var path = ctx.Request.Url!.AbsolutePath;
+                var isMe = path == "/api/auth/me";
+                // /api/auth/me — как у настоящего сервера, но только с токеном
+                var body = System.Text.Encoding.UTF8.GetBytes(isMe
+                    ? (ctx.Request.Headers["Authorization"] == "Bearer tok-test"
+                        ? "{\"userId\":\"u-adm\",\"username\":\"admin\",\"role\":\"admin\"}" : "{}")
+                    : path == "/" ? "<body>ok</body>" : Page(page));
+                if (isMe && ctx.Request.Headers["Authorization"] == "Bearer tok-expired") ctx.Response.StatusCode = 401;
+                ctx.Response.ContentType = isMe ? "application/json" : "text/html; charset=utf-8";
                 await ctx.Response.OutputStream.WriteAsync(body);
                 ctx.Response.Close();
             }
         });
 
         var request = new UiProbeRequest(new Project { Id = "p", OwnerId = "u", Name = "Замер", RootPath = _root }, _root, modules!,
-            "s", $"http://127.0.0.1:{port}", "/app", [360], 40, null, null, null);
-        var spec = UiProbeService.BuildSpec(request, "turn", settleMs: settleMs);
+            "s", $"http://127.0.0.1:{port}", "/app", [360], 40, null, null, null, storage);
+        var spec = UiProbeService.BuildSpec(request, "turn", token, settleMs: settleMs);
         var psi = new System.Diagnostics.ProcessStartInfo("node")
         {
             WorkingDirectory = modules, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
         };
         foreach (var a in spec.Args) psi.ArgumentList.Add(a);
+        if (spec.Env!.TryGetValue("UIPROBE_TOKEN", out var tokenEnv)) psi.Environment["UIPROBE_TOKEN"] = tokenEnv;
         System.Diagnostics.Process process;
         try { process = System.Diagnostics.Process.Start(psi)!; }
         catch (Exception e) { Skip.If(true, $"node недоступен: {e.Message}"); return default; }
@@ -731,6 +744,52 @@ public class UiProbeTests : IDisposable
                 ? (null, refusal)
                 : (UiProbeReport.Serialize(UiProbeReport.Build(json!, url, 40)), null);
         }
+    }
+
+    private static int Small(string json) => JsonNode.Parse(json)!["viewports"]![0]!["counts"]!["smallTargets"]!.GetValue<int>();
+
+    [SkippableFact]
+    [Trait("Category", "Slow")]
+    public async Task ВходПоТокену_РольИПрофильИзMe_ВХранилищеСтраницы()
+    {
+        var anon = await ProbeRealAsync("seed");
+        var admin = await ProbeRealAsync("seed", token: "tok-test");
+        var wrong = await ProbeRealAsync("seed", token: "tok-other");
+
+        JsonNode.Parse(admin.Json!)!["profile"]!.GetValue<string>().Should().Be("ok");
+        Small(anon.Json!).Should().Be(0, "без токена хранилище пусто");
+        Small(admin.Json!).Should().Be(13, "cc_role=admin (3) и cc_user_id/cc_username (10) легли из /api/auth/me");
+        var expired = await ProbeRealAsync("seed", token: "tok-expired");
+        var wrongNode = JsonNode.Parse(wrong.Json!)!;
+        wrongNode["profile"]!.GetValue<string>().Should().Be("no-role", "200 без роли — не «ok»");
+        wrongNode["warning"]!.GetValue<string>().Should().Contain("no-role");
+        var expiredNode = JsonNode.Parse(expired.Json!)!;
+        expiredNode["profile"]!.GetValue<string>().Should().Be("failed:401");
+        expiredNode["warning"]!.GetValue<string>().Should().Contain("401");
+        JsonNode.Parse(admin.Json!)!["warning"].Should().BeNull();
+        Small(wrong.Json!).Should().Be(0, "/me не отдал профиль — замер идёт как раньше, без падения");
+    }
+
+    [SkippableFact]
+    [Trait("Category", "Slow")]
+    public async Task Storage_КлючиКладутсяДоЗагрузки_ПрофильИхНеПерекрываетСверхуНаоборот()
+    {
+        var storage = new Dictionary<string, string> { ["cc_tab"] = "hardware", ["cc_role"] = "user" };
+        var withTab = await ProbeRealAsync("seed", token: "tok-test", storage: storage);
+        var tabOnly = await ProbeRealAsync("seed", storage: new Dictionary<string, string> { ["cc_tab"] = "hardware" });
+
+        Small(tabOnly.Json!).Should().Be(4, "без токена вкладка из storage попала в localStorage");
+        Small(withTab.Json!).Should().Be(17, "роль из /me (admin) перекрывает cc_role из storage: 3 + 4 + 10");
+    }
+
+    [Fact]
+    public void BuildSpec_Storage_ЕдетПолемВходаИНеЛишнимПоказывается()
+    {
+        var plain = UiProbeService.BuildSpec(Request(), "t");
+        JsonNode.Parse(plain.Args[2])!["storage"].Should().BeNull("без storage поле не едет");
+        var with = Request() with { Storage = new Dictionary<string, string> { ["cc_local_model_tab"] = "hardware" } };
+        var input = JsonNode.Parse(UiProbeService.BuildSpec(with, "t").Args[2])!;
+        input["storage"]!["cc_local_model_tab"]!.GetValue<string>().Should().Be("hardware");
     }
 
     [SkippableFact]

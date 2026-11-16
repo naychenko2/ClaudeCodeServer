@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services.TestRuns;
 // пакета playwright (процесс запускается из него), Path — маршрут вместе с «#…» у hash-роутера
 public sealed record UiProbeRequest(Project Project, string WorkingDirectory, string Directory, string SessionId,
     string Origin, string Path, IReadOnlyList<int> Viewports, int MinTargetPx, string? Selector,
-    string? User, string? Password);
+    string? User, string? Password, IReadOnlyDictionary<string, string>? Storage = null);
 
 // Итог замера: Refusal — отказ до запуска; Json — готовый итог (числа по пяти классам); иначе
 // Failure — почему замера нет (скрипт упал, «Стоп», потолок)
@@ -293,6 +293,10 @@ public sealed class UiProbeService
             ["height"] = ViewportHeight,
             ["max"] = UiProbeScript.MaxItems,
             ["selector"] = request.Selector,
+            // Значения не логируются: едут только в аргумент процесса и в localStorage страницы
+            ["storage"] = request.Storage is { Count: > 0 }
+                ? new JsonObject(request.Storage.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value)))
+                : null,
             ["settleMs"] = settleMs,
             ["stableMs"] = UiProbeScript.StableWindowMs,
         };

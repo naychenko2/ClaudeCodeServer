@@ -183,6 +183,12 @@ describe('Чистые функции (тон/формулировка/дни)',
     expect(eventPhrase(ev({ kind: 'created', role: null }))).toBe('создание фичи');
   });
 
+  it('причина события выводится без markdown', () => {
+    const c = render({ events: [ev({ kind: 'created', reason: '**важно**: см. `X`' })] });
+    const r = findNodeByAttr(c, 'data-testid', 'event-reason')!;
+    expect(textNodes(r).join('')).toBe('важно: см. X');
+  });
+
   it('groupEventsByDay: группировка по дням (порядок at desc, заголовки dd.mm)', () => {
     const now = new Date('2026-10-20T12:00:00Z').getTime();
     const events = [

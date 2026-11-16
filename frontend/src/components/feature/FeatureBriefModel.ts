@@ -15,6 +15,7 @@
 
 import { formatDuration } from '../../lib/chatGroups';
 import { plural } from '../../lib/plural';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { formatClock, formatDate, minutesSince, stageLabel } from './FeatureStatsBits';
 import { trackerPercent } from '../../lib/featureProgress';
 import { laneWord } from '../../lib/roleLabel';
@@ -82,7 +83,7 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
       // Тревога «мерж» (бэк кладёт код «мерж») — строка макета; прочая причина — как есть.
       // Ш4: «ждёт вас» говорит одна тревога страницы (FeaturePageAlert), сводка называет
       // только факт — что нужно, без обращения к человеку.
-      const r = brief.reason;
+      const r = markdownToPlain(brief.reason ?? '');
       if (!r || r === 'мерж') return 'Нужно согласие на мерж в master';
       return `Нужен ответ: ${r}`;
     }

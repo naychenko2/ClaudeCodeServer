@@ -1,6 +1,8 @@
+using System.Diagnostics.Metrics;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -1366,6 +1368,139 @@ public class SessionManagerQueueTests : SessionManagerTestBase
 
         Sent<TurnStartPhaseMessage>().Should().NotContain(p => p.Phase == "queued",
             "ждать нечего — строка мигнула бы зря");
+    }
+
+    // ── TS-13 (решение 21eb0bcf §2б): ожидание прошлого хода — метрика ccs.delivery.await_exit_ms ──
+    // В паспорт хода оно не пишется (вторая точка правды); здесь — ровно одно измерение на ожидание,
+    // с тегами ceiling_hit/orchestration. Метка «измерение из этого теста» (образец
+    // ClaudeSessionPromptCacheTests): колбэк MeterListener исполняется синхронно в потоке Record,
+    // поэтому AsyncLocal отсекает измерения параллельных тестов других классов.
+    private static readonly AsyncLocal<bool> AwaitMetricMine = new();
+
+    private sealed record AwaitSample(double Value, Dictionary<string, object?> Tags);
+
+    private static List<AwaitSample> CaptureAwaitExitMetrics(Func<Task> action)
+    {
+        var samples = new List<AwaitSample>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == ServerMetrics.MeterName &&
+                instrument.Name == "ccs.delivery.await_exit_ms")
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
+        {
+            if (!AwaitMetricMine.Value) return;
+            var dict = new Dictionary<string, object?>();
+            foreach (var t in tags) dict[t.Key] = t.Value;
+            lock (samples) samples.Add(new AwaitSample(value, dict));
+        });
+        listener.Start();
+        try
+        {
+            AwaitMetricMine.Value = true;
+            action().GetAwaiter().GetResult();
+        }
+        finally { AwaitMetricMine.Value = false; }
+        return samples;
+    }
+
+    private Task InvokeDeliverPendingAsync(string sessionId, object entry, QueuedMessage next)
+    {
+        var method = typeof(SessionManager).GetMethod("DeliverPendingAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        return (Task)method.Invoke(_sut, [sessionId, entry, next])!;
+    }
+
+    [Fact]
+    public async Task Очередь_ОжиданиеПрошлогоПрогона_МетрикаОдноИзмерениеБезПотолка()
+    {
+        EnableAwaitPreviousExit(5);
+        var session = await MkBusySessionAsync("await-metric", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        var alive = true;
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(() => Volatile.Read(ref alive));
+        SetProcess(entry, adapter.Object);
+        // Прогон «умирает» через 120 мс после рассылки queued: ожидание проходит цикл опросов
+        // (≥1 паузы 50 мс), но заканчивается до потолка — обычный боевой путь.
+        _broadcaster.Gate = msg =>
+        {
+            if (msg is TurnStartPhaseMessage { Phase: "queued" })
+                _ = Task.Run(async () => { await Task.Delay(120); Volatile.Write(ref alive, false); });
+            return Task.CompletedTask;
+        };
+
+        List<AwaitSample> samples;
+        try
+        {
+            samples = CaptureAwaitExitMetrics(() =>
+                InvokeDeliverPendingAsync(session.Id, entry, UserQueued("после ожидания")));
+        }
+        finally { _broadcaster.Gate = null; }
+
+        var sample = samples.Should().ContainSingle(
+            "одно ожидание — одно измерение: повторная запись удваивала бы гистограмму").Subject;
+        sample.Tags["ceiling_hit"].Should().Be("false", "ожидание закончилось до потолка");
+        sample.Tags["orchestration"].Should().Be("false", "обычный адаптер — фолбэка нет");
+        sample.Value.Should().BeGreaterThanOrEqualTo(50, "ожидание прошло хотя бы один цикл опроса — значение есть замер, мс");
+        sample.Tags.Keys.Should().OnlyContain(tag => ServerMetrics.AllowedTags.Contains(tag));
+    }
+
+    [Fact]
+    public async Task Очередь_ПотолокОжидания_МетрикаОтмеченаCeilingHitTrue()
+    {
+        EnableAwaitPreviousExit(1);
+        var session = await MkBusySessionAsync("await-ceiling", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        var alive = true;
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(() => Volatile.Read(ref alive));
+        // Прогон живёт до потолка: умирает только от Interrupt — ветка потолка зовёт его,
+        // и grace после этого выходит сразу.
+        adapter.Setup(a => a.Interrupt()).Callback(() => Volatile.Write(ref alive, false));
+        SetProcess(entry, adapter.Object);
+
+        var samples = CaptureAwaitExitMetrics(() =>
+            InvokeDeliverPendingAsync(session.Id, entry, UserQueued("после потолка")));
+
+        var sample = samples.Should().ContainSingle("потолок — тоже выход из ожидания, одно измерение").Subject;
+        sample.Tags["ceiling_hit"].Should().Be("true", "ожидание достигло потолка");
+        sample.Tags["orchestration"].Should().Be("false", "живой прогон, не фолбэк-оркестрация");
+        sample.Value.Should().BeGreaterThanOrEqualTo(1000, "потолок 1 с — значение не меньше ожидания");
+    }
+
+    [Fact]
+    public async Task Очередь_СбойВМоментОжидания_МетрикаЗаписанаДоПробросаИОдинРаз()
+    {
+        EnableAwaitPreviousExit(5);
+        var session = await MkBusySessionAsync("await-throw", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        int calls = 0;
+        // Первый вызов — проверка «есть ли чего ждать» перед ожиданием (true — есть), второй — первый опрос
+        // цикла ожидания: исключение уже ВНУТРИ ожидания. Запись в catch делается одна — флаг
+        // не даёт повторить её на обычном пути (повтор удвоил бы гистограмму).
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(() =>
+        {
+            if (++calls == 2) throw new InvalidOperationException("сбой чтения занятости");
+            return true;
+        });
+        SetProcess(entry, adapter.Object);
+
+        var samples = CaptureAwaitExitMetrics(async () =>
+        {
+            Func<Task> act = () => InvokeDeliverPendingAsync(session.Id, entry, UserQueued("сбой"));
+            await act.Should().ThrowAsync<InvalidOperationException>();
+        });
+
+        var sample = samples.Should().ContainSingle(
+            "исключение в момент ожидания не отменяет запись — и не дублирует её").Subject;
+        sample.Tags["ceiling_hit"].Should().Be("false");
+        sample.Tags["orchestration"].Should().Be("false");
+        // Поведение исключительного пути не изменилось (TS-5): показанная «queued» закрывается «done»
+        Sent<TurnStartPhaseMessage>().Select(p => p.Phase).Should().Equal(["queued", "done"]);
     }
 
     [Fact]

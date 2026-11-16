@@ -50,6 +50,8 @@ public static class ServerMetrics
         "healability", // healable | unhealable — сопоставим ли error-документ с записью стора
         "observer",    // имя типа наблюдателя сообщений сессии (≈10 значений, берутся из кода)
         "session_kind",// human | executor — чат человека или чат-исполнитель задачи
+        "ceiling_hit", // true | false — ожидание смерти прогона прошлого хода достигло потолка
+        "orchestration",// true | false — ожидание держала только фолбэк-оркестрация (прогон мёртв)
     };
 
     private static readonly Meter _meter = new(MeterName, MeterVersion);
@@ -78,6 +80,16 @@ public static class ServerMetrics
         "ccs.session.queue_bytes",
         unit: "By",
         description: "Суммарный текст несливаемых кадров в очереди сессии (символов), по моменту добавления кадра");
+
+    /// <summary>
+    /// Ожидание смерти прогона прошлого хода перед отложенной доставкой (TurnIntake.AwaitPreviousTurnExitAsync).
+    /// Решение 21eb0bcf §2б: в паспорт хода оно не пишется (вторая точка правды) — только здесь;
+    /// структурный лог остаётся в TurnIntake.
+    /// </summary>
+    public static readonly Histogram<double> DeliveryAwaitExit = _meter.CreateHistogram<double>(
+        "ccs.delivery.await_exit_ms",
+        unit: "ms",
+        description: "Ожидание смерти прогона прошлого хода перед отложенной доставкой (ms)");
 
     /// <summary>
     /// Явные границы бакетов для <see cref="LlmDuration"/> (мс). Регистрируются как View
@@ -223,6 +235,17 @@ public static class ServerMetrics
         SessionObserverDuration.Record(durationMs,
             new KeyValuePair<string, object?>("observer", observer),
             new KeyValuePair<string, object?>("session_kind", sessionKind));
+
+    /// <summary>
+    /// Ожидание смерти прогона прошлого хода (TurnIntake.AwaitPreviousTurnExitAsync).
+    /// <paramref name="ceilingHit"/> — ждали до потолка, прогон прерван ради доставки;
+    /// <paramref name="orchestration"/> — прогон мёртв, держала только фолбэк-оркестрация.
+    /// Значения — "true"/"false", берутся из кода, MetricTagGuard им не нужен.
+    /// </summary>
+    public static void RecordDeliveryAwaitExit(double waitedMs, string ceilingHit, string orchestration) =>
+        DeliveryAwaitExit.Record(waitedMs,
+            new KeyValuePair<string, object?>("ceiling_hit", ceilingHit),
+            new KeyValuePair<string, object?>("orchestration", orchestration));
 
     public static void RecordLlmError(string provider, string errorType, string execution = "local")
     {

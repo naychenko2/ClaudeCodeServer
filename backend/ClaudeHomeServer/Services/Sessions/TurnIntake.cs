@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
@@ -1054,13 +1055,33 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         // Эфемерное событие в группу сессии — в history.json не пишется.
         // Исключение после рассылки queued (Interrupt, сам Broadcast) не должно оставить строку
         // «В очереди» висеть: гасим фазой done и пробрасываем дальше.
+        //
+        // TS-13 (решение 21eb0bcf §2б): ожидание в паспорт хода не пишется (вторая точка правды) —
+        // оно в метрике ccs.delivery.await_exit_ms. Состояние ведётся до try: запись — ровно одна
+        // на выход из ожидания, обычный он или по исключению; «queued» не расслан — ожидания не
+        // было, записи нет (opt-out с потолком 0 и мёртвый прогон возвращаются выше, до этого блока).
+        var started = DateTime.UtcNow;
+        var orchestration = false;
+        var ceilingHit = false;
+        var awaiting = false;
+        var recorded = false;
+        void RecordAwaitExit()
+        {
+            if (!awaiting || recorded) return;
+            recorded = true;
+            ServerMetrics.RecordDeliveryAwaitExit(
+                (long)(DateTime.UtcNow - started).TotalMilliseconds,
+                ceilingHit ? "true" : "false",
+                orchestration ? "true" : "false");
+        }
+
         try
         {
             await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("queued"));
 
-            var started = DateTime.UtcNow;
-            var orchestration = entry.Process?.OrchestrationActive == true && entry.Process?.HasLiveTurn != true;
-            var ceilingHit = false;
+            started = DateTime.UtcNow; // ожидание начинается здесь: время рассылки в замер не входит
+            awaiting = true;
+            orchestration = entry.Process?.OrchestrationActive == true && entry.Process?.HasLiveTurn != true;
             var deadline = started + TimeSpan.FromSeconds(ceiling);
             while (SessionStore.Busy(entry.Process))
             {
@@ -1079,6 +1100,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
                 }
                 await Task.Delay(50);
             }
+            RecordAwaitExit();
             // orchestration=true — прогон мёртв, держит только фолбэк-оркестрация (OrchestrationActive).
             _log.LogInformation(
                 "Ожидание прогона {Session} перед отложенной доставкой: waitedMs={WaitedMs} ceilingHit={CeilingHit} orchestration={Orchestration}",
@@ -1086,6 +1108,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         }
         catch
         {
+            RecordAwaitExit(); // исключение в момент ожидания — запись всё равно делается, одна: флаг не даёт повторить
             await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
             throw;
         }

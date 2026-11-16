@@ -136,6 +136,8 @@ public class MetricTagAllowlistTests
             "healability", // healable | unhealable
             "observer",    // имя типа наблюдателя сообщений сессии
             "session_kind",// human | executor
+            "ceiling_hit", // true | false — ожидание смерти прогона достигло потолка (TS-13)
+            "orchestration",// true | false — ожидание держала только фолбэк-оркестрация
         };
 
         ServerMetrics.AllowedTags.Should().BeEquivalentTo(expected);

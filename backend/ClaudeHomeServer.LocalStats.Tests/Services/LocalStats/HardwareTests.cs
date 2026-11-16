@@ -105,7 +105,9 @@ public class HardwareTests : IDisposable
 
         var cpu = Dir("hwmon", "hwmon0");
         Put(cpu, "name", "k10temp\n");
-        Put(cpu, "temp1_input", "76250"); Put(cpu, "temp3_input", "78000"); Put(cpu, "temp4_input", "49750");
+        Put(cpu, "temp1_input", "76250"); Put(cpu, "temp1_label", "Tctl");
+        Put(cpu, "temp3_input", "78000"); Put(cpu, "temp3_label", "Tccd1");
+        Put(cpu, "temp4_input", "49750"); Put(cpu, "temp4_label", "Tccd2");
 
         var board = Dir("hwmon", "hwmon6");
         Put(board, "name", "asusec\n");
@@ -134,8 +136,8 @@ public class HardwareTests : IDisposable
         var (reader, _) = BuildFakeHwmon();
         var snap = reader.Read()!;
 
-        snap.Cpu!.Tctl.Should().Be(76);
-        snap.Cpu.Tccd1.Should().Be(78);
+        snap.Cpus!.Should().ContainSingle().Which.Tctl.Should().Be(76);
+        snap.Cpus![0].Ccd.Should().Equal(78, 49);
         snap.Board!.Vrm.Should().Be(53);
         snap.Board.Chipset.Should().Be(78);
         snap.Board.ChipsetFanRpm.Should().Be(1159);
@@ -304,28 +306,31 @@ public class HardwareTests : IDisposable
 
     // ─── Сэмплер: кольцо, бакеты, свежесть ───────────────────────────────────────
 
-    private (HardwareSampler sampler, ManualTime time, string cpuDir) BuildSampler(IGpuSampler? gpu = null, string? helperFile = null)
+    private const string CpuDir = "/sys/class/hwmon/hwmon0/";
+
+    private (HardwareSampler sampler, ManualTime time, FakeNodeSource src) BuildSampler(IGpuSampler? gpu = null, string? helperFile = null)
     {
         var time = new ManualTime();
-        var hw = Dir("hw2");
-        var cpu = Dir("hw2", "hwmon0");
-        Put(cpu, "name", "k10temp");
-        var opts = new LocalModelStatsOptions { Enabled = true, Gddr6HelperFile = helperFile ?? Path.Combine(_root, "none.json") };
-        var sampler = new HardwareSampler(new FakeOptions(opts), gpu, new Gddr6HelperReader(time),
-            new HwmonReader(hw, Dir("block2"), Path.Combine(_root, "mi")), new MeminfoReader(Path.Combine(_root, "mem")), time);
-        return (sampler, time, cpu);
+        var src = new FakeNodeSource(gpu, helperFile);
+        src.Files["/sys/class/hwmon/hwmon0/name"] = "k10temp\n";
+        src.Files[CpuDir + "temp1_label"] = "Tctl\n";
+        var opts = new LocalModelStatsOptions { Enabled = true };
+        var sampler = new HardwareSampler(new FakeOptions(opts), [new HardwareSamplerNode("worker", src)],
+            new Gddr6HelperReader(time), time);
+        return (sampler, time, src);
     }
 
     [Fact]
     public async Task Ring_BucketTakesMax_NullBreaks_NotZero()
     {
-        var (s, time, cpu) = BuildSampler();
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
         // t0: 60 °C, +2 с: 50 °C (максимум не последний!), +4 с: датчик исчез (null).
-        Put(cpu, "temp1_input", "60000"); await s.PollOnceAsync(); time.Advance(TimeSpan.FromSeconds(2));
-        Put(cpu, "temp1_input", "50000"); await s.PollOnceAsync(); time.Advance(TimeSpan.FromSeconds(2));
-        File.Delete(Path.Combine(cpu, "temp1_input")); await s.PollOnceAsync(); time.Advance(TimeSpan.FromSeconds(2));
+        src.Files[CpuDir + "temp1_input"] = "60000"; await sampler.PollNodeAsync("worker"); time.Advance(TimeSpan.FromSeconds(2));
+        src.Files[CpuDir + "temp1_input"] = "50000"; await sampler.PollNodeAsync("worker"); time.Advance(TimeSpan.FromSeconds(2));
+        src.Files.Remove(CpuDir + "temp1_input"); await sampler.PollNodeAsync("worker"); time.Advance(TimeSpan.FromSeconds(2));
 
-        var pts = s.Aggregate(x => x.Cpu?.Tctl, TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(10));
+        var pts = s.Aggregate(x => x.Cpus?[0].Tctl, TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(10));
         pts.Should().HaveCount(6, "окно 1 мин / шаг 10 с");
         pts.Where(p => p.value is not null).Should().ContainSingle().Which.value.Should().Be(60,
             "в бакете максимум (50, 60), снимок с null значения не вносит");
@@ -335,16 +340,17 @@ public class HardwareTests : IDisposable
     [Fact]
     public async Task Status_StaleAfter10s_NotBefore()
     {
-        var (s, time, cpu) = BuildSampler();
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
         s.Status.Should().Be("ok", "снимков ещё нет — не stale");
-        Put(cpu, "temp1_input", "50000");
-        await s.PollOnceAsync();
+        src.Files[CpuDir + "temp1_input"] = "50000";
+        await sampler.PollNodeAsync("worker");
         var at = time.GetUtcNow();
         time.Advance(TimeSpan.FromSeconds(9));
         s.Status.Should().Be("ok");
         time.Advance(TimeSpan.FromSeconds(2));
         s.Status.Should().Be("stale");
-        s.StaleSince.Should().Be(at.ToUnixTimeMilliseconds());
+        s.Since.Should().Be(at.ToUnixTimeMilliseconds());
     }
 
     // ─── Отчёт ───────────────────────────────────────────────────────────────────
@@ -361,7 +367,7 @@ public class HardwareTests : IDisposable
         var (s, time, _) = BuildSampler(new FakeGpu(Gpu(70)), file);
         File.WriteAllText(file, HelperJson(time.GetUtcNow(),
             "[{\"busId\":\"0000:0b:00.0\",\"deviceId\":\"0x2204\",\"memTempC\":96,\"hotspotTempC\":75}]"));
-        await s.PollOnceAsync();
+        await s.PollNodeAsync("worker");
 
         var report = new HardwareReportService(s).Build(TimeSpan.FromMinutes(15));
         var g = report.Gpus.Single();
@@ -385,7 +391,7 @@ public class HardwareTests : IDisposable
         var file = Path.Combine(_root, "temps.json");
         var (s, time, _) = BuildSampler(new FakeGpu(Gpu(70)), file);
         File.WriteAllText(file, HelperJson(time.GetUtcNow().AddSeconds(-30)));
-        await s.PollOnceAsync();
+        await s.PollNodeAsync("worker");
 
         var g = new HardwareReportService(s).Build(TimeSpan.FromMinutes(1)).Gpus.Single();
         g.MemTempC.Should().BeNull();
@@ -398,7 +404,7 @@ public class HardwareTests : IDisposable
     {
         var file = Path.Combine(_root, "temps.json");
         var (s, time, _) = BuildSampler(new FakeGpu(Gpu(95)), file);
-        await s.PollOnceAsync();
+        await s.PollNodeAsync("worker");
         time.Advance(TimeSpan.FromSeconds(30));
 
         var report = new HardwareReportService(s).Build(TimeSpan.FromMinutes(1));
@@ -408,11 +414,14 @@ public class HardwareTests : IDisposable
         report.Nodes.Single(n => n.Kind == "gpu").Level.Should().Be("ok");
     }
 
-    private sealed class FixedSampler(HardwareSample cur) : IHardwareSampler
+    private sealed class FixedSampler(HardwareSample cur) : IHardwareSampler, INodeHardwareView
     {
+        public IReadOnlyList<string> NodeKeys => ["worker"];
+        public INodeHardwareView? ForNode(string key) => key == "worker" ? this : null;
+        public string Key => "worker";
         public HardwareSample? Current => cur;
         public string Status => "ok";
-        public long? StaleSince => null;
+        public long? Since => null;
         public IReadOnlyList<(long t, int? value)> Aggregate(Func<HardwareSample, int?> selector, TimeSpan window, TimeSpan step) =>
             [(0, selector(cur))];
     }

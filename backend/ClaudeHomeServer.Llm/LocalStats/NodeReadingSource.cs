@@ -23,6 +23,9 @@ public sealed record NodeReading
     public IReadOnlyList<GpuSample> Gpus { get; init; } = [];
     // Текст /run/ccs-gddr6/temps.json дословно; null — файла нет.
     public string? Gddr6 { get; init; }
+    // Текст /run/ccs-ipmi/sdr.json дословно; null — файла нет или он больше потолка.
+    // Толкование — Ш2d4, здесь только перенос.
+    public string? Ipmi { get; init; }
     // Возраст среза, мс: у локального источника 0 (снимок свежий по построению);
     // у агента — ageMs из ответа (monotonic-часы агента).
     public long AgeMs { get; init; }
@@ -46,8 +49,9 @@ public sealed class LocalReadingSource : INodeReadingSource
     private readonly ISysFileSource _files;
     private readonly IGpuSampler _gpu;
     private readonly string _gddr6File;
+    private readonly string? _ipmiFile;
 
-    public LocalReadingSource(IGpuSampler gpu, string gddr6File)
+    public LocalReadingSource(IGpuSampler gpu, string gddr6File, string? ipmiFile = null)
     {
         // Файлы — реальный диск (тот же DiskFileSource, что у сегодняшнего локального
         // снимка); тесты гоняют на фикстуре во временном каталоге — DiskFileSource
@@ -55,6 +59,7 @@ public sealed class LocalReadingSource : INodeReadingSource
         _files = new DiskFileSource();
         _gpu = gpu;
         _gddr6File = gddr6File;
+        _ipmiFile = ipmiFile;
     }
 
     public async Task<NodeReading> ReadAsync(CancellationToken ct = default)
@@ -68,6 +73,7 @@ public sealed class LocalReadingSource : INodeReadingSource
                 Files = _files,
                 Gpus = gpus,
                 Gddr6 = ReadGddr6(),
+                Ipmi = ReadIpmi(),
                 AgeMs = 0,
             };
         }
@@ -81,11 +87,18 @@ public sealed class LocalReadingSource : INodeReadingSource
 
     // Текст файла помощника дословно; null — файла нет/сбой чтения (дальнеe решит
     // Gddr6HelperReader в сэмплере: свежесть по метке "at", не здесь).
-    private string? ReadGddr6()
+    private string? ReadGddr6() => ReadCapped(_gddr6File, NodeSliceLimits.MaxGddr6Bytes);
+
+    // Текст файла помощника ccs-ipmi дословно; нет файла/путь не задан/больше 16 КБ → null.
+    private string? ReadIpmi() => _ipmiFile is null ? null : ReadCapped(_ipmiFile, NodeSliceLimits.MaxIpmiBytes);
+
+    private static string? ReadCapped(string path, int maxBytes)
     {
         try
         {
-            return File.Exists(_gddr6File) ? File.ReadAllText(_gddr6File) : null;
+            if (!File.Exists(path) || new FileInfo(path).Length > maxBytes)
+                return null;
+            return File.ReadAllText(path);
         }
         catch
         {

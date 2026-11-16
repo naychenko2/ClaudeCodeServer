@@ -3,12 +3,13 @@ using System.Text;
 
 namespace ClaudeHomeServer.Services.Llm;
 
-// CPU (k10temp): Tctl — главный датчик, Tccd1/Tccd2 — кристаллы (деталь плитки «Процессор»).
+// CPU (k10temp, один сокет): Tctl — главный датчик, Ccd — кристаллы (деталь плитки «Процессор»).
+// Кристаллы — все temp* с меткой Tccd<k> в порядке k, подряд, без дыр: нумерация k у EPYC не
+// сплошная (Tccd1, 2, 3, 5, 7, 8), номера файлов temp3/temp4 не зашиты.
 public sealed record HwmonCpu
 {
     public int? Tctl { get; init; }
-    public int? Tccd1 { get; init; }
-    public int? Tccd2 { get; init; }
+    public int?[] Ccd { get; init; } = [];
 }
 
 // Плата (asusec): чипсет + VRM + вентилятор чипсета. «Процессор по датчику платы» (asusec CPU)
@@ -47,13 +48,18 @@ public sealed record HwmonFan
     public int Rpm { get; init; }
 }
 
-// Снимок hwmon: CPU, плата, диски, вентиляторы корпуса. null-поля — датчика нет.
+// Снимок hwmon: CPU по сокетам, плата, диски, вентиляторы корпуса. null-поля — датчика нет.
 public sealed record HwmonSnapshot
 {
-    public HwmonCpu? Cpu { get; init; }
+    // Сокеты в порядке PCI-адреса (последний сегмент цели ссылки hwmonN/device), НЕ по номеру hwmonN;
+    // null — k10temp нет. Индекс в массиве = номер сокета.
+    public HwmonCpu[]? Cpus { get; init; }
     public HwmonBoard? Board { get; init; }
     public HwmonDisk[]? Disks { get; init; }
     public HwmonFan[]? CaseFans { get; init; }
+    // Имена чипов платы, которых в hwmon оказалось несколько (берётся первый по порядку device);
+    // предупреждение с троттлингом пишет вызывающий — у читателя логгера нет.
+    public string[] AmbiguousChips { get; init; } = [];
 }
 
 // Читатель /sys/class/hwmon/* (без процессов и без root). Имена hwmon определяются по `name`
@@ -98,35 +104,49 @@ public sealed class HwmonReader
             return null;
 
         var (kvController, kvFs) = FindKvDisk();
+        var ambiguous = new List<string>();
         var snap = new HwmonSnapshot
         {
-            Cpu = ReadCpu(),
-            Board = ReadBoard(),
+            Cpus = ReadCpus(),
+            Board = ReadBoard(ambiguous),
             Disks = ReadDisks(kvController, kvFs),
-            CaseFans = ReadCaseFans(),
+            CaseFans = ReadCaseFans(ambiguous),
         };
-        return snap;
+        return snap with { AmbiguousChips = ambiguous.Distinct().ToArray() };
     }
 
-    // ─── CPU (k10temp): Tctl, Tccd1, Tccd2 ─────────────────────────────────────────
+    // ─── CPU (k10temp): Tctl и кристаллы по сокетам ────────────────────────────────
 
-    private HwmonCpu? ReadCpu()
+    // Все k10temp в порядке сокетов (см. OrderedHwmon); null — ни одного.
+    private HwmonCpu[]? ReadCpus()
     {
-        var dir = FindHwmon("k10temp");
-        if (dir is null) return null;
-        return new HwmonCpu
+        var dirs = OrderedHwmon("k10temp");
+        if (dirs.Count == 0) return null;
+        return dirs.Select(ReadCpu).ToArray();
+    }
+
+    private HwmonCpu ReadCpu(string dir)
+    {
+        int? tctl = null;
+        var ccd = new List<(int k, int? temp)>();
+        foreach (var f in EnumerateFiles(dir, "temp*_input"))
         {
-            Tctl = ReadTemp(dir, "temp1"),
-            Tccd1 = ReadTemp(dir, "temp3"),
-            Tccd2 = ReadTemp(dir, "temp4"),
-        };
+            var label = ReadLabel(f);
+            if (label is null) continue;
+            if (label == "Tctl")
+                tctl ??= ReadMilliC(f);
+            else if (label.StartsWith("Tccd", StringComparison.Ordinal)
+                     && int.TryParse(label.AsSpan(4), NumberStyles.None, CultureInfo.InvariantCulture, out var k))
+                ccd.Add((k, ReadMilliC(f)));
+        }
+        return new HwmonCpu { Tctl = tctl, Ccd = ccd.OrderBy(c => c.k).Select(c => c.temp).ToArray() };
     }
 
     // ─── Плата (asusec): Chipset, VRM, вентилятор чипсета ───────────────────────────
 
-    private HwmonBoard? ReadBoard()
+    private HwmonBoard? ReadBoard(List<string> ambiguous)
     {
-        var dir = FindHwmon("asusec");
+        var dir = FindBoardChip("asusec", ambiguous);
         if (dir is null) return null;
         // Метки asusec: temp1=Chipset, temp2=CPU, temp3=Motherboard, temp5=VRM, fan2=Chipset.
         // Определяем по label, не по номеру (номера могут отличаться на другой плате).
@@ -213,9 +233,9 @@ public sealed class HwmonReader
 
     // ─── Вентиляторы корпуса (nct6798): только подключённые (rpm > 0) ──────────────
 
-    private HwmonFan[]? ReadCaseFans()
+    private HwmonFan[]? ReadCaseFans(List<string> ambiguous)
     {
-        var dir = FindHwmon("nct6798");
+        var dir = FindBoardChip("nct6798", ambiguous);
         if (dir is null) return null;
 
         var fans = new List<HwmonFan>();
@@ -232,15 +252,48 @@ public sealed class HwmonReader
 
     // ─── Утилиты: hwmon по name, датчики, контроллер nvme, размер/занято диска ─────
 
-    // Каталог hwmon с заданным name (первый); null — нет такого датчика.
-    private string? FindHwmon(string name)
+    // Каталоги hwmon с заданным name в порядке сокетов: сначала чипы со ссылкой device — по
+    // последнему сегменту цели (PCI-адрес, сравнение строкой), затем чипы без ссылки — по
+    // возрастанию N. Номер hwmonN между загрузками плавает и порядком сокетов НЕ служит.
+    private List<string> OrderedHwmon(string name)
     {
+        var keyed = new List<(bool noLink, string device, int n, string dir)>();
         foreach (var dir in EnumerateHwmonDirs())
         {
-            if (ReadName(dir) == name)
-                return dir;
+            if (ReadName(dir) != name) continue;
+            string? device = null;
+            try
+            {
+                var target = _fs.LinkTarget(Path.Combine(dir, "device"));
+                if (!string.IsNullOrEmpty(target))
+                    device = target.TrimEnd('/').Split('/').Last();
+            }
+            catch { }
+            keyed.Add((device is null, device ?? "", HwmonNumber(dir), dir));
         }
-        return null;
+        return keyed
+            .OrderBy(k => k.noLink)
+            .ThenBy(k => k.device, StringComparer.Ordinal)
+            .ThenBy(k => k.n)
+            .Select(k => k.dir)
+            .ToList();
+    }
+
+    // Номер из имени каталога hwmonN; не число — в конец (int.MaxValue).
+    private static int HwmonNumber(string dir)
+    {
+        var leaf = Path.GetFileName(dir.TrimEnd('/'));
+        return leaf.StartsWith("hwmon", StringComparison.Ordinal)
+               && int.TryParse(leaf.AsSpan(5), NumberStyles.None, CultureInfo.InvariantCulture, out var n)
+            ? n : int.MaxValue;
+    }
+
+    // Чип платы: первый в порядке OrderedHwmon; если их несколько — имя уходит в ambiguous.
+    private string? FindBoardChip(string name, List<string> ambiguous)
+    {
+        var dirs = OrderedHwmon(name);
+        if (dirs.Count > 1) ambiguous.Add(name);
+        return dirs.Count > 0 ? dirs[0] : null;
     }
 
     // Все каталоги hwmon с заданным name.

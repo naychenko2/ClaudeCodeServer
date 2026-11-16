@@ -86,6 +86,7 @@ public sealed class RemoteReadingSource : INodeReadingSource
                     Files = BuildFiles(s),
                     Gpus = GpuSampler.ParseCsv(s.GpuCsv),
                     Gddr6 = s.Gddr6,
+                    Ipmi = s.Ipmi,
                     AgeMs = s.AgeMs,
                 };
             default:

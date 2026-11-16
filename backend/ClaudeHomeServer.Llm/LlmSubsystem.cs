@@ -524,16 +524,38 @@ public sealed class LlmSubsystem : IAppSubsystem
         // ccs-gddr6, /sys/class/hwmon, /proc/meminfo). Singleton + hosted от того же экземпляра
         // (без второго AddSingleton<HardwareSampler>: гейт DuplicateSingletonRegistrationTests).
         services.AddSingleton(sp => new Gddr6HelperReader(sp.GetRequiredService<TimeProvider>()));
-        services.AddSingleton(_ => new HwmonReader());
-        services.AddSingleton(_ => new MeminfoReader());
-        services.AddSingleton<HardwareSampler>(sp => new HardwareSampler(
-            sp.GetRequiredService<IOptionsMonitor<LocalModelStatsOptions>>(),
-            sp.GetRequiredService<IGpuSampler>(),
-            sp.GetRequiredService<Gddr6HelperReader>(),
-            sp.GetRequiredService<HwmonReader>(),
-            sp.GetRequiredService<MeminfoReader>(),
-            sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<ILogger<HardwareSampler>>()));
+        // Узлы фермы: реестр HardwareNodes (URL агентов — только из IConfiguration), HTTP-клиент к
+        // агентам тихий (мёртвый узел — не Error со стеком). Без секции — один узел worker/local.
+        const string hardwareNodesClient = "HardwareNodes";
+        services.AddQuietHttpClient(
+            hardwareNodesClient,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.HardwareNodes",
+                Subject: "агентом узла фермы (/v1/slice)",
+                Consequence: "Узел покажется в статусе «не отвечает» до следующего опроса."));
+        services.AddSingleton<HardwareSampler>(sp =>
+        {
+            var log = sp.GetRequiredService<ILogger<HardwareSampler>>();
+            var time = sp.GetRequiredService<TimeProvider>();
+            var stats = sp.GetRequiredService<IOptionsMonitor<LocalModelStatsOptions>>().CurrentValue;
+            var registry = HardwareNodesOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>());
+            var effective = registry.EffectiveNodes();
+            if (registry.Nodes.Count > 0 && effective.Count < registry.Nodes.Count)
+                log.LogWarning("HardwareNodes: пропущено элементов с неверным Key/Source/дублем: {Skipped} из {Total}",
+                    registry.Nodes.Count - effective.Count, registry.Nodes.Count);
+            var nodes = effective.Select(def => new HardwareSamplerNode(def.Key,
+                def.Source == "local"
+                    ? new LocalReadingSource(sp.GetRequiredService<IGpuSampler>(), stats.Gddr6HelperFile, stats.IpmiHelperFile)
+                    : new RemoteReadingSource(
+                        sp.GetRequiredService<IHttpClientFactory>().CreateClient(hardwareNodesClient),
+                        new Uri(def.Source), time))).ToList();
+            return new HardwareSampler(
+                sp.GetRequiredService<IOptionsMonitor<LocalModelStatsOptions>>(),
+                nodes,
+                sp.GetRequiredService<Gddr6HelperReader>(),
+                time,
+                log);
+        });
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<HardwareSampler>());
         services.AddSingleton<IHardwareSampler>(sp => sp.GetRequiredService<HardwareSampler>());
         services.AddSingleton<IHardwareReportService, HardwareReportService>();

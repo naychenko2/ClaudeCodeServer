@@ -65,7 +65,7 @@ public class HwmonSliceParityTests : IDisposable
 
         slice.Should().NotBeNull(because: "фикстура непустая — иначе паритет вакуумный");
         disk.Should().NotBeNull();
-        slice!.Cpu.Should().Be(disk!.Cpu);
+        slice!.Cpus.Should().BeEquivalentTo(disk!.Cpus, o => o.WithStrictOrdering());
         slice.Board.Should().Be(disk.Board);
         slice.Disks.Should().Equal(disk.Disks);
         slice.CaseFans.Should().Equal(disk.CaseFans);
@@ -89,7 +89,9 @@ public class HwmonSliceParityTests : IDisposable
 
         var cpu = Dir("hwmon", "hwmon0");
         Put(cpu, "name", "k10temp\n");
-        Put(cpu, "temp1_input", "76250"); Put(cpu, "temp3_input", "78000"); Put(cpu, "temp4_input", "49750");
+        Put(cpu, "temp1_input", "76250"); Put(cpu, "temp1_label", "Tctl");
+        Put(cpu, "temp3_input", "78000"); Put(cpu, "temp3_label", "Tccd1");
+        Put(cpu, "temp4_input", "49750"); Put(cpu, "temp4_label", "Tccd2");
 
         var board = Dir("hwmon", "hwmon6");
         Put(board, "name", "asusec\n");

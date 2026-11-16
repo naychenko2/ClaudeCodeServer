@@ -112,10 +112,20 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
         : window <= TimeSpan.FromMinutes(15) ? TimeSpan.FromSeconds(10)
         : TimeSpan.FromSeconds(30);
 
+    // Контракт ручки — один узел «worker» (узлы на сокет и ?node — Ш3a); нет такого узла — пустой отчёт.
+    private INodeHardwareView? View => sampler.ForNode("worker");
+
+    // Статус отчёта остаётся «ok»|«stale»: down/incompatible узла для ручки — тот же «не отвечает».
+    private static string ReportStatus(INodeHardwareView? v) => v is null || v.Status == "ok" ? "ok" : "stale";
+
+    private static HwmonCpu? Cpu0(HardwareSample? s) => s?.Cpus is { Length: > 0 } a ? a[0] : null;
+    private static int? Vrm0(HardwareSample? s) => s?.Vrms is { Length: > 0 } a ? a[0] : null;
+
     public HardwareReport Build(TimeSpan window)
     {
-        var cur = sampler.Current;
-        var status = sampler.Status;
+        var view = View;
+        var cur = view?.Current;
+        var status = ReportStatus(view);
         var stale = status == "stale";
         var step = StepFor(window);
 
@@ -129,14 +139,15 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
         var fans = cur?.CaseFans?.Select(f => new HardwareFanDto(f.Label, f.Rpm)).ToArray() ?? [];
         var level = stale ? "ok" : HardwareThresholds.Worst(nodes.Select(n => n.Level));
         return new HardwareReport(
-            (cur?.At ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds(), status, sampler.StaleSince, level,
+            (cur?.At ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds(), status, stale ? view!.Since : null, level,
             gpus.Select(x => x.Dto).ToArray(), nodes, fans, series, (long)step.TotalMilliseconds);
     }
 
     public HardwareBrief Brief()
     {
-        var cur = sampler.Current;
-        var stale = sampler.Status == "stale";
+        var view = View;
+        var cur = view?.Current;
+        var stale = ReportStatus(view) == "stale";
         var gpus = BuildGpus(cur, stale);
         var nodes = BuildNodes(cur, gpus, stale);
         var level = stale ? "ok" : HardwareThresholds.Worst(nodes.Select(n => n.Level));
@@ -190,21 +201,22 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
                 g.ShownThresholds.Warn, g.ShownThresholds.Danger, new HardwareNodeDetailDto(), empty));
         }
 
-        if (cur?.Cpu is { } cpu)
+        if (Cpu0(cur) is { } cpu)
         {
             var t = HardwareThresholds.Cpu;
             nodes.Add(new HardwareNodeDto("cpu", "cpu", "Процессор", cpu.Tctl,
                 cpu.Tctl is null ? "nodata" : "ok", Lvl(cpu.Tctl, t), t.Warn, t.Danger,
-                new HardwareNodeDetailDto { CcdC = new[] { cpu.Tccd1, cpu.Tccd2 }.Where(x => x is not null).Select(x => x!.Value).ToArray() },
+                new HardwareNodeDetailDto { CcdC = cpu.Ccd.Where(x => x is not null).Select(x => x!.Value).ToArray() },
                 empty));
         }
 
         // Плата есть, если hwmon asusec присутствовал (VRM/чипсет/вентилятор — хоть что-то прочитано).
-        if (cur is { } c && (c.Vrm is not null || c.Chipset is not null))
+        if (cur is { } c && (Vrm0(c) is not null || c.Chipset is not null))
         {
+            var vrm = Vrm0(c);
             var tv = HardwareThresholds.Vrm;
-            nodes.Add(new HardwareNodeDto("vrm", "vrm", "Питание процессора", c.Vrm,
-                c.Vrm is null ? "nodata" : "ok", Lvl(c.Vrm, tv), tv.Warn, tv.Danger, new HardwareNodeDetailDto(), empty));
+            nodes.Add(new HardwareNodeDto("vrm", "vrm", "Питание процессора", vrm,
+                vrm is null ? "nodata" : "ok", Lvl(vrm, tv), tv.Warn, tv.Danger, new HardwareNodeDetailDto(), empty));
             var tc = HardwareThresholds.Chipset;
             nodes.Add(new HardwareNodeDto("chipset", "chipset", "Чипсет платы", c.Chipset,
                 c.Chipset is null ? "nodata" : "ok", Lvl(c.Chipset, tc), tc.Warn, tc.Danger,
@@ -259,8 +271,8 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
             return s => Gpu(s, gi) is { } g ? g.MemTempC ?? g.CoreTempC : null;
         return key switch
         {
-            "cpu" => s => s.Cpu?.Tctl,
-            "vrm" => s => s.Vrm,
+            "cpu" => s => Cpu0(s)?.Tctl,
+            "vrm" => s => Vrm0(s),
             "chipset" => s => s.Chipset,
             "water" => s => s.Water,
             "ram" => s => Perc(s.RamUsedGb, s.RamTotalGb),
@@ -277,13 +289,13 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
     {
         var sel = SelectorFor(key);
         if (sel is null) return [];
-        return sampler.Aggregate(sel, SparkWindow, SparkStep).Select(p => p.value).ToArray();
+        return View?.Aggregate(sel, SparkWindow, SparkStep).Select(p => p.value).ToArray() ?? [];
     }
 
     private HardwareSeriesDto[] BuildSeries(HardwareSample? cur, TimeSpan window, TimeSpan step)
     {
         var list = new List<HardwareSeriesDto>();
-        int?[] Pts(Func<HardwareSample, int?> sel) => sampler.Aggregate(sel, window, step).Select(p => p.value).ToArray();
+        int?[] Pts(Func<HardwareSample, int?> sel) => View?.Aggregate(sel, window, step).Select(p => p.value).ToArray() ?? [];
 
         foreach (var g in cur?.Gpus ?? [])
         {
@@ -293,8 +305,8 @@ public sealed class HardwareReportService(IHardwareSampler sampler) : IHardwareR
             list.Add(new HardwareSeriesDto($"core-{i}", "core", i, $"Ядро · карта {n}", Pts(s => Gpu(s, i)?.CoreTempC)));
             list.Add(new HardwareSeriesDto($"hotspot-{i}", "hotspot", i, $"Горячая точка · карта {n}", Pts(s => Gpu(s, i)?.HotspotTempC)));
         }
-        if (cur?.Cpu is not null)
-            list.Add(new HardwareSeriesDto("cpu", "cpu", null, "Процессор", Pts(s => s.Cpu?.Tctl)));
+        if (Cpu0(cur) is not null)
+            list.Add(new HardwareSeriesDto("cpu", "cpu", null, "Процессор", Pts(s => Cpu0(s)?.Tctl)));
         if (cur?.Chipset is not null)
             list.Add(new HardwareSeriesDto("chipset", "chipset", null, "Чипсет", Pts(s => s.Chipset)));
         if (cur?.Water is not null)

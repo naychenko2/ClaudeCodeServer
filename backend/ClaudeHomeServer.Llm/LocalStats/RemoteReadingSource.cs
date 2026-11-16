@@ -49,6 +49,15 @@ public sealed class RemoteReadingSource : INodeReadingSource
         {
             return NodeReading.Down(); // тайм-аут 1,5 с (часовой или сетевой).
         }
+        // Простой OperationCanceledException: так бросит отмену базовый Stream.ReadAsync и любые
+        // обёртки чтения тела (GZip/декомпрессия) — токен вызывающего цел, а TaskCanceledException
+        // ловит только свой подкласс. Ставится ПОСЛЕ catch (TaskCanceledException): без фильтра он
+        // поглотил бы подкласс, следующий clause стал бы недостижимым (CS0160), и мутация
+        // «убрать catch TaskCanceledException» перестала бы краснеть.
+        catch (OperationCanceledException)
+        {
+            return NodeReading.Down(); // таймер тайм-аута сработал на чтении тела.
+        }
         catch (HttpRequestException)
         {
             return NodeReading.Down(); // сеть/коннект.
@@ -57,8 +66,10 @@ public sealed class RemoteReadingSource : INodeReadingSource
         {
             return NodeReading.Down(); // обрыв потока тела.
         }
-        // Список закрытый: TaskCanceledException ловит только свой catch (мутация c2),
-        // NodeSliceParser не бросает по контракту (NodeSliceTests), ParseCsv/BuildFiles — чистые.
+        // Список закрытый: отмена ct вызывающего — только фильтр-catch выше (тест
+        // ReadAsync_CallerCancellation_Propagates), тайм-аут — TaskCanceledException/
+        // OperationCanceledException (мутации c2), NodeSliceParser не бросает по контракту
+        // (NodeSliceTests), ParseCsv/BuildFiles — чистые.
 
         var parsed = NodeSliceParser.Parse(body);
         switch (parsed.Status)

@@ -214,6 +214,56 @@ public class RemoteReadingSourceTests
         await Assert.ThrowsAsync<TaskCanceledException>(() => readTask);
     }
 
+    // Фаза чтения тела (её в прошлом покрытии не было): заголовки пришли, тело читается.
+    // Поток бросает простой OperationCanceledException — так делает отмену базовый
+    // Stream.ReadAsync и любые обёртки (GZip/декомпрессия), а не TaskCanceledException.
+    // Токен вызывающего цел (отменён только связанный CTS часового таймера) → фильтр-catch
+    // не срабатывает → down, исключение наружу не выходит (инвариант ADR-029).
+    // Мутация «убрать catch OperationCanceledException» — краснеет именно этот тест.
+    [Fact]
+    public async Task ReadAsync_TimeoutDuringBodyRead_DownWithoutThrow()
+    {
+        var time = new ManualTimerTime();
+        var handler = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new CancelThrowingStream()),
+        });
+        var readTask = SourceOf(handler, time).ReadAsync();
+
+        // Чтение тела уже началось (только с ним поток и встретится), теперь стреляет таймер.
+        await Task.Delay(30);
+        time.Fire();
+        var reading = await readTask;
+
+        reading.Status.Should().Be(NodeReadingStatus.Down);
+    }
+
+    // Поток тела на одном чтении: ждёт отмены токена и бросает простой OperationCanceledException
+    // (не TaskCanceledException) — поведение базового Stream.ReadAsync / обёрток декомпрессии.
+    private sealed class CancelThrowingStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set { } }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct)
+        {
+            var tcs = new TaskCompletionSource<bool>();
+            using var _ = ct.Register(() => tcs.TrySetResult(true));
+            await tcs.Task.ConfigureAwait(false);
+            throw new OperationCanceledException(ct);
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     // ─── c3: независимость одновременных вызовов ──────────────────────────────────
 
     // Сценарный handler: оба ответа — «медленные» (первые половины сразу, вторые — с задержкой),

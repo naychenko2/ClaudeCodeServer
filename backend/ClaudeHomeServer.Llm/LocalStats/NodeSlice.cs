@@ -51,8 +51,9 @@ public sealed record NodeSlice
     public int V { get; init; }
     // Возраст среза по монотонным часам агента (мс). Метки истории ставит worker при получении.
     public long AgeMs { get; init; }
-    // Настенные часы узла (unix-мс) момента сборки. Нужны ТОЛЬКО для свежести gddr6:
-    // метка "at" выставлена часами узла, с часами worker не сравнивается (Gddr6HelperReader.StaleAfter).
+    // Настенные часы узла (unix-мс) момента сборки. Нужны для свежести файлов root-помощников:
+    // и ipmi (TryReadIpmi), и gddr6 (Gddr6HelperReader): метка "at" выставлена часами узла,
+    // с часами worker не сравнивается (IpmiFreshAfterMs, Gddr6HelperReader.StaleAfter, ADR-029). Ни для чего другого.
     public long ClockMs { get; init; }
     // Абсолютный путь → текст дословно (с завершающим \n). Файла нет или он за потолка — ключа нет.
     public IReadOnlyDictionary<string, string> Files { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);

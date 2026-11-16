@@ -24,6 +24,10 @@ public static class NodeSliceLimits
     // Исключения из потолка строки: /proc/self/mountinfo после фильтра — 64 КБ, gddr6 — 16 КБ.
     public const int MaxMountinfoBytes = 64 * 1024;
     public const int MaxGddr6Bytes = 16 * 1024;
+    // ipmi — тот же потолок, что у gddr6 (ADR-029, «Узел — набор устройств»).
+    public const int MaxIpmiBytes = 16 * 1024;
+    // Свежесть ipmi: clockMs − at ≤ 30 000 (покрывает один пропуск помощника, ADR-029).
+    public const long IpmiFreshAfterMs = 30_000;
 }
 
 // Запись statvfs одной точки монтирования: байты, как DriveInfo.TotalSize/TotalFreeSpace на worker.
@@ -58,8 +62,40 @@ public sealed record NodeSlice
     public string? GpuCsv { get; init; }
     // Текст /run/ccs-gddr6/temps.json дословно (≤ MaxGddr6Bytes); null — файла нет.
     public string? Gddr6 { get; init; }
+    // Текст /run/ccs-ipmi/sdr.json дословно (≤ MaxIpmiBytes). Необязательное поле v1 без смены v
+    // (ADR-029, «Узел — набор устройств»): нет ключа, null или не строка — null, срез принимается.
+    public string? Ipmi { get; init; }
     // По одной записи на точку монтирования из отданного mountinfo (≤ MaxStatvfs).
     public IReadOnlyList<NodeStatvfs> Statvfs { get; init; } = [];
+
+    // Разбор обёртки ipmi {at, sdr} (тот же образец, что Gddr6HelperReader.Parse):
+    // null — текста нет, JSON кривой, полей нет или нет или не те типы, или несвежее
+    // (ClockMs − at > IpmiFreshAfterMs; часы узла — свои, с часами worker не сравниваем).
+    // Толкование строк SDR — не здесь (Ш2d3).
+    public (long at, string sdr)? TryReadIpmi()
+    {
+        if (Ipmi is null)
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(Ipmi);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+            if (!root.TryGetProperty("at", out var atEl) || atEl.ValueKind != JsonValueKind.Number || !atEl.TryGetInt64(out var at))
+                return null;
+            if (!root.TryGetProperty("sdr", out var sdrEl) || sdrEl.ValueKind != JsonValueKind.String)
+                return null;
+            if (ClockMs - at > NodeSliceLimits.IpmiFreshAfterMs)
+                return null;
+            return (at, sdrEl.GetString()!);
+        }
+        catch
+        {
+            // Недоверенный текст помощника: наружу не выходит.
+            return null;
+        }
+    }
 }
 
 public enum NodeSliceParseStatus
@@ -149,6 +185,15 @@ public static class NodeSliceParser
             if (gddr6 != null && Encoding.UTF8.GetByteCount(gddr6) > NodeSliceLimits.MaxGddr6Bytes)
                 gddr6 = null;
 
+            // ipmi — необязательное поле без смены v (ADR-029, «Узел — набор устройств»):
+            // нет ключа, null или не строка — null, срез принимается (это не Invalid);
+            // потолок 16 КБ, как у gddr6: сверх — отбрасывается целиком, не обрезается.
+            string? ipmi = null;
+            if (root.TryGetProperty("ipmi", out var ipmiEl) && ipmiEl.ValueKind == JsonValueKind.String)
+                ipmi = ipmiEl.GetString();
+            if (ipmi != null && Encoding.UTF8.GetByteCount(ipmi) > NodeSliceLimits.MaxIpmiBytes)
+                ipmi = null;
+
             return NodeSliceParseResult.Ok(new NodeSlice
             {
                 V = v,
@@ -158,6 +203,7 @@ public static class NodeSliceParser
                 Links = ReadMap(linksEl, NodeSliceLimits.MaxLinks, allowedHwmon),
                 GpuCsv = TrimGpuCsv(gpuCsv),
                 Gddr6 = gddr6,
+                Ipmi = ipmi,
                 Statvfs = ReadStatvfs(statvfsEl),
             });
         }

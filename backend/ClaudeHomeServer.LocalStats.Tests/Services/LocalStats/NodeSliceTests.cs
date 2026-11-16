@@ -10,7 +10,9 @@ namespace ClaudeHomeServer.Tests.Services.LocalStats;
 /// разбора недоверенного тела: любой вход даёт результат (Ok/Incompatible/Invalid), исключение
 /// наружу не выходит никогда. Потолки — из ADR, константами в NodeSlice.cs: тело ≤ 256 КБ до разбора,
 /// карт ≤ 16, чипов hwmon ≤ 64 (наименьшие N), записей files/links ≤ 4096, строка > 4 КБ отбрасывается
-/// целиком (ADR: «отбрасывается целиком, а не обрезается»), исключения — mountinfo ≤ 64 КБ, gddr6 ≤ 16 КБ.
+/// целиком (ADR: «отбрасывается целиком, а не обрезается»), исключения — mountinfo ≤ 64 КБ, gddr6 и ipmi
+/// ≤ 16 КБ. ipmi — необязательное поле без смены v: нет ключа / null / не строка → null, срез принимается;
+/// TryReadIpmi — разбор обёртки {at, sdr} со свежестью clockMs − at ≤ 30 000 (несвежее/кривое → null).
 /// Плюс реестр HardwareNodesOptions: EffectiveNodes — пропуск неверных элементов и фолбэк worker/local.
 /// </summary>
 public class NodeSliceTests
@@ -182,6 +184,62 @@ public class NodeSliceTests
         ParseSlice(gddr6: new string('x', NodeSliceLimits.MaxGddr6Bytes)).Slice!.Gddr6.Should().NotBeNull();
     }
 
+    // ─── ipmi: необязательное поле без смены v (ADR-029, «Узел — набор устройств») ───
+
+    [Fact]
+    public void Parse_IpmiAbsentOrNull_Ok_Null()
+    {
+        // Нет ключа — Ok, Ipmi null: это не Invalid (отличается от обязательных полей).
+        var noKey = NodeSliceParser.Parse(Encoding.UTF8.GetBytes(
+            """{"v":1,"ageMs":0,"clockMs":1000,"files":{},"links":{},"gpuCsv":null,"gddr6":null,"statvfs":[]}"""));
+        noKey.Status.Should().Be(NodeSliceParseStatus.Ok);
+        noKey.Slice!.Ipmi.Should().BeNull();
+
+        // Ключ с null — то же (агент так и отдаёт, когда файла нет).
+        ParseSlice(ipmi: null).Slice!.Ipmi.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_IpmiNotString_Ok_Null()
+    {
+        // Не строка — null, срез при этом принимается.
+        ParseSlice(ipmi: 123).Slice!.Ipmi.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_IpmiOver16K_Ok_Null_NotTruncated()
+    {
+        // Потолок 16 КБ, как у gddr6: сверх — отбрасывается целиком, не обрезается. Граница включена.
+        ParseSlice(ipmi: new string('x', NodeSliceLimits.MaxIpmiBytes + 1)).Slice!.Ipmi.Should().BeNull();
+        ParseSlice(ipmi: new string('x', NodeSliceLimits.MaxIpmiBytes)).Slice!.Ipmi.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void TryReadIpmi_Fresh30000_HasValue_Stale30001_Null()
+    {
+        // Граница свежести: clockMs − at = 30 000 — значение есть; 30 001 — null.
+        var fresh = ParseSlice(clockMs: 1_000_000, ipmi: """{"at":970000,"sdr":"CPU1 Temp | 30.1 | ok | 3.1 | 42 degrees C"}""").Slice!;
+        var v = fresh.TryReadIpmi();
+        v.Should().NotBeNull();
+        v!.Value.at.Should().Be(970000);
+        v.Value.sdr.Should().StartWith("CPU1 Temp");
+
+        var stale = ParseSlice(clockMs: 1_000_000, ipmi: """{"at":969999,"sdr":"CPU1 Temp | 30.1 | ok | 3.1 | 42 degrees C"}""").Slice!;
+        stale.TryReadIpmi().Should().BeNull();
+    }
+
+    [Fact]
+    public void TryReadIpmi_BadWrapper_Null()
+    {
+        // Несвежий или кривой → null; текстов нет (помощника на узле нет) → null.
+        ParseSlice().Slice!.TryReadIpmi().Should().BeNull();
+        ParseSlice(ipmi: "не JSON").Slice!.TryReadIpmi().Should().BeNull();
+        ParseSlice(ipmi: """[1,2]""").Slice!.TryReadIpmi().Should().BeNull(); // корень не объект
+        ParseSlice(ipmi: """{"at":1}""").Slice!.TryReadIpmi().Should().BeNull(); // нет sdr
+        ParseSlice(ipmi: """{"sdr":"x"}""").Slice!.TryReadIpmi().Should().BeNull(); // нет at
+        ParseSlice(ipmi: """{"at":"1","sdr":"x"}""").Slice!.TryReadIpmi().Should().BeNull(); // at не число
+    }
+
     [Fact]
     public void Parse_FilesOver4096_KeepsFirst4096()
     {
@@ -319,6 +377,7 @@ public class NodeSliceTests
         Dictionary<string, string>? links = null,
         string? gpuCsv = null,
         string? gddr6 = null,
+        object? ipmi = null,
         List<object>? statvfs = null,
         long ageMs = 0,
         long clockMs = 0)
@@ -332,6 +391,7 @@ public class NodeSliceTests
             links = links ?? new Dictionary<string, string>(),
             gpuCsv,
             gddr6,
+            ipmi,
             statvfs = statvfs ?? new List<object> { new { mount = "/", total = 1L, free = 1L } },
         };
         return NodeSliceParser.Parse(JsonSerializer.SerializeToUtf8Bytes(body));

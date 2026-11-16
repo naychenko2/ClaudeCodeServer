@@ -252,6 +252,16 @@ public class NodeSliceTests
     }
 
     [Fact]
+    public void TryReadIpmi_AtLongMaxValue_Null_NotFreshByAge()
+    {
+        // Парность к long.MinValue: здесь переполнения НЕТ (1000 − long.MaxValue влезает в long),
+        // но age ≈ −9.2e18 < −30 000 — за двусторонним окном → null, тот же итог, что у MinValue.
+        var s = ParseSlice(clockMs: 1_000, ipmi: """{"at":9223372036854775807,"sdr":"CPU1 Temp | 30.1 | ok"}""").Slice!;
+
+        s.TryReadIpmi().Should().BeNull();
+    }
+
+    [Fact]
     public void TryReadIpmi_BadWrapper_Null()
     {
         // Несвежий или кривой → null; текстов нет (помощника на узле нет) → null.

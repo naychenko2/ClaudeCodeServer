@@ -70,7 +70,9 @@ public sealed record NodeSlice
 
     // Разбор обёртки ipmi {at, sdr} (тот же образец, что Gddr6HelperReader.Parse):
     // null — текста нет, JSON кривой, полей нет или нет или не те типы, или несвежее
-    // (ClockMs − at > IpmiFreshAfterMs; часы узла — свои, с часами worker не сравниваем).
+    // (ClockMs − at > IpmiFreshAfterMs; часы узла — свои, с часами worker не сравниваем),
+    // или вычитание свежести переполняется (at недоверенное число, напр. long.MinValue):
+    // переполнение — это заведомо не «свежее», поэтому checked и null через catch.
     // Толкование строк SDR — не здесь (Ш2d3).
     public (long at, string sdr)? TryReadIpmi()
     {
@@ -86,7 +88,7 @@ public sealed record NodeSlice
                 return null;
             if (!root.TryGetProperty("sdr", out var sdrEl) || sdrEl.ValueKind != JsonValueKind.String)
                 return null;
-            if (ClockMs - at > NodeSliceLimits.IpmiFreshAfterMs)
+            if (checked(ClockMs - at) > NodeSliceLimits.IpmiFreshAfterMs)
                 return null;
             return (at, sdrEl.GetString()!);
         }
@@ -112,7 +114,7 @@ public enum NodeSliceParseStatus
 // (тот же закон, что у Gddr6HelperReader: необработанное исключение роняет хост через StopHost).
 public readonly struct NodeSliceParseResult
 {
-    private NodeSliceParseResult(NodeSliceParseStatus status, NodeSlice? slice, int version, string reason)
+    private NodeSliceParseResult(NodeSliceParseStatus status, NodeSlice? slice, long version, string reason)
     {
         Status = status;
         Slice = slice;
@@ -123,15 +125,16 @@ public readonly struct NodeSliceParseResult
     public NodeSliceParseStatus Status { get; }
     // Только для Ok.
     public NodeSlice? Slice { get; }
-    // Только для Incompatible: пришедшая версия (0 — её нет или она не число).
-    public int Version { get; }
+    // Только для Incompatible: пришедшая версия как есть, вне диапазона int НЕ усечена
+    // (0 — её нет или она не число). Только для диагностики.
+    public long Version { get; }
     // Только для Invalid: причина (для лога).
     public string Reason { get; }
 
     public bool IsOk => Status == NodeSliceParseStatus.Ok;
 
     public static NodeSliceParseResult Ok(NodeSlice slice) => new(NodeSliceParseStatus.Ok, slice, slice.V, "");
-    public static NodeSliceParseResult Incompatible(int version) => new(NodeSliceParseStatus.Incompatible, null, version, "");
+    public static NodeSliceParseResult Incompatible(long version) => new(NodeSliceParseStatus.Incompatible, null, version, "");
     public static NodeSliceParseResult Invalid(string reason) => new(NodeSliceParseStatus.Invalid, null, 0, reason);
 }
 
@@ -159,7 +162,7 @@ public static class NodeSliceParser
 
             // Версия проверяется раньше остальных полей: не-срез этой версии разбирать не за чем.
             if (!root.TryGetProperty("v", out var vEl) || vEl.ValueKind != JsonValueKind.Number || !vEl.TryGetInt32(out var v) || !IsAcceptedVersion(v))
-                return NodeSliceParseResult.Incompatible(TryGetInt64(root, "v", out var rawV) ? (int)rawV : 0);
+                return NodeSliceParseResult.Incompatible(TryGetInt64(root, "v", out var rawV) ? rawV : 0);
 
             // Все ключи обязательны (ADR-029): нет ключа или не тот тип — Invalid (узел down).
             // Единственное исключение — карты files/links: там отсутствие ключа штатно.

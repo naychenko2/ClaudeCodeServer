@@ -12,8 +12,10 @@ namespace ClaudeHomeServer.Tests.Services.LocalStats;
 /// карт ≤ 16, чипов hwmon ≤ 64 (наименьшие N), записей files/links ≤ 4096, строка > 4 КБ отбрасывается
 /// целиком (ADR: «отбрасывается целиком, а не обрезается»), исключения — mountinfo ≤ 64 КБ, gddr6 и ipmi
 /// ≤ 16 КБ. ipmi — необязательное поле без смены v: нет ключа / null / не строка → null, срез принимается;
-/// TryReadIpmi — разбор обёртки {at, sdr} со свежестью clockMs − at ≤ 30 000 (несвежее/кривое → null).
-/// Плюс реестр HardwareNodesOptions: EffectiveNodes — пропуск неверных элементов и фолбэк worker/local.
+/// TryReadIpmi — разбор обёртки {at, sdr} со свежестью clockMs − at ≤ 30 000 (несвежее/кривое → null,
+/// переполнение вычитания при недоверенном at — тоже null). Версия при Incompatible — как пришедшее
+/// число, вне диапазона int не усечена. Плюс реестр HardwareNodesOptions: EffectiveNodes — пропуск
+/// неверных элементов (ключ с хвостовым \n — не ключ) и фолбэк worker/local.
 /// </summary>
 public class NodeSliceTests
 {
@@ -62,6 +64,17 @@ public class NodeSliceTests
         var strV = NodeSliceParser.Parse(Encoding.UTF8.GetBytes(
             """{"v":"1","ageMs":0,"clockMs":0,"files":{},"links":{},"gpuCsv":null,"gddr6":null,"statvfs":[]}"""));
         strV.Status.Should().Be(NodeSliceParseStatus.Incompatible);
+    }
+
+    [Fact]
+    public void Parse_VersionOverIntRange_Incompatible_VersionAsIs()
+    {
+        // v вне диапазона int: пришедшее число печатается как есть (для диагностики), а не усечённое до int.
+        var r = NodeSliceParser.Parse(Encoding.UTF8.GetBytes(
+            """{"v":99999999999,"ageMs":0,"clockMs":0,"files":{},"links":{},"gpuCsv":null,"gddr6":null,"statvfs":[]}"""));
+
+        r.Status.Should().Be(NodeSliceParseStatus.Incompatible);
+        r.Version.Should().Be(99999999999);
     }
 
     // ─── Не срез: не-JSON, корень не объект, пустое/длинное тело → Invalid ───────
@@ -229,6 +242,16 @@ public class NodeSliceTests
     }
 
     [Fact]
+    public void TryReadIpmi_AtLongMinValue_Null_NotFreshByOverflow()
+    {
+        // at = long.MinValue: ClockMs − at в unchecked переполняется в отрицательное → «свежее».
+        // Вычитание под checked: переполнение — заведомо не свежесть → null (как и любой кривой вход).
+        var s = ParseSlice(clockMs: 1_000, ipmi: """{"at":-9223372036854775808,"sdr":"CPU1 Temp | 30.1 | ok"}""").Slice!;
+
+        s.TryReadIpmi().Should().BeNull();
+    }
+
+    [Fact]
     public void TryReadIpmi_BadWrapper_Null()
     {
         // Несвежий или кривой → null; текстов нет (помощника на узле нет) → null.
@@ -332,6 +355,21 @@ public class NodeSliceTests
         var nodes = opts.EffectiveNodes();
 
         nodes.Select(n => n.Key).Should().Equal("worker", "ai");
+    }
+
+    [Fact]
+    public void EffectiveNodes_KeyWithTrailingNewLine_IsRejected()
+    {
+        // Якорь конца ключа: $ в .NET совпадает и перед хвостовым \n — «ai\n» прошёл бы проверку,
+        // а ключ идёт в ?node= и в лог. С \z такой ключ не проходит, остаётся фолбэк worker/local.
+        var opts = new HardwareNodesOptions
+        {
+            Nodes = [new HardwareNodeDef { Key = "ai\n", Source = "http://10.0.0.11:9105" }],
+        };
+
+        var nodes = opts.EffectiveNodes();
+
+        nodes.Should().ContainSingle().Which.Key.Should().Be("worker");
     }
 
     [Fact]

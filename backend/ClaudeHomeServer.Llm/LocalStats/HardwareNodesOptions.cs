@@ -6,7 +6,7 @@ namespace ClaudeHomeServer.Services.Llm;
 // Один узел реестра HardwareNodes (ADR-029, «Узлы фермы» → «Реестр HardwareNodes»).
 public sealed class HardwareNodeDef
 {
-    // Идентификатор узла: он же ?node= в API. ^[a-z][a-z0-9-]{0,31}$, уникален.
+    // Идентификатор узла: он же ?node= в API. ^[a-z][a-z0-9-]{0,31}\z, уникален.
     public string Key { get; set; } = "";
     // Подпись в интерфейсе; пусто — показывается Key.
     public string Title { get; set; } = "";
@@ -27,7 +27,9 @@ public sealed class HardwareNodesOptions
     public const string Section = "HardwareNodes";
 
     // Ключ элемента: [a-z] затем [a-z0-9-], всего до 32 символов.
-    private static readonly Regex KeyPattern = new("^[a-z][a-z0-9-]{0,31}$", RegexOptions.CultureInvariant);
+    // Якорь — \z (абсолютный конец строки): $ в .NET совпадает и перед хвостовым \n,
+    // и ключ "ai\n" прошёл бы проверку — а он идёт в ?node= и в лог.
+    private static readonly Regex KeyPattern = new(@"^[a-z][a-z0-9-]{0,31}\z", RegexOptions.CultureInvariant);
 
     public List<HardwareNodeDef> Nodes { get; set; } = [];
 

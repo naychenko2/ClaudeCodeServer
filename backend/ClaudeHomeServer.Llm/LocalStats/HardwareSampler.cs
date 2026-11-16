@@ -79,8 +79,9 @@ public interface INodeHardwareView
     // или срез агента старше порога свежести; down — срез не получен; incompatible — другая версия.
     string Status { get; }
 
-    // Момент начала нештатного статуса (unix-мс): у stale — последний живой снимок, у down/incompatible —
-    // первое такое чтение; null — статус ok или снимков ещё нет.
+    // Момент начала нештатного статуса (unix-мс): у stale — время данных последнего снимка в кольце
+    // (Current.At: для Ok-среза, после которого узел замолчал, — время получения; для Stale-среза —
+    // now − AgeMs), у down/incompatible — первое такое чтение; null — статус ok или снимков ещё нет.
     long? Since { get; }
 
     // Агрегация кольца в бакеты по step, МАКСИМУМ в бакете (пики важнее среднего);
@@ -450,7 +451,9 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
                     return StatusLocked() switch
                     {
                         "ok" => null,
-                        "stale" => _lastSampleTime?.ToUnixTimeMilliseconds(),
+                        // Время данных последнего снимка в кольце, а не время последнего тика:
+                        // агент отдаёт тот же старый срез раз в 2 с — метка не должна ехать вместе с тиками.
+                        "stale" => _current?.At.ToUnixTimeMilliseconds(),
                         _ => _statusSince?.ToUnixTimeMilliseconds(),
                     };
                 }
@@ -482,11 +485,18 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
         {
             lock (_gate)
             {
-                _ring.Add(sample);
-                while (_ring.Count > MaxSamples)
-                    _ring.RemoveAt(0);
-                _current = sample;
-                _lastSampleTime = now;
+                // Stale-срез с временем данных не новее последнего снимка кольца — агент вернул тот же
+                // старый срез: в кольцо он не кладётся, иначе дубли одного снимка копятся. Ok-срез
+                // кладётся всегда. Решение «класть или нет» — внутри этого же lock: читатель должен
+                // видеть Current и кольцо согласованными.
+                if (status != NodeReadingStatus.Stale || _current is not { } last || sample.At > last.At)
+                {
+                    _ring.Add(sample);
+                    while (_ring.Count > MaxSamples)
+                        _ring.RemoveAt(0);
+                    _current = sample;
+                }
+                _lastSampleTime = now; // время последнего ответа источника — как было до правки
                 SetStatusLocked(status, now);
             }
         }

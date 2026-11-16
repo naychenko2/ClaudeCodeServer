@@ -442,42 +442,119 @@ public class HardwareTests : IDisposable
         s.Since.Should().Be(at.ToUnixTimeMilliseconds());
     }
 
+    // (а) Метка Stale-снимка = время данных (now − AgeMs), не время получения; в кольцо он кладётся,
+    // только когда его время данных новее последнего снимка.
     [Fact]
-    public async Task Ring_StaleReading_AtIsDataTime_NotNow()
+    public async Task Ring_StaleSample_AtIsDataTime_NotNow()
     {
         var (sampler, time, src) = BuildSampler();
         var s = sampler.ForNode("worker")!;
         src.Files[CpuDir + "temp1_input"] = "50000";
 
-        // Ok-срез — контроль: метка = время получения (былое поведение).
+        // Ok-срез в t0 — контроль: метка = время получения (былое поведение).
         await sampler.PollNodeAsync("worker");
         var t0 = time.GetUtcNow();
         s.Current!.At.Should().Be(t0, "Ok-срез (AgeMs = 0) метится временем получения");
 
-        // Stale-срез возрастом 12 с: в кольцо он идёт со временем данных, не получения.
+        // Stale-срез возрастом 12 с через +14 с после t0: время данных (t0+2 с) новее Ok-среза → в кольцо.
         src.Status = NodeReadingStatus.Stale;
         src.AgeMs = 12_000;
+        time.Advance(TimeSpan.FromSeconds(14));
         await sampler.PollNodeAsync("worker");
         var t1 = time.GetUtcNow();
         s.Status.Should().Be("stale");
         s.Current!.At.Should().Be(t1 - TimeSpan.FromSeconds(12),
             "Stale-срез метится временем данных (now − AgeMs), а не now");
-        sampler.RingCount("worker").Should().Be(2);
+        sampler.RingCount("worker").Should().Be(2, "Stale-срез с более свежим временем данных — в кольцо");
 
-        // Читатели кольца не видят «живого» устаревшего: снимок попадает в бакет своих данных
-        // ([t1−20с, t1−10с)), текущий бакет — пустой разрыв.
+        // Читатели кольца не видят «живого» устаревшего: Stale-снимок попадает в бакет своих данных
+        // ([t1−20с, t1−10с)), а не в текущий — тот пустой разрыв.
         var pts = s.Aggregate(x => x.Cpus?[0].Tctl, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(10));
         pts.Count(p => p.value is not null).Should().Be(1);
         pts.Single(p => p.value is not null).value.Should().Be(50);
         pts.Last().value.Should().BeNull("текущий бакет пуст: устаревшее не выглядит живым");
+    }
 
-        // Порядок кольца не ломается: следующий Ok-срез метится своим временем (позже Stale-метки).
+    // (б) Порядок кольца после возврата в Ok: метки не убывают, Ok-срез метится своим временем.
+    [Fact]
+    public async Task Ring_AfterStaleReturnToOk_MarksAscending()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+        await sampler.PollNodeAsync("worker");
+
+        // Stale-срез со временем данных t0+2 с (возраст 12 с через +14 с после Ok-среза в t0).
+        src.Status = NodeReadingStatus.Stale;
+        src.AgeMs = 12_000;
+        time.Advance(TimeSpan.FromSeconds(14));
+        await sampler.PollNodeAsync("worker");
+        var staleAt = time.GetUtcNow() - TimeSpan.FromSeconds(12);
+
+        // Возврат в Ok: следующий срез метится своим временем (позже Stale-метки), статус — ok.
         src.Status = NodeReadingStatus.Ok;
         src.AgeMs = 0;
         src.Files[CpuDir + "temp1_input"] = "60000";
         time.Advance(TimeSpan.FromSeconds(2));
         await sampler.PollNodeAsync("worker");
-        s.Current!.At.Should().Be(t1 + TimeSpan.FromSeconds(2), "после Stale-среза метки кольца не убывают");
+        var cur = s.Current!;
+        cur.At.Should().Be(staleAt + TimeSpan.FromSeconds(14), "после Stale-среза метки кольца не убывают");
+        cur.Cpus![0].Tctl.Should().Be(60);
+        s.Status.Should().Be("ok", "свежий Ok-срез — статус ok");
+        s.Since.Should().BeNull();
+        sampler.RingCount("worker").Should().Be(3);
+    }
+
+    // Since у stale = время данных последнего снимка в кольце (Current.At), а не время последнего тика:
+    // агент отдаёт тот же старый срез раз в 2 с — метка не едет вместе с тиками (api.md «staleSince —
+    // момент последнего живого снимка»). Мутация «Since = _lastSampleTime (как было)» краснит тест:
+    // после первого тика метка = время получения, дальше сдвигается на 2 с каждый тик.
+    [Fact]
+    public async Task Status_SinceStale_IsLastSampleDataTime_NotTickTime()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+
+        // Ok-срез в t0, затем тот же срез от агента: в t0+2k с с возрастом 2k с — время данных всегда t0.
+        await sampler.PollNodeAsync("worker");
+        var t0 = time.GetUtcNow();
+        src.Status = NodeReadingStatus.Stale;
+        for (var k = 1; k <= 3; k++)
+        {
+            src.AgeMs = 2_000 * k;
+            time.Advance(TimeSpan.FromSeconds(2));
+            await sampler.PollNodeAsync("worker");
+            s.Status.Should().Be("stale");
+            s.Since.Should().Be(t0.ToUnixTimeMilliseconds(),
+                $"Since после Stale-тика {k} — время данных последнего снимка (t0), не время тика");
+        }
+    }
+
+    // Stale-срез с временем данных не новее последнего снимка кольца в кольцо не кладётся: обновляется
+    // только статус. Мутация «убрать проверку sample.At ≤ At последнего» краснит тест: RingCount 4
+    // вместо 1 — в кольце три дубли одного среза.
+    [Fact]
+    public async Task Ring_RepeatedStaleSlice_NotDuplicated()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+        await sampler.PollNodeAsync("worker");
+        var t0 = time.GetUtcNow();
+
+        // Три Stale-тика одного среза (возраст растёт на 2000, время данных всегда t0): кольцо выросло
+        // ровно на 1 (Ok-срез), а не на 3.
+        src.Status = NodeReadingStatus.Stale;
+        for (var k = 1; k <= 3; k++)
+        {
+            src.AgeMs = 2_000 * k;
+            time.Advance(TimeSpan.FromSeconds(2));
+            await sampler.PollNodeAsync("worker");
+        }
+        sampler.RingCount("worker").Should().Be(1, "тот же Stale-срез не дублируется в кольце");
+        s.Current!.At.Should().Be(t0, "последний снимок кольца — Ok-срез, его метка не тронута");
+        s.Since.Should().Be(t0.ToUnixTimeMilliseconds(), "Since указывает на тот же снимок");
     }
 
     // ─── Отчёт ───────────────────────────────────────────────────────────────────

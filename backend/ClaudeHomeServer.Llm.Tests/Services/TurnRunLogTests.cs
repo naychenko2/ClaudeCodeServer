@@ -97,12 +97,13 @@ public class TurnRunLogTests
                 SpawnToInitMs = null,
                 InitToFirstEventMs = 0,
                 SlowSections = new Dictionary<string, long> { ["code-graph"] = 7000 },
+                PrevRunStopWaitMs = 6500,
             });
 
             var lines = File.ReadAllLines(Path.Combine(dir, $"turn-runs-{DateTime.UtcNow:yyyyMMdd}.jsonl"));
-            lines[0].Should().NotContain("promptAssemblyMs").And.NotContain("slowSections");
+            lines[0].Should().NotContain("promptAssemblyMs").And.NotContain("slowSections").And.NotContain("prevRunStopWaitMs");
             lines[1].Should().Contain("\"queueWaitMs\":12").And.Contain("\"promptAssemblyMs\":8800")
-                .And.Contain("\"initToFirstEventMs\":0").And.Contain("\"slowSections\":{\"code-graph\":7000}")
+                .And.Contain("\"prevRunStopWaitMs\":6500").And.Contain("\"initToFirstEventMs\":0").And.Contain("\"slowSections\":{\"code-graph\":7000}")
                 .And.NotContain("spawnToInitMs", "повторно используемый процесс — null, а не 0");
         }
         finally

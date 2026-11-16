@@ -98,6 +98,13 @@ public sealed record TurnRunPassport(
     /// {ключ контрибьютора: мс}. null — медленных не было.
     /// </summary>
     public IReadOnlyDictionary<string, long>? SlowSections { get; init; }
+
+    /// <summary>
+    /// Остановка несовместимого живого прогона прошлого хода (kill и ожидание его читателя, до 15 с), мс.
+    /// Входит в <see cref="PromptAssemblyMs"/>: «PromptAssemblyMs − PrevRunStopWaitMs − сумма SlowSections» —
+    /// невидимая часть сборки. null — останавливать было нечего.
+    /// </summary>
+    public long? PrevRunStopWaitMs { get; init; }
 }
 
 /// <summary>
@@ -109,7 +116,8 @@ public sealed record TurnStartTimings(
     long? PromptAssemblyMs,
     long? SpawnToInitMs,
     long? InitToFirstEventMs,
-    IReadOnlyDictionary<string, long>? SlowSections)
+    IReadOnlyDictionary<string, long>? SlowSections,
+    long? PrevRunStopWaitMs = null)
 {
     /// <summary>Порог (строго больше), с которого секция промпта попадает в паспорт.</summary>
     public const long SlowSectionThresholdMs = 500;

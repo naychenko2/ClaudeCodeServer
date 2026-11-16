@@ -34,6 +34,23 @@ public class ClaudeSessionStartPhaseTests : IDisposable
     private static readonly FieldInfo QueuedTurnsField =
         typeof(ClaudeSession).GetField("_queuedTurns", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
+    private static readonly MethodInfo StopIncompatibleM =
+        typeof(ClaudeSession).GetMethod("StopIncompatibleRunAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+    // Лаунчер-заглушка: Kill ничего не убивает (процесс в тесте — пустой), остальное тесту не нужно.
+    private sealed class StubLauncher : ClaudeHomeServer.Services.Execution.IProcessLauncher
+    {
+        public bool IsSandboxed => false;
+        public bool TargetIsWindows => OperatingSystem.IsWindows();
+        public ClaudeHomeServer.Services.Execution.IPathMapper Paths => ClaudeHomeServer.Services.Execution.IdentityPathMapper.Instance;
+        public string ClaudeCliCommand => "fake-claude";
+        public string HostTempDir => Path.GetTempPath();
+        public string? McpApiUrlOverride => null;
+        public Process Start(ClaudeHomeServer.Services.Execution.ProcessSpec spec) => throw new NotSupportedException();
+        public void Kill(Process process, string? turnId = null) { }
+        public int EstimateCommandLineLength(ClaudeHomeServer.Services.Execution.ProcessSpec spec) => 0;
+    }
+
     private readonly List<Process> _fake = [];
     public void Dispose() { foreach (var p in _fake) ProcessTestCleanup.SafeDispose(p); }
 
@@ -169,6 +186,49 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         // без сброса защёлок в NoteSpawn — мутация «убрать сброс» краснит обе строки.
         t.SpawnToInitMs.Should().BeLessThan(60);
         t.InitToFirstEventMs.Should().BeLessThan(60);
+    }
+
+    // ——— Остановка несовместимого прогона (PrevRunStopWaitMs) ———
+
+    private static ClaudeSession NewSessionWithStubLauncher()
+    {
+        var context = new LlmSessionContext(
+            RootPath: Path.GetTempPath(), OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null, TasksMcp: null, Launcher: new StubLauncher());
+        return new ClaudeSession(new Session(), context);
+    }
+
+    [Fact]
+    public async Task ОстановкаПрошлогоПрогона_ЖдётЧитателя_ЗамерВПаспорте()
+    {
+        var s = NewSessionWithStubLauncher();
+        Begin(s);
+        s.GetStartTimings().PrevRunStopWaitMs.Should().BeNull("останавливать было нечего — null, а не 0");
+
+        var run = NewRun();
+        CliRunType.GetProperty("ReaderTask")!.SetValue(run, Task.Delay(300));
+        await (Task)StopIncompatibleM.Invoke(s, [run, TimeSpan.FromSeconds(5)])!;
+
+        s.GetStartTimings().PrevRunStopWaitMs.Should().BeGreaterThanOrEqualTo(250,
+            "ожидание финализации читателя прошлого прогона входит в замер");
+        CliRunType.GetField("SuppressExited")!.GetValue(run).Should().Be(true);
+
+        // Новый ход сбрасывает замер: он принадлежит ходу, а не сессии
+        Begin(s);
+        s.GetStartTimings().PrevRunStopWaitMs.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ОстановкаПрошлогоПрогона_ЗависшийЧитатель_НеБлокируетСверхПотолка()
+    {
+        var s = NewSessionWithStubLauncher();
+        Begin(s);
+        var run = NewRun();
+        CliRunType.GetProperty("ReaderTask")!.SetValue(run, new TaskCompletionSource().Task);
+        await (Task)StopIncompatibleM.Invoke(s, [run, TimeSpan.FromMilliseconds(200)])!;
+
+        s.GetStartTimings().PrevRunStopWaitMs.Should().BeInRange(150, 3000);
     }
 
     // ——— Повторный «queued» за идущим ходом (первое событие, хвост 137df65c) ———

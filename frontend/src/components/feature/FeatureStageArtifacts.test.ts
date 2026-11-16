@@ -9,7 +9,8 @@
 // пустых files → тест «без файлов коммитов» красный; (5) оставить пустое состояние при результате →
 // тест «без пустого состояния» красный; (6) не рисовать «Файлы задачи» при непустых files → тест
 // «при файлах коммитов» красный; (7) не различать commitsAvailable в пустом состоянии → тест «без
-// дерева задачи» красный.
+// дерева задачи» красный; (8) вернуть сырой текст итога вместо MarkdownContent → тесты
+// «markdown итога» красные: нет h2/li/strong/code, в тексте остаются сырые «##» и «**».
 
 import { act, createElement } from 'react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
@@ -219,5 +220,54 @@ describe('FeatureStageArtifacts · файлы', () => {
     const signal = diffMock.mock.calls[0][4] as AbortSignal;
     act(() => { root.unmount(); }); roots.length = 0;
     expect(signal.aborted).toBe(true);
+  });
+});
+
+// F-2.46a: итог исполнителя — общий markdown-рендер ленты, а не сырой текст.
+describe('FeatureStageArtifacts · markdown итога', () => {
+  const MD = '## Заголовок\n- **пункт** `код`';
+  function findByTag(c: FNode, tag: string): FNode | null {
+    let hit: FNode | null = null;
+    const walk = (x: FNode) => {
+      if (hit) return;
+      if (x.nodeType === 1 && x.nodeName === tag) { hit = x; return; }
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(c);
+    return hit;
+  }
+  // Элементы разметки внутри карточки итога, а не их литералы в тексте
+  function expectRendered(result: FNode) {
+    const h2 = findByTag(result, 'H2');
+    expect(h2, 'нет h2').not.toBeNull();
+    expect(textNodes(h2!).join('')).toBe('Заголовок');
+    const li = findByTag(result, 'LI');
+    expect(li, 'нет li').not.toBeNull();
+    const strong = findByTag(li!, 'STRONG');
+    expect(strong, 'нет strong').not.toBeNull();
+    expect(textNodes(strong!).join('')).toBe('пункт');
+    const code = findByTag(li!, 'CODE');
+    expect(code, 'нет code').not.toBeNull();
+    expect(textNodes(code!).join('')).toBe('код');
+  }
+
+  it('новый вид: итог — заголовок/список/strong/code, сырых маркеров нет', () => {
+    const { container } = render(arts([], { resultMarkdown: MD }));
+    const result = findNodeByAttr(container, 'data-testid', 'stage-result');
+    expect(result, 'stage-result').not.toBeNull();
+    expectRendered(result!);
+    const t = text(container);
+    expect(t).not.toContain('##');
+    expect(t).not.toContain('**');
+  });
+
+  it('старый вид (без files): итог тоже рендерится разметкой', () => {
+    const { container } = render(arts([], { resultMarkdown: MD, files: undefined }));
+    const result = findNodeByAttr(container, 'data-testid', 'stage-result');
+    expect(result, 'stage-result').not.toBeNull();
+    expectRendered(result!);
+    const t = text(container);
+    expect(t).not.toContain('##');
+    expect(t).not.toContain('**');
   });
 });

@@ -309,6 +309,34 @@ variant, count, initiator, percent? }`. `percent` (0..1) необязателе�
 `initiator = agent` (пометка «✦ Claude»); пять пишущих и тратящих отказывают делегированному ходу (fail-closed),
 потолка трат и лимита запусков за ход нет.
 
+## Мои файлы (личный чат) (ADR-040 §Ф2-9)
+
+Панель «Файлы» личного чата — [PersonalFilesController.cs](../../backend/ClaudeHomeServer/Controllers/PersonalFilesController.cs).
+Владение берётся из **чата** (гейт — чат без проекта, `SessionAccess.CanSee`), корень — `PersonalFolderResolver.Find(session.OwnerId)`.
+Чужой чат и администратор — `404 chat_not_found`; «Личного» нет в `ProjectManager`, WebDAV для него нет. GET папку не создаёт
+(без неё список пуст), создают её `mkdir`/`create`/`upload`/`save-from-url`.
+Заметок в личном корне нет: путь `notes`/`notes/…` — `404 notes_unavailable`
+(хранилище заметок вне файлов). Ошибки — `{ error, code }`.
+
+```
+GET                 /api/personal/chats/{sid}/files                ?path=   → [FileEntry…]
+GET                 /api/personal/chats/{sid}/files/tree           ?path=   → дерево
+GET                 /api/personal/chats/{sid}/files/search         ?q=      → совпадения
+GET                 /api/personal/chats/{sid}/files/content        ?path=   → { content, isBinary, isImage, base64?, … }
+GET                 /api/personal/chats/{sid}/files/stream         ?path=   → поток файла (Range, песочница CSP)
+GET                 /api/personal/chats/{sid}/files/download       ?path=   → вложение (Range)
+POST                /api/personal/chats/{sid}/files/mkdir          { path }
+POST                /api/personal/chats/{sid}/files/create         { path, content }   содержимое ≤ 1 МБ (413 content_too_large)
+POST                /api/personal/chats/{sid}/files/upload         ?path=   multipart поле file, ≤ 100 МБ
+POST                /api/personal/chats/{sid}/files/save-from-url  { url, path }       только в images/audio/video, ≤ 200 МБ
+POST                /api/personal/chats/{sid}/files/rename         { oldPath, newPath }
+DELETE              /api/personal/chats/{sid}/files                ?path=
+```
+
+Отказы: `400 invalid_path` (абсолютный путь, `..`, `\`, символическая ссылка; для save-from-url — не-медиальная папка),
+`409 exists` (имя занято), `413 file_too_large` (превышен объём загрузки), `409 personal_scope_folder_unavailable`,
+`404 file_not_found`, `404 notes_unavailable`, `400 no_file`/`bad_url`, `502 fetch_failed`.
+
 ## Контекст чата (ADR-023)
 
 Основной объект и референсы чата; владелец — из `sub`, сессия — `GetOwned` (чужая — `404`), область

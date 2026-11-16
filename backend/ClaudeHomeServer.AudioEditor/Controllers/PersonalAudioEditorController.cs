@@ -57,9 +57,10 @@ public class PersonalAudioEditorController(
     {
         if (!Gate(sessionId, out var scope, out var denied)) return denied;
         // Входы из файлов «Личного» — вход, которому нужен диск: папку создаём здесь, а не на GET
-        if (!string.IsNullOrWhiteSpace(form.ReferencePath) || form.ClipPaths is { Count: > 0 }
-            || !string.IsNullOrWhiteSpace(form.VoiceModelPath) || !string.IsNullOrWhiteSpace(form.VoiceIndexPath)
-            || !string.IsNullOrWhiteSpace(form.VideoPath))
+        // и только когда все пути допустимы (негодный путь — отказ без создания папки)
+        var paths = (form.ClipPaths ?? []).Concat([form.ReferencePath, form.VoiceModelPath, form.VoiceIndexPath, form.VideoPath])
+            .Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+        if (paths.Count > 0 && PersonalMediaFolders.AllowsAll(paths))
             scope = await gate.WithFolderAsync(scope, ct);
         return await StartIn(scope, form, ct);
     }
@@ -76,7 +77,8 @@ public class PersonalAudioEditorController(
     public IActionResult Threads(string sessionId) =>
         Gate(sessionId, out var scope, out var denied) ? ThreadsIn(scope, sessionId) : denied;
 
-    // Только черновик в корне: файл и папка черновика — 400, файлов проекта у личного чата нет
+    // Файл или папка черновика — внутри «Личного» (тот же корень, что отдаёт панель «Звук из Личного»),
+    // или черновик в корне: файлов проекта у личного чата нет
     [HttpPost("threads")]
     public async Task<IActionResult> Open(string sessionId, [FromBody] AudioThreadOpenRequest req, CancellationToken ct) =>
         Gate(sessionId, out var scope, out var denied) ? await OpenIn(scope, sessionId, req, ct) : denied;
@@ -122,20 +124,26 @@ public class PersonalAudioEditorController(
     public async Task<IActionResult> Concat(string sessionId, [FromBody] AudioConcatRequest? req, CancellationToken ct)
     {
         if (!Gate(sessionId, out var scope, out var denied)) return denied;
-        if (req?.Pieces?.Any(p => !string.IsNullOrWhiteSpace(p.ProjectFile)) == true)
+        // Папку «Личного» создаём, только если все файловые куски допустимы: негодный путь — отказ без папки
+        var pieceFiles = req?.Pieces?.Where(p => !string.IsNullOrWhiteSpace(p.ProjectFile)).Select(p => p.ProjectFile).ToList() ?? [];
+        if (pieceFiles.Count > 0 && PersonalMediaFolders.AllowsAll(pieceFiles))
             scope = await gate.WithFolderAsync(scope, ct);
         return await ConcatIn(scope, sessionId, req, ct);
     }
 
     // Сохранить версию в «Личное»: Personal/audio/, только новыми файлами. Работает и для старых личных версий:
-    // файлы версии копируются из рабочей папки
+    // файлы версии копируются из рабочей папки. Корень «Личного» создаёт хук EnsurePersonalRootAsync внутри
+    // SaveIn, на записи: отказ по mode/folder/thread не оставляет папки на диске
     [HttpPost("threads/{threadId}/save")]
     public async Task<IActionResult> Save(string sessionId, string threadId, [FromBody] AudioSaveRequest req, CancellationToken ct)
     {
         if (!Gate(sessionId, out var scope, out var denied)) return denied;
-        scope = await gate.WithFolderAsync(scope, ct);
-        return await SaveIn(scope, sessionId, threadId, req);
+        return await SaveIn(scope, sessionId, threadId, req, null, ct);
     }
+
+    // Пишущий путь личной области: «Личное» создаётся лениво, только когда SaveIn дошёл до записи
+    protected override Task<AudioEditScope> EnsurePersonalRootAsync(AudioEditScope scope, CancellationToken ct) =>
+        gate.WithFolderAsync(scope, ct);
 
     private bool Gate(string sessionId, [NotNullWhen(true)] out AudioEditScope? scope,
         [NotNullWhen(false)] out IActionResult? denied) =>

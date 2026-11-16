@@ -47,6 +47,7 @@ public sealed class TurnContextContributor(
         ["image-character"] = "персонаж",
         ["audio-voice"] = "голос",
         ["project-file"] = "файл проекта",
+        ["personal-file"] = "файл «Личного»",
     };
 
     public const string Footer =

@@ -5,11 +5,12 @@ import { C, FONT, SHADOW } from '../../lib/design';
 import { getEffectiveTheme } from '../../lib/themeMode';
 import { ImageLightbox, Modal, ModalActions } from '../ui';
 import { proxyUrl } from './MarkdownContent';
-import { ChatProjectContext } from './contexts';
+import { ChatProjectContext, ChatSessionContext } from './contexts';
 import { fmtCredits } from './glifStats';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 import { readStoredToken } from '../../lib/offline';
 import { canWriteContent } from '../../features/projects/members/contentRights';
+import { personalFilesId, personalFilesProject } from '../../features/files/personalFiles';
 
 export function mediaLabel(items: MediaItem[]): string {
   const imgCount = items.filter(m => m.kind === 'image').length;
@@ -65,6 +66,26 @@ export function mediaSrc(url: string): string {
   if (!isLocalStreamUrl(url)) return proxyUrl(url);
   const token = readStoredToken();
   return token ? `${url}&access_token=${encodeURIComponent(token)}` : url;
+}
+
+// «Сохранить в Личное» (Ф-8, вердикт Р-Ф-8): бэк принимает только пути, начинающиеся
+// с медиальной папки (PersonalFilesController.MediaKindOf: первый сегмент images|audio|video,
+// PersonalMediaFolders.Resolve отсекает '.'/'..'). Панель «Файлы» может быть закрыта
+// (стора нет — '') или открыта в не-медиальной папке: такой путь бэк отвергает
+// invalid_path. Значит для личной записи медиальная папка типа медиа — предложение,
+// когда папка панели не медиальная; диалог показывает ровно то, что уйдёт в запрос.
+const PERSONAL_MEDIA_KIND_DIR: Record<'image' | 'video' | 'audio', 'images' | 'video' | 'audio'> = {
+  image: 'images', video: 'video', audio: 'audio',
+};
+
+// Чистая функция предложения папки (экспортирована для теста, как mediaLabel/isLocalStreamUrl
+// выше): папка панели используется только если она медиальная (с вложенностью), иначе —
+// медиальная папка типа медиа
+export function personalSaveDir(kind: MediaItem['kind'], explorerDir: string): string {
+  const dir = explorerDir.replace(/\\/g, '/');
+  const first = dir.split('/')[0];
+  const isMediaDir = first === 'images' || first === 'audio' || first === 'video';
+  return isMediaDir ? dir : PERSONAL_MEDIA_KIND_DIR[kind];
 }
 
 // JSON из результатов MCP-инструментов (fal/glif): форма заранее неизвестна и
@@ -359,7 +380,8 @@ export function extractMediaMeta(result: string, media?: MediaItem[]): MediaMeta
 }
 
 // Один медиа-блок (изображение или видео).
-// Футер: метаданные (размер, модель, время, цена) + кнопки «Скачать» и «В проект».
+// Футер: метаданные (размер, модель, время, цена) + кнопки «Скачать» и «В проект»
+// (в личном чате без проекта — «Сохранить в Личное», Ф-8).
 // Тач-устройства: тап по изображению открывает лайтбокс с навигацией назад.
 export function MediaBlock({
   m,
@@ -386,10 +408,22 @@ export function MediaBlock({
   online?: boolean;
 }) {
   const project = useContext(ChatProjectContext);
+  const sessionId = useContext(ChatSessionContext);
+  // Личный чат (Ф-8, требование Андрея 15.11): проекта нет, но есть личная область —
+  // тот же псевдо-проект, что у панели «Файлы» личного чата (features/files/personalFiles.ts).
+  // Им становится только чат без проекта: в проектном чате кнопка остаёт проектной
+  const personalId = !project && sessionId ? personalFilesId(sessionId) : null;
   // Дверь 'file.saveFromUrl' (S2c-F4i): редактору и читателю не обещаем то, что бэк
   // откажет (на бэке save-from-url остаётся на Write). Кнопка — единственный вход
   // в диалог и doSave: закрытая прячет всю цепочку записи, а не только себя.
-  const canSaveFromUrl = !!project && canWriteContent(project, 'file.saveFromUrl');
+  // У личной области ролей нет: бэк отдаёт личный чат только его владельцу
+  // (PersonalFilesController.TryChat) — дверь открыта тому же canWriteContent
+  // по псевдо-проекту без myRole
+  const canSaveFromUrl = !!project
+    ? canWriteContent(project, 'file.saveFromUrl')
+    : !!sessionId && canWriteContent(personalFilesProject(sessionId), 'file.saveFromUrl');
+  // Адрес кнопки и диалога: id проекта или псевдо-id личных файлов чата
+  const saveTarget = canSaveFromUrl ? (project ? project.id : personalId) : null;
   const [lightbox, setLightbox] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveDialog, setSaveDialog] = useState<{ baseName: string; ext: string } | null>(null);
@@ -409,13 +443,27 @@ export function MediaBlock({
     }
   };
 
+  // Папка сохранения — один источник для диалога и doSave (показанное = отправленное).
+  // Проект — папка панели, как раньше (у проектного бэка медиального ограничения нет);
+  // личная область — папка панели, только если она медиальная, иначе медиальная папка
+  // типа медиа (контракт бэка, см. PERSONAL_MEDIA_KIND_DIR выше)
+  const resolveSaveDir = (target: string): string => {
+    const dir = getExplorerCreateInDir(target);
+    if (project) return dir;
+    return personalSaveDir(m.kind, dir);
+  };
+
   const doSave = async (customName: string) => {
-    if (!project) return;
-    const dir = getExplorerCreateInDir(project.id);
+    if (!saveTarget) return;
+    const dir = resolveSaveDir(saveTarget);
     const path = dir ? `${dir}/${customName}` : customName;
     setSaveState('saving');
     try {
-      await api.files.saveFromUrl(project.id, m.url, path);
+      // Личная область — личный вариант записи: бэк принимает только медиальные папки
+      // «Личного» (images/|audio/|video/); когда папка панели не медиальная (или панели
+      // нет), resolveSaveDir подставляет медиальную папку типа медиа
+      if (project) await api.files.saveFromUrl(project.id, m.url, path);
+      else await api.files.saveFromUrlPersonal(saveTarget, m.url, path);
       setSaveState('saved');
       setTimeout(() => setSaveState('idle'), 3000);
     } catch {
@@ -426,7 +474,7 @@ export function MediaBlock({
 
   const openSaveDialog = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!project || saveState === 'saving') return;
+    if (!saveTarget || saveState === 'saving') return;
     const dotIdx = filename.lastIndexOf('.');
     const baseName = dotIdx > 0 ? filename.slice(0, dotIdx) : filename;
     const ext = dotIdx > 0 ? filename.slice(dotIdx) : '';
@@ -463,7 +511,7 @@ export function MediaBlock({
   const saveBtnLabel =
     saveState === 'saved' ? '✓ Сохранено'
     : saveState === 'error' ? '✗ Ошибка'
-    : 'Добавить в проект';
+    : project ? 'Добавить в проект' : 'Сохранить в Личное';
 
   const renderButtons = (dark = false) => (
     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -566,10 +614,10 @@ export function MediaBlock({
         </ImageLightbox>
       )}
 
-      {/* Диалог «Добавить в проект» */}
-      {saveDialog && project && (
+      {/* Диалог «Добавить в проект» / «Сохранить в Личное» (личный чат) */}
+      {saveDialog && saveTarget && (
         <Modal
-          title="Добавить в проект"
+          title={project ? 'Добавить в проект' : 'Сохранить в Личное'}
           onClose={() => setSaveDialog(null)}
           footer={
             <ModalActions
@@ -624,7 +672,9 @@ export function MediaBlock({
               )}
             </div>
             {(() => {
-              const dir = getExplorerCreateInDir(project.id);
+              // Личная область: dir здесь всегда медиальный (resolveSaveDir) — строка
+              // видна всегда; проект: как раньше — только когда панель открыта в папке
+              const dir = resolveSaveDir(saveTarget);
               return dir ? (
                 <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>
                   Папка: {dir}/

@@ -58,8 +58,10 @@ public class PersonalImageEditorController(
     public async Task<IActionResult> Start(string sessionId, [FromForm] StartJobForm form, CancellationToken ct)
     {
         if (!Gate(sessionId, out var scope, out var denied)) return denied;
-        // Образцы и исходник из файлов — вход, которому нужен диск: «Личное» создаём здесь, а не на GET
-        if (form.ReferencePaths is { Count: > 0 } || !string.IsNullOrWhiteSpace(form.SourcePath))
+        // Образцы и исходник из файлов — вход, которому нужен диск: «Личное» создаём здесь, а не на GET, и только
+        // если все пути допустимы: запрос с заведомо негодным путём получит отказ, не оставив папку
+        var paths = (form.ReferencePaths ?? []).Concat(string.IsNullOrWhiteSpace(form.SourcePath) ? [] : [form.SourcePath]).ToList();
+        if (paths.Count > 0 && PersonalMediaFolders.AllowsAll(paths))
             scope = await gate.WithFolderAsync(scope, ct);
         return await StartIn(scope, form, ct);
     }
@@ -88,7 +90,8 @@ public class PersonalImageEditorController(
         [FromQuery] bool dryRun, CancellationToken ct)
     {
         if (!Gate(sessionId, out var scope, out var denied)) return denied;
-        if (req.Base?.Path is { Length: > 0 }) scope = await gate.WithFolderAsync(scope, ct);
+        if (req.Base?.Path is { Length: > 0 } basePath && PersonalMediaFolders.AllowsAll([basePath]))
+            scope = await gate.WithFolderAsync(scope, ct);
         return await TransformIn(scope, req, dryRun, ct);
     }
 

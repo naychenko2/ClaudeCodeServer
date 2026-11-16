@@ -202,19 +202,31 @@ export const filesApi = {
         method: 'POST',
         body: JSON.stringify({ url, path }),
       }),
+    // Сохранение в «Личное» по URL (Ф-8, требование Андрея 15.11): личный вариант saveFromUrl.
+    // Маршрут «Личного» обслуживает только сервер (агент устройства о нём не знает), поэтому
+    // request(), а не projectRequest(). Путь ограниченный медиальными папками images/|audio/|video/
+    // (invalid_path для прочих), предел 200 МБ (413) — держит бэк (PersonalFilesController.SaveFromUrl)
+    saveFromUrlPersonal: (personalId: string, url: string, path: string) =>
+      request<{ path: string }>(`${personalFilesBase(personalId)}/save-from-url`, {
+        method: 'POST',
+        body: JSON.stringify({ url, path }),
+      }),
     officeDiscard: (projectId: string, path: string) =>
       projectRequest<void>(`/projects/${projectId}/files/office-discard?path=${encodeURIComponent(path)}`, { method: 'POST' }),
     getOfficeVersion: (projectId: string, path: string) =>
       projectRequest<{ ms: number }>(`/projects/${projectId}/files/office-version?path=${encodeURIComponent(path)}`),
     officeForceSave: (projectId: string, path: string) =>
       projectRequest<{ ok: boolean; reason?: string }>(`/projects/${projectId}/files/office-force-save?path=${encodeURIComponent(path)}`, { method: 'POST' }),
+    // Загрузка файла в текущую папку (Ф-7): multipart-поле file, ?path= каталога. Личный
+    // маршрут ('personal') обслуживает только сервер — агентской ветки у него нет по построению,
+    // поэтому устройствая проверка для него не нужна; проектный маршрут — как раньше
     upload: async (projectId: string, file: File, targetPath = ''): Promise<void> => {
-      assertServerRoute(projectId, 'POST', 'files/upload');
+      if (!isPersonalFilesId(projectId)) assertServerRoute(projectId, 'POST', 'files/upload');
       const token = readStoredToken();
       const form = new FormData();
       form.append('file', file);
       const res = await fetch(
-        `/api/projects/${projectId}/files/upload?path=${encodeURIComponent(targetPath)}`,
+        `/api${filesBase(projectId)}/upload?path=${encodeURIComponent(targetPath)}`,
         { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form },
       );
       if (res.status === 401) {

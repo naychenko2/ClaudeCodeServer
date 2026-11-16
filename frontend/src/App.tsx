@@ -582,8 +582,8 @@ export default function App() {
       resetCacheWarnOnLogout()
       resetWallOwner()
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
-    runLogoutResets() // сторы модулей прежнего пользователя — см. cc-unauthorized выше
       runLogoutResets() // сторы модулей (персонажи «Картинок» и др.) прежнего пользователя
+      resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки (Х-6)
       resetFeaturesIndexOwner() // срез индекса фич прежнего владельца (FI-3)
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
       // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого
@@ -1410,6 +1410,7 @@ export default function App() {
     resetCacheWarnOnLogout() // пороги кэша прежнего владельца — см. cc-unauthorized выше
     resetWallOwner()
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
+    runLogoutResets() // сторы модулей (персонажи «Картинок» и др.) прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки
     resetFeaturesIndexOwner() // срез индекса фич прежнего владельца — см. cc-unauthorized выше
     // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике

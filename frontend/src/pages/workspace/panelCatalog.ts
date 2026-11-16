@@ -17,7 +17,7 @@
 import {
   BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb, DraftingCompass, SlidersHorizontal, Mic, Cpu, Plug,
+  TableOfContents, Lightbulb, DraftingCompass, SlidersHorizontal, Mic, Cpu, Plug, FileAudio,
   ArrowDownToLine, History, Activity, Settings,
   type LucideIcon,
 } from 'lucide-react';
@@ -58,6 +58,9 @@ export const PANEL_KEYS = [
   // «Видео». Рисует её оболочка (ContextPanel), а не вертикаль. Ключ `context` занят панелью «Персона» и
   // сохранён в раскладках — отсюда отдельный ключ
   'chatContext',
+  // «Звук из Личного» (Ф-2): звуковые файлы папки «Личное» — только в личном чате,
+  // поэтому ключа нет в WORKSPACE_KEYS (в проекте панель не появляется)
+  'personal-sound',
   // Фоновый эфир рядом с работой: живёт и в проекте, и в разделе «Чаты».
   // Каталог каналов панелью НЕ является: он открывается в центральном острове
   // (кнопка в шапке этой панели), потому что каналы выбирают по обложкам,
@@ -175,6 +178,8 @@ export const PANEL_META: Record<Exclude<PanelKey, 'pluginPanels'>, { title: stri
   voices: { title: 'Голоса', Icon: Mic },
   // Панели генерации: заголовок и иконку в рельсе отдаёт вклад, здесь — запасные
   chatContext: { title: 'Контекст', Icon: SlidersHorizontal },
+  // «Звук из Личного» (Ф-2): файлы звука папки «Личное» — только в личном чате
+  'personal-sound': { title: 'Звук из Личного', Icon: FileAudio },
 
   // Разделы хаба. Ключи намеренно длиннее воркспейсных: рядом живут похожие по
   // смыслу панели проекта, и путать их нельзя. personasList — все персоны
@@ -228,6 +233,8 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   localModel: 'right',
   voices: 'right',
   chatContext: 'right',
+  // «Звук из Личного» (Ф-2): панель живёт в правой рельсе личного чата
+  'personal-sound': 'right',
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
   notesGraph: 'left',
@@ -314,7 +321,9 @@ export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
 // видит панель по-прежнему). Точка состояния на значке — там, где виден сам значок:
 // её даёт indicator фичи, и она молчит у не-админа (тот не спрашивает состояние).
 // «Файлы» (ADR-040 Ф2-9): папка «Личного» этого пользователя — «Мои файлы» личного чата.
-export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'chatContext', 'files', 'localModel'];
+// «Звук из Личного» (Ф-2): звуковые файлы той же папки — только личному чату, в
+// проекте такой панели нет (ключа нет в WORKSPACE_KEYS).
+export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'chatContext', 'files', 'localModel', 'personal-sound'];
 
 // Панель подсистемы в правом рельсе личного чата: «Локальные модели» — только
 // админу (см. выше); остальное решает сама фича (isAvailable, которым ChatsPage

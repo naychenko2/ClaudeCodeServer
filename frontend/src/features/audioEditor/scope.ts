@@ -30,7 +30,22 @@ export function enterVoicesScope(scope: string, sessionId: string | null): void 
   if (isPersonalScope(scope) && sessionId) _personalChat = sessionId;
 }
 
-export const voicesScopeBase = (scope: string) => audioBase(scope, isPersonalScope(scope) ? _personalChat : null);
+// sessionId явно — чат берётся из аргумента и от порядка вызовов не зависит; без него остаётся запомненный
+// чат точки входа (вызовы voices/api.ts без sessionId в сигнатуре)
+export const voicesScopeBase = (scope: string, sessionId?: string | null) =>
+  audioBase(scope, isPersonalScope(scope) ? sessionId ?? _personalChat : null);
+
+// ── Файлы «Личного» (личные файлы чата, features/files/personalFiles.ts): вход «звук из Личного» ──
+
+export const personalFilesPath = (sessionId: string) => `/personal/chats/${encodeURIComponent(sessionId)}/files`;
+
+const SOUND_FILE = /\.(wav|mp3|flac|ogg)$/i;
+
+export interface PersonalFileEntry { name: string; path: string; isDirectory: boolean }
+
+// Звуковые файлы из плоского дерева «Личного» по пути; папки и прочие файлы не берём
+export const personalSoundFiles = (entries: readonly PersonalFileEntry[]): PersonalFileEntry[] =>
+  entries.filter(e => !e.isDirectory && SOUND_FILE.test(e.path)).sort((a, b) => a.path.localeCompare(b.path, 'ru'));
 
 // Сброс — только для тестов
 export function __resetVoicesScope() {

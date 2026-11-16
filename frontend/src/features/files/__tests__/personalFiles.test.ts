@@ -31,13 +31,13 @@ describe('личные файлы: id и маршрут', () => {
     expect(personalFilesProject('c1').id).toBe(personalFilesId('c1'));
   });
 
-  it('маршрут personal: просмотр, создание, переименование и удаление есть; загрузки, сохранения текста и git нет', () => {
+  it('маршрут personal: просмотр, создание, загрузка, переименование и удаление есть; сохранения текста и git нет', () => {
     const p = personalFilesProject('c1');
     expect(projectFilesRoute(p)).toBe('personal');
     for (const r of ['GET files', 'GET files/tree', 'GET files/content', 'GET files/stream', 'POST files/mkdir',
-      'POST files/create', 'POST files/rename', 'DELETE files'] as const)
+      'POST files/create', 'POST files/rename', 'POST files/upload', 'DELETE files'] as const)
       expect(routeSupports('personal', r), r).toBe(true);
-    for (const r of ['PUT files/content', 'POST files/upload', 'POST files/revert', 'GET git/status',
+    for (const r of ['PUT files/content', 'POST files/revert', 'GET git/status',
       'POST files/document/to-markdown'] as const)
       expect(personalFilesSupports(r), r).toBe(false);
   });
@@ -75,5 +75,24 @@ describe('личные файлы: адреса api-слоя', () => {
     expect(filesApi.files.fileUrl(ID, 'images/a.png')).toBe('/api/personal/chats/chat%201/files/stream?path=images%2Fa.png&access_token=tok');
     expect(filesApi.files.downloadUrl(ID, 'a.png')).toBe('/api/personal/chats/chat%201/files/download?path=a.png&access_token=tok');
     expect(filesApi.files.fileUrl('p1', 'a.png')).toBe('/api/projects/p1/files/stream?path=a.png&access_token=tok');
+  });
+
+  // Ф-7: загрузка файла в панель. Личный маршрут — personalFilesBase + /upload, файл в multipart;
+  // проектный адрес — без изменений
+  it('upload: личный маршрут — адрес чата с файлом в multipart; проектный адрес не меняется', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK', json: async () => ({ path: 'images/a.png' }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const file = new File(['x'], 'a.png', { type: 'image/png' });
+      await filesApi.files.upload(ID, file, 'images');
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('/api/personal/chats/chat%201/files/upload?path=images');
+      expect(init.method).toBe('POST');
+      expect((init.body as FormData).get('file')).toBe(file);
+      await filesApi.files.upload('p1', file, '');
+      expect(fetchMock.mock.calls[1][0]).toBe('/api/projects/p1/files/upload?path=');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

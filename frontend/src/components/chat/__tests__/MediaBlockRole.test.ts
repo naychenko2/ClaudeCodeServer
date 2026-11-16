@@ -9,16 +9,30 @@
 // Мутация «убрать canWriteContent из canSaveFromUrl» красит тесты читателя и редактора;
 // «canSaveFromUrl = !!project» (дверь снята целиком) — то же.
 //
+// Ф-8 (требование Андрея 15.11): в личном чате (нет проекта, есть ChatSessionContext) кнопка
+// становится личной — «Сохранить в Личное», и её цепочка уходит на личный маршрут чата
+// (api.files.saveFromUrlPersonal → /personal/chats/{id}/files/save-from-url). Без сессии
+// (рендер вне ленты чата) личной области нет — кнопки нет вовсе.
+//
 // Окружение node (без jsdom), по образцу components/__tests__/FileExplorerRole.test.ts:
 // mount fakeDom. Стаб storage не нужен: readStoredToken (mediaSrc/proxyUrl) безопасен без
 // него — readFrom в lib/offline.ts закрыт try/catch и typeof-проверкой.
 
 import { act, createElement } from 'react';
-import { describe, it, expect, afterEach } from 'vitest';
-import { MediaBlock, type MediaItem } from '../MediaBlock';
-import { ChatProjectContext } from '../contexts';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { MediaBlock, personalSaveDir, type MediaItem } from '../MediaBlock';
+import { ChatProjectContext, ChatSessionContext } from '../contexts';
 import type { ProjectRoleView } from '../../../types';
-import { installFakeDom, uninstallFakeDom, mount, textNodes } from './fakeDom';
+import { installFakeDom, uninstallFakeDom, mount, textNodes, reactProps } from './fakeDom';
+// Конец цепочки личной записи (Ф-8): request() мокнут, цепка api → personalFilesBase настоящая
+// (тот же образец, что features/files/__tests__/personalFiles.test.ts); цепочка проходит
+// через компонент (MediaBlock → api), не через прямой вызов filesApi
+const { request } = vi.hoisted(() => ({ request: vi.fn() }));
+vi.mock('../../../lib/offline', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/offline')>();
+  return { ...orig, request };
+});
+import { personalFilesSupports } from '../../../features/files/personalFiles';
 
 const REMOTE: MediaItem = { kind: 'image', url: 'https://fal.media/img.png', width: 100, height: 100 };
 // Локальное медиа — строгий stream-URL: оно уже в проекте, save-from-url к нему не применяется
@@ -72,6 +86,102 @@ describe('MediaBlock: «Добавить в проект» по роли (S2c-F4
     const { root, container } = mountBlock('owner', LOCAL);
     expect(hasText(container, 'Добавить в проект'), 'локальное медиа не копируют через save-from-url').toBe(false);
     expect(hasText(container, 'Скачать'), 'локальное медиа и «Скачать» на месте').toBe(true);
+    await act(async () => { root.unmount(); });
+  });
+});
+
+// Личный чат: ChatProjectContext нет (ChatPanel не проведёт его без проекта), есть
+// ChatSessionContext — по нему блок опознаёт личную область и рисует личную кнопку
+function mountPersonal(m: MediaItem = REMOTE, sessionId: string | null = 's1') {
+  installFakeDom();
+  const { root, container } = mount(
+    createElement(
+      ChatSessionContext.Provider, { value: sessionId },
+      createElement(MediaBlock, { m, filename: 'img.png' }),
+    ),
+  );
+  return { root, container };
+}
+
+// Диалог сохранения (Modal) — портал в document.body: его кнопки ищем обходом body,
+// кнопку самого блока — обходом контейнера mount (контейнер в body не пристёгнут)
+const body = () => (globalThis as { document: { body: unknown } }).document.body as never;
+const buttonByLabel = (from: unknown, label: string): never => {
+  let hit: never | null = null;
+  const walk = (x: { nodeType: number; nodeName: string; childNodes?: unknown[] }) => {
+    if (hit) return;
+    if (x.nodeType === 1 && x.nodeName === 'BUTTON' && textNodes(x as never).join('').includes(label)) hit = x as never;
+    for (const c of x.childNodes ?? []) walk(c);
+  };
+  walk(from as never);
+  return hit!;
+};
+
+describe('MediaBlock: «Сохранить в Личное» в личном чате (Ф-8)', () => {
+  afterEach(uninstallFakeDom);
+
+  it('личный чат (нет проекта, сессия есть): кнопка «Сохранить в Личное» есть, проектной — нет', async () => {
+    const { root, container } = mountPersonal();
+    expect(hasText(container, 'Сохранить в Личное'), 'личная кнопка сохранения на месте').toBe(true);
+    expect(hasText(container, 'Добавить в проект'), 'проектной кнопки в личном чате нет').toBe(false);
+    expect(hasText(container, 'Скачать'), 'медиа и «Скачать» на месте').toBe(true);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('локальное медиа в личном чате: нет кнопки сохранения (тот же гейт isLocalStreamUrl)', async () => {
+    const { root, container } = mountPersonal(LOCAL);
+    expect(hasText(container, 'Сохранить в Личное'), 'локальное медиа не копируют в «Личное»').toBe(false);
+    expect(hasText(container, 'Скачать'), 'локальное медиа и «Скачать» на месте').toBe(true);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('без сессии (рендер вне ленты чата): личной области нет — кнопки нет', async () => {
+    const { root, container } = mountPersonal(REMOTE, null);
+    expect(hasText(container, 'Сохранить в Личное'), 'без сессии личной кнопки нет').toBe(false);
+    expect(hasText(container, 'Добавить в проект'), 'проектной кнопки тоже нет').toBe(false);
+    await act(async () => { root.unmount(); });
+  });
+
+  // Предложение папки при личной записи (вердикт Р-Ф-8): панель закрыта ('') или открыта
+  // в не-медиальной папке — медиальная папка типа медиа; медиальная папка панели (с
+  // вложенностью) — своя: бэк принимает первый сегмент images|audio|video (MediaKindOf)
+  it('предложение папки: не-медиальная или закрытая панель → папка типа медиа; медиальная — своя', () => {
+    expect(personalSaveDir('image', ''), 'панель закрыта — нет стора').toBe('images');
+    expect(personalSaveDir('image', 'docs'), 'панель в не-медиальной папке').toBe('images');
+    expect(personalSaveDir('image', 'заметки/2026'), 'русская не-медиальная папка').toBe('images');
+    expect(personalSaveDir('video', 'docs'), 'видео → video/').toBe('video');
+    expect(personalSaveDir('audio', 'docs'), 'аудио → audio/').toBe('audio');
+    // медиальная папка панели — своя, включая вложенность: бэк её принимает
+    expect(personalSaveDir('image', 'images')).toBe('images');
+    expect(personalSaveDir('image', 'images/sub'), 'вложенность внутри медиальной').toBe('images/sub');
+    expect(personalSaveDir('image', 'video/sub'), 'чужая медиальная — остаётся').toBe('video/sub');
+  });
+
+  // Конец цепочки личной кнопки (вердикт Р-Ф-8): клик «Сохранить в Личное» → диалог
+  // с предлагаемой папкой → «Сохранить» → doSave → saveFromUrlPersonal → личный маршрут
+  // чата, не /projects/…. Панель «Файлы» закрыта (стора нет): doSave подставляет медиальную
+  // папку типа медиа, и path в теле запроса начинается с 'images/' — контракт бэка
+  // (PersonalFilesController.MediaKindOf). Мутация «resolveSaveDir для личной области
+  // возвращает ''» (MediaBlock.tsx) красит тест и на строке папки диалога, и на path.
+  it('клик «Сохранить в Личное»: диалог предлагает images/, тело запроса — path с images/', async () => {
+    request.mockReset();
+    request.mockResolvedValue({ path: 'images/img.png' });
+    expect(personalFilesSupports('POST files/save-from-url'), 'личный маршрут объявляет save-from-url').toBe(true);
+    const { root, container } = mountPersonal();
+    act(() => {
+      (reactProps(buttonByLabel(container, 'Сохранить в Личное'))!.onClick as (e: { stopPropagation: () => void }) => void)({ stopPropagation: () => {} });
+    });
+    // Диалог показывает предлагаемую папку: не пусто и не папку панели (панель закрыта) — медиальную
+    expect(textNodes(body()).join(''), 'диалог показывает медиальную папку').toContain('Папка: images/');
+    await act(async () => {
+      (reactProps(buttonByLabel(body(), 'Сохранить'))!.onClick as () => void)();
+    });
+    const [url, init] = request.mock.calls[0] as [string, { method: string; body: string }];
+    expect(url).toBe('/personal/chats/s1/files/save-from-url');
+    expect(init.method).toBe('POST');
+    const bodyJson = JSON.parse(init.body) as { url: string; path: string };
+    expect(bodyJson.url).toBe('https://fal.media/img.png');
+    expect(bodyJson.path.startsWith('images/'), 'path в теле запроса начинается с медиальной папки').toBe(true);
     await act(async () => { root.unmount(); });
   });
 });

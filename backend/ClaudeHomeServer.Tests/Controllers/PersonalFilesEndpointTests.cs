@@ -1,6 +1,8 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
@@ -25,7 +27,42 @@ public class PersonalFilesEndpointTests : IClassFixture<PersonalFilesEndpointTes
         public Host()
         {
             Personal = new FakePersonal(Path.Combine(TempDir, "Personal"));
-            ExtraServices = services => services.AddSingleton<IPersonalProjects>(Personal);
+            // Стаб клиента для save-from-url: настоящей сети нет, поведение — по пути URL.
+            // Адреса в тестах — публичные литералы (8.8.8.8) или приватные (127.0.0.1):
+            // SSRF-guard решает по ним как в бою, без DNS
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IPersonalProjects>(Personal);
+                services.AddSingleton<IHttpClientFactory>(new StubHttpFactory());
+            };
+        }
+    }
+
+    private sealed class StubHttpFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new StubHandler());
+
+        private sealed class StubHandler : HttpMessageHandler
+        {
+            private static readonly byte[] Small = [0x89, 0x50, 0x4E, 0x47, 1, 2, 3];
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+            {
+                var path = request.RequestUri!.AbsolutePath;
+                HttpResponseMessage resp;
+                if (path.EndsWith("/small.png"))
+                    resp = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Small) };
+                else if (path.EndsWith("/huge"))
+                {
+                    // Тело с объявленной длиной больше предела: отказ по заголовку, до чтения
+                    var content = new ByteArrayContent([]);
+                    content.Headers.ContentLength = 200L * 1024 * 1024 + 1;
+                    resp = new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+                }
+                else
+                    resp = new HttpResponseMessage(HttpStatusCode.NotFound);
+                return Task.FromResult(resp);
+            }
         }
     }
 
@@ -161,6 +198,116 @@ public class PersonalFilesEndpointTests : IClassFixture<PersonalFilesEndpointTes
 
         (await _owner.GetAsync(Url(chat, "/content?" + Q("нет.txt")))).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await _owner.GetAsync(Url(chat, "/download?" + Q("docs")))).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // ── Заметки (Х-9, дефект 44718bbf) ─────────────────────────────────────────────
+
+    // Кейс приёмки дефекта: «Личное» существует и пусто — корень пуст, мёртвой «Заметки» нет,
+    // пустое состояние «Личное пусто» достижимо
+    [Fact]
+    public async Task Пустой_личный_корень_не_содержит_папку_Заметки()
+    {
+        await _host.Personal.EnsurePersonalAsync(_ownerId);
+        var chat = await Chat();
+
+        (await Json(await _owner.GetAsync(Url(chat)))).GetArrayLength()
+            .Should().Be(0, "виртуальная «notes» листа корня проекта в личный корень не вставляется");
+        (await Json(await _owner.GetAsync(Url(chat, "/tree")))).GetArrayLength().Should().Be(0);
+    }
+
+    public static TheoryData<string> NotesPaths() => new()
+    {
+        "notes", "notes/Заметка.md", "Notes/Заметка.md", "notes/под/Глубокая.md",
+    };
+
+    // Путь заметок недоступен вовсе: явный 404 на чтении, а запись и перенос не создают
+    // мёртвую папку — ни следа на диске
+    [Theory]
+    [MemberData(nameof(NotesPaths))]
+    public async Task Путь_Заметки_отказан_404_на_чтении_и_не_создаётся_записью(string path)
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        var list = await _owner.GetAsync(Url(chat, "?" + Q(path)));
+        list.StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        (await Json(list)).GetProperty("code").GetString().Should().Be("notes_unavailable", path);
+        (await _owner.GetAsync(Url(chat, "/tree?" + Q(path)))).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        (await _owner.GetAsync(Url(chat, "/content?" + Q(path)))).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        (await _owner.GetAsync(Url(chat, "/download?" + Q(path)))).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+
+        (await _owner.PostAsJsonAsync(Url(chat, "/mkdir"), new { path })).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        (await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path, content = "x" })).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        // каталог из query: загрузка не создаёт мёртвую папку
+        (await _owner.PostAsync(Url(chat, "/upload?" + Q(path)), Form([1], "a.bin"))).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+        // перенос в мёртвую папку — тоже нет
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "docs", newPath = path })).StatusCode.Should().Be(HttpStatusCode.NotFound, path);
+
+        Directory.Exists(Path.Combine(root, "notes")).Should().BeFalse("отказ не оставляет следа на диске");
+    }
+
+    // Наследная физическая notes/ (создана до правки или мимо API): прямая ссылка по-прежнему
+    // отказана, переименование — ни в неё, ни из неё; снести её может только delete
+    [Fact]
+    public async Task Наследная_физическая_папка_Заметки_недоступна_по_ссылке_но_удаляется()
+    {
+        var root = await Seeded();
+        Directory.CreateDirectory(Path.Combine(root, "notes"));
+        await File.WriteAllTextAsync(Path.Combine(root, "notes", "Старая.md"), "# старая");
+        var chat = await Chat();
+
+        var list = await _owner.GetAsync(Url(chat, "?path=notes"));
+        list.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await Json(list)).GetProperty("code").GetString().Should().Be("notes_unavailable");
+        (await _owner.GetAsync(Url(chat, "/content?" + Q("notes/Старая.md")))).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "notes", newPath = "docs2" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        Directory.Exists(Path.Combine(root, "notes")).Should().BeTrue();
+
+        (await _owner.DeleteAsync(Url(chat, "?path=notes"))).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        Directory.Exists(Path.Combine(root, "notes")).Should().BeFalse();
+    }
+
+    // ── Звук из Личного (Ф-2, закрепление после Х-9) ──────────────────────────────
+
+    private static readonly byte[] Wav = [.. "RIFF"u8, 0, 0, 0, 0, .. "WAVE"u8, 1, 2, 3];
+
+    // Панель «Звук из Личного» (PersonalSoundPanel) берёт всё дерево личного корня (/tree?path=)
+    // и отфильтровывает звуковые файлы на клиенте; «Работать с этим» и «В контекст» берут
+    // отдаваемый путь как есть. После Х-9 (корень без «Заметок») вход панели не изменился:
+    // audio/ принимается записью и чтением, листинг корня — только то, что на диске.
+    // Мутация «вернуть вставку «Заметки» в листинг личного корня» краснит Equal корня.
+    [Fact]
+    public async Task Звук_из_Личного_листит_папку_audio_и_корень_без_Заметок()
+    {
+        var chat = await Chat();
+
+        // audio/ принимается записью: upload создаёт папку вида и файл — вход панели
+        (await _owner.PostAsync(Url(chat, "/upload?path=audio"), Form(Wav, "qa-tone.wav")))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // запрос панели: всё дерево личного корня содержит звуковой файл
+        (await Json(await _owner.GetAsync(Url(chat, "/tree")))).EnumerateArray()
+            .Select(e => e.GetProperty("path").GetString()).Should().Contain("audio/qa-tone.wav");
+
+        // прямой листинг audio/ — тот файл (тот же путь, что панель отдаёт в контекст)
+        (await Json(await _owner.GetAsync(Url(chat, "?path=audio")))).EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).Should().Equal("qa-tone.wav");
+
+        // листинг корня — только то, что на диске: виртуальной «Заметки» нет (Х-9)
+        (await Json(await _owner.GetAsync(Url(chat)))).EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).Should().Equal("audio");
+
+        // guard заметок медиальные пути не задел: audio/… читается как обычно…
+        var stream = await _owner.GetAsync(Url(chat, "/stream?" + Q("audio/qa-tone.wav")));
+        stream.StatusCode.Should().Be(HttpStatusCode.OK);
+        stream.Content.Headers.ContentType!.MediaType.Should().Be("audio/wav");
+        (await _owner.GetAsync(Url(chat, "/download?" + Q("audio/qa-tone.wav"))))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // …а notes/… на том же корне остаётся 404
+        (await _owner.GetAsync(Url(chat, "?path=notes"))).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // ── Доступ ───────────────────────────────────────────────────────────────────
@@ -310,6 +457,303 @@ public class PersonalFilesEndpointTests : IClassFixture<PersonalFilesEndpointTes
         Directory.Exists(Path.Combine(root, "docs")).Should().BeFalse();
         Directory.Exists(root).Should().BeTrue();
         (await _owner.DeleteAsync(Url(chat, "?" + Q("уже-нет")))).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // ── Нормализация пути, родитель цели и размер содержимого (низкие пункты ревью Ф2-9) ──
+
+    [Fact]
+    public async Task Пробелы_по_краям_пути_снимаются_до_диска_и_файла_с_пробелами_не_появляется()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        // Запись идёт по тому же значению, что проверила SyntaxOk: на диске — без пробелов
+        (await _owner.PostAsJsonAsync(Url(chat, "/mkdir"), new { path = " docs/sub " })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path = "  notes2.txt  ", content = "x" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        Directory.Exists(Path.Combine(root, "docs", "sub")).Should().BeTrue();
+        File.Exists(Path.Combine(root, "notes2.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(root, "  notes2.txt  ")).Should().BeFalse();
+        Directory.Exists(Path.Combine(root, " docs ")).Should().BeFalse();
+
+        // Чтение по пути с пробелами — тот же файл, и в списке его имя без пробелов
+        (await _owner.GetAsync(Url(chat, "/content?" + Q("  notes2.txt  "))))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(await _owner.GetAsync(Url(chat)))).EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).Should().Contain("notes2.txt");
+
+        // Переименование и удаление — тоже по обрезанному: «  notes2.txt  » → docs/sub/n.txt
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = " notes2.txt ", newPath = " docs/sub/n.txt " }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        File.Exists(Path.Combine(root, "docs", "sub", "n.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(root, "notes2.txt")).Should().BeFalse();
+        (await _owner.DeleteAsync(Url(chat, "?" + Q(" docs/sub/n.txt ")))).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        File.Exists(Path.Combine(root, "docs", "sub", "n.txt")).Should().BeFalse();
+    }
+
+    // Trim — по краям пути, не по сегментам: «a b.txt» — законное имя, оно пишется, читается,
+    // перечисляется, переносится и удаляется как есть
+    [Fact]
+    public async Task Пробел_внутри_сегмента_имени_не_снимается_файл_живёт_под_ним()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+        (await _owner.PostAsJsonAsync(Url(chat, "/mkdir"), new { path = "docs/sub" })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path = "a b.txt", content = "x" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK, "имя с пробелом внутри — законное");
+        File.Exists(Path.Combine(root, "a b.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(root, "ab.txt")).Should().BeFalse("пробелы внутри имени не вырезаются");
+
+        (await _owner.GetAsync(Url(chat, "/content?" + Q("a b.txt")))).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(await _owner.GetAsync(Url(chat)))).EnumerateArray()
+            .Select(e => e.GetProperty("name").GetString()).Should().Contain("a b.txt");
+
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "a b.txt", newPath = "docs/sub/a b.txt" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        File.Exists(Path.Combine(root, "docs", "sub", "a b.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(root, "a b.txt")).Should().BeFalse();
+        (await _owner.GetAsync(Url(chat, "/content?" + Q("docs/sub/a b.txt")))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await _owner.DeleteAsync(Url(chat, "?" + Q("docs/sub/a b.txt")))).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        File.Exists(Path.Combine(root, "docs", "sub", "a b.txt")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Переименование_в_несуществующую_папку_даёт_404_и_источник_остаётся_целым()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        // Родителя цели нет — нет и цели: 404 «нет такого пути», а не 409 «имя занято»
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "notes.txt", newPath = "нет-папки/notes.txt" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        File.Exists(Path.Combine(root, "notes.txt")).Should().BeTrue();
+        Directory.Exists(Path.Combine(root, "нет-папки")).Should().BeFalse();
+
+        // Папку — тот же отказ, её содержимое цело
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "docs", newPath = "нет-папки/docs" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        File.Exists(Path.Combine(root, "docs", "readme.md")).Should().BeTrue();
+
+        // Занятая цель — по-прежнему 409: новый отказ её не подменил
+        (await _owner.PostAsJsonAsync(Url(chat, "/rename"), new { oldPath = "notes.txt", newPath = "docs/readme.md" }))
+            .StatusCode.Should().Be(HttpStatusCode.Conflict);
+        File.Exists(Path.Combine(root, "notes.txt")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Содержимое_на_пределе_создаётся_а_больше_предела_даёт_413_без_файла()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+        const int limit = 1024 * 1024; // MaxContentBytes контроллера
+
+        // Ровно на пределе — ещё можно: интервал [0, limit]
+        (await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path = "at-limit.txt", content = new string('a', limit) }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        new FileInfo(Path.Combine(root, "at-limit.txt")).Length.Should().Be(limit);
+
+        // На байт больше — отказ с понятным кодом; кириллица считается её длиной в UTF-8
+        var resp = await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path = "over.txt", content = new string('а', limit) });
+        resp.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        (await Json(resp)).GetProperty("code").GetString().Should().Be("content_too_large");
+        File.Exists(Path.Combine(root, "over.txt")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Содержимое_больше_предела_отказано_до_создания_папки_Личного()
+    {
+        var chat = await Chat();
+
+        (await _owner.PostAsJsonAsync(Url(chat, "/create"), new { path = "over.txt", content = new string('а', 1024 * 1024) }))
+            .StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        Directory.Exists(_host.Personal.RootOf(_ownerId)).Should().BeFalse();
+    }
+
+    // ── Загрузка и сохранение по URL (Ф-6) ────────────────────────────────────────
+
+    private static MultipartFormDataContent Form(byte[] bytes, string fileName)
+    {
+        var form = new MultipartFormDataContent();
+        var part = new ByteArrayContent(bytes);
+        part.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        form.Add(part, "file", fileName);
+        return form;
+    }
+
+    [Fact]
+    public async Task Загрузка_пишет_в_корень_и_в_папку_перезапись_атомарна_и_temp_не_остаётся()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        var resp = await _owner.PostAsync(Url(chat, "/upload"), Form([0x89, 0x50, 0x4E, 0x47], "кот.png"));
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        (await Json(resp)).GetProperty("path").GetString().Should().Be("кот.png");
+        (await File.ReadAllBytesAsync(Path.Combine(root, "кот.png"))).Should().Equal([0x89, 0x50, 0x4E, 0x47]);
+
+        // Каталог из query: файл ложится в него, путь в ответе — полный
+        (await _owner.PostAsync(Url(chat, "/upload?path=images"), Form([1, 2], "doc.bin")))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await File.ReadAllBytesAsync(Path.Combine(root, "images", "doc.bin"))).Should().Equal([1, 2]);
+
+        // Перезапись цели — атомарная подмена: содержимое новое, temp не пережил запись
+        (await _owner.PostAsync(Url(chat, "/upload"), Form([9, 9], "кот.png"))).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await File.ReadAllBytesAsync(Path.Combine(root, "кот.png"))).Should().Equal([9, 9]);
+        Directory.GetFiles(root).Select(Path.GetFileName).Should().NotContain(n => n!.EndsWith(".tmp"));
+
+        // Загруженное читается как остальное: поток с типом по сигнатуре
+        var stream = await _owner.GetAsync(Url(chat, "/stream?" + Q("кот.png")));
+        stream.StatusCode.Should().Be(HttpStatusCode.OK);
+        stream.Content.Headers.ContentType!.MediaType.Should().Be("image/png");
+    }
+
+    [Fact]
+    public async Task Загрузка_без_файла_с_пустым_именем_или_за_корнем_отказана_и_папки_Личного_не_создана()
+    {
+        var chat = await Chat();
+
+        // Нет поля file
+        (await _owner.PostAsync(Url(chat, "/upload"), new MultipartFormDataContent()))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        // Пустой файл
+        (await _owner.PostAsync(Url(chat, "/upload"), Form([], "пусто.bin"))).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        // Имя — одни путь-сегменты: Path.GetFileName даёт пусто
+        (await _owner.PostAsync(Url(chat, "/upload"), Form([1], "x/"))).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        // Каталог за корнем — отказ до любого эффекта, папка «Личного» не создана
+        (await _owner.PostAsync(Url(chat, "/upload?path=../evil"), Form([1], "a.bin")))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        Directory.Exists(_host.Personal.RootOf(_ownerId)).Should().BeFalse();
+
+        // Чужого и несуществующего чата нет, как на остальных ручках
+        (await _owner.PostAsync(Url("нет-такого-чата", "/upload"), Form([1], "a.bin"))).StatusCode
+            .Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Загрузка_больше_100_МБ_даёт_413_и_файла_нет()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        var resp = await _owner.PostAsync(Url(chat, "/upload"), Form(new byte[100 * 1024 * 1024 + 1], "big.bin"));
+        resp.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        (await Json(resp)).GetProperty("code").GetString().Should().Be("file_too_large");
+        File.Exists(Path.Combine(root, "big.bin")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Загрузка_и_сохранение_по_URL_с_именем_существующей_папки_дают_409_exists_а_не_500()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        // Имя занято каталогом: File.Move в атомарной записи бросает IOException —
+        // тот же 409 «exists», что у create/mkdir/rename, а не 500
+        var resp = await _owner.PostAsync(Url(chat, "/upload"), Form([1, 2], "images"));
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict, await resp.Content.ReadAsStringAsync());
+        (await Json(resp)).GetProperty("code").GetString().Should().Be("exists");
+        Directory.Exists(Path.Combine(root, "images")).Should().BeTrue();
+        (await File.ReadAllBytesAsync(Path.Combine(root, "images", "a.png"))).Should().Equal([0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
+        Directory.GetFiles(root).Select(Path.GetFileName).Should().NotContain(n => n!.EndsWith(".tmp"));
+
+        // save-from-url: та же коллизия внутри медиальной папки — тоже 409 «exists», каталог цел
+        (await _owner.PostAsJsonAsync(Url(chat, "/mkdir"), new { path = "images/sub" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        var save = await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "http://8.8.8.8/small.png", path = "images/sub" });
+        save.StatusCode.Should().Be(HttpStatusCode.Conflict, await save.Content.ReadAsStringAsync());
+        (await Json(save)).GetProperty("code").GetString().Should().Be("exists");
+        Directory.Exists(Path.Combine(root, "images", "sub")).Should().BeTrue();
+        Directory.GetFiles(Path.Combine(root, "images")).Select(Path.GetFileName).Should().NotContain(n => n!.EndsWith(".tmp"));
+    }
+
+    [Fact]
+    public async Task Сохранение_по_URL_пишет_в_медиальную_папку_а_вне_неё_400_до_создания_папки_Личного()
+    {
+        var chat = await Chat();
+
+        // Путь проверяется до резолва адреса и до сети: вне медиальной папки — 400, папки нет
+        foreach (var bad in new[] { "заметки.txt", "images", "docs/x.png", "images/../x.png", "" })
+            (await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "http://8.8.8.8/small.png", path = bad }))
+                .StatusCode.Should().Be(HttpStatusCode.BadRequest, bad);
+        Directory.Exists(_host.Personal.RootOf(_ownerId)).Should().BeFalse();
+
+        // Медиальная папка — можно; сама папка вида создаётся на записи
+        var resp = await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "http://8.8.8.8/small.png", path = "images/cat.png" });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        (await Json(resp)).GetProperty("path").GetString().Should().Be("images/cat.png");
+        var root = _host.Personal.RootOf(_ownerId);
+        (await File.ReadAllBytesAsync(Path.Combine(root, "images", "cat.png"))).Should().Equal([0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
+
+        // audio/ и video/ — тоже можно, вложенность допустима
+        (await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "http://8.8.8.8/small.png", path = "audio/sound.wav" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "http://8.8.8.8/small.png", path = "video/sub/clip.mp4" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        File.Exists(Path.Combine(root, "video", "sub", "clip.mp4")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Сохранение_по_URL_отказывает_внутренний_адрес_и_плохой_URL_а_на_404_адреса_отвечает_502()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+
+        // Тот же SSRF-guard, что у проектной ручки: 127.0.0.1 — литерал, отказа хватает без DNS
+        (await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "http://127.0.0.1/small.png", path = "images/x.png" }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "ftp://8.8.8.8/x.png", path = "images/x.png" }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "не URL", path = "images/x.png" }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        // Адрес ответил 404 — 502 с причиной, файла нет
+        var resp = await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "http://8.8.8.8/gone", path = "images/gone.png" });
+        resp.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        (await Json(resp)).GetProperty("code").GetString().Should().Be("fetch_failed");
+        File.Exists(Path.Combine(root, "images", "gone.png")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Сохранение_по_URL_больше_200_МБ_даёт_413_и_цель_остаётся_как_была()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+        // По целевому пути уже есть файл: отказ по заголовку не должен его тронуть
+        await File.WriteAllBytesAsync(Path.Combine(root, "images", "cat.png"), [1, 2, 3]);
+
+        var resp = await _owner.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "http://8.8.8.8/huge", path = "images/cat.png" });
+        resp.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        (await Json(resp)).GetProperty("code").GetString().Should().Be("file_too_large");
+        (await File.ReadAllBytesAsync(Path.Combine(root, "images", "cat.png"))).Should().Equal([1, 2, 3]);
+    }
+
+    [Fact]
+    public async Task Чужой_получает_404_на_загрузку_и_сохранение_по_URL_и_ничего_не_создаёт()
+    {
+        var root = await Seeded();
+        var chat = await Chat();
+        var stranger = _host.CreateAuthenticatedClient(); // администратор чужого личного чата — чужой
+
+        (await stranger.PostAsync(Url(chat, "/upload"), Form([1], "a.bin"))).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await stranger.PostAsJsonAsync(Url(chat, "/save-from-url"), new { url = "http://8.8.8.8/small.png", path = "images/x.png" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        File.Exists(Path.Combine(root, "a.bin")).Should().BeFalse();
+        File.Exists(Path.Combine(root, "images", "x.png")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Загрузка_и_сохранение_несут_пределы_тела_как_проектные_ручки()
+    {
+        // Предел держит транспорт (RequestSizeLimit), а не только код ручки: без него Kestrel
+        // отказал бы разрешённый файл дефолтным 30 МБ (функциональный путь >100 МБ — в тесте выше)
+        static long LimitOf(string methodName) =>
+            ((Microsoft.AspNetCore.Http.Metadata.IRequestSizeLimitMetadata)typeof(PersonalFilesController)
+                .GetMethod(methodName)!.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute), false).Single())
+            .MaxRequestBodySize!.Value;
+
+        LimitOf(nameof(PersonalFilesController.Upload)).Should().Be(100L * 1024 * 1024);
+        LimitOf(nameof(PersonalFilesController.SaveFromUrl)).Should().Be(200L * 1024 * 1024);
     }
 
     // ── Проектные маршруты «Личное» не открывают ─────────────────────────────────

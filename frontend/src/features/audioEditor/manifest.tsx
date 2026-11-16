@@ -1,7 +1,7 @@
 // Манифест MF-модуля «Звук» (ADR-021 §3). Ключ совпадает с AudioEditorSubsystem.Key
 // бэкенда: гейт слотов сверяется с активными подсистемами из /api/auth/me.
 
-import { Mic } from 'lucide-react';
+import { FileAudio, Mic } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
   ChatItemToolCtx, ComposerChipCtx, ContextOpenerApi, SlotContribution, SubsystemManifest,
@@ -10,6 +10,7 @@ import type {
 import { AudioConcatCard, AudioFocusLine, AudioLaunchCard, AudioPromptCard, AudioServiceLine } from './feed/AgentCards';
 import { AUDIO_TOOL } from './feed/parse';
 import { SoundChatWatcher } from './composer/SoundChatWatcher';
+import { PERSONAL_SOUND_KEY, PersonalSoundPanel } from './panel/PersonalSoundPanel';
 import { VoicesContextPanel } from './voices/VoicesContextPanel';
 import { VOICES_KEY } from './thread/panelKey';
 import { audioKindApi } from './context/kind';
@@ -64,6 +65,16 @@ export const manifest: SubsystemManifest = {
           title: 'Голоса',
           icon: <Mic size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
           isAvailable: (projectId: string | null) => projectId !== null,
+        } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
+      },
+      // «Звук из Личного» (Ф-2): звуковые файлы папки «Личное» → основной звук или кусок склейки; только в личном чате
+      {
+        name: PERSONAL_SOUND_KEY,
+        render: (ctx: WorkspacePanelDefCtx) => <PersonalSoundPanel ctx={ctx} layout={ctx.isMobile ? 'sheet' : 'column'} />,
+        action: {
+          title: 'Звук из Личного',
+          icon: <FileAudio size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          isAvailable: (projectId: string | null) => projectId === null,
         } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
       },
     ],

@@ -81,7 +81,8 @@ public class ImageEditorToolsetTests : IDisposable
         IImagePlaceSettings? placeSettings = null,
         ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache? faces = null,
         ILocalImageMedia? localMedia = null, IImageEditJobs? jobsOverride = null,
-        ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null)
+        ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null,
+        PersonalFolderResolver? personalFolder = null)
     {
         editors ??= [HiggsfieldImageEditorTests.Create().Editor];
         var workspace = new ImageEditWorkspace(Path.Combine(_dir, "image-editor"));
@@ -117,7 +118,7 @@ public class ImageEditorToolsetTests : IDisposable
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         return new ImageEditorToolset(accessor.Object, projects.Object, editors, threads, launcher,
             withGate ? _turnGate.Object : null, _jobs, placeSettings: placeSettings, events: _bus, config: config, prefs: prefs,
-            context: context, faces: faces, localMedia: localMedia, turnActors: turnActors);
+            context: context, faces: faces, localMedia: localMedia, turnActors: turnActors, personalFolder: personalFolder);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -348,6 +349,60 @@ public class ImageEditorToolsetTests : IDisposable
         draft.Text.Should().Contain("вне проекта");
         _store.Get(Owner, PersonalChat).Threads.Should().BeEmpty();
         _feed.Records.Should().BeEmpty();
+    }
+
+    // «Личное» с созданием папки на Ensure: «не создали» видно как отсутствие папки
+    private sealed class PersonalStore(string root) : IPersonalProjects
+    {
+        private Project? _project;
+
+        public string Root => root;
+
+        public Project? GetPersonalOf(string ownerId) => _project;
+
+        public Task<Project> EnsurePersonalAsync(string ownerId, CancellationToken ct = default)
+        {
+            Directory.CreateDirectory(root);
+            return Task.FromResult(_project ??= new Project
+                { Id = "personal", OwnerId = ownerId, RootPath = root, Kind = ProjectKind.Personal });
+        }
+
+        public Project? GetByIdIncludingPersonal(string id) => null;
+
+        public IReadOnlyCollection<Project> GetAllPersonal() => _project is null ? [] : [_project];
+
+        public bool DeleteOf(string ownerId) => false;
+    }
+
+    // «Личное» создаётся, только если все пути входа допустимы (ADR-040 §1.2): негодный путь — отказ,
+    // папки нет. Снятие «&& PersonalMediaFolders.AllowsAll(...)» в любой ветке NeedsDisk краснит
+    // этот тест: резолвер вызвался бы и по негодному пути
+    [Fact]
+    public async Task Личный_вход_с_негодным_путём_отказ_а_папка_Личного_не_создана()
+    {
+        AddChat(PersonalChat, Owner, projectId: null);
+        var personal = new PersonalStore(Path.Combine(_dir, "personal"));
+        var toolset = Toolset(personalFolder: new PersonalFolderResolver(personal));
+
+        var focus = await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/../x.png" },
+            Ctx(tail: PersonalChat));
+        var generate = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject
+        {
+            ["prompt"] = "кот",
+            ["references"] = new JsonArray(
+                new JsonObject { ["path"] = "images/hero.png" },
+                new JsonObject { ["path"] = "notes.txt" }),
+        }, Ctx(tail: PersonalChat));
+
+        focus.IsError.Should().BeTrue(focus.Text);
+        generate.IsError.Should().BeTrue(generate.Text);
+        Directory.Exists(personal.Root).Should().BeFalse("ни один отказ не имел права создать папку");
+
+        // Положительная половина: с допустимым путём ленивое создание доходит до дела
+        var allowed = await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" },
+            Ctx(tail: PersonalChat));
+        allowed.IsError.Should().BeTrue("файла в «Личном» нет — отказ по делу, а не по пути");
+        Directory.Exists(personal.Root).Should().BeTrue("допустимый вход — тот, ради которого папку и создают");
     }
 
     [Fact]

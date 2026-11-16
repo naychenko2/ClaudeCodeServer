@@ -2,8 +2,11 @@
 // проекта и доступность кнопки. Расширение ставит сервер по формату результата.
 
 import type { FileEntry } from '../../types';
+import { personalFilesId } from '../files/personalFiles';
 import type { ImageEncodeFormat, SaveCheckResponse } from './api';
 import { nextVersionName, splitPath } from './format';
+import { isPersonalScope } from './scope';
+import { PERSONAL_SAVE_FOLDER } from './thread/model';
 
 export const FORMAT_EXT: Record<ImageEncodeFormat, string> = { png: 'png', jpeg: 'jpg', webp: 'webp' };
 
@@ -34,6 +37,27 @@ export function projectFolders(entries: FileEntry[]): SaveFolder[] {
   }
   return [...counts].map(([path, files]) => ({ path, files }))
     .sort((a, b) => (a.path === '' ? -1 : b.path === '' ? 1 : a.path.localeCompare(b.path)));
+}
+
+// Список личной области ⊆ допуску бэка (PersonalMediaFolders.Resolve): только images/ и её
+// подпапки. Корень «Личного» и чужие папки (audio/, video/) не предлагаем: выбор их — 400,
+// а корень бэк молча маппит в images/ — подпись о «корне» лжёт.
+export function personalImageFolders(folders: SaveFolder[]): SaveFolder[] {
+  return folders.filter(f => f.path === PERSONAL_SAVE_FOLDER || f.path.startsWith(`${PERSONAL_SAVE_FOLDER}/`));
+}
+
+// Кому принадлежит дерево папок диалога: проект — id проекта; личная область — псевдо-id
+// личных файлов чата (скрытый проект «Личное», features/files/personalFiles.ts):
+// filesApi по этому префиксу ведёт запрос на личный маршрут /personal/chats/{id}/files
+export function foldersTarget(scope: string, sessionId: string): string {
+  return isPersonalScope(scope) ? personalFilesId(sessionId) : scope;
+}
+
+// Список папок для выбора: текущая есть всегда — даже когда дерево ещё не пришло
+// или не отдало её; из дерева она не дублируется
+export function shownFolders(loaded: SaveFolder[] | null, current: string): SaveFolder[] {
+  const list = loaded ?? [];
+  return list.some(f => f.path === current) ? list : [{ path: current, files: 0 }, ...list];
 }
 
 // Ответ проверки относится к тому, что сейчас в поле: имя, папка и формат

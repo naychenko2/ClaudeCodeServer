@@ -81,7 +81,11 @@ public class HardwareSamplerIpmiTests
 
         s!.Vrms.Should().Equal(new int?[] { 47, 50 });
         s.BoardVrm.Should().BeNull();
-        s.CaseFans!.Select(f => f.Label).Should().Contain("FAN3");
+        // Температуры сокетов остаются из k10temp: IPMI их не трогает (c1).
+        s.Cpus!.Select(c => c.Tctl).Should().Equal(new int?[] { 60, 40 });
+        // Порядок слияния (c3): сначала hwmon-вентилятор («Case»), за ним IPMI («FAN3»);
+        // мутация [..ipmi.Fans, ..hw.CaseFans] краснит именно эту строку.
+        s.CaseFans!.Select(f => f.Label).Should().Equal("Case", "FAN3");
         s.BoardTempC.Should().Be(33);
         s.PeripheralTempC.Should().Be(41);
         s.BoardProbe.Should().BeTrue();
@@ -108,6 +112,22 @@ public class HardwareSamplerIpmiTests
         var time = new ManualTime();
         var s = await Build(Worker(Wrap(Clock - 30_000, Sdr)), time).PollNodeAsync("w");
         s!.PeripheralTempC.Should().Be(41);
+    }
+
+    // Метка дальше в будущем, чем окно свежести: не свежее (хвост 53e2dc3c).
+    // Мутация «проверять только age ≤ IpmiFreshAfterMs» краснит этот тест: age = −30 001 проходит.
+    [Fact]
+    public async Task FutureIpmiBeyondWindow_YieldsNulls()
+    {
+        var time = new ManualTime();
+        var s = await Build(Worker(Wrap(Clock + 30_001, Sdr)), time).PollNodeAsync("w");
+
+        s!.Vrms.Should().OnlyContain(v => v == null);
+        s.CaseFans.Should().NotContain(f => f.Label == "FAN3");
+        s.BoardTempC.Should().BeNull();
+        s.PeripheralTempC.Should().BeNull();
+        s.Cpus.Should().HaveCount(2); // hwmon-поля на месте
+        s.BoardProbe.Should().BeTrue(); // текст IPMI есть, пусть и несвежий
     }
 
     [Fact]

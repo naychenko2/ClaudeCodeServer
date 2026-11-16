@@ -26,7 +26,8 @@ public static class NodeSliceLimits
     public const int MaxGddr6Bytes = 16 * 1024;
     // ipmi — тот же потолок, что у gddr6 (ADR-029, «Узел — набор устройств»).
     public const int MaxIpmiBytes = 16 * 1024;
-    // Свежесть ipmi: clockMs − at ≤ 30 000 (покрывает один пропуск помощника, ADR-029).
+    // Свежесть ipmi: |clockMs − at| ≤ 30 000 (покрывает один пропуск помощника и сдвиг часов
+    // узла в обе стороны, ADR-029).
     public const long IpmiFreshAfterMs = 30_000;
 }
 
@@ -69,9 +70,11 @@ public sealed record NodeSlice
     public IReadOnlyList<NodeStatvfs> Statvfs { get; init; } = [];
 
     // Разбор обёртки ipmi {at, sdr} (тот же образец, что Gddr6HelperReader.Parse):
-    // null — текста нет, JSON кривой, полей нет или нет или не те типы, или несвежее
-    // (ClockMs − at > IpmiFreshAfterMs; часы узла — свои, с часами worker не сравниваем),
-    // или вычитание свежести переполняется (at недоверенное число, напр. long.MinValue):
+    // null — текста нет, JSON кривой, полей нет или нет или не те типы, или несвежее.
+    // Свежесть симметрична: |ClockMs − at| ≤ IpmiFreshAfterMs. Метка в будущем (at > ClockMs)
+    // — не «свежее»: помощник не мог написать sdr.json позже сборки среза, это сдвиг часов
+    // или недоверенное значение (хвост 53e2dc3c). Часы узла — свои, с часами worker не сравниваем.
+    // Вычитание свежести может переполниться (at недоверенное число, напр. long.MinValue):
     // переполнение — это заведомо не «свежее», поэтому checked и null через catch.
     // Толкование строк SDR — не здесь (Ш2d3).
     public (long at, string sdr)? TryReadIpmi()
@@ -88,7 +91,8 @@ public sealed record NodeSlice
                 return null;
             if (!root.TryGetProperty("sdr", out var sdrEl) || sdrEl.ValueKind != JsonValueKind.String)
                 return null;
-            if (checked(ClockMs - at) > NodeSliceLimits.IpmiFreshAfterMs)
+            var age = checked(ClockMs - at);
+            if (age > NodeSliceLimits.IpmiFreshAfterMs || age < -NodeSliceLimits.IpmiFreshAfterMs)
                 return null;
             return (at, sdrEl.GetString()!);
         }

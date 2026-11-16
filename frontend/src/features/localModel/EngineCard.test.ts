@@ -83,7 +83,11 @@ describe('EngineCard — vLLM', () => {
     expect(h.slice(h.lastIndexOf('<h3', pref), pref)).toContain('color:var(--c-text-secondary)');
     expect(h.slice(h.lastIndexOf('<h3', pref), pref)).not.toContain('color:var(--c-text-heading)');
     const name = h.indexOf('Qwen3.8-27B');
-    expect(h.slice(h.lastIndexOf('<span', name), name)).toContain('color:var(--c-text-heading)');
+    const nameOpen = h.lastIndexOf('<span', name);
+    expect(h.slice(nameOpen, name)).toContain('color:var(--c-text-heading)');
+    // цвет имени не «унаследован» от уже закрытого span с тем же цветом перед ним:
+    // между открывающим тегом и текстом имени нет </span> или </div> (как проверка радиуса ниже)
+    expect(h.slice(nameOpen, name)).not.toMatch(/<\/(?:span|div)>/);
   });
 
   it('нет kv.prefixHitPerc — «нет данных», и ни одного «0 %» в разметке', () => {
@@ -169,8 +173,9 @@ describe('EngineCard — строка-причина', () => {
     // Почему не «по всему html»: трек ProgressBar (R.max) рендерится в этой же фикстуре (полоса KV, ПОСЛЕ
     // строки-причины) и даёт border-radius:999px сам. Безграничный поиск по всему html берёт трек
     // (после текста) — краснеет «радиус до текста»; поиск «по тексту» (после текста) краснит так же.
-    // Ограниченный поиск от текста берёт трек только когда радиуса до текста нет вовсе — тогда не закрыт
-    // и сам факт радиуса у текста.
+    // Ограниченный поиск от текста никогда не берёт трек: lastIndexOf с fromIndex не заходит за
+    // позицию текста, а трек лежит после него. Если радиуса до текста нет вовсе, open = -1 и тест
+    // падает на первой проверке toBeGreaterThanOrEqual(0).
     expect(h).not.toContain('↓');
     const at = h.indexOf('Упирается в лимит мощности');
     const open = h.lastIndexOf('border-radius:999px', at);

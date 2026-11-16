@@ -557,6 +557,75 @@ public class HardwareTests : IDisposable
         s.Since.Should().Be(t0.ToUnixTimeMilliseconds(), "Since указывает на тот же снимок");
     }
 
+    // Джиттер ageMs на стороне агента: ageMs пересчитывается в момент отправки (ccs_node_stats.py),
+    // поэтому время данных одного и того же среза At = now − AgeMs гуляет на единицы–десятки мс
+    // в обе стороны. С допуском (половина интервала опроса) дублей нет. Мутация «вернуть строгое
+    // > без допуска» краснит этот тест: на первом же тике с At = t0+3 мс кольцо растёт до 2,
+    // Current смещается, Since дрогает на 3 мс.
+    [Fact]
+    public async Task Ring_StaleJitterWithinTolerance_NotDuplicated()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+        await sampler.PollNodeAsync("worker");
+        var t0 = time.GetUtcNow();
+
+        // Шесть Stale-тиков одного среза: AgeMs = 2000k ± 3 мс, знаки чередуются — At = t0 ∓ 3 мс.
+        src.Status = NodeReadingStatus.Stale;
+        for (var k = 1; k <= 6; k++)
+        {
+            src.AgeMs = 2_000 * k + (k % 2 == 1 ? -3 : 3);
+            time.Advance(TimeSpan.FromSeconds(2));
+            await sampler.PollNodeAsync("worker");
+            s.Since.Should().Be(t0.ToUnixTimeMilliseconds(),
+                $"Since после джиттер-тика {k} — не двигается, срез тот же");
+        }
+        sampler.RingCount("worker").Should().Be(1, "джиттер в пределах допуска — дублей в кольце нет");
+        s.Current!.At.Should().Be(t0, "Current не смещается джиттер-тиками");
+    }
+
+    // Новый срез агента: его время данных новее последнего в кольце на интервал сборки агента
+    // (≥ интервала опроса) — новая запись кольца, Since переезжает на неё. Граница «ровно
+    // интервал опроса» — тоже новая запись (строгий ≥ по постановке). Граница допуска: ровно
+    // 1 с (допуск) — не считается новой: ни кольцо, ни Current не тронуты.
+    [Fact]
+    public async Task Ring_NewerStaleSliceByInterval_AddedAndSinceMoves()
+    {
+        var (sampler, time, src) = BuildSampler();
+        var s = sampler.ForNode("worker")!;
+        src.Files[CpuDir + "temp1_input"] = "50000";
+        await sampler.PollNodeAsync("worker");
+        var t0 = time.GetUtcNow();
+
+        // Stale-тик того же среза: ни кольцо, ни Since не меняются.
+        src.Status = NodeReadingStatus.Stale;
+        src.AgeMs = 2_000;
+        time.Advance(TimeSpan.FromSeconds(2));
+        await sampler.PollNodeAsync("worker");
+        sampler.RingCount("worker").Should().Be(1);
+        s.Since.Should().Be(t0.ToUnixTimeMilliseconds());
+
+        // Новый срез: в t0+16 с его время данных t0+2 с — ровно на интервал опроса новее
+        // последнего в кольце.
+        src.AgeMs = 14_000;
+        time.Advance(TimeSpan.FromSeconds(14));
+        await sampler.PollNodeAsync("worker");
+        var newAt = t0 + TimeSpan.FromSeconds(2);
+        sampler.RingCount("worker").Should().Be(2, "срез, новее на интервал опроса, — новая запись кольца");
+        s.Current!.At.Should().Be(newAt);
+        s.Since.Should().Be(newAt.ToUnixTimeMilliseconds(), "Since — время данных нового среза");
+
+        // Граница допуска: в t0+18 с время данных t0+3 с — ровно на допуск (1 с) новее —
+        // не считается новым.
+        src.AgeMs = 15_000;
+        time.Advance(TimeSpan.FromSeconds(2));
+        await sampler.PollNodeAsync("worker");
+        sampler.RingCount("worker").Should().Be(2, "ровно допуск — не новый срез");
+        s.Current!.At.Should().Be(newAt, "Current остаётся предыдущая запись");
+        s.Since.Should().Be(newAt.ToUnixTimeMilliseconds(), "Since не двигается");
+    }
+
     // ─── Отчёт ───────────────────────────────────────────────────────────────────
 
     private static GpuSample Gpu(int temp, string bus = "00000000:0B:00.0") => new()

@@ -120,6 +120,14 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
     // stale по ageMs > 10 000 — «порог тот же, что у локального status:"stale"»).
     public const long StaleAfterMs = 10_000;
 
+    // Допуск дедупа Stale-срезов: половина интервала опроса (1 с). Время данных Stale-среза
+    // At = now − AgeMs, а ageMs агент пересчитывает в момент отправки (ccs_node_stats.py):
+    // между тиками одного и того же среза At гуляет на сетевую/планировочную латентность
+    // (единицы–десятки мс), между соседними срезами агента — на его интервал сборки (2 с).
+    // Половина интервала опроса строго между этими масштабами: джиттер не открывает дубль
+    // в кольце, новый срез — открывает.
+    private static readonly TimeSpan StaleDedupTolerance = SampleInterval / 2;
+
     // Тайм-аут одного тика узла: не уложившийся узел → down, опоздавший срез отбрасывается.
     public static readonly TimeSpan TickTimeout = TimeSpan.FromSeconds(4);
 
@@ -485,11 +493,12 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
         {
             lock (_gate)
             {
-                // Stale-срез с временем данных не новее последнего снимка кольца — агент вернул тот же
-                // старый срез: в кольцо он не кладётся, иначе дубли одного снимка копятся. Ok-срез
-                // кладётся всегда. Решение «класть или нет» — внутри этого же lock: читатель должен
-                // видеть Current и кольцо согласованными.
-                if (status != NodeReadingStatus.Stale || _current is not { } last || sample.At > last.At)
+                // Stale-срез с временем данных новее последнего снимка кольца не больше чем на допуск —
+                // агент вернул тот же старый срез (джиттер пересчёта ageMs укладывается в допуск,
+                // см. StaleDedupTolerance): в кольцо он не кладётся, иначе дубли одного снимка
+                // копятся. Ok-срез кладётся всегда. Решение «класть или нет» — внутри этого же lock:
+                // читатель должен видеть Current и кольцо согласованными.
+                if (status != NodeReadingStatus.Stale || _current is not { } last || sample.At - last.At > StaleDedupTolerance)
                 {
                     _ring.Add(sample);
                     while (_ring.Count > MaxSamples)

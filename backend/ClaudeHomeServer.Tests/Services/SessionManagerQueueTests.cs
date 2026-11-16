@@ -1312,6 +1312,44 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         balloonAt.Should().BeGreaterThan(queuedAt, "queued идёт раньше пользовательского баллона");
     }
 
+    // TS-5 (доработка): «queued» уже показан, а ход не стартует — отказ по зоне персоны.
+    // done шлёт сам TurnIntake: ClaudeSession до старта не дойдёт и фазу не закроет.
+    [Theory]
+    [InlineData(false)] // пользовательское сообщение из очереди
+    [InlineData(true)]  // агентское сообщение из очереди
+    public async Task Очередь_ОтказПоЗонеПослеQueued_ШлётсяDone(bool agent)
+    {
+        EnableAwaitPreviousExit(5);
+        var session = await MkBusySessionAsync("queued-zone" + agent, SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var persona = _personaManager.Create(TestUserId, "Сферная", role: null, description: null,
+            systemPrompt: null, model: null, effort: null, scope: PersonaScope.Sphere,
+            projectId: null, color: null, greeting: null, memoryEnabled: false, sphereId: "s-gone");
+        session.PersonaId = persona.Id;
+        var adapter = StubAdapter(entry);
+        var alive = true;
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(() => Volatile.Read(ref alive));
+        SetProcess(entry, adapter.Object);
+        _broadcaster.Gate = msg =>
+        {
+            if (msg is TurnStartPhaseMessage { Phase: "queued" }) Volatile.Write(ref alive, false);
+            return Task.CompletedTask;
+        };
+        var next = agent
+            ? new QueuedMessage(Guid.NewGuid().ToString("N"), "от агента", null, null, 0, DateTime.UtcNow, Kind: PendingKind.Agent)
+            : UserQueued("от человека");
+        try
+        {
+            var method = typeof(SessionManager).GetMethod("DeliverPendingAsync",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            await (Task)method.Invoke(_sut, [session.Id, entry, next])!;
+        }
+        finally { _broadcaster.Gate = null; }
+
+        Sent<TurnStartPhaseMessage>().Select(p => p.Phase).Should().Equal(["queued", "done"],
+            "ход отклонён зоной персоны и не стартует — строка «В очереди» обязана закрыться");
+    }
+
     [Fact]
     public async Task Очередь_ПредыдущийПрогонУжеМёртв_QueuedНеШлётся()
     {

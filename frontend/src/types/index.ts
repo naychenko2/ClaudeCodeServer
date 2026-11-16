@@ -6,7 +6,10 @@ import type { Task } from '../features/tasks/types';
 import type { ProviderFallbackOption } from '../features/spend/types';
 // ProjectCapabilitiesView читает SphereOverview (карточка сферы); сама матрица — в домене «Проекты».
 import type { ProjectCapabilitiesView } from '../features/projects/types';
-// StartPhase — тип домена «Чат» (features/chat/types.ts): нужен ServerMessage (turn_start_phase).
+// StartPhase — тип домена «Чат» (features/chat/types.ts): потребитель импорта здесь — ChatItem
+// (turn_start_phase). ServerMessage.turn_start_phase.phase — string намеренно: редьюсер
+// проверяет известные фазы по PHASE_KEYS (lib/chatReducer.ts), неизвестная от сервера
+// не должна ломать типизацию.
 import type { StartPhase } from '../features/chat/types';
 export type { Mode };
 

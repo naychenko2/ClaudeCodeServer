@@ -36,6 +36,7 @@ INTERVAL_S = 2.0
 SMI_TIMEOUT_S = 1.0
 DEFAULT_CONFIG = "/etc/ccs-node-stats.json"
 GDDR6_PATH = "/run/ccs-gddr6/temps.json"
+IPMI_PATH = "/run/ccs-ipmi/sdr.json"
 
 # Потолки из ADR (бэкенд проверяет их повторно и агенту не доверяет).
 MAX_BODY = 256 * 1024
@@ -47,6 +48,7 @@ MAX_STATVFS = 64
 MAX_TEXT = 4096
 MAX_MOUNTINFO = 64 * 1024
 MAX_GDDR6 = 16 * 1024
+MAX_IPMI = 16 * 1024
 # Сырой mountinfo на хосте с docker бывает большим: читаем с запасом, потом фильтруем.
 MAX_MOUNTINFO_RAW = 4 * 1024 * 1024
 
@@ -223,6 +225,11 @@ def collect_gddr6(env):
     return read_text(env.real(GDDR6_PATH), MAX_GDDR6)
 
 
+def collect_ipmi(env):
+    """Текст SDR помощника ccs-ipmi дословно; агент его не разбирает."""
+    return read_text(env.real(IPMI_PATH), MAX_IPMI)
+
+
 def build_slice(env):
     """Срез v1 без ageMs: его проставляет сервер в момент отправки."""
     files = {}
@@ -237,6 +244,7 @@ def build_slice(env):
         "links": links,
         "gpuCsv": collect_gpu_csv(env),
         "gddr6": collect_gddr6(env),
+        "ipmi": collect_ipmi(env),
         "statvfs": statvfs,
     }
 

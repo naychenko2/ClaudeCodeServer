@@ -19,7 +19,7 @@ _spec = importlib.util.spec_from_file_location(
 agent = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(agent)
 
-TOP_KEYS = {"v", "ageMs", "clockMs", "files", "links", "gpuCsv", "gddr6", "statvfs"}
+TOP_KEYS = {"v", "ageMs", "clockMs", "files", "links", "gpuCsv", "gddr6", "ipmi", "statvfs"}
 
 
 def write(root, path, text):
@@ -259,6 +259,28 @@ class Gddr6Tests(TmpRoot):
         self.assertIsNone(agent.build_slice(self.env())["gddr6"])
         write(self.root, "/run/ccs-gddr6/temps.json", "x" * (agent.MAX_GDDR6 + 1))
         self.assertIsNone(agent.build_slice(self.env())["gddr6"])
+
+
+class IpmiTests(TmpRoot):
+    def test_present_verbatim(self):
+        text = '{"at": 1, "sdr": ["CPU1 Temp | 38 degrees C"]}\n'
+        write(self.root, "/run/ccs-ipmi/sdr.json", text)
+        self.assertEqual(agent.build_slice(self.env())["ipmi"], text)
+
+    def test_not_parsed_as_json(self):
+        write(self.root, "/run/ccs-ipmi/sdr.json", "не json {")
+        self.assertEqual(agent.build_slice(self.env())["ipmi"], "не json {")
+
+    def test_absent_and_oversized_null(self):
+        s = agent.build_slice(self.env())
+        self.assertIn("ipmi", s)
+        self.assertIsNone(s["ipmi"])
+        write(self.root, "/run/ccs-ipmi/sdr.json", "x" * (agent.MAX_IPMI + 1))
+        self.assertIsNone(agent.build_slice(self.env())["ipmi"])
+
+    def test_limit_exact_is_kept(self):
+        write(self.root, "/run/ccs-ipmi/sdr.json", "x" * agent.MAX_IPMI)
+        self.assertEqual(len(agent.build_slice(self.env())["ipmi"]), agent.MAX_IPMI)
 
 
 class SliceShapeTests(TmpRoot):

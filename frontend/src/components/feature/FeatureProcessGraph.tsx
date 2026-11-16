@@ -408,7 +408,8 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
             // прокрутка внутри блока, документ не переполняется. Отступ сверху = вылет бейджа
             // «↺N»: overflow-x:auto неявно делает overflow-y:auto и режет по padding box — без
             // отступа верх бейджа срезан (дефект «↺8» на проде). Шевроны на внешнем обёртке
-            // (pgraph-scroll), их выравнивание по краям ленты это не меняет.
+            // (pgraph-scroll) стоят по ленте узлов: их top/bottom равны отступам контейнера —
+            // полоса совпадает с лентой по высоте и центром (хвост ревью R-Ф-2.44).
             overflowX: 'auto', paddingTop: RETURNS_BADGE_OVERHANG, paddingBottom: SP.xxs,
           }}
         >
@@ -609,7 +610,10 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
           <span
             aria-hidden="true" data-testid="pgraph-scroll-right"
             style={{
-              position: 'absolute', right: 0, top: 0, bottom: SP.xxs, width: EDGE_W, zIndex: 2, pointerEvents: 'none',
+              // Полоса — по ленте узлов, а не по контейнеру: верх = его отступу сверху (вылету
+              // бейджа), низ = его нижнему отступу. С top:0 после Ф-2.44 лента опустилась на
+              // 8 px, центр шеврона — на 4 px выше центра узлов (хвост ревью R-Ф-2.44).
+              position: 'absolute', right: 0, top: RETURNS_BADGE_OVERHANG, bottom: SP.xxs, width: EDGE_W, zIndex: 2, pointerEvents: 'none',
               display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: `0 ${SP.xs}px`,
               background: `linear-gradient(to right, transparent, ${C.bgMain})`,
               fontFamily: FONT.mono, fontSize: FS.md, color: C.textMuted,
@@ -620,7 +624,8 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
           <span
             aria-hidden="true" data-testid="pgraph-scroll-left"
             style={{
-              position: 'absolute', left: 0, top: 0, bottom: SP.xxs, width: EDGE_W, zIndex: 2, pointerEvents: 'none',
+              // Тот же центр, что у правого: полоса по ленте узлов (см. правый шеврон).
+              position: 'absolute', left: 0, top: RETURNS_BADGE_OVERHANG, bottom: SP.xxs, width: EDGE_W, zIndex: 2, pointerEvents: 'none',
               display: 'flex', alignItems: 'center', justifyContent: 'flex-start', padding: `0 ${SP.xs}px`,
               background: `linear-gradient(to left, transparent, ${C.bgMain})`,
               fontFamily: FONT.mono, fontSize: FS.md, color: C.textMuted,

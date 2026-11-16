@@ -1,0 +1,67 @@
+[Unit]
+Description=ccs-node-stats: read-only срез датчиков узла фермы для вкладки «Железо» CCS
+Documentation=file:///usr/local/lib/ccs-node-stats/ccs_node_stats.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/local/lib/ccs-node-stats/ccs_node_stats.py --config /etc/ccs-node-stats.json
+Restart=on-failure
+RestartSec=5
+
+# Отдельный непривилегированный пользователь на время жизни службы. Привилегий нет вовсе
+# (в отличие от ccs-gddr6 здесь нет CAP_SYS_RAWIO): датчики читаются без root.
+DynamicUser=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# Файловая система и ядро — только чтение. Точки монтирования хоста агент ВИДЕТЬ ОБЯЗАН:
+# по /proc/self/mountinfo он отдаёт диски узла, поэтому ProtectHome=yes, PrivateMounts=,
+# TemporaryFileSystem= и PrivateTmp= тут запрещены (ADR-029, «Узлы фермы»).
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# /proc/meminfo, /proc/uptime, /proc/stat нужны целиком: ProcSubset=pid не ставим.
+ProtectProc=invisible
+
+# Сеть: слушаем один LAN-адрес из /etc/ccs-node-stats.json, пускаем только worker.
+# ЗАМЕНИТЬ 10.0.0.5 на адрес worker (тот же, что в allow конфига и в правиле firewall).
+# localhost оставлен для проверки curl с самого узла. AF_UNIX нужен nvidia-smi.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=10.0.0.5
+
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+# MemoryDenyWriteExecute и ~@resources не ставим сознательно: nvidia-smi грузит драйверные
+# библиотеки, и без проверки на живом узле эти фильтры могут его ломать (шаг У1).
+
+# nvidia-smi открывает /dev/nvidiactl и /dev/nvidiaN. Имена групп — из /proc/devices
+# (у новых драйверов nvidia-frontend, у старых nvidia); лишнее имя systemd игнорирует.
+DevicePolicy=closed
+DeviceAllow=char-nvidia-frontend rw
+DeviceAllow=char-nvidia rw
+DeviceAllow=char-nvidia-uvm rw
+DeviceAllow=char-nvidia-caps rw
+
+# Скромные потолки: срез собирается раз в 2 с.
+MemoryMax=128M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

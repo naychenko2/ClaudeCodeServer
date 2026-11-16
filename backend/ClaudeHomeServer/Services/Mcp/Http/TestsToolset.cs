@@ -185,6 +185,7 @@ public sealed class TestsToolset(
         var selector = StringArg(arguments, "selector");
         if (selector is { Length: > MaxSelectorLength } || selector?.Any(char.IsControl) == true)
             return Deny($"selector — CSS-селектор до {MaxSelectorLength} символов без управляющих символов.");
+        if (!TryParseStorage(arguments["storage"], out var storage, out error)) return Deny(error);
         if (!TryResolveProbeTarget(root, StringArg(arguments, "target"), out var target, out error))
             return Deny(error);
 
@@ -196,7 +197,7 @@ public sealed class TestsToolset(
             return Deny($"user и password — строки до {MaxEnvValueLength} символов без управляющих символов.");
 
         var request = new UiProbeRequest(project, root, Path.Combine(root, target!), session.Id, origin, path,
-            viewports, minSize, selector, user, password);
+            viewports, minSize, selector, user, password, storage);
         var stages = new TestRunStages(() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         UiProbeResult? result = null;
         try
@@ -286,6 +287,46 @@ public sealed class TestsToolset(
         }
         error = "min_size_px — целое от 1 до 200 (по умолчанию 40).";
         return false;
+    }
+
+    public const int MaxStorageKeys = 10;
+    public const int MaxStorageValueBytes = 4096;
+
+    // storage: подготовка localStorage страницы до загрузки (вкладка, раскладка панелей). Только ключи cc_*,
+    // не больше 10, значение — строка до 4 КБ. Значения в сообщения об ошибках не попадают
+    internal static bool TryParseStorage(JsonNode? node, out IReadOnlyDictionary<string, string>? storage, out string error)
+    {
+        storage = null;
+        error = "";
+        if (node is null) return true;
+        if (node is not JsonObject obj)
+        {
+            error = "storage — объект «ключ: строка».";
+            return false;
+        }
+        if (obj.Count > MaxStorageKeys)
+        {
+            error = $"storage — не больше {MaxStorageKeys} ключей.";
+            return false;
+        }
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in obj)
+        {
+            if (!key.StartsWith("cc_", StringComparison.Ordinal) || key.Length > 100 || key.Any(char.IsControl))
+            {
+                error = "Ключи storage — только cc_* (до 100 символов, без управляющих).";
+                return false;
+            }
+            if (value is not JsonValue v || !v.TryGetValue<string>(out var text)
+                || System.Text.Encoding.UTF8.GetByteCount(text) > MaxStorageValueBytes)
+            {
+                error = $"Значение storage[{key}] — строка до {MaxStorageValueBytes} байт.";
+                return false;
+            }
+            result[key] = text;
+        }
+        if (result.Count > 0) storage = result;
+        return true;
     }
 
     internal static bool TryParseKind(string? raw, out TestRunKind kind, out string error)
@@ -743,6 +784,14 @@ public sealed class TestsToolset(
                         ["type"] = "string",
                         ["maxLength"] = MaxSelectorLength,
                         ["description"] = "CSS-селектор: замерять только внутри него; без него — вся страница",
+                    },
+                    ["storage"] = new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["maxProperties"] = MaxStorageKeys,
+                        ["additionalProperties"] = new JsonObject { ["type"] = "string", ["maxLength"] = MaxStorageValueBytes },
+                        ["description"] = "localStorage до загрузки страницы: ключи только cc_* (до 10, значение до 4 КБ), "
+                            + "например {\"cc_local_model_tab\":\"hardware\"}; роль и токен входа ими не перекрываются",
                     },
                     ["target"] = new JsonObject
                     {

@@ -737,7 +737,7 @@ public class TestsToolsetTests : IDisposable
         var schema = probe.InputSchema["properties"]!.AsObject();
 
         schema.Select(p => p.Key).Should().BeEquivalentTo("url", "service", "path", "viewports", "min_size_px",
-            "selector", "target", "user", "password");
+            "selector", "storage", "target", "user", "password");
         schema["viewports"]!["description"]!.GetValue<string>().Should().Contain("360").And.Contain("1280");
         schema["min_size_px"]!["description"]!.GetValue<string>().Should().Contain("40");
         probe.InputSchema["required"].Should().BeNull("url или service — одно из двух, схема это не выражает");
@@ -881,6 +881,29 @@ public class TestsToolsetTests : IDisposable
         TestsToolset.TryParseViewports(new JsonArray(), out _, out _).Should().BeFalse("пустой список — не «по умолчанию»");
         TestsToolset.TryParseMinSize(null, out var min, out _).Should().BeTrue();
         min.Should().Be(40);
+    }
+
+    [Fact]
+    public void TryParseStorage_ГраницыИОтказы()
+    {
+        TestsToolset.TryParseStorage(null, out var none, out _).Should().BeTrue();
+        none.Should().BeNull();
+        TestsToolset.TryParseStorage(new JsonObject(), out none, out _).Should().BeTrue();
+        none.Should().BeNull("пустой объект — как отсутствие");
+        TestsToolset.TryParseStorage(JsonNode.Parse("{\"cc_local_model_tab\":\"hardware\"}"), out var ok, out _).Should().BeTrue();
+        ok!["cc_local_model_tab"].Should().Be("hardware");
+
+        var ten = new JsonObject(Enumerable.Range(0, 10).Select(i => KeyValuePair.Create($"cc_k{i}", (JsonNode?)"v")));
+        TestsToolset.TryParseStorage(ten, out _, out _).Should().BeTrue("ровно 10 ключей допустимо");
+        ten["cc_k10"] = "v";
+        TestsToolset.TryParseStorage(ten, out _, out _).Should().BeFalse("11 ключей — отказ");
+
+        TestsToolset.TryParseStorage(new JsonObject { ["cc_a"] = new string('x', 4096) }, out _, out _).Should().BeTrue("4096 байт — граница");
+        TestsToolset.TryParseStorage(new JsonObject { ["cc_a"] = new string('x', 4097) }, out _, out var big).Should().BeFalse();
+        big.Should().NotContain("xxx", "значение в ошибку не попадает");
+        TestsToolset.TryParseStorage(new JsonObject { ["token"] = "v" }, out _, out _).Should().BeFalse("только cc_*");
+        TestsToolset.TryParseStorage(new JsonObject { ["cc_a"] = 5 }, out _, out _).Should().BeFalse("значение — строка");
+        TestsToolset.TryParseStorage(JsonNode.Parse("[]"), out _, out _).Should().BeFalse();
     }
 
     // Замечание Киры (А): пример «backend/App.slnx» модель подставляла буквально

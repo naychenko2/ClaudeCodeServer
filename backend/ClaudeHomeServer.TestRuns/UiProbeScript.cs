@@ -167,9 +167,29 @@ internal static class UiProbeScript
               // Без входа страница — экран логина: замер дал бы ложное «находок нет»
               if (out.auth !== 'ok') { console.log('UIPROBE-RESULT ' + JSON.stringify(out)); return; }
             }
+            // Хранилище страницы: ключи вызывающего (вкладка, раскладка; cc_* проверил сервер), поверх них — то, что кладёт
+            // штатный вход (LoginPage.finishLogin): токен, роль, id. Без cc_role приложение считает пользователя
+            // не-админом, и всё за админским гейтом пропадает на любой ширине
+            const seed = {};
+            for (const [k, v] of Object.entries(input.storage || {})) seed[k] = String(v);
+            if (token) {
+              seed.cc_token = token;
+              const ctx1 = await browser.newContext();
+              try {
+                const me = await ctx1.request.get(origin + '/api/auth/me', { headers: { Authorization: 'Bearer ' + token }, timeout: 10000 });
+                if (me.ok()) {
+                  const p = await me.json();
+                  if (p.role) seed.cc_role = String(p.role);
+                  if (p.userId) seed.cc_user_id = String(p.userId);
+                  if (p.username) seed.cc_username = String(p.username);
+                  out.profile = 'ok';
+                } else out.profile = 'failed:' + me.status();
+              } catch (e) { out.profile = 'failed:' + String(e.message || e).slice(0, 80); }
+              await ctx1.close();
+            }
             for (const width of input.viewports) {
               const ctx = await browser.newContext({ viewport: { width, height: input.height } });
-              if (token) await ctx.addInitScript((t) => { localStorage.setItem('cc_token', t); }, token);
+              if (Object.keys(seed).length) await ctx.addInitScript((s) => { for (const k in s) localStorage.setItem(k, s[k]); }, seed);
               const page = await ctx.newPage();
               const vp = { width, status: null, console: [], failed: [], pageTruncated: [] };
               const keep = (list, name, item) => { if (list.length < MAX) list.push(item); else if (!vp.pageTruncated.includes(name)) vp.pageTruncated.push(name); };

@@ -117,6 +117,8 @@ public static class UiProbeReport
             ["minTargetPx"] = minTargetPx,
             ["auth"] = root["auth"]?.GetValue<string>() ?? "skipped",
         };
+        // Профиль (роль, id) из /api/auth/me: не «ok» — замер шёл без роли, админские зоны не видны
+        if (root["profile"]?.GetValue<string>() is { } profile) result["profile"] = profile;
         var perViewport = new JsonArray();
         var totals = new JsonObject
         {

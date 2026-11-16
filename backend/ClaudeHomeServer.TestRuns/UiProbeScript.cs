@@ -182,7 +182,7 @@ internal static class UiProbeScript
                   if (p.role) seed.cc_role = String(p.role);
                   if (p.userId) seed.cc_user_id = String(p.userId);
                   if (p.username) seed.cc_username = String(p.username);
-                  out.profile = 'ok';
+                  out.profile = p.role ? 'ok' : 'no-role';
                 } else out.profile = 'failed:' + me.status();
               } catch (e) { out.profile = 'failed:' + String(e.message || e).slice(0, 80); }
               await ctx1.close();

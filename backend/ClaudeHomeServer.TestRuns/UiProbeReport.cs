@@ -118,7 +118,15 @@ public static class UiProbeReport
             ["auth"] = root["auth"]?.GetValue<string>() ?? "skipped",
         };
         // Профиль (роль, id) из /api/auth/me: не «ok» — замер шёл без роли, админские зоны не видны
-        if (root["profile"]?.GetValue<string>() is { } profile) result["profile"] = profile;
+        if (root["profile"]?.GetValue<string>() is { } profile)
+        {
+            result["profile"] = profile;
+            // Профиль не получен: страница, скорее всего, на экране логина или без админских зон — нули не значат «элементов нет»
+            if (profile != "ok")
+                result["warning"] = profile.StartsWith("failed:401", StringComparison.Ordinal)
+                    ? "Токен отклонён (401, просрочен или чужой): замер мог увидеть экран логина, нули в отчёте ненадёжны."
+                    : $"Профиль не получен ({profile}): роль не попала в хранилище, зоны за гейтом роли могли не отрисоваться.";
+        }
         var perViewport = new JsonArray();
         var totals = new JsonObject
         {

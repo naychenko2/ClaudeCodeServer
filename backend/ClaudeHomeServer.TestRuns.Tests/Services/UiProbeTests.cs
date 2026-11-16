@@ -710,6 +710,7 @@ public class UiProbeTests : IDisposable
                     ? (ctx.Request.Headers["Authorization"] == "Bearer tok-test"
                         ? "{\"userId\":\"u-adm\",\"username\":\"admin\",\"role\":\"admin\"}" : "{}")
                     : path == "/" ? "<body>ok</body>" : Page(page));
+                if (isMe && ctx.Request.Headers["Authorization"] == "Bearer tok-expired") ctx.Response.StatusCode = 401;
                 ctx.Response.ContentType = isMe ? "application/json" : "text/html; charset=utf-8";
                 await ctx.Response.OutputStream.WriteAsync(body);
                 ctx.Response.Close();
@@ -758,6 +759,14 @@ public class UiProbeTests : IDisposable
         JsonNode.Parse(admin.Json!)!["profile"]!.GetValue<string>().Should().Be("ok");
         Small(anon.Json!).Should().Be(0, "без токена хранилище пусто");
         Small(admin.Json!).Should().Be(13, "cc_role=admin (3) и cc_user_id/cc_username (10) легли из /api/auth/me");
+        var expired = await ProbeRealAsync("seed", token: "tok-expired");
+        var wrongNode = JsonNode.Parse(wrong.Json!)!;
+        wrongNode["profile"]!.GetValue<string>().Should().Be("no-role", "200 без роли — не «ok»");
+        wrongNode["warning"]!.GetValue<string>().Should().Contain("no-role");
+        var expiredNode = JsonNode.Parse(expired.Json!)!;
+        expiredNode["profile"]!.GetValue<string>().Should().Be("failed:401");
+        expiredNode["warning"]!.GetValue<string>().Should().Contain("401");
+        JsonNode.Parse(admin.Json!)!["warning"].Should().BeNull();
         Small(wrong.Json!).Should().Be(0, "/me не отдал профиль — замер идёт как раньше, без падения");
     }
 

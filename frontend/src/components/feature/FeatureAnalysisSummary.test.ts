@@ -20,7 +20,10 @@
 //     «устарело», без числа (решение продакта); если бэк eventCount не несёт (старая
 //     версия) — числа в шапке нигде нет;
 //   · полная строка шапки с пробелами вокруг «·» — проверяется целиком, не подстроками
-//     (вердикт W4-R-AN-EC, п.2).
+//     (вердикт W4-R-AN-EC, п.2);
+//   · пункт с markdown-разметкой выводится чистым: без «**», обратных кавычек и
+//     «[текст](ссылка)»; код шага в кавычках — ссылка так же, как голый; разделители
+//     между токенами сохранены — пункт не печатается слитно (Ф-2.46f).
 //
 // Мутации (в отчёте): в FeatureAnalysisLine «Обновить» → fetchSummary(false) —
 // тест «Обновить — запрос с force» краснеет; удаление сброса состояния при смене
@@ -32,7 +35,10 @@
 // прогоном); удаление cleanup-стрелки в useEffect красит тест про отмену при
 // размонтировании; удаление показа «по N событиям» в шапке красит тест про число
 // событий; склейка шапки без пробела перед «·» (join('· ')) красит тест полной
-// строки шапки (проверено прогоном).
+// строки шапки (проверено прогоном); удаление markdownToPlain в parseSummary красит
+// тесты про чистоту пункта и про ссылку «Ф-2.4» в кавычках (проверено прогоном в копии);
+// split без сохранения разделителей (/\s+/) красит тест полной строки пункта (проверено
+// прогоном до правки renderItem).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -93,7 +99,8 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
 vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
 
 // Худший случай строки — «idle»: действие ровно одно, «Анализ моделью».
-function mkRun(featureId = 'f-1', lastActivityAt?: string): FeatureRun {
+// stepRefs — цепочки шагов: без них ни один код ссылкой не станет (stepRefsOf пуст).
+function mkRun(featureId = 'f-1', lastActivityAt?: string, stepRefs: string[] = []): FeatureRun {
   return {
     featureId,
     state: 'idle',
@@ -106,6 +113,9 @@ function mkRun(featureId = 'f-1', lastActivityAt?: string): FeatureRun {
     progress: 0,
     ready: false,
     ...(lastActivityAt ? { lastActivityAt } : {}),
+    ...(stepRefs.length
+      ? { stepChains: stepRefs.map(r => ({ stepRef: r, title: `шаг ${r}`, taskIds: [`t-${r}`], outcome: 'accepted' })) }
+      : {}),
   };
 }
 
@@ -119,12 +129,12 @@ const SUMMARY: FeatureSummaryResult = {
 
 // render возвращает и root: тест смены фичи перерендеривает тот же экземпляр
 // с другим run — так же делает WorkspacePage при переходе между фичами.
-function render(opts?: { isMobile?: boolean; lastActivityAt?: string }) {
+function render(opts?: { isMobile?: boolean; lastActivityAt?: string; stepRefs?: string[] }) {
   installFakeDom();
   const { root, container } = mount(
     createElement(
       FeatureAnalysisLine,
-      { run: mkRun('f-1', opts?.lastActivityAt), isMobile: !!opts?.isMobile },
+      { run: mkRun('f-1', opts?.lastActivityAt, opts?.stepRefs ?? []), isMobile: !!opts?.isMobile },
     ),
   );
   return { root, c: container };
@@ -397,5 +407,39 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
     expect(all2, 'полная строка шапки без eventCount').toContain(header2);
     expect(all2, 'бейдж без числа — просто «устарело»').toContain('устарело');
     expect(all2, 'числа событий в шапке нет').not.toContain('событи');
+  });
+
+  // === 17. Пункт с markdown-разметкой выводится чистым (Ф-2.46f; мутация: убрать
+  //     markdownToPlain в parseSummary — краснеет «без **» и «без кавычек») ===
+  it('пункт «**Риск»: шаг `Ф-2.3` см. [док](docs/x.md)» — без «**», кавычек и скобок ссылки', async () => {
+    mockSummary.result = { ...SUMMARY, text: '## Сделано\n- **Риск**: шаг `Ф-2.3` см. [док](docs/x.md)' };
+    const { c } = render({ stepRefs: ['Ф-2.3'] });
+    clickLineSummary(c);
+    await flush();
+    const box = findNodeByAttr(c, 'data-testid', 'feature-analysis-summary');
+    expect(box, 'резюме раскрыто').not.toBeNull();
+    const all = textNodes(box!).join('');
+    expect(all, 'без «**»').not.toContain('**');
+    expect(all, 'без обратных кавычек').not.toContain('`');
+    expect(all, 'без скобок ссылки «[…]»').not.toContain('[док]');
+    expect(all, 'без URL-скобок «(…)»').not.toContain('(docs/x.md)');
+    // Содержание целиком, порядок слов тот же: разметка снята, текст цел.
+    expect(all, 'пункт читается как есть').toContain('Риск: шаг Ф-2.3 см. док');
+  });
+
+  // === 18. Код шага в обратных кавычках — ссылка так же, как голый (Ф-2.46f; мутация:
+  //     убрать очистку — краснеет поиск ссылки «Ф-2.4», т.к. токен остаётся «`Ф-2.4`») ===
+  it('код шага в обратных кавычках становится ссылкой, как и без кавычек', async () => {
+    // Пунктуация к коду не прилипает: токен сверяется точно (тот же контракт, что у «:93»).
+    mockSummary.result = { ...SUMMARY, text: '## Сделано\n- закрыт Ф-2.3 и риск `Ф-2.4`' };
+    const { c } = render({ stepRefs: ['Ф-2.3', 'Ф-2.4'] });
+    clickLineSummary(c);
+    await flush();
+    const bare = findNodeByAttr(c, 'data-testid', 'summary-step-link-Ф-2.3');
+    const quoted = findNodeByAttr(c, 'data-testid', 'summary-step-link-Ф-2.4');
+    expect(bare, 'голый код — ссылка').not.toBeNull();
+    expect(quoted, 'код в кавычках — ссылка').not.toBeNull();
+    // Внутри ссылки — сам код без кавычек (тот же токен, что stepRef).
+    expect(textNodes(quoted!).join(''), 'текст ссылки — код без кавычек').toBe('Ф-2.4');
   });
 });

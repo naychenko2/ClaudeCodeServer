@@ -4,6 +4,9 @@
 // Результат держится в состоянии строки: повторное открытие страницы не плодит запрос —
 // повторный клик по кнопке берёт кэш бэка (force=false), «Обновить» — новый прогон (force=true).
 // Коды шагов в тексте становятся ссылками только если токен точно равен stepRef из run.stepChains.
+// Содержание пунктов перед рендером очищается markdownToPlain: символы разметки («**»,
+// обратные кавычки, «[текст](ссылка)») не должны доходить до экрана, а код шага в кавычках
+// после снятия кавычек становится ссылкой так же, как голый.
 
 import type { CSSProperties, ReactNode } from 'react';
 import { C, R, FS, SP, FONT, TB } from '../../lib/design';
@@ -14,6 +17,7 @@ import { ICON_SIZE, ICON_PROPS } from '../ui/icons';
 import { AlertTriangle, RotateCcw, Sparkles } from 'lucide-react';
 import { setFeaturePageTab, focusFeatureStage } from '../../lib/featurePage';
 import { formatClock } from './FeatureStatsBits';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import type { FeatureRun } from '../../types/featureRun';
 import type { FeatureSummaryResult } from '../../lib/api';
 
@@ -56,8 +60,11 @@ export function parseSummary(text: string): SummarySection[] {
     }
     const m = line.match(/^([-*]|\d+\.)\s+(.+)$/);
     if (!m) continue;
-    if (cur) cur.items.push(m[2].trim());
-    else loose.push(m[2].trim());
+    // Очистка содержания — через markdownToPlain и до renderItem: без своего strip
+    // (дублировать правила markdown было бы ошибкой). Очистка до ссылки-превращения
+    // нужна и для кодов: «`Ф-2.3`» после снятия кавычек — тот же токен, что «Ф-2.3».
+    if (cur) cur.items.push(markdownToPlain(m[2]));
+    else loose.push(markdownToPlain(m[2]));
   }
   if (!sections.length) return [{ title: null, items: loose }];
   return sections;
@@ -89,22 +96,25 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 // Пункт: текст, где коды шагов — кнопки-ссылки (моно, акцент, без фона).
+// Разделители между токенами сохраняются: split с захватывающей группой. Без них
+// React ставит смежные текстовые узлы слитно («закрытшаг») — пункт не читается
+// (найдено при проверке Ф-2.46f: тест полной строки пункта красел до этой правки).
 function renderItem(item: string, refs: Set<string>, run: FeatureRun, isMobile: boolean): ReactNode[] {
-  return item.split(/\s+/).map((token, i) => refs.has(token) ? (
+  return item.split(/(\s+)/).map((part, i) => !part || /^\s/.test(part) ? part : refs.has(part) ? (
     <button
-      key={`${i}-${token}`}
+      key={`${i}-${part}`}
       type="button"
-      data-testid={`summary-step-link-${token}`}
-      onClick={() => focusStep(run, token)}
+      data-testid={`summary-step-link-${part}`}
+      onClick={() => focusStep(run, part)}
       style={{
         background: 'none', border: 'none', padding: 0, cursor: 'pointer',
         fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.accent,
         ...(isMobile ? { minHeight: TB.iconHitMobile } : {}),
       }}
     >
-      {token}
+      {part}
     </button>
-  ) : token);
+  ) : part);
 }
 
 export function FeatureAnalysisSummary({

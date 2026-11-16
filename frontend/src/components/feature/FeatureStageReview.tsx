@@ -6,6 +6,8 @@ import { C, R, FS, SP, FONT } from '../../lib/design';
 import { Badge, type BadgeTone } from '../ui/Badge';
 import { EmptyState } from '../ui/EmptyState';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { MarkdownContent } from '../chat/MarkdownContent';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { SEC_LABEL } from './FeatureStageArtifacts';
 import { formatDateTime } from './FeatureStatsBits';
 import type { StageReview, StageReviewItem, StageReviewRound } from '../../types/featureStage';
@@ -35,7 +37,8 @@ function Item({ item }: { item: StageReviewItem }) {
         <Badge tone={b.tone} size="xs">{b.text}</Badge>
       </div>
       {item.returnReason && <div style={{ fontSize: FS.xs, color: C.textSecondary }}>Причина: {item.returnReason}</div>}
-      {item.notes && <div style={{ fontSize: FS.sm, color: C.textPrimary, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{item.notes}</div>}
+      {/* Заметки — отчёт ревьюера (markdown: списки, **, `кавычки`): общий рендер, как в читалке плана. */}
+      {item.notes && <div data-testid="stage-review-notes" style={{ fontSize: FS.sm, lineHeight: 1.5, color: C.textPrimary, minWidth: 0 }}><MarkdownContent text={item.notes} /></div>}
       {item.verifiedAt && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{formatDateTime(item.verifiedAt)}</div>}
     </div>
   );
@@ -77,14 +80,15 @@ function Round({ r, total }: { r: StageReviewRound; total: number }) {
           <Badge tone="danger" size="xs">блокер</Badge>
           <span style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textPrimary, overflowWrap: 'anywhere' }}>
             {bl.file && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs }}>{bl.file}{bl.line != null ? `:${bl.line}` : ''}{bl.text ? ' — ' : ''}</span>}
-            {bl.text}
+            {/* Строка вырезана из заметок (ReviewNotesParser): инлайновые ** и `кавычки` остаются в ней — снимаем плоской версией. */}
+            {markdownToPlain(bl.text)}
           </span>
         </div>
       ))}
       {!legacy && r.remarks.map((t, i) => (
         <div key={i} data-testid="stage-review-remark" style={{ display: 'flex', alignItems: 'baseline', gap: SP.sm, minWidth: 0 }}>
           <Badge tone="neutral" size="xs">замечание</Badge>
-          <span style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textPrimary, overflowWrap: 'anywhere' }}>{t}</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textPrimary, overflowWrap: 'anywhere' }}>{markdownToPlain(t)}</span>
         </div>
       ))}
     </div>

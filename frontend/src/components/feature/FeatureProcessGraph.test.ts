@@ -29,8 +29,16 @@
 // - дефект «данные не помещаются в узел» (жалоба по «Производство»: 7 исполнителей, бейдж «↺3»):
 //   в мете не больше двух имён, за ними «+N», полный список — в title узла (при двух имён
 //   подсказки нет: скрывать нечего); под бейдж «↺N» резервируется место справа в строке
-//   заголовка, при returns=0 резерва нет; код роли — только у роли, повторяющейся в маршруте
+//   заголовка — не меньше ширины бейджа по его разметке (одно- и двузначный N); при
+//   returns=0 резерва нет; код роли — только у роли, повторяющейся в маршруте
 //   (макет feature-page.html:431-444), у единственной роли его нет.
+// - дефект «бейдж ↺N срезан сверху» (жалоба с прода, релиз b0ac0a8c): бейдж висит над верхним
+//   краем узла (top<0), а контейнер ленты (overflowX:auto) режет по padding box — поэтому его
+//   верхняя половина исчезала. Проверено соотношение: отступ контейнера сверху ≥ вылет бейджа.
+// - хвост ревью R-Ф-2.44: стрелки прокрутки центрированы по ленте узлов. После отступа
+//   контейнера сверху (Ф-2.44) лента опустилась на 8 px, а шеврон с top:0 — только на 4,
+//   и его центр встал выше центра узлов. Проверено: top/bottom шевронов равны отступам
+//   контейнера — полоса шеврона совпадает с лентой узлов по высоте.
 // Колонки, рёбра и состояния компонент не пересчитывает — это покрыто в FeatureProcessGraphModel.test.ts.
 //
 // Мутации (проверяются прогоном): (1) убрать `if (stage.title)` в nodeTitle — краснеет
@@ -54,6 +62,12 @@
 // (12) показывать код роли безусловно (`{stage.role && …}` вместо repeatedRole.has(role)) —
 //      краснеют «уникальная роль — кода нет…», «повтор роли…» (проверка единственной «plan»)
 //      и две правки роли в блоке «данные узла B01» — всего 4 теста.
+// (13) убрать `paddingTop` у контейнера ленты (`feature-process-graph`) — краснеет
+//      «отступ контейнера сверху ≥ вылет бейджа» (верх бейджа «↺N» снова срезан краем прокрутки).
+// (14) вернуть `top: 0` у шевронов прокрутки — краснеет «шевроны центрированы по ленте»
+//      (top шеврона ≠ отступу контейнера).
+// (15) сжать `badgeReserveW` до 1 px — краснеет «под бейджем возврата зарезервировано место»
+//      (резерв меньше ширины бейджа по его разметке).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -451,14 +465,51 @@ describe('FeatureProcessGraph: данные узла не выходят за р
     expect(get(c, 'pgraph-node-step-back')!.getAttribute('title')).toBeNull();
   });
 
+  // Ширина бейджа «↺N» — из его собственной разметки (не из формулы резерва): глифы
+  // моно-шрифта при кегле из fontSize (~0.7em на знак), поля из padding, рамка из border.
+  // Число глифов — по фактическому тексту бейджа: «↺3» → 2, «↺12» → 3.
+  const badgeWidth = (badge: unknown): number => {
+    const s = style(badge);
+    const glyphW = Math.ceil(Number(String(s.fontSize).replace('px', '')) * 0.7);
+    const glyphs = textNodes(badge as never).join('').length;
+    const padX = Math.max(0, ...[...String(s.padding ?? '').matchAll(/([\d.]+)px/g)].map((m) => Number(m[1])));
+    const bm = String(s.border ?? '').match(/([\d.]+)px/);
+    return glyphW * glyphs + 2 * padX + 2 * (bm ? Number(bm[1]) : 0);
+  };
+
   it('под бейджем возврата зарезервировано место в строке заголовка; без возвратов — нет', () => {
     // Резерв меряется по стилю подписи: при бейдже справа должна быть свободная колонка
     // (иначе «↺3» ляжет на первую строку имени — «Производст»), без бейджа — нет.
-    const withBadge = style(get(prod({}), 'pgraph-title-step-back'));
-    expect(Number(withBadge.paddingRight)).toBeGreaterThan(0);
+    // Величина — не «больше нуля»: резерв не меньше ширины бейджа по его разметке, при
+    // однозначном и двузначном N (двузначный — шире; сжавшийся до 1 px резерв краснеет).
+    for (const returns of [3, 12]) {
+      const c = prod({ returns });
+      const reserve = Number(style(get(c, 'pgraph-title-step-back')).paddingRight);
+      expect(reserve, `резерв под бейдж «↺${returns}»`).toBeGreaterThanOrEqual(badgeWidth(get(c, 'pgraph-returns-step-back')));
+    }
     const noBadge = style(get(prod({ returns: 0 }), 'pgraph-title-step-back'));
     expect(noBadge.paddingRight).toBeUndefined();
     expect(get(prod({ returns: 0 }), 'pgraph-returns-step-back')).toBeNull();
+  });
+});
+
+describe('FeatureProcessGraph: бейдж «↺N» не срезан верхним краем контейнера прокрутки (дефект «↺8», b0ac0a8c)', () => {
+  const get = (c: unknown, tid: string) => findNodeByAttr(c as never, 'data-testid', tid);
+  const style = (n: unknown): Record<string, unknown> =>
+    (reactProps(n as never) as { style: Record<string, unknown> }).style;
+  // Узел с возвратами: бейдж висит абсолютно над верхним краем узла (top < 0).
+  const withBadge = () =>
+    render([{ ...mkStage('prod', 'step-back', 'step', 0, 'active', [], 'back'), returns: 8 }]);
+
+  it('отступ контейнера сверху ≥ вылет бейджа: его верх остаётся внутри области прокрутки', () => {
+    const c = withBadge();
+    // Вылет меряется по факту рендера, а не числом из константы: бейдж обязан висеть выше узла.
+    const badgeTop = Number(style(get(c, 'pgraph-returns-step-back')).top);
+    expect(badgeTop, 'бейдж возврата висит выше верхнего края узла').toBeLessThan(0);
+    // Контейнер ленты (overflowX:auto ⇒ браузер делает и overflow-y:auto) режет по padding box:
+    // без отступа сверху верх бейджа, выходящий за ленту, срезан — как на проде.
+    const padTop = Number(style(get(c, 'feature-process-graph')).paddingTop);
+    expect(padTop, 'контейнер прокрутки обязан иметь отступ сверху под вылет бейджа').toBeGreaterThanOrEqual(-badgeTop);
   });
 });
 
@@ -530,5 +581,29 @@ describe('FeatureProcessGraph: признак края следует факти
     scrollTo(0);
     expect(right()).not.toBeNull();
     expect(left()).toBeNull();
+  });
+
+  it('шевроны центрированы по ленте узлов: их top/bottom равны отступам контейнера (хвост ревью R-Ф-2.44)', () => {
+    // Лента узлов занимает content box контейнера (отступы сверху и снизу — его границы).
+    // Шеврон на внешнем обёртке по всей высоте контейнера: top=отступу, bottom=отступу
+    // снизу — полоса шеврона совпадает с лентой. С top:0 (до этой правки) после paddingTop
+    // лента опускалась на 8 px, а центр шеврона — только на 4: он стоял выше центра узлов.
+    const c = render(parallelCycle(true));
+    const el = get(c, 'feature-process-graph') as unknown as {
+      clientWidth: number; scrollWidth: number; scrollLeft: number;
+      listeners: Record<string, Set<(e: unknown) => void>>;
+    };
+    el.clientWidth = 400; el.scrollWidth = 1000; el.scrollLeft = 300; // середина: обрезаны оба края
+    const handlers = [...(el.listeners['scroll'] ?? [])];
+    expect(handlers.length, 'на контейнере ленты нет слушателя «scroll»').toBe(1);
+    act(() => { handlers.forEach((fn) => fn({})); });
+    const containerStyle = (reactProps(el as never) as { style: Record<string, unknown> }).style;
+    for (const side of ['right', 'left']) {
+      const ch = get(c, `pgraph-scroll-${side}`);
+      expect(ch, `шеврон ${side}`).not.toBeNull();
+      const s = (reactProps(ch as never) as { style: Record<string, unknown> }).style;
+      expect(Number(s.top), `верх шеврона ${side} = отступу контейнера сверху`).toBe(Number(containerStyle.paddingTop));
+      expect(Number(s.bottom), `низ шеврона ${side} = отступу контейнера снизу`).toBe(Number(containerStyle.paddingBottom));
+    }
   });
 });

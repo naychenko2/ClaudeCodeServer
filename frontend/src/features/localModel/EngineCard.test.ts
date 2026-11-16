@@ -69,13 +69,21 @@ describe('EngineCard — vLLM', () => {
 
   // Заголовок — общий заголовок секции (как «Стенд»/«Видеокарты»), не вложенная карточка:
   // префикс капсом textSecondary, имя движка/модели — mono-спан без капса (textHeading).
-  // «до/после»: на старом оформлении (одна div, всё textHeading, строка одним блоком) эти проверки краснеют.
+  // Цвета — по зонам заголовка: префикс — в открывающем теге заголовка (от «<h3» до текста
+  // префикса span нет), имя — в открывающем теге span непосредственно перед текстом имени.
+  // «до/после»: на старом оформлении (одна div, всё textHeading, строка одним блоком) эти
+  // проверки краснеют; мутация «вернуть textHeading на префикс» краснит цветные ассерции префикса.
   it('заголовок-секция: префикс «Движок ·» капсом textSecondary, имя — в mono-спане без капса (textHeading)', () => {
     const h = html({ kind: 'vllm', title: 'Qwen3.8-27B', stats: vllmStats(), throttled: null, stale: false });
     expect(h).toContain('text-transform:uppercase');
     expect(h).toContain('text-transform:none');
     expect(plain(h)).toContain('Движок · vLLM · Qwen3.8-27B');
     expect(h).not.toContain('Движок · vLLM · Qwen3.8-27B');
+    const pref = h.indexOf('Движок · ');
+    expect(h.slice(h.lastIndexOf('<h3', pref), pref)).toContain('color:var(--c-text-secondary)');
+    expect(h.slice(h.lastIndexOf('<h3', pref), pref)).not.toContain('color:var(--c-text-heading)');
+    const name = h.indexOf('Qwen3.8-27B');
+    expect(h.slice(h.lastIndexOf('<span', name), name)).toContain('color:var(--c-text-heading)');
   });
 
   it('нет kv.prefixHitPerc — «нет данных», и ни одного «0 %» в разметке', () => {
@@ -154,13 +162,21 @@ describe('EngineCard — строка-причина', () => {
     expect(h).not.toContain('var(--c-warning-bg)');
     expect(h).not.toContain('var(--c-danger-bg)');
     // упор в лимит — штатный режим: пилюля без глифа («↓» читался бы как «стало хуже»), полная скруглённость.
-    // Радиус проверяется внутри самой пилюли, а не в общей разметке: трек ProgressBar (R.max) рендерится
-    // в этой же фикстуре (полоса KV) и даёт border-radius:999px сам — глобальная проверка осталась бы
-    // зелёной и при сломанном радиусе пилюли. Фрагмент пилюли — от её открывающего <span> (ближайшего
-    // перед текстом) до текста: текст — прямой ребёнок span, вложенных span в пилюле нет.
+    // Радиус ищется по открывающему тегу элемента, несущего текст (минор ревью 5592b74a): от текста назад
+    // до ближайшего border-radius:999px — он должен быть ДО текста и не закрыт до него (между ним и
+    // текстом нет </span> или </div>). Форма пилюле не задана: держится и span с прямым текстом
+    // (текущий), и div с borderRadius + внутренний span (образец thermal).
+    // Почему не «по всему html»: трек ProgressBar (R.max) рендерится в этой же фикстуре (полоса KV, ПОСЛЕ
+    // строки-причины) и даёт border-radius:999px сам. Безграничный поиск по всему html берёт трек
+    // (после текста) — краснеет «радиус до текста»; поиск «по тексту» (после текста) краснит так же.
+    // Ограниченный поиск от текста берёт трек только когда радиуса до текста нет вовсе — тогда не закрыт
+    // и сам факт радиуса у текста.
     expect(h).not.toContain('↓');
     const at = h.indexOf('Упирается в лимит мощности');
-    expect(h.slice(h.lastIndexOf('<span', at), at)).toContain('border-radius:999px');
+    const open = h.lastIndexOf('border-radius:999px', at);
+    expect(open).toBeGreaterThanOrEqual(0);
+    expect(open).toBeLessThan(at);
+    expect(h.slice(open, at)).not.toMatch(/<\/(?:span|div)>/);
   });
 
   it('throttled=null — строки-причины нет вовсе', () => {

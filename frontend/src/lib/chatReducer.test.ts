@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
   serverHistoryNewer, PERSISTED_KINDS, applyServerMessage, normalizeHistory, initialChatState,
-  resolveCardsFromHistory, type ChatState,
+  resolveCardsFromHistory, PHASE_KEYS, type ChatState,
 } from './chatReducer';
 import type { ChatItem, ServerMessage } from '../types';
 
@@ -577,7 +577,9 @@ describe('applyServerMessage: turn_start_phase — статус старта х�
 
   it('фазы идут по очереди и обновляют одну строку, а не плодят новые', () => {
     let s = feed(initialChatState(), { type: 'user_message', text: 'привет' });
-    for (const phase of ['queued', 'context', 'launching', 'waiting']) {
+    // список фаз берётся из единого источника (PHASE_KEYS), а не литералом:
+    // новая фаза попадает в тест сама, как только попала в тип
+    for (const phase of Object.keys(PHASE_KEYS)) {
       s = applyServerMessage(s, { sessionId: SID, type: 'turn_start_phase', phase } as ServerMessage);
       expect(phases(s)).toEqual([{ kind: 'turn_start_phase', phase }]);
     }

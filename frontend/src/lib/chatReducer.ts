@@ -519,7 +519,10 @@ function dropLocalTurnQueue(items: ChatItem[], keepQueued = false): ChatItem[] {
 // Неизвестная фаза от сервера (например, новая добавлена на бэке раньше фронта)
 // игнорируется: строка не меняется и не добавляется — иначе лента показала бы
 // точку с пустой подписью.
-const KNOWN_START_PHASES: ReadonlySet<string> = new Set(['queued', 'context', 'launching', 'waiting']);
+// Единый источник списка: Record<StartPhase, true> — добавление фазы в union без
+// ключа здесь даёт ошибку компиляции, копия списка руками не ведётся.
+export const PHASE_KEYS: Record<StartPhase, true> = { queued: true, context: true, launching: true, waiting: true };
+const KNOWN_START_PHASES: ReadonlySet<string> = new Set(Object.keys(PHASE_KEYS));
 
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
 // если сообщение состояние не меняет (подписчиков можно не будить).

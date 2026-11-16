@@ -899,6 +899,7 @@ public class ClaudeSession : ILlmSessionAdapter
     private long _turnSpawnToInitMs = -1;
     private long _turnInitTs;
     private long _turnInitToFirstEventMs = -1;
+    private long _turnFirstContentMs = -1;
     private long _turnPrevRunStopMs = -1;
     private volatile IReadOnlyDictionary<string, long>? _turnSlowSections;
 
@@ -914,6 +915,7 @@ public class ClaudeSession : ILlmSessionAdapter
         Volatile.Write(ref _turnSpawnToInitMs, -1);
         Volatile.Write(ref _turnInitTs, 0);
         Volatile.Write(ref _turnInitToFirstEventMs, -1);
+        Volatile.Write(ref _turnFirstContentMs, -1);
         Volatile.Write(ref _turnPrevRunStopMs, -1);
         _turnSlowSections = null;
     }
@@ -925,7 +927,14 @@ public class ClaudeSession : ILlmSessionAdapter
         return new TurnStartTimings(
             N(Volatile.Read(ref _turnQueueWaitMs)), N(Volatile.Read(ref _turnPromptAssemblyMs)),
             N(Volatile.Read(ref _turnSpawnToInitMs)), N(Volatile.Read(ref _turnInitToFirstEventMs)),
-            _turnSlowSections, N(Volatile.Read(ref _turnPrevRunStopMs)));
+            _turnSlowSections, N(Volatile.Read(ref _turnPrevRunStopMs)))
+        {
+            FirstContentMs = N(Volatile.Read(ref _turnFirstContentMs)),
+            // Явный факт спавна этого хода: _turnSpawnTs ставит только NoteSpawn (единственный путь
+            // запуска процесса), BeginStartTimings обнуляет. Не путать с SpawnToInitMs == null —
+            // там «не спавняли» и «init не дошёл» смешаны в одно.
+            Spawned = Volatile.Read(ref _turnSpawnTs) != 0,
+        };
     }
 
     // Остановка несовместимого живого прогона: kill и ожидание финализации его читателя. Время
@@ -943,8 +952,9 @@ public class ClaudeSession : ILlmSessionAdapter
     }
 
     // Спавн процесса на этом ходу: начало фазы «запуск CLI». Повторный спавн в ретрае
-    // (DiedEmpty) относится к последней попытке: сбрасываем защёлки NoteInit/NoteFirstEvent,
-    // иначе «init'ом» остался бы первый процесс и фазы мерились бы от него (хвост bc852f0e).
+    // (DiedEmpty) относится к последней попытке: сбрасываем защёлки NoteInit/NoteFirstEvent/
+    // NoteFirstContent, иначе «init'ом» остался бы первый процесс и фазы мерились бы от него
+    // (хвост bc852f0e).
     // Сброс — раньше записи _turnSpawnTs: к моменту, когда спавн стал новым, защёлки уже открыты,
     // и поздний init старого процесса не может дать новую фазу от старого init (хвост e33b6bd2).
     private void NoteSpawn(long spawnStartTs)
@@ -952,6 +962,7 @@ public class ClaudeSession : ILlmSessionAdapter
         Volatile.Write(ref _turnSpawnToInitMs, -1);
         Volatile.Write(ref _turnInitTs, 0);
         Volatile.Write(ref _turnInitToFirstEventMs, -1);
+        Volatile.Write(ref _turnFirstContentMs, -1);
         Volatile.Write(ref _turnSpawnTs, spawnStartTs);
     }
 
@@ -972,6 +983,32 @@ public class ClaudeSession : ILlmSessionAdapter
         var initTs = Volatile.Read(ref _turnInitTs);
         if (initTs == 0 || Volatile.Read(ref _turnInitToFirstEventMs) >= 0 || HasParentToolUseId(root)) return;
         Volatile.Write(ref _turnInitToFirstEventMs, ElapsedMs(initTs));
+    }
+
+    // Первое СОДЕРЖИМОЕ основного агента после init: начало контент-блока или первая дельта
+    // текста/размышления/инструмента. message_start — не содержимое: локальный прокси отдаёт его
+    // до префилла, и на нём InitToFirstEventMs показывает доли секунд при настоящем первом
+    // содержимом через десятки секунд (дефект замера карточки b8f329c6) — поэтому защёлка
+    // отдельная, а не расширение существующей. msg_start живёт только внутри stream_event
+    // (строка assistant поля event не несёт), поэтому зацепление — одна ветка case "stream_event".
+    private void NoteFirstContent(JsonElement root)
+    {
+        var initTs = Volatile.Read(ref _turnInitTs);
+        if (initTs == 0 || Volatile.Read(ref _turnFirstContentMs) >= 0 || HasParentToolUseId(root)) return;
+        if (!root.TryGetProperty("event", out var evt) || !evt.TryGetProperty("type", out var et)) return;
+        switch (et.GetString())
+        {
+            case "content_block_start":
+                break; // начало блока (text/thinking/tool_use) — уже содержимое
+
+            case "content_block_delta":
+                if (!evt.TryGetProperty("delta", out var delta) || !delta.TryGetProperty("type", out var dt)
+                    || dt.GetString() is not ("text_delta" or "thinking_delta" or "input_json_delta")) return;
+                break;
+
+            default: return; // message_start / message_delta / content_block_stop — не содержимое
+        }
+        Volatile.Write(ref _turnFirstContentMs, ElapsedMs(initTs));
     }
     // MCP-сервер персон: CRUD из любого чата + @упоминания/persona_ask
     private readonly PersonasMcpContext? _personasMcp;
@@ -6585,6 +6622,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             case "stream_event":
                 NoteFirstEvent(root);
+                NoteFirstContent(root);
                 if (!HasParentToolUseId(root)) run.PreEchoResultLine = null;
                 // Контент ОСНОВНОГО агента после конца хода — CLI начал ход-продолжение
                 // (ответ на task-notification); его result не должен завершить будущий ход

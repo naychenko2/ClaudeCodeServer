@@ -99,6 +99,22 @@ public sealed record TurnRunPassport(
     public long? InitToFirstEventMs { get; init; }
 
     /// <summary>
+    /// От system/init до ПЕРВОГО СОДЕРЖИМОГО основного агента (content_block_start или первая
+    /// дельта текста/размышления/инструмента), мс; null — не дошло. Отдельная защёлка к
+    /// <see cref="InitToFirstEventMs"/>: локальный прокси отдаёт message_start до префилла, и
+    /// первая метрика показывает 0,1–1,7 с, а настоящее содержимое приходит через десятки
+    /// секунд (разбор карточки b8f329c6); размышления Claude без этой фазы невидимы вовсе.
+    /// </summary>
+    public long? FirstContentMs { get; init; }
+
+    /// <summary>
+    /// Процесс CLI был запущен на этом ходу — ЯВНЫЙ факт спавна, а не вывод из наличия
+    /// <see cref="SpawnToInitMs"/>: null там смешивает «не спавняли» (same-process ход) и
+    /// «спавняли, но init не дошёл». False — ход отдан живому процессу или замеры не собраны.
+    /// </summary>
+    public bool Spawned { get; init; }
+
+    /// <summary>
     /// Контрибьюторы секций промпта, собиравшиеся дольше <see cref="TurnStartTimings.SlowSectionThresholdMs"/>:
     /// {ключ контрибьютора: мс}. null — медленных не было.
     /// </summary>
@@ -124,6 +140,12 @@ public sealed record TurnStartTimings(
     IReadOnlyDictionary<string, long>? SlowSections,
     long? PrevRunStopWaitMs = null)
 {
+    /// <summary>От init до первого содержимого (см. TurnRunPassport.FirstContentMs); null — не дошло.</summary>
+    public long? FirstContentMs { get; init; }
+
+    /// <summary>На этом ходу был спавн процесса (факт NoteSpawn, а не факт init; см. TurnRunPassport.Spawned).</summary>
+    public bool Spawned { get; init; }
+
     /// <summary>Порог (строго больше), с которого секция промпта попадает в паспорт.</summary>
     public const long SlowSectionThresholdMs = 500;
 

@@ -32,6 +32,8 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         typeof(ClaudeSession).GetMethod("NoteInit", BindingFlags.NonPublic | BindingFlags.Instance)!;
     private static readonly MethodInfo NoteFirstEventM =
         typeof(ClaudeSession).GetMethod("NoteFirstEvent", BindingFlags.NonPublic | BindingFlags.Instance)!;
+    private static readonly MethodInfo NoteFirstContentM =
+        typeof(ClaudeSession).GetMethod("NoteFirstContent", BindingFlags.NonPublic | BindingFlags.Instance)!;
     private static readonly FieldInfo QueuedTurnsField =
         typeof(ClaudeSession).GetField("_queuedTurns", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
@@ -92,6 +94,7 @@ public class ClaudeSessionStartPhaseTests : IDisposable
     private static void Spawn(ClaudeSession s, long ts) => _ = NoteSpawnM.Invoke(s, [ts]);
     private static void Init(ClaudeSession s) => _ = NoteInitM.Invoke(s, []);
     private static void FirstEvent(ClaudeSession s) => _ = NoteFirstEventM.Invoke(s, [JsonDocument.Parse(Event).RootElement]);
+    private static void FirstContent(ClaudeSession s, string line) => _ = NoteFirstContentM.Invoke(s, [JsonDocument.Parse(line).RootElement]);
     private static void SetQueued(ClaudeSession s, int n) => QueuedTurnsField.SetValue(s, n);
 
     [Fact]
@@ -234,6 +237,71 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         t.InitToFirstEventMs.Should().BeGreaterThanOrEqualTo(0);
     }
 
+    // ——— TS-19: первое содержимое (FirstContentMs) и явный факт спавна (Spawned) ———
+
+    [Fact]
+    public void FirstContent_НаMessageStartНеСрабатывает_СтавитсяОдинРазНаПервомСодержимом()
+    {
+        var (s, _) = NewSession();
+        Begin(s);
+        Spawn(s, Stopwatch.GetTimestamp());
+        Init(s);
+        // Локальный прокси отдаёт message_start до префилла: защёлка на нём закрываться не
+        // должна — на нём и построен новый замер (дефект существующего InitToFirstEventMs).
+        FirstContent(s, MsgStart);
+        s.GetStartTimings().FirstContentMs.Should().BeNull("message_start — не содержимое");
+        FirstContent(s, SubagentBlockStart);
+        s.GetStartTimings().FirstContentMs.Should().BeNull("контент сабагента — не контент основного агента");
+        // Размышление — тоже содержимое (у Claude оно раньше в паспорт не попадало вовсе).
+        FirstContent(s, ThinkingDelta);
+        var v = s.GetStartTimings().FirstContentMs;
+        v.Should().NotBeNull();
+        v.Should().BeGreaterThanOrEqualTo(0);
+        // Срабатывает один раз: последующие содержимые защёлку не двигают.
+        FirstContent(s, BlockStart);
+        FirstContent(s, TextDelta);
+        s.GetStartTimings().FirstContentMs.Should().Be(v, "защёлка срабатывает один раз за попытку");
+    }
+
+    [Fact]
+    public async Task FirstContent_ПослеНовогоСпавнаСбрасываетсяИМеряетсяОтНовогоInit()
+    {
+        // Названный тест мутации «убрать сброс защёлки в NoteSpawn»: без сброса в защёлке
+        // остаётся значение первой попытки — краснеют обе проверки после второго спавна.
+        var (s, _) = NewSession();
+        Begin(s);
+        Spawn(s, Stopwatch.GetTimestamp());
+        Init(s);
+        await Task.Delay(120);
+        FirstContent(s, TextDelta);
+        s.GetStartTimings().FirstContentMs.Should().BeGreaterThanOrEqualTo(100, "фаза первой попытки — первая");
+
+        // Ретрай: новый процесс. Сброс открыл защёлки до записи _turnSpawnTs (хвост e33b6bd2).
+        Spawn(s, Stopwatch.GetTimestamp());
+        s.GetStartTimings().FirstContentMs.Should().BeNull("новый спавн открывает защёлку первого содержимого");
+        Init(s);
+        FirstContent(s, TextDelta);
+        s.GetStartTimings().FirstContentMs.Should().NotBeNull().And.BeLessThan(60,
+            "после нового спавна фаза меряется от нового init, а не от старого");
+    }
+
+    [Fact]
+    public void Spawned_БезСпавнаЛожь_ПослеСпавнаИстина_НовыйХодСноваЛожь()
+    {
+        var (s, _) = NewSession();
+        Begin(s);
+        s.GetStartTimings().Spawned.Should().BeFalse("процесс на этом ходу не спавнился — false, а не null");
+        Spawn(s, Stopwatch.GetTimestamp());
+        // Факт спавна, а не факт init: init не дошёл, SpawnToInitMs — null, но процесс
+        // спавнен — и именно ради этого различия поле явное.
+        s.GetStartTimings().Spawned.Should().BeTrue();
+        s.GetStartTimings().SpawnToInitMs.Should().BeNull();
+        // Следующий ход (same-process) сбрасывает: замер принадлежит ходу, а не сессии.
+        Begin(s);
+        s.GetStartTimings().Spawned.Should().BeFalse();
+        s.GetStartTimings().FirstContentMs.Should().BeNull("BeginStartTimings сбрасывает и защёлку первого содержимого");
+    }
+
     // ——— Остановка несовместимого прогона (PrevRunStopWaitMs) ———
 
     private static ClaudeSession NewSessionWithStubLauncher()
@@ -311,6 +379,20 @@ public class ClaudeSessionStartPhaseTests : IDisposable
     // Ветка case "user" (снятие PendingEchoUuid/SkipResults/ContinuationActive) не затронута.
 
     private const string Uuid = "11111111-2222-4333-8444-555555555555";
+    // Содержимые строки (NoteFirstContent): message_start — НЕ содержимое (локальный прокси
+    // отдаёт его до префилла — сам дефект замера InitToFirstEventMs, карточка b8f329c6);
+    // начало контент-блока и дельты текста/размышления/инструмента — содержимое.
+    private const string MsgStart =
+        """{"type":"stream_event","event":{"type":"message_start","message":{"role":"assistant","content":[]}}}""";
+    private const string BlockStart =
+        """{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}""";
+    private const string TextDelta =
+        """{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}}""";
+    private const string ThinkingDelta =
+        """{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"h"}}}""";
+    private const string SubagentBlockStart =
+        """{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}},"parent_tool_use_id":"t1"}""";
+
     private static readonly string Echo =
         $$"""{"type":"user","message":{"role":"user","content":"ну как?"},"uuid":"{{Uuid}}","isReplay":true}""";
     private const string EchoForeign =

@@ -1356,6 +1356,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         PromptAssemblyMs = startTimings?.PromptAssemblyMs,
                         SpawnToInitMs = startTimings?.SpawnToInitMs,
                         InitToFirstEventMs = startTimings?.InitToFirstEventMs,
+                        FirstContentMs = startTimings?.FirstContentMs,
+                        // Явный факт спавна этого хода: same-process ход — false; без фабрики
+                        // (тесты) замеры не собраны — тоже false, отсутствие замера не «был».
+                        Spawned = startTimings?.Spawned ?? false,
                         SlowSections = startTimings?.SlowSections,
                         PrevRunStopWaitMs = startTimings?.PrevRunStopWaitMs,
                     };

@@ -340,7 +340,7 @@ public sealed class HardwareReportService(IHardwareSampler sampler, IConfigurati
             var tb = HardwareThresholds.Board;
             nodes.Add(new HardwareNodeDto("board", "board", "Плата", b.BoardTempC,
                 b.BoardTempC is not null ? "ok" : b.BoardProbe ? "nodata" : "none",
-                b.BoardTempC is null ? "ok" : Lvl(b.BoardTempC, tb), tb.Warn, tb.Danger,
+                Lvl(b.BoardTempC, tb), tb.Warn, tb.Danger,
                 new HardwareNodeDetailDto { PeripheralC = b.PeripheralTempC }, empty));
         }
 

@@ -18,7 +18,7 @@
 // — при выгруженной модели «Сейчас»/«Скорость» — спокойная строка, не нули;
 // — поля из `unsupported` (Кэш, Вытеснения, время агентов) скрыты целиком;
 // — видеокарта — своя карточка «Видеокарта · Video» с чипом «общая с ComfyUI»
-//   (данные с узла ComfyUI на Video; «Железо» — хост CCS, ссылки туда нет);
+//   (данные с узла ComfyUI на Video; «Стенды» — хост CCS, ссылки туда нет);
 // — «Кто сейчас на модели» — одна карточка на оба стенда: чаты дорожки (свой — кликабелен)
 //   и места сервера из duty.callsNow (не кликабельны); счётчик = чаты + места + «прочие»;
 // — «Дежурство» (DutyBlock) — последним блоком, только у выбранного второго движка и только
@@ -147,7 +147,7 @@ function StatusSubline({ data, named }: { data: LocalModelStats; named?: boolean
   );
 }
 
-// === Баннер «Стенд не отвечает» ===
+// === Баннер «Движок не отвечает» ===
 // C.dangerBg/C.dangerBorder/C.dangerText; кнопка ghost «Проверить сейчас»
 // запускает внеочередной опрос (refetch из панели).
 // Для стенда на Video — свой текст (макет §4): 'down' у движка с арбитром означает,
@@ -167,7 +167,7 @@ function DownBanner({ data, onCheck, named }: { data: LocalModelStats; onCheck: 
         <b style={{ fontWeight: 700 }}>
           {named
             ? `Модель не отвечает${since ? ` с ${since}` : ''}, а арбитр её не выгружал.`
-            : `Стенд не отвечает${since ? ` с ${since}` : ''}.`}
+            : `Движок не отвечает${since ? ` с ${since}` : ''}.`}
         </b>{' '}
         {named ? 'Это авария, не уступка: места идут на MiniMax.' : 'Новые ходы на локальной модели встанут в ошибку, пока он не поднимется.'}
         <div style={{ marginTop: SP.sm }}>
@@ -286,17 +286,17 @@ function SpeedCard({ data }: { data: LocalModelStats }) {
   );
 }
 
-// === «Видеокарты»: строка-ссылка на вкладку «Железо» (только админ) ===
-// GpuCard ушёл на «Железо» (GpuDetailCard); здесь — компактная строка-ссылка:
-// точка худшего уровня, «память 68° · 81°», плашки, «Железо →». Касание открывает
-// «Железо». hardware — только у админа (не-админу поля нет → строки нет, ADR-030).
+// === «Видеокарты»: строка-ссылка на вкладку «Стенды» (только админ) ===
+// GpuCard ушёл на «Стенды» (GpuDetailCard); здесь — компактная строка-ссылка:
+// точка худшего уровня, «память 68° · 81°», плашки, «Стенды →». Касание открывает
+// «Стенды». hardware — только у админа (не-админу поля нет → строки нет, ADR-030).
 function GpusCard({ data, onOpenHardware }: { data: LocalModelStats; onOpenHardware: () => void }) {
   if (!data.hardware || data.hardware.gpus.length === 0) return null;
   return <HwLinkRow brief={data.hardware} onOpen={onOpenHardware} />;
 }
 
 // === «Видеокарта · Video» (стенд на Video, макет §3/§6) ===
-// Данные — с узла ComfyUI на Video (b.gpus в ответе stats?engine=named): «Железо» —
+// Данные — с узла ComfyUI на Video (b.gpus в ответе stats?engine=named): «Стенды» —
 // это хост CCS, ссылки туда нет. Чип «общая с ComfyUI» — карточка стоит на Video и
 // делит её с ComfyUI (макет §3). ComfyUI не ответил (gpus пустые) — «Нет данных о
 // карте…», карточка остаётся: человек должен видеть, что карта есть, но молчит узел.
@@ -700,8 +700,8 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
         <NowCard data={data} />
         <SpeedCard data={data} />
         <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
-        {/* Видеокарты: основной стенд — строка-ссылка на «Железо» (хост CCS, только
-            админ); второй движок — своя карточка Video, ссылка на «Железо» была бы неправдой */}
+        {/* Видеокарты: основной стенд — строка-ссылка на «Стенды» (хост CCS, только
+            админ); второй движок — своя карточка Video, ссылка на «Стенды» была бы неправдой */}
         {named
           ? <VideoCard data={data} />
           : <GpusCard data={data} onOpenHardware={onOpenHardware} />}

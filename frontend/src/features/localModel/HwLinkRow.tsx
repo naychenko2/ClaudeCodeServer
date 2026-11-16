@@ -1,7 +1,7 @@
 // Строка-ссылка «Видеокарты» — замена карточкам GpuCard на вкладках «LLM» и
 // «Медиа» (только у админа). Card с role="button": касание переключает на вкладку
-// «Железо». Содержимое: точка худшего уровня карт, «память 68° · 81°», плашки
-// «в лимите мощности» (info) / «перегрев» (danger), «Железо →» (вправо).
+// «Стенды». Содержимое: точка худшего уровня карт, «память 68° · 81°», плашки
+// «в лимите мощности» (info) / «перегрев» (danger), «Стенды →» (вправо).
 //
 // Данные — из поля hardware (HardwareBrief) ответа /stats или /stats/media
 // (только админ; у не-админа поля нет → строки нет, ADR-030). LLM — по всем картам
@@ -32,7 +32,7 @@ export function HwLinkRow({ brief, stale, onOpen }: {
     <div
       role="button"
       tabIndex={0}
-      aria-label="Видеокарты — открыть вкладку «Железо»"
+      aria-label="Видеокарты — открыть вкладку «Стенды»"
       onClick={onOpen}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
       style={{
@@ -59,7 +59,7 @@ export function HwLinkRow({ brief, stale, onOpen }: {
         </span>
       )}
       <span style={{ marginLeft: 'auto', fontSize: FS.xs, fontWeight: 600, color: C.accent, whiteSpace: 'nowrap', fontFamily: FONT.sans }}>
-        Железо →
+        Стенды →
       </span>
     </div>
   );

@@ -1,4 +1,4 @@
-// Чистые функции вкладки «Железо»: форматирование значений, подписи, выбор
+// Чистые функции вкладки «Стенды»: форматирование значений, подписи, выбор
 // «самой горячей» точки, сводка, модель представления плитки. Юнит-тесты без React/DOM.
 //
 // Уровень (level) и пороги считает БЕКЕНД (HardwareReport.cs); фронт только
@@ -27,6 +27,7 @@ export function hwIcon(kind: HardwareNode['kind']): string {
     case 'gpu': return 'Gpu';
     case 'cpu': return 'Cpu';
     case 'vrm': return 'Zap';
+    case 'board': return 'Thermometer';
     case 'chipset': return 'CircuitBoard';
     case 'water': return 'Droplet';
     case 'disk': return 'HardDrive';
@@ -75,6 +76,9 @@ export function hwTileView(report: HardwareReport): HwTileView[] {
       if (ccd.length) detail = `кристаллы ${ccd.map(v => Math.round(v)).join(' и ')}`;
     } else if (node.kind === 'vrm') {
       sensorLabel = 'цепи питания на плате';
+    } else if (node.kind === 'board') {
+      sensorLabel = 'на плате';
+      if (node.detail.peripheralC != null) detail = `периферия ${Math.round(node.detail.peripheralC)} °C`;
     } else if (node.kind === 'chipset') {
       // Неразрывный пробел: «3859 об/мин» — неделимое, перенос (если не
       // помещается) — перед «вентилятор», не внутри единицы «об/мин».
@@ -204,7 +208,7 @@ export function hwBriefMem(brief: HardwareBrief): string {
   return `память ${parts.join(' · ')}`;
 }
 
-// Уровень всего стенда по сводке (для точки на самой вкладке «Железо»:
+// Уровень всего стенда по сводке (для точки на самой вкладке «Стенды»:
 // там красная верна, если, например, перегрет диск кэша).
 export function hwBriefLevel(brief: HardwareBrief): HwLevel {
   return brief.level;
@@ -302,4 +306,42 @@ export function farmHottestLine(farm: HardwareFarm): string {
   const h = farmHottest(farm);
   if (!h) return '';
   return `${farmHottestWord(h.hottest.level)} — ${h.node.title} · ${h.hottest.label.toLowerCase()}: ${hwTemp(h.hottest.tempC)}`;
+}
+
+// === Вкладка «Стенды»: выбор узла, счётчик «без данных», причина падения скорости ===
+
+// Какой узел показывать: выбор человека, если такой узел ещё есть в ферме; иначе —
+// узел с худшим уровнем, при равенстве первый по порядку фермы. Нештатный узел
+// (down/stale) уровня не имеет ('ok'), поэтому по умолчанию выбирается лишь при равенстве.
+// null — фермы нет (ещё не ответила / пуста).
+export function farmPickNode(farm: HardwareFarm | null, chosen: string | null): string | null {
+  if (!farm || farm.farmNodes.length === 0) return null;
+  if (chosen != null && farm.farmNodes.some(n => n.key === chosen)) return chosen;
+  let best = farm.farmNodes[0];
+  for (const n of farm.farmNodes.slice(1)) {
+    if (RANK[n.level] > RANK[best.level]) best = n;
+  }
+  return best.key;
+}
+
+// Сколько плиток узла «датчик есть, но не ответил» (sensor='nodata'); «датчика нет» ('none') не считается.
+export function hwNoDataCount(report: Pick<HardwareReport, 'nodes'>): number {
+  return report.nodes.filter(n => n.sensor === 'nodata').length;
+}
+
+// «1 показатель без данных» / «2 показателя …» / «5 показателей …»; 0 — пусто.
+export function hwNoDataCountLabel(n: number): string {
+  if (n <= 0) return '';
+  const m10 = n % 10;
+  const m100 = n % 100;
+  const word = m10 === 1 && m100 !== 11 ? 'показатель'
+    : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 'показателя' : 'показателей';
+  return `${n} ${word} без данных`;
+}
+
+// Причина падения скорости по картам узла: перегрев важнее упора в лимит мощности.
+export function hwThrottled(report: Pick<HardwareReport, 'gpus'>): 'thermal' | 'powerCap' | null {
+  if (report.gpus.some(g => g.throttle.thermal)) return 'thermal';
+  if (report.gpus.some(g => g.throttle.powerCap)) return 'powerCap';
+  return null;
 }

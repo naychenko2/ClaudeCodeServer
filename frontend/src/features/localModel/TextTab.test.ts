@@ -300,7 +300,7 @@ describe('карточка Video и «места сервера» (стенд в
     expect(html).toContain('Видеокарта · Video');
     expect(html).toContain('общая с ComfyUI');
     expect(html).toContain('8/24 ГБ');
-    expect(html).not.toContain('Железо');
+    expect(html).not.toContain('Стенды');
   });
   it('«Кто сейчас» — места со звеном и длительностью; строки не кнопки', () => {
     const html = renderTab({ data: mockEngineStats('yielded'), engine: 'gemma' });

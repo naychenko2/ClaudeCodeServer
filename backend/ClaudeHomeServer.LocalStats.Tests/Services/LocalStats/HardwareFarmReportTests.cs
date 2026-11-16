@@ -256,13 +256,14 @@ public class HardwareFarmReportTests
     [InlineData(true, "nodata")] [InlineData(false, "none")]
     public void Board_NoValue_NotAnxiety(bool probe, string sensor)
     {
+        // Мутация «вернуть b.BoardTempC is null ? "ok"» → красный (плитка получила бы ok вместо none).
         var report = Service(Sample(cpus: [Cpu(40)], board: null, probe: probe)).Build("worker", TimeSpan.FromMinutes(5))!;
 
         var board = report.Nodes.Single(t => t.Key == "board");
         board.Sensor.Should().Be(sensor, probe ? "источник платы есть, значения нет" : "датчика нет");
         board.TempC.Should().BeNull();
-        board.Level.Should().Be("ok");
-        report.Level.Should().Be("ok", "плата без значения тревогой не считается");
+        board.Level.Should().Be("none", "без значения — уровень none, как у остальных плиток");
+        report.Level.Should().Be("ok", "плата без значения тревогой не считается (none в худший не входит)");
         report.Series.Should().NotContain(s => s.Key == "board", "ряда нет, если значения нет в текущем снимке");
     }
 

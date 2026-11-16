@@ -20,7 +20,7 @@ export type HwNodeStatus = 'ok' | 'stale' | 'down' | 'incompatible';
 
 // Семейство ряда графика «Температуры». Порядок в union не значим; 'cpu' намеренно
 // последним (проверка Ф0 не допускает в файле литерала 'cpu' с последующей чертой).
-export type HwFamily = 'mem' | 'core' | 'hotspot' | 'chipset' | 'water' | 'disk' | 'cpu';
+export type HwFamily = 'mem' | 'core' | 'hotspot' | 'chipset' | 'water' | 'disk' | 'board' | 'cpu';
 
 // Видеокарта (nvidia-smi + помощник root для памяти GDDR6X). Числовые поля nullable:
 // null — датчик не ответил (nvidia-smi/помощник), не «0».

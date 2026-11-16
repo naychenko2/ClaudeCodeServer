@@ -170,7 +170,7 @@ describe('новый контракт (Ш3a/Ш3b): фикстуры через �
   it('два сокета: cpu-0/cpu-1, vrm-board и board с peripheralC — поля типа', () => {
     const r = multiSocketReport();
     expect(r.nodes.map(n => n.key)).toEqual(['cpu-0', 'cpu-1', 'vrm-0', 'vrm-1', 'vrm-board', 'board']);
-    const board = r.nodes.find(n => n.key === 'board')!;
+    const board = r.nodes.find(n => n.kind === 'board')!;
     expect(board.kind).toBe('board');
     expect(board.detail.peripheralC).toBe(37);
     // Ветвление по kind, а не по ключу: две плитки одного kind — норма.

@@ -75,7 +75,12 @@ public sealed record TurnRunPassport(
     /// <summary>Последний HTTP-статус внутренних повторов CLI (529/429); null — не было.</summary>
     public string? CliRetryLastStatus { get; init; }
 
-    /// <summary>Ожидание хода в очереди сессии (на `_turnLock`) до начала обработки, мс; null — не замерено.</summary>
+    /// <summary>
+    /// Ожидание хода в очереди сессии (на `_turnLock`) до начала обработки, мс; null — не замерено.
+    /// Здесь только ожидание в очереди адаптера; ожидание прошлого хода в TurnIntake (отложенная
+    /// доставка) в паспорт не пишется (решение 21eb0bcf §2б): метрика ccs.delivery.await_exit_ms,
+    /// лог AwaitPreviousTurnExitAsync.
+    /// </summary>
     public long? QueueWaitMs { get; init; }
 
     /// <summary>
@@ -98,6 +103,13 @@ public sealed record TurnRunPassport(
     /// {ключ контрибьютора: мс}. null — медленных не было.
     /// </summary>
     public IReadOnlyDictionary<string, long>? SlowSections { get; init; }
+
+    /// <summary>
+    /// Остановка несовместимого живого прогона прошлого хода (kill и ожидание его читателя, до 15 с), мс.
+    /// Входит в <see cref="PromptAssemblyMs"/>: «PromptAssemblyMs − PrevRunStopWaitMs − сумма SlowSections» —
+    /// невидимая часть сборки. null — останавливать было нечего.
+    /// </summary>
+    public long? PrevRunStopWaitMs { get; init; }
 }
 
 /// <summary>
@@ -109,7 +121,8 @@ public sealed record TurnStartTimings(
     long? PromptAssemblyMs,
     long? SpawnToInitMs,
     long? InitToFirstEventMs,
-    IReadOnlyDictionary<string, long>? SlowSections)
+    IReadOnlyDictionary<string, long>? SlowSections,
+    long? PrevRunStopWaitMs = null)
 {
     /// <summary>Порог (строго больше), с которого секция промпта попадает в паспорт.</summary>
     public const long SlowSectionThresholdMs = 500;

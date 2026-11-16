@@ -1357,6 +1357,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         SpawnToInitMs = startTimings?.SpawnToInitMs,
                         InitToFirstEventMs = startTimings?.InitToFirstEventMs,
                         SlowSections = startTimings?.SlowSections,
+                        PrevRunStopWaitMs = startTimings?.PrevRunStopWaitMs,
                     };
                 }
                 catch (Exception ex)

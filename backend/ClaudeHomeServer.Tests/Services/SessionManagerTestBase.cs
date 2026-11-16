@@ -1388,6 +1388,16 @@ public abstract class SessionManagerTestBase : IDisposable
         }
     }
 
+    // Потолок ожидания смерти прогона в тестах выключен (0), включаем для одного теста:
+    // конфиг — общий IConfiguration, TurnIntake читает его на каждой доставке.
+    protected void EnableAwaitPreviousExit(int seconds)
+    {
+        var intake = OwnerOf("DeliverPendingAsync");
+        var cfg = (Microsoft.Extensions.Configuration.IConfiguration)intake.GetType()
+            .GetField("_config", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(intake)!;
+        cfg["Delivery:AwaitProcessExitSeconds"] = seconds.ToString();
+    }
+
     protected object? InvokePrivate(string name, params object?[] args)
     {
         var owner = OwnerOf(name);

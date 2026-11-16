@@ -3,7 +3,8 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, StartPhase, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
+import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
+import type { StartPhase } from '../features/chat/types';
 import { handsStatusFeedLine } from './localHands';
 import { isBgLaunchResult } from './agentTail';
 import { RUN_TESTS_TOOL, testRunKindLabel } from './toolLabels';
@@ -504,10 +505,25 @@ export function retryableInterruptedIndex(items: ChatItem[]): number {
 // оборванный WS или потерянное событие не должны оставлять её в закончившемся ходе —
 // конец хода (result/error/exited) снимает её как failsafe. Без строки возвращает
 // тот же массив (подписчиков не будит лишний раз).
-function dropLocalTurnQueue(items: ChatItem[]): ChatItem[] {
-  const live = (it: ChatItem) => it.kind === 'local_turn_queue' || it.kind === 'turn_start_phase';
+// keepQueued: фаза «queued» принадлежит СЛЕДУЮЩЕМУ ходу — TurnIntake шлёт её, пока
+// предыдущий ход ещё идёт. На result/exited такая строка обязана пережить конец
+// чужого хода: снести её — значит лишить следующий хода его статуса старта.
+// На error — как раньше, снимается всё: отказ закрывает всю цепочку.
+function dropLocalTurnQueue(items: ChatItem[], keepQueued = false): ChatItem[] {
+  const live = (it: ChatItem) =>
+    it.kind === 'local_turn_queue' ||
+    (it.kind === 'turn_start_phase' && (!keepQueued || it.phase !== 'queued'));
   return items.some(live) ? items.filter(it => !live(it)) : items;
 }
+
+// Известные фазы старта хода (StartPhase, без «done» — он снимает строку отдельно).
+// Неизвестная фаза от сервера (например, новая добавлена на бэке раньше фронта)
+// игнорируется: строка не меняется и не добавляется — иначе лента показала бы
+// точку с пустой подписью.
+// Единый источник списка: Record<StartPhase, true> — добавление фазы в union без
+// ключа здесь даёт ошибку компиляции, копия списка руками не ведётся.
+export const PHASE_KEYS: Record<StartPhase, true> = { queued: true, context: true, launching: true, waiting: true };
+const KNOWN_START_PHASES: ReadonlySet<string> = new Set(Object.keys(PHASE_KEYS));
 
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
 // если сообщение состояние не меняет (подписчиков можно не будить).
@@ -811,8 +827,9 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // предыдущий result; сабагентские тексты (parentToolUseId) пропускаем — они
       // могли идти другой моделью.
       // Строка ожидания слота относится только к этому ходу: position=0 снимает её обычно
-      // раньше, но до конца хода она точно не переживёт (failsafe, см. dropLocalTurnQueue)
-      const items = dropLocalTurnQueue(prev.items.slice());
+      // раньше, но до конца хода она точно не переживёт (failsafe, см. dropLocalTurnQueue).
+      // «queued» следующего хода — не трогать: result хода A не должен сносить очередь хода B
+      const items = dropLocalTurnQueue(prev.items.slice(), true);
       if (msg.usageModel) {
         for (let i = items.length - 1; i >= 0; i--) {
           const it = items[i];
@@ -973,7 +990,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         bgClosed = true;
         return { ...item, bgDone: true, bgAborted: true };
       });
-      const base = dropLocalTurnQueue(bgClosed ? items : prev.items);
+      // «queued» следующего хода сохраняем и здесь: ExitedMessage приходит в окне ожидания
+      // смерти прогона, когда следующий ход уже поставлен в очередь — снести её сейчас
+      // значит оставить следующий ход без статуса старта
+      const base = dropLocalTurnQueue(bgClosed ? items : prev.items, true);
       // Компакция, оборванная смертью процесса, результата уже не пришлёт — иначе «Сжимаю…»
       // и заблокированная кнопка висели бы до перезагрузки страницы
       return { ...prev, isWaiting: false, isCompacting: false, items: abnormal ? [...base, { kind: 'session_ended' }] : base };
@@ -1228,6 +1248,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // её failsafe-ом (dropLocalTurnQueue).
       const at = prev.items.findLastIndex(it => it.kind === 'turn_start_phase');
       if (msg.phase === 'done') return at >= 0 ? withItems(prev.items.filter(it => it.kind !== 'turn_start_phase')) : prev;
+      if (!KNOWN_START_PHASES.has(msg.phase)) return prev; // неизвестная фаза — лента остаётся как есть
       const phase = msg.phase as StartPhase;
       if (at >= 0) {
         const items = prev.items.slice();

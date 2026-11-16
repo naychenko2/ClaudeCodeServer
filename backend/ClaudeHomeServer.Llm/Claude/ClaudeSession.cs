@@ -899,6 +899,7 @@ public class ClaudeSession : ILlmSessionAdapter
     private long _turnSpawnToInitMs = -1;
     private long _turnInitTs;
     private long _turnInitToFirstEventMs = -1;
+    private long _turnPrevRunStopMs = -1;
     private volatile IReadOnlyDictionary<string, long>? _turnSlowSections;
 
     private static long ElapsedMs(long fromTs) => (long)System.Diagnostics.Stopwatch.GetElapsedTime(fromTs).TotalMilliseconds;
@@ -913,6 +914,7 @@ public class ClaudeSession : ILlmSessionAdapter
         Volatile.Write(ref _turnSpawnToInitMs, -1);
         Volatile.Write(ref _turnInitTs, 0);
         Volatile.Write(ref _turnInitToFirstEventMs, -1);
+        Volatile.Write(ref _turnPrevRunStopMs, -1);
         _turnSlowSections = null;
     }
 
@@ -923,18 +925,34 @@ public class ClaudeSession : ILlmSessionAdapter
         return new TurnStartTimings(
             N(Volatile.Read(ref _turnQueueWaitMs)), N(Volatile.Read(ref _turnPromptAssemblyMs)),
             N(Volatile.Read(ref _turnSpawnToInitMs)), N(Volatile.Read(ref _turnInitToFirstEventMs)),
-            _turnSlowSections);
+            _turnSlowSections, N(Volatile.Read(ref _turnPrevRunStopMs)));
+    }
+
+    // Остановка несовместимого живого прогона: kill и ожидание финализации его читателя. Время
+    // входит в фазу сборки промпта (снимок публикуется позже), поэтому меряем отдельно — иначе
+    // «медленная сборка» неотличима от медленной смерти прошлого процесса.
+    private async Task StopIncompatibleRunAsync(CliRun existing, TimeSpan readerWait)
+    {
+        var ts = System.Diagnostics.Stopwatch.GetTimestamp();
+        existing.SuppressExited = true;
+        _launcher.Kill(existing.Process, existing.LaunchTurnId);
+        if (existing.ReaderTask is { } prevReader)
+            try { await prevReader.WaitAsync(readerWait, CancellationToken.None); }
+            catch (TimeoutException) { /* финализация зависла — не блокируем новый ход */ }
+        Volatile.Write(ref _turnPrevRunStopMs, ElapsedMs(ts));
     }
 
     // Спавн процесса на этом ходу: начало фазы «запуск CLI». Повторный спавн в ретрае
     // (DiedEmpty) относится к последней попытке: сбрасываем защёлки NoteInit/NoteFirstEvent,
     // иначе «init'ом» остался бы первый процесс и фазы мерились бы от него (хвост bc852f0e).
+    // Сброс — раньше записи _turnSpawnTs: к моменту, когда спавн стал новым, защёлки уже открыты,
+    // и поздний init старого процесса не может дать новую фазу от старого init (хвост e33b6bd2).
     private void NoteSpawn(long spawnStartTs)
     {
-        Volatile.Write(ref _turnSpawnTs, spawnStartTs);
         Volatile.Write(ref _turnSpawnToInitMs, -1);
         Volatile.Write(ref _turnInitTs, 0);
         Volatile.Write(ref _turnInitToFirstEventMs, -1);
+        Volatile.Write(ref _turnSpawnTs, spawnStartTs);
     }
 
     // system/init процесса, спавненного на ЭТОМ ходу: фаза «запуск CLI». Повторный init того
@@ -2823,6 +2841,11 @@ public class ClaudeSession : ILlmSessionAdapter
                     // Явная модель хода (голосовой) тоже действует ровно на ход: сбрасываем,
                     // чтобы следующий (обычный) ход шёл на модели чата, а не на голосовой
                     _turnModelOverride = null;
+                    // Строка фазы принадлежит ходу: ход, закончившийся без своего события (смерть/
+                    // ошибка до первого события), не должен оставлять флаг «показано» — иначе
+                    // опоздавшая строка убираемого процесса дала бы «done» без первого события
+                    // следующего хода
+                    _startPhaseShown = false;
                     // Семафор мог уйти вместе с адаптером — Release тогда некому и незачем
                     try { _turnLock.Release(); } catch (ObjectDisposedException) { /* адаптер уже снесён */ }
                 }
@@ -4850,14 +4873,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // в stdin сорвалась): убиваем и дожидаемся финализации. Его фоновые агенты гибнут —
         // осознанная плата за смену окружения; CLI сообщит о них notification'ом на resume.
         // ExitedMessage прогона подавляем: статусом сессии владеет новый ход.
-        if (existing is not null)
-        {
-            existing.SuppressExited = true;
-            _launcher.Kill(existing.Process, existing.LaunchTurnId);
-            if (existing.ReaderTask is { } prevReader)
-                try { await prevReader.WaitAsync(TimeSpan.FromSeconds(15), CancellationToken.None); }
-                catch (TimeoutException) { /* финализация зависла — не блокируем новый ход */ }
-        }
+        if (existing is not null) await StopIncompatibleRunAsync(existing, TimeSpan.FromSeconds(15));
 
         // Ход идёт новым процессом — этот промпт модель и увидит. Пишем снимок ДО старта:
         // id нужен прогону (CliRun.PromptSnapshotId), чтобы следующие same-process ходы
@@ -6306,6 +6322,14 @@ public class ClaudeSession : ILlmSessionAdapter
            && root.TryGetProperty("uuid", out var u) && u.ValueKind == JsonValueKind.String
            && u.GetString() == uuid;
 
+    // Replay-эхо user-строки (--replay-user-messages): CLI возвращает собственный вход — наше
+    // сообщение или подсаженный task-notification. Это вход в CLI, а не событие ответа модели:
+    // гейт «done» по такой строке срабатывать не должен. Привязки к нашему uuid нет: после
+    // echo-fallback PendingEchoUuid уже null, но строка всё так же вход в CLI (дефект D1 смоука TS-10).
+    internal static bool IsReplayUserLine(JsonElement root)
+        => root.TryGetProperty("type", out var t) && t.GetString() == "user"
+           && root.TryGetProperty("isReplay", out var rp) && rp.ValueKind == JsonValueKind.True;
+
     // Диагностика промаха IsEmptyNoopResult (инцидент 03.10.2026): result с numTurns=0, который
     // эвристика пустого результата не отсеяла и который засчитан ходу. Сырой result не
     // логировался — без subtype/usage/denials не видно, какое именно поле его «наполнило».
@@ -6363,8 +6387,10 @@ public class ClaudeSession : ILlmSessionAdapter
             _turnActivity?.SetTag("model", cliModel);
         }
 
-        // «done» — только по событию самого хода: хвост продолжения (SkipResults>0) чужой
-        if (typeProp.GetString() != "system" && Volatile.Read(ref run.SkipResults) == 0)
+        // «done» — только по событию самого хода: хвост продолжения (SkipResults>0) чужой;
+        // replay-эхо user-строки — вход в CLI, а не ответ модели: эхо нашего сообщения или
+        // task-notification гасило «Запускаю…» (до init) или «Жду…» (после init) — дефект D1 смоука TS-10
+        if (typeProp.GetString() != "system" && !IsReplayUserLine(root) && Volatile.Read(ref run.SkipResults) == 0)
         {
             var wasShown = _startPhaseShown;
             await EmitStartPhaseAsync("done");

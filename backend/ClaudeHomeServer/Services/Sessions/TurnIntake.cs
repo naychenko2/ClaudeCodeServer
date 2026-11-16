@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
@@ -128,7 +129,12 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
     // дописывает уточнение, а не просит остановиться. Для «перебить сейчас» есть явные
     // действия: кнопка «Стоп» и PreemptForPending (кнопка на карточке очереди).
     // Возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, int agentDepth = 0, string? senderUserId = null)
+    public Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, int agentDepth = 0, string? senderUserId = null)
+        => SendMessageCoreAsync(sessionId, text, attachedPaths, mode, systemDirective, auto, senderPersonaId, suppressTasksExecute,
+            senderOrigin, senderConnectionId, staffNote, cause, agentDepth, senderUserId, queuedShown: false);
+
+    // queuedShown — доставка из очереди уже показала «В очереди»: выходы без старта хода обязаны её закрыть
+    private async Task<SendUserOutcome> SendMessageCoreAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto, string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId, string? staffNote, DeliveryCause cause, int agentDepth, string? senderUserId, bool queuedShown)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -263,7 +269,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
 
         await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
             senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause, agentDepth: agentDepth,
-            senderUserId: senderUserId);
+            senderUserId: senderUserId, queuedShown: queuedShown);
         return SendUserOutcome.Started;
     }
 
@@ -287,7 +293,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
         bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown,
-        int agentDepth = 0, string? senderUserId = null)
+        int agentDepth = 0, string? senderUserId = null, bool queuedShown = false)
     {
         // Общая точка доставки хода: сюда идут и три входа с отметкой, и разбор очереди отложенных
         // после рестарта (DrainRestoredPendingAsync → DeliverPendingAsync), которая отметки не ставила
@@ -297,6 +303,8 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         if (_settings.ZoneRefusalForTurn(entry) is { } refusal)
         {
             await RefuseTurnAsync(sessionId, entry, refusal);
+            // Ход не стартует — снять строку «В очереди», сама ClaudeSession фазу не закроет
+            if (queuedShown) await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
             return;
         }
 
@@ -320,6 +328,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
                 SuppressTasksExecute: suppressTasksExecute, StaffNote: staffNote,
                 AttachedPaths: attachedPaths.Count > 0 ? attachedPaths : null, Mode: mode,
                 SenderUserId: senderUserId));
+            if (queuedShown) await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
             return;
         }
 
@@ -1021,7 +1030,9 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
     // По истечении — НЕ fail-open (вернуло бы гонку) и НЕ честная ошибка (доставка нужна):
     // прерываем доживающий прогон (фоновые агенты гибнут, добиваются в следующем ходе через
     // notification — как при смене окружения) и коротко ждём его финализации.
-    private async Task AwaitPreviousTurnExitAsync(string sessionId, SessionEntry entry)
+    // Возвращает true, если разослали фазу «queued» (ждать пришлось): тогда выходы доставки
+    // без старта хода обязаны снять строку фазой «done».
+    private async Task<bool> AwaitPreviousTurnExitAsync(string sessionId, SessionEntry entry)
     {
         var ceiling = int.TryParse(_config["Delivery:AwaitProcessExitSeconds"], out var s) && s >= 0
             ? s : 8;
@@ -1034,25 +1045,74 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
                 _log.LogWarning(
                     "Delivery:AwaitProcessExitSeconds={Ceiling} — сериализация отложенной доставки выключена (opt-out)",
                     ceiling);
-            return;
+            return false;
         }
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(ceiling);
-        while (SessionStore.Busy(entry.Process))
+        // Предыдущий прогон уже мёртв — ждать нечего, строку «В очереди» не показываем.
+        if (!SessionStore.Busy(entry.Process)) return false;
+
+        // Карточка очереди к этому моменту уже снята (pending_messages), а баллон сообщения
+        // появится только после ожидания: без фазы человек ~секунды видит пустоту.
+        // Эфемерное событие в группу сессии — в history.json не пишется.
+        // Исключение после рассылки queued (Interrupt, сам Broadcast) не должно оставить строку
+        // «В очереди» висеть: гасим фазой done и пробрасываем дальше.
+        //
+        // TS-13 (решение 21eb0bcf §2б): ожидание в паспорт хода не пишется (вторая точка правды) —
+        // оно в метрике ccs.delivery.await_exit_ms. Состояние ведётся до try: запись — ровно одна
+        // на выход из ожидания, обычный он или по исключению; «queued» не расслан — ожидания не
+        // было, записи нет (opt-out с потолком 0 и мёртвый прогон возвращаются выше, до этого блока).
+        var started = DateTime.UtcNow;
+        var orchestration = false;
+        var ceilingHit = false;
+        var awaiting = false;
+        var recorded = false;
+        void RecordAwaitExit()
         {
-            if (DateTime.UtcNow >= deadline)
-            {
-                _log.LogInformation(
-                    "Ожидание смерти прогона {Session} истекло ({Ceiling} с) — прерываю доживание ради отложенной доставки",
-                    sessionId, ceiling);
-                entry.Process?.Interrupt();
-                // Interrupt асинхронен: прогон финализируется за секунды, даём короткий grace.
-                var grace = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-                while (SessionStore.Busy(entry.Process) && DateTime.UtcNow < grace)
-                    await Task.Delay(50);
-                break;
-            }
-            await Task.Delay(50);
+            if (!awaiting || recorded) return;
+            recorded = true;
+            ServerMetrics.RecordDeliveryAwaitExit(
+                (long)(DateTime.UtcNow - started).TotalMilliseconds,
+                ceilingHit ? "true" : "false",
+                orchestration ? "true" : "false");
         }
+
+        try
+        {
+            await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("queued"));
+
+            started = DateTime.UtcNow; // ожидание начинается здесь: время рассылки в замер не входит
+            awaiting = true;
+            orchestration = entry.Process?.OrchestrationActive == true && entry.Process?.HasLiveTurn != true;
+            var deadline = started + TimeSpan.FromSeconds(ceiling);
+            while (SessionStore.Busy(entry.Process))
+            {
+                if (DateTime.UtcNow >= deadline)
+                {
+                    ceilingHit = true;
+                    _log.LogInformation(
+                        "Ожидание смерти прогона {Session} истекло ({Ceiling} с) — прерываю доживание ради отложенной доставки",
+                        sessionId, ceiling);
+                    entry.Process?.Interrupt();
+                    // Interrupt асинхронен: прогон финализируется за секунды, даём короткий grace.
+                    var grace = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+                    while (SessionStore.Busy(entry.Process) && DateTime.UtcNow < grace)
+                        await Task.Delay(50);
+                    break;
+                }
+                await Task.Delay(50);
+            }
+            RecordAwaitExit();
+            // orchestration=true — прогон мёртв, держит только фолбэк-оркестрация (OrchestrationActive).
+            _log.LogInformation(
+                "Ожидание прогона {Session} перед отложенной доставкой: waitedMs={WaitedMs} ceilingHit={CeilingHit} orchestration={Orchestration}",
+                sessionId, (long)(DateTime.UtcNow - started).TotalMilliseconds, ceilingHit, orchestration);
+        }
+        catch
+        {
+            RecordAwaitExit(); // исключение в момент ожидания — запись всё равно делается, одна: флаг не даёт повторить
+            await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
+            throw;
+        }
+        return true;
     }
 
     // Доставка конкретного сообщения из очереди обычным ходом (без повторных гейтов очереди).
@@ -1068,7 +1128,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         // умрёт (HasLiveTurn=false) И фолбэк-оркестрация снимется (OrchestrationActive=false) — тогда
         // _turnLock свободен, транзрипт закрыт, новый ход стартует свежим процессом. Только для
         // отложенной доставки (из Pending): свежий ход человека через SendDirectAsync сюда не попадает.
-        await AwaitPreviousTurnExitAsync(sessionId, entry);
+        var queuedShown = await AwaitPreviousTurnExitAsync(sessionId, entry);
 
         // F2-O3 доработка 2 (дельта-ревью 627bd324): гонка «отзыв против уже начатой доставки».
         // Сообщение изымается из очереди под PendingLock (DrainNextPendingAsync), а доставляется
@@ -1090,6 +1150,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
             // ОтзывВОкнеДоставки_АктивныйЦиклИМаркерСнятыСтопом_ХодСиротаНеПоднят).
             if (entry.Info.WorkLoop is not null)
                 lock (entry.PendingLock) entry.LoopTurnInFlight = false;
+            if (queuedShown) await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
             return false;
         }
 
@@ -1103,16 +1164,16 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
                     next.AttachedPaths ?? [], mode: next.Mode, systemDirective: false, auto: false,
                     senderPersonaId: next.SenderPersonaId, suppressTasksExecute: next.SuppressTasksExecute,
                     senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser,
-                    senderUserId: next.SenderUserId);
+                    senderUserId: next.SenderUserId, queuedShown: queuedShown);
             else
                 // Глубина сообщения едет в ход: агентское из очереди так же делегированное,
                 // как поданное сразу (иначе chats_send, отстоявший очередь, получил бы
                 // возможности хода человека)
-                await SendMessageAsync(sessionId, next.Text, [], auto: true,
-                    senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
-                    suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote,
+                await SendMessageCoreAsync(sessionId, next.Text, [], mode: null, systemDirective: false, auto: true,
+                    senderPersonaId: next.SenderPersonaId, suppressTasksExecute: next.SuppressTasksExecute,
+                    senderOrigin: next.SenderOrigin, senderConnectionId: null, staffNote: next.StaffNote,
                     cause: DeliveryCause.QueueAgent, agentDepth: next.AgentDepth,
-                    senderUserId: next.SenderUserId);
+                    senderUserId: next.SenderUserId, queuedShown: queuedShown);
             return true;
         }
         catch (Exception ex)
@@ -1126,6 +1187,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
             if (entry.Info.WorkLoop is not null)
                 lock (entry.PendingLock) entry.LoopTurnInFlight = false;
             Console.Error.WriteLine($"[SessionManager] Доставка отложенного сообщения ({sessionId}): {ex.Message}");
+            if (queuedShown) await _store.BroadcastAsync(sessionId, new TurnStartPhaseMessage("done"));
             return false;
         }
     }

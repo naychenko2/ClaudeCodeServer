@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
   serverHistoryNewer, PERSISTED_KINDS, applyServerMessage, normalizeHistory, initialChatState,
-  resolveCardsFromHistory, type ChatState,
+  resolveCardsFromHistory, PHASE_KEYS, type ChatState,
 } from './chatReducer';
 import type { ChatItem, ServerMessage } from '../types';
 
@@ -577,7 +577,9 @@ describe('applyServerMessage: turn_start_phase — статус старта х�
 
   it('фазы идут по очереди и обновляют одну строку, а не плодят новые', () => {
     let s = feed(initialChatState(), { type: 'user_message', text: 'привет' });
-    for (const phase of ['queued', 'context', 'launching', 'waiting']) {
+    // список фаз берётся из единого источника (PHASE_KEYS), а не литералом:
+    // новая фаза попадает в тест сама, как только попала в тип
+    for (const phase of Object.keys(PHASE_KEYS)) {
       s = applyServerMessage(s, { sessionId: SID, type: 'turn_start_phase', phase } as ServerMessage);
       expect(phases(s)).toEqual([{ kind: 'turn_start_phase', phase }]);
     }
@@ -590,9 +592,55 @@ describe('applyServerMessage: turn_start_phase — статус старта х�
     expect(applyServerMessage(gone, { sessionId: SID, type: 'turn_start_phase', phase: 'done' } as ServerMessage)).toBe(gone);
   });
 
-  it('строка не переживает ход: result и error её снимают', () => {
+  it('строка своей фазы не переживает ход: result и error её снимают', () => {
     const shown = feed(initialChatState(), { type: 'turn_start_phase', phase: 'launching' });
-    const r = applyServerMessage(shown, { sessionId: SID, type: 'error', text: 'сбой' } as ServerMessage);
-    expect(phases(r)).toHaveLength(0);
+    for (const end of [
+      { type: 'error', text: 'сбой' },
+      { type: 'result', subtype: 'success', durationMs: 1, numTurns: 1 },
+    ]) {
+      const s = applyServerMessage(shown, { sessionId: SID, ...end } as ServerMessage);
+      expect(phases(s), `конец хода ${end.type}`).toHaveLength(0);
+    }
+  });
+
+  // «queued» принадлежит СЛЕДУЮЩЕМУ ходу: TurnIntake шлёт её, пока предыдущий ход ещё
+  // идёт (в ленте одна строка фаз — queued хода B заменяет фазу хода A). Конец чужого
+  // хода (result/exited) не должен сносить очередь следующего хода; error — снимает всё.
+  const queuedBehindBusy = () => feed(initialChatState(),
+    { type: 'user_message', text: 'вопрос A' },
+    { type: 'turn_start_phase', phase: 'waiting' },
+    { type: 'text_delta', text: 'ответ A' },
+    { type: 'user_message', text: 'вопрос B' },
+    { type: 'turn_start_phase', phase: 'queued' },
+  );
+
+  it('queued переживает exited предыдущего хода: строка остаётся', () => {
+    const s = applyServerMessage(queuedBehindBusy(), { sessionId: SID, type: 'exited' } as ServerMessage);
+    expect(phases(s)).toEqual([{ kind: 'turn_start_phase', phase: 'queued' }]);
+  });
+
+  it('queued переживает result предыдущего хода: строка остаётся', () => {
+    const s = applyServerMessage(queuedBehindBusy(), {
+      sessionId: SID, type: 'result', subtype: 'success', durationMs: 1, numTurns: 1,
+    } as ServerMessage);
+    expect(phases(s)).toEqual([{ kind: 'turn_start_phase', phase: 'queued' }]);
+  });
+
+  it('error снимает и queued: отказ закрывает всю цепочку', () => {
+    const s = applyServerMessage(queuedBehindBusy(), { sessionId: SID, type: 'error', text: 'сбой' } as ServerMessage);
+    expect(phases(s)).toHaveLength(0);
+  });
+
+  it('поставленная queued остаётся живой строкой: следующая фаза её заменяет, не плодит вторую', () => {
+    const s = applyServerMessage(queuedBehindBusy(), { sessionId: SID, type: 'turn_start_phase', phase: 'context' } as ServerMessage);
+    expect(phases(s)).toEqual([{ kind: 'turn_start_phase', phase: 'context' }]);
+  });
+
+  it('неизвестная фаза игнорируется: стоящую строку не меняет, новой не плодит', () => {
+    // фаза, которой нет среди известных (например, добавлена на бэке раньше фронта)
+    const shown = feed(initialChatState(), { type: 'turn_start_phase', phase: 'waiting' });
+    expect(applyServerMessage(shown, { sessionId: SID, type: 'turn_start_phase', phase: 'rendering' } as ServerMessage)).toBe(shown);
+    const empty = initialChatState();
+    expect(applyServerMessage(empty, { sessionId: SID, type: 'turn_start_phase', phase: 'rendering' } as ServerMessage)).toBe(empty);
   });
 });

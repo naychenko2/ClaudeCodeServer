@@ -3,6 +3,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
@@ -238,6 +239,41 @@ public class ProjectMembershipRevokeTurnTests : SessionManagerTestBase
                 It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
                 "после отзыва стартует ход-сирота в приватном чате отозванного");
             _sut.GetPending(chat.Id).Should().BeEmpty();
+        }
+        finally { _broadcaster.Gate = null; }
+    }
+
+    /// <summary>
+    /// TS-5: доставка ждала смерти прогона (показана фаза «queued»), а перепроверка отзыва
+    /// отказала — ход не стартует, строка обязана сняться фазой «done».
+    /// </summary>
+    [Fact]
+    public async Task ОтзывПослеОжиданияПрогона_ПослеQueuedШлётсяDone()
+    {
+        EnableAwaitPreviousExit(5);
+        var (project, chat) = await SharedProjectWithPrivateChatOfMemberAsync("queued-done");
+        var entry = GetEntry(chat.Id);
+        var adapter = StubAdapter(entry);
+        var alive = true;
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(() => Volatile.Read(ref alive));
+        SetProcess(entry, adapter.Object);
+        _broadcaster.Gate = msg =>
+        {
+            if (msg is TurnStartPhaseMessage { Phase: "queued" }) Volatile.Write(ref alive, false);
+            return Task.CompletedTask;
+        };
+        try
+        {
+            (await NewMembershipService().RemoveAsync(TestUserId, project.Id, MemberId)).Ok.Should().BeTrue();
+            var next = new QueuedMessage(Guid.NewGuid().ToString("N"), "после отзыва",
+                null, null, 0, DateTime.UtcNow, Kind: PendingKind.User);
+            var method = typeof(SessionManager).GetMethod("DeliverPendingAsync",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var delivered = await (Task<bool>)method.Invoke(_sut, [chat.Id, entry, next])!;
+
+            delivered.Should().BeFalse("ход не стартовал");
+            Sent<TurnStartPhaseMessage>().Select(p => p.Phase).Should().Equal(["queued", "done"],
+                "после показанной очереди выход без старта хода снимает строку");
         }
         finally { _broadcaster.Gate = null; }
     }

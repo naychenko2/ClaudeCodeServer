@@ -6,6 +6,11 @@ import type { Task } from '../features/tasks/types';
 import type { ProviderFallbackOption } from '../features/spend/types';
 // ProjectCapabilitiesView читает SphereOverview (карточка сферы); сама матрица — в домене «Проекты».
 import type { ProjectCapabilitiesView } from '../features/projects/types';
+// StartPhase — тип домена «Чат» (features/chat/types.ts): потребитель импорта здесь — ChatItem
+// (turn_start_phase). ServerMessage.turn_start_phase.phase — string намеренно: редьюсер
+// проверяет известные фазы по PHASE_KEYS (lib/chatReducer.ts), неизвестная от сервера
+// не должна ломать типизацию.
+import type { StartPhase } from '../features/chat/types';
 export type { Mode };
 
 // ─── Документация проекта (панель «Документы»: README.md + docs/**) ───────────────
@@ -741,9 +746,6 @@ export type ServerMessage = { sessionId: string } & (
   // done — пришло первое событие ответа, строку снять. Эфемерное, в историю не пишется.
   | { type: 'turn_start_phase'; phase: string }
 );
-
-// Фазы старта хода, которые показывает строка статуса в ленте
-export type StartPhase = 'queued' | 'context' | 'launching' | 'waiting';
 
 // Снимок промпта хода (GET /api/sessions/{id}/prompt/{snapshotId})
 export interface PromptSection {

@@ -52,6 +52,12 @@ public sealed class PromptAssembling : ITurnFilter
     public string? TurnText { get; }
     public List<PromptSection> Sections { get; }
     public List<RecallItem> ManifestItems { get; }
+
+    /// <summary>
+    /// Длительность сборки (IsEnabled + BuildAsync) каждого сработавшего контрибьютора, мс, по
+    /// ключу. Пишет обёртка реестра; фильтры идут по очереди, гонок нет. Для паспорта хода.
+    /// </summary>
+    public Dictionary<string, long> ContributorTimingsMs { get; } = new(StringComparer.Ordinal);
 }
 
 // Этап 1: данные для подписчика снимка промпта (PromptSnapshotStore). Snapshot=null у хода

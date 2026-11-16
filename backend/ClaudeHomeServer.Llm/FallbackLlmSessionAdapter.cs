@@ -74,6 +74,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // сколько раз headless-сессия сама переждала 429/529, суммарное ожидание (мс) и последний
     // HTTP-статус. null (тесты/без фабрики) — паспорт пишет нули (повторов не было).
     private readonly Func<CliRetryStats>? _cliRetryStats;
+    // Замеры фаз старта хода (ClaudeSession.TurnStartTimings). null (тесты/без фабрики) — полей в паспорте нет.
+    private readonly Func<TurnStartTimings>? _startTimings;
     // Колбэк персиста сессий (SessionManager.SaveSessions через фабрику/контекст): нужен,
     // чтобы переписать sessions.json ВОССТАНОВЛЕННЫМИ значениями после restore в finally —
     // иначе финальный result успевает сохранить подменённую модель (ApplyStatusAsync →
@@ -153,8 +155,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         ILocalEndpointProbe? localProbe = null,
         bool transcriptOnServer = true,
         string? turnOwnerId = null,
-        LocalEngineBusyTracker? localGate = null)
+        LocalEngineBusyTracker? localGate = null,
+        Func<TurnStartTimings>? startTimings = null)
     {
+        _startTimings = startTimings;
         _localGate = localGate;
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -1317,6 +1321,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     // Факт внутренних повторов CLI этого хода (system/api_retry): null — без
                     // фабрики/тесты, CLI не дотягивал (нули в паспорте).
                     var cliRetry = _cliRetryStats?.Invoke();
+                    var startTimings = _startTimings?.Invoke();
                     passport = new TurnRunPassport(
                         SessionId: Info.Id,
                         StartedAt: startedAt,
@@ -1346,6 +1351,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         CliRetries = cliRetry?.Count ?? 0,
                         CliRetryWaitMs = cliRetry?.WaitMs ?? 0,
                         CliRetryLastStatus = cliRetry?.LastStatus,
+                        // Замеры фаз старта хода: null-поле — фаза не наблюдалась (не 0)
+                        QueueWaitMs = startTimings?.QueueWaitMs,
+                        PromptAssemblyMs = startTimings?.PromptAssemblyMs,
+                        SpawnToInitMs = startTimings?.SpawnToInitMs,
+                        InitToFirstEventMs = startTimings?.InitToFirstEventMs,
+                        SlowSections = startTimings?.SlowSections,
                     };
                 }
                 catch (Exception ex)

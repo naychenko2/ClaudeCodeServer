@@ -37,6 +37,7 @@ public static class PromptSectionContributorsRegistration
             {
                 if (c.IsEnabled(e.Session))
                 {
+                    var started = System.Diagnostics.Stopwatch.GetTimestamp();
                     PromptSectionContribution? contrib = null;
                     try
                     {
@@ -50,6 +51,9 @@ public static class PromptSectionContributorsRegistration
                         // мы не доходим: исключения из BuildAsync глотаются нами.
                         contrib = null;
                     }
+                    // Замер для паспорта хода: какой контрибьютор держит сборку промпта
+                    e.ContributorTimingsMs[c.Key] =
+                        (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
                     if (contrib is not null)
                     {
                         foreach (var s in contrib.Sections)

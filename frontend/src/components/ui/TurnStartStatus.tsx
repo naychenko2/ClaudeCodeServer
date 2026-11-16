@@ -2,12 +2,12 @@ import type { StartPhase } from '../../types';
 import { C, FS, SP } from '../../lib/design';
 import { LiveDot } from './LiveDot';
 
-// Тексты фаз старта хода. Согласованы с Софьей (см. итог задачи).
+// Тексты фаз старта хода. Утверждены Софьей 16.11.
 export const START_PHASE_LABEL: Record<StartPhase, string> = {
-  queued: 'В очереди',
-  context: 'Собираю контекст',
-  launching: 'Запускаю',
-  waiting: 'Жду ответ модели',
+  queued: 'В очереди — сначала доработает предыдущий ход',
+  context: 'Собираю контекст…',
+  launching: 'Запускаю…',
+  waiting: 'Жду ответ модели…',
 };
 
 // Строка статуса старта хода: дышащая точка и подпись фазы, без таймера (секунды ожидание

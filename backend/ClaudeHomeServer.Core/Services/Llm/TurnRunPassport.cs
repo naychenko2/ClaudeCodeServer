@@ -74,6 +74,53 @@ public sealed record TurnRunPassport(
 
     /// <summary>Последний HTTP-статус внутренних повторов CLI (529/429); null — не было.</summary>
     public string? CliRetryLastStatus { get; init; }
+
+    /// <summary>Ожидание хода в очереди сессии (на `_turnLock`) до начала обработки, мс; null — не замерено.</summary>
+    public long? QueueWaitMs { get; init; }
+
+    /// <summary>От приёма хода до готового промпта (снимок опубликован), мс; null — не замерено.</summary>
+    public long? PromptAssemblyMs { get; init; }
+
+    /// <summary>
+    /// От старта процесса CLI до system/init, мс. null — процесс не спавнился на этом ходу
+    /// (same-process ход живому процессу) или init не дошёл; не путать с 0.
+    /// </summary>
+    public long? SpawnToInitMs { get; init; }
+
+    /// <summary>От system/init до первого stream_event/assistant основного агента, мс; null — не дошло.</summary>
+    public long? InitToFirstEventMs { get; init; }
+
+    /// <summary>
+    /// Контрибьюторы секций промпта, собиравшиеся дольше <see cref="TurnStartTimings.SlowSectionThresholdMs"/>:
+    /// {ключ контрибьютора: мс}. null — медленных не было.
+    /// </summary>
+    public IReadOnlyDictionary<string, long>? SlowSections { get; init; }
+}
+
+/// <summary>
+/// Замеры фаз старта хода (ClaudeSession → паспорт хода). Поля nullable: null — фаза на этом
+/// ходу не наблюдалась (например, повторно используемый процесс не спавнится).
+/// </summary>
+public sealed record TurnStartTimings(
+    long? QueueWaitMs,
+    long? PromptAssemblyMs,
+    long? SpawnToInitMs,
+    long? InitToFirstEventMs,
+    IReadOnlyDictionary<string, long>? SlowSections)
+{
+    /// <summary>Порог (строго больше), с которого секция промпта попадает в паспорт.</summary>
+    public const long SlowSectionThresholdMs = 500;
+
+    /// <summary>
+    /// Оставляет только секции строго дольше порога (граница полуоткрытая: ровно 500 мс — не медленная).
+    /// Пусто → null, чтобы поле не писалось в паспорт.
+    /// </summary>
+    public static IReadOnlyDictionary<string, long>? SelectSlow(IReadOnlyDictionary<string, long> timingsMs)
+    {
+        var slow = timingsMs.Where(kv => kv.Value > SlowSectionThresholdMs)
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+        return slow.Count == 0 ? null : slow;
+    }
 }
 
 /// <summary>

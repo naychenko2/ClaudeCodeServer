@@ -2,6 +2,9 @@
 // S13–S15, feature-page.html P44/P45). Открытый вопрос — карточка: тег «вопрос», аватар, «Глеб ·
 // 12.11 17:20 · ждёт 35 мин», текст, поле ответа, «Ответить». Отвеченный — строка «отвечено».
 // Нет вопросов — пустое состояние.
+// Вопрос и ответ пишет исполнитель/ревьюер в markdown — на экране показываем плоский текст через
+// markdownToPlain (как в chat/AskQuestionView): служебные символы разметки («**», обратные кавычки)
+// читателю не нужны, полный блочный рендер коротким строкам не нужен.
 // Ответ пишет человека на сервер, поэтому:
 //  · отправка одна на вопрос: guard — модульный Set по id вопроса, а не состояние экземпляра
 //    (два быстрых клика и два экземпляра блока на один вопрос шлют один POST);
@@ -19,6 +22,7 @@ import { TextArea } from '../ui/Field';
 import { api } from '../../lib/api';
 import { formatDuration } from '../../lib/chatGroups';
 import { personaInitials } from '../../lib/personas';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { SEC_LABEL } from './FeatureStageArtifacts';
 import { formatClock, formatDate } from './FeatureStatsBits';
 import type { StageQuestion } from '../../types/featureStage';
@@ -27,8 +31,9 @@ import type { StageQuestion } from '../../types/featureStage';
 const inFlight = new Set<string>();
 
 // Подпись ответа: пустой text — «Ответили в чате» (ответ пришёл сообщением, текста в событии нет).
+// Текст ответа — markdown, разметку снимаем тем же markdownToPlain, что и у вопроса.
 export function answerText(q: StageQuestion): string {
-  const t = q.answer?.text?.trim();
+  const t = markdownToPlain(q.answer?.text ?? '');
   return t ? `«${t}»` : 'Ответили в чате';
 }
 
@@ -77,7 +82,7 @@ function OpenCard({ q, taskId, isMobile, onAnswered }: { q: StageQuestion; taskI
         }}>{personaInitials(q.askedBy.name)}</span>
         <span data-testid="stage-question-when" style={{ flex: '1 1 160px', minWidth: 0, fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>{whenLine(q)}</span>
       </div>
-      <div style={{ fontSize: FS.sm, color: C.textPrimary, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{q.text}</div>
+      <div style={{ fontSize: FS.sm, color: C.textPrimary, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{markdownToPlain(q.text)}</div>
       <TextArea value={text} onChange={setText} minHeight={56} autoGrow disabled={sending} isMobile={isMobile}
         placeholder="Ваш ответ — уйдёт исполнителю и ревьюеру" />
       {error && <div data-testid="stage-question-error" role="alert" style={{ fontSize: FS.xs, color: C.dangerText }}>{error}</div>}
@@ -99,7 +104,7 @@ function AnsweredRow({ q }: { q: StageQuestion }) {
     }}>
       <Badge tone="success" size="xs">отвечено</Badge>
       <span data-testid="stage-question-answered-text" style={{ flex: '1 1 200px', minWidth: 0, fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans, overflowWrap: 'anywhere' }}>
-        {q.askedBy.name}: «{q.text}» — {answerText(q)}
+        {q.askedBy.name}: «{markdownToPlain(q.text)}» — {answerText(q)}
       </span>
     </div>
   );

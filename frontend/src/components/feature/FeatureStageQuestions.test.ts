@@ -5,7 +5,8 @@
 // Мутации (в отчёте): (1) убрать inFlight.has(q.id) → тест «два клика — одна отправка» красный;
 // (2) заменить guard на состояние экземпляра → тест «два экземпляра» красный; (3) убрать
 // alive.current перед onAnswered → тест «после ухода» красный; (4) убрать .catch → тест
-// «отказ» красный; (5) answerText без ветки пустого текста → тест «Ответили в чате» красный.
+// «отказ» красный; (5) answerText без ветки пустого текста → тест «Ответили в чате» красный;
+// (6) вернуть сырой текст вопроса/ответа (без markdownToPlain) → тест «без символов разметки» красный.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -86,6 +87,23 @@ describe('FeatureStageQuestions', () => {
     const t = text(container);
     expect(t).toContain('отвечено');
     expect(text(findNodeByAttr(container, 'data-testid', 'stage-question-answered-text')!)).toBe('Тимур: «Слепок пишем и для rework?» — «Да, текущая версия»');
+  });
+
+  it('markdown в вопросе и ответе — показ без символов разметки', () => {
+    // Открытый вопрос: «Выбрать **А** или `Б`?» читается как «Выбрать А или Б?».
+    const open: StageQuestion = { ...OPEN, id: 'q-md', text: 'Выбрать **А** или `Б`?' };
+    const { container } = render([open]);
+    const tOpen = text(findNodeByAttr(container, 'data-testid', 'stage-question-q-md')!);
+    expect(tOpen).toContain('Выбрать А или Б?');
+    expect(tOpen).not.toContain('**');
+    expect(tOpen).not.toContain('`');
+    // Отвеченный: и вопрос, и ответ без разметки — в одной строке записи.
+    const done: StageQuestion = { ...DONE, id: 'q-md2', text: 'Выбрать **А** или `Б`?',
+      answer: { text: 'Берём **Б**, `текущая` версия', by: 'u', at: '2026-11-12T10:05:00' } };
+    expect(answerText(done)).toBe('«Берём Б, текущая версия»');
+    const { container: c2 } = render([done]);
+    expect(text(findNodeByAttr(c2, 'data-testid', 'stage-question-answered-text')!))
+      .toBe('Тимур: «Выбрать А или Б?» — «Берём Б, текущая версия»');
   });
 
   it('ответ без текста — «Ответили в чате», без пустых кавычек и null', () => {

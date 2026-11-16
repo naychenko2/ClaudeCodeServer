@@ -926,8 +926,20 @@ public class ClaudeSession : ILlmSessionAdapter
             _turnSlowSections);
     }
 
-    // system/init процесса, спавненного на ЭТОМ ходу: фаза «запуск CLI». Повторный init
-    // (продолжение хода, same-process) не пересчитывается.
+    // Спавн процесса на этом ходу: начало фазы «запуск CLI». Повторный спавн в ретрае
+    // (DiedEmpty) относится к последней попытке: сбрасываем защёлки NoteInit/NoteFirstEvent,
+    // иначе «init'ом» остался бы первый процесс и фазы мерились бы от него (хвост bc852f0e).
+    private void NoteSpawn(long spawnStartTs)
+    {
+        Volatile.Write(ref _turnSpawnTs, spawnStartTs);
+        Volatile.Write(ref _turnSpawnToInitMs, -1);
+        Volatile.Write(ref _turnInitTs, 0);
+        Volatile.Write(ref _turnInitToFirstEventMs, -1);
+    }
+
+    // system/init процесса, спавненного на ЭТОМ ходу: фаза «запуск CLI». Повторный init того
+    // же процесса (продолжение хода, same-process) не пересчитывается; после повторного спавна
+    // защёлка снята в NoteSpawn — init меряется от нового процесса.
     private void NoteInit()
     {
         var spawnTs = Volatile.Read(ref _turnSpawnTs);
@@ -4907,7 +4919,7 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
         _currentProcess = process;
-        Volatile.Write(ref _turnSpawnTs, spawnStartTs);
+        NoteSpawn(spawnStartTs);
 
         CliRun run;
         try

@@ -78,7 +78,10 @@ public sealed record TurnRunPassport(
     /// <summary>Ожидание хода в очереди сессии (на `_turnLock`) до начала обработки, мс; null — не замерено.</summary>
     public long? QueueWaitMs { get; init; }
 
-    /// <summary>От приёма хода до готового промпта (снимок опубликован), мс; null — не замерено.</summary>
+    /// <summary>
+    /// От начала обработки хода (после взятия `_turnLock`; ожидание в очереди — отдельно в
+    /// <see cref="QueueWaitMs"/>) до готового промпта (снимок опубликован), мс; null — не замерено.
+    /// </summary>
     public long? PromptAssemblyMs { get; init; }
 
     /// <summary>

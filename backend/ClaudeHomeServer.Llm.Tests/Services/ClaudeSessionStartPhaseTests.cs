@@ -12,9 +12,10 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Фазы старта хода (TurnStartPhaseMessage): «done» шлётся один раз, по первому событию самого
 // хода, и только после показанной фазы; ход в очереди не теряет «queued» от событий идущего.
-// Плюс секундомеры фаз (GetStartTimings) и повторный «queued» за идущим ходом (хвосты bc852f0e,
-// 137df65c). Приватные CliRun/ProcessLineAsync/EmitStartPhaseAsync/Note* — через reflection
-// (приём соседних тестов); GetStartTimings — internal, через InternalsVisibleTo.
+// Плюс секундомеры фаз (GetStartTimings), повторный «queued» за идущим ходом (хвосты bc852f0e,
+// 137df65c) и D1 смоука TS-10: replay-эхо user-строки — вход в CLI, а не событие ответа модели,
+// «done» по нему не срабатывает. Приватные CliRun/ProcessLineAsync/EmitStartPhaseAsync/Note* —
+// через reflection (приём соседних тестов); GetStartTimings — internal, через InternalsVisibleTo.
 public class ClaudeSessionStartPhaseTests : IDisposable
 {
     private static readonly Type CliRunType =
@@ -294,5 +295,101 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         SetQueued(s, 1);
         await Line(s, run);
         phases.Should().Equal("context", "done");
+    }
+
+    // ——— D1 смоука TS-10: replay-эхо не гасит строку статуса ———
+    // Гейт «done» (ProcessLineAsync) — только по первому событию ответа модели нашего хода.
+    // --replay-user-messages возвращает вход CLI (isReplay): эхо нашего сообщения и эхо
+    // подсаженного task-notification — не событие ответа, «Запускаю…/Жду…» они не гасят.
+    // Ветка case "user" (снятие PendingEchoUuid/SkipResults/ContinuationActive) не затронута.
+
+    private const string Uuid = "11111111-2222-4333-8444-555555555555";
+    private static readonly string Echo =
+        $$"""{"type":"user","message":{"role":"user","content":"ну как?"},"uuid":"{{Uuid}}","isReplay":true}""";
+    private const string EchoForeign =
+        """{"type":"user","message":{"role":"user","content":"<task-notification>done</task-notification>"},"uuid":"99999999-0000-4000-8000-000000000000","isReplay":true}""";
+    private const string ToolResultLine =
+        """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}""";
+
+    private static Task LineRaw(ClaudeSession s, object run, string line) => (Task)ProcessLine.Invoke(s, [run, line])!;
+    private static void SetRun(object run, string field, object? v) => CliRunType.GetField(field)!.SetValue(run, v);
+    private static string? GetRunStr(object run, string field) => (string?)CliRunType.GetField(field)!.GetValue(run);
+
+    [Fact]
+    public async Task ЭхоДоInit_НеГаситЗапускаю_DoneРовноОдинРазНаПервомStreamEvent()
+    {
+        var (s, phases) = NewSession();
+        var run = NewRun();
+        SetRun(run, "PendingEchoUuid", Uuid); // сообщение отправлено, эхо ожидается (ArmEchoWait)
+        await Emit(s, "context");
+        await Emit(s, "launching");
+        await LineRaw(s, run, Echo); // CLI взял наше сообщение — эхо это вход CLI, не ответ модели
+        phases.Should().Equal(new[] { "context", "launching" }, "эхо не гасит «Запускаю…»");
+        await LineRaw(s, run, Event); // первое событие ответа модели — вот теперь «done»
+        phases.Should().Equal(new[] { "context", "launching", "done" });
+        await LineRaw(s, run, Event);
+        phases.Should().Equal(new[] { "context", "launching", "done" }, "«done» ровно один раз");
+    }
+
+    [Fact]
+    public async Task ЭхоПослеInit_ЖдуДержитсяДоПервогоStreamEvent()
+    {
+        var (s, phases) = NewSession();
+        var run = NewRun();
+        SetRun(run, "PendingEchoUuid", Uuid);
+        await Emit(s, "context");
+        await Emit(s, "launching");
+        await Emit(s, "waiting"); // то же состояние, что даёт ветка init (EmitStartPhaseAsync("waiting") после init)
+        await LineRaw(s, run, Echo);
+        phases.Should().Equal(new[] { "context", "launching", "waiting" }, "эхо не гасит «Жду ответ модели…»");
+        await LineRaw(s, run, Event);
+        phases.Should().Equal(new[] { "context", "launching", "waiting", "done" });
+    }
+
+    [Fact]
+    public async Task ЖивойПроцесс_ЭхоНеГаситЖду_СнимаетОжиданиеЭха_DoneНаПервомStreamEvent()
+    {
+        // Состояние после TrySubmitTurn + EmitStartPhaseAsync("waiting"): сообщение отдано
+        // живому процессу прогона (same-process ход).
+        var (s, phases) = NewSession();
+        var run = NewRun();
+        SetRun(run, "PendingEchoUuid", Uuid);
+        await Emit(s, "context");
+        await Emit(s, "waiting");
+        await LineRaw(s, run, Echo);
+        phases.Should().Equal(new[] { "context", "waiting" }, "эхо не гасит «Жду…» живого процесса");
+        GetRunStr(run, "PendingEchoUuid").Should().BeNull("эхо опознано: ветка case \"user\" целая");
+        await LineRaw(s, run, Event);
+        phases.Should().Equal(new[] { "context", "waiting", "done" });
+    }
+
+    [Fact]
+    public async Task ХвостПродолжения_UserСтрокиНеДаютDone_ПослеСбросаSkip_DoneОдинРаз()
+    {
+        var (s, phases) = NewSession();
+        var run = NewRun();
+        await Emit(s, "context");
+        SetRun(run, "SkipResults", 1);
+        await LineRaw(s, run, Event);          // стрим продолжения — не наш ход
+        await LineRaw(s, run, ToolResultLine); // tool_result продолжения — не наш ход
+        await LineRaw(s, run, EchoForeign);    // эхо подсаженного task-notification — вход CLI
+        phases.Should().Equal(new[] { "context" }, "хвост продолжения не даёт «done»");
+        SetRun(run, "SkipResults", 0);
+        await LineRaw(s, run, Event);
+        phases.Should().Equal(new[] { "context", "done" });
+        await LineRaw(s, run, Event);
+        phases.Should().Equal(new[] { "context", "done" }, "«done» ровно один раз");
+    }
+
+    [Fact]
+    public async Task ОбычныйToolResultБезReplay_ПоПрежнемуДаётDone()
+    {
+        // Граница исключения: без isReplay user-строка — продолжение ответа модели нашего хода
+        // (результат её инструмента), статусный ход она гасит корректно — исключать её нельзя.
+        var (s, phases) = NewSession();
+        var run = NewRun();
+        await Emit(s, "context");
+        await LineRaw(s, run, ToolResultLine);
+        phases.Should().Equal(new[] { "context", "done" });
     }
 }

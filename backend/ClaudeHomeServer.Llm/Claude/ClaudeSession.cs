@@ -2841,6 +2841,11 @@ public class ClaudeSession : ILlmSessionAdapter
                     // Явная модель хода (голосовой) тоже действует ровно на ход: сбрасываем,
                     // чтобы следующий (обычный) ход шёл на модели чата, а не на голосовой
                     _turnModelOverride = null;
+                    // Строка фазы принадлежит ходу: ход, закончившийся без своего события (смерть/
+                    // ошибка до первого события), не должен оставлять флаг «показано» — иначе
+                    // опоздавшая строка убираемого процесса дала бы «done» без первого события
+                    // следующего хода
+                    _startPhaseShown = false;
                     // Семафор мог уйти вместе с адаптером — Release тогда некому и незачем
                     try { _turnLock.Release(); } catch (ObjectDisposedException) { /* адаптер уже снесён */ }
                 }
@@ -6317,6 +6322,14 @@ public class ClaudeSession : ILlmSessionAdapter
            && root.TryGetProperty("uuid", out var u) && u.ValueKind == JsonValueKind.String
            && u.GetString() == uuid;
 
+    // Replay-эхо user-строки (--replay-user-messages): CLI возвращает собственный вход — наше
+    // сообщение или подсаженный task-notification. Это вход в CLI, а не событие ответа модели:
+    // гейт «done» по такой строке срабатывать не должен. Привязки к нашему uuid нет: после
+    // echo-fallback PendingEchoUuid уже null, но строка всё так же вход в CLI (дефект D1 смоука TS-10).
+    internal static bool IsReplayUserLine(JsonElement root)
+        => root.TryGetProperty("type", out var t) && t.GetString() == "user"
+           && root.TryGetProperty("isReplay", out var rp) && rp.ValueKind == JsonValueKind.True;
+
     // Диагностика промаха IsEmptyNoopResult (инцидент 03.10.2026): result с numTurns=0, который
     // эвристика пустого результата не отсеяла и который засчитан ходу. Сырой result не
     // логировался — без subtype/usage/denials не видно, какое именно поле его «наполнило».
@@ -6374,8 +6387,10 @@ public class ClaudeSession : ILlmSessionAdapter
             _turnActivity?.SetTag("model", cliModel);
         }
 
-        // «done» — только по событию самого хода: хвост продолжения (SkipResults>0) чужой
-        if (typeProp.GetString() != "system" && Volatile.Read(ref run.SkipResults) == 0)
+        // «done» — только по событию самого хода: хвост продолжения (SkipResults>0) чужой;
+        // replay-эхо user-строки — вход в CLI, а не ответ модели: эхо нашего сообщения или
+        // task-notification гасило «Запускаю…» (до init) или «Жду…» (после init) — дефект D1 смоука TS-10
+        if (typeProp.GetString() != "system" && !IsReplayUserLine(root) && Volatile.Read(ref run.SkipResults) == 0)
         {
             var wasShown = _startPhaseShown;
             await EmitStartPhaseAsync("done");

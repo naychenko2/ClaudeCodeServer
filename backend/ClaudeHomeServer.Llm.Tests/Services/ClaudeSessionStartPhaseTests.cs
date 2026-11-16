@@ -188,6 +188,44 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         t.InitToFirstEventMs.Should().BeLessThan(60);
     }
 
+    // Порядок записей внутри NoteSpawn (сброс раньше _turnSpawnTs, хвост e33b6bd2) тестом не
+    // ловится: финальные состояния «сброс→запись» и «запись→сброс» идентичны, а единственный
+    // различимый сценарий — опоздавший NoteInit читателя строго внутри NoteSpawn — это окно в
+    // две Volatile-записи (~нс): его попадание неустойчиво в обе стороны (в предсостоянии без
+    // init старого новый порядок сам оставляет окно «сброс уже, спавн ещё старый»). Детерминирован
+    // только сам факт сброса к моменту нового спавна — его держит тест выше.
+
+    [Fact]
+    public async Task ПозднийInitСтарогоПроцессаПослеСпавна_НеДаётФазуОтСтарогоИнициатора()
+    {
+        // Соседний с хвостом e33b6bd2 случай: строка init старого процесса доходит уже после
+        // NoteSpawn нового. Сброс в NoteSpawn открыл защёлки ДО записи _turnSpawnTs — к моменту
+        // нового спавна старый init не защёлкнут и не может дать новую фазу от себя: опоздавший
+        // NoteInit меряет SpawnToInit от нового спавна, а init нового процесса остаётся открыт.
+        // Мутация «убрать сброс в NoteSpawn»: опоздавший NoteInit — no-op (защёкнут старым init),
+        // init нового процесса тоже no-op — SpawnToInit остаётся значением старой попытки.
+        var (s, _) = NewSession();
+        Begin(s);
+        // Старая попытка полностью измерена: её init давно дошёл (фаза старой — сотни мс).
+        Spawn(s, Stopwatch.GetTimestamp());
+        await Task.Delay(200);
+        Init(s);
+        FirstEvent(s);
+        s.GetStartTimings().SpawnToInitMs.Should().BeGreaterThanOrEqualTo(150, "фаза старой попытки — старая");
+
+        // Новый спавн, затем — опоздавшая строка init старого процесса.
+        Spawn(s, Stopwatch.GetTimestamp());
+        Init(s);
+        // Init нового процесса: меряется от нового спавна, а не от старого инициатора.
+        Init(s);
+        FirstEvent(s);
+        var t = s.GetStartTimings();
+        t.SpawnToInitMs.Should().NotBeNull();
+        t.SpawnToInitMs.Should().BeLessThan(60,
+            "поздний init старого процесса не дал фазу от старого инициатора");
+        t.InitToFirstEventMs.Should().BeGreaterThanOrEqualTo(0);
+    }
+
     // ——— Остановка несовместимого прогона (PrevRunStopWaitMs) ———
 
     private static ClaudeSession NewSessionWithStubLauncher()

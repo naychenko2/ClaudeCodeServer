@@ -945,12 +945,14 @@ public class ClaudeSession : ILlmSessionAdapter
     // Спавн процесса на этом ходу: начало фазы «запуск CLI». Повторный спавн в ретрае
     // (DiedEmpty) относится к последней попытке: сбрасываем защёлки NoteInit/NoteFirstEvent,
     // иначе «init'ом» остался бы первый процесс и фазы мерились бы от него (хвост bc852f0e).
+    // Сброс — раньше записи _turnSpawnTs: к моменту, когда спавн стал новым, защёлки уже открыты,
+    // и поздний init старого процесса не может дать новую фазу от старого init (хвост e33b6bd2).
     private void NoteSpawn(long spawnStartTs)
     {
-        Volatile.Write(ref _turnSpawnTs, spawnStartTs);
         Volatile.Write(ref _turnSpawnToInitMs, -1);
         Volatile.Write(ref _turnInitTs, 0);
         Volatile.Write(ref _turnInitToFirstEventMs, -1);
+        Volatile.Write(ref _turnSpawnTs, spawnStartTs);
     }
 
     // system/init процесса, спавненного на ЭТОМ ходу: фаза «запуск CLI». Повторный init того

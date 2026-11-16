@@ -2763,11 +2763,18 @@ public class ClaudeSession : ILlmSessionAdapter
                 var snippet = (fullText.Length > 50 ? fullText[..50] : fullText).Replace('\n', ' ');
                 Console.Error.WriteLine($"[ClaudeSession] Постановка хода в очередь _turnLock: уже запарковано {parked} (session {Info.Id}, «{snippet}»)");
             }
+            // TS-16: «В очереди», показанная ЭТОЙ постановкой, не должна пережить отменённый ход.
+            // Флаг знает только о своём «queued»: фазу TurnIntake (её строку на время ожидания
+            // смерти предыдущего прогона) адаптер не видит и не закрывает — та принадлежит своему
+            // выходящему по своей причине, чужой «done» её трогать не должен.
+            var queuedShown = false;
             try
             {
                 if (_cts.IsCancellationRequested) return;
                 var queuedTs = System.Diagnostics.Stopwatch.GetTimestamp();
-                if (_turnLock.CurrentCount == 0) await EmitStartPhaseAsync("queued");
+                // Очередь под живым ещё прогоном: строку показали — держим в флаге, пока
+                // постановка не вышла по отмене (ниже): RunTurnAsync по ней не начнётся никогда.
+                if (_turnLock.CurrentCount == 0) { await EmitStartPhaseAsync("queued"); queuedShown = true; }
                 await _turnLock.WaitAsync(_cts.Token);
                 BeginStartTimings(queuedTs);
                 try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token, turnModelOverride); }
@@ -2856,6 +2863,23 @@ public class ClaudeSession : ILlmSessionAdapter
                 // запаркованным ходом): ход тихо отменяем, но фиксируем в логе —
                 // необработанное исключение fire-and-forget невидимо нигде
                 Console.Error.WriteLine($"[ClaudeSession] Ход не стартовал (гонка с dispose сессии {Info.Id}): {ex.Message}");
+                // TS-16: здесь цепочка доставки и обрывается: RunTurnAsync не начат — ни result,
+                // ни exited по этому ходу нет, а их «done» на фронте строку и не снимал бы (queued
+                // переживает их по keepQueued). Показанную этой постановкой «В очереди» закрываем
+                // здесь же — иначе она висит до ошибки, перезагрузки страницы или фазы следующего
+                // хода. Вне очереди (lock был свободен — ход пошёл сразу, строку не показывали)
+                // снимать нечего; двойного «done» нет: этот путь не пересекается ни с одним выходом,
+                // закрывающим фазу. Гейт EmitStartPhaseAsync(«done») — по _startPhaseShown, а
+                // «queued» его не взводит (фаза принадлежит следующему ходу), поэтому сообщение
+                // идёт напрямую, мимо гейта.
+                if (queuedShown)
+                {
+                    try { await _onMessage(new TurnStartPhaseMessage("done")); }
+                    catch (Exception cleanupEx)
+                    {
+                        Console.Error.WriteLine($"[ClaudeSession] Фаза «done» после отмены хода не доставлена (session {Info.Id}): {cleanupEx.Message}");
+                    }
+                }
             }
             finally { Interlocked.Decrement(ref _queuedTurns); }
         });

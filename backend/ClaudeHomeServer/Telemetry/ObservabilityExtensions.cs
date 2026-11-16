@@ -118,6 +118,13 @@ public static class ObservabilityExtensions
                 ServerMetrics.LlmDuration.Name,
                 new ExplicitBucketHistogramConfiguration { Boundaries = ServerMetrics.LlmDurationBoundaries });
 
+            // Явные границы для ожидания смерти прогона: диапазон 0–11 с (потолок 8 с + grace 2 с),
+            // иначе «упёрся в потолок» и обычное ожидание в сотни мс сливаются в одном бакете.
+            // Обоснование шкалы — в ServerMetrics.DeliveryAwaitExitBoundaries.
+            m.AddView(
+                ServerMetrics.DeliveryAwaitExit.Name,
+                new ExplicitBucketHistogramConfiguration { Boundaries = ServerMetrics.DeliveryAwaitExitBoundaries });
+
             // Встроенные метры .NET 10 + OTel 1.17.0 (GA, не experimental).
             // Раньше был комментарий «experimental packages, оставляем custom Meter для MVP» —
             // он устарел: AspNetCore/Http 1.17.0 дают GA-метрики, а метры ниже нативны в .NET 10.

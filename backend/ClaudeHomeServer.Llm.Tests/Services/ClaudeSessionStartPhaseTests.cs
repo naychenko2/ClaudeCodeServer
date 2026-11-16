@@ -38,6 +38,9 @@ public class ClaudeSessionStartPhaseTests : IDisposable
     private static readonly MethodInfo StopIncompatibleM =
         typeof(ClaudeSession).GetMethod("StopIncompatibleRunAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
+    private static readonly FieldInfo TurnLockField =
+        typeof(ClaudeSession).GetField("_turnLock", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
     // Лаунчер-заглушка: Kill ничего не убивает (процесс в тесте — пустой), остальное тесту не нужно.
     private sealed class StubLauncher : ClaudeHomeServer.Services.Execution.IProcessLauncher
     {
@@ -197,14 +200,16 @@ public class ClaudeSessionStartPhaseTests : IDisposable
     // только сам факт сброса к моменту нового спавна — его держит тест выше.
 
     [Fact]
-    public async Task ПозднийInitСтарогоПроцессаПослеСпавна_НеДаётФазуОтСтарогоИнициатора()
+    public async Task ПослеНовогоСпавна_InitМеряетсяОтНового()
     {
-        // Соседний с хвостом e33b6bd2 случай: строка init старого процесса доходит уже после
-        // NoteSpawn нового. Сброс в NoteSpawn открыл защёлки ДО записи _turnSpawnTs — к моменту
-        // нового спавна старый init не защёлкнут и не может дать новую фазу от себя: опоздавший
-        // NoteInit меряет SpawnToInit от нового спавна, а init нового процесса остаётся открыт.
-        // Мутация «убрать сброс в NoteSpawn»: опоздавший NoteInit — no-op (защёкнут старым init),
-        // init нового процесса тоже no-op — SpawnToInit остаётся значением старой попытки.
+        // Соседний с хвостом e33b6bd2 случай: строка init доходит уже после NoteSpawn нового
+        // спавна. Одиночный поток не отличает опоздавший init старого процесса от первого init
+        // нового — проверяется сброс защёлок: после нового спавна первый NoteInit (им и будет
+        // эта строка) меряет SpawnToInit от нового спавна и закрывает защёлку, второй Init —
+        // no-op. Сброс в NoteSpawn открыл защёлки ДО записи _turnSpawnTs — к моменту нового
+        // спавна старый init не защёлкнут и фазу от себя не даёт.
+        // Мутация «убрать сброс в NoteSpawn»: первый после спавна NoteInit — no-op (защёлкнут
+        // старым init), второй — тоже no-op — SpawnToInit остаётся значением старой попытки.
         var (s, _) = NewSession();
         Begin(s);
         // Старая попытка полностью измерена: её init давно дошёл (фаза старой — сотни мс).
@@ -214,16 +219,18 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         FirstEvent(s);
         s.GetStartTimings().SpawnToInitMs.Should().BeGreaterThanOrEqualTo(150, "фаза старой попытки — старая");
 
-        // Новый спавн, затем — опоздавшая строка init старого процесса.
+        // Новый спавн, затем — строка init, дошедшая после него (опоздавшая или нового
+        // процесса — одиночный поток их не различает): первая закрывает защёлку и меряет
+        // SpawnToInit от нового спавна, а не от старого инициатора.
         Spawn(s, Stopwatch.GetTimestamp());
         Init(s);
-        // Init нового процесса: меряется от нового спавна, а не от старого инициатора.
+        // Второй Init — no-op: защёлка уже закрыта предыдущим.
         Init(s);
         FirstEvent(s);
         var t = s.GetStartTimings();
         t.SpawnToInitMs.Should().NotBeNull();
         t.SpawnToInitMs.Should().BeLessThan(60,
-            "поздний init старого процесса не дал фазу от старого инициатора");
+            "после нового спавна фаза меряется от нового спавна, а не от старого инициатора");
         t.InitToFirstEventMs.Should().BeGreaterThanOrEqualTo(0);
     }
 
@@ -391,5 +398,41 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         await Emit(s, "context");
         await LineRaw(s, run, ToolResultLine);
         phases.Should().Equal(new[] { "context", "done" });
+    }
+
+    // ——— TS-16: щель отмены адаптера: «В очереди» не переживает отменённый ход ———
+    // Реанимация/закрытие убивают адаптер под запаркованным на _turnLock ходом: RunTurnAsync по
+    // нему не начнётся никогда — ни result, ни exited по этому ходу нет, а их «done» на фронте
+    // строку не снял бы и в обычном пути (queued переживает их по keepQueued). Проверка — на
+    // уровне адаптера: окно отмены живёт внутри QueueTurnAsync, и мок-адаптер теста очереди его
+    // не воспроизводит (_cts — внутренний примитив ClaudeSession, наружу не отдаётся).
+
+    [Fact]
+    public async Task ОтменаПодЗапаркованнымХодом_QueuedЗакрываетсяDone()
+    {
+        var (s, phases) = NewSession();
+        // Чужой прогон держит _turnLock: постановка показывает «В очереди» и встаёт на замок —
+        // то же состояние отложенной доставки, что бывает по живому ещё предыдущему прогону
+        var turnLock = (SemaphoreSlim)TurnLockField.GetValue(s)!;
+        turnLock.Wait();
+        await s.SendMessageAsync("отменённый ход");
+        for (var i = 0; i < 200; i++)
+        {
+            lock (phases) if (phases.Count > 0) break;
+            await Task.Delay(10);
+        }
+        lock (phases) phases.Should().Equal(new[] { "queued" }, "окно отмены открыто: строка показана, ход ждёт замок");
+
+        // Закрытие/реанимация: DisposeAsync отменяет адаптер под запаркованным ходом —
+        // WaitAsync(_cts.Token) бросает, RunTurnAsync не начат никогда
+        await s.DisposeAsync();
+        // Внутренняя постановка — fire-and-forget (QueueTurnAsync сразу возвращает CompletedTask):
+        // её конец ждём по снятию счётчика очереди — finally идёт после «done», поэтому к этому
+        // моменту рассылка уже состоялась.
+        for (var i = 0; i < 200 && s.HasQueuedTurn; i++) await Task.Delay(10);
+        s.HasQueuedTurn.Should().BeFalse("постановка вышла по отмене");
+
+        lock (phases) phases.Should().Equal(new[] { "queued", "done" },
+            "отмена между показом «В очереди» и стартом хода обязана снять строку: по этому ходу больше никто её не закроет");
     }
 }

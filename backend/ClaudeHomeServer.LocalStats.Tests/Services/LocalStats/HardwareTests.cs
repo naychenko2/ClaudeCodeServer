@@ -196,6 +196,7 @@ public class HardwareTests : IDisposable
         var nvmeSys = Dir("hwmon", "hwmon3");
         Put(nvmeSys, "name", "nvme\n");
         Put(nvmeSys, "temp1_input", "59850"); Put(nvmeSys, "temp1_label", "Composite");
+        Put(nvmeSys, "temp3_input", "82850"); Put(nvmeSys, "temp3_label", "Sensor 2");
         File.CreateSymbolicLink(Path.Combine(nvmeSys, "device"), "../../nvme0");
 
         var cpu = Dir("hwmon", "hwmon0");
@@ -240,15 +241,62 @@ public class HardwareTests : IDisposable
 
         var kv = snap.Disks!.Single(d => d.Role == "kv");
         kv.Controller.Should().Be("nvme1");
-        kv.TempC.Should().Be(82, "самый горячий датчик контроллера");
-        kv.Temp2C.Should().Be(58);
+        kv.TempC.Should().Be(58, "основной датчик — Composite (temp1), не самый горячий");
+        kv.Temp2C.Should().Be(82, "Temp2C — самый горячий из остальных");
         kv.CritC.Should().Be(84, "temp*_max 83,85 → 84 (WCTEMP)");
         var sys = snap.Disks!.Single(d => d.Role == "system");
         sys.Controller.Should().Be("nvme0");
+        sys.TempC.Should().Be(59, "Composite при горячем temp3 — базовая температура диска");
+        sys.Temp2C.Should().Be(82);
         sys.CritC.Should().BeNull("предел не сообщён → пороги 70/80");
 
         // Вентиляторы корпуса: только подключённые (rpm > 0); температуры nct6798 (AUXTIN 127/96) не читаются вовсе.
         snap.CaseFans!.Select(f => f.Rpm).Should().BeEquivalentTo(new[] { 1159, 4821 });
+    }
+
+    // Диск без меток датчиков: базовая температура — temp1 (первый по номеру), а не самый
+    // горячий; Temp2C — самый горячий из остальных.
+    [Fact]
+    public void Hwmon_DiskWithoutLabels_TakesTemp1_NotHottest()
+    {
+        var hw = Dir("hwNoLabel");
+        var nvme = Dir("hwNoLabel", "hwmon2");
+        Put(nvme, "name", "nvme\n");
+        Put(nvme, "temp1_input", "41000");
+        Put(nvme, "temp2_input", "66000");
+        File.CreateSymbolicLink(Path.Combine(nvme, "device"), "../../nvme5");
+        var snap = new HwmonReader(hw, Dir("blockNL"), Path.Combine(_root, "miNL")).Read()!;
+
+        var disk = snap.Disks!.Single();
+        disk.TempC.Should().Be(41, "меток нет — temp1, не самый горячий");
+        disk.Temp2C.Should().Be(66);
+    }
+
+    // Плитка «Системный диск» сквозом (замер живой машины, 16.11): Composite 42,85 и горячий
+    // temp3 74,85 при temp1_max 83,85 (пороги warn 74 / danger 81). По Composite уровень «ok»;
+    // по прежнему выбору самого горячего (74 ≥ 74) плитка висела в «warn» без причины.
+    // Мутация «вернуть выбор самого горячего» краснит оба утверждения.
+    [Fact]
+    public void Report_SystemDisk_LevelByComposite_NotHottest()
+    {
+        var hw = Dir("hwLevel");
+        var nvme = Dir("hwLevel", "hwmon1");
+        Put(nvme, "name", "nvme\n");
+        Put(nvme, "temp1_input", "42850"); Put(nvme, "temp1_label", "Composite");
+        Put(nvme, "temp3_input", "74850"); Put(nvme, "temp3_label", "Sensor 2");
+        Put(nvme, "temp1_max", "83850");
+        File.CreateSymbolicLink(Path.Combine(nvme, "device"), "../../nvme0");
+        var mountinfo = Path.Combine(_root, "miLevel");
+        File.WriteAllText(mountinfo, "36 1 8:1 / / rw - ext4 /dev/nvme0n1p2 rw\n");
+        var disk = new HwmonReader(hw, Dir("blockL"), mountinfo).Read()!.Disks!.Single();
+        disk.TempC.Should().Be(42, "Composite (42,85 → 42), не горячий temp3 (74,85 → 74)");
+        disk.CritC.Should().Be(84);
+
+        var sample = new HardwareSample { At = DateTimeOffset.UtcNow, Disks = [disk] };
+        var report = new HardwareReportService(new FixedSampler(sample), NoNodes()).Build(TimeSpan.FromMinutes(1))!;
+        var tile = report.Nodes.Single(n => n.Key == "disk-nvme0");
+        tile.TempC.Should().Be(42);
+        tile.Level.Should().Be("ok", "пороги от CritC 84 (warn 74): по Composite 42 — ok, а не warn");
     }
 
     [Fact]

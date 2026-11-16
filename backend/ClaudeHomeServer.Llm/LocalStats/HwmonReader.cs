@@ -26,15 +26,17 @@ public sealed record HwmonBoard
     public int? Water { get; init; }
 }
 
-// Диск (nvme, по контроллеру): самый горячий датчик + дополнительный + предел.
+// Диск (nvme, по контроллеру): основной датчик + второстепенный + предел.
 // Role: "kv" — диск, смонтированный в kvdisk; "system" — остальные.
 public sealed record HwmonDisk
 {
     public string Controller { get; init; } = "";
     public string Role { get; init; } = "system";
-    // Самый горячий из доступных датчиков (Composite и др.), °C; null — датчиков нет.
+    // Основной датчик: с меткой «Composite» (сводная температура — та же, что Temperature
+    // в nvme smart-log, и относительно неё пороги wctemp/cctemp диска), иначе temp1, °C;
+    // null — датчиков нет.
     public int? TempC { get; init; }
-    // Дополнительный датчик (Sensor 2), °C; null — нет.
+    // Самый горячий из остальных датчиков (напр. «Sensor 2» микросхемы), °C; null — нет.
     public int? Temp2C { get; init; }
     // Предел (temp*_crit из hwmon, БЕЗ root); null — не сообщает (пороги 70/80).
     public int? CritC { get; init; }
@@ -178,21 +180,9 @@ public sealed class HwmonReader
             var controller = ResolveNvmeController(dir);
             if (controller is null) continue;
 
-            // Все датчики (temp1..tempN): самый горячий → TempC, второй → Temp2C.
-            var temps = ReadAllTemps(dir);
-            int? hottest = null;
-            int? second = null;
-            foreach (var t in temps)
-            {
-                if (t is null) continue;
-                if (hottest is null || t > hottest)
-                {
-                    second = hottest;
-                    hottest = t;
-                }
-                else if (second is null || t > second)
-                    second = t;
-            }
+            // Все датчики (temp1..tempN): основной — «Composite» (иначе temp1) → TempC,
+            // самый горячий из остальных → Temp2C.
+            var (primary, secondary) = PickDiskTemps(ReadSensors(dir));
 
             var isKv = controller == kvController;
             // kv — ФС, определившая роль (точка kvdisk); system — наибольшая ФС контроллера (не /boot/efi).
@@ -209,8 +199,8 @@ public sealed class HwmonReader
             {
                 Controller = controller,
                 Role = isKv ? "kv" : "system",
-                TempC = hottest,
-                Temp2C = second,
+                TempC = primary,
+                Temp2C = secondary,
                 CritC = ReadCrit(dir),
                 UsedGb = usedGb,
                 TotalGb = totalGb,
@@ -360,13 +350,32 @@ public sealed class HwmonReader
         return null;
     }
 
-    // Все датчики temp*_input (милли-°C → °C), в порядке номеров.
-    private List<int?> ReadAllTemps(string dir)
+    // Датчики temp*_input (милли-°C → °C) с метками, в порядке номеров.
+    private List<(int? temp, string? label)> ReadSensors(string dir)
     {
-        var result = new List<int?>();
+        var result = new List<(int?, string?)>();
         foreach (var f in EnumerateFiles(dir, "temp*_input"))
-            result.Add(ReadMilliC(f));
+            result.Add((ReadMilliC(f), ReadLabel(f)));
         return result;
+    }
+
+    // Основная температура диска — датчик с меткой «Composite» (сводная, та же, что в smart-log;
+    // пороги wctemp/cctemp заданы относительно неё), иначе temp1 — первый по номеру (карты без
+    // меток работают как раньше). Temp2C — самый горячий из остальных датчиков.
+    private static (int? primary, int? secondary) PickDiskTemps(List<(int? temp, string? label)> sensors)
+    {
+        var present = sensors.FindAll(s => s.temp is not null);
+        if (present.Count == 0) return (null, null);
+        var main = present.FindIndex(s => s.label == "Composite");
+        if (main < 0) main = 0;
+        int? second = null;
+        for (var i = 0; i < present.Count; i++)
+        {
+            if (i == main) continue;
+            if (second is null || present[i].temp > second)
+                second = present[i].temp;
+        }
+        return (present[main].temp, second);
     }
 
     // Метка датчика/вентилятора (temp*_label / fan*_label); null — нет метки.

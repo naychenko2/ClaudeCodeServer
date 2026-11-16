@@ -30,7 +30,7 @@ import { usePersonas } from '../../lib/personas';
 import { useSpecialtyCatalog } from '../../lib/specialties';
 import { showToast } from '../../lib/toast';
 import { workflowTemplatesApi } from './api';
-import { stageErrors } from './workflowTemplateModel';
+import { parseStageLabel, stageErrors, stageLabelParts } from './workflowTemplateModel';
 import {
   blankTemplate, normalizeForSave, forkToProject, saveGuarded,
   templateSnapshot, splitEntries, entryMetaMap, toolbarSubtitle, errorSummaryItems,
@@ -61,8 +61,6 @@ export interface WorkflowTemplatesEditorProps {
 
 type Scope = 'global' | 'project';
 interface Selection { scope: Scope; isNew: boolean }
-
-const STAGE_ERR_RE = /^этап «([^»]+)»:\s*(.*)$/;
 
 export function WorkflowTemplatesEditor({
   projectId, projectName, canWrite, isAdmin, mcpChoices,
@@ -142,19 +140,37 @@ export function WorkflowTemplatesEditor({
   const canSave = !!draft && !readOnly && dirty && !busy && draft.name.trim() !== '' && canSaveDraft(draft, failure);
   const errorItems = draft && !readOnly ? errorSummaryItems(draft, failure) : [];
 
-  // Подсказки модели + ответ валидатора — по ролям этапов (у полей, а не общей плашкой).
-  const errorsByRole = useMemo(() => {
-    const map: Record<string, string[]> = {};
-    const push = (role: string, msg: string) => {
-      const arr = (map[role] ??= []);
+  // Подсказки модели + ответ валидатора — у поля своего этапа (не общей плашкой). Ключ —
+  // адресная метка этапа (Title → роль → «роль (id)» при повторе роли), тот же, что строит
+  // stageLabelParts для строки ленты и parseStageLabel для текста ошибки: ключ по роли или по
+  // id здесь неоднозначен — при двух этапах одной роли или заданном Title поле читало бы
+  // чужую ошибку или не находило бы свою.
+  const errorsForStage = useMemo(() => {
+    const norm = normalizeStages(draft?.stages ?? []);
+    const byKey: Record<string, string[]> = {};
+    const byIndex: Record<number, string[]> = {};
+    const pushKey = (key: string, msg: string) => {
+      const arr = (byKey[key] ??= []);
+      if (!arr.includes(msg)) arr.push(msg);
+    };
+    const pushIndex = (i: number, msg: string) => {
+      const arr = (byIndex[i] ??= []);
       if (!arr.includes(msg)) arr.push(msg);
     };
     for (const line of draft ? stageErrors(draft) : []) {
-      const m = STAGE_ERR_RE.exec(line);
-      if (m) push(m[1], m[2]);
+      const m = parseStageLabel(line);
+      if (m) { pushKey(m.key, m.message); continue; }
+      // «этап #N» — пустая запись или роль вне белого списка: адресной метки у неё нет,
+      // строка ленты — по номеру в списке.
+      const num = /^этап #(\d+):/.exec(line);
+      if (num) pushIndex(Number(num[1]) - 1, line.slice(num[0].length));
     }
-    for (const [role, msgs] of Object.entries(failure?.stageErrors ?? {})) msgs.forEach(m => push(role, m));
-    return map;
+    // Ключ stageErrors из ответа 400 — тот же (classifySaveError строит его из parseStageLabel).
+    for (const [key, msgs] of Object.entries(failure?.stageErrors ?? {})) msgs.forEach(m => pushKey(key, m));
+    return (index: number): string[] => [
+      ...(byKey[stageLabelParts(norm, index).key] ?? []),
+      ...(byIndex[index] ?? []),
+    ];
   }, [draft, failure]);
 
   const applySaved = (saved: WorkflowTemplate, scope: Scope) => {
@@ -483,7 +499,7 @@ export function WorkflowTemplatesEditor({
           readOnly={readOnly}
           specialties={catalog ?? []}
           personas={personas}
-          errorsFor={(s, i) => errorsByRole[normalizeStages(draft.stages)[i].id ?? s.role] ?? errorsByRole[s.role] ?? []}
+          errorsFor={(_s, i) => errorsForStage(i)}
           onStagesChange={stages => editDraft(d => (d ? { ...d, stages } : d))}
           selectedKey={settingsIndex >= 0 ? selectedStageId : null}
           onSelectStage={setSelectedStageId}

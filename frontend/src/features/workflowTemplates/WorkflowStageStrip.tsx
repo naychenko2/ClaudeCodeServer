@@ -26,7 +26,8 @@ interface Props {
   // Нужны только для строки «кто» (подписи специальности и персоны).
   specialties: SpecialtyCatalogEntry[];
   personas: Persona[];
-  // Ошибки по id этапа (роль — запасной ключ, как у прежнего списка).
+  // Ошибки своего этапа: вызывающий привязывает их по адресной метке (stageLabelParts),
+  // а не по id/роли — при повторе роли или Title эти ключи неоднозначны.
   errorsFor: (stage: WorkflowStage, index: number) => string[];
   onStagesChange: (next: WorkflowStage[]) => void;
   // Выбранный этап (ключ из stageKeys; null — не выбран) и выбор по клику на строку.

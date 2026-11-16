@@ -86,9 +86,10 @@ public class HardwareTests : IDisposable
     public void Helper_MarkInFuture_NotFresh()
     {
         var t = new ManualTime();
-        // Метка "at" впереди часов отбора → отрицательный возраст (для локального файла
-        // часы узла и есть часы сэмплера). Без проверки знака замороженный файл считался
-        // бы свежим ещё offset+StaleAfter.
+        // Метка "at" впереди часов отбора дальше окна → не свежесть (для локального файла
+        // часы узла и есть часы сэмплера). Окно двустороннее ±StaleAfter (ADR-029): метка из
+        // будущего за окном — сдвиг часов или битое значение, с односторонней проверкой такой
+        // файл казался бы свежим, пока часы не догонят метку.
         var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(11)), t.GetUtcNow());
         r!.Value.fresh.Should().BeFalse("отрицательный возраст — не свежесть");
     }
@@ -111,11 +112,13 @@ public class HardwareTests : IDisposable
 
     // Часы удалённого узла фермы идут впереди часов worker (обычный NTP-дрейф): свежесть gddr6
     // решается по часам узла (NodeReading.ClockMs), а не по часам worker (ADR-029, NodeSlice:55).
-    // Мутация «взять в Parse _time.GetUtcNow() вместо now» краснит этот тест: case1 даёт
-    // возраст −4 с (не свежесть), case3 — +6 с (свежесть).
+    // Мутация «взять в Parse _time.GetUtcNow() вместо now» краснит случай −11: с часами worker
+    // возраст +6 с — в окне ±StaleAfter (свежесть), а по часам узла +11 с — за окном.
     [Theory]
-    [InlineData(-1, true)] // возраст 1 с по часам узла — свежий (по-старому: −4 с → mem/hotspot в nodata)
-    [InlineData(11, false)] // метка на 11 с впереди часов узла — не свежесть (нижняя граница возраста)
+    [InlineData(-1, true)] // возраст 1 с по часам узла — свежий
+    [InlineData(1, true)] // метка на 1 с впереди часов узла — в окне ±StaleAfter: свежая (односторонняя
+                          // проверка давала бы mem/hotspot = nodata на живом узле)
+    [InlineData(11, false)] // метка на 11 с впереди часов узла — за окном — не свежесть (нижняя граница возраста)
     [InlineData(-11, false)] // метка на 11 с старше часов узла — протухло (StaleAfter = 10 с)
     public void Helper_FreshnessIsByNodeClock_NotWorkerClock(int atOffsetSec, bool expected)
     {
@@ -145,13 +148,14 @@ public class HardwareTests : IDisposable
     }
 
     // Тот же сдвиг часов сквозом через сэмплер: файл помощника возрастом 1 с ПО ЧАСАМ УЗЛА —
-    // свежий, mem/hotspot на месте (по-старому возраст −4 с от часов worker → nodata).
-    // Мутация «передать в сэмплере _time.GetUtcNow()» краснит этот тест.
+    // свежий, mem/hotspot на месте. Сдвиг узла взят 15 с — больше окна ±StaleAfter, иначе
+    // двустороннее окно делает выбор часов неразличимым. Мутация «передать в сэмплере
+    // _time.GetUtcNow()» краснит этот тест: по часам worker возраст −14 с — за окном.
     [Fact]
     public async Task RemoteNode_ClockAheadOfWorker_Gddr6StaysFresh()
     {
         var time = new ManualTime();
-        var nodeClock = time.GetUtcNow().AddSeconds(5);
+        var nodeClock = time.GetUtcNow().AddSeconds(15);
         var s = await BuildRemoteSampler(time, HelperJson(nodeClock.AddSeconds(-1)), nodeClock).PollNodeAsync("video");
 
         var g = s!.Gpus!.Single();
@@ -161,11 +165,13 @@ public class HardwareTests : IDisposable
     }
 
     // Метка на 11 с старше часов узла — протухло: mem/hotspot = null, остальное работает.
+    // Мутация «передать в сэмплере _time.GetUtcNow()» краснит этот тест: при сдвиге узла 15 с
+    // возраст по часам worker +4 с — в окне (свежесть), а по часам узла +11 с — за окном.
     [Fact]
     public async Task RemoteNode_Gddr6StaleByNodeClock_MemNullCoreWorks()
     {
         var time = new ManualTime();
-        var nodeClock = time.GetUtcNow().AddSeconds(5);
+        var nodeClock = time.GetUtcNow().AddSeconds(15);
         var s = await BuildRemoteSampler(time, HelperJson(nodeClock.AddSeconds(-11)), nodeClock).PollNodeAsync("video");
 
         var g = s!.Gpus!.Single();

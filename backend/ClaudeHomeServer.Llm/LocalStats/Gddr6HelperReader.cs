@@ -16,9 +16,11 @@ public sealed record Gddr6GpuTemp
 // Читатель файла помощника ccs-gddr6 (root-служба, deploy/gddr6-helper, deploy/systemd/ccs-gddr6.service).
 // Бэкенд ТОЛЬКО читает файл (недоверенный источник): любой сбой разбора → null, а не исключение
 // наружу (иначе упадёт BackgroundService, а с ним весь хост). Метка "at" в файле — признак свежести:
-// старше StaleAfter → данные протухли (mem/hotspot = null, sensor:'nodata'), остальное работает.
-// Отрицательный возраст (метка впереди часов отбора — часы узла сдвинуты вперёд) — тоже не свежесть:
-// иначе замороженный файл кажется свежим ещё offset+StaleAfter.
+// дальше StaleAfter от часов отбора в любую сторону → данные протухли (mem/hotspot = null,
+// sensor:'nodata'), остальное работает. Окно двустороннее, как у ipmi (NodeSlice.TryReadIpmi):
+// метка чуть впереди часов — это запись помощника, попавшая между меткой clockMs и чтением файла
+// (ccs-gddr6 переписывает его раз в 2 с), а не протухшие данные; метка за окном впереди — сдвиг
+// часов узла или битое значение недоверенного файла — тоже не свежесть (ADR-029).
 public sealed class Gddr6HelperReader
 {
     // Метка "at" старше этого → данные протухли.
@@ -51,7 +53,7 @@ public sealed class Gddr6HelperReader
 
     // Чистая функция: разбирает JSON помощника. null — не тот формат (v != 1) или битый JSON.
     // Свежесть — по метке "at" в файле (DateTimeOffset из unix-мс), метки нет → протухло:
-    // 0 <= (now - at) <= StaleAfter; метка впереди now — не свежесть.
+    // |(now - at)| <= StaleAfter; окно двустороннее, как у ipmi в NodeSlice.TryReadIpmi.
     // now — ЧАСЫ, по которым решается свежесть: для узла фермы это настенные часы узла
     // (NodeReading.ClockMs), для локального файла — часы сэмплера (Read). Метку "at" ставит
     // часами узла сам помощник, поэтому часы приходят СНАРУКИ: с часами worker она не
@@ -87,7 +89,7 @@ public sealed class Gddr6HelperReader
             }
 
             var age = now - DateTimeOffset.FromUnixTimeMilliseconds(at);
-            return (gpus, age >= TimeSpan.Zero && age <= StaleAfter);
+            return (gpus, age.Duration() <= StaleAfter);
         }
         catch
         {

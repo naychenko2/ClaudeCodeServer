@@ -105,7 +105,11 @@ describe('FeatureStageReview', () => {
         notes: '- пункт **один** `code`\n- второй',
       }],
     }));
-    expect(findNodeByAttr(container, 'data-testid', 'stage-review-notes')).not.toBeNull();
+    const notes = findNodeByAttr(container, 'data-testid', 'stage-review-notes');
+    expect(notes).not.toBeNull();
+    // Обёртка заметок обязана переносить длинные пути file:line (ревью 1abfa5e5): без этого
+    // карточка разъезжается на 360.
+    expect(notes!.style.overflowWrap, 'обёртка заметок не защищена от переполнения').toBe('anywhere');
     // Рендер даёт настоящие li/strong/code: обычный наивный вывод этих узлов не даст.
     expect(container.querySelectorAll('li,strong,code').length).toBeGreaterThanOrEqual(3);
     const t = text(container);

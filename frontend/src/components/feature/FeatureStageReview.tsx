@@ -38,7 +38,8 @@ function Item({ item }: { item: StageReviewItem }) {
       </div>
       {item.returnReason && <div style={{ fontSize: FS.xs, color: C.textSecondary }}>Причина: {item.returnReason}</div>}
       {/* Заметки — отчёт ревьюера (markdown: списки, **, `кавычки`): общий рендер, как в читалке плана. */}
-      {item.notes && <div data-testid="stage-review-notes" style={{ fontSize: FS.sm, lineHeight: 1.5, color: C.textPrimary, minWidth: 0 }}><MarkdownContent text={item.notes} /></div>}
+      {/* overflowWrap — как на :35/:76/:81/:91: длинный путь file:line в заметке не должен выходить за карточку на 360. */}
+      {item.notes && <div data-testid="stage-review-notes" style={{ fontSize: FS.sm, lineHeight: 1.5, color: C.textPrimary, minWidth: 0, overflowWrap: 'anywhere' }}><MarkdownContent text={item.notes} /></div>}
       {item.verifiedAt && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{formatDateTime(item.verifiedAt)}</div>}
     </div>
   );

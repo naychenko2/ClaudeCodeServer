@@ -185,6 +185,11 @@ describe('HardwareTab', () => {
     expect(html).toContain(`Узел ai не отвечает с ${hms(SINCE)}`);
     expect(html).not.toContain(OLD_BANNER);
   });
+  it('молчащий узел: плашка «Стенд» не говорит «всё в норме» (как плашка сводки — «узел молчит»)', () => {
+    const silent = fnode({ ...AI, status: 'down', since: SINCE, level: 'ok' });
+    const html = render({ farm: farm([WORKER, silent, VIDEO]), report: report([tile({ key: 'vrm' })], { status: 'stale', staleSince: SINCE, level: 'ok' }) });
+    expect(html).not.toContain('всё в норме');
+  });
   it('down и отчёта нет ни разу — «Нет связи с узлом ai», без баннера и плиток', () => {
     const silent = fnode({ ...AI, status: 'down', since: SINCE, level: 'ok' });
     const html = render({ farm: farm([WORKER, silent, VIDEO]), report: null });

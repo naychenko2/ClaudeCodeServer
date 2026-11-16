@@ -45,8 +45,13 @@ function tone(n: HardwareFarmNode): { border: string; dot: string; value: string
 // Статусная строка молчащего узла вместо значения.
 function statusLine(n: HardwareFarmNode): string {
   if (n.status === 'incompatible') return 'версия агента не подходит';
-  const t = formatHms(n.since);
-  return t ? `не отвечает с ${t}` : 'не отвечает';
+  return 'не отвечает';
+}
+
+// Подпись для скринридера: время «с HH:MM:SS» живёт здесь и в баннере деталей, а в тесной карточке его нет.
+function statusLineFull(n: HardwareFarmNode): string {
+  const t = n.status === 'incompatible' ? '' : formatHms(n.since);
+  return t ? `не отвечает с ${t}` : statusLine(n);
 }
 
 // Плашка уровня фермы: ok → muted, warn → warning, danger → danger (тот же контроль, что LevelPill в HardwareTab.tsx:29).
@@ -116,7 +121,7 @@ function NodeCard({ node, selected, onSelect, engineLine, isMobile }: {
   const hasValue = !silent && hot?.tempC != null;
   const valueFs = hasValue ? (isMobile ? FS.lg : FS.xl) : FS.sm;
   const valueColor = hasValue ? t.value : C.textMuted;
-  const aria = silent ? `Узел ${node.title}: ${statusLine(node)}` : `Узел ${node.title}: ${roles}`;
+  const aria = silent ? `Узел ${node.title}: ${statusLineFull(node)}` : `Узел ${node.title}: ${roles}`;
   // aria-expanded: выбор узла раскрывает ниже его детали (макет А) — у PressableArea
   // из штатных aria-свойств есть только это; aria-pressed в контроле нет.
   const head = (
@@ -139,7 +144,7 @@ function NodeCard({ node, selected, onSelect, engineLine, isMobile }: {
         }}
       >
         <span style={{ minWidth: 0 }}>{head}<div style={ROLES_S}>{roles}</div>{what ? <div style={WHAT_S}>{what}</div> : null}</span>
-        <span style={{ justifySelf: 'end', textAlign: 'right', fontSize: valueFs, fontWeight: 600, fontFamily: FONT.mono, color: valueColor, whiteSpace: 'nowrap' }}>{value}</span>
+        <span style={{ justifySelf: 'end', textAlign: 'right', fontSize: valueFs, fontWeight: 600, fontFamily: FONT.mono, color: valueColor, whiteSpace: 'nowrap', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
         {eng ? <div style={{ ...ENG_S, gridColumn: '1 / span 2' }}>{engineLine}</div> : null}
       </PressableArea>
     );
@@ -156,7 +161,7 @@ function NodeCard({ node, selected, onSelect, engineLine, isMobile }: {
     >
       {head}
       <div style={ROLES_S}>{roles}</div>
-      <div style={{ fontSize: valueFs, fontWeight: 600, fontFamily: FONT.mono, color: valueColor, lineHeight: 1.2, marginTop: SP.xs, whiteSpace: 'nowrap' }}>{value}</div>
+      <div style={{ fontSize: valueFs, fontWeight: 600, fontFamily: FONT.mono, color: valueColor, lineHeight: 1.2, marginTop: SP.xs, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
       {what ? <div style={WHAT_S}>{what}</div> : null}
       {eng}
     </PressableArea>

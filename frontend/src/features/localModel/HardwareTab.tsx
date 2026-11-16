@@ -35,8 +35,17 @@ function formatHms(ms?: number): string {
 }
 
 // Плашка уровня стенда: ok → muted, warn → warning, danger → danger.
-function LevelPill({ level }: { level: HwLevel }) {
+function LevelPill({ level, silent }: { level: HwLevel; silent?: boolean }) {
   if (level === 'none') return null;
+  // Молчащий узел без опасности — «узел молчит», как в плашке сводки «Ферма», а не «всё в норме».
+  if (silent && level !== 'danger') {
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', background: C.warningBg, color: C.warningText,
+        borderRadius: R.max, padding: `1px ${SP.sm}px`, fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
+      }}>узел молчит</span>
+    );
+  }
   const bg = level === 'danger' ? C.dangerBg : level === 'warn' ? C.warningBg : C.bgInset;
   const fg = level === 'danger' ? C.dangerText : level === 'warn' ? C.warningText : C.textSecondary;
   return (
@@ -80,7 +89,7 @@ function StandCard({ report, isMobile }: { report: HardwareReport; isMobile: boo
         <h3 style={{ margin: 0, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textSecondary, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           Стенд
         </h3>
-        <LevelPill level={report.level} />
+        <LevelPill level={report.level} silent={stale} />
       </div>
       {/* Строка-сводка */}
       <div style={{ fontSize: FS.sm, color: C.textSecondary, margin: `-2px 0 ${SP.sm}px` }}>

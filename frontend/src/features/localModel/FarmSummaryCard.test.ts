@@ -140,7 +140,10 @@ describe('карточка «Ферма» — состав и роли', () => {
 describe('молчащий узел (down/stale/incompatible)', () => {
   it('down: «не отвечает с HH:MM:SS» (локальное время из since), точка-кольцо, плашка «узел молчит», «всё в норме» нет, рамка не окрашена', () => {
     const html = render(farmSilent());
-    expect(html).toContain(`не отвечает с ${hms(SINCE)}`);
+    // видимая подпись короткая (в карточку узла помещается), время — только в aria-label
+    expect(html).toContain('>не отвечает<');
+    expect(html).not.toContain(`>не отвечает с ${hms(SINCE)}<`);
+    expect(html).toContain(`aria-label="Узел ai: не отвечает с ${hms(SINCE)}"`);
     // точка-кольцо: заполнение C.track, обводка C.textMuted
     expect(html).toContain('fill="var(--c-track)"');
     expect(html).toContain('stroke="var(--c-text-muted)"');

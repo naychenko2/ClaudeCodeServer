@@ -314,7 +314,8 @@ variant, count, initiator, percent? }`. `percent` (0..1) необязателе�
 Панель «Файлы» личного чата — [PersonalFilesController.cs](../../backend/ClaudeHomeServer/Controllers/PersonalFilesController.cs).
 Владение берётся из **чата** (гейт — чат без проекта, `SessionAccess.CanSee`), корень — `PersonalFolderResolver.Find(session.OwnerId)`.
 Чужой чат и администратор — `404 chat_not_found`; «Личного» нет в `ProjectManager`, WebDAV для него нет. GET папку не создаёт
-(без неё список пуст), создают её только `mkdir`/`create`. Заметок в личном корне нет: путь `notes`/`notes/…` — `404 notes_unavailable`
+(без неё список пуст), создают её `mkdir`/`create`/`upload`/`save-from-url`.
+Заметок в личном корне нет: путь `notes`/`notes/…` — `404 notes_unavailable`
 (хранилище заметок вне файлов). Ошибки — `{ error, code }`.
 
 ```

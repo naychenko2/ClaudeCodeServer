@@ -504,8 +504,14 @@ export function retryableInterruptedIndex(items: ChatItem[]): number {
 // оборванный WS или потерянное событие не должны оставлять её в закончившемся ходе —
 // конец хода (result/error/exited) снимает её как failsafe. Без строки возвращает
 // тот же массив (подписчиков не будит лишний раз).
-function dropLocalTurnQueue(items: ChatItem[]): ChatItem[] {
-  const live = (it: ChatItem) => it.kind === 'local_turn_queue' || it.kind === 'turn_start_phase';
+// keepQueued: фаза «queued» принадлежит СЛЕДУЮЩЕМУ ходу — TurnIntake шлёт её, пока
+// предыдущий ход ещё идёт. На result/exited такая строка обязана пережить конец
+// чужого хода: снести её — значит лишить следующий хода его статуса старта.
+// На error — как раньше, снимается всё: отказ закрывает всю цепочку.
+function dropLocalTurnQueue(items: ChatItem[], keepQueued = false): ChatItem[] {
+  const live = (it: ChatItem) =>
+    it.kind === 'local_turn_queue' ||
+    (it.kind === 'turn_start_phase' && (!keepQueued || it.phase !== 'queued'));
   return items.some(live) ? items.filter(it => !live(it)) : items;
 }
 
@@ -811,8 +817,9 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // предыдущий result; сабагентские тексты (parentToolUseId) пропускаем — они
       // могли идти другой моделью.
       // Строка ожидания слота относится только к этому ходу: position=0 снимает её обычно
-      // раньше, но до конца хода она точно не переживёт (failsafe, см. dropLocalTurnQueue)
-      const items = dropLocalTurnQueue(prev.items.slice());
+      // раньше, но до конца хода она точно не переживёт (failsafe, см. dropLocalTurnQueue).
+      // «queued» следующего хода — не трогать: result хода A не должен сносить очередь хода B
+      const items = dropLocalTurnQueue(prev.items.slice(), true);
       if (msg.usageModel) {
         for (let i = items.length - 1; i >= 0; i--) {
           const it = items[i];
@@ -973,7 +980,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         bgClosed = true;
         return { ...item, bgDone: true, bgAborted: true };
       });
-      const base = dropLocalTurnQueue(bgClosed ? items : prev.items);
+      // «queued» следующего хода сохраняем и здесь: ExitedMessage приходит в окне ожидания
+      // смерти прогона, когда следующий ход уже поставлен в очередь — снести её сейчас
+      // значит оставить следующий ход без статуса старта
+      const base = dropLocalTurnQueue(bgClosed ? items : prev.items, true);
       // Компакция, оборванная смертью процесса, результата уже не пришлёт — иначе «Сжимаю…»
       // и заблокированная кнопка висели бы до перезагрузки страницы
       return { ...prev, isWaiting: false, isCompacting: false, items: abnormal ? [...base, { kind: 'session_ended' }] : base };

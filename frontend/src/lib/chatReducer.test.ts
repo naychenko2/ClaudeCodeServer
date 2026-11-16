@@ -590,9 +590,47 @@ describe('applyServerMessage: turn_start_phase — статус старта х�
     expect(applyServerMessage(gone, { sessionId: SID, type: 'turn_start_phase', phase: 'done' } as ServerMessage)).toBe(gone);
   });
 
-  it('строка не переживает ход: result и error её снимают', () => {
+  it('строка своей фазы не переживает ход: result и error её снимают', () => {
     const shown = feed(initialChatState(), { type: 'turn_start_phase', phase: 'launching' });
-    const r = applyServerMessage(shown, { sessionId: SID, type: 'error', text: 'сбой' } as ServerMessage);
-    expect(phases(r)).toHaveLength(0);
+    for (const end of [
+      { type: 'error', text: 'сбой' },
+      { type: 'result', subtype: 'success', durationMs: 1, numTurns: 1 },
+    ]) {
+      const s = applyServerMessage(shown, { sessionId: SID, ...end } as ServerMessage);
+      expect(phases(s), `конец хода ${end.type}`).toHaveLength(0);
+    }
+  });
+
+  // «queued» принадлежит СЛЕДУЮЩЕМУ ходу: TurnIntake шлёт её, пока предыдущий ход ещё
+  // идёт (в ленте одна строка фаз — queued хода B заменяет фазу хода A). Конец чужого
+  // хода (result/exited) не должен сносить очередь следующего хода; error — снимает всё.
+  const queuedBehindBusy = () => feed(initialChatState(),
+    { type: 'user_message', text: 'вопрос A' },
+    { type: 'turn_start_phase', phase: 'waiting' },
+    { type: 'text_delta', text: 'ответ A' },
+    { type: 'user_message', text: 'вопрос B' },
+    { type: 'turn_start_phase', phase: 'queued' },
+  );
+
+  it('queued переживает exited предыдущего хода: строка остаётся', () => {
+    const s = applyServerMessage(queuedBehindBusy(), { sessionId: SID, type: 'exited' } as ServerMessage);
+    expect(phases(s)).toEqual([{ kind: 'turn_start_phase', phase: 'queued' }]);
+  });
+
+  it('queued переживает result предыдущего хода: строка остаётся', () => {
+    const s = applyServerMessage(queuedBehindBusy(), {
+      sessionId: SID, type: 'result', subtype: 'success', durationMs: 1, numTurns: 1,
+    } as ServerMessage);
+    expect(phases(s)).toEqual([{ kind: 'turn_start_phase', phase: 'queued' }]);
+  });
+
+  it('error снимает и queued: отказ закрывает всю цепочку', () => {
+    const s = applyServerMessage(queuedBehindBusy(), { sessionId: SID, type: 'error', text: 'сбой' } as ServerMessage);
+    expect(phases(s)).toHaveLength(0);
+  });
+
+  it('поставленная queued остаётся живой строкой: следующая фаза её заменяет, не плодит вторую', () => {
+    const s = applyServerMessage(queuedBehindBusy(), { sessionId: SID, type: 'turn_start_phase', phase: 'context' } as ServerMessage);
+    expect(phases(s)).toEqual([{ kind: 'turn_start_phase', phase: 'context' }]);
   });
 });

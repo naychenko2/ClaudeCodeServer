@@ -160,6 +160,22 @@ public class ProcStatReaderTests
         ProcStatReader.CpuLoadPerc(J(1000, 500), J(1000, 700)).Should().BeNull("за интервал не было тиков");
     }
 
+    [Fact]
+    public void Load_IdleWentBack_ClampedTo100()
+    {
+        // Мутация «убрать Math.Clamp» → краснеет: без клампа (100−(−50))/100 = 150.
+        ProcStatReader.CpuLoadPerc(J(1000, 500), J(1100, 450)).Should().Be(100,
+            "Δtotal 100, Δidle −50 → зажатие к 100");
+    }
+
+    [Fact]
+    public void Load_IdleGrewMoreThanTotal_ClampedTo0()
+    {
+        // Мутация «убрать Math.Clamp» → краснеет: без клампа (100−150)/100 = −50.
+        ProcStatReader.CpuLoadPerc(J(1000, 500), J(1100, 650)).Should().Be(0,
+            "Δidle 150 > Δtotal 100 → зажатие к 0");
+    }
+
     // ─── Сквозной кейс живой машины: два среза /proc/stat → загрузка ─────────────
 
     [Fact]

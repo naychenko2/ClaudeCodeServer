@@ -71,7 +71,8 @@ public static class ProcStatReader
     }
 
     // Загрузка CPU, %: дельта jiffies двух соседних срезов (разрез 6199b268):
-    // (Δtotal − Δidle) / Δtotal, целое вниз, 0…100 для реальных снимков (счётчики монотонны).
+    // (Δtotal − Δidle) / Δtotal, целое вниз, зажатая в 0…100 для любой пары с Δtotal > 0
+    // (несогласованные снимки: Δidle < 0 → 100, Δidle > Δtotal → 0).
     // null: нет prev; Δtotal ≤ 0 (за интервал не было тиков или счётчик ушёл назад —
     // перезагрузка узла); переполнение long при умножении.
     public static int? CpuLoadPerc(CpuJiffies? prev, CpuJiffies? cur)
@@ -82,7 +83,9 @@ public static class ProcStatReader
         try
         {
             var busy = checked(dTotal - (cur.Idle - prev.Idle));
-            return (int)(checked(busy * 100) / dTotal);
+            // Кламп — до приведения к int: при переполнении cast'а несжатое значение
+            // обернулось бы в мусор, который кламп вернул бы к произвольной границе.
+            return (int)Math.Clamp(checked(busy * 100) / dTotal, 0L, 100L);
         }
         catch
         {

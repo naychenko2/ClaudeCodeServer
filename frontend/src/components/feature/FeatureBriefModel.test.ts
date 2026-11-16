@@ -63,6 +63,11 @@ describe('Сейчас: строки восьми kind', () => {
     expect(briefNowText(b, { nameOf })).toBe('Нужен ответ: нужен твой ответ по макету');
   });
 
+  it('waiting_you: markdown в причине очищается', () => {
+    const b = brief({ kind: 'waiting_you', reason: '**нужен** ответ по `макету`' });
+    expect(briefNowText(b, { nameOf })).toBe('Нужен ответ: нужен ответ по макету');
+  });
+
   // Дефект c79050aa: у kind 'error' причина — машинный код бэка (ExecutorStopClassifier →
   // Attention.Reason, FeatureProjector.cs:143), а не текст: старый фикстур «сохранение
   // журнала упало» описывал поведение, которого бэк не даёт. Перевод — общая таблица.

@@ -24,6 +24,7 @@ import { C, FONT, FS, R, SP, TB } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { formatDuration } from '../../lib/chatGroups';
 import { useNow } from '../../lib/useNow';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { minutesSince } from './FeatureStatsBits';
 import { dativeName, genitiveName } from './FeatureBriefModel';
 import type { FeatureAsk } from '../../lib/featurePage';
@@ -61,7 +62,7 @@ export function FeatureAskBlock({ ask, nameOf, isMobile, onAnswer }: FeatureAskB
   const labelColor = calm ? C.textMuted : stopped ? C.dangerText : C.warningText;
 
   const label = calm ? 'От тебя' : stopped ? ASK_LABEL.blocker : ASK_LABEL.need;
-  const phrase = ask ? ask.text : 'Ничего не нужно — работа идёт';
+  const phrase = ask ? markdownToPlain(ask.text) : 'Ничего не нужно — работа идёт';
   // Подстрока — только когда есть имя (контракт: нет personaId — подстроки нет);
   // давность добавляется, только когда есть от чего считать.
   const who = name ? `${name} ${stopped ? 'стоит' : 'ждёт'}${dur ? ` ${dur}` : ''}` : null;

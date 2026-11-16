@@ -206,6 +206,29 @@ describe('«Итог»: догрузка полного текста', () => {
     expect(tasksGetMock).toHaveBeenCalledTimes(1);
   });
 
+  it('итог с markdown: первая строка — после очистки, без «## » и «**»', async () => {
+    const id = nextId();
+    tasksGetMock.mockResolvedValue(fullTask(id, { resultMarkdown: '## Итог\n**сделано**' }));
+    const { container } = renderItem({ taskId: id });
+    await act(async () => { await flush(); });
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'step-result-text')!).join('')).toBe('Итог');
+  });
+
+  it('итог, начинающийся с рамки кода: берётся первая строка с содержимым', async () => {
+    const id = nextId();
+    tasksGetMock.mockResolvedValue(fullTask(id, { resultMarkdown: '```\n- **сделано**' }));
+    const { container } = renderItem({ taskId: id });
+    await act(async () => { await flush(); });
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'step-result-text')!).join('')).toBe('сделано');
+  });
+
+  it('текст критерия приёмки выводится без markdown', () => {
+    const id = nextId();
+    upsertTaskLocal(fullTask(id));
+    const { container } = renderItem({ taskId: id, acceptance: [{ id: 'c1', text: 'Тест **краснеет** на `X`' }], evidence: [] });
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'step-crit-c1')!).join('')).toContain('Тест краснеет на X');
+  });
+
   it('задача в списке без итога (hasResult=false): ни запроса, ни блока', async () => {
     const id = nextId();
     // Mock живый: при убранном гейте краснеет ровно на ассерте «запроса нет», а не TypeError'ом.

@@ -10,6 +10,7 @@
 import { C } from '../../lib/design';
 import { getPersonaById } from '../../lib/personas';
 import { plural } from '../../lib/plural';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { executorStopVisual } from '../../lib/tasks';
 // Подпись закрытия без мержа — общий источник (chatGroups, Ш1e): строка анализа,
 // плашка чата и тег страницы берут её, а не свою копию литералом.
@@ -188,7 +189,7 @@ export function analysisLineState(run: FeatureRun, nowMs: number): AnalysisLineS
 
   // 5. attention — тревога бэка: «Ждёт вас · {причина}».
   if (run.attention != null) {
-    const reason = run.attention.reason ?? (run.attention.kind === 'merge' ? 'мерж' : '');
+    const reason = markdownToPlain(run.attention.reason ?? '') || (run.attention.kind === 'merge' ? 'мерж' : '');
     const actions: AnalysisAction[] = [];
     if (run.attention.linkedSessionId) {
       actions.push({ kind: 'openChat', label: 'Открыть чат', sessionId: run.attention.linkedSessionId, variant: 'secondary' });

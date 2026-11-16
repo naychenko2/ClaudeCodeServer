@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { C, FONT, FS, R, SP, TB } from '../../lib/design';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { Badge, Button, Select } from '../../components/ui';
 import { WorkflowLadder } from './WorkflowLadder';
 import { WorkflowRouteSheet } from './WorkflowRouteSheet';
@@ -741,7 +742,7 @@ export function FeatureWorkflowConfirm({
 function quote(text: string, by: string): React.ReactElement {
   return (
     <div style={{ borderLeft: `3px solid ${C.accent}`, paddingLeft: SP.md, display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-      <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>{text}</div>
+      <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>{markdownToPlain(text)}</div>
       {by && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{by}</div>}
     </div>
   );

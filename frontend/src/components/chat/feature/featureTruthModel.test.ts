@@ -106,6 +106,10 @@ describe('featureTruthBar: полосы и процент', () => {
 });
 
 describe('alarmView: одни слова для строки В2 и попапа П2', () => {
+  it('причина «ждёт вас» очищается от markdown', () => {
+    expect(alarmView('waiting', '**Нужен** ответ про `X`', 'Полина', false).text).toBe('Ждёт вас · Нужен ответ про X');
+  });
+
   it('waiting десктоп — «Ждёт вас · {причина}», действие «Ответить» без имени (warn)', () => {
     const a = alarmView('waiting', 'Полина спрашивает про отступы', 'Полина', false);
     expect(a.tone).toBe('warn');

@@ -18,6 +18,7 @@ import { useMemo } from 'react';
 import { C, R, FS, SP, FONT, TB } from '../../lib/design';
 import { getPersonaById } from '../../lib/personas';
 import { roleLabel } from '../../lib/roleLabel';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { dateOnly, hhmm } from '../chat/feature/featureTime';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
@@ -190,7 +191,7 @@ function EventRow({ e, index, featureId, featureTitle = null, projectId, marks =
         </span>
         {e.reason && (
           <span data-testid="event-reason" style={{ minWidth: 0, fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>
-            {e.reason}
+            {markdownToPlain(e.reason)}
           </span>
         )}
         <span style={{ display: 'inline-flex', gap: SP.xs, marginLeft: 'auto' }}>

@@ -411,12 +411,19 @@ const STATIC_COMPONENTS: Components = {
   ),
 };
 
+const COMPACT_COMPONENTS: Components = {
+  p: ({ children }) => <p style={{ margin: '0 0 4px 0', lineHeight: 1.5 }}>{children}</p>,
+  ul: ({ children }) => <ul style={{ paddingLeft: 18, margin: '0 0 4px' }}>{children}</ul>,
+  ol: ({ children }) => <ol style={{ paddingLeft: 18, margin: '0 0 4px' }}>{children}</ol>,
+};
+
 // Рендер текста Claude с поддержкой Markdown.
 // memo + мемоизированная карта components: react-markdown использует её функции как ТИПЫ
 // элементов, поэтому новая ссылка на каждый рендер размонтировала бы поддерево целиком.
 // Для картинок это выливалось в мигание — ChatImage терял загруженный data-URL и тянул
 // файл заново (лента перерисовывается на каждом обновлении объекта проекта).
-export const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
+// compact — короткие плашки (голос оркестратора): абзацы почти без отступа, последний — вовсе без него.
+export const MarkdownContent = memo(function MarkdownContent({ text, compact = false }: { text: string; compact?: boolean }) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const onOpenFile = useContext(ChatOpenFileContext);
@@ -443,6 +450,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
       project && onOpenFile ? resolveFileMention(fileIndex, project, treePath, raw ?? '') : null;
     return {
         ...STATIC_COMPONENTS,
+        ...(compact ? COMPACT_COMPONENTS : null),
         code: ({ className, children, ...props }) => {
           const language = /language-(\w+)/.exec(className || '')?.[1];
           const text = String(children).replace(/\n$/, '');
@@ -532,7 +540,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
     };
     // treePath — в зависимостях: от него зависит короткий label абсолютного пути;
     // featureLinks — от него зависит распознавание ссылок читалки фичи (W4-LINK-F)
-  }, [project, onOpenFile, fileIndex, treePath, featureLinks]);
+  }, [project, onOpenFile, fileIndex, treePath, featureLinks, compact]);
 
   return (
     <ReactMarkdown remarkPlugins={REMARK_PLUGINS} urlTransform={urlTransform} components={components}>

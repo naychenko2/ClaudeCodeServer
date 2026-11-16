@@ -369,6 +369,18 @@ describe('FeatureStageScreen', () => {
     }
   });
 
+  it('«Ждёт сейчас»: markdown в причине очищается', async () => {
+    const m = waitingMetrics(5);
+    m.human.waitingNow!.reason = '**нужен** ответ';
+    stageMock.mockResolvedValue(screen('A', { metrics: m }));
+    const { container } = render([{ id: 'A', title: 'A' }]);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    clickTab(container, 'Метрики');
+    const row = kvRow(container, 'stage-metrics-human', 'Ждёт сейчас');
+    expect(row).toContain('нужен ответ');
+    expect(row).not.toContain('**');
+  });
+
   it('без waitingNow интервал не ставится: нечего ждать — нечего и считать', async () => {
     stageMock.mockResolvedValue(screen('A', { metrics: METRICS })); // waitingNow = null
     vi.useFakeTimers();

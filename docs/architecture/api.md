@@ -386,7 +386,7 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
      иначе — ВСЕ карты хоста (ADR-029 п.7: всё, что видит nvidia-smi, — «текст»).
      tensorParallel? — из секции Stats провайдера (vLLM --tensor-parallel-size); null — фронт
      показывает число карт (gpus.length)
-GET  /api/local-model/hardware     ?window=1m|5m|15m|1h   (только admin: роль на действии, не-админ — 403; флаг local-model-stats, без него 404)
+GET  /api/local-model/hardware     ?node=<key>&window=1m|5m|15m|1h   (node: без него worker, неизвестный — 404; только admin: роль на действии, не-админ — 403; флаг local-model-stats, без него 404)
      → { at, status: ok|stale, staleSince?, level: ok|warn|danger,
          gpus: [{ index, uuid, name, roles: ["text"], utilPerc?, memUsedMb?, memTotalMb?, memBusPerc?, coreTempC?, memTempC?,
                   hotspotTempC?, fanPerc?, clockMhz?, clockMaxMhz?, memClockMhz?, powerW?, powerLimitW?,
@@ -405,8 +405,9 @@ GET  /api/local-model/hardware     ?window=1m|5m|15m|1h   (только admin: �
      чипсет 85/95, диск от critC (−10/−3 °C), без предела 70/80. При status:"stale" (снимок старше 10 с) всё "ok", а
      staleSince — момент последнего живого снимка. memTempC/hotspotTempC — из файла помощника ccs-gddr6 (метка старше 10 с
      или файла нет — null); плитка карты берёт память, нет — ядро. Узел ram: tempC null, sensor "none".
-     В stats и stats/media ТОЛЬКО админу добавляется hardware?: { level, gpus: [{ uuid, memTempC?, level, powerCap, thermal }] }
+     В stats и stats/media ТОЛЬКО админу добавляется hardware?: { level, gpus: [{ uuid, memTempC?, level, powerCap, thermal }], nodes: [{ key, level }] }
      (для строки-ссылки и точки на вкладке); у не-админа (scope "self") поля нет. Подробнее — ADR-029, «Решения: вкладка «Железо»».
+GET  /api/local-model/hardware/farm   (только admin, не-админ — 403) → { at, level, farmNodes: [{ key, title, roles, engines, media, status: ok|stale|down|incompatible, since?, level, hottest?, gpus, uptimeS?, cpuLoadPerc?, ramUsedPerc? }] }; без hardware в контейнере — пустой farmNodes
 GET  /api/local-model/stats/media  ?since=<unix ms>   (аутентифицированный; ADR-030 §9)
      → { scope: "all"|"self", queueAhead: number|null,
          configured, comfy: { status: working|busy|down|disabled, downSince?, version? },

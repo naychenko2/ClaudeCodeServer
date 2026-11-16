@@ -110,4 +110,118 @@ public class HardwareEndpointTests : IClassFixture<HardwareEndpointTests.Host>, 
         media.GetProperty("scope").GetString().Should().Be("self");
         media.TryGetProperty("hardware", out _).Should().BeFalse("hardware отдаётся только админу");
     }
+
+    // ─── Узлы фермы (Ш3b) ───
+
+    [Fact]
+    public async Task Hardware_БезNode_ЭтоWorker_СПолямиУзла()
+    {
+        var resp = await _admin.GetAsync("/api/local-model/hardware");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("node").GetProperty("key").GetString().Should().Be("worker");
+        body.TryGetProperty("uptimeS", out _).Should().BeTrue();
+        body.TryGetProperty("cpuLoadPerc", out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Hardware_НеизвестныйУзел_404() =>
+        (await _admin.GetAsync("/api/local-model/hardware?node=nope")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+    // Мутация: убрать [Authorize(Roles="admin")] с hardware — не-админ получит 200/404 вместо 403.
+    [Theory]
+    [InlineData("")] [InlineData("?node=worker")] [InlineData("?node=nope")]
+    public async Task Hardware_НеАдмин_Отказ_ЛюбойУзел(string query) =>
+        (await _user.GetAsync("/api/local-model/hardware" + query)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+    [Fact]
+    public async Task Farm_Админ_СводкаУзлов()
+    {
+        var resp = await _admin.GetAsync("/api/local-model/hardware/farm");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("farmNodes").GetArrayLength().Should().Be(1);
+        body.GetProperty("farmNodes")[0].GetProperty("key").GetString().Should().Be("worker");
+        body.GetProperty("level").GetString().Should().Be("ok");
+    }
+
+    // Мутация: убрать [Authorize(Roles="admin")] с hardware/farm — тест краснеет.
+    [Fact]
+    public async Task Farm_НеАдмин_403() =>
+        (await _user.GetAsync("/api/local-model/hardware/farm")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+    [Fact]
+    public async Task Farm_Аноним_401() =>
+        (await _factory.CreateClient().GetAsync("/api/local-model/hardware/farm")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+    [Fact]
+    public async Task Stats_НеАдмин_Отказ() =>
+        (await _user.GetAsync("/api/local-model/stats")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+    [Fact]
+    public async Task Админ_Brief_СодержитУзлы()
+    {
+        var stats = await (await _admin.GetAsync("/api/local-model/stats")).Content.ReadFromJsonAsync<JsonElement>();
+        var nodes = stats.GetProperty("hardware").GetProperty("nodes");
+        nodes.GetArrayLength().Should().Be(1);
+        nodes[0].GetProperty("key").GetString().Should().Be("worker");
+        var media = await (await _admin.GetAsync("/api/local-model/stats/media")).Content.ReadFromJsonAsync<JsonElement>();
+        media.GetProperty("hardware").GetProperty("nodes").GetArrayLength().Should().Be(1);
+    }
+
+    // Два узла в конфиге → сводка отдаёт оба, в порядке конфига.
+    [Trait("Category", "Host")]
+    public sealed class ДваУзла : IClassFixture<ДваУзла.TwoNodesHost>
+    {
+        public sealed class TwoNodesHost : TestWebApplicationFactory
+        {
+            public TwoNodesHost()
+            {
+                ExtraConfig["HardwareNodes:0:Key"] = "worker";
+                ExtraConfig["HardwareNodes:0:Source"] = "local";
+                ExtraConfig["HardwareNodes:1:Key"] = "ai";
+                ExtraConfig["HardwareNodes:1:Source"] = "http://127.0.0.1:9105";
+            }
+        }
+
+        private readonly HttpClient _admin;
+        public ДваУзла(TwoNodesHost host) => _admin = host.CreateAuthenticatedClient();
+
+        [Fact]
+        public async Task Farm_ДваУзла()
+        {
+            var farm = await (await _admin.GetAsync("/api/local-model/hardware/farm")).Content.ReadFromJsonAsync<JsonElement>();
+            farm.GetProperty("farmNodes").GetArrayLength().Should().Be(2);
+            farm.GetProperty("farmNodes")[1].GetProperty("key").GetString().Should().Be("ai");
+        }
+    }
+
+    // Реестр без узла worker: ручка без node — 404, не пустое тело; farm — по реестру.
+    [Trait("Category", "Host")]
+    public sealed class БезWorker : IClassFixture<БезWorker.NoWorkerHost>
+    {
+        public sealed class NoWorkerHost : TestWebApplicationFactory
+        {
+            public NoWorkerHost()
+            {
+                ExtraConfig["HardwareNodes:0:Key"] = "solo";
+                ExtraConfig["HardwareNodes:0:Source"] = "local";
+            }
+        }
+
+        private readonly HttpClient _admin;
+        public БезWorker(NoWorkerHost host) => _admin = host.CreateAuthenticatedClient();
+
+        [Fact]
+        public async Task БезNode_404() =>
+            (await _admin.GetAsync("/api/local-model/hardware")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        [Fact]
+        public async Task УзелИзРеестра_200()
+        {
+            (await _admin.GetAsync("/api/local-model/hardware?node=solo")).StatusCode.Should().Be(HttpStatusCode.OK);
+            var farm = await (await _admin.GetAsync("/api/local-model/hardware/farm")).Content.ReadFromJsonAsync<JsonElement>();
+            farm.GetProperty("farmNodes")[0].GetProperty("key").GetString().Should().Be("solo");
+        }
+    }
 }

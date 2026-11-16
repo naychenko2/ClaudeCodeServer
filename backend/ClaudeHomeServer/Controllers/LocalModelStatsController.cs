@@ -398,13 +398,14 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         DurationS = c.Duration.TotalSeconds,
     };
 
-    // GET /api/local-model/hardware?window=1m|5m|15m|1h
+    // GET /api/local-model/hardware?node=<key>&window=1m|5m|15m|1h
     // Вкладка «Железо»: температуры карт (в т.ч. памяти GDDR6X), процессора, платы, дисков + ряды
-    // истории за окно. ТОЛЬКО admin (роль на действии, как у /stats; не-админ → 403). Неизвестное window → 400.
-    // hardware нет в контейнере (ветка эпохи отключаемой llm, ADR-014 §5) → 200 пустой отчёт (не 500).
+    // истории за окно. ТОЛЬКО admin (роль на действии, как у /stats; не-админ → 403, узел при этом не выдаётся).
+    // Без node — узел worker (прежний контракт); неизвестный node или worker нет в реестре → 404.
+    // Неизвестное window → 400. hardware нет в контейнере (ветка эпохи отключаемой llm, ADR-014 §5) → 200 пустой отчёт (не 500).
     [Authorize(Roles = "admin")]
     [HttpGet("hardware")]
-    public IActionResult Hardware([FromQuery] string? window)
+    public IActionResult Hardware([FromQuery] string? window, [FromQuery] string? node)
     {
         if (!TryParseWindow(window, out var windowSpan))
             return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 1m, 5m, 15m, 1h)" });
@@ -412,8 +413,17 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         if (_hardware is null)
             return Ok(new HardwareReport(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "ok", null, "ok",
                 [], [], [], [], (long)HardwareReportService.StepFor(windowSpan).TotalMilliseconds));
-        return Ok(_hardware.Build(windowSpan));
+
+        var report = string.IsNullOrEmpty(node) ? _hardware.Build(windowSpan) : _hardware.Build(node, windowSpan);
+        return report is null ? NotFound(new { error = "Узел не найден" }) : Ok(report);
     }
+
+    // GET /api/local-model/hardware/farm — сводка узлов фермы (карточка «Ферма»). ТОЛЬКО admin.
+    // hardware нет в контейнере → 200 с пустым farmNodes (не 500).
+    [Authorize(Roles = "admin")]
+    [HttpGet("hardware/farm")]
+    public IActionResult HardwareFarm() =>
+        Ok(_hardware?.Farm() ?? new HardwareFarmReport(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "ok", []));
 
     // GET /api/local-model/stats/media?since=<unix ms>
     // Вкладка «Медиа»: статус ComfyUI + слоты + running/queue/lastHour.

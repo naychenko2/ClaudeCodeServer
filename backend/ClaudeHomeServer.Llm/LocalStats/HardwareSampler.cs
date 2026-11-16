@@ -245,11 +245,20 @@ public sealed class HardwareSampler : BackgroundService, IHardwareSampler
     private HardwareSample BuildSample(NodeState node, NodeReading reading, DateTimeOffset now, out string[] ambiguous)
     {
         // gddr6: связка по каноническому busId; протухший или отсутствующий → mem/hotspot = null.
+        // Свежесть — по часам узла: метку "at" в файле помощника ставит часами узла сам помощник,
+        // с часами worker она не сравнивается (ADR-029). У локального источника ClockMs нет —
+        // там часы узла и есть часы сэмплера (тот же порядок, что у ipmi ниже).
         var gddr6Map = new Dictionary<string, Gddr6GpuTemp>();
-        if (reading.Gddr6 is { } gtext && _gddr6.Parse(gtext) is { } gr && gr.fresh)
+        if (reading.Gddr6 is { } gtext)
         {
-            foreach (var g in gr.gpus)
-                gddr6Map[GpuSampler.CanonicalBusId(g.BusId)] = g;
+            var nodeNow = reading.ClockMs is { } gclock
+                ? DateTimeOffset.FromUnixTimeMilliseconds(gclock)
+                : now;
+            if (_gddr6.Parse(gtext, nodeNow) is { } gr && gr.fresh)
+            {
+                foreach (var g in gr.gpus)
+                    gddr6Map[GpuSampler.CanonicalBusId(g.BusId)] = g;
+            }
         }
 
         var gpus = new List<HardwareGpuSample>();

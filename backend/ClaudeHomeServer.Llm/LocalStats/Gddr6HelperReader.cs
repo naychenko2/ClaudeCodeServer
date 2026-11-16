@@ -17,7 +17,7 @@ public sealed record Gddr6GpuTemp
 // Бэкенд ТОЛЬКО читает файл (недоверенный источник): любой сбой разбора → null, а не исключение
 // наружу (иначе упадёт BackgroundService, а с ним весь хост). Метка "at" в файле — признак свежести:
 // старше StaleAfter → данные протухли (mem/hotspot = null, sensor:'nodata'), остальное работает.
-// Отрицательный возраст (метка впереди часов CCS — часы узла сдвинуты вперёд) — тоже не свежесть:
+// Отрицательный возраст (метка впереди часов отбора — часы узла сдвинуты вперёд) — тоже не свежесть:
 // иначе замороженный файл кажется свежим ещё offset+StaleAfter.
 public sealed class Gddr6HelperReader
 {
@@ -31,8 +31,9 @@ public sealed class Gddr6HelperReader
         _time = time;
     }
 
-    // Читает файл: null — файла нет/сбой чтения/битый JSON; иначе (список температур, свеж).
-    // Свежесть — по метке "at" в файле (DateTimeOffset из unix-мс); метки нет → протухло.
+    // Читает ЛОКАЛЬНЫЙ файл (файл помощника на этой же машине): null — файла нет/сбой чтения/
+    // битый JSON; иначе (список температур, свеж). Часов отбора здесь свои нет: часы сэмплера
+    // и есть часы узла (у локального источника ClockMs не ставится, см. NodeReading).
     public (IReadOnlyList<Gddr6GpuTemp> gpus, bool fresh)? Read(string path)
     {
         try
@@ -40,7 +41,7 @@ public sealed class Gddr6HelperReader
             if (!File.Exists(path))
                 return null;
             var text = File.ReadAllText(path);
-            return Parse(text);
+            return Parse(text, _time.GetUtcNow());
         }
         catch
         {
@@ -49,8 +50,13 @@ public sealed class Gddr6HelperReader
     }
 
     // Чистая функция: разбирает JSON помощника. null — не тот формат (v != 1) или битый JSON.
-    // Свежесть: 0 <= (now - at) <= StaleAfter; метка впереди now — не свежесть.
-    public (IReadOnlyList<Gddr6GpuTemp> gpus, bool fresh)? Parse(string text)
+    // Свежесть — по метке "at" в файле (DateTimeOffset из unix-мс), метки нет → протухло:
+    // 0 <= (now - at) <= StaleAfter; метка впереди now — не свежесть.
+    // now — ЧАСЫ, по которым решается свежесть: для узла фермы это настенные часы узла
+    // (NodeReading.ClockMs), для локального файла — часы сэмплера (Read). Метку "at" ставит
+    // часами узла сам помощник, поэтому часы приходят СНАРУКИ: с часами worker она не
+    // сравнивается (ADR-029; тот же порядок, что у ipmi в NodeSlice.TryReadIpmi).
+    public (IReadOnlyList<Gddr6GpuTemp> gpus, bool fresh)? Parse(string text, DateTimeOffset now)
     {
         try
         {
@@ -80,7 +86,7 @@ public sealed class Gddr6HelperReader
                 }
             }
 
-            var age = _time.GetUtcNow() - DateTimeOffset.FromUnixTimeMilliseconds(at);
+            var age = now - DateTimeOffset.FromUnixTimeMilliseconds(at);
             return (gpus, age >= TimeSpan.Zero && age <= StaleAfter);
         }
         catch

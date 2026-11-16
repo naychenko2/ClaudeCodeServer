@@ -59,7 +59,7 @@ public class HardwareTests : IDisposable
     public void Helper_Fresh_ParsesValues()
     {
         var t = new ManualTime();
-        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(-3)));
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(-3)), t.GetUtcNow());
         r.Should().NotBeNull();
         r!.Value.fresh.Should().BeTrue();
         r.Value.gpus.Should().ContainSingle().Which.MemTempC.Should().Be(68);
@@ -70,7 +70,7 @@ public class HardwareTests : IDisposable
     public void Helper_Stale_NotFresh()
     {
         var t = new ManualTime();
-        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(-11)));
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(-11)), t.GetUtcNow());
         r!.Value.fresh.Should().BeFalse("метка at старше 10 с — данных нет");
     }
 
@@ -78,7 +78,7 @@ public class HardwareTests : IDisposable
     public void Helper_AtExactlyNow_IsFresh()
     {
         var t = new ManualTime();
-        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow()));
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow()), t.GetUtcNow());
         r!.Value.fresh.Should().BeTrue("возраст ровно 0 — граница свежести включительна");
     }
 
@@ -86,9 +86,10 @@ public class HardwareTests : IDisposable
     public void Helper_MarkInFuture_NotFresh()
     {
         var t = new ManualTime();
-        // Часы узла сдвинуты вперёд: метка "at" впереди часов CCS → отрицательный возраст.
-        // Без проверки знака замороженный файл считался бы свежим ещё offset+StaleAfter.
-        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(11)));
+        // Метка "at" впереди часов отбора → отрицательный возраст (для локального файла
+        // часы узла и есть часы сэмплера). Без проверки знака замороженный файл считался
+        // бы свежим ещё offset+StaleAfter.
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(11)), t.GetUtcNow());
         r!.Value.fresh.Should().BeFalse("отрицательный возраст — не свежесть");
     }
 
@@ -98,13 +99,79 @@ public class HardwareTests : IDisposable
     [InlineData("")]
     public void Helper_Broken_ReturnsNull(string text)
     {
-        new Gddr6HelperReader(new ManualTime()).Parse(text).Should().BeNull();
+        var t = new ManualTime();
+        new Gddr6HelperReader(t).Parse(text, t.GetUtcNow()).Should().BeNull();
     }
 
     [Fact]
     public void Helper_MissingFile_ReturnsNull()
     {
         new Gddr6HelperReader(new ManualTime()).Read(Path.Combine(_root, "нет.json")).Should().BeNull();
+    }
+
+    // Часы удалённого узла фермы идут впереди часов worker (обычный NTP-дрейф): свежесть gddr6
+    // решается по часам узла (NodeReading.ClockMs), а не по часам worker (ADR-029, NodeSlice:55).
+    // Мутация «взять в Parse _time.GetUtcNow() вместо now» краснит этот тест: case1 даёт
+    // возраст −4 с (не свежесть), case3 — +6 с (свежесть).
+    [Theory]
+    [InlineData(-1, true)] // возраст 1 с по часам узла — свежий (по-старому: −4 с → mem/hotspot в nodata)
+    [InlineData(11, false)] // метка на 11 с впереди часов узла — не свежесть (нижняя граница возраста)
+    [InlineData(-11, false)] // метка на 11 с старше часов узла — протухло (StaleAfter = 10 с)
+    public void Helper_FreshnessIsByNodeClock_NotWorkerClock(int atOffsetSec, bool expected)
+    {
+        var t = new ManualTime();
+        var nodeClock = t.GetUtcNow().AddSeconds(5);
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(nodeClock.AddSeconds(atOffsetSec)), nodeClock);
+        r!.Value.fresh.Should().Be(expected);
+    }
+
+    // Срез удалённого узла: текст помощника + настенные часы узла (как у RemoteReadingSource).
+    private sealed class RemoteNodeSource(string? gddr6, long? clockMs, IGpuSampler gpu) : INodeReadingSource
+    {
+        public async Task<NodeReading> ReadAsync(CancellationToken ct = default) => new()
+        {
+            Status = NodeReadingStatus.Ok,
+            Gpus = await gpu.ReadAsync(ct),
+            Gddr6 = gddr6,
+            ClockMs = clockMs,
+        };
+    }
+
+    private HardwareSampler BuildRemoteSampler(ManualTime time, string helperText, DateTimeOffset nodeClock)
+    {
+        var src = new RemoteNodeSource(helperText, nodeClock.ToUnixTimeMilliseconds(), new FakeGpu(Gpu(70)));
+        return new HardwareSampler(new FakeOptions(new LocalModelStatsOptions { Enabled = true }),
+            [new HardwareSamplerNode("video", src)], new Gddr6HelperReader(time), time);
+    }
+
+    // Тот же сдвиг часов сквозом через сэмплер: файл помощника возрастом 1 с ПО ЧАСАМ УЗЛА —
+    // свежий, mem/hotspot на месте (по-старому возраст −4 с от часов worker → nodata).
+    // Мутация «передать в сэмплере _time.GetUtcNow()» краснит этот тест.
+    [Fact]
+    public async Task RemoteNode_ClockAheadOfWorker_Gddr6StaysFresh()
+    {
+        var time = new ManualTime();
+        var nodeClock = time.GetUtcNow().AddSeconds(5);
+        var s = await BuildRemoteSampler(time, HelperJson(nodeClock.AddSeconds(-1)), nodeClock).PollNodeAsync("video");
+
+        var g = s!.Gpus!.Single();
+        g.MemTempC.Should().Be(68, "свежесть по часам узла, а не worker");
+        g.HotspotTempC.Should().Be(75);
+        g.CoreTempC.Should().Be(70);
+    }
+
+    // Метка на 11 с старше часов узла — протухло: mem/hotspot = null, остальное работает.
+    [Fact]
+    public async Task RemoteNode_Gddr6StaleByNodeClock_MemNullCoreWorks()
+    {
+        var time = new ManualTime();
+        var nodeClock = time.GetUtcNow().AddSeconds(5);
+        var s = await BuildRemoteSampler(time, HelperJson(nodeClock.AddSeconds(-11)), nodeClock).PollNodeAsync("video");
+
+        var g = s!.Gpus!.Single();
+        g.MemTempC.Should().BeNull();
+        g.HotspotTempC.Should().BeNull();
+        g.CoreTempC.Should().Be(70);
     }
 
     // ─── hwmon ───────────────────────────────────────────────────────────────────

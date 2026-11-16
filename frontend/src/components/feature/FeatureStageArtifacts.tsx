@@ -4,6 +4,9 @@
 // файлами коммитов, и без них (F-2.11), итог — без коммитов; пустое состояние — только когда нет
 // ничего, и при отсутствии дерева оно говорит об этом, а не обещает коммит (F-2.11).
 //
+// Итог исполнителя — общий markdown-рендер ленты (MarkdownContent), а не сырой текст:
+// на странице фичи «##», «**», «- » и обратные кавычки видны разметкой (F-2.46a).
+//
 // Дифф: один запрос на коммит — пока он идёт, повторный клик ничего не шлёт (inFlight);
 // готовый дифф кэшируется в состоянии, повторное раскрытие запроса не делает. Отказ
 // (404/сеть) показывается под своим коммитом, остальные коммиты и блоки живут; упавший
@@ -20,6 +23,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { InlineSegmented } from '../ui/InlineSegmented';
 import { AlertTriangle, FileText } from 'lucide-react';
 import { DiffView } from '../DiffView';
+import { MarkdownContent } from '../chat/MarkdownContent';
 import { api } from '../../lib/api';
 import { formatDateTime } from './FeatureStatsBits';
 import type { StageArtifacts, StageCommit, StageCommitDiff, StageFile, StageFileDiff } from '../../types/featureStage';
@@ -147,10 +151,10 @@ function LegacyArtifacts({ taskId, artifacts, isMobile }: {
         <div data-testid="stage-result" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
           <div style={SEC_LABEL}>Итог</div>
           <div style={{
-            fontSize: FS.sm, color: C.textPrimary, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+            fontSize: FS.sm, lineHeight: 1.6, color: C.textPrimary, overflowWrap: 'anywhere',
             padding: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.md,
           }}>
-            {resultMarkdown}
+            <MarkdownContent text={resultMarkdown} />
           </div>
         </div>
       )}
@@ -191,15 +195,16 @@ export function diffModes(file: StageFile): DiffMode[] {
 
 const diffKey = (path: string, from: string, to: string) => `${path}\u0000${from}\u0000${to}`;
 
+// Итог исполнителя — тем же рендером, что лента чата и читалка плана (F-2.46a)
 function ResultCard({ markdown }: { markdown: string }) {
   return (
     <div data-testid="stage-result" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
       <div style={SEC_LABEL}>Итог исполнителя</div>
       <div style={{
-        fontSize: FS.sm, color: C.textPrimary, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+        fontSize: FS.sm, lineHeight: 1.6, color: C.textPrimary, overflowWrap: 'anywhere',
         padding: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.md,
       }}>
-        {markdown}
+        <MarkdownContent text={markdown} />
       </div>
     </div>
   );

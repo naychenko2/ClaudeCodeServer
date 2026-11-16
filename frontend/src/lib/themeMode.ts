@@ -45,9 +45,11 @@ export function getEffectiveTheme(): EffectiveTheme {
   return _mode === 'system' ? systemTheme() : _mode;
 }
 
-// Применить эффективную тему к <html>
+// Применить эффективную тему к <html>. В тестовом fake-DOM document есть, но
+// documentElement отсутствует (chat/__tests__/fakeDom, FDoc) — применять не к чему,
+// тот же пропуск, что в node. В браузере documentElement есть всегда.
 function applyTheme() {
-  if (typeof document !== 'undefined') {
+  if (typeof document !== 'undefined' && document.documentElement) {
     document.documentElement.dataset.theme = getEffectiveTheme();
   }
 }

@@ -3365,6 +3365,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Фаза старта хода для строки статуса в ленте (TurnStartPhaseMessage). Лёгкое эфемерное
     // событие: сбой доставки не должен ронять ход. «done» шлём один раз после показанной фазы.
+    // Флаг пер-ходовый по построению: его взводит только «context» (внутри _turnLock, у самого
+    // хода), а «queued» — нет: ход в очереди не владеет флагом, и события идущего хода его
+    // строку «В очереди» не снимают.
     private volatile bool _startPhaseShown;
 
     private async Task EmitStartPhaseAsync(string phase)
@@ -3374,7 +3377,7 @@ public class ClaudeSession : ILlmSessionAdapter
             if (!_startPhaseShown) return;
             _startPhaseShown = false;
         }
-        else _startPhaseShown = true;
+        else if (phase != "queued") _startPhaseShown = true;
         try { await _onMessage(new TurnStartPhaseMessage(phase)); }
         catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] Фаза старта хода не доставлена: {ex.Message}"); }
     }
@@ -6348,7 +6351,14 @@ public class ClaudeSession : ILlmSessionAdapter
             _turnActivity?.SetTag("model", cliModel);
         }
 
-        if (typeProp.GetString() != "system") await EmitStartPhaseAsync("done");
+        // «done» — только по событию самого хода: хвост продолжения (SkipResults>0) чужой
+        if (typeProp.GetString() != "system" && Volatile.Read(ref run.SkipResults) == 0)
+        {
+            var wasShown = _startPhaseShown;
+            await EmitStartPhaseAsync("done");
+            // За идущим ходом стоят ещё ходы — их «В очереди» снял этот done, вернём строку
+            if (wasShown && Volatile.Read(ref _queuedTurns) > 1) await EmitStartPhaseAsync("queued");
+        }
 
         switch (typeProp.GetString())
         {

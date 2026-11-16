@@ -168,6 +168,87 @@ public class PromptSectionContributorsDiTests
         prompt.Sections.Select(s => s.Text).Should().Equal(new[] { "ранняя", "средняя", "поздняя" });
     }
 
+    // TS-18 (параллельная сборка recall): гонка параллельной группы. Реестр получил
+    // двух parallel-safe членов в обратном порядке (поздний Order первым), и «поздний»
+    // завершается первым — порядок завершения задан гейтами TaskCompletionSource, без
+    // Task.Delay. Секции в событии остаются в порядке Order, а не завершения и не
+    // получения. Проверка «оба внутри BuildAsync» — сторож параллельного старта:
+    // при последовательных фильтрах второй не начался бы, пока первый ждёт свой гейт.
+    [Fact]
+    public async Task ParallelGroup_CompletingInReverseOrder_SectionsStayInOrder()
+    {
+        var bus = new TurnEventBus(NullLogger<TurnEventBus>.Instance);
+        var later = new GateContributor("later", 300);
+        var earlier = new GateContributor("earlier", 200);
+        // Порядок получения намеренно обратный: он тоже не должен определять результат.
+        PromptSectionContributorsRegistration.RegisterAll(bus,
+            new IPromptSectionContributor[] { later, earlier });
+
+        var prompt = new PromptAssembling(new TurnContext("session-1", "owner-1", 1, 0), ParallelCtx());
+        var applying = bus.ApplyAsync(prompt);
+
+        var bothEntered = Task.WhenAll(later.Entered, earlier.Entered);
+        (await Task.WhenAny(bothEntered, Task.Delay(5000))).Should().Be(bothEntered,
+            "оба члена группы должны быть внутри BuildAsync одновременно — иначе гонки нет");
+
+        // Завершение — в порядке, обратном Order: «later» завершится строго раньше,
+        // чем «earlier» будет отпущен.
+        later.Gate.SetResult();
+        await later.Done;
+        earlier.Gate.SetResult();
+
+        await applying;
+
+        prompt.Sections.Select(s => s.Key).Should().Equal(new[] { "earlier", "later" },
+            "секции склеиваются по Order, а не по порядку завершения или получения");
+        prompt.ContributorTimingsMs.Should().ContainKeys("earlier", "later");
+    }
+
+    // TS-18: исключение одного члена группы не ломает ни второго, ни хода:
+    // сбойный измеряется как державший сборку (как раньше), здоровый даёт свою секцию,
+    // цепочка продолжается следующим фильтром.
+    [Fact]
+    public async Task ParallelGroup_FailingMemberDoesNotBreakTheOtherOrTheTurn()
+    {
+        var bus = new TurnEventBus(NullLogger<TurnEventBus>.Instance);
+        var bad = new GateContributor("bad", 200, throws: true);
+        var good = new GateContributor("good", 300);
+        var after = new OrderContributor("after", 400, "после группы"); // не parallel-safe, после группы
+        PromptSectionContributorsRegistration.RegisterAll(bus,
+            new IPromptSectionContributor[] { bad, good, after });
+
+        var prompt = new PromptAssembling(new TurnContext("session-1", "owner-1", 1, 0), ParallelCtx());
+        var applying = bus.ApplyAsync(prompt);
+
+        var bothEntered = Task.WhenAll(bad.Entered, good.Entered);
+        (await Task.WhenAny(bothEntered, Task.Delay(5000))).Should().Be(bothEntered,
+            "оба члена группы стартуют одновременно");
+
+        good.Gate.SetResult();
+        bad.Gate.SetResult(); // внутри BuildAsync — намеренное исключение
+
+        await applying; // ход не падает
+
+        prompt.Sections.Select(s => s.Key).Should().Equal(new[] { "good", "after" },
+            "исключение одного члена не уносит секцию другого и не обрывает цепочку");
+        prompt.ContributorTimingsMs.Should().ContainKeys("bad", "good", "after");
+    }
+
+    // TS-18: parallel-safe ровно у пары recall (recall-notes + recall-memory).
+    // Сторож от обратного: «отметить своего контрибьютора параллельным за скорость»,
+    // не проверив отсутствия общего состояния, и от потери отметки.
+    [Fact]
+    public void ParallelSafe_IsClaimedExactlyByRecallPair()
+    {
+        using var provider = BuildSut();
+
+        var parallelSafe = provider.GetServices<IPromptSectionContributor>()
+            .Where(c => c.ParallelSafe).Select(c => c.Key).ToList();
+
+        parallelSafe.Should().BeEquivalentTo(new[] { "recall-notes", "recall-memory" },
+            "parallel-safe — только проверенная пара recall; остальные по дефолту последовательны");
+    }
+
     // Замер для паспорта хода: обёртка реестра пишет длительность каждого СРАБОТАВШЕГО
     // контрибьютора; выключенный (IsEnabled=false) в замеры не попадает.
     [Fact]
@@ -474,5 +555,43 @@ public class PromptSectionContributorsDiTests
             await Task.Delay(delayMs);
             return new PromptSectionContribution([new PromptSection(key, key)]);
         }
+    }
+
+    // TS-18: член параллельной группы с гейтами: Entered сигналит, что работа началась,
+    // Gate отпускает завершение, Done — что BuildAsync уже вернулся. Тест держит
+    // порядок завершения сам (TaskCompletionSource), без Task.Delay.
+    // RunContinuationsAsynchronously — чтобы SetResult из теста не исполнял продолжение
+    // на теме теста (иначе тест встал бы внутри своего же гейта).
+    private sealed class GateContributor(string key, int order, bool throws = false) : IPromptSectionContributor
+    {
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string Key => key;
+        public string Title => key;
+        public int Order => order;
+        public string Group => "test";
+        public bool ParallelSafe => true;
+        public bool IsEnabled(PromptSessionContext sessionContext) => true;
+        public Task Entered => _entered.Task;
+        public TaskCompletionSource Gate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Done => _done.Task;
+        public async Task<PromptSectionContribution?> BuildAsync(
+            PromptSessionContext sessionContext, string? turnText)
+        {
+            _entered.SetResult();
+            await Gate.Task;
+            if (throws) throw new InvalidOperationException($"{key}: намеренный сбой теста");
+            _done.SetResult();
+            return new PromptSectionContribution([new PromptSection(key, key)]);
+        }
+    }
+
+    private static PromptSessionContext ParallelCtx()
+    {
+        var session = new Session { OwnerId = "owner-1" };
+        return new PromptSessionContext(session, "owner-1", Persona: null, RootPath: null,
+            HasNotesMcp: false, HasMemoryMcp: false, HasWorkspaceMcp: false,
+            WorkspaceSections: Array.Empty<string>());
     }
 }

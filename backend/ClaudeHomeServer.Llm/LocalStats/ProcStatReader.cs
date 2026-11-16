@@ -71,22 +71,22 @@ public static class ProcStatReader
     }
 
     // Загрузка CPU, %: дельта jiffies двух соседних срезов (разрез 6199b268):
-    // (Δtotal − Δidle) / Δtotal, целое вниз, 0…100. null: нет prev; Δtotal ≤ 0 (за интервал
-    // не было тиков); счётчик ушёл назад (перезагрузка узла: total или idle меньше prev);
-    // Δidle > Δtotal (занятое время убывает — невозможная пара); переполнение при умножении.
+    // (Δtotal − Δidle) / Δtotal, целое вниз, 0…100 для реальных снимков (счётчики монотонны).
+    // null: нет prev; Δtotal ≤ 0 (за интервал не было тиков или счётчик ушёл назад —
+    // перезагрузка узла); переполнение long при умножении.
     public static int? CpuLoadPerc(CpuJiffies? prev, CpuJiffies? cur)
     {
         if (prev is null || cur is null) return null;
         var dTotal = cur.Total - prev.Total;
-        var dIdle = cur.Idle - prev.Idle;
-        if (dTotal <= 0 || dIdle < 0 || dIdle > dTotal) return null;
+        if (dTotal <= 0) return null;
         try
         {
-            return (int)(checked(dTotal - dIdle) * 100 / dTotal);
+            var busy = checked(dTotal - (cur.Idle - prev.Idle));
+            return (int)(checked(busy * 100) / dTotal);
         }
         catch
         {
-            // Переполнение long при умножении.
+            // Переполнение long при вычитании/умножении.
             return null;
         }
     }

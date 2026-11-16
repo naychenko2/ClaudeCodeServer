@@ -74,6 +74,24 @@ public class HardwareTests : IDisposable
         r!.Value.fresh.Should().BeFalse("метка at старше 10 с — данных нет");
     }
 
+    [Fact]
+    public void Helper_AtExactlyNow_IsFresh()
+    {
+        var t = new ManualTime();
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow()));
+        r!.Value.fresh.Should().BeTrue("возраст ровно 0 — граница свежести включительна");
+    }
+
+    [Fact]
+    public void Helper_MarkInFuture_NotFresh()
+    {
+        var t = new ManualTime();
+        // Часы узла сдвинуты вперёд: метка "at" впереди часов CCS → отрицательный возраст.
+        // Без проверки знака замороженный файл считался бы свежим ещё offset+StaleAfter.
+        var r = new Gddr6HelperReader(t).Parse(HelperJson(t.GetUtcNow().AddSeconds(11)));
+        r!.Value.fresh.Should().BeFalse("отрицательный возраст — не свежесть");
+    }
+
     [Theory]
     [InlineData("не json")]
     [InlineData("{\"v\":2,\"at\":1,\"gpus\":[]}")]

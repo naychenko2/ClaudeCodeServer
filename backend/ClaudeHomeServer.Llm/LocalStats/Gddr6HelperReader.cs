@@ -17,6 +17,8 @@ public sealed record Gddr6GpuTemp
 // Бэкенд ТОЛЬКО читает файл (недоверенный источник): любой сбой разбора → null, а не исключение
 // наружу (иначе упадёт BackgroundService, а с ним весь хост). Метка "at" в файле — признак свежести:
 // старше StaleAfter → данные протухли (mem/hotspot = null, sensor:'nodata'), остальное работает.
+// Отрицательный возраст (метка впереди часов CCS — часы узла сдвинуты вперёд) — тоже не свежесть:
+// иначе замороженный файл кажется свежим ещё offset+StaleAfter.
 public sealed class Gddr6HelperReader
 {
     // Метка "at" старше этого → данные протухли.
@@ -47,7 +49,7 @@ public sealed class Gddr6HelperReader
     }
 
     // Чистая функция: разбирает JSON помощника. null — не тот формат (v != 1) или битый JSON.
-    // Свежесть: (now - at) <= StaleAfter.
+    // Свежесть: 0 <= (now - at) <= StaleAfter; метка впереди now — не свежесть.
     public (IReadOnlyList<Gddr6GpuTemp> gpus, bool fresh)? Parse(string text)
     {
         try
@@ -79,7 +81,7 @@ public sealed class Gddr6HelperReader
             }
 
             var age = _time.GetUtcNow() - DateTimeOffset.FromUnixTimeMilliseconds(at);
-            return (gpus, age <= StaleAfter);
+            return (gpus, age >= TimeSpan.Zero && age <= StaleAfter);
         }
         catch
         {

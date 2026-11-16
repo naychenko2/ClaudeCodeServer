@@ -59,6 +59,56 @@ journalctl -u ccs-node-stats -n 50
 
 В WSL нет `/sys/class/hwmon` с датчиками хоста, поэтому `files` и `links` содержат только `/proc/*`, а список датчиков пуст — **это норма**, не поломка. Карты видны через `nvidia-smi` (`gpuCsv`). Нужен включённый systemd в WSL: в `/etc/wsl.conf` секция `[boot]` с `systemd=true`, затем `wsl --shutdown` и запуск заново. Адрес для `listen` — адрес интерфейса WSL, доступный с worker (при NAT-сети потребуется проброс порта на хосте Windows — отдельное решение шага С1).
 
+## Где стоит
+
+Установлено 2026-11-16 (шаг У1), версия среза `v=1`, worker — `192.168.7.117`. Код агента на узлах побайтно равен `ccs_node_stats.py` из ветки (сверено `sha256sum`).
+
+| Узел | Адрес и порт | Среда | Что отдаёт |
+|---|---|---|---|
+| ai | `192.168.7.83:9105` | Linux, systemd 259, Python 3.14 | hwmon (asus-ec, k10temp, nct6798, nvme), `/proc`, `statvfs`, `gpuCsv` — 2× RTX 3090, `gddr6` из `/run/ccs-gddr6/temps.json` |
+| video | `192.168.7.208:9105` | Windows 11 + WSL2 Ubuntu-24.04 (mirrored, systemd), Python 3.12 | только `/proc/{meminfo,stat,uptime,self/mountinfo}` (4 файла), `statvfs`, `gpuCsv` — 1× RTX 3090; `gddr6: null` |
+
+У обоих узлов: `/etc/ccs-node-stats.json` = `{ "listen": "<адрес узла>:9105", "allow": ["192.168.7.117"] }`, в unit `IPAddressAllow=192.168.7.117` (три места совпадают с адресом worker), `systemctl enable` стоит.
+
+### Особенности узла video
+
+- **hwmon пуст, датчиков платы и GDDR6 нет — ожидаемо, не дефект:** в WSL нет `/sys/class/hwmon` хоста, а помощник `ccs-gddr6` не переносится (нет `/dev/mem` карты). Температура ядра, мощность, VRAM и утилизация карты приходят из `gpuCsv`.
+- **Два отличия от unit по умолчанию, оформлены drop-in'ом `/etc/systemd/system/ccs-node-stats.service.d/wsl.conf`** (репозиторный unit не менялся):
+  ```ini
+  [Service]
+  Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib
+  DeviceAllow=/dev/dxg rw
+  ```
+  Без первой строки агент не находит `nvidia-smi` (в WSL он лежит в `/usr/lib/wsl/lib`, которого нет в PATH unit'а) и отдаёт `gpuCsv: null`; без второй `DevicePolicy=closed` закрывает `/dev/dxg`, через который WSL видит карту. Драйверных устройств `nvidia*` в `/proc/devices` WSL нет, `DeviceAllow=char-nvidia*` из unit там ничего не делают.
+- **Проброс порта не нужен:** WSL в режиме `networkingMode=mirrored` делит LAN-адрес с Windows (`192.168.7.208`), порт из WSL виден в сети сразу.
+- **Брандмауэр Windows — правку пришлось сделать:** без неё `curl` с worker уходил в тайм-аут. По образцу правил «ComfyUI 8188 from ai» / «Bonsai 18030-18031 from ai» заведены **два** правила (в `.wslconfig` стоит `firewall=true`, поэтому нужно и обычное, и Hyper-V правило для WSL), TCP 9105, источник только `192.168.7.117`:
+  ```powershell
+  New-NetFirewallRule -DisplayName 'CCS node-stats 9105 from worker' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 9105 -RemoteAddress 192.168.7.117 -Profile Any
+  New-NetFirewallHyperVRule -Name 'CCS-node-stats-9105-from-worker' -DisplayName 'CCS node-stats 9105 from worker' -Direction Inbound -Action Allow -Protocol TCP -LocalPorts 9105 -RemoteAddresses 192.168.7.117 -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+  ```
+  Откат — `Remove-NetFirewallRule` / `Remove-NetFirewallHyperVRule` по тем же именам.
+- **Автозапуск после перезагрузки Windows:** WSL поднимает задача планировщика `WSL-Keepalive-Ubuntu` (триггер входа в систему, `wsl.exe -d Ubuntu-24.04 --exec /bin/sleep infinity`); systemd внутри WSL стартует все `enabled`-юниты, включая `ccs-node-stats`. Ничего отдельного не требуется.
+- На ai брандмауэра нет (`ufw` неактивен, `iptables` INPUT ACCEPT) — правок не потребовалось; защита — `IPAddressDeny=any` в unit и `allow` агента.
+
+### Проверка установки (2026-11-16)
+
+- С worker оба узла отдают срез: `v=1`, `ageMs` 0,6–2 с; ai — 98 файлов, 2 карты, `gddr6` с температурой памяти и hotspot; video — 4 файла, 1 карта.
+- Чужой адрес получает отказ: с video (`.208`) к ai и с ai (`.83`) к video и к самому себе — тайм-аут без ответа (пакеты отбрасывает `IPAddressDeny` unit'а на ai и правило брандмауэра на video, до агента не доходят). Ответ `403` самого агента (второй слой) проверяют тесты, живьём его не увидеть.
+- `kill -9` процесса агента: systemd поднимает его за ~5 с (`Restart=on-failure`), срез снова отдаётся.
+- **Перезагрузку узлов не проводили:** ai и video несут боевую нагрузку. Переживаемость перезагрузки — по `systemctl is-enabled` = `enabled` (ai и video) и по автозапуску WSL выше; первый реальный перезапуск проверит себя сам.
+
+### Фрагмент `HardwareNodes` для боевого конфига
+
+Вставляется в `/opt/ccs/app/appsettings.Local.json` **после** мержа фичи и штатной выкатки (отдельный шаг, по просьбе Андрея). Основной движок `main` (`LocalLlm`) сидит на ai, движок `gemma` (`LocalEngines`) — на video, ComfyUI — на video; на worker сейчас ни одного движка.
+
+```json
+"HardwareNodes": [
+  { "Key": "worker", "Title": "worker", "Source": "local", "Engines": [], "Media": false },
+  { "Key": "ai",     "Title": "ai",     "Source": "http://192.168.7.83:9105",  "Engines": ["main"],  "Media": false },
+  { "Key": "video",  "Title": "video",  "Source": "http://192.168.7.208:9105", "Engines": ["gemma"], "Media": true }
+]
+```
+
 ## Тесты
 
 ```bash

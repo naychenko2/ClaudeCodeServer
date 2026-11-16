@@ -45,9 +45,12 @@ export function getEffectiveTheme(): EffectiveTheme {
   return _mode === 'system' ? systemTheme() : _mode;
 }
 
-// Применить эффективную тему к <html>
+// Применить эффективную тему к <html>.
+// Guard по documentElement: «document есть» не значит «DOM готов» — в тестовом фейк-DOM
+// documentElement null, и верхний вызов (строка «Синхронизируем DOM…») падал бы на нём,
+// если импорт themeMode попал в граф модулей теста, где соседний файл уже поднял фейк-DOM.
 function applyTheme() {
-  if (typeof document !== 'undefined') {
+  if (typeof document !== 'undefined' && document.documentElement) {
     document.documentElement.dataset.theme = getEffectiveTheme();
   }
 }

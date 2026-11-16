@@ -60,6 +60,8 @@ SMI_QUERY = (
     "clocks_event_reasons.hw_thermal_slowdown,clocks_event_reasons.sw_thermal_slowdown,pci.bus_id"
 )
 SMI_FORMAT = "--format=csv,noheader,nounits"
+# В WSL nvidia-smi лежит здесь и в PATH юнита его нет: запасной путь избавляет узел от drop-in'а.
+WSL_SMI = "/usr/lib/wsl/lib/nvidia-smi"
 
 _HWMON_DIR = re.compile(r"hwmon([0-9]+)")
 # В точности перечень путей из ADR: temp*_input/_label/_max/_crit и fan*_input/_label, * — число.
@@ -190,6 +192,16 @@ def collect_mounts(env, files):
             continue
         result.append({"mount": mount, "total": st.f_blocks * st.f_frsize, "free": st.f_bfree * st.f_frsize})
     return result
+
+
+def find_nvidia_smi(path=None, fallback=WSL_SMI):
+    """nvidia-smi из PATH (path=None — PATH процесса), иначе запасной путь WSL, иначе None."""
+    found = shutil.which("nvidia-smi", path=path)
+    if found:
+        return found
+    if os.path.isfile(fallback) and os.access(fallback, os.X_OK):
+        return fallback
+    return None
 
 
 def collect_gpu_csv(env):
@@ -383,7 +395,7 @@ def main(argv=None):
     except ConfigError as exc:
         print("ccs-node-stats: %s" % exc, file=sys.stderr)
         return 2
-    env = Env(nvidia_smi=shutil.which("nvidia-smi"))
+    env = Env(nvidia_smi=find_nvidia_smi())
     store = SliceStore()
     stop = threading.Event()
     threading.Thread(target=run_collector, args=(store, env, INTERVAL_S, stop), daemon=True).start()

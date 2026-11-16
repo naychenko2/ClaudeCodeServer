@@ -195,6 +195,30 @@ class ProcTests(TmpRoot):
 
 
 class SmiTests(TmpRoot):
+    def test_found_in_path(self):
+        smi = fake_smi(self.bin, "exit 0\n")
+        self.assertEqual(agent.find_nvidia_smi(path=self.bin, fallback="/нет/такого"), smi)
+
+    def test_wsl_fallback_when_not_in_path(self):
+        wsl = fake_smi(os.path.join(self._tmp.name), "exit 0\n", name="wsl-smi")
+        # PATH пуст (как у юнита без drop-in'а), бинарь лежит только по запасному пути.
+        self.assertEqual(agent.find_nvidia_smi(path=self.bin, fallback=wsl), wsl)
+
+    def test_path_wins_over_fallback(self):
+        smi = fake_smi(self.bin, "exit 0\n")
+        wsl = fake_smi(self._tmp.name, "exit 0\n", name="wsl-smi")
+        self.assertEqual(agent.find_nvidia_smi(path=self.bin, fallback=wsl), smi)
+
+    def test_none_when_neither(self):
+        self.assertIsNone(agent.find_nvidia_smi(path=self.bin, fallback=os.path.join(self.bin, "нет")))
+
+    def test_fallback_not_executable_is_ignored(self):
+        plain = write(self._tmp.name, "wsl-smi", "x")
+        self.assertIsNone(agent.find_nvidia_smi(path=self.bin, fallback=plain))
+
+    def test_wsl_fallback_constant(self):
+        self.assertEqual(agent.WSL_SMI, "/usr/lib/wsl/lib/nvidia-smi")
+
     def test_exact_arguments_and_no_shell(self):
         args_file = os.path.join(self.bin, "args.txt")
         smi = fake_smi(self.bin, 'for a in "$@"; do echo "$a" >> %s; done\necho "0, GPU-1, RTX"\n' % args_file)

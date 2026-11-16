@@ -81,7 +81,7 @@ journalctl -u ccs-node-stats -n 50
   Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib
   DeviceAllow=/dev/dxg rw
   ```
-  Без первой строки агент не находит `nvidia-smi` (в WSL он лежит в `/usr/lib/wsl/lib`, которого нет в PATH unit'а) и отдаёт `gpuCsv: null`; без второй `DevicePolicy=closed` закрывает `/dev/dxg`, через который WSL видит карту. Драйверных устройств `nvidia*` в `/proc/devices` WSL нет, `DeviceAllow=char-nvidia*` из unit там ничего не делают.
+  Первая строка с версии Ш2а-доработки не обязательна: агент сам ищет `nvidia-smi` в `/usr/lib/wsl/lib` после PATH (на уже настроенных узлах она безвредна); без второй `DevicePolicy=closed` закрывает `/dev/dxg`, через который WSL видит карту. Драйверных устройств `nvidia*` в `/proc/devices` WSL нет, `DeviceAllow=char-nvidia*` из unit там ничего не делают.
 - **Проброс порта не нужен:** WSL в режиме `networkingMode=mirrored` делит LAN-адрес с Windows (`192.168.7.208`), порт из WSL виден в сети сразу.
 - **Брандмауэр Windows — правку пришлось сделать:** без неё `curl` с worker уходил в тайм-аут. По образцу правил «ComfyUI 8188 from ai» / «Bonsai 18030-18031 from ai» заведены **два** правила (в `.wslconfig` стоит `firewall=true`, поэтому нужно и обычное, и Hyper-V правило для WSL), TCP 9105, источник только `192.168.7.117`:
   ```powershell

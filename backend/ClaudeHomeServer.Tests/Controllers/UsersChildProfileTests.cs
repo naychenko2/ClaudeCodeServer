@@ -440,6 +440,53 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         whole.Should().BeTrue("одновременные PUT не перемешивают поля");
     }
 
+    // только персоны-тьюторы (роль «Репетитор…»): дефолт-ассистент ребёнка не в счёт
+    private IReadOnlyList<Persona> PersonasOf(string ownerId) =>
+        _hosts.Services.GetRequiredService<PersonaManager>().GetAllInternal()
+            .Where(p => p.OwnerId == ownerId && p.Role?.StartsWith("Репетитор") == true).ToList();
+
+    [Fact]
+    public async Task Put_Повторный_ТотЖеТьютор_БезВторогоПомощника()
+    {
+        var id = await EnableChild("kid-tutor-once");
+        var first = _users.GetById(id)!.ChildMode!.TutorPersonaId;
+
+        var (status, body) = await PutAsync(id, ValidBody());
+        status.Should().Be(HttpStatusCode.OK);
+        body.GetProperty("tutorPersonaId").GetString().Should().Be(first);
+
+        var (status2, body2) = await PutAsync(id, new { enabled = true, providerKey = KidsKey, model = "sonnet", resetRules = true });
+        status2.Should().Be(HttpStatusCode.OK);
+        body2.GetProperty("tutorPersonaId").GetString().Should().Be(first, "resetRules тьютора не сбрасывает");
+        PersonasOf(id).Should().ContainSingle("тьютор у ребёнка один");
+    }
+
+    [Fact]
+    public async Task Put_ПровижерУпал_ResetRules_ОткатСохраняетПрежниеПравилаИТьютора()
+    {
+        var id = await EnableChild("kid-rollback-rules");
+        SeedRules(id, RulesT0, "Прежние правила");
+        var tutor = _users.GetById(id)!.ChildMode!.TutorPersonaId;
+        // ключ тьютора «повис» (персона жива, ключа нет): Ensure создаст новую персону,
+        // вещание упадёт — откат обязан удалить новую и вернуть профиль как был
+        var live = _users.GetById(id)!.ChildMode!;
+        live.TutorPersonaId = "";
+        _hosts.BroadcasterStub.ThrowFor = id;
+        try
+        {
+            var (status, _) = await PutAsync(id, new { enabled = true, providerKey = KidsKey, model = "sonnet", resetRules = true });
+            status.Should().Be(HttpStatusCode.InternalServerError);
+            var stored = _users.GetById(id)!.ChildMode!;
+            stored.RulesAgreedAt.Should().Be(RulesT0, "откат целиком: правила прежние, а не сброшенные resetRules");
+            stored.RulesSummary.Should().Be("Прежние правила");
+            PersonasOf(id).Select(p => p.Id).Should().BeEquivalentTo(new[] { tutor }, "новая персона удалена, прежняя цела");
+        }
+        finally
+        {
+            _hosts.BroadcasterStub.ThrowFor = null;
+        }
+    }
+
     [Fact]
     public async Task Put_ПровижерУпал_500_ПрофильНеСохранён()
     {
@@ -453,6 +500,7 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             status.Should().Be(HttpStatusCode.InternalServerError);
             CodeOf(resp).Should().NotBeNullOrEmpty();
             _users.GetById(id)!.ChildMode.Should().BeNull("отказ включению — профиль не сохранён");
+            PersonasOf(id).Should().BeEmpty("персона, созданная упавшим вызовом, не остаётся сиротой");
         }
         finally
         {

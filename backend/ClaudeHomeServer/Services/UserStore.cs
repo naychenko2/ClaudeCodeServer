@@ -631,7 +631,9 @@ public class UserStore : IForgejoAccountStore, IUserStore
     /// только он, KM-B6b) затёрся бы снимком вызывающего, а два одновременных PUT дали бы
     /// смесь полей вместо одного целого профиля.
     /// Правила всегда берутся из живого профиля, кроме resetRules=true — тот же resetRules
-    /// просит админ (сбросить оба поля). profile=null — профиля нет (отказ включению:
+    /// просит админ (сбросить оба поля). TutorPersonaId берётся из живого профиля ВСЕГДА, и при
+    /// resetRules тоже: тьютор у ребёнка один, повторный PUT не должен плодить второго
+    /// «Помощника». profile=null — профиля нет (отказ включению:
     /// провижн тьютора не удался, вызывающий откатывает прежний). Возвращает false, если
     /// пользователь не найден.
     /// </summary>
@@ -643,10 +645,14 @@ public class UserStore : IForgejoAccountStore, IUserStore
             if (user is null) return false;
             if (profile is not null)
             {
-                if (!resetRules && user.ChildMode is { } live)
+                if (user.ChildMode is { } live)
                 {
-                    profile.RulesAgreedAt = live.RulesAgreedAt;
-                    profile.RulesSummary = live.RulesSummary;
+                    if (!resetRules)
+                    {
+                        profile.RulesAgreedAt = live.RulesAgreedAt;
+                        profile.RulesSummary = live.RulesSummary;
+                    }
+                    profile.TutorPersonaId = live.TutorPersonaId;
                 }
                 user.ChildMode = profile;
             }
@@ -654,6 +660,23 @@ public class UserStore : IForgejoAccountStore, IUserStore
             {
                 user.ChildMode = null;
             }
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Откат детского профиля целиком (KM-B1e): прежний снимок возвращается как есть, без
+    /// переноса правил и тьютора из живого — иначе откат при resetRules=true терял бы
+    /// previous.RulesAgreedAt. null — профиля не было.
+    /// </summary>
+    public bool RestoreChildProfile(string id, ChildProfile? previous)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            user.ChildMode = previous;
             Save();
             return true;
         }

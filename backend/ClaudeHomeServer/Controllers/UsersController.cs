@@ -20,6 +20,7 @@ public class UsersController(UserStore users, SessionManager sessions,
     UserKnowledgeCascade knowledgeCascade, DefaultAssistantProvisioner provisioner,
     ProjectMembershipService membership, IPersonalProjects personalProjects,
     ChildTutorProvisioner childTutorProvisioner, ClaudeSubscriptionPool subscriptionPool,
+    PersonaManager personas,
     ILogger<UsersController> logger) : ControllerBase
 {
     private static readonly Regex UsernameRegex = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
@@ -201,14 +202,14 @@ public class UsersController(UserStore users, SessionManager sessions,
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Детский режим: провижн тьютора не удался для {User}", id);
-            users.SetChildProfile(id, previous, resetRules: false);
+            RollbackChildProfile(id, previous);
             return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось создать персону-тьютора; профиль не изменён." });
         }
         // null — провижн невозможен (пользователь или профиль исчезли на параллельной правке,
         // запрос отменён): ребёнок без тьютора не остаётся — тот же откат и 500.
         if (tutorId is null)
         {
-            users.SetChildProfile(id, previous, resetRules: false);
+            RollbackChildProfile(id, previous);
             return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось закрепить персону-тьютора; профиль не изменён." });
         }
 
@@ -219,6 +220,17 @@ public class UsersController(UserStore users, SessionManager sessions,
     }
 
     // --- вспомогательные методы ---
+
+    // Откат отказанного включения: тьютор, созданный ЭТИМ вызовом (его id в живом профиле
+    // отличается от прежнего), удаляется — иначе сирота в personas.json; профиль
+    // возвращается целиком, с прежними правилами и прежним тьютором.
+    private void RollbackChildProfile(string id, ChildProfile? previous)
+    {
+        var liveTutor = users.GetById(id)?.ChildMode?.TutorPersonaId;
+        if (!string.IsNullOrWhiteSpace(liveTutor) && liveTutor != previous?.TutorPersonaId)
+            personas.Delete(liveTutor, id);
+        users.RestoreChildProfile(id, previous);
+    }
 
     private static UserDto ToDto(User u) =>
         new(u.Id, u.Username, u.Role, u.CreatedAt, u.ExecutionEnvironment);

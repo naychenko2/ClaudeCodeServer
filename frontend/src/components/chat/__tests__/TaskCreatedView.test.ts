@@ -84,6 +84,26 @@ function item(t: Task | null, over: Partial<ToolItem> = {}): ToolItem {
 const render = (i: ToolItem) =>
   renderToStaticMarkup(createElement(TaskCreatedView, { item: i, online: true }));
 
+// === Компактный ответ tasks_create: описание берётся из входа вызова ===
+
+describe('компактный ответ сервера (без description)', () => {
+  it('описание карточки — из input вызова, если в ответе его нет', () => {
+    const compact = { id: 'task-1', title: 'Шаг D1', status: 'todo', priority: 'medium', kind: 'task' };
+    const html = render(item(compact as unknown as Task, {
+      input: { title: 'Шаг D1', description: 'Уникальный текст описания из входа' },
+    }));
+    expect(html).toContain('Уникальный текст описания из входа');
+  });
+
+  it('описание в ответе (полный режим сервера) — приоритетнее входа', () => {
+    const html = render(item(task({ description: 'Описание из ответа' }), {
+      input: { title: 'Шаг D1', description: 'Описание из входа' },
+    }));
+    expect(html).toContain('Описание из ответа');
+    expect(html).not.toContain('Описание из входа');
+  });
+});
+
 // === Присутствие чипа: флаг + featureId + stepRef ===
 
 describe('F9: чип «Шаг N фичи» — присутствие', () => {

@@ -42,12 +42,18 @@ public class TeamBlockerResolveTests : IDisposable
     private readonly PersonaManager _personas;
     private readonly SessionManager _sessions;
     private readonly TestSessionBroadcaster _broadcaster = new();
+    // R-Ф-2.48 (минор 2): обёртка с гейтом на рассылке закрытой карточки — единственном
+    // живом await гашения активного чата (см. GatedSessionBroadcaster и тест
+    // «ОжиданиеПоднятоеВоВремяГашенияОстаётся»).
+    // Для остальных тестов класса — прозрачная передача внутреннему коллекктору.
+    private readonly GatedSessionBroadcaster _gated;
 
     private const string UserId = "user-1";
     private const string Username = "tester";
 
     public TeamBlockerResolveTests()
     {
+        _gated = new(_broadcaster);
         _dir = Path.Combine(Path.GetTempPath(), "team_blocker_resolve_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         var config = new ConfigurationBuilder()
@@ -129,7 +135,7 @@ public class TeamBlockerResolveTests : IDisposable
             s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
             s.AddSingleton<global::ClaudeHomeServer.Services.Team.TeamPlanningService>(planning);
             s.AddSingleton<global::ClaudeHomeServer.Services.Tasks.TaskManager>(_tasks);
-            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(_broadcaster);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(_gated);
         }).Manager;
     }
 
@@ -265,6 +271,59 @@ public class TeamBlockerResolveTests : IDisposable
             .Where(t => t != null && t.Action == "updated" && t.Task.Id == task.Id)
             .Should().HaveCount(1,
                 "доска и страница фичи живут только по task_changed: молчаливое снятие оставило бы «ждёт вас»");
+    }
+
+    // R-Ф-2.48 (минор 2): окно «ожидание поднято во время гашения». Граница стора «Since <= at»
+    // берётся в начале гашения (resolvedAt, TeamDecisionService.cs:825), а не в момент клира:
+    // новый доклад, поднявший ожидание ПОКА гашение в пути, этим действием не снимается.
+    // Окно держит гейт на рассылке закрытой карточки — единственном живом await гашения
+    // активного чата (чтение и гашение карточки в аккумуляторе синхронны, SessionManager.cs:1842,
+    // 1948; рассылка — TeamDecisionService.cs:848 → SessionStore.cs:907 → ISessionBroadcaster.ToSession):
+    // метод уже прошёл resolvedAt и стоит до ClearAwaitingHumanByFactAsync; тест ставит
+    // ожидание и отпускает гейт. Since > resolvedAt детерминирован.
+    // Мутация: взять «at» в момент клира (DateTime.UtcNow в клире) — сторож снимет новое
+    // ожидание, тест краснеет.
+    [Fact]
+    public async Task TryResolveBlockerByFact_ОжиданиеПоднятоеВоВремяГашенияОстаётся()
+    {
+        var (stab, _) = await MakeStabAsync("resolve-awaiting-during");
+        var task = _tasks.Create(stab.ProjectId, UserId, new CreateTaskRequest(
+            Title: "Тест", Description: "", Assignee: TaskItemAssignee.Claude), null);
+        _tasks.Update(task.Id, new UpdateTaskRequest());
+        await PublishBlockerAsync(stab, task.Id);
+
+        // Сценарий именно про поднятие ВО время гашения: до вызова ожидания нет
+        // (ожидание, стоящее до вызова, — случай теста выше).
+        _tasks.GetById(task.Id)!.AwaitingHumanSince.Should().BeNull("тест про новое ожидание внутри гашения");
+
+        _gated.ArmGate();
+        var resolving = _sessions.TryResolveBlockerByFactAsync(stab.Id, task.Id, "штаб ответил исполнителю");
+        // Синхронная часть (включая resolvedAt) уже отработала: гашение стоит на гейту
+        // рассылки закрытой карточки — до ClearAwaitingHumanByFactAsync.
+        resolving.IsCompleted.Should().BeFalse("гашение должно быть в окне: на рассылке закрытой карточки");
+
+        // Тот самый новый доклад: ожидание поднимается, пока гашение в пути.
+        _tasks.SetAwaitingHuman(task.Id, "исполник доложил снова во время гашения");
+        var afterSet = _broadcaster.Owner.Count;
+
+        _gated.ReleaseGate();
+        var ok = await resolving;
+        ok.Should().BeTrue("карточка всё равно должна быть погашена");
+
+        var open = await _sessions.ListOpenEscalationsAsync(stab.Id);
+        open.Should().BeEmpty("главный эффект вызова — карточка блокера — достигнут");
+
+        var stored = _tasks.GetById(task.Id)!;
+        stored.AwaitingHumanSince.Should().NotBeNull(
+            "ожидание, поднятое во время гашения, этим действием не снимается: граница — resolvedAt, не момент клира");
+        stored.AwaitingHumanReason.Should().Be("исполник доложил снова во время гашения");
+
+        // Снятия не было — доска не должна получить ложного «updated» (переменные лямбды
+        // не конфликтуют с outer-именами, см. комментарий про expression tree выше).
+        _broadcaster.Owner.Skip(afterSet)
+            .Select(m => m.Message as TaskChangedMessage)
+            .Where(t => t != null && t.Action == "updated" && t.Task.Id == task.Id)
+            .Should().BeEmpty("неснятое ожидание не объявляется снятым на доске");
     }
 
     [Fact]
@@ -927,6 +986,45 @@ public class TeamBlockerResolveTests : IDisposable
             NullLogger<ClaudeHomeServer.Services.Team.TeamTurnCompletionService>.Instance, null);
         Func<Task> act = () => bare.ReportBlockerAsync("any-session", "застрял", UserId);
         await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    // R-Ф-2.48 (минор 2): гейт на рассылке закрытой карточки — единственном живом await
+    // TryResolveBlockerByFactAsync для активного чата (TeamDecisionService.cs:848 →
+    // SessionStore.cs:907 → ToSession).
+    // Когда гейт взведён, ToSession пропускает сообщение (тесты читают его как обычно), но не
+    // возвращается до отпускания: гашение держится в окне «после resolvedAt, до
+    // ClearAwaitingHumanByFactAsync». Без взведённого гейта — прозрачная передача внутреннему
+    // коллекктору, остальные тесты класса обёртки не замечают.
+    private sealed class GatedSessionBroadcaster(TestSessionBroadcaster inner) : ISessionBroadcaster
+    {
+        private TaskCompletionSource? _gate;
+
+        public void ArmGate() => _gate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void ReleaseGate()
+        {
+            var gate = _gate;
+            _gate = null;
+            gate?.TrySetResult();
+        }
+
+        public async Task ToSession(string sessionId, ServerMessage message)
+        {
+            await inner.ToSession(sessionId, message);
+            var gate = _gate;
+            if (gate is not null) await gate.Task;
+        }
+
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) =>
+            inner.ToSessionExcept(sessionId, exceptConnectionId, message);
+
+        public Task ToOwner(string ownerId, ServerMessage message) => inner.ToOwner(ownerId, message);
+
+        public Task ToProject(string projectId, ServerMessage message) => inner.ToProject(projectId, message);
+
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) =>
+            inner.ToPreviewLog(projectId, serviceId, message);
     }
 
     // Заглушка планировщика: тесты не вызывают планирование, но SessionManager требует

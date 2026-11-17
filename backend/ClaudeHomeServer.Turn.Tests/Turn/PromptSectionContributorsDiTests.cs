@@ -234,6 +234,53 @@ public class PromptSectionContributorsDiTests
         prompt.ContributorTimingsMs.Should().ContainKeys("bad", "good", "after");
     }
 
+    // TS-18: чужой контрибьютор с Order строго между членами ParallelSafe-группы разрывает её:
+    // иначе склеенная группа обогнала бы его в цепочке. Оба члена отпущены сразу (гейты открыты),
+    // порядок секций доказывает разрыв: при склейке в группу было бы earlier, later, foreign.
+    [Fact]
+    public async Task ParallelGroup_ForeignOrderBetweenMembers_BreaksTheGroup()
+    {
+        var bus = new TurnEventBus(NullLogger<TurnEventBus>.Instance);
+        var earlier = new GateContributor("earlier", 200);
+        var foreign = new OrderContributor("foreign", 250, "чужая");
+        var later = new GateContributor("later", 300);
+        earlier.Gate.SetResult();
+        later.Gate.SetResult();
+        PromptSectionContributorsRegistration.RegisterAll(bus,
+            new IPromptSectionContributor[] { later, foreign, earlier });
+
+        var prompt = new PromptAssembling(new TurnContext("session-1", "owner-1", 1, 0), ParallelCtx());
+        await bus.ApplyAsync(prompt);
+
+        prompt.Sections.Select(s => s.Key).Should().Equal(new[] { "earlier", "foreign", "later" },
+            "чужая секция между членами не должна быть обогнана склеенной группой");
+    }
+
+    // TS-18: равный Order у двух ParallelSafe-членов группу не разрывает (чужого Order строго
+    // между ними нет): оба внутри BuildAsync одновременно, секции — в порядке получения.
+    [Fact]
+    public async Task ParallelGroup_EqualOrder_StaysOneGroupInReceiptOrder()
+    {
+        var bus = new TurnEventBus(NullLogger<TurnEventBus>.Instance);
+        var a = new GateContributor("a", 200);
+        var b = new GateContributor("b", 200);
+        PromptSectionContributorsRegistration.RegisterAll(bus,
+            new IPromptSectionContributor[] { a, b });
+
+        var prompt = new PromptAssembling(new TurnContext("session-1", "owner-1", 1, 0), ParallelCtx());
+        var applying = bus.ApplyAsync(prompt);
+
+        var bothEntered = Task.WhenAll(a.Entered, b.Entered);
+        (await Task.WhenAny(bothEntered, Task.Delay(5000))).Should().Be(bothEntered,
+            "равный Order не разрывает группу: оба члена внутри BuildAsync одновременно");
+        a.Gate.SetResult();
+        b.Gate.SetResult();
+        await applying;
+
+        prompt.Sections.Select(s => s.Key).Should().Equal(new[] { "a", "b" },
+            "при равном Order склейка стабильна — в порядке получения реестра");
+    }
+
     // TS-18: parallel-safe ровно у пары recall (recall-notes + recall-memory).
     // Сторож от обратного: «отметить своего контрибьютора параллельным за скорость»,
     // не проверив отсутствия общего состояния, и от потери отметки.

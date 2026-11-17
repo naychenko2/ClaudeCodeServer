@@ -126,6 +126,25 @@ public sealed record TurnRunPassport(
     /// невидимая часть сборки. null — останавливать было нечего.
     /// </summary>
     public long? PrevRunStopWaitMs { get; init; }
+
+    /// <summary>
+    /// От спавна процесса на этом ходу (<see cref="Spawned"/>) до первого байта его stdout
+    /// (первой прочитанной строки цикла чтения), мс. null — процесса на ходу не спавнилось
+    /// или он умер, не сказав ни слова. Отдельная фаза от <see cref="SpawnToInitMs"/>: та мерит
+    /// до system/init, эта — до первого звука процесса; их разница — собственный старт CLI
+    /// до init (разбор п.5.1 карточки b51880e5: ~2,5 с спавна на всех ходах — самый крупный
+    /// дешёвый остаток, а что внутри него — MCP-handshake, плагины, --agents — видно только
+    /// из этого разделения).
+    /// </summary>
+    public long? SpawnToFirstByteMs { get; init; }
+
+    /// <summary>
+    /// Число MCP-серверов в конфиге этого запуска: ключи собранного temp-конфига — ровно то,
+    /// что поехало в --mcp-config. null — не замерено: ход откатился к внешнему базовому
+    /// конфигу (его состав в месте сборки без дополнительного разбора файла не известен)
+    /// или замеры не собраны. 0 — настоящий ноль: конфиг собран пустым.
+    /// </summary>
+    public int? McpServerCount { get; init; }
 }
 
 /// <summary>
@@ -145,6 +164,12 @@ public sealed record TurnStartTimings(
 
     /// <summary>На этом ходу был спавн процесса (факт NoteSpawn, а не факт init; см. TurnRunPassport.Spawned).</summary>
     public bool Spawned { get; init; }
+
+    /// <summary>От NoteSpawn до первого байта stdout процесса (см. TurnRunPassport.SpawnToFirstByteMs); null — не спавнилось или не дошло.</summary>
+    public long? SpawnToFirstByteMs { get; init; }
+
+    /// <summary>Число MCP-серверов в собранном конфиге этого хода (см. TurnRunPassport.McpServerCount); null — не замерено.</summary>
+    public int? McpServerCount { get; init; }
 
     /// <summary>Порог (строго больше), с которого секция промпта попадает в паспорт.</summary>
     public const long SlowSectionThresholdMs = 500;

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Mcp.Http;
@@ -44,7 +45,7 @@ public class McpHttpTransportConfigTests : IDisposable
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
         string? difyDatasetId = null, string? mcpConfigPath = null, Func<bool>? httpEnabled = null,
-        WatchMcpContext? watch = null, string? privateToUserId = null)
+        WatchMcpContext? watch = null, string? privateToUserId = null, bool hands = false)
     {
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -64,18 +65,20 @@ public class McpHttpTransportConfigTests : IDisposable
             HttpMcpEnabledProvider: httpEnabled,
             WatchMcp: watch);
         var session = new ClaudeSession(new Session { PrivateToUserId = privateToUserId }, context, mcpConfigPath);
-        return BuildFor(session, difyDatasetId, personaAgents);
+        return BuildFor(session, difyDatasetId, personaAgents, hands);
     }
 
     // Вызов приватного BuildTurnMcpConfig готовой сессии + разбор temp-конфига: сессию можно
     // звать повторно — так тесты проверяют ЖИВЫЕ решения (рубильник, фабрика токена), а не
     // снятые при создании адаптера слепки
+    // hands — решение HandsActiveNow этого хода: с руками в конфиге нет ни одного stdio-узла
+    // и ставится маркер «hands» (путь device-hands, ADR-016 §7)
     private (JsonObject Servers, string ServerKeys) BuildFor(ClaudeSession session,
-        string? difyDatasetId = null, PersonaAgentsContext? personaAgents = null)
+        string? difyDatasetId = null, PersonaAgentsContext? personaAgents = null, bool hands = false)
     {
         var method = typeof(ClaudeSession).GetMethod("BuildTurnMcpConfig",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var result = method.Invoke(session, [difyDatasetId, personaAgents, false])!;
+        var result = method.Invoke(session, [difyDatasetId, personaAgents, hands])!;
         var type = result.GetType();
         // У ValueTuple элементы — ПОЛЯ, а не свойства
         var path = (string?)type.GetField("Item1")!.GetValue(result);
@@ -949,5 +952,60 @@ public class McpHttpTransportConfigTests : IDisposable
         legacyEnv["DIFY_DEFAULT_DATASET_ID"]!.GetValue<string>().Should().Be("ds-1");
         legacyEnv["DIFY_SEARCH_ONLY"]!.GetValue<string>().Should().Be("true");
         legacyKeys.Should().Contain("dify", "внешний узел — без отпечатка состава, как до волны 4");
+    }
+
+    // --- порядок ключей в конфиге хода (стабильность префикса системного промпта) ---
+
+    /// <summary>
+    /// Порядок ключей mcpServers в temp-конфиге хода — это порядок инструментов в системном
+    /// промпте CLI. Он обязан быть Ordinal-сортировкой, а не порядком вставки: порядок вставки
+    /// зависит от того, какие контексты собрались в этом ходу, и префикс промпта у бесед
+    /// одинакового состава разошёлся бы байт-в-байт — локальная модель не взяла бы его из кэша.
+    /// Контексты подобраны так, что порядок вставки (tasks→notes→widgets→memory) заведомо
+    /// расходится с Ordinal (memory→notes→tasks→widgets): без сортировки тест краснеет.
+    /// Серверов ≥ 3 — иначе проверка вакуумна (один-два ключа «отсортированы» всегда).
+    /// </summary>
+    [Fact]
+    public void КлючиMcpСерверовКонфигаХода_ИдутПоРядкуOrdinal()
+    {
+        var (servers, _) = BuildConfig(
+            tasks: new TasksMcpContext("http://localhost:5000", () => "tok-t", "proj-1", UseHttp: true),
+            notes: new NotesMcpContext("http://localhost:5000", () => "tok-n", "proj-1", UseHttp: true),
+            widgets: new WidgetsMcpContext("http://localhost:5000", () => "tok-w", UseHttp: true),
+            memory: new MemoryMcpContext("http://localhost:5000", () => "tok-m", "persona-1", UseHttp: true));
+
+        var keys = servers.Select(entry => entry.Key).ToList();
+        keys.Count.Should().BeGreaterThanOrEqualTo(3, "один-два ключа «отсортированы» тривиально");
+        keys.Should().Equal(keys.OrderBy(k => k, StringComparer.Ordinal),
+            "ключи temp-конфига — порядок инструментов в системном промпте: он детерминирован по ключу");
+    }
+
+    /// <summary>
+    /// Тот же порядок на пути «рук устройства» (device-hands, ADR-016 §7): при руках хода
+    /// не-http узлы гасятся и маркер «hands» вставляется ПОСЛЕДНИМ (ClaudeSession.cs, блок
+    /// hands). Порядок ключей обязан пережить этот блок — он держится той же Ordinal-сортировкой
+    /// в конце BuildTurnMcpConfig; без неё «hands» встал бы в конец списка инструментов, и
+    /// префикс промпта у двух бесед одного состава разошёлся бы байт-в-байт. Контексты подобраны
+    /// так, что порядок вставки (tasks→notes→widgets→memory→hands) расходится с Ordinal
+    /// (hands→memory→notes→tasks→widgets): без сортировки тест краснеет.
+    /// </summary>
+    [Fact]
+    public void РукиУстройства_КлючиКонфигаОтсортированыМаркеромHands()
+    {
+        var (servers, _) = BuildConfig(
+            tasks: new TasksMcpContext("http://localhost:5000", () => "tok-t", "proj-1", UseHttp: true),
+            notes: new NotesMcpContext("http://localhost:5000", () => "tok-n", "proj-1", UseHttp: true),
+            widgets: new WidgetsMcpContext("http://localhost:5000", () => "tok-w", UseHttp: true),
+            memory: new MemoryMcpContext("http://localhost:5000", () => "tok-m", "persona-1", UseHttp: true),
+            hands: true);
+
+        var keys = servers.Select(entry => entry.Key).ToList();
+        keys.Should().Contain(DeviceExecPlaceholders.HandsServerName,
+            "маркер рук обязан пережить сортировку, а не выпасть из конфига");
+        keys.Count.Should().BeGreaterThanOrEqualTo(3, "один-два ключа «отсортированы» тривиально");
+        keys.Should().Equal(keys.OrderBy(k => k, StringComparer.Ordinal),
+            "ключи конфига хода с руками — тот же порядок инструментов в системном промпте: по ключу, Ordinal");
+        servers[DeviceExecPlaceholders.HandsServerName]!["type"]!.GetValue<string>()
+            .Should().Be(DeviceExecPlaceholders.Hands, "узел рук — маркер, а не процесс и не http-эндпоинт");
     }
 }

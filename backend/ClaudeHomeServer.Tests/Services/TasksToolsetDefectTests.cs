@@ -750,8 +750,8 @@ public class TasksToolsetDefectTests : IClassFixture<TestWebApplicationFactory>
         isError.Should().BeFalse();
         var updated = JsonSerializer.Deserialize<JsonElement>(text);
         updated.GetProperty("status").GetString().Should().Be("done");
-        updated.TryGetProperty("outcome", out var o).Should().BeTrue();
-        o.ValueKind.Should().Be(JsonValueKind.Null);
+        // Компактный ответ без пустых полей: игнорированный outcome — отсутствие ключа (null не едет)
+        updated.TryGetProperty("outcome", out _).Should().BeFalse();
     }
 
     // ─── tasks_complete с verification/outcome ──────────────────────────────

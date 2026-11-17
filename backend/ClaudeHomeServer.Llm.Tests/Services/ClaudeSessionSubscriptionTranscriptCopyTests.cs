@@ -107,7 +107,7 @@ public class ClaudeSessionSubscriptionTranscriptCopyTests : IDisposable
     // сторонняя, ClaudeSessionId есть, CliConfigRoot — профиль подписки (как его передаёт
     // SessionManager.ConfigRootFor по Info.Provider).
     private async Task RunResumedTurnAsync(LlmProviderRegistry providers, ClaudeSubscriptionPool pool,
-        string root, string? ownRootOverride = null, bool sandboxed = false)
+        string root, string? ownRootOverride = null, bool sandboxed = false, TimeSpan? startTimeout = null)
     {
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -130,9 +130,12 @@ public class ClaudeSessionSubscriptionTranscriptCopyTests : IDisposable
             new Session { Model = ExternalModel, Provider = SubKey, ClaudeSessionId = ClaudeSessionId },
             context, providers: providers, subscriptionPool: pool);
 
-        await session.SendMessageAsync("тестовый ход");
-        var done = await Task.WhenAny(started.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+        // Отправка не ждётся до старта: если ход встал на копии транскрипта, SendMessageAsync
+        // вернётся вместе с ней, и порог на started измерил бы не то.
+        var send = session.SendMessageAsync("тестовый ход");
+        var done = await Task.WhenAny(started.Task, Task.Delay(startTimeout ?? TimeSpan.FromSeconds(15)));
         done.Should().Be(started.Task, "процесс хода обязан стартовать");
+        await send;
 
         Process cli;
         lock (_processes) cli = _processes[^1];
@@ -243,6 +246,29 @@ public class ClaudeSessionSubscriptionTranscriptCopyTests : IDisposable
         await RunResumedTurnAsync(providers, pool, root, ownRoot, sandboxed: true);
 
         File.ReadAllText(TranscriptPath(dst, root)).Should().Be(body);
+    }
+
+    /// <summary>
+    /// TS-17: проводка waitIfBusy:false в CopyTranscriptToTurnRoot. Источник копии держится
+    /// эксклюзивно (FileShare.None), приёмник пуст: копия не удаётся, но ход обязан стартовать
+    /// сразу, не дожидаясь бэкофа TryMigrate до 8 с. Порог 5 с — между «сразу» и прежним потолком.
+    /// Мутация: убрать waitIfBusy:false в CopyTranscriptToTurnRoot — ход встаёт на 8 с, тест краснеет.
+    /// </summary>
+    [Fact]
+    public async Task ЗанятыйИсточникКопии_ХодСтартуетБезОжиданияБэкофа()
+    {
+        var (providers, pool) = BuildConfig();
+        var root = Path.Combine(_tempDir, "root-busy-turn");
+        var srcProfile = providers.GetProfileDir("sub-" + SubKey);
+        WriteTranscript(srcProfile, root, "{}\n");
+
+        using var hold = new FileStream(TranscriptPath(srcProfile, root),
+            FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        await RunResumedTurnAsync(providers, pool, root, startTimeout: TimeSpan.FromSeconds(5));
+
+        File.Exists(TranscriptPath(providers.GetProfileDir(ExternalProviderKey), root)).Should().BeFalse(
+            "копия не удалась (источник занят) — приёмник остался пуст, ход пошёл дальше на --resume");
     }
 
     /// <summary>

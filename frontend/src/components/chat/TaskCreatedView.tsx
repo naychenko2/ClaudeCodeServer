@@ -111,7 +111,7 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
   // Ошибка создания или непарсибельный ответ — стандартный блок инструмента
   if (!running && !task) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
 
-  const inp = (item.input ?? {}) as { title?: unknown };
+  const inp = (item.input ?? {}) as { title?: unknown; description?: unknown };
   const title = task?.title ?? (typeof inp.title === 'string' ? inp.title : '');
 
   // В ответе личной задачи projectId нет — для hash-URL берём проект чата (личный чат → null)
@@ -124,7 +124,8 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
   const subtasksDone = subtasks.filter(s => s.isDone).length;
   const labels = task?.labels ?? [];
   // Описание клампится в 2 строки — блочный markdown ломает кламп, показываем плоский текст
-  const description = markdownToPlain(task?.description ?? '');
+  // Компактный ответ сервера не повторяет присланное описание — берём его из входа вызова
+  const description = markdownToPlain(task?.description ?? (typeof inp.description === 'string' ? inp.description : ''));
   const dueUrgent = task ? isDueUrgent(task) : false;
   // F9: подпись чипа. Линия — из task.lane с той же нормализацией, что в конвейере
   // (back/бэк → бэк, front/фронт → фронт); линии нет или она другая — суффикса нет.

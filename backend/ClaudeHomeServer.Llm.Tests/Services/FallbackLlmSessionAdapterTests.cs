@@ -3,6 +3,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -174,7 +175,9 @@ public class FallbackLlmSessionAdapterTests
         Func<string>? contextSource = null,
         ILogger? log = null,
         IEgressProbe? egress = null,
-        TurnRunLog? turnRuns = null)
+        TurnRunLog? turnRuns = null,
+        ITurnEventBus? events = null,
+        Func<TurnStartTimings>? startTimings = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -207,7 +210,8 @@ public class FallbackLlmSessionAdapterTests
             orchestrationDone: orchestrationDone,
             contextSource: contextSource,
             egress: egress,
-            events: null,
+            events: events,
+            startTimings: startTimings,
             // Пауза повтора при лежащем канале — миллисекунды: ждать продовые 5 с в тесте нельзя
             egressRetryDelay: TimeSpan.FromMilliseconds(10));
         inner.Sink = sut.HandleMessageAsync;
@@ -245,6 +249,30 @@ public class FallbackLlmSessionAdapterTests
     private List<ServerMessage> Downstream()
     {
         lock (_downstream) return [.. _downstream];
+    }
+
+    // Паспорт собирается в finally адаптера из фабрики замеров (единственный источник — шина
+    // turn/completed). Новый тест TS-20 держит проводку именно здесь: убрать присвоение
+    // SpawnToFirstByteMs/McpServerCount (или FirstContentMs/Spawned) в finally — краснеет он.
+    [Fact]
+    public async Task ПаспортНесётЗамерПервогоБайтаИЧислоMcpСерверов()
+    {
+        var pool = BuildPool("acc-a");
+        var bus = new TurnEventBus();
+        TurnRunPassport? captured = null;
+        bus.OnNotification<TurnCompleted>(e => { captured = e.Passport; return Task.CompletedTask; });
+        var (sut, inner) = BuildSut(pool, events: bus, startTimings: () => new TurnStartTimings(
+            QueueWaitMs: 12, PromptAssemblyMs: 800, SpawnToInitMs: 2500, InitToFirstEventMs: 100, SlowSections: null)
+        { FirstContentMs = 400, Spawned = true, SpawnToFirstByteMs = 1900, McpServerCount = 36 });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => captured is not null, "turn/completed с паспортом");
+
+        captured!.SpawnToFirstByteMs.Should().Be(1900, "замер от спавна до первого байта доезжает до паспорта");
+        captured.McpServerCount.Should().Be(36, "число MCP-серверов собранного конфига хода доезжает до паспорта");
+        captured.FirstContentMs.Should().Be(400, "проводка TS-19 цела");
+        captured.Spawned.Should().BeTrue("явный факт спавна доезжает до паспорта");
     }
 
     [Fact]

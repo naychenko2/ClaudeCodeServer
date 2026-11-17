@@ -73,8 +73,9 @@ public static class PromptSectionContributorsRegistration
     {
         if (run.Count == 0) return;
         if (run.Count == 1) { singles.AddRange(run); return; }
-        // Порядок запуска внутри группы — порядок получения реестра (DI-порядок
-        // неканоничен); единственная точка порядка — склейка по Order в RegisterGroup.
+        // Члены группы запускаются одновременно, порядок запуска незначим. Порядок получения
+        // реестра (DI-порядок неканоничен) нужен лишь как стабильный тай-брейк при равном Order
+        // и для имени фильтра; единственная точка порядка секций — склейка по Order в RegisterGroup.
         run.Sort((a, b) => all.IndexOf(a).CompareTo(all.IndexOf(b)));
         groups.Add(run);
     }

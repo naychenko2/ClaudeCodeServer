@@ -231,6 +231,13 @@ public sealed class PersonaLayerBuilder
                 // круг персон, которых можно позвать сабагентом.
                 var (subagents, _) = SplitConsultants(ownerId, session,
                     _personas.GetForContext(ownerId, projectId).ToList());
+                // Порядок ВСЕГО плана — по handle (Ordinal). GetForContext отдаёт персон по UpdatedAt
+                // по убыванию: без этой сортировки определения per-run --agents (ClaudeAgentsJson →
+                // turnAgentsFingerprint, ClaudeSession.cs:3861-3870) и порядок pmem-серверов
+                // менялись бы от чата к чату при неизменном составе агентов: порядок
+                // определений влияет на отпечаток запуска (та же причина, что у
+                // AppendPersonaLines).
+                subagents.Sort((a, b) => string.CompareOrdinal(a.Handle, b.Handle));
                 var apiUrl = _endpoint.ResolveTasksApiUrl(ownerId);
                 var tokenFactory = () => _endpoint.GetServiceToken(ownerId);
                 var useHttp = _endpoint.HttpEndpointUsable(apiUrl);
@@ -244,7 +251,9 @@ public sealed class PersonaLayerBuilder
                         PersonaConsultantToolset.PmemServerKey(p.Handle),
                         apiUrl, tokenFactory, p.Id, projectId, useHttp))
                     .ToList();
-                var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
+                // Список «Доступные agentType» в промпте — уже в порядке handle (сортировка выше),
+                // здесь только отсекаются пустые handles.
+                var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList();
                 // Определения для per-run --agents JSON: omitClaudeMd ClaudeSession дополнит
                 // по факту BareMode (свойство прогона, известное только там)
                 var agents = _agentSync.GetAgentsDefs(subagents, omitClaudeMd: false);
@@ -316,9 +325,16 @@ public sealed class PersonaLayerBuilder
     internal void AppendPersonaLines(System.Text.StringBuilder sb, List<Persona> personas, string? currentProjectId)
     {
         // Персоны сферы — отдельной группой «Команда сферы»: в одном списке с проектными и
-        // глобальными их не отличить
+        // глобальными их не отличить.
+        // Порядок внутри группы — по handle (Ordinal): строки подсказки не должны зависеть ни от
+        // выборки (GetForContext — по UpdatedAt по убыванию: любое касание персоны переставляло бы
+        // строки), ни от порядка входного списка — префикс системного промпта стабилен между
+        // беседами (кэш префикса локальной модели).
         var ordered = personas.Where(p => !PersonaZone.IsSpherePersona(p))
-            .Concat(personas.Where(PersonaZone.IsSpherePersona)).ToList();
+            .OrderBy(p => p.Handle, StringComparer.Ordinal)
+            .Concat(personas.Where(PersonaZone.IsSpherePersona)
+                .OrderBy(p => p.Handle, StringComparer.Ordinal))
+            .ToList();
         var sphereHeaderDone = false;
         foreach (var p in ordered)
         {

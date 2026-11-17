@@ -37,7 +37,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // • снять отсечку по пустому callerSessionId — краснеет «АвтоСообщениеСервера…»;
 // • убрать вещание task_changed — краснеет «АдресатВещаетTaskChanged…»;
 // • переставить взятие acceptedAt после await SendMessageAndWaitAsync — краснеет «Гонка…»
-//   (свежее ожидание, поднятое внутри хода адресата, снято прежним моментом).
+//   (свежее ожидание, поднятое внутри хода адресата, снято прежним моментом);
+// • допустить дубль в условии снятия (убрать { Duplicate: false }) — краснеет «Дубль…»
+//   (новое ожидание снято rejected-ретраем, а не принятым сообщением).
 [Trait("Category", "Host")]
 public class ChatsSendAwaitingHumanClearTests : IClassFixture<TestWebApplicationFactory>
 {
@@ -377,5 +379,49 @@ public class ChatsSendAwaitingHumanClearTests : IClassFixture<TestWebApplication
         stored.AwaitingHumanSince.Should().NotBeNull(
             "ожидание, поднятое внутри хода адресата, этим ответом не снимается");
         stored.AwaitingHumanReason.Should().Be(newReason);
+    }
+
+    // Дубль в очереди (R-Ф-2.48, минор): дубль — не действие адресата. Тот же текст того же
+    // отправителя уже стоит в очереди и будет доставлен; первое его принятие уже учлось как
+    // действие (то же чтение, что у рефанда в SendAsync — «не дошло»). Опасность прежнего
+    // условия: дублем можно ошибочно снять НОВОЕ ожидание, поднятое между первой копией и
+    // ретраем, — хронологически оно раньше дубля, и сторож по acceptedAt тут бессилен.
+    [Fact]
+    public async Task ДубльОжиданияПоднятогоМеждуПервойКопиейИРетраемНеСнимает()
+    {
+        var (taskId, _, staff, exec) = await ExecutorScenarioAsync("duplicate");
+        await SetAwaitingByBlockerAsync(taskId, exec);
+        SetWorkingAdapter(exec);
+
+        var bc = new TestSessionBroadcaster();
+        var messaging = Messaging(bc);
+
+        // Первая копия принята — её действие снимает ожидание (положительный путь уже покрыт
+        // «АдресатСнимаетОжидание…»; здесь она нужна, чтобы создать состояние дубля).
+        var first = await messaging.SendAsync(OwnerId, exec, "Разобрался: правь по мастеру.",
+            callerSessionId: staff, senderSessionId: staff, agentDepthFallback: 0, wait: "none", timeoutSec: null);
+        first.Should().BeOfType<SessionMessagingService.SendOutcome.Queued>();
+        Tasks.GetById(taskId)!.AwaitingHumanSince.Should().BeNull();
+
+        // Между первой копией (ещё в очереди) и ретраем поднят новый блокер — новое ожидание.
+        // Первая копия уже родила своё task_changed (сняла исходное ожидание) — события дубля
+        // считаем от её границы.
+        var newReason = "Уткнулся в новый блок: нет доступа к прод-конфигу.";
+        Tasks.SetAwaitingHuman(taskId, newReason);
+        var beforeRetry = bc.Owner.Count;
+
+        var second = await messaging.SendAsync(OwnerId, exec, "Разобрался: правь по мастеру.",
+            callerSessionId: staff, senderSessionId: staff, agentDepthFallback: 0, wait: "none", timeoutSec: null);
+        var dup = second.Should().BeOfType<SessionMessagingService.SendOutcome.Queued>().Subject;
+        dup.Duplicate.Should().BeTrue("тот же текст того же отправителя уже в очереди — ретрей отклонён");
+
+        var stored = Tasks.GetById(taskId)!;
+        stored.AwaitingHumanSince.Should().NotBeNull(
+            "дубль — не принятое действие: новое ожидание, поднятое после первой копии, он не снимает");
+        stored.AwaitingHumanReason.Should().Be(newReason);
+        bc.Owner.Skip(beforeRetry)
+            .Select(m => m.Message as Protocol.TaskChangedMessage)
+            .Where(t => t != null && t.Task.Id == taskId)
+            .Should().BeEmpty("снятия не было — «updated» без изменения не шлём");
     }
 }

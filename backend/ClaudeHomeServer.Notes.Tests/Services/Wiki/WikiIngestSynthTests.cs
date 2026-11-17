@@ -562,6 +562,12 @@ public class WikiIngestSynthTests : IDisposable
 
         """;
 
+    // Та же страница, но с телом в «Хронологии»: маркер тела виден в промпте только если
+    // страница попала в кандидаты (в каталог промпта тело не входит — там строка с
+    // заголовком и, если влезает, сводкой).
+    private static string KnowledgePageWithBody(string title, string swodka, string body) =>
+        KnowledgePage(title, swodka).Replace("## Хронология\n", "## Хронология\n" + body + "\n");
+
     [Fact]
     public void КаталогПромпта_200Страниц_ПотолокКарточекНетНоваяПоследняя()
     {
@@ -649,6 +655,31 @@ public class WikiIngestSynthTests : IDisposable
             .Should().Contain("CURRENT CONTENT OF THE SECTION PAGES")
             .And.Contain("Прежний план был остаться на Windows",
                 "сводка делит слова с окном — страница кандидат, а не по дословному заголовку");
+    }
+
+    [Fact]
+    public async Task КандидатыПоЗначимымСловам_СтраницаСНулевойОценкой_ВПромптНеПопадает()
+    {
+        // Негатив к предыдущему тесту: «Зимняя вишня» не делит с окном ни одной значимой
+        // основы (заголовок и сводка — о зиме), оценка 0: страница не кандидат, её текст не
+        // входит в блок страниц промпта. При этом она остаётся строкой каталога раздела —
+        // значит исключена именно оценкой, а не тем, что раздел не прочитан.
+        // Мутация «снять отсечку оценки 0» (WikiCandidates.Pick: if (!exact && score == 0)
+        // continue → без continue): страница становится кандидатом, маркер её тела — в
+        // промпте, тест красный (другие тесты файла на этом не меняются).
+        const string coldMarker = "Морозный узор на стекле";
+        Write(Section, "Проекты/p1/Зимняя-вишня.md",
+            KnowledgePageWithBody("Зимняя вишня", "Зимняя вишня цветёт зимой", coldMarker));
+        var llm = new FakeLlm(WikiSynthJson.Ok());
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew, res.Reason);
+        var prompt = llm.Calls.Should().ContainSingle().Which.Prompt;
+        prompt.Should().Contain("CURRENT CONTENT OF THE SECTION PAGES")
+            .And.Contain("Прежний план был остаться на Windows", "кандидат — в промпте")
+            .And.Contain("[[Зимняя вишня]]", "не-кандидат остаётся строкой каталога раздела")
+            .And.NotContain(coldMarker, "страница с нулевой оценкой не кандидат: её текст в промпт не входит");
     }
 
     [Fact]

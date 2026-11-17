@@ -365,20 +365,16 @@ const REPRO_SCHEMA = {
 // сам по сессии вызова; MCP передаёт комментарий проверяющего и вердикт (исход витка).
 const VERIFICATION_SCHEMA = {
   type: 'object',
-  description: `Подтверждение проверки дефекта (${SEE_INSTRUCTIONS})`,
+  description: 'Вердикт: исполнитель своего step/rework не снимает; withdrawn агента — только с notes; returnReason — при returned (other — с текстом в notes)',
   properties: {
-    notes: { type: 'string', description: 'Комментарий проверяющего (опционально)' },
+    notes: { type: 'string' },
     verdict: {
       type: 'string',
       enum: ['accepted', 'accepted_with_remarks', 'returned', 'withdrawn'],
-      description: 'Исход витка: accepted · accepted_with_remarks · returned · withdrawn. '
-        + 'Исполнитель своего step/rework не снимает; агентский withdrawn — только с notes.',
     },
     returnReason: {
       type: 'string',
       enum: ['size', 'side-effect', 'contract', 'robustness', 'quality', 'other'],
-      description: 'Причина возврата (только при verdict=returned; other — с текстом в notes): ' +
-        'size · side-effect · contract · robustness · quality · other',
     },
   },
 };
@@ -386,28 +382,19 @@ const VERIFICATION_SCHEMA = {
 // Критерии приёмки и свидетельства. Парные AcceptanceSchema/EvidenceSchema http-ветки TasksToolset.cs.
 const ACCEPTANCE_SCHEMA = {
   type: 'array',
-  description: 'Критерии приёмки (измеримые): заменяют список целиком; исполнитель задачи их не меняет',
+  description: 'Критерии приёмки {id?, text}: заменяют список целиком; исполнитель их не меняет; пустой id — c1, c2…',
   items: {
     type: 'object',
     required: ['text'],
-    properties: {
-      id: { type: 'string', description: 'Id критерия (пусто — присвоится c1, c2…)' },
-      text: { type: 'string', description: 'Измеримая формулировка критерия' },
-    },
   },
 };
 
 const EVIDENCE_SCHEMA = {
   type: 'array',
-  description: 'Свидетельства по критериям приёмки: добавляются к имеющимся; закрытие задачи требует свидетельство на каждый критерий',
+  description: 'Свидетельства {criterionId, how, result}: добавляются; закрытие требует свидетельство на каждый критерий',
   items: {
     type: 'object',
     required: ['criterionId', 'how', 'result'],
-    properties: {
-      criterionId: { type: 'string', description: 'Id критерия' },
-      how: { type: 'string', description: 'Чем проверено (команда, замер)' },
-      result: { type: 'string', description: 'Что получилось (вывод, цифры)' },
-    },
   },
 };
 

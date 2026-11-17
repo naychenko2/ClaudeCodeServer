@@ -501,6 +501,28 @@ ASP.NET на запись отвечает `Ok()` без объекта — 200 
 её второй раз). Разбор тела во всех серверах — общий `parseBody()`: 204 и пустое тело → `null`,
 не-JSON при успешном статусе → сырой текст. Регресс — `McpServerEmptyBodyTests`.
 
+## Компактные ответы и описания tasks_* (задача 85fbaee8, 17.11.2026)
+
+Замер показал: ответы изменяющих вызовов (полная карточка 3–10 КБ) и `tasks_get` — главный пожиратель контекста, а схемы tasks_* — половина всех описаний MCP. Ответ режет `Services/Mcp/Http/TasksCompactView.cs`:
+
+- **Рубильник — живой ключ `Mcp:TasksCompactResponses`** (по умолчанию `true`). Откат без выкатки: `"Mcp": { "TasksCompactResponses": false }` в `appsettings.Local.json` (файл перечитывается сам) — ответы вернутся прежними байт в байт.
+- **Чтение (`tasks_get`)**: без `null`, пустых строк/массивов и служебных полей платформы; `full: true` отдаёт карточку как есть.
+- **Запись (`create/update/complete/add_subtask/toggle_subtask`)**: то же плюс без эха присланных текстов (`description`, `resultMarkdown`, `claudeResult`); `acceptance`/`planSteps`/`subtasks`/`linkedFiles` — только если ключ был в аргументах (серверные id критериев и подзадач вызывающему нужны); `evidence` — только `criterionId`, и только если менялись свидетельства или критерии (смена текста критерия сбрасывает свидетельство).
+
+**Реестр потребителей ответа** (поля, которые НЕЛЬЗЯ убирать; сторож — `TasksCompactViewTests.ForRead_СохраняетСигналыКонвейера`):
+
+| Потребитель | Что читает |
+|---|---|
+| фронт `useSessionArtifacts` | `"id": "<guid>"` из результата `tasks_create` регуляркой; статус update берёт из ВХОДА, не из ответа |
+| фронт `TaskCreatedView` | `id/title/projectId/personaId/assignee/priority/dueDate/dueTime/subtasks/labels/featureId/stepRef/lane`; описание — из ответа, при отсутствии из входа вызова |
+| роли конвейера (промпты) | читают только ВХОДЫ вызовов; поля ответа по именам в промптах не названы |
+| гейты и сторожа (`SessionManager` сигналы блокера, `ActorRightGate`, `ParticipantTurnFrameGuard`, `DelegatedTurnGate`) | имя инструмента и аргументы вызова, ответ не разбирают |
+| оркестратор / ревьюеры (читают модели) | `status`, `awaitingHumanSince/Reason`, `stage`, `routeRequired`, `workflowProposal`, `workflow`, `hold`, `note`, `pregate`, `warning` (tasks_complete), `acceptance`/`evidence`, `reviewOf`, `planSteps`, `executorStoppedAt/executorStopReason`, `droppedByHumanAt`, `deviceWait*`, `claudeResult`, `assigneeUserId`, `linkedSessionId` |
+
+Убираются как служебные: `ownerId`, `reminderSentAt`, `createdByUserId`, `seriesId`, `sourceNoteLine`, `executionExpiresAfterMinutes`, `claudeStartedAt`, `holdResumeDeliveredAt`, `executorNudgedAt`, `executorStaleAlertedAt`, `completionDelivered`, `executorLaunchedBy*`, `createdByPersonaId`, `delegationDepth`, `order`, `initialEtaMinutes`, `baselineSteps`.
+
+**Описания схем** ужаты (5617 → 3567 токенов по Strata `count_tokens`, 22,8 → 12,4 тыс. символов): параметры `tasks_update`, дословно повторяющие `tasks_create`, без описаний; вложенные схемы `recurrence/repro/featureEstimate/awaitingHuman` — одним объектом с формой в тексте. Узлы `acceptance/evidence/verification` парны `mcp/tasks-server/index.js` (сторож парности) — правятся вместе. Вес держит `TasksToolsetSchemaWeightTests`, правила ролей — тот же класс.
+
 ## Окно и потолок `tasks_list`
 
 Замер 22.10: `tasks_list` без фильтра отдавал 6,2 МБ (6968 задач, 6237 закрытых), а CLI клал ответ в файл

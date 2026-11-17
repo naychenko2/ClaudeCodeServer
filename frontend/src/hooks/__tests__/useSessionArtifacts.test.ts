@@ -223,6 +223,17 @@ describe('computeTodos', () => {
     ]);
   });
 
+  it('mcp__tasks__tasks_create: компактный ответ сервера (без description и null) — guid достаётся, update матчится', () => {
+    // Форма ответа после сжатия tasks_* (задача 85fbaee8): id первым, поле status есть, лишнего нет
+    const compact = '{"id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","projectId":"p1","title":"Сделать B",'
+      + '"status":"todo","priority":"medium","kind":"task","shortId":"a1b2c3d4"}';
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'Сделать B', description: 'эхо не вернётся' }, { result: compact }),
+      tool('mcp__tasks__tasks_update', { id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', status: 'inProgress' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'Сделать B', status: 'in_progress' }]);
+  });
+
   it('mcp__tasks__tasks_create: без guid в result (стрим или старый транскрипт) — фолбэк на mcp-N', () => {
     // result пустой — стрим; guid не достали, ключ синтетический, но update идёт по title
     const items: ChatItem[] = [

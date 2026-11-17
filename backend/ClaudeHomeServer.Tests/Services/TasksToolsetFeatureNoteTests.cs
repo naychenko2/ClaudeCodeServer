@@ -171,8 +171,9 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
 
         var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new { id = epicId, featureNote = "" });
         isError.Should().BeFalse();
-        JsonSerializer.Deserialize<JsonElement>(text).GetProperty("note")
-            .ValueKind.Should().Be(JsonValueKind.Null, "пустой текст снял голос");
+        // Компактный ответ не несёт пустых полей: снятый голос — это отсутствие note
+        JsonSerializer.Deserialize<JsonElement>(text).TryGetProperty("note", out _)
+            .Should().BeFalse("пустой текст снял голос");
         Tasks.GetById(epicId)!.Note.Should().BeNull();
     }
 
@@ -399,9 +400,8 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
                 .BeEquivalentTo("remaining", "etaMinutes", "why", "expectedSteps");
             est.ContainsKey("required").Should().BeFalse($"{label}: обязательных полей у оценки нет");
             est["description"]!.GetValue<string>().Should().Contain("в каждом ходе").And.Contain("why");
-            var expectedStepsProp = (JsonObject)((JsonObject)est["properties"]!)["expectedSteps"]!;
-            expectedStepsProp["description"]!.GetValue<string>()
-                .Should().Contain("Оценка итога шагов фичи").And.Contain("не процент");
+            // Описание expectedSteps — в описании самого объекта (ужатие схем, задача 85fbaee8)
+            est["description"]!.GetValue<string>().Should().Contain("expectedSteps").And.Contain("итог шагов");
             props["featureNote"]!["description"]!.GetValue<string>().Should().Contain("в каждом ходе");
         }
     }

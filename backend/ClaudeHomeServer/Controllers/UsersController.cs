@@ -1,1 +1,464 @@
+﻿using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text.RegularExpressions;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Auth;
+using ClaudeHomeServer.Services.ChildMode;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Llm;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
+namespace ClaudeHomeServer.Controllers;
+
+[ApiController]
+[Route("api/users")]
+[Authorize(Roles = "admin")]
+// knowledge — необязательная зависимость от вертикали «Знаний» (К1b): детский профиль
+// живёт и без неё, а новый datasetId без сервиса или без Dify — отказ knowledge_unavailable,
+// не исключение и не обязательный параметр конструктора (тот же приём, что у
+// FilesController/OnboardingController с опциональными сервисами).
+public class UsersController(UserStore users, SessionManager sessions,
+    UserKnowledgeCascade knowledgeCascade, DefaultAssistantProvisioner provisioner,
+    ProjectMembershipService membership, IPersonalProjects personalProjects,
+    ChildTutorProvisioner childTutorProvisioner, ClaudeSubscriptionPool subscriptionPool,
+    PersonaManager personas,
+    ILogger<UsersController> logger,
+    // `= null` — обязательность для DI (S2b-1, ADR-014): на выключенной вертикали «Знаний»
+    // активация контроллера не должна падать; без неё новый datasetId — отказ ниже.
+    KnowledgeService? knowledge = null) : ControllerBase
+{
+    private static readonly Regex UsernameRegex = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
+
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        var dtos = users.GetAll().Select(ToDto);
+        return Ok(dtos);
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateUserRequest req)
+    {
+        var validationError = ValidateUsername(req.Username)
+                           ?? ValidatePassword(req.Password)
+                           ?? ValidateRole(req.Role)
+                           ?? ValidateExecutionEnvironment(req.ExecutionEnvironment);
+        if (validationError is not null) return BadRequest(new { error = validationError });
+
+        try
+        {
+            var user = users.Add(req.Username, req.Password, req.Role,
+                req.ExecutionEnvironment ?? ExecutionEnvironments.Local);
+            // Провижн ассистента новому пользователю (план 2.3): новичок сразу получает
+            // ассистента при заведении, без отдельного шага. Идемпотентно — повторный
+            // вызов на первом входе вернёт уже созданную заготовку.
+            await provisioner.EnsureAsync(user.Id);
+            return CreatedAtAction(nameof(GetAll), ToDto(user));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+    }
+
+    [HttpPut("{id}")]
+    public IActionResult Update(string id, [FromBody] UpdateUserRequest req)
+    {
+        if (req.Username is not null)
+        {
+            var err = ValidateUsername(req.Username);
+            if (err is not null) return BadRequest(new { error = err });
+        }
+
+        if (req.Role is not null)
+        {
+            var err = ValidateRole(req.Role);
+            if (err is not null) return BadRequest(new { error = err });
+        }
+
+        var envChange = req.ExecutionEnvironment;
+        if (envChange is not null)
+        {
+            var err = ValidateExecutionEnvironment(envChange);
+            if (err is not null) return BadRequest(new { error = err });
+
+            // Среда фиксируется после появления чатов: корни проектов и профили сред различаются,
+            // resume-транскрипты привязаны к путям старой среды (аналог guard'а смены провайдера)
+            var existing = users.GetById(id);
+            if (existing is not null && existing.ExecutionEnvironment != envChange
+                && sessions.HasSessionsOwnedBy(id))
+                return Conflict(new { error = "Нельзя сменить среду исполнения: у пользователя уже есть чаты. Удалите их и повторите." });
+        }
+
+        try
+        {
+            if (!users.Update(id, req.Username, req.Role, envChange))
+                return NotFound();
+
+            var user = users.GetById(id)!;
+            return Ok(ToDto(user));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(string id)
+    {
+        // Нельзя удалить самого себя
+        var currentUserId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (id == currentUserId)
+            return BadRequest(new { error = "Нельзя удалить собственную учётную запись" });
+
+        // Владелец общих проектов с живыми участниками: пока они есть, учётку не удаляем
+        if (membership.OwnerHasMembers(id))
+            return Conflict(new
+            {
+                error = "У пользователя есть общие проекты с участниками: сначала уберите участников.",
+                code = "owner_has_members",
+            });
+
+        var user = users.GetById(id);
+        try
+        {
+            if (!users.Delete(id))
+                return NotFound();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
+        // Каскад знаний: датасеты «{username}:…», локальные сторы, персоны. Без него всё это
+        // сиротеет, а новый пользователь с тем же именем увидел бы чужие базы как свои.
+        if (user is not null)
+            try { await knowledgeCascade.CleanupAsync(user.Id, user.Username); }
+            catch (Exception ex) { logger.LogWarning(ex, "Каскад знаний при удалении пользователя {User}", id); }
+
+        // «Личное»: запись стора удаляется, папка на диске остаётся (ADR-040 §3)
+        try { personalProjects.DeleteOf(id); }
+        catch (Exception ex) { logger.LogWarning(ex, "Удаление записи «Личного» пользователя {User}", id); }
+
+        return NoContent();
+    }
+
+    [HttpPut("{id}/password")]
+    public IActionResult ResetPassword(string id, [FromBody] ResetPasswordRequest req)
+    {
+        var err = ValidatePassword(req.NewPassword);
+        if (err is not null) return BadRequest(new { error = err });
+
+        if (!users.ResetPassword(id, req.NewPassword))
+            return NotFound();
+
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Детский профиль пользователя (ADR-041 «Контракт», ручка №10; KM-B1e): включает и правит
+    /// режим только админ. Роль — и по claim ([Authorize] класса), и по стору (AdminByStore):
+    /// сервисный токен хода — всегда роль "user", без политики он к админ-ручке не допускается,
+    /// а снятое админство не ждало бы истечения токена. [ChildAllowed] здесь нет намеренно:
+    /// ребёнок свой профиль не правит (тот же приём, что у AdminUserModelTiersController).
+    /// Тело — ChildProfileDto или { enabled: false } для выключения. Ответ 200 { profile,
+    /// tutorPersonaId }; отказы — { code, message } с кодами ADR (фронт переводит code сам).
+    /// Правила (RulesAgreedAt/RulesSummary) из тела не принимаются: их пишет только детский
+    /// rules/agree (KM-B6b); resetRules=true — сбросить оба.
+    /// </summary>
+    [HttpPut("{id}/child-profile")]
+    [Authorize(Policy = AdminByStoreRequirement.PolicyName)]
+    public async Task<IActionResult> SetChildProfile(string id, [FromBody] ChildProfileDto req)
+    {
+        var user = users.GetById(id);
+        if (user is null)
+            return NotFound(new { code = "user_not_found", message = "Пользователь не найден." });
+        // Кто привязывает базу знаний (К1b): адмен ручки — он же автор привязки в сторе.
+        var callerId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+        // Выключение — без проверок тела: отказы таблицы ADR — проверки «при включении».
+        // Профиль при этом сохраняется (Enabled=false): тело {enabled:false} просит выключить
+        // режим, а не стереть выставленные админом лимиты; политика «профиль выключен» =
+        // обычный пользователь (ChildModePolicy).
+        if (!req.Enabled)
+        {
+            users.DisableChildMode(id);
+            var off = users.GetById(id)!;
+            return Ok(new ChildProfileResponse(ToChildProfileDto(off.ChildMode), off.ChildMode?.TutorPersonaId ?? ""));
+        }
+
+        if (ChildProfileValidator.Validate(req, user, users, subscriptionPool) is { } reject)
+            return BadRequest(new { code = reject.Code, message = reject.Message });
+
+        // Привязка базы знаний (К1b, разрез §1/§3) — после того, как тело само читаемо: id
+        // предметов здесь ключи сличения с сохранённой привязкой. Новый datasetId проверяется
+        // по свежему списку Dify (он один на запрос и только если тело просит привязку).
+        // Без вертикали «Знаний», без настроенного Dify или без ответа Dify — отказ до записи
+        // профиля: не исключение и не тихий пропуск проверки.
+        if (RequestsKnowledgeBinding(req))
+        {
+            // Привязывает адмен ручки: «своя» база бывает у него, а не у ребёнка.
+            var caller = string.IsNullOrEmpty(callerId) ? null : users.GetById(callerId);
+            if (knowledge is null || !knowledge.IsConfigured || caller is null)
+                return BadRequest(new { code = "knowledge_unavailable", message = "База знаний недоступна: вертикаль «Знаний» выключена или Dify не настроен." });
+
+            IReadOnlyDictionary<string, string> datasets;
+            try
+            {
+                // id → логическое имя (префикс неймспейса снимает сам KnowledgeService): дальше
+                // по этому имени идёт предикат допустимой привязки (К1a).
+                datasets = (await knowledge.ListDatasetsAsync()).ToDictionary(d => d.Id, d => d.Name ?? "");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Детский режим: список датасетов Dify не получен для {User}", id);
+                return BadRequest(new { code = "knowledge_unavailable", message = "Не удалось проверить базу знаний: Dify не ответил." });
+            }
+
+            if (ChildProfileValidator.ValidateSubjectKnowledge(req, caller, users, LiveKnowledge(user), datasets) is { } kReject)
+                return BadRequest(new { code = kReject.Code, message = kReject.Message });
+        }
+
+        // Снимок прежнего профиля — ради отката при отказе провижнера («профиль не сохранён»).
+        var previous = user.ChildMode;
+        // Целый новый профиль, мутация — под локом стора: RulesAgreedAt/RulesSummary стор
+        // возьмёт из живого профиля, а не из нашего снимка (иначе затёрся бы параллельный
+        // agree ребёнка), и два одновременных PUT дают один целый профиль, не смесь полей.
+        // Привязка знания — тот же приём: в профиле только кандидат (id вызывающего админа и
+        // момент запроса), живая пара остаётся, если id датасета не изменился (К1b).
+        users.SetChildProfile(id, ToChildProfile(req, callerId ?? "", DateTime.UtcNow),
+            resetRules: req.ResetRules == true);
+
+        // Тьютор провится после записи: EnsureAsync закрепляет id в существующем профиле
+        // (SetChildTutorPersona) и идемпотентен — повторное включение возвращает живого тьютора.
+        string? tutorId;
+        try
+        {
+            tutorId = await childTutorProvisioner.EnsureAsync(id);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Детский режим: провижн тьютора не удался для {User}", id);
+            RollbackChildProfile(id, previous);
+            return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось создать персону-тьютора; профиль не изменён." });
+        }
+        // null — провижн невозможен (пользователь или профиль исчезли на параллельной правке,
+        // запрос отменён): ребёнок без тьютора не остаётся — тот же откат и 500.
+        if (tutorId is null)
+        {
+            RollbackChildProfile(id, previous);
+            return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось закрепить персону-тьютора; профиль не изменён." });
+        }
+
+        // Репетиторы предметов (Т2b, разрез §2): после тьютора профиля — по каждому предмету
+        // сохранённого профиля. Провижер идемпотентен: живой ключ возвращает тот же id без
+        // создания (один репетитор может вести несколько предметов, засев миграции даёт
+        // предмету тьютора профиля), пустой или висящий — провится заново.
+        // Снимок ключей берётся ДО провижна: SetChildSubjectTutor пишет в те же объекты,
+        // что живой профиль (а при слиянии «тела без subjects» — и в откатываемый снимок),
+        // поэтому «создана ЭТИМ вызовом» на момент отказа различается только сравнением с
+        // тем, что было до цикла. При отказе любого предмета (исключение или null) все новые
+        // ключи удаляются до RestoreChildProfile: после отката их не найти в профиле.
+        var subjectKeysBefore = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (users.GetById(id)?.ChildMode is { } prepared)
+        {
+            foreach (var subject in prepared.Subjects)
+                subjectKeysBefore[subject.Id] = subject.TutorPersonaId;
+        }
+        try
+        {
+            if (users.GetById(id)?.ChildMode is { } stored)
+            {
+                foreach (var subject in stored.Subjects)
+                {
+                    var subjectTutorId = await childTutorProvisioner.EnsureSubjectTutorAsync(id, subject.Id);
+                    // null — провижн невозможен (ребёнок или предмет исчезли на параллельной
+                    // правке, запрос отменён): ребёнок с предметом без репетитора не остаётся.
+                    if (subjectTutorId is null)
+                    {
+                        logger.LogWarning("Детский режим: провижн репетитора предмета {Subject} не удался для {User}", subject.Id, id);
+                        RollbackSubjectTutors(id, subjectKeysBefore);
+                        RollbackChildProfile(id, previous);
+                        return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось закрепить персону-репетитора предмета; профиль не изменён." });
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Детский режим: провижн репетитора предмета не удался для {User}", id);
+            RollbackSubjectTutors(id, subjectKeysBefore);
+            RollbackChildProfile(id, previous);
+            return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось создать персону-репетитора предмета; профиль не изменён." });
+        }
+
+        var saved = users.GetById(id);
+        if (saved?.ChildMode is not { } finalProfile)
+            return StatusCode(500, new { code = "tutor_provision_failed", message = "Профиль ребёнка не сохранился; повторите." });
+        return Ok(new ChildProfileResponse(ToChildProfileDto(finalProfile), tutorId));
+    }
+
+    // --- вспомогательные методы ---
+
+    // Откат отказанного включения: тьютор, созданный ЭТИМ вызовом (его id в живом профиле
+    // отличается от прежнего), удаляется — иначе сирота в personas.json; профиль
+    // возвращается целиком, с прежними правилами и прежним тьютором.
+    private void RollbackChildProfile(string id, ChildProfile? previous)
+    {
+        var liveTutor = users.GetById(id)?.ChildMode?.TutorPersonaId;
+        if (!string.IsNullOrWhiteSpace(liveTutor) && liveTutor != previous?.TutorPersonaId)
+            personas.Delete(liveTutor, id);
+        users.RestoreChildProfile(id, previous);
+    }
+
+    // Откат репетиторов предметов, созданных ЭТИМ вызовом: ключ живого профиля, отличный от
+    // снимка до провижна. Вызывается ДО RestoreChildProfile: после отката ключей новых персон
+    // в профиле нет, и их не найти. Свой откат провижера (отказ закрепления) в этот разбор не
+    // попадает: там ключ живого профиля равен снимку, персона уже удалена им самим. Сбой
+    // самого удаления — только лог: причина 500 уже известна, сирота видна в логе (тот же
+    // приём, что у RollbackDelete в провижере).
+    private void RollbackSubjectTutors(string id, Dictionary<string, string> subjectKeysBefore)
+    {
+        if (users.GetById(id)?.ChildMode is not { } live) return;
+        foreach (var subject in live.Subjects)
+        {
+            var key = subject.TutorPersonaId;
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            if (subjectKeysBefore.TryGetValue(subject.Id, out var before) && before == key) continue;
+            try { personas.Delete(key, id); }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Детский режим: откат персоны-репетитора предмета не прошёл (ребёнок {User}, персона {Persona})", id, key);
+            }
+        }
+    }
+
+    private static UserDto ToDto(User u) =>
+        new(u.Id, u.Username, u.Role, u.CreatedAt, u.ExecutionEnvironment);
+
+    // Есть ли в теле хоть одна привязка (К1b): нужен ли ради проверки свежий список Dify.
+    // Пустой/отсутствующий datasetId — снятие, а не привязка: проверка ему не нужна.
+    private static bool RequestsKnowledgeBinding(ChildProfileDto req) =>
+        req.Subjects?.Any(s => !string.IsNullOrWhiteSpace(s?.Knowledge?.DatasetId)) == true;
+
+    // Привязки ЖИВОГО профиля: id предмета → DatasetId (предметов без привязки в словаре нет).
+    // Снимок ради вопроса «изменился ли id» — решение о сохранении пары стор делает под своим
+    // локом по живому значению (UserStore.SetChildProfile), здесь только сравнение валидатора.
+    private static Dictionary<string, string> LiveKnowledge(User user)
+    {
+        var live = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var subject in user.ChildMode?.Subjects ?? [])
+            if (subject?.Knowledge is { } k)
+                live[subject.Id] = k.DatasetId;
+        return live;
+    }
+
+    // Wire-контракт ADR-041 (ChildProfileDto) → модель стора. Правил (RulesAgreedAt/
+    // RulesSummary) в wire-типе нет: они живут только в модели и из тела не принимаются
+    // никогда. Порог предупреждения: нет поля — дефолт 5 (ADR-041).
+    private static ChildProfile ToChildProfile(ChildProfileDto req, string callerId, DateTime attachedAt) => new()
+    {
+        Enabled = true,
+        GuardianUserIds = [.. req.GuardianUserIds ?? []],
+        ProviderKey = req.ProviderKey ?? "",
+        Model = req.Model ?? "",
+        Spaces = (req.Spaces ?? []).ToDictionary(
+            kv => kv.Key,
+            kv => new SpaceLimits
+            {
+                Windows = [.. (kv.Value?.Windows ?? []).Select(w => new TimeWindow
+                {
+                    From = w?.From ?? "",
+                    To = w?.To ?? "",
+                    Weekdays = w?.Weekdays is { } days ? [.. days] : null,
+                })],
+                DailyMinutes = kv.Value?.DailyMinutes,
+            }),
+        // Предметы (Т2a): тела нет — null как сигнал стору «предметы не трогать» (живое
+        // слияние в SetChildProfile; без живого профиля он нормализует его в []). Явный []
+        // — очистить. Порядок сохраняется. Тьютора предмета из тела НЕ читаем: слияние
+        // берёт его по Id из живого профиля, новый предмет остаётся пустым — персону
+        // пишет SetChildSubjectTutor (Т2b).
+        Subjects = req.Subjects is null
+            ? null!
+            : [.. req.Subjects.Select(s => new ChildSubject
+                {
+                    Id = s?.Id ?? "",
+                    Label = s?.Label ?? "",
+                    Glyph = s?.Glyph ?? "",
+                    Color = s?.Color ?? "",
+                    ProviderKey = s?.ProviderKey ?? "",
+                    Model = s?.Model ?? "",
+                    Enabled = s?.Enabled ?? true,
+                    // Привязка знания (К1b): из тела — только id датасета; автор и момент —
+                    // вызывающий админ и момент запроса. Это КАНДИДАТ: живое слияние стора
+                    // сохранит прежнюю пару, если id не изменился, и возьмёт этот — если
+                    // изменился. null (поля нет или datasetId пуст) — привязка снимается.
+                    Knowledge = string.IsNullOrWhiteSpace(s?.Knowledge?.DatasetId)
+                        ? null
+                        : new ChildSubjectKnowledge(s!.Knowledge!.DatasetId!, callerId, attachedAt),
+                })],
+        DailyBudgetUsd = req.DailyBudgetUsd,
+        MonthlyBudgetUsd = req.MonthlyBudgetUsd,
+        WarnMinutes = req.WarnMinutes ?? 5,
+    };
+
+    // Обратный маппинг — для поля profile ответа (null — профиля нет: выключение пользователя,
+    // который им и не был). Правила наружу не отдаются: их поле — дата согласия ребёнка,
+    // её показывает status-ручка (№1), не этот ответ.
+    private static ChildProfileDto? ToChildProfileDto(ChildProfile? p) => p is null ? null :
+        new ChildProfileDto(p.Enabled, [.. p.GuardianUserIds], p.ProviderKey, p.Model,
+            p.Spaces.ToDictionary(
+                kv => kv.Key,
+                kv => new ChildSpaceLimitsDto([.. kv.Value.Windows.Select(
+                    w => new ChildTimeWindowDto(w.From, w.To, w.Weekdays is { } days ? [.. days] : null))],
+                    kv.Value.DailyMinutes)),
+            // Предметы — в порядке стора (он же порядок плиток); тьютор — живой (Т2a:
+            // поле ответа, из тела оно не читалось). Привязка знания — id и момент (К1b):
+            // автор привязки в ответ не идёт, он остаётся в сторе.
+            [.. p.Subjects.Select(s => new ChildSubjectDto(
+                s.Id, s.Label, s.Glyph, s.Color, s.ProviderKey, s.Model, s.Enabled, s.TutorPersonaId,
+                s.Knowledge is { } k ? new ChildSubjectKnowledgeDto(k.DatasetId, k.AttachedAt) : null))],
+            p.DailyBudgetUsd, p.MonthlyBudgetUsd, p.WarnMinutes, null);
+
+    private static string? ValidateUsername(string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+            return "Имя пользователя не может быть пустым";
+        if (username.Length < 3 || username.Length > 32)
+            return "Имя пользователя должно содержать от 3 до 32 символов";
+        if (!UsernameRegex.IsMatch(username))
+            return "Имя пользователя может содержать только буквы, цифры, _ и -";
+        return null;
+    }
+
+    private static string? ValidatePassword(string? password)
+    {
+        if (string.IsNullOrEmpty(password) || password.Length < 8)
+            return "Пароль должен содержать не менее 8 символов";
+        return null;
+    }
+
+    private static string? ValidateRole(string? role)
+    {
+        if (role is not "admin" and not "user")
+            return "Роль должна быть 'admin' или 'user'";
+        return null;
+    }
+
+    private static string? ValidateExecutionEnvironment(string? env)
+    {
+        if (env is not null && !ExecutionEnvironments.IsValid(env))
+            return "Среда исполнения должна быть 'local' или 'container'";
+        return null;
+    }
+}
+
+public record UserDto(string Id, string Username, string Role, DateTime CreatedAt, string ExecutionEnvironment);
+public record CreateUserRequest(string Username, string Password, string Role, string? ExecutionEnvironment = null);
+public record UpdateUserRequest(string? Username, string? Role, string? ExecutionEnvironment = null);
+public record ResetPasswordRequest(string NewPassword);

@@ -228,6 +228,13 @@ public sealed class PersonaLayerBuilder
                 // круг персон, которых можно позвать сабагентом.
                 var (subagents, _) = SplitConsultants(ownerId, session,
                     _personas.GetForContext(ownerId, projectId).ToList());
+                // Порядок ВСЕГО плана — по handle (Ordinal). GetForContext отдаёт персон по UpdatedAt
+                // по убыванию: без этой сортировки определения per-run --agents (ClaudeAgentsJson →
+                // turnAgentsFingerprint) и порядок pmem-серверов менялись бы от чата к чату —
+                // отпечаток запуска расходился бы при одинаковом составе (та же причина, что у
+                // AppendPersonaLines). На состав это не влияет: CLI сортирует агентов сам,
+                // порядок держит только отпечаток.
+                subagents.Sort((a, b) => string.CompareOrdinal(a.Handle, b.Handle));
                 var apiUrl = _endpoint.ResolveTasksApiUrl(ownerId);
                 var tokenFactory = () => _endpoint.GetServiceToken(ownerId);
                 var useHttp = _endpoint.HttpEndpointUsable(apiUrl);
@@ -241,11 +248,9 @@ public sealed class PersonaLayerBuilder
                         PersonaConsultantToolset.PmemServerKey(p.Handle),
                         apiUrl, tokenFactory, p.Id, projectId, useHttp))
                     .ToList();
-                // Порядок — по handle (Ordinal): список «Доступные agentType» в промпте и состав
-                // --agents не должны зависеть от выборки GetForContext (та же причина, что у
-                // AppendPersonaLines — стабильность префикса промпта).
-                var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h))
-                    .OrderBy(h => h, StringComparer.Ordinal).ToList()!;
+                // Список «Доступные agentType» в промпте — уже в порядке handle (сортировка выше),
+                // здесь только отсекаются пустые handles.
+                var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList();
                 // Определения для per-run --agents JSON: omitClaudeMd ClaudeSession дополнит
                 // по факту BareMode (свойство прогона, известное только там)
                 var agents = _agentSync.GetAgentsDefs(subagents, omitClaudeMd: false);

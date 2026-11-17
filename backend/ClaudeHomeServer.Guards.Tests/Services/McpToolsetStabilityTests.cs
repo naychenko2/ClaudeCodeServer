@@ -763,6 +763,52 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Репетитор детского режима (К3, разрез «Знания репетитора» §3): сервер tutor объявляется ТОЛЬКО
+    /// ребёнку — по владельцу (IsChild) и allow-list, а НЕ через Gate(...): у взрослого AllowsServer = true
+    /// для любого сервера, и tutor объявился бы всем. Решение — свойство владельца, ход его не меняет;
+    /// контекст обязан ехать в LlmSessionContext и в признак http-транспорта хода.
+    /// </summary>
+    [SkippableFact]
+    public void СерверРепетитора_ОбъявляетсяПоIsChildИAllowList_НеЧерезGate()
+    {
+        var compose = ContextConstructionPoint().Replace("\r\n", "\n");
+
+        compose.Should().Contain("childGate.IsChild(ownerId)", "объявление — по признаку ребёнка");
+        compose.Should().Contain("ChildModeAllowList.AllowsServer(\"tutor\")", "и только пока у сервера есть пара в allow-list");
+        compose.Should().Contain("BuildTutorContext(");
+        compose.Should().NotContain("Gate(\"tutor\"", "через Gate взрослый получил бы tutor");
+        compose.Should().Contain("TutorMcp: tutorMcp", "контекст обязан доехать до ClaudeSession");
+        Regex.IsMatch(compose, @"HttpMcpActive\([^;]*tutorMcp").Should().BeTrue(
+            "признак http-транспорта хода (NO_PROXY) учитывает tutor");
+    }
+
+    /// <summary>
+    /// Тулсет репетитора лежит в Main, но своя пара сторожей: состав ToolsFor решается только по владельцу
+    /// и сессии (шаги 1–4 §3 — TryResolve, там же сверка И1-бис той же функцией LaunchMismatch), не по ходу;
+    /// гейт делегирования и состояние хода в состав не входят.
+    /// </summary>
+    [SkippableFact]
+    public void СоставToolsFor_ТулсетаРепетитора_НеЧитаетСостояниеХода()
+    {
+        var path = FindSource("Services", "Mcp", "Http", "TutorToolset.cs");
+        Skip.If(path is null, "TutorToolset.cs не найден (сборка вне дерева репозитория)");
+
+        var source = File.ReadAllText(path!).Replace("\r\n", "\n");
+        var toolsFor = MethodBody(source, "public IReadOnlyList<McpToolSchema> ToolsFor(");
+        var resolve = MethodBody(source, "private bool TryResolve(");
+
+        toolsFor.Should().Contain("TryResolve(", "состав — результат резолва владельца и сессии");
+        foreach (var body in new[] { toolsFor, resolve })
+        {
+            body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync, не в составе");
+            body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав инструментов");
+        }
+        resolve.Should().Contain("LaunchMismatch(", "сверка И1-бис — той же функцией, что на запуске хода, второй сверки нет");
+        var code = string.Join('\n', source.Split('\n').Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+        code.Should().NotContain("dataset_id", "в схеме нет аргумента-источника: fail-closed построен отсутствием параметра");
+    }
+
+    /// <summary>
     /// Единая формула mentions для http-ветки (блокер приёмки волны 2.1): и tools/list
     /// тулсета, и отпечаток сигнатуры запуска (mentionsForShape в ClaudeSession) обязаны
     /// читать MentionsToolsEnabled — «MentionsHint is not null» расходился с составом при

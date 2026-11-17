@@ -103,6 +103,25 @@ public class ChildCliLayerTests : IDisposable
     public void ChildPermissionDecision_НераспознанноеИмя_Deny(string tool) =>
         ClaudeSession.ChildPermissionDecision(tool).Should().Be("deny");
 
+    // --- п.12 (К3): три пары tutor — allow без карточки, остальное — deny ---
+
+    [Theory]
+    [InlineData("mcp__tutor__search_materials")]
+    [InlineData("mcp__tutor__list_materials")]
+    [InlineData("mcp__tutor__read_material")]
+    public void ChildPermissionDecision_ТриПарыTutor_Allow(string tool) =>
+        ClaudeSession.ChildPermissionDecision(tool).Should().Be("allow");
+
+    [Theory]
+    [InlineData("mcp__dify__search_knowledge")]
+    [InlineData("mcp__dify__list_datasets")]
+    [InlineData("mcp__tutor__write_material")]
+    [InlineData("mcp__tutor__search_materials__x")]
+    [InlineData("mcp__wsp__files_read")]
+    [InlineData("Read")]
+    public void ChildPermissionDecision_ОстальноеВключаяDify_Deny(string tool) =>
+        ClaudeSession.ChildPermissionDecision(tool).Should().Be("deny");
+
     // --- п.11: встроенные инструменты ---
 
     [Fact]

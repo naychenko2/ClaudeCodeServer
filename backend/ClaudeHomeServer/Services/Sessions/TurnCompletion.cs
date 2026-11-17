@@ -241,8 +241,10 @@ public sealed class TurnCompletion : ITurnMessageSink
                     // И6: в детском чате результат инструмента вырезается ДО записи в историю
                     // (acc.OnToolResult) и ДО широковещания — дальше по ветке идёт один заменённый
                     // объект, и в history.json, и в хреб. Меняется ТОЛЬКО Content; IsError и прочие
-                    // поля (тайминги) целы. Сессии нет (entry null) или чат взрослый — как раньше.
-                    if (entry?.Info.ChildSpace is not null)
+                    // поля (тайминги) целы. Чат взрослый — как раньше. Сессии нет (удалена посреди хода,
+                    // entry null): признак ребёнка узнать нечем, а читателя у результата уже нет — вырезаем
+                    // (fail-closed), иначе материалы удалённого детского чата уходили бы в хаб и историю.
+                    if (entry is null || entry.Info.ChildSpace is not null)
                         m = m with { Content = ChildToolResultPlaceholder };
                     msg = m;
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError, m.FinishedAt);

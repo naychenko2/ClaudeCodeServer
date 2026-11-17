@@ -126,7 +126,28 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
         ctx.NotesMcp.Should().BeNull();
         ctx.TasksMcp.Should().BeNull();
         ctx.MemoryMcp.Should().BeNull();
-        ctx.HttpMcpActive.Should().BeFalse();
+        // п.10 (К3): единственный сервер детского хода — tutor; ради него и активен http-транспорт
+        ctx.TutorMcp.Should().NotBeNull("ребёнку объявляется tutor");
+        ctx.HttpMcpActive.Should().Be(ctx.TutorMcp!.UseHttp, "других http-серверов у ребёнка нет");
+    }
+
+    [Fact]
+    public void ЧатПравил_ТоженеСетсяСервер_АСоставПустойРешаетТулсет()
+    {
+        var s = ValidSession();
+        s.OnboardingKind = OnboardingKinds.ChildRules;
+        s.ChildSubject = null; s.PersonaId = "tutor-1"; s.Provider = "pool-key"; s.Model = "sonnet";
+        Launch(Build(ValidChild()), s).TutorMcp.Should().NotBeNull(
+            "отдельной ветки «не объявлять в чате правил» нет: ToolsFor там пуст");
+    }
+
+    [Fact]
+    public void ОбычныйВладелец_TutorMcpНеОбъявляется()
+    {
+        // п.10: у взрослого AllowsServer = true для любого сервера — tutor объявился бы всем, если бы
+        // шёл через Gate(...). Он идёт по IsChild && allow-list.
+        var ctx = Launch(Build(null), ValidSession());
+        ctx.TutorMcp.Should().BeNull();
     }
 
     public static TheoryData<string> Fields => ["persona", "provider", "model", "project", "mode"];

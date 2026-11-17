@@ -1049,6 +1049,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly WidgetsMcpContext? _widgetsMcp;
     // MCP-сервер сторожей чатов (watch_*): null — чат без владельца
     private readonly WatchMcpContext? _watchMcp;
+    // MCP-сервер репетитора детского режима: null у взрослого владельца (ADR-041, К3)
+    private readonly TutorMcpContext? _tutorMcp;
     // Сводный признак «в сессии есть продуктовые MCP-серверы, чей адрес допускает http»:
     // решён SessionManager на едином гейте СХЕМЫ адреса, сюда приезжает готовым
     // (pmem-консультанты уточняют на ходу). Рубильник в нём НЕ сидит — он живой, ниже.
@@ -1064,6 +1066,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // решает, клеить ли секцию промпта mcp-watch: рассинхрон обучал бы модель вызывать
     // watch_start при отсутствующем туле — «No such tool available» (блокер ревью)
     private bool WatchHttpOn() => _watchMcp is { UseHttp: true } && HttpMcpOnNow();
+    // Репетитор: stdio-отката нет — условие то же, что у сторожей (схема адреса И рубильник)
+    private bool TutorHttpOn() => _tutorMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер веб-поиска (web_search/web_read): null — чат без владельца или пустой
     // Perplexity:ApiKey (сервер не настроен)
     private readonly WebSearchMcpContext? _webSearchMcp;
@@ -1388,6 +1392,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _modulesMcp = context.ModulesMcp;
         _widgetsMcp = context.WidgetsMcp;
         _watchMcp = context.WatchMcp;
+        _tutorMcp = context.TutorMcp;
         _webSearchMcp = context.WebSearchMcp;
         _architectureMcp = context.ArchitectureMcp;
         _higgsfieldMcp = context.HiggsfieldMcp;
@@ -1468,6 +1473,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // Сторожа чатов: stdio-ветки отката НЕТ (node-сервера не существовало) — при
         // негодном для http адресе или выключенном рубильнике тулсет ходу не объявляется
         var hasWatch = WatchHttpOn();
+        // Репетитор ребёнка: stdio-ветки нет, у взрослого контекста нет вовсе. В KeepMcpServers-срез
+        // не входит сознательно: это единственный сервер детского хода, а его состав и так минимален
+        var hasTutor = TutorHttpOn();
         // Веб-поиск: та же история — stdio-ветки нет, контекста нет вовсе при пустом
         // Perplexity:ApiKey (тогда схемы web_search/web_read не занимают окно модели)
         var hasWebSearch = WebSearchHttpOn();
@@ -1613,7 +1621,7 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
             && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasPlugins && !hasTurnContext && !hasLocalMedia && !hasTests && !hasDev && userServers is null
-            && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
+            && !hasExternal && !hasWatch && !hasTutor && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
 
@@ -1933,6 +1941,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
                 // Состав фиксирован (3 инструмента), вариативен только транспорт
                 shapes["watch"] = "t:http";
+            }
+
+            if (hasTutor)
+            {
+                // Репетитор детского режима: единственная ветка — http, сессия-вызыватель едет
+                // хвостом URL (/mcp/tutor/{sessionId}); тулсет сам сверяет ребёнка, чат и предмет.
+                // Состав фиксирован (3 инструмента), вариативен только транспорт.
+                servers["tutor"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_tutorMcp!.ApiUrl, McpEndpoints.TutorName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_tutorMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                shapes["tutor"] = "t:http";
             }
 
             if (hasMemory)

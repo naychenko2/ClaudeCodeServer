@@ -145,6 +145,16 @@ public sealed class BuiltinMcpContexts
         return new WatchMcpContext(apiUrl, () => _endpoint.GetServiceToken(ownerId!), _endpoint.HttpEndpointUsable(apiUrl));
     }
 
+    // Контекст MCP-сервера репетитора детского режима (К3): сессия-вызыватель едет хвостом URL
+    // (/mcp/tutor/{sessionId}), его строит ClaudeSession из Info.Id; sessionId здесь — для
+    // симметрии с вызовом фабрики и ради будущих контекстов с привязкой к чату. Решение «объявлять ли» — у вызывающего (TurnLaunchContextFactory:
+    // IsChild и allow-list), здесь только сборка адреса.
+    internal TutorMcpContext BuildTutorContext(string ownerId, string sessionId)
+    {
+        var apiUrl = _endpoint.ResolveTasksApiUrl(ownerId);
+        return new TutorMcpContext(apiUrl, () => _endpoint.GetServiceToken(ownerId), _endpoint.HttpEndpointUsable(apiUrl));
+    }
+
     // Контекст MCP-сервера веб-поиска: null — чат без владельца ИЛИ пустой Perplexity:ApiKey
     // (единственный рубильник фичи, как у Dify). Ключ читается ЖИВЬЁМ, но остаётся свойством
     // ИНСТАНСА, а не хода: инвариант стабильности состава (ADR-012) не задет — правка ключа
@@ -329,8 +339,8 @@ public sealed class BuiltinMcpContexts
         LocalMediaMcpContext? localMedia = null, ArchitectureMcpContext? architecture = null,
         AudioEditorMcpContext? audioEditor = null, VideoEditorMcpContext? videoEditor = null,
         TurnContextMcpContext? turnContext = null, TestsMcpContext? tests = null,
-        PluginsMcpContext? plugins = null) =>
-        architecture is { UseHttp: true } || tests is { UseHttp: true }
+        PluginsMcpContext? plugins = null, TutorMcpContext? tutor = null) =>
+        tutor is { UseHttp: true } || architecture is { UseHttp: true } || tests is { UseHttp: true }
         || widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }

@@ -86,6 +86,31 @@ public class ChildToolResultRedactionTests : SessionManagerTestBase
         sent.IsError.Should().BeTrue();
     }
 
+    // Ревью К4a (К3): ветка entry == null — сессию удалили посреди хода, а результат инструмента ещё
+    // летит. Вырезка раньше держалась на entry.Info.ChildSpace и без записи о сессии пропускала сырой
+    // результат в хаб и историю; теперь без записи вырезка включается (fail-closed): признак ребёнка
+    // узнать нечем, а читателя у результата уже нет. Мутация: вернуть условие `entry?.Info.ChildSpace is not null`
+    // в TurnCompletion — тест краснеет (в хаб уходит исходный Content).
+    [Fact]
+    public async Task ДетскийЧат_СессияУдаленаПосредиХода_РезультатВХабИИсториюНеУходит()
+    {
+        var session = await MkChatAsync("gone", ChildSpaces.Lessons);
+        var csId = "redact-" + Guid.NewGuid().ToString("N");
+        var toolId = "toolu-" + Guid.NewGuid().ToString("N");
+        var acc = new TurnAccumulator(new List<StoredMessage>(), csId);
+        await InvokeOnMessageAsync(session.Id, acc, new ToolUseMessage(toolId, "Read", InputMarker, null, null));
+        await _sut.DeleteAsync(session.Id);
+        var sentBefore = Sent<ToolResultMessage>().Count;
+
+        await InvokeOnMessageAsync(session.Id, acc, new ToolResultMessage(toolId, ResultMarker, false));
+
+        Sent<ToolResultMessage>().Skip(sentBefore).Should().OnlyContain(m => !m.Content.Contains(ResultMarker),
+            "после удаления чата сырой результат инструмента в хаб не уходит");
+        var historyFile = Path.Combine(_tempDir, "sessions", csId, "history.json");
+        (File.Exists(historyFile) ? File.ReadAllText(historyFile) : "").Should().NotContain(ResultMarker,
+            "и в историю удалённого чата сырой результат не записывается");
+    }
+
     [Fact]
     public async Task ВзрослыйЧат_Результат_БезИзменений()
     {

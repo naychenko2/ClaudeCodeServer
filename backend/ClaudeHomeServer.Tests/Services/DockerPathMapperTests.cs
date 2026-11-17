@@ -113,6 +113,23 @@ public class DockerPathMapperTests
     // Достаём хостовый корень /projects через ToHost (внутренние правила приватны)
     private static string RootProjectsHost(DockerPathMapper m) => m.ToHost("/projects");
 
+    // И6 №13 (К3, разрез «Знания репетитора» §4): каталог материалов предмета data/child-subjects
+    // вне монтирований песочницы — процесс CLI container-владельца (ребёнка) его не видит. Мутация:
+    // добавить в SandboxManager.BuildRunArgs/DockerPathMapper правило на data целиком или на
+    // child-subjects — тест краснеет (CanMap → true, ToRuntime не бросает).
+    [Fact]
+    public void ToRuntime_КаталогМатериаловПредмета_НеМапитсяВПесочницу()
+    {
+        var m = Make();
+        var dataDir = Path.GetDirectoryName(m.ToHost(SandboxManager.PluginsMount))!;
+        var materials = Path.Combine(dataDir, "child-subjects", "kid-1", "math", "text", "m_000000000001.txt");
+
+        m.CanMap(materials).Should().BeFalse();
+        m.CanMap(Path.Combine(dataDir, "child-subjects")).Should().BeFalse();
+        var act = () => m.ToRuntime(materials);
+        act.Should().Throw<InvalidOperationException>();
+    }
+
     // СТОРОЖ правила плагинов (ADR-031 §2.5): data/plugins → /plugins. --plugin-dir в
     // container-сборке обязан указывать на /plugins/… (а не на хостовый путь data/plugins,
     // которого в контейнере нет). Правило добавляется одной правкой с bind-mount'ом

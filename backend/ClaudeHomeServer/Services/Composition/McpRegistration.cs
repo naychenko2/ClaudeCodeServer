@@ -78,6 +78,10 @@ public static class McpRegistration
         // Сторожа чатов: хвост /mcp/watch/{sessionId} — сессия-вызыватель; право на чат
         // проверяется на каждый tools/list и вызов (WatchToolset.TryResolve)
         services.AddSingleton<IMcpToolset, WatchToolset>();
+        // Репетитор детского режима (ADR-041, К3): хвост /mcp/tutor/{sessionId}; объявляется только
+        // ребёнку (TurnLaunchContextFactory), а резолв ребёнка, чата и предмета — на каждый вызов.
+        // KnowledgeService — необязательная зависимость (вертикаль «Знаний» может быть выключена)
+        services.AddSingleton<IMcpToolset, TutorToolset>();
         // Веб-поиск (websearch: web_search + web_read): поиск идёт во внешний Perplexity Sonar
         // (ключ не покидает бэкенд), чтение страницы — существующим ридером панели «Чтение»
         // вместе с его SsrfGuard и квотой владельца. Пустой Perplexity:ApiKey = сервер ходу

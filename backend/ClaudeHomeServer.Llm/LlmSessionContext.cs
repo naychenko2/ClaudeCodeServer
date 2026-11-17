@@ -142,6 +142,12 @@ public sealed record WidgetsMcpContext(string ApiUrl, Func<string> TokenFactory,
 // ходу не объявляется вовсе.
 public sealed record WatchMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
+// Контекст MCP-сервера репетитора детского режима (ADR-041, К3): материалы предмета. Сессия-
+// вызыватель едет хвостом URL (/mcp/tutor/{sessionId}). Объявляется только ребёнку (свойство
+// владельца), stdio-отката нет: при UseHttp=false или выключенном Mcp:HttpTransport сервер ходу
+// не объявляется вовсе. Идиом токена и гейта схемы — как у watch.
+public sealed record TutorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
+
 // Контекст MCP-сервера веб-поиска (websearch: web_search + web_read): адрес API и фабрика
 // сервисного токена владельца; сессия-вызыватель едет хвостом URL (/mcp/websearch/{sessionId})
 // — по ней тулсет проверяет право на чат и берёт разрезы траты. null — чат без владельца ИЛИ
@@ -398,6 +404,9 @@ public sealed record LlmSessionContext(
     // MCP-сервер сторожей чатов (watch_*): null — чат без владельца. Наличие контекста —
     // свойство владельца (инвариант стабильности состава ADR-012).
     WatchMcpContext? WatchMcp = null,
+    // MCP-сервер репетитора (search_materials/list_materials/read_material): только у ребёнка
+    // (свойство владельца — инвариант стабильности состава ADR-012); у взрослого всегда null.
+    TutorMcpContext? TutorMcp = null,
     // MCP-сервер веб-поиска (web_search/web_read): null — чат без владельца или пустой
     // Perplexity:ApiKey. Наличие контекста — свойство владельца и настройки инстанса
     // (инвариант стабильности состава ADR-012).

@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -188,6 +189,36 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
 
         r.StatusCode.Should().Be(HttpStatusCode.OK);
         r.Content.Headers.ContentType!.MediaType.Should().Be(expectedMime);
+    }
+
+    // И6 №3 (К3, разрез «Знания репетитора» §4): ручка миниатюр не отдаёт материалы предмета —
+    // каталог data/child-subjects вне корня чата. Три формы пути (абсолютный, обход от корня, «data/…»),
+    // каждая и без учёта, и с записью в Session.Attachments: ни одна не 2xx, содержимого в ответе нет.
+    [Fact]
+    public async Task ДетскийЧат_ПутьВКаталогМатериаловПредмета_НеОтдаётся()
+    {
+        var name = "kid-raw-materials";
+        var (childId, chatId, root) = await ChildChat(name);
+        var dataDir = Path.GetDirectoryName(ChildSubjectMaterialsStore.RootFromConfig(
+            _hosts.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()))!;
+        var materials = Path.Combine(dataDir, ChildSubjectMaterialsStore.DirName, childId, "russian", "text", "m_000000000001.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(materials)!);
+        File.WriteAllBytes(materials, Png); // даже валидная картинка по сигнатуре не должна уйти ребёнку
+        var traversal = Path.GetRelativePath(root, materials).Replace('\\', '/');
+        var viaData = $"data/{ChildSubjectMaterialsStore.DirName}/{childId}/russian/text/m_000000000001.txt";
+        var attachments = Sessions.GetById(chatId)!.Attachments ??= [];
+        using var child = _hosts.CreateAuthenticatedClient(name, ChildPassword);
+
+        foreach (var recorded in new[] { false, true })
+        {
+            if (recorded) { attachments.Add(materials); attachments.Add(traversal); attachments.Add(viaData); }
+            foreach (var path in new[] { materials, traversal, viaData })
+            {
+                var r = await child.GetAsync(Url(chatId, path));
+                ((int)r.StatusCode).Should().BeGreaterThanOrEqualTo(400, $"путь «{path}» (учтён: {recorded})");
+                (await r.Content.ReadAsByteArrayAsync()).Should().NotEqual(Png, "байты материала ребёнку не уходят");
+            }
+        }
     }
 
     [Fact]

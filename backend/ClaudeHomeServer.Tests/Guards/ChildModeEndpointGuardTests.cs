@@ -101,6 +101,27 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         actual.Should().Equal(FrozenAllowed.Order(StringComparer.Ordinal));
     }
 
+    // Ревью К4a (К3): WorkflowController.GetTimeline отдаёт ToolResult из транскрипта workflow-агента, а защита
+    // у него одна — TranscriptRoots.IsPathAllowed. Ребёнку он закрыт тем, что у ручки нет [ChildAllowed]:
+    // обе ручки (список агентов и таймлайн) отвечают детскому токену 403 до контроллера, а метки на них нет.
+    [Fact]
+    public async Task WorkflowAgents_ТаймлайнИСписок_РебёнкуЗакрыты_МеткиНет()
+    {
+        SetChild();
+        var workflow = Endpoints()
+            .Where(e => (e.RoutePattern.RawText ?? "").StartsWith("api/workflow-agents", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        workflow.Should().NotBeEmpty();
+        workflow.Should().OnlyContain(e => e.Metadata.GetMetadata<ChildAllowedAttribute>() == null,
+            "ручки транскриптов workflow-агентов ребёнку не открываются никогда");
+
+        using var client = ChildClient();
+        (await client.GetAsync("/api/workflow-agents/timeline?transcriptDir=x&agentId=y")).StatusCode
+            .Should().Be(System.Net.HttpStatusCode.Forbidden);
+        (await client.GetAsync("/api/workflow-agents?transcriptDir=x")).StatusCode
+            .Should().Be(System.Net.HttpStatusCode.Forbidden);
+    }
+
     [Fact]
     public async Task ChildToken_OnEveryEndpointWithoutChildAllowed_IsRefused()
     {

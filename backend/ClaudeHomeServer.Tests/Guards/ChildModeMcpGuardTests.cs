@@ -25,8 +25,14 @@ public class ChildModeMcpGuardTests : IClassFixture<ChildModeMcpGuardTests.Hosts
 
     public ChildModeMcpGuardTests(Hosts host) => _host = host;
 
-    // Заморожено: в волне 1 allow-list ПУСТ. Студия волны 2 добавит сюда пары осознанной правкой.
-    private static readonly (string Server, string Tool)[] FrozenAllowList = [];
+    // Заморожено: единственный сервер — tutor (К3, ADR-041 «Редакция 3»): три инструмента материалов
+    // предмета. Студия волны 2 добавит сюда пары осознанной правкой.
+    private static readonly (string Server, string Tool)[] FrozenAllowList =
+    [
+        ("tutor", "search_materials"),
+        ("tutor", "list_materials"),
+        ("tutor", "read_material"),
+    ];
 
     private sealed class FakePolicy(ChildPolicySnapshot? snapshot) : IChildModePolicy
     {

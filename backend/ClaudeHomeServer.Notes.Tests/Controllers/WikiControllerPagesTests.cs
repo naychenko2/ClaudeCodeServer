@@ -468,7 +468,79 @@ public class WikiControllerPagesTests : IDisposable
         PackageFiles().Should().BeEmpty();
     }
 
+    // ─── 6. «Связанные» (Q1-S6b): поле related в GET /api/wiki/page ────────────
+
+    [Fact]
+    public async Task GET_Page_КарточкаИсточника_RelatedГруппаSource_ПустыхГруппНет()
+    {
+        // Фикстура: у страницы одна сноска на карточку источника того же раздела.
+        var body = Json(PageResult(), 200);
+        var related = body.GetProperty("related");
+        related.EnumerateArray().Select(g => g.GetProperty("kind").GetString())
+            .Should().Equal(new[] { "source" },
+                "единственная связь фикстуры — общая карточка источника; пустых групп не отдаём");
+        var item = related[0].GetProperty("items")[0];
+        item.GetProperty("pageKey").GetString().Should().Be(CardKey);
+        item.GetProperty("title").GetString().Should().Be(AiCard);
+        item.GetProperty("type").GetString().Should().Be("source");
+        foreach (var g in related.EnumerateArray())
+            g.GetProperty("items").GetArrayLength().Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task GET_Page_СоседнююСтраницуВУчётЧтенийНеЗовёт()
+    {
+        // Инвариант шага (c2): чтение соседей для «Связанных» ни на одном пути не попадает
+        // в учёт чтений (ADR-039 §7). Мутация «зовёт учёт чтения для соседей» в Page —
+        // счётчик карточки сдвигается, тест красный.
+        var root = WikiPaths.Root(_dir, User);
+        var now = DateTimeOffset.UnixEpoch;
+        WikiReadsStore.RecordMany(root, [(CardKey, WikiReadKind.Human)], now).Should().BeTrue();
+        var cardBefore = WikiReadsStore.Read(root).Pages[CardKey];
+
+        var body = Json(PageResult(), 200);
+        RelatedPageKeys(body).Should().Contain(CardKey,
+            "сосед фикстуры действительно в related — проверка ниже идёт по реальному соседу, не по пустому списку");
+
+        var after = WikiReadsStore.Read(root).Pages;
+        after[CardKey].Should().Be(cardBefore, "счётчики соседа не двинулись: его чтение — фон показа");
+        after.ContainsKey(_pageKey).Should().BeTrue();
+        after[_pageKey].Human.Should().Be(1, "цель учитывается как раньше (R4) — исключение только про соседей");
+    }
+
+    [Fact]
+    public async Task GET_Page_НеразобранныйСоседПропущен_Ответ200_РеальныйСоседОстаётся()
+    {
+        // Сосед полузаписан/битый (не разбирается как страница): он выпадает из related,
+        // страница отвечена как обычно — 200 без исключения. Выпадение локально: реальная
+        // связь не исчезает вместе с битой.
+        var brokenKey = _pageKey.Replace("Знание.md", "Битая.md");
+        File.WriteAllText(Path.Combine(_pages, brokenKey.Replace('/', Path.DirectorySeparatorChar)),
+            "полузаписанный текст без шапки и заголовка");
+
+        var body = Json(PageResult(), 200); // сам 200 проверяет Json(..., 200)
+        RelatedPageKeys(body).Should().NotContain(brokenKey, "битый сосед не часть «Связанных»");
+        RelatedPageKeys(body).Should().Contain(CardKey, "реальная связь осталась");
+    }
+
     // ─── Помощники ─────────────────────────────────────────────────────────
+
+
+    // Карточка источника фикстуры: сосед страницы по сноске — он же цель «Связанных» (source).
+    private string CardKey => _pageKey.Replace("Знание.md", $"Источники/{AiCard}.md");
+
+    // GET /api/wiki/page напрямую (тот же путь, что у PageJson, но с web-сериализацией —
+    // как отдаёт MVC): поле related и его группы проверяются по контрактным именам.
+    private IActionResult PageResult() =>
+        new WikiController(_keeper, _projects, new NoSpheres(), null!, _journalReader, new Flags(true), _config, null!, null!, null!, null!)
+        {
+            ControllerContext = Ctx(),
+        }.Page(_key, _pageKey);
+
+    private static IEnumerable<string> RelatedPageKeys(JsonElement body) =>
+        body.GetProperty("related").EnumerateArray()
+            .SelectMany(g => g.GetProperty("items").EnumerateArray())
+            .Select(i => i.GetProperty("pageKey").GetString()!);
 
     private async Task SeedAsync()
     {

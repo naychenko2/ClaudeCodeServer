@@ -259,6 +259,15 @@ public class WikiController : ControllerBase
             .Select(o => new WikiOverrideDto(o.Op, o.Statement, ResolveHistoryLine(content, o.Previous), o.At, o.PackageId,
                 o.Op == WikiPackage.OpConflict ? ResolveLiveLine(content, o.Previous, o.Statement) : null))
             .ToList();
+        // «Связанные» (2Б, Q1-S6b): чистая проекция при показе — что относится к странице по её
+        // же содержанию (WikiRelated, Q1-S6a). Вход — снимок страниц раздела и цепочки вверх,
+        // то же множество, что `allowed` у гейта. Чтение соседей — фоновое: ни в учёт чтений
+        // (RecordMany выше — только эта страница), ни под замок раздела (ADR-039 §7): возможен
+        // устаревший снимок — это проекция, не ошибка. Нечитаемый или неразобранный сосед
+        // выпадает на уровне сборки: ответ остаётся 200.
+        var related = WikiRelated.Build(
+            new WikiGate.Draft(page!, content),
+            RelatedSnapshot(root, WikiPaths.Pages(_dataDir, userId), key!, userId, page!));
         return Ok(new
         {
             pageKey = page,
@@ -266,11 +275,52 @@ public class WikiController : ControllerBase
             authorship,
             footnotes,
             overrides,
+            related,
             // sha256 байтов страницы — baseHash редактора (B3b): сохранение сверяет его под замком раздела.
             hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.IO.File.ReadAllBytes(full))).ToLowerInvariant(),
             drift = IsDrifted(root, page!, manifest),
             manifestState = ManifestStateOf(manifest.State),
         });
+    }
+
+    // Снимок для «Связанных»: страницы раздела и цепочки вверх — то же множество, что
+    // `allowed` у гейта (WikiRelated.cs:3-6, WikiGate.cs:332). Форма та же, что у каталога
+    // раздела: «_*» — не страницы; нечитаемый или пропавший во время чтения файл — сосед
+    // выпадает, не исключение: «Связанные» — фон показа, а не часть страницы. Неразобранный
+    // текст читается как есть — его отметит Build той же мерой, что гейт (model null).
+    // Своя страница не читается второй раз: она уже цель Build.
+    private List<WikiGate.Draft> RelatedSnapshot(string root, string pagesRoot,
+        string sectionKey, string ownerId, string ownPage)
+    {
+        var drafts = new List<WikiGate.Draft>();
+        foreach (var section in new[] { sectionKey }.Concat(WikiSections.UpChain(sectionKey, ownerId, _spheres)))
+        {
+            if (WikiSections.Folder(section) is not { } folder)
+                continue;
+            var dir = SafePath.JoinBelowRoot(root, "pages/" + folder);
+            if (!Directory.Exists(dir))
+                continue; // раздела на диске нет: читать нечего
+            try
+            {
+                foreach (var full in Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories))
+                {
+                    if (Path.GetFileName(full).StartsWith('_'))
+                        continue;
+                    var pageKey = Path.GetRelativePath(pagesRoot, full).Replace('\\', '/');
+                    if (pageKey == ownPage)
+                        continue;
+                    string text;
+                    try { text = System.IO.File.ReadAllText(full); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+                    drafts.Add(new WikiGate.Draft(pageKey, text));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Каталог стал недоступен во время перечисления: оставшиеся соседи просто нет.
+            }
+        }
+        return drafts;
     }
 
     // «Вернуть мою» принимает формулировку из «Истории» страницы, а не цитату цели модели: цель

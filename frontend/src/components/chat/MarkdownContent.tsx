@@ -107,10 +107,12 @@ export function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   // /api/proxy?... — уже проксированный URL (от urlTransform)
   const isRemote = !!src && /^(https?:|data:|\/api\/proxy)/i.test(src);
   // Детская лента («Знания репетитора», §8 п.5): внешние картинки (http(s): и /api/proxy)
-  // не грузятся — вместо них подпись alt текстом; data: остаётся картинкой.
-  if (childFeed && isRemote && src && !/^data:/i.test(src)) {
-    return alt ? <span>{alt}</span> : null;
-  }
+  // не грузятся — вместо них подпись alt текстом; data: остаётся картинкой. Условие
+  // вычисляется здесь, а применяется в финальных ветках рендера (ниже): ранний return до
+  // хуков ниже нарушал Rules of Hooks — при смене src (внешняя → data:) или провайдера без
+  // ремоунта тот же экземпляр перемонтировался с чистыми useState (в React 18 это ещё и
+  // роняло ленту «Rendered fewer/more hooks»; ревью 6b50faac).
+  const blocked = childFeed && isRemote && !!src && !/^data:/i.test(src);
   // Примитивы (id/rel/ключ), а не объект project: смена ССЫЛКИ projectCtx при неизменных
   // id/rootPath не должна дёргать перезагрузку картинки.
   const projectId = !isRemote ? project?.id ?? null : null;
@@ -148,6 +150,9 @@ export function ChatImage({ src, alt }: { src?: string; alt?: string }) {
 
   // ref — на КАЖДУЮ ветку: пока картинки нет, в DOM только плейсхолдер, и без ref на нём
   // IntersectionObserver ничего не наблюдает → inView вечно false → fetch не стартует никогда
+  // Blocked — первой веткой: при смене локальной картинки на внешнюю в детской ленте
+  // старое состояние (failed/resolved) не должно показаться вместо alt-подписи.
+  if (blocked) return alt ? <span>{alt}</span> : null;
   if (failed) return <span ref={wrapRef} style={{ fontSize: 13, color: C.textMuted }}>🖼 {alt || src}</span>;
   if (!finalSrc) return <span ref={wrapRef} style={{ fontSize: 13, color: C.textMuted }}>Загрузка изображения…</span>;
 

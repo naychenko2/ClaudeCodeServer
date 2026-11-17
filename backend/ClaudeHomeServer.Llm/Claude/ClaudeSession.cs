@@ -900,6 +900,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private long _turnInitTs;
     private long _turnInitToFirstEventMs = -1;
     private long _turnFirstContentMs = -1;
+    private long _turnFirstByteMs = -1;
+    private int _turnMcpServerCount = -1;
     private long _turnPrevRunStopMs = -1;
     private volatile IReadOnlyDictionary<string, long>? _turnSlowSections;
 
@@ -916,6 +918,8 @@ public class ClaudeSession : ILlmSessionAdapter
         Volatile.Write(ref _turnInitTs, 0);
         Volatile.Write(ref _turnInitToFirstEventMs, -1);
         Volatile.Write(ref _turnFirstContentMs, -1);
+        Volatile.Write(ref _turnFirstByteMs, -1);
+        Volatile.Write(ref _turnMcpServerCount, -1);
         Volatile.Write(ref _turnPrevRunStopMs, -1);
         _turnSlowSections = null;
     }
@@ -924,12 +928,15 @@ public class ClaudeSession : ILlmSessionAdapter
     internal TurnStartTimings GetStartTimings()
     {
         static long? N(long v) => v < 0 ? null : v;
+        var mcpCount = Volatile.Read(ref _turnMcpServerCount);
         return new TurnStartTimings(
             N(Volatile.Read(ref _turnQueueWaitMs)), N(Volatile.Read(ref _turnPromptAssemblyMs)),
             N(Volatile.Read(ref _turnSpawnToInitMs)), N(Volatile.Read(ref _turnInitToFirstEventMs)),
             _turnSlowSections, N(Volatile.Read(ref _turnPrevRunStopMs)))
         {
             FirstContentMs = N(Volatile.Read(ref _turnFirstContentMs)),
+            SpawnToFirstByteMs = N(Volatile.Read(ref _turnFirstByteMs)),
+            McpServerCount = mcpCount < 0 ? null : mcpCount,
             // Явный факт спавна этого хода: _turnSpawnTs ставит только NoteSpawn (единственный путь
             // запуска процесса), BeginStartTimings обнуляет. Не путать с SpawnToInitMs == null —
             // там «не спавняли» и «init не дошёл» смешаны в одно.
@@ -963,7 +970,21 @@ public class ClaudeSession : ILlmSessionAdapter
         Volatile.Write(ref _turnInitTs, 0);
         Volatile.Write(ref _turnInitToFirstEventMs, -1);
         Volatile.Write(ref _turnFirstContentMs, -1);
+        Volatile.Write(ref _turnFirstByteMs, -1);
         Volatile.Write(ref _turnSpawnTs, spawnStartTs);
+    }
+
+    // Первый байт stdout процесса, спавненного на ЭТОМ ходу: первая строка, прочитанная циклом
+    // чтения, — факт того, что процесс заговорил, до разбора и классификации её содержимого.
+    // Отдельная фаза от NoteInit: их разница — собственный старт CLI до init (разбор п.5.1
+    // карточки b51880e5). Same-process ход спавна не имеет: тот же гейт по _turnSpawnTs, что у
+    // NoteInit. После повторного спавна защёлка снята в NoteSpawn — байт мерится от нового
+    // процесса (хвост bc852f0e/e33b6bd2 — тот же порядок: сброс до записи _turnSpawnTs).
+    private void NoteFirstByte()
+    {
+        var spawnTs = Volatile.Read(ref _turnSpawnTs);
+        if (spawnTs == 0 || Volatile.Read(ref _turnFirstByteMs) >= 0) return;
+        Volatile.Write(ref _turnFirstByteMs, ElapsedMs(spawnTs));
     }
 
     // system/init процесса, спавненного на ЭТОМ ходу: фаза «запуск CLI». Повторный init того
@@ -3748,6 +3769,13 @@ public class ClaudeSession : ILlmSessionAdapter
         var currentWk = _serverContent ? _wkStore?.ForRoot(_rootPath) : null;
         var currentDatasetId = currentWk?.DatasetId;
         var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents, handsActive);
+        // Число MCP-серверов в конфиге этого запуска: ключи собранного temp-конфига — ровно то,
+        // что поехло в --mcp-config (тот же источник правды, что у deliveredMcp ниже). При откате
+        // к базовому внешнему конфигу (turnMcpPath == null) состав его здесь не известен без
+        // дополнительного разбора файла — замер остаёт null, не 0: отсутствие замера не ноль.
+        // Повторный спавн в ретрае берёт тот же конфиг — счётчик относится к ходу, не к попытке,
+        // и в NoteSpawn не сбрасывается.
+        if (turnMcpPath is not null) Volatile.Write(ref _turnMcpServerCount, mcpServerNames.Count);
         // Секции промпта про MCP-серверы вешаются на ФАКТ доставки сервера в конфиг ЭТОГО хода,
         // а не на «контекст сервера есть у сессии»: TrimMcpServers/KeepMcpServers гасят сервер
         // (у local-qwen из всего набора остаются tasks/codegraph/memory), а руководство к нему
@@ -5190,6 +5218,10 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
 
                 if (line is null) break; // stdout закрыт — процесс завершился
+                // Первый байт stdout спавненного процесса — факт его речи: до разбора строки и
+                // состояния прогона (пустая строка — тоже байт). Same-process хода без спавна
+                // не меряется — гейт внутри NoteFirstByte.
+                NoteFirstByte();
                 // Прогон уже финализирован по смерти процесса (EOF не пришёл — stdout держат его
                 // потомки): выдача мёртвого прогона в ленту не нужна, ход давно завершён
                 if (Volatile.Read(ref run.FinalizeGate) == 1) break;

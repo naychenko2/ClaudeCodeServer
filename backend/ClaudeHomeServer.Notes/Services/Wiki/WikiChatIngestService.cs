@@ -852,6 +852,7 @@ public sealed class WikiChatIngestService
                 // или несуществующая ссылка в хронику не идёт ни в каком виде — её видимый
                 // текст остаётся. Цитата сноски — дословная, в том числе с её [[…]]:
                 // сноска не утверждение, она не правится.
+                statement = WikiGate.StripUnresolvedLinks(statement, home, upChain, linkSnapshot, out _);
                 IEnumerable<string> candidates = op.Quotes is { Count: > 0 } ? op.Quotes : [op.Text];
                 // Мера контракта гейта (8–300, одна с гейтом) — только на сноске: цитату не
                 // обрезаем, она обязана остаться дословной, а пропускаем — иначе гейт отвергает

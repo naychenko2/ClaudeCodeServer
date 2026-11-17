@@ -87,6 +87,23 @@ public class WikiLintTests
         finding.Value.Should().Be("Порядок встреч");
     }
 
+    // Граница слова — часть общего матчера (WikiRelated.IsMention): заголовок внутри более
+    // длинного слова — не упоминание. Тот же тест держит и метрику: та же строка матчера.
+    [Fact]
+    public void ЗаголовокКакЧастьБолееДлинногоСлова_НеНаходкаИНеМетрика()
+    {
+        var shortPage = "Проекты/p1/Порядок.md";
+        var f = Background()
+            .Page(shortPage, "Порядок")
+            .Link(P2, shortPage)
+            .Text(P1, "Это был лишь подпорядок общих правил.");
+
+        var report = f.Run();
+
+        report.Findings.Should().BeEmpty("«подпорядок» — не слово «порядок»: граница слова — часть матчера");
+        report.Metrics.UnlinkedMentionPairs.Should().Be(0);
+    }
+
     [Fact]
     public void УпоминаниеВнутриКода_НеНаходка()
     {

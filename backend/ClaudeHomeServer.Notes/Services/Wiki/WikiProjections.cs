@@ -33,10 +33,21 @@ public static class WikiProjections
 
     private static readonly Regex TitleRx = new(@"^# (.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex FootnoteRefRx = new(@"\[\^(s\d+)\]", RegexOptions.CultureInvariant);
+    // Ссылка вики в сводке каталога заменяется видимым текстом: [[x|y]] → y, [[x]] → x —
+    // каталог читается одной строкой, а скобки модели кочуют в заголовок операции.
+    private static readonly Regex LinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
+    private static readonly Regex SpaceRx = new(@"\s+", RegexOptions.CultureInvariant);
 
     // Секция, чьи сноски авторство не считает: в «Истории» лежат снятые и замещённые утверждения,
     // а не то, что страница говорит сейчас (ADR-038, §2).
     private const string HistorySectionName = "История";
+
+    // Секция, из которой проектируется сводка каталога, когда в шапке нет summary (Q1-S2).
+    private const string SummarySectionName = "Сводка";
+
+    /// <summary>Длина сводки в строке каталога, символов: строка каталога остаётся строкой,
+    /// а каталог реального раздела — обозримым.</summary>
+    public const int SummaryMaxChars = 150;
 
     /// <summary>Что известно о карточке источника по её шапке: origin и дата захвата.</summary>
     public readonly record struct CardInfo(string? Origin, string? Captured, string? Path = null);
@@ -127,8 +138,12 @@ public static class WikiProjections
     }
 
     // _index.md: строка на каждую страницу раздела — имя (заголовок страницы), type и одна
-    // строка описания из шапки (summary). Порядок строк — по относительному пути (Ordinal):
-    // diff между перегенерациями читаем и не зависит от обхода ФС.
+    // строка сводки. Сводка — проекция (Q1-S2, ADR-039 решение 12): то, что сказано в шапке
+    // (summary), а если в шапке ничего — первые ~150 символов раздела «Сводка»: модель поле
+    // summary не заполняет, проекция читает то, что страница уже говорит. Порядок строк — по
+    // относительному пути (Ordinal): diff между перегенерациями читаем и не зависит от обхода
+    // ФС. Каталог промпта синтеза строится тем же CatalogLine, но из снимка страниц разбора
+    // (WikiIngestService.BuildSectionIndex) — здесь только человеческая витрина.
     // Страницы раздела — все .md под его папкой рекурсивно: карточки источников живут в
     // «Источники/» своего раздела (решение 3) и тоже относятся к его каталогу. Ссылка — голой
     // [[Заголовок]]: внутри раздела она резолвится без префикса (решение 1).
@@ -142,7 +157,7 @@ public static class WikiProjections
             string text;
             try { text = File.ReadAllText(Path.Combine(sectionDir, rel), Encoding.UTF8); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { text = ""; }
-            sb.Append(IndexLine(rel, text)).Append('\n');
+            sb.Append(CatalogLine(rel, text)).Append('\n');
         }
         WikiFileWriter.Write(root, "pages/" + folder + IndexFileName, sb.ToString());
     }
@@ -159,19 +174,59 @@ public static class WikiProjections
             .OrderBy(rel => rel, StringComparer.Ordinal);
     }
 
-    private static string IndexLine(string rel, string text)
+    /// <summary>Строка каталога раздела для страницы — общая для человеческой витрины _index.md
+    /// и каталога промпта синтеза (Q1-S2): имя, вид и сводка. Сводка — проекция, не поле:
+    /// то, что сказано в шапке (summary); если в шапке ничего — первые ~SummaryMaxChars
+    /// символов раздела «Сводка» (ADR-039, решение 12: модель поле summary не пишет).
+    /// Имя, которого нельзя достать из шапки, — имя файла: страница остаётся в каталоге
+    /// (она есть на диске) и помечается как неразобранная — молчание о странице хуже.
+    /// withSummary=false — та же строка без сводки («[[Заголовок]] — вид»): для строк
+    /// каталога промпта за его потолком.</summary>
+    public static string CatalogLine(string rel, string text, bool withSummary = true)
     {
         var parsed = WikiFrontmatter.Parse(text);
         var title = parsed.Model is null ? null : TitleOf(text, parsed.CloseLineIndex);
-        // Имя, которого нельзя достать из шапки, — имя файла: страница остаётся в каталоге
-        // (она есть на диске) и помечается как неразобранная — молчание о странице хуже.
         var name = title ?? Path.GetFileNameWithoutExtension(rel);
         if (parsed.Model is null)
             return $"- [[{name}]] — (шапка не разобрана)";
         var line = $"- [[{name}]] — {parsed.Model.Type}";
-        if (parsed.Model.Summary is { Length: > 0 })
-            line += " — " + parsed.Model.Summary;
+        if (!withSummary)
+            return line;
+        var summary = SummaryOf(parsed.Model, text);
+        if (summary is { Length: > 0 })
+            line += " — " + summary;
         return line;
+    }
+
+    // Сводка для строки каталога: из шапки; при её отсутствии — проекция раздела «Сводка»:
+    // строки складываются в одну, сноски [^sN] снимаются (в разобранной странице ссылки уже
+    // канонические), [[x|y]] заменяется видимым текстом, пробелы схлопываются, обрезка по
+    // слову на SummaryMaxChars. Неразобранная страница не проектируется: у неё нет секций.
+    private static string? SummaryOf(WikiFrontmatter fm, string text)
+    {
+        if (fm.Summary is { Length: > 0 })
+            return fm.Summary;
+        var page = WikiPage.Parse(text).Model;
+        var swodka = page?.Sections.FirstOrDefault(s => s.Name == SummarySectionName);
+        if (swodka is null || swodka.Lines.Count == 0)
+            return null;
+        var oneLine = FootnoteRefRx.Replace(WikiPage.OneLine(string.Join(" ", swodka.Lines)), "");
+        oneLine = LinkRx.Replace(oneLine, m =>
+        {
+            var target = m.Groups[1].Value;
+            var bar = target.IndexOf('|');
+            return bar >= 0 ? target[(bar + 1)..] : target;
+        });
+        oneLine = SpaceRx.Replace(oneLine.Trim(), " ");
+        if (oneLine.Length == 0)
+            return null;
+        if (oneLine.Length <= SummaryMaxChars)
+            return oneLine;
+        var cut = oneLine[..SummaryMaxChars];
+        var lastSpace = cut.LastIndexOf(' ');
+        // Обрезка по слову: хвост неполного слова отбрасывается; целого слова в отрезе нет —
+        // оставляется отрез как есть (дальше обрезанного некуда).
+        return lastSpace > 0 ? cut[..lastSpace] : cut;
     }
 
     private static string? TitleOf(string text, int closeLineIndex)

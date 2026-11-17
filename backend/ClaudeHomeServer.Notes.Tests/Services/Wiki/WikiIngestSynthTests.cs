@@ -511,6 +511,114 @@ public class WikiIngestSynthTests : IDisposable
             "вердикт дошёл до стора: сквозной путь ночной операции закрыт");
     }
 
+    // ── Q1-S2 (1А): каталог промпта из снимка раздела ──
+
+    // Страница знаний с заполненной «Сводкой» (без summary в шапке): сводка каталога
+    // проектируется из неё.
+    private static string KnowledgePage(string title, string swodka) =>
+        $"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {title}
+
+        ## Сводка
+        {swodka}
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+
+        """;
+
+    [Fact]
+    public void КаталогПромпта_200Страниц_ПотолокКарточекНетНоваяПоследняя()
+    {
+        // 200 страниц знаний с длинными «Сводками» + карточка источника + 201-я новая
+        // страница. Порядок записи — обратный именам: порядок каталога проверяет именно
+        // created, а не путь. Мутация «снять потолок» (PromptCatalogMaxChars → int.MaxValue):
+        // все строки получают сводки, каталог перерастает потолок — первый assert красный.
+        for (var i = 199; i >= 0; i--)
+            Write(Section, $"Проекты/p1/П{i:000}.md", KnowledgePage($"П{i:000}", new string('с', 160)));
+        Write(Section, "Проекты/p1/ПНовая.md", KnowledgePage("ПНовая", new string('с', 160)));
+
+        var upChain = WikiSections.UpChain(Section, User, new NoSpheres());
+        var snapshot = WikiIngestService.ReadSectionState(Root, Section, upChain);
+        var catalog = WikiIngestService.BuildSectionIndex(Root, Section, upChain, snapshot);
+
+        // Потолок — договорённость, она названа числом: мутация «снять потолок»
+        // (PromptCatalogMaxChars → int.MaxValue) краснит именно эту строку.
+        WikiIngestService.PromptCatalogMaxChars.Should().Be(14_000);
+        catalog.Length.Should().BeLessOrEqualTo(14_000,
+            "потолок каталога промпта (риск 1 разреза): окно вместе с ним помещается в контекст места");
+        catalog.Should().NotContain("— source").And.NotContain(CardTitle,
+            "карточки source в каталог промпта не входят");
+
+        var titles = catalog.Split('\n')
+            .Where(l => l.StartsWith("- [[", StringComparison.Ordinal))
+            .Select(l => l[4..l.IndexOf("]]", StringComparison.Ordinal)])
+            .ToList();
+        var expected = new List<string> { PageTitle };
+        for (var i = 199; i >= 0; i--) expected.Add($"П{i:000}");
+        expected.Add("ПНовая");
+        titles.Should().Equal(expected,
+            "порядок — по created, новые в конце: позиция не зависит от имени и правок содержания");
+        titles.Should().HaveCount(202, "потолок не покупается выбрасыванием хвоста: новая страница в каталоге");
+    }
+
+    [Fact]
+    public void КаталогПромпта_ПотолокОбщийДляРазделаНазначенияИЦепочкиВверх()
+    {
+        // Раздел назначения съедает потолок своими сводками; цепочка вверх обязана получить
+        // остаток — голые строки новых страниц. Сводки назначения — тоже длина каталога:
+        // при их невписании в бюджет следующего раздела суммарный каталог перерастает
+        // потолок (мутация «учёт без приписанных сводок» → первый assert красный).
+        for (var i = 0; i < 100; i++)
+            Write(Section, $"Проекты/p1/Т{i:000}.md", KnowledgePage($"Т{i:000}", new string('с', 160)));
+        for (var i = 0; i < 10; i++)
+            Write("common", $"Общее/В{i:000}.md", KnowledgePage($"В{i:000}", new string('с', 160)));
+
+        var upChain = WikiSections.UpChain(Section, User, new NoSpheres());
+        var snapshot = WikiIngestService.ReadSectionState(Root, Section, upChain);
+        var catalog = WikiIngestService.BuildSectionIndex(Root, Section, upChain, snapshot);
+
+        catalog.Length.Should().BeLessOrEqualTo(14_000,
+            "потолок считается суммарно по разделу назначения и цепочке вверх");
+        catalog.Should().Contain("[[В009]]", "новая страница цепочки вверх остаётся, даже когда потолок плотный");
+    }
+
+    [Fact]
+    public void КаталогПромпта_СтраницаПослеСнимка_ВКаталогОкнаНеПопадает()
+    {
+        // Каталог и кандидаты — один снимок под шлюзом раздела. Страница, появившаяся на
+        // диске после снимка (Хранитель перегенерировал её _index.md — прежняя реализация
+        // читала каталог оттуда и пустила бы её), в каталог этого окна не входит.
+        var upChain = WikiSections.UpChain(Section, User, new NoSpheres());
+        var snapshot = WikiIngestService.ReadSectionState(Root, Section, upChain);
+
+        Write(Section, "Проекты/p1/ПослеСнимка.md", KnowledgePage("ПослеСнимка", "то, чего в снимке нет"));
+
+        var catalog = WikiIngestService.BuildSectionIndex(Root, Section, upChain, snapshot);
+        catalog.Should().NotContain("ПослеСнимка", "второй точки правды о состоянии раздела в окне нет");
+    }
+
+    [Fact]
+    public void КаталогПромпта_ПустойРаздел_КаталогаНетВовсе()
+    {
+        // Пустой раздел был в промпте без описания и раньше: ни заголовка, ни строк.
+        // На этом держатся точные оценки ночи: пустой раздел не платит каталога.
+        var upChain = WikiSections.UpChain(EmptySection, User, new NoSpheres());
+        var snapshot = WikiIngestService.ReadSectionState(Root, EmptySection, upChain);
+        WikiIngestService.BuildSectionIndex(Root, EmptySection, upChain, snapshot).Should().BeEmpty();
+    }
+
     // ── подмена модели ──
 
     private sealed class FakeLlm : ICheapTextRunner

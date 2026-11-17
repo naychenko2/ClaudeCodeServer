@@ -140,11 +140,14 @@ public sealed class WikiChatIngestService
     /// было: модель ни разу не звалась (отказ ступеней до модели, «новых сообщений нет») либо движок
     /// их не отдал. Dropped/FirstDropReason — операции синтеза, отброшенные поштучным приёмом по
     /// всем разобранным окнам: число и первая причина из первого окна с отказами; отказ
-    /// позднего окна не стирает то, что было отброшено раньше (минор ревью C2R-Sh1).</summary>
+    /// позднего окна не стирает то, что было отброшено раньше (минор ревью C2R-Sh1).
+    /// CatalogChars (Q1-S2, риск 1 разреза) — символы каталогов промпта всех разобранных
+    /// окон: каталог — часть входа модели; вызывающий (ночь) прибавляет его /4 к оценке
+    /// расхода. 0 — до окон дело не дошло или разделы были пустые.</summary>
     public readonly record struct ChatResult(
         string Outcome, string? Reason, IReadOnlyList<string> PackageIds, string? Code = null,
         int OverrodeHuman = 0, IReadOnlyList<string>? DisputedPages = null, bool Partial = false,
-        long InputTokens = 0, int Dropped = 0, string? FirstDropReason = null);
+        long InputTokens = 0, int Dropped = 0, string? FirstDropReason = null, int CatalogChars = 0);
 
     /// <summary>Последний исход разбора чата с временем окончания (S7b0a, чтение
     /// analyze-status и списка).</summary>
@@ -600,6 +603,10 @@ public sealed class WikiChatIngestService
         // Входные токены разбора (WC-4a): сумма по всем разобранным окнам, независимо от их
         // исхода — окно, отказанное после ответившего вызова, расход тоже понесло.
         long inputTokens = 0;
+        // Символы каталогов промпта всех разобранных окон (Q1-S2, риск 1 разреза): каталог —
+        // часть входа модели; та же сумма, что inputTokens: окно, отказанное после постройки
+        // каталога, свой вход тоже занимал.
+        int catalogChars = 0;
         // Операции синтеза, отброшенные поштучным приёмом, по всем окнам (число и первая причина).
         var dropped = 0;
         string? firstDropReason = null;
@@ -614,7 +621,7 @@ public sealed class WikiChatIngestService
         {
             if (applied.Count > 0 || awaiting > 0) { failedReason = reason; return null; }
             return RecordRejection(root, sessionId, history, reason, afterModel, windowTo, inputTokens,
-                dropped, firstDropReason);
+                dropped, firstDropReason, catalogChars);
         }
 
         foreach (var window in windows)
@@ -640,6 +647,7 @@ public sealed class WikiChatIngestService
             // Расход окна прибавляется до разбора его исхода: он не зависит от того, чем
             // окно закончилось (applied, nothing_new, отказ после модели) (WC-4a).
             inputTokens += ing.InputTokens;
+            catalogChars += ing.CatalogChars;
             dropped += ing.Dropped;
             if (ing.DropReasons is { Count: > 0 } dr) firstDropReason ??= dr[0];
             switch (ing.Outcome)
@@ -686,9 +694,9 @@ public sealed class WikiChatIngestService
             });
             if (!up.Ok)
                 return Refused(null, $"исход разбора не записан: {up.Reason}", inputTokens,
-                    dropped, firstDropReason);
+                    dropped, firstDropReason, catalogChars);
             return new ChatResult(OutcomeNothingNew, nothingReason, [], InputTokens: inputTokens,
-                Dropped: dropped, FirstDropReason: firstDropReason);
+                Dropped: dropped, FirstDropReason: firstDropReason, CatalogChars: catalogChars);
         }
 
         if (applied.Count == 0)
@@ -706,17 +714,18 @@ public sealed class WikiChatIngestService
             });
             if (!upAwait.Ok)
                 return Refused(null, $"курсор разбора не записан: {upAwait.Reason}", inputTokens,
-                    dropped, firstDropReason);
+                    dropped, firstDropReason, catalogChars);
             return new ChatResult(OutcomeAwaitingHuman,
                 "в разборе есть спорные пакеты: их решает человек («Входящие»)", [],
                 Partial: failedReason is not null,
-                InputTokens: inputTokens, Dropped: dropped, FirstDropReason: firstDropReason);
+                InputTokens: inputTokens, Dropped: dropped, FirstDropReason: firstDropReason,
+                CatalogChars: catalogChars);
         }
 
         var (chronicleOk, chronicleReason) = await AppendChronicleAsync(ownerId, home, session, sessionId, applied);
         if (!chronicleOk)
             return Refused(null, chronicleReason ?? "хроника чата не записана", inputTokens,
-                dropped, firstDropReason);
+                dropped, firstDropReason, catalogChars);
 
         // Курсор после применения — на конец дельты, с хэшем последней записи; при
         // частичном исходе — на конце последнего успешного окна, с хэшем его записи (та же
@@ -735,7 +744,7 @@ public sealed class WikiChatIngestService
         });
         if (!upApplied.Ok)
             return Refused(null, $"курсор разбора не записан: {upApplied.Reason}", inputTokens,
-                dropped, firstDropReason);
+                dropped, firstDropReason, catalogChars);
 
         var overrodeHuman = 0;
         var disputed = new List<string>();
@@ -754,7 +763,8 @@ public sealed class WikiChatIngestService
         // перечёркнуто, но вызывающий видит, что разбор оборвался (WC-3).
         return new ChatResult(OutcomeApplied, failedReason, applied.Select(a => a.PackageId).ToList(),
             OverrodeHuman: overrodeHuman, DisputedPages: disputed, Partial: failedReason is not null,
-            InputTokens: inputTokens, Dropped: dropped, FirstDropReason: firstDropReason);
+            InputTokens: inputTokens, Dropped: dropped, FirstDropReason: firstDropReason,
+            CatalogChars: catalogChars);
     }
 
     // ── хроника чата ───────────────────────────────────────────────────────────────
@@ -1023,10 +1033,11 @@ public sealed class WikiChatIngestService
     // переходит через окно (зона rejected_skipped с причиной последнего отказа); вручную чат
     // по-прежнему разбирается пунктом меню чата.
     private ChatResult RecordRejection(string root, string sessionId, IReadOnlyList<StoredMessage> history,
-        string reason, bool afterModel, int windowTo, long inputTokens, int dropped, string? firstDropReason)
+        string reason, bool afterModel, int windowTo, long inputTokens, int dropped, string? firstDropReason,
+        int catalogChars = 0)
     {
         if (!afterModel)
-            return Refused(null, reason, inputTokens, dropped, firstDropReason);
+            return Refused(null, reason, inputTokens, dropped, firstDropReason, catalogChars);
         var skipped = false;
         var up = WikiChatTriageStore.Update(root, sessionId, cur =>
         {
@@ -1044,17 +1055,17 @@ public sealed class WikiChatIngestService
         });
         if (!up.Ok)
             return Refused(null, $"{reason}; серия отказов не записана: {up.Reason}", inputTokens,
-                dropped, firstDropReason);
+                dropped, firstDropReason, catalogChars);
         return Refused(null, skipped
             ? $"окно пропущено после {RejectSkipAfter} отказов подряд: {reason}"
-            : reason, inputTokens, dropped, firstDropReason);
+            : reason, inputTokens, dropped, firstDropReason, catalogChars);
     }
 
     /// <summary>Отказ разбора: то, что было понесено до отказа (токены вызовов и отброшенные
     /// операции разобранных окон), остаётся в исходе — отказ его не обнуляет (WC-4a; минор
     /// ревью C2R-Sh1).</summary>
     private static ChatResult Refused(string? code, string reason, long inputTokens = 0,
-        int dropped = 0, string? firstDropReason = null) =>
+        int dropped = 0, string? firstDropReason = null, int catalogChars = 0) =>
         new(OutcomeRejected, reason, [], code, InputTokens: inputTokens,
-            Dropped: dropped, FirstDropReason: firstDropReason);
+            Dropped: dropped, FirstDropReason: firstDropReason, CatalogChars: catalogChars);
 }

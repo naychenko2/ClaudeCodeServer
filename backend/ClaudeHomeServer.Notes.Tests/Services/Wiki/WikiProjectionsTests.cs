@@ -257,4 +257,119 @@ public class WikiProjectionsTests : IDisposable
         foots[0].CardPage.Should().Be("Общее/Источники/Моя заметка.md");
         foots[1].CardPage.Should().BeNull("карточки нет");
     }
+
+    // —— Q1-S2 (1А): CatalogLine и сводка-проекция (ADR-039, решение 12) ——
+    // Модель поле summary не пишет: без него в шапке сводку каталога даёт проекция раздела
+    // «Сводка» — одна строка, без сносок и [[ссылок]], обрезанная по слову.
+
+    // Страница с заполненной «Сводкой»: шапка без summary (или с ним), тело задано.
+    private static string PageSwodka(string title, string swodka, string? headerSummary = null) =>
+        $"""
+        ---
+        type: topic
+        {(headerSummary is null ? "" : $"summary: {headerSummary}\n")}aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {title}
+
+        ## Сводка
+        {swodka}
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+
+        """;
+
+    [Fact]
+    public void CatalogLine_НетSummaryВШапке_СводкаБерётсяИзРазделаИОбрезанаПоСлову()
+    {
+        // Тело длиннее потолка и сплошное: обрезка обязана упасть на границу слова,
+        // а не внутрь слова.
+        var swodka = string.Join(" ", Enumerable.Range(1, 40).Select(i => $"слово{i}"));
+        var text = PageSwodka("Предмет", swodka);
+
+        var line = WikiProjections.CatalogLine("Проекты/p1/Предмет.md", text);
+        const string prefix = "- [[Предмет]] — topic — ";
+        line.Should().StartWith(prefix);
+        var summary = line[prefix.Length..];
+
+        summary.Should().NotBeEmpty("содержимое «Сводки» в каталоге есть");
+        summary.Length.Should().BeLessOrEqualTo(WikiProjections.SummaryMaxChars,
+            "сводка каталога — строка, а не раздел");
+        swodka[..summary.Length].Should().Be(summary, "сводка — первые символы раздела");
+        swodka[summary.Length].Should().Be(' ',
+            "обрезка по слову: неполный хвост слова отброшен, следующий слово целиком не начался");
+    }
+
+    [Fact]
+    public void CatalogLine_СводкаБезСносокИСсылок_ОднойСтрокой()
+    {
+        // «Сводка» со сноской, алиасной ссылкой и двумя строками: строка каталога — одна
+        // строка без [^sN] и без [[…]]: скобки модели кочуют в заголовок операции.
+        var text = $"""
+            ---
+            type: topic
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # Предмет
+
+            ## Сводка
+            - Утверждение первое.[^s1] Оно ссылается на [[Карточка|видимый текст]] и продолжается.
+            - Утверждение второе, оно на другой строке.
+
+            ## Хронология
+
+            ## Противоречия
+
+            ## История
+
+            [^s1]: [[Карточка]] — «цитата длинная достаточная»
+            """;
+
+        var line = WikiProjections.CatalogLine("Проекты/p1/Предмет.md", text);
+        const string prefix = "- [[Предмет]] — topic — ";
+        line.Should().StartWith(prefix);
+        var summary = line[prefix.Length..];
+
+        summary.Should().NotContain("[^", "сносок в сводке нет");
+        summary.Should().NotContain("[[").And.NotContain("]]", "ссылок вики в сводке нет");
+        summary.Should().NotContain("\n", "строка каталога — одна строка");
+        summary.Should().Contain("видимый текст", "[[x|y]] заменяется видимым текстом y");
+        summary.Should().Contain("Утверждение первое. Оно ссылается", "тело осталось, снопка снята");
+        summary.Should().Contain("Утверждение второе, оно на другой строке.", "строки сложены в одну");
+    }
+
+    [Fact]
+    public void CatalogLine_ЕстьSummaryВШапке_БерётсяШапкаАНеПроекция()
+    {
+        var text = PageSwodka("Предмет", "содержание раздела совсем другое и не оно", headerSummary: "описание из шапки");
+        WikiProjections.CatalogLine("Проекты/p1/Предмет.md", text)
+            .Should().Be("- [[Предмет]] — topic — описание из шапки");
+    }
+
+    [Fact]
+    public void CatalogLine_ПустаяСводкаИШапка_СтрокаТолькоИмяИВид()
+    {
+        var text = PageSwodka("Предмет", "");
+        WikiProjections.CatalogLine("Проекты/p1/Предмет.md", text).Should().Be("- [[Предмет]] — topic");
+    }
+
+    [Fact]
+    public void CatalogLine_ВызовБезСводки_ТаЖеСтрокаТолькоИмяИВид()
+    {
+        // Вариант для строк каталога промпта за его потолком.
+        var text = PageSwodka("Предмет", "что-то в разделе", headerSummary: "описание из шапки");
+        WikiProjections.CatalogLine("Проекты/p1/Предмет.md", text, withSummary: false)
+            .Should().Be("- [[Предмет]] — topic");
+    }
 }

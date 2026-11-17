@@ -112,8 +112,8 @@ public class ChildChatsController(
             return ChildError(400, "invalid_style", "Неизвестный стиль озвучки.");
 
         // Чужой, не детский и несуществующий — одно тело 404 (существование не раскрываем)
-        var chat = sessions.GetById(id);
-        if (chat is null || chat.ProjectId is not null || chat.OwnerId != UserId || chat.ChildSpace is null)
+        var chat = sessions.GetOwned(id, UserId);
+        if (chat is null || chat.ProjectId is not null || chat.ChildSpace is null)
             return ChildError(404, "chat_not_found", "Чат не найден.");
 
         try

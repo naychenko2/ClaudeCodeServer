@@ -33,7 +33,7 @@ public sealed class ChildHubFilter : IHubFilter
                 || !AllowedMethods.Contains(name, StringComparer.Ordinal))
                 throw new HubException("child_mode");
 
-            if (name == "SendMessage" && invocationContext.HubMethodArguments.Count > AutoArg)
+            if (name == "SendMessage")
             {
                 // mode/auto от ребёнка не доверяем: подменяем аргументы до вызова метода хаба
                 var args = SanitizeSendMessageArgs(invocationContext.HubMethodArguments);
@@ -49,8 +49,8 @@ public sealed class ChildHubFilter : IHubFilter
     internal static object?[] SanitizeSendMessageArgs(IReadOnlyList<object?> arguments)
     {
         var args = arguments.ToArray();
-        args[ModeArg] = null;
-        args[AutoArg] = false;
+        if (args.Length > ModeArg) args[ModeArg] = null;
+        if (args.Length > AutoArg) args[AutoArg] = false;
         return args;
     }
 

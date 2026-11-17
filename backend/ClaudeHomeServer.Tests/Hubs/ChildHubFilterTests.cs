@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http.Connections;
@@ -120,5 +121,40 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
     {
         var args = ChildHubFilter.SanitizeSendMessageArgs(["s", "t", null, "bypassPermissions", true]);
         args.Should().Equal("s", "t", null, null, false);
+    }
+
+    private sealed class FakeCaller(System.Security.Claims.ClaimsPrincipal user) : HubCallerContext
+    {
+        public override string ConnectionId => "c";
+        public override string? UserIdentifier => null;
+        public override System.Security.Claims.ClaimsPrincipal? User => user;
+        public override IDictionary<object, object?> Items { get; } = new Dictionary<object, object?>();
+        public override Microsoft.AspNetCore.Http.Features.IFeatureCollection Features =>
+            new Microsoft.AspNetCore.Http.Features.FeatureCollection();
+        public override CancellationToken ConnectionAborted => CancellationToken.None;
+        public override void Abort() { }
+    }
+
+    private sealed class ChildPolicy : IChildModePolicy
+    {
+        public ChildPolicySnapshot? For(string ownerId) => new(ownerId, new ChildProfile { Enabled = true }, DenyAll: false);
+    }
+
+    [Fact]
+    public async Task SendMessage_ThroughFilter_NextGetsSanitizedArgs()
+    {
+        var services = new ServiceCollection().AddSingleton<IChildModePolicy, ChildPolicy>().BuildServiceProvider();
+        var user = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
+            [new System.Security.Claims.Claim(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub, "kid")], "test"));
+        var hub = (SessionHub)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SessionHub));
+        var method = typeof(SessionHub).GetMethod(nameof(SessionHub.SendMessage))!;
+        var ctx = new HubInvocationContext(new FakeCaller(user), services, hub, method,
+            new object?[] { "s", "t", null, "bypassPermissions", true });
+
+        IReadOnlyList<object?>? seen = null;
+        await new ChildHubFilter().InvokeMethodAsync(ctx, c => { seen = c.HubMethodArguments; return ValueTask.FromResult<object?>(null); });
+
+        seen.Should().NotBeNull();
+        seen!.Should().Equal("s", "t", null, null, false);
     }
 }

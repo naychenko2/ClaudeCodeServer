@@ -121,6 +121,33 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         (await tts.Content.ReadAsStringAsync()).Should().NotContain("child_mode");
     }
 
+    // Ветки app.Use после гейта: SPA-фолбэк с [ChildAllowed] не должен пропускать ребёнка в них
+    [Theory]
+    [InlineData("GET", "/telemetry-proxy/x")]
+    [InlineData("GET", "/9.4.0-hash/web-apps/x")]
+    [InlineData("GET", "/modules/viaduct/")]
+    [InlineData("GET", "/modules/viaduct/index.js")]
+    [InlineData("POST", "/произвольный/путь")]
+    [InlineData("POST", "/")]
+    [InlineData("DELETE", "/some-page")]
+    public async Task ChildToken_OnSpaFallbackBranchesOrWrites_Gets403ChildMode(string method, string path)
+    {
+        SetChild();
+        using var client = ChildClient();
+        var resp = await client.SendAsync(new HttpRequestMessage(new HttpMethod(method), path));
+        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("child_mode");
+    }
+
+    [Fact]
+    public async Task ChildToken_OnSpaRoot_Get_PassesGate()
+    {
+        SetChild();
+        using var client = ChildClient();
+        var resp = await client.GetAsync("/");
+        (await resp.Content.ReadAsStringAsync()).Should().NotContain("child_mode");
+    }
+
     [Fact]
     public async Task ChildToken_OnPlainEndpoint_Gets403ChildMode()
     {

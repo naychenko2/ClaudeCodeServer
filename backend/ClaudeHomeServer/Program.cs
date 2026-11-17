@@ -1457,7 +1457,8 @@ if (Directory.Exists(distPath))
     // SPA-фолбэк — интерфейс, а не управляющая поверхность: ребёнку он нужен, чтобы
     // открыть приложение (гейт И1 закрывает API и хабы, статику не трогает).
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders })
-        .WithMetadata(new ClaudeHomeServer.Services.ChildMode.ChildAllowedAttribute());
+        .WithMetadata(new ClaudeHomeServer.Services.ChildMode.ChildAllowedAttribute(),
+            new ClaudeHomeServer.Services.ChildMode.ChildSpaFallbackAttribute());
 }
 else
 {

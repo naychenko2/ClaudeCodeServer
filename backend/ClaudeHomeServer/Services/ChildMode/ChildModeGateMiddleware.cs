@@ -10,8 +10,10 @@ namespace ClaudeHomeServer.Services.ChildMode;
 /// по стору через <see cref="IChildModePolicy"/>, а не из claim: выключение профиля действует
 /// со следующего запроса.
 /// <para>
-/// Отказ по умолчанию: аутентифицированный ребёнок на запросе без эндпоинта (ветки конвейера
-/// вроде WebDAV или /preview) тоже получает 403 — у этих веток свои проверки профиля на входе
+/// Отказ по умолчанию: ребёнок получает 403 на любом запросе без метки <see cref="ChildAllowedAttribute"/>.
+/// SPA-фолбэк совпадает с любым путём без своего эндпоинта, поэтому открыт ему лишь на GET/HEAD к корню
+/// <c>/</c> (<see cref="ChildSpaFallbackAttribute"/>), всё прочее на нём — 403: иначе ребёнок прошёл бы
+/// в ветки <c>app.Use</c> после гейта (/telemetry-proxy, OnlyOffice, статика модулей). У веток свои проверки профиля на входе
 /// для случаев, когда токен приходит не в <c>ctx.User</c>. Профиль с <c>DenyAll</c> не пускает
 /// никуда, даже на размеченные эндпоинты: «выход» — клиентский, серверного logout у JWT нет.
 /// Аутентифицированный запрос без владельца (нет sub) отказывается так же. Анонимный запрос ребёнком не считается: вход (login) закрывает свой [AllowAnonymous].
@@ -31,8 +33,10 @@ public sealed class ChildModeGateMiddleware(RequestDelegate next)
             {
                 // Хабы кроме /hubs/session (terminal, devices) ребёнку закрыты целиком:
                 // у них нет [ChildAllowed], поэтому negotiate получает 403 здесь.
+                var meta = ctx.GetEndpoint()?.Metadata;
                 var allowed = !unknownOwner && !snapshot!.DenyAll
-                    && ctx.GetEndpoint()?.Metadata.GetMetadata<ChildAllowedAttribute>() is not null;
+                    && meta?.GetMetadata<ChildAllowedAttribute>() is not null
+                    && (meta.GetMetadata<ChildSpaFallbackAttribute>() is null || IsSpaRootRead(ctx.Request));
                 if (!allowed)
                 {
                     ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -43,6 +47,10 @@ public sealed class ChildModeGateMiddleware(RequestDelegate next)
         }
         await next(ctx);
     }
+
+    private static bool IsSpaRootRead(HttpRequest request) =>
+        (HttpMethods.IsGet(request.Method) || HttpMethods.IsHead(request.Method))
+        && (request.Path.Value is null or "" or "/");
 }
 
 public static class ChildModeGateExtensions

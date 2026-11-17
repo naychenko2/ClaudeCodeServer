@@ -35,11 +35,15 @@ public enum ChatOrigin { Manual, Task, Automation }
 
 // Значения Session.OnboardingKind:
 // User — онбординг первого входа (ведёт системный «Мастер настройки», персоны у сессии нет);
-// Project — онбординг проекта (ведёт личная дефолт-персона владельца).
+// Project — онбординг проекта (ведёт личная дефолт-персона владельца);
+// ChildRules — онбординг правил детского режима (ведёт закреплённый тьютор, ADR-041 §5).
 public static class OnboardingKinds
 {
     public const string User = "user";
     public const string Project = "project";
+    // Онбординг правил детского режима (ADR-041 §5): интервью ведёт тьютор, правила уже
+    // выставил админ; согласие пишет только ChildProfile.RulesAgreedAt/RulesSummary.
+    public const string ChildRules = "child-rules";
 }
 
 // Состояние цикла «до готово» (флаг work-loop, идея ralph/ulw-loop из oh-my-openagent):
@@ -528,6 +532,13 @@ public class Session
     // Аддитивное nullable-поле: старые записи sessions.json читаются с null,
     // BackupSchema.Version не двигается.
     public SessionImageChat? ImageChat { get; set; }
+    // Детское пространство чата (ADR-041): "lessons" (В1), позже "studio"; null — обычный чат.
+    // Фиксируется при СОЗДАНИИ: детский чат создаёт только POST /api/child/spaces/{space}/chat
+    // с закреплёнными тьютором, провайдером и моделью; поля сверяются при запуске хода (И1-бис).
+    // Строковая ключ-метка, не enum: Студия волны 2 — запись в профиле без миграции формата.
+    // Аддитивное nullable-поле: старые записи sessions.json читаются с null,
+    // BackupSchema.Version не двигается.
+    public string? ChildSpace { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
     // Сообщения, ждущие устройство локального проекта (ADR-016, вариант А плана §5): фоновые

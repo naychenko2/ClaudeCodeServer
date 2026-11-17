@@ -261,6 +261,23 @@ public class ChildStopSignalTests : IClassFixture<ChildStopSignalTests.Hosts>
         (await StopSignals(guardian)).Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task МаркерВоВзросломЧате_СигналаНеПоднимает()
+    {
+        // Админ — взрослый: чат без ChildSpace; опекуном ребёнка назначен он же — сигнал был бы виден
+        var adultId = await NewUser("kss-adult-chat", child: false);
+        var kid = await NewUser("kss-adult-kid", child: true, guardians: [adultId]);
+        var chat = await Sessions.CreateChatAsync(adultId, ClaudeMode.Default);
+        var completion = _hosts.Services.GetRequiredService<TurnCompletion>();
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+
+        await completion.OnMessageAsync(chat.Id, acc, new TextDeltaMessage("<ccs-stop-signal reason=\"x\"/>"));
+        await completion.OnMessageAsync(chat.Id, acc, new ResultMessage("success", 10, 1, null, null));
+        await Task.Delay(300);
+
+        (await StopSignals(adultId)).Should().BeEmpty("сигнал поднимается только в детском чате");
+    }
+
     private static async Task<T> WaitFor<T>(Func<Task<T>> read, Func<T, bool> done)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);

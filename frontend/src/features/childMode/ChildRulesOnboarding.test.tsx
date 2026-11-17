@@ -31,6 +31,9 @@ vi.stubGlobal('HTMLElement', win.HTMLElement);
 vi.stubGlobal('Node', win.Node);
 vi.stubGlobal('Event', win.Event);
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// TZ — для теста «дата согласия»: process вне типов браузерной сборки (test.tsx входит в
+// tsconfig.app, node-типы в неё не входят). Доступ через globalThis, как у IS_REACT_ACT_ENVIRONMENT.
+const nodeEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
 
 // childApi.rulesAgree: ответ по индексу вызова — Error сразу отказывает promise (как
 // отказывает request() из lib/offline), записи нет → promise держится in-flight
@@ -232,15 +235,17 @@ describe('ChildRulesOnboarding: пять шагов в порядке макет
     // Зона машины не важна: тест сам ставит зону браузера. Дата лежит в зоне ребёнка:
     // 00:30 по +03:00 — предыдущий день в UTC. Реализация с переводом в зону браузера
     // дала бы «15 ноября».
-    const prevTZ = process.env.TZ;
-    process.env.TZ = 'UTC';
+    const prevTZ = nodeEnv?.TZ;
+    if (nodeEnv) nodeEnv.TZ = 'UTC';
     try {
       await mount('review', brief({ agreedAt: '2026-11-16T00:30:00+03:00' }));
       await toLastStep('review');
       expect(doc.body.innerHTML).toContain('Договорились 16 ноября: Лиза и папа');
     } finally {
-      if (prevTZ === undefined) delete process.env.TZ;
-      else process.env.TZ = prevTZ;
+      if (nodeEnv) {
+        if (prevTZ === undefined) delete nodeEnv.TZ;
+        else nodeEnv.TZ = prevTZ;
+      }
     }
   });
 });
@@ -315,6 +320,29 @@ describe('ChildRulesOnboarding: согласие', () => {
     // Флаг загрузки — механизм контракта: без него второй клик шлёт второй agree.
     expect(b.disabled, 'кнопка в загрузке до ответа').toBe(true);
     await click(b);
+    expect(calls.length).toBe(1);
+    await settle(() => pending.get(0)?.resolve({ rulesAgreedAt: '2026-11-17T12:00:00+03:00' }));
+    expect(agreedCalls).toBe(1);
+  });
+
+  it('guard busy держит один запрос: два прямых вызова onConfirm — один agree', async () => {
+    await mount('agree');
+    await toLastStep();
+    await markBoth();
+    const b = buttonByText('Договорились')!;
+    // Зовём onConfirm напрямую через props узла (тот же путь, что событие клика), без опоры
+    // на disabled кнопки: держать запрос обязан guard, а не состояние контрола.
+    const callConfirm = () => {
+      const key = Object.keys(b).find((k) => k.startsWith('__reactProps$'));
+      const props = key ? (b as unknown as Record<string, unknown>)[key] as { onClick?: () => void } : undefined;
+      expect(props?.onClick, 'onConfirm на кнопке').toBeTruthy();
+      props!.onClick!();
+    };
+    // Каждый вызов — свой act: после первого React перерисовывает кнопку (busy=true),
+    // и второй читает уже новый замыкающий onConfirm.
+    await act(async () => { callConfirm(); });
+    expect(calls.length).toBe(1);
+    await act(async () => { callConfirm(); });
     expect(calls.length).toBe(1);
     await settle(() => pending.get(0)?.resolve({ rulesAgreedAt: '2026-11-17T12:00:00+03:00' }));
     expect(agreedCalls).toBe(1);

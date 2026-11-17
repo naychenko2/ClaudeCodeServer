@@ -160,7 +160,7 @@ public class FeatureFlagServiceTests : IDisposable
             FeatureFlagCatalog.Exists(key).Should().BeFalse($"флаг {key} снят и не должен возвращаться в каталог");
 
         FeatureFlagCatalog.All.Select(f => f.Key).Should().BeEquivalentTo(
-            ["workspace-destructive", "spheres", "plugins-mvp", "plugins-build-yourself", "shared-projects", "llm-wiki"]);
+            ["workspace-destructive", "spheres", "plugins-mvp", "plugins-build-yourself", "shared-projects", "llm-wiki", "child-mode"]);
     }
 
     // --- GetDefinitions ---

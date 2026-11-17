@@ -102,6 +102,8 @@ public static class DeviceAgentRoutes
         // Пакетный резолв по worktree проекта (шаг B2b): у локального проекта trees нет,
         // фронт locate не зовёт (разрез bc27cbee §3)
         new("POST", "files/locate"),
+        // Архив папки собирает только сервер — агент архивов не умеет
+        new("GET", "files/zip"),
         // OnlyOffice живёт рядом с сервером и тянет файл по адресу сервера
         new("GET", "files/office-download"),
         new("GET", "files/office-config"),

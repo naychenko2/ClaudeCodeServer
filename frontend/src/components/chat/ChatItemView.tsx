@@ -24,6 +24,7 @@ import { useModelLabel } from '../../lib/models';
 import { MessageAuthorLine } from '../../features/projects/members/MessageAuthorLine';
 import { formatPostTime, formatPostTimeFull } from '../../lib/postTime';
 import { relPathTree, stripRootTree } from '../../lib/paths';
+import { projectRouteOf } from '../../lib/deviceAgent';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
 import { detectTeamMechanic, describeTeamTurn } from '../../features/team/teamMechanics';
 import { TeamTurnRequest } from '../../features/team/TeamTurnCard';
@@ -49,6 +50,7 @@ import { CollapsibleMarkdownBody } from './AgentContentBlocks';
 import { parseDelegationReport } from '../../lib/delegationReport';
 import { detectAutoCommand, isCancelCommand } from '../../lib/autoCommand';
 import { DelegationReportCard } from './DelegationReportCard';
+import { AttachmentThumb } from './AttachmentThumb';
 import { ToolUseView, HEAD_GAP, CHEVRON_W } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
@@ -1298,13 +1300,17 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             {item.attachedPaths && item.attachedPaths.length > 0 && (
               <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {item.attachedPaths.map(p => (
-                  <span key={p} style={{
-                    background: C.bgPanel, color: C.textSecondary, borderRadius: 5,
-                    padding: '1px 6px', fontSize: 11, maxWidth: '100%', overflowWrap: 'anywhere',
-                  }}>
-                    {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
-                    {project ? relPathTree(p, project.rootPath, treePath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
-                  </span>
+                  /* Миниатюра картинки-вложения (ADR-041, KM-F13b): не-картинка, чат без
+                     sessionId, файлы локального проекта (на маршруте агента их здесь нет)
+                     и любая ошибка загрузки — тот же ярлык, что был до миниатюр.
+                     В проекте — путь относительно корня; в чате без проекта — только имя файла */
+                  <AttachmentThumb
+                    key={p}
+                    sessionId={chatSessionId}
+                    path={p}
+                    agentRoute={project ? projectRouteOf(project.id) === 'agent' : false}
+                    label={project ? relPathTree(p, project.rootPath, treePath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
+                  />
                 ))}
               </div>
             )}

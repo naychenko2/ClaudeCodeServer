@@ -45,6 +45,9 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         // Чтение своего детского чата (KM-B6f): обе формы истории — с курсором и без
         "GET api/chats/{id}",
         "GET api/chats/{id}/history",
+        // Health-пинг (хвост дельта-ревью R-KM-F10): probeHealth фронта шлёт GET /api/health
+        // со своим токеном; ответ — пустой 204, данных нет
+        "GET,HEAD api/health",
         "ANY /hubs/session",
         "ANY /hubs/session/negotiate",
         // SPA-фолбэк — интерфейс, а не управляющая поверхность
@@ -136,6 +139,20 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
 
         var tts = await client.PostAsync("/api/tts", new StringContent("{}", Encoding.UTF8, "application/json"));
         (await tts.Content.ReadAsStringAsync()).Should().NotContain("child_mode");
+    }
+
+    // Health-пинг ребёнка (хвост дельта-ревью R-KM-F10): probeHealth (offline.ts) шлёт GET /api/health
+    // со своим токеном — без метки на действии гейт отвечал 403. Пинг отвечает 204 NoContent
+    // (HealthController.Get), а не 200: важен сам факт ответа; тело обязано остаться пустым.
+    // Мутация: сними [ChildAllowed] с действия HealthController.Get → этот тест краснеет (403).
+    [Fact]
+    public async Task ChildToken_OnHealthPing_PassesEmptyNoContent()
+    {
+        SetChild();
+        using var client = ChildClient();
+        var resp = await client.GetAsync("/api/health");
+        resp.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await resp.Content.ReadAsStringAsync()).Should().BeEmpty();
     }
 
     // Ветки app.Use после гейта: SPA-фолбэк с [ChildAllowed] не должен пропускать ребёнка в них

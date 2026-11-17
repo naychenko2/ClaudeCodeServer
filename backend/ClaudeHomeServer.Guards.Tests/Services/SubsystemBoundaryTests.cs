@@ -1907,6 +1907,13 @@ public class SubsystemBoundaryTests
         // Core-стор без вертикали-владельца, его зовут эндпоинты Main (S1-7). Тот же
         // порядок, что у ChatContext/Access: спина без своей строки в Boundaries.
         "ClaudeHomeServer.Services.ChatUserState",
+        // Детский режим (ADR-041, KM-B1): чистый хелпер дневного окна «HH:mm»
+        // (DailyTimeWindow: Contains/CurrentEnd/NextStart) — примитив без владения
+        // вертикалью: его зовёт автоматика Main (PersonaAutomationService.InQuietWindow)
+        // и, следом, детский режим (ChildMode), а его выдачу — статусы
+        // windowEndsAt/nextWindowAt — читает фронт. Тот же порядок, что у
+        // ChatSubjects/Access: чистая часть в спине Core, своей строки в Boundaries нет.
+        "ClaudeHomeServer.Services.Time",
     ];
 
     /// <summary>

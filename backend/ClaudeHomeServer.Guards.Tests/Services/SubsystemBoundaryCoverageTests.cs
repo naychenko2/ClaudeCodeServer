@@ -276,6 +276,10 @@ public class SubsystemBoundaryCoverageTests
             // состояния чата — спина Core без вертикали-владельца (тот же порядок, что
             // ChatContext/Access выше); его границы — в явности типов: только спина.
             "ClaudeHomeServer.Services.ChatUserState",
+            // Детский режим (ADR-041, KM-B1): чистый хелпер дневного окна DailyTimeWindow —
+            // спина Core без вертикали-владельца (тот же порядок, что ChatContext/Access/
+            // ChatUserState выше); его состав держит соседний сторож CoreAllowedNamespaces.
+            "ClaudeHomeServer.Services.Time",
             // Ядро сессий (S3, docs/research/session-manager-split-2026-11.md): роли, вынесенные из
             // SessionManager, остаются в Main и вертикалью не являются (новой строки в Boundaries нет).
             // Форму держит SessionCoreShapeGuardTests: пять правил, в том числе «на типы ядра

@@ -40,6 +40,13 @@ export const ChatOpenTaskContext = createContext<((task: Task) => void) | null>(
 // а ChatItemView сидит глубоко в ленте и id сессии пропом не получает.
 export const ChatSessionContext = createContext<string | null>(null);
 
+// Признак детской ленты («Знания репетитора», §8 п.5): текст сообщения не несёт ссылок
+// наружу и внешних картинок — markdown-ссылка рисуется обычным текстом, внешняя картинка
+// (http(s): и /api/proxy) заменяется подписью alt; data: и картинки проекта остаются.
+// Провайдится ChildLessonChat в шаге К8b; по умолчанию false — взрослая лента не меняется.
+// Контекстом, а не пропом: MarkdownContent сидит глубоко в ленте, как остальные здесь.
+export const ChildFeedContext = createContext<boolean>(false);
+
 // Персона текущего чата, если он ведётся от её лица.
 // Провайдится в ChatPanel — лента показывает её аватар у реплик ассистента,
 // не таща persona-проп через все вложенные компоненты.

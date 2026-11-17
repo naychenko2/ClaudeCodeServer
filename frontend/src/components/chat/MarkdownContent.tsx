@@ -19,7 +19,7 @@ import {
 } from '../../lib/projectFileIndex';
 import { withImageLimit } from '../../lib/concurrency';
 import { useInView } from '../../lib/useInView';
-import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext, ChatSessionContext, FeatureLinkContext } from './contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext, ChatSessionContext, FeatureLinkContext, ChildFeedContext } from './contexts';
 
 // Абсолютный путь (Windows-диск или POSIX) — для A1: упоминание вне корня проекта тоже
 // становится ссылкой (открытие само покажет ошибку, если файла на самом деле нет).
@@ -103,8 +103,14 @@ function toProjectRelative(src: string, rootPath: string): string {
 // проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
 export function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const project = useContext(ChatProjectContext);
+  const childFeed = useContext(ChildFeedContext);
   // /api/proxy?... — уже проксированный URL (от urlTransform)
   const isRemote = !!src && /^(https?:|data:|\/api\/proxy)/i.test(src);
+  // Детская лента («Знания репетитора», §8 п.5): внешние картинки (http(s): и /api/proxy)
+  // не грузятся — вместо них подпись alt текстом; data: остаётся картинкой.
+  if (childFeed && isRemote && src && !/^data:/i.test(src)) {
+    return alt ? <span>{alt}</span> : null;
+  }
   // Примитивы (id/rel/ключ), а не объект project: смена ССЫЛКИ projectCtx при неизменных
   // id/rootPath не должна дёргать перезагрузку картинки.
   const projectId = !isRemote ? project?.id ?? null : null;
@@ -428,6 +434,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text, compact = f
   const treePath = useContext(ChatTreePathContext);
   const onOpenFile = useContext(ChatOpenFileContext);
   const featureLinks = useContext(FeatureLinkContext);
+  const childFeed = useContext(ChildFeedContext);
   const fileIndex = useProjectFileIndex(project?.id ?? null);
 
   const urlTransform = useMemo(() => (url: string, key: string) => {
@@ -436,13 +443,17 @@ export const MarkdownContent = memo(function MarkdownContent({ text, compact = f
     // Схемы читалки фичи (W4-LINK-F) — сквозные: defaultUrlTransform вырезал бы их как
     // неизвестный протокол, а «featurelink:docs/…» — сама цель ссылки, не URL.
     if (/^feature(link|doc):/.test(url)) return url;
+    // Детская лента (§8 п.5): data:картинки встроенные — в детской ленте они остаются
+    // картинками. Во взрослой defaultUrlTransform режет data: как неизвестный протокол
+    // (safeProtocol его не содержит) — там поведение не меняется.
+    if (childFeed && key === 'src' && /^data:image\//i.test(url)) return url;
     // Абсолютный путь (в т.ч. вне корня проекта, A1) — оставляем как есть: defaultUrlTransform
     // режет его, приняв «C:» за неизвестный протокол; существование не проверяем —
     // resolveFileMention сам решит, стал ли он ссылкой на файл
     if (project && ABS_PATH_RE.test(url)) return url;
     // остальные внешние URL (src и href) — через прокси если домен разрешён
     return isProxiable(url) ? proxyUrl(url) : defaultUrlTransform(url);
-  }, [project]);
+  }, [project, childFeed]);
 
   const components = useMemo<Components>(() => {
     // Вне проекта и без обработчика открытия фича молчит — текст как раньше.
@@ -503,6 +514,9 @@ export const MarkdownContent = memo(function MarkdownContent({ text, compact = f
           );
         },
         a: ({ children, href }) => {
+          // Детская лента («Знания репетитора», §8 п.5): ссылок наружу нет — текст ссылки
+          // без href и без FileLink/ReaderLinkWrap (ребёнок никуда не уходит по клику).
+          if (childFeed) return <>{children}</>;
           // W4-LINK-F: читалка документов фичи — ссылки между её документами. Читалка
           // переписывает [[…]] в featuredoc: (другой документ фичи) и featurelink: (файл
           // дерева фичи); относительный путь внутри дерева фичи распознаётся здесь.
@@ -539,8 +553,9 @@ export const MarkdownContent = memo(function MarkdownContent({ text, compact = f
         },
     };
     // treePath — в зависимостях: от него зависит короткий label абсолютного пути;
-    // featureLinks — от него зависит распознавание ссылок читалки фичи (W4-LINK-F)
-  }, [project, onOpenFile, fileIndex, treePath, featureLinks, compact]);
+    // featureLinks — от него зависит распознавание ссылок читалки фичи (W4-LINK-F);
+    // childFeed — от него зависит замена ссылок текстом (детская лента, §8 п.5)
+  }, [project, onOpenFile, fileIndex, treePath, featureLinks, childFeed, compact]);
 
   return (
     <ReactMarkdown remarkPlugins={REMARK_PLUGINS} urlTransform={urlTransform} components={components}>

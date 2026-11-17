@@ -57,6 +57,34 @@ public class WikiRelatedTests
     }
 
     [Fact]
+    public void ГруппаChronicle_ХроникаЧужогоБоковогоРазделаНеПопадает()
+    {
+        // Пункт 1 вердикта 141df4ac: карточка из «Общего» (видима) с ref на чат не тянет хронику
+        // этого чата из бокового проекта — вбок нельзя (ADR-036), тот же allowed, что у остальных
+        // групп.
+        var f = new Fixture()
+            .Target(footnotes: ["Источник чата"])
+            .Page("Общее/Источник-чата.md", "Источник чата", type: WikiFrontmatter.TypeSource,
+                origin: "session", @ref: "session:chat-1#m1-5")
+            .Page("Проекты/p2/Хроники/chat-1.md", "Хроника чата", type: WikiFrontmatter.TypeChronicle);
+
+        var groups = f.Build();
+        Group(groups, WikiRelated.KindSource).Items.Should().HaveCount(1);
+        groups.Should().NotContain(g => g.Kind == WikiRelated.KindChronicle,
+            "хроника бокового раздела не видима: при том же id чата группы нет");
+    }
+
+    [Fact]
+    public void ГруппаSource_КарточкаИзЧужогоБоковогоРазделаНеРезолвится()
+    {
+        var f = new Fixture()
+            .Target(footnotes: ["Источник встреч"])
+            .Page("Проекты/p2/Источники/Источник-встреч.md", "Источник встреч", type: WikiFrontmatter.TypeSource);
+
+        f.Build().Should().BeEmpty("карточка бокового раздела не в пространстве резолва — источника нет");
+    }
+
+    [Fact]
     public void ГруппаMentions_УпоминаютЭтуСтраницуБезСсылки()
     {
         var other = "Проекты/p1/Порядок-встреч.md";
@@ -100,6 +128,26 @@ public class WikiRelatedTests
         var groups = f.Build();
         Group(groups, WikiRelated.KindMentionedHere).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic") });
         groups.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void ГруппаMentionedHere_СтраницаЧужогоБоковогоРазделаНеПопадает()
+    {
+        var f = new Fixture()
+            .Target(text: "См. также Порядок встреч — детали там.")
+            .Page("Проекты/p2/Порядок-встреч.md", "Порядок встреч");
+
+        f.Build().Should().BeEmpty("упомянутая страница бокового раздела невидима — группы нет");
+    }
+
+    [Fact]
+    public void ГруппаBacklinks_СсылкаИзЧужогоБоковогоРазделаНеРезолвится()
+    {
+        var f = new Fixture()
+            .Target()
+            .Page("Проекты/p2/Порядок-встреч.md", "Порядок встреч", text: "См. [[Порядок работ]].");
+
+        f.Build().Should().BeEmpty("ссылка из бокового раздела не резолвится сюда: backlinks нет");
     }
 
     [Fact]
@@ -253,6 +301,34 @@ public class WikiRelatedTests
             """[{"kind":"mentions","items":[{"pageKey":"Проекты/p1/Порядок-встреч.md","title":"Порядок встреч","type":"topic"}]}]""");
     }
 
+    // ─── c3 вердикта 141df4ac: резолв по словарю, а не FirstOrDefault с нормализацией ─
+    // по всем кандидатам на каждую ссылу (O(N·L·N) → O(N+L)) ──────────────────────────
+
+    [Fact]
+    public void СловарьРезолва_300СтраницПо10Ссылок_НормализацийНеБольшеПорога()
+    {
+        var linked = "Проекты/p1/Фикстура-300.md";
+        var f = new Fixture().Target();
+        var unresolvable = string.Join(", ", Enumerable.Range(1, 10).Select(k => "[[нет-" + k + "]]"));
+        for (var i = 1; i <= 300; i++)
+        {
+            // 10 нерезолванных ссылок на страницу; у последней — ещё одна резолвающаяся сюда,
+            // чтобы тот же прогон проверял и разрешение по словарю на масштабе.
+            f.Page($"Проекты/p1/Фикстура-{i}.md", $"Фикстура {i}",
+                text: i < 300 ? $"См. {unresolvable}." : $"См. {unresolvable}, [[Порядок работ]].");
+        }
+
+        var groups = f.Build();
+        Group(groups, WikiRelated.KindBacklinks).Items
+            .Should().Equal(new[] { new WikiRelatedItem(linked, "Фикстура 300", "topic") });
+        groups.Should().HaveCount(1);
+
+        var calls = f.NormCalls();
+        calls.Should().BeLessThanOrEqualTo(20_000,
+            "словарь строится один раз (O(N)) и нормализует цель ссылки один раз на ссылу (O(L)); " +
+            "прежний FirstOrDefault по всем кандидатам дал бы ~1.8 млн");
+    }
+
     // ─── фикстура ───────────────────────────────────────────────────────────────
 
     private static WikiRelatedGroup Group(IReadOnlyList<WikiRelatedGroup> groups, string kind)
@@ -302,6 +378,9 @@ public class WikiRelatedTests
         // Снимок — как его даёт вызывающий: страницы раздела вместе с самой целью
         // (свою страницу Build исключает сам).
         public IReadOnlyList<WikiRelatedGroup> Build() => WikiRelated.Build(TargetDraft, [TargetDraft, .. Candidates]);
+
+        // Тестовый срез (c3 вердикта): число нормализаций на том же снимке.
+        public int NormCalls() => WikiRelated.CountNormCalls(TargetDraft, [TargetDraft, .. Candidates]);
 
         // Форма страницы полная (требование WikiPage.Parse): шапка, заголовок, канонические
         // секции — текст идёт в первой; у карточки секций нет вовсе.

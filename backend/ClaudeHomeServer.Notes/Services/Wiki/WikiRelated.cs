@@ -39,7 +39,19 @@ public static class WikiRelated
     /// и текст); pages — снимок страниц её раздела и цепочки вверх (тот же набор, что state
     /// гейта для allowed-разделов): своя страница, неразобранный путь, проекция и неразобранная
     /// страница из него выпадают — та же мера, что у гейта (WikiGate.cs:101-137).</summary>
-    public static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages)
+    public static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages) =>
+        Build(page, pages, null);
+
+    /// <summary>Тестовый срез (c3 вердикта 141df4ac): сколько вызовов WikiGate.Norm делает
+    /// полный Build на этом снимке — сторож O(N+L) резолва вместо прежнего O(N·L·N).</summary>
+    internal static int CountNormCalls(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages)
+    {
+        var counter = new NormCounter();
+        Build(page, pages, counter);
+        return counter.Calls;
+    }
+
+    private static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages, NormCounter? counter)
     {
         var targetSection = WikiSections.Parse(page.Path);
         if (targetSection is null || WikiPaths.IsProjection(page.Path))
@@ -63,10 +75,14 @@ public static class WikiRelated
         }
 
         var allowed = AllowedSections(targetSection, candidates);
-        // Пространство резолва — снимок вместе с целью: ссылка кандидата должна опознавать
-        // и саму страницу (иначе «указывает сюда» не резолвилась бы никогда). В группы цель
-        // не входит: обход групп идёт по candidates, цель в них не попадает.
-        var searchable = new List<Cand>(candidates) { new(page.Path, targetSection, page.Content, target) };
+        // Словарь резолва (раздел, нормализованный заголовок) → кандидат: строится один раз до
+        // циклов — резолв ссылки больше не нормализует заголовок каждого кандидата на каждую
+        // ссылу (O(N·L·N) → O(N+L), пункт 2 вердикта). Пространство — снимок вместе с целью:
+        // ссылка кандидата должна опознавать и саму страницу (иначе «указывает сюда» не
+        // резолвилась бы никогда). Первое вхождение заголовка остаётся — тот же порядок, что
+        // у прежнего FirstOrDefault по снимку. В группы цель не входит: обход групп идёт по
+        // candidates, цель в них не попадает.
+        var index = BuildIndex([.. candidates, new Cand(page.Path, targetSection, page.Content, target)], counter);
         var groups = new Dictionary<string, List<Cand>>(StringComparer.Ordinal);
         var taken = new HashSet<string>(StringComparer.Ordinal);
 
@@ -77,7 +93,7 @@ public static class WikiRelated
         {
             if (!footnote.Target.IsLink)
                 continue;
-            var card = ResolveLink(footnote.Target.Text, targetSection, allowed, searchable);
+            var card = ResolveLink(footnote.Target.Text, targetSection, allowed, index, counter);
             if (card is null || card.Path == page.Path || card.Page.Frontmatter.Type != WikiFrontmatter.TypeSource)
                 continue; // сноска на себя — не «связанный» источник
             if (cited.Any(c => c.Path == card.Path))
@@ -98,6 +114,9 @@ public static class WikiRelated
                 continue;
             foreach (var c in candidates)
             {
+                if (!allowed.Contains(c.Section))
+                    continue; // хроника бокового раздела — не видима (тот же allowed, что у
+                             // остальных групп): карточка из «Общего» не тянет хронику чужого проекта
                 if (c.Page.Frontmatter.Type != WikiFrontmatter.TypeChronicle)
                     continue;
                 var segments = c.Path.Split('/');
@@ -112,9 +131,9 @@ public static class WikiRelated
         foreach (var c in Navigable(candidates, allowed))
         {
             var lower = c.Content.ToLowerInvariant();
-            if (!IsMention(lower, NotesService.CodeMask(lower), target.Title))
+            if (!IsMention(lower, NotesService.CodeMask(lower), target.Title, counter))
                 continue;
-            if (LinksTo(c.Page, c.Section, page.Path, allowed, searchable))
+            if (LinksTo(c.Page, c.Section, page.Path, allowed, index, counter))
                 continue; // ссылка есть — это backlink, не упоминание
             Add(groups, taken, KindMentions, c);
         }
@@ -125,9 +144,9 @@ public static class WikiRelated
         var targetMask = NotesService.CodeMask(targetLower);
         foreach (var c in Navigable(candidates, allowed))
         {
-            if (!IsMention(targetLower, targetMask, c.Page.Title))
+            if (!IsMention(targetLower, targetMask, c.Page.Title, counter))
                 continue;
-            if (LinksTo(target, targetSection, c.Path, allowed, searchable))
+            if (LinksTo(target, targetSection, c.Path, allowed, index, counter))
                 continue; // ссылка есть — это не «упомянуто без ссылки»
             Add(groups, taken, KindMentionedHere, c);
         }
@@ -135,7 +154,7 @@ public static class WikiRelated
         // 5. backlinks — те, чьи OutboundLinks указывают сюда.
         foreach (var c in Navigable(candidates, allowed))
         {
-            if (!LinksTo(c.Page, c.Section, page.Path, allowed, searchable))
+            if (!LinksTo(c.Page, c.Section, page.Path, allowed, index, counter))
                 continue;
             Add(groups, taken, KindBacklinks, c);
         }
@@ -154,13 +173,37 @@ public static class WikiRelated
     /// один раз на страницу — их даёт вызывающий; порог длины (3) и нормализация здесь.
     /// Проверка «ссылки нет» — за вызывающим: lint знает рёбра снимка, проекция — разрешённые
     /// [[…]]. Тот же матчер зовёт и метрика UnlinkedMentionPairs (WikiLint.Metrics).</summary>
-    internal static bool IsMention(string lowerText, bool[] codeMask, string title)
+    internal static bool IsMention(string lowerText, bool[] codeMask, string title, NormCounter? counter = null)
     {
-        var normalized = WikiGate.Norm(title);
+        var normalized = Norm(title, counter);
         return normalized.Length >= 3 && NotesService.FindWord(lowerText, normalized, codeMask) >= 0;
     }
 
     private sealed record Cand(string Path, string Section, string Content, WikiPage Page);
+
+    // Счётчик нормализаций для тестового среза CountNormCalls; в обычном пути Build(null).
+    internal sealed class NormCounter
+    {
+        public int Calls;
+    }
+
+    private static string Norm(string text, NormCounter? counter)
+    {
+        if (counter is not null)
+            counter.Calls++;
+        return WikiGate.Norm(text);
+    }
+
+    // Словарь резолва: (раздел, нормализованный заголовок) → кандидат. Строится один раз до
+    // циклов (O(N) нормализаций); первое вхождение заголовка остаётся — тот же выбор, что у
+    // прежнего FirstOrDefault по снимку.
+    private static Dictionary<(string Section, string Title), Cand> BuildIndex(List<Cand> searchable, NormCounter? counter)
+    {
+        var index = new Dictionary<(string, string), Cand>();
+        foreach (var c in searchable)
+            index.TryAdd((c.Section, Norm(c.Page.Title, counter)), c);
+        return index;
+    }
 
     private static void Add(Dictionary<string, List<Cand>> groups, HashSet<string> taken, string kind, Cand c)
     {
@@ -208,21 +251,20 @@ public static class WikiRelated
 
     // Резолв цели ссылки — тот же, что у гейта (WikiGate.cs:336-362): голая цель — свой раздел,
     // потом вверх; цель с префиксом — этот раздел, последний сегмент — заголовок страницы.
-    private static Cand? ResolveLink(string text, string fromSection, HashSet<string> allowed, List<Cand> candidates)
+    private static Cand? ResolveLink(string text, string fromSection, HashSet<string> allowed,
+        Dictionary<(string Section, string Title), Cand> index, NormCounter? counter)
     {
         if (text.Contains('/'))
         {
             var section = WikiSections.Parse(text);
             if (section is null || !allowed.Contains(section))
                 return null;
-            var title = WikiGate.Norm(text.Split('/')[^1]);
-            return candidates.FirstOrDefault(c => c.Section == section && WikiGate.Norm(c.Page.Title) == title);
+            return index.TryGetValue((section, Norm(text.Split('/')[^1], counter)), out var prefixed) ? prefixed : null;
         }
-        var bare = WikiGate.Norm(text);
+        var bare = Norm(text, counter); // одна нормализация цели на ссылу, не на раздел цепочки
         foreach (var section in ChainOf(fromSection, allowed))
         {
-            var hit = candidates.FirstOrDefault(c => c.Section == section && WikiGate.Norm(c.Page.Title) == bare);
-            if (hit is not null)
+            if (index.TryGetValue((section, bare), out var hit))
                 return hit;
         }
         return null;
@@ -231,11 +273,11 @@ public static class WikiRelated
     // Указывает ли страница на цель: хоть одна OutboundLink резолвится в неё. Направление —
     // аргументы: «кто на кого».
     private static bool LinksTo(WikiPage fromPage, string fromSection, string toPath,
-        HashSet<string> allowed, List<Cand> candidates) =>
-        fromPage.OutboundLinks().Any(link => ResolveLink(link.Text, fromSection, allowed, candidates)?.Path == toPath);
+        HashSet<string> allowed, Dictionary<(string Section, string Title), Cand> index, NormCounter? counter) =>
+        fromPage.OutboundLinks().Any(link => ResolveLink(link.Text, fromSection, allowed, index, counter)?.Path == toPath);
 }
 
-/// <summary>Одна группа «Связанных» (контракт Q1-S7): kind — имя группы (KindSource…KindBacklines),
+/// <summary>Одна группа «Связанных» (контракт Q1-S7): kind — имя группы (KindSource…KindBacklinks),
 /// items — страницы по Ordinal пути, не больше GroupLimit.</summary>
 public sealed record WikiRelatedGroup(string Kind, IReadOnlyList<WikiRelatedItem> Items);
 

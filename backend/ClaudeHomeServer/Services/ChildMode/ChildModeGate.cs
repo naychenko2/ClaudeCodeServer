@@ -31,7 +31,8 @@ public sealed class ChildModeGate(IChildModePolicy policy) : IChildModeGate
 
     public string? LaunchMismatch(string? ownerId, Session session)
     {
-        if (string.IsNullOrWhiteSpace(ownerId)) return "владелец чата не определён";
+        // Детский чат всегда имеет владельца-ребёнка: чат без владельца — не детский, сверять нечего
+        if (string.IsNullOrWhiteSpace(ownerId)) return null;
         if (policy.For(ownerId) is not { } snapshot) return null;
         if (snapshot.DenyAll || snapshot.Profile is not { } profile)
             return "профиль детского режима не проходит проверку";

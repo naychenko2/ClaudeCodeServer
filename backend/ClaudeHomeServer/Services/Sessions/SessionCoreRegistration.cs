@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Llm;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Team;
 
@@ -169,6 +170,16 @@ public static class SessionCoreRegistration
         // IDeviceExecChannel, прямая зависимость замкнула бы граф синглтонов. Опциональные
         // — GetService: та же семантика, что у параметров SessionManager (подсистема или
         // OAuth-сервис могут не быть в DI).
+        // Детская политика и гейт (ADR-041): BuiltinMcpContexts берёт гейт обязательным, поэтому
+        // ядро регистрирует их само (TryAdd — подмена в тестах остаётся возможной).
+        // IUserStore — GetService: тестовый хост ядра его не держит, берём проекцию UserStore.
+        services.TryAddSingleton<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>(sp =>
+            new ClaudeHomeServer.Services.ChildMode.ChildModePolicy(
+                sp.GetService<IUserStore>() ?? new UserStoreAdapter(sp.GetRequiredService<UserStore>()),
+                sp.GetService<ILogger<ClaudeHomeServer.Services.ChildMode.ChildModePolicy>>()));
+        services.TryAddSingleton<ClaudeHomeServer.Services.ChildMode.IChildModeGate>(sp =>
+            new ClaudeHomeServer.Services.ChildMode.ChildModeGate(
+                sp.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>()));
         services.AddSingleton(sp => new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(),
             sp.GetRequiredService<FeatureFlagService>(),

@@ -593,14 +593,9 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore(
     ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore.RootFromConfig(sp.GetRequiredService<IConfiguration>())));
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ChatUserStateService>();
-// Единственная точка правды «ребёнок ли владелец и что ему можно» (KM-B1b, разрез §1):
-// читает ChildProfile по ownerId из стора пользователей (как AdminByStore — не по claim).
-// Потребители (KM-B2…KM-B5d) берут только этот снимок, не user.ChildMode.
-builder.Services.AddSingleton<IChildModePolicy, ChildModePolicy>();
+// IChildModePolicy и IChildModeGate регистрирует AddSessionCore (ядро берёт гейт обязательным).
 // Журнал присутствия ребёнка по пространствам (KM-B5b, разрез §3): минуты по дням в
 // data/child-usage/. Пишет его ручка heartbeat (KM-B5e), читает — статус «остаток минут» (KM-B5c).
-// Детский гейт И1 для MCP-транспорта и состава MCP хода (KM-B3a): allow-list пар, fail-closed.
-builder.Services.AddSingleton<IChildModeGate, ChildModeGate>();
 builder.Services.AddSingleton(sp => new ChildUsageStore(
     ChildUsageStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
     sp.GetRequiredService<ILogger<ChildUsageStore>>()));

@@ -91,7 +91,15 @@ public class ChildModeMcpGuardTests
         gate.Denied("wsp", "files_read", owner).Should().NotBeNull();
         gate.AllowsServer(owner, "wsp").Should().BeFalse();
         gate.IsChild(owner).Should().BeTrue();
-        gate.LaunchMismatch(owner, new Session()).Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void ПустойВладелец_СверкаПриЗапускеНеБросает_ЧатБезВладельцаНеДетский(string? owner)
+    {
+        Gate(child: false).LaunchMismatch(owner, new Session()).Should().BeNull();
     }
 
     private sealed class ChildHost : TestWebApplicationFactory

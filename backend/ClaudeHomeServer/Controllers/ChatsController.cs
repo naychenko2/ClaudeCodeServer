@@ -141,15 +141,17 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     public IActionResult Get(string id)
     {
         var child = CurrentOwnerIsChild();
-        // Чтение: чат виден и участнику общего проекта (GetAccessible), запись остаётся на GetOwned
-        if (sessions.GetAccessible(id, UserId) is { } found)
+        if (child)
         {
-            // Ребёнку — только детские пространства (ADR-041): чат без ChildSpace неотличим от чужого
-            if (child && found.Session.ChildSpace is null) return ChildChatNotFound();
-            return Ok(found.Session);
+            // Ребёнку — только свои ChildSpace-чаты вне проекта, та же граница, что у GetHistory (R-KM-B6f п. 2):
+            // владение (OwnedChat), а не видимость — чат другого ребёнка в общем проекте неотличим от
+            // несуществующего. Свой без ChildSpace, чужой и несуществующий — одно тело 404 (ADR-041).
+            if (OwnedChat(id) is { } own && own.ChildSpace is not null) return Ok(own);
+            return ChildChatNotFound();
         }
-        // Ребёнку чужой и несуществующий неотличимы — то же тело, что и «не детское пространство»
-        return child ? ChildChatNotFound() : NotFound();
+        // Чтение: чат виден и участнику общего проекта (GetAccessible), запись остаётся на GetOwned
+        if (sessions.GetAccessible(id, UserId) is { } found) return Ok(found.Session);
+        return NotFound();
     }
 
     [HttpPost]

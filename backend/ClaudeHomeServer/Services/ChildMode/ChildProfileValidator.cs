@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.ChildMode;
@@ -111,6 +112,60 @@ public static class ChildProfileValidator
         return null;
     }
 
+    /// <summary>
+    /// Привязка базы знаний к предмету (К1b, разрез §1/§3). Зовётся после Validate: id предметов
+    /// — ключи сличения с сохранённой привязкой. Проверяется только НОВОЙ datasetId против
+    /// ЖИВОГО профиля: тот же id — поле ставит живое слияние стора (прежние автор и момент),
+    /// и повторный PUT не зависит от того, жив ли датасет сейчас (его допустимость на каждом
+    /// вызове — К3). null/пустой datasetId в теле — привязка снимается, не проверяется.
+    /// Отказ — один код и для «нет такого», и для «нельзя привязать»: фронт не различает их,
+    /// админу одинаково подсказать, что база не подходит.
+    /// caller — тот, кто привязывает (адмен ручки), а не ребёнок: «своя» база бывает только у
+    /// вызывающего. liveKnowledge — id предмета → DatasetId живого профиля (предметов без
+    /// привязки в словаре нет); datasets — id → логическое имя датасета из свежего списка Dify.
+    /// </summary>
+    public static Reject? ValidateSubjectKnowledge(
+        ChildProfileDto req,
+        User caller,
+        IUserStore users,
+        IReadOnlyDictionary<string, string> liveKnowledge,
+        IReadOnlyDictionary<string, string>? datasets)
+    {
+        var adminUsername = caller.Username;
+        // Имена ВСЕХ пользователей, включая других адменов: предикат считает имя «глобальной»
+        // базы, если её владельца нет в others (KnowledgeAccess.cs:41) — пропуск адмена-соседа
+        // выдал бы его чужую базу общей для всех.
+        var others = users.GetAll()
+            .Select(u => u.Username)
+            .Where(u => !string.IsNullOrWhiteSpace(u) && !u.Equals(adminUsername, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var subject in req.Subjects ?? [])
+        {
+            var requested = subject?.Knowledge?.DatasetId;
+            if (string.IsNullOrWhiteSpace(requested)) continue;
+            if (liveKnowledge.TryGetValue(subject!.Id ?? "", out var stored) && stored == requested) continue;
+
+            // Пустой adminUsername — не «чужая/своя», здесь нельзя определить даже владельца:
+            // отказ до вызова предиката (тот же приём, что с пустым именем датасета ниже).
+            if (string.IsNullOrWhiteSpace(adminUsername))
+                return new("knowledge_unavailable", "Не удалось определить владельца, привязывающего базу знаний.");
+
+            // Нет свежего списка Dify при новом datasetId — вертикаль «Знаний» или Dify не дали
+            // ответа: тот же отказ, что у вызывающего до проверки (early exit контроллера).
+            if (datasets is null)
+                return new("knowledge_unavailable", "Проверить базу знаний нельзя: сервис знаний недоступен.");
+
+            // Имя пустое — ни своей, ни чужой её не назвать: предикат не зовём.
+            if (!datasets.TryGetValue(requested, out var name) || string.IsNullOrWhiteSpace(name))
+                return new("dataset_not_attachable", $"База знаний «{requested}» не найдена среди доступных датасетов или не может быть привязана к предмету.");
+
+            if (!KnowledgeAccess.IsTutorAttachable(name, adminUsername, others))
+                return new("dataset_not_attachable", $"База знаний «{name}» не может быть привязана к предмету: допустимы только общая (без префикса) или своя самостоятельная.");
+        }
+        return null;
+    }
+
     // [GeneratedRegex] не нужен: проверка редкая (тот же приём, что у SubjectId в политике).
     private static readonly System.Text.RegularExpressions.Regex SubjectIdRegex = new(@"^[a-z0-9-]{1,32}\z");
 }
@@ -146,7 +201,14 @@ public record ChildSubjectDto(
     string? ProviderKey,
     string? Model,
     bool? Enabled,
-    string? TutorPersonaId);
+    string? TutorPersonaId,
+    // Привязка базы знаний (К1b): из ВХОДА принимается только datasetId. Автор и момент —
+    // поля сервера (их ставит живое слияние стора по живому значению), attachedAt в теле
+    // не читается никогда: тот же приём, что с tutorPersonaId выше. null — привязка снимается.
+    ChildSubjectKnowledgeDto? Knowledge);
+// Wire-форма привязки (К1b): id датасета Dify + момент, поставленный сервером.
+// AttachedByUserId живёт только в сторе (ChildSubjectKnowledge) и наружу не отдаётся.
+public record ChildSubjectKnowledgeDto(string? DatasetId, DateTime? AttachedAt);
 public record ChildSpaceLimitsDto(List<ChildTimeWindowDto>? Windows, int? DailyMinutes);
 public record ChildTimeWindowDto(string? From, string? To, List<int>? Weekdays);
 // Ответ 200 ручки №10: { profile, tutorPersonaId }. Profile — null только когда профиля нет

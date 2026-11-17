@@ -640,7 +640,9 @@ public class UserStore : IForgejoAccountStore, IUserStore
     /// сохраняется), но TutorPersonaId каждого предмета берётся из ЖИВОГО профиля по Id,
     /// как тьютор профиля: админ не может подменить персону через DTO, её пишет только
     /// SetChildSubjectTutor. Новый Id — пустой (провижн Т2b); без живого профиля новые все
-    /// Id — тьюторы тела обнуляются так же. profile.Subjects=null —
+    /// Id — тьюторы тела обнуляются так же. Привязка базы знаний предмета (К1b) — тот же
+    /// приём: из тела берётся только кандидат (id датасета + автор и момент вызывающего),
+    /// живая пара сохраняется, когда id не изменился. profile.Subjects=null —
     /// сигнал вызывающего «предметов в теле нет»: живой список сохраняется как есть
     /// (PUT вкладки «Режим и время» не стирает предметы); без живого профиля — [].
     /// В сохранённом профиле Subjects никогда не null (тот же сигнал нормализуется здесь).
@@ -671,9 +673,21 @@ public class UserStore : IForgejoAccountStore, IUserStore
                     else
                     {
                         var tutors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        // Привязка базы знаний (К1b, разрез §1/§3): в теле — только кандидат
+                        // (id датасета, автор и момент вызывающего); решение — здесь, по ЖИВОМУ
+                        // значению под этим же локом: тот же datasetId → прежняя пара (автор и
+                        // момент не меняются, повторный PUT другого админа их не переставляет),
+                        // другой id или нового датасета в живом нет → кандидат вызывающего,
+                        // null в теле → привязка снята. Слияние вне этого замка (по снимку
+                        // профиля до записи) вернуло бы пару, какой она была на первом чтении
+                        // запроса, — параллельная привязка затёрлась бы.
+                        var knowledge = new Dictionary<string, ChildSubjectKnowledge?>(StringComparer.OrdinalIgnoreCase);
                         foreach (var subject in live.Subjects)
-                            if (subject is not null)
-                                tutors[subject.Id] = subject.TutorPersonaId;
+                        {
+                            if (subject is null) continue;
+                            tutors[subject.Id] = subject.TutorPersonaId;
+                            knowledge[subject.Id] = subject.Knowledge;
+                        }
                         foreach (var subject in profile.Subjects)
                         {
                             if (subject is null) continue;
@@ -681,6 +695,10 @@ public class UserStore : IForgejoAccountStore, IUserStore
                             // (админ список правит, персону не подменяет), новый Id — пусто.
                             subject.TutorPersonaId =
                                 tutors.TryGetValue(subject.Id, out var tutor) ? tutor : "";
+                            if (subject.Knowledge is { } requested
+                                && knowledge.TryGetValue(subject.Id, out var stored)
+                                && stored?.DatasetId == requested.DatasetId)
+                                subject.Knowledge = stored;
                         }
                     }
                 }

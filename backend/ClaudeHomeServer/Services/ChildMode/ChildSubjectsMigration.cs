@@ -16,14 +16,26 @@ namespace ClaudeHomeServer.Services.ChildMode;
 //
 // Ошибки не роняют старт (best-effort, образец GlmModelAliasMigration): несостоявшийся засев —
 // лог, ребёнок до следующего старта живёт с пустым Subjects, это ровно состояние до Т1b.
+//
+// Второй проход — те же id на чатах (Т1b2): детские чаты, заведённые до Т1b, остались без
+// ChildSubject, и на запуске хода И1-бис отказывает им «Этот предмет закрыт». Досев ставит
+// первый предмет тройки — тот же id, что засев пишет профилю (DefaultSubjectId).
+// Идёт ПОСЛЕ засева профилей: предмет
+// чата должен существовать в профиле этого ребёнка, иначе чат получил бы id, которого нет.
 public class ChildSubjectsMigration : IHostedService
 {
+    // Первый предмет тройки — он же досев старых детских чатов (тот же id, что в SeedSubjectsOf):
+    // два прохода пишут один и тот же ключ, разночтения между ними быть не должно.
+    public const string DefaultSubjectId = "math";
+
     private readonly UserStore _users;
+    private readonly SessionManager _sessions;
     private readonly ILogger<ChildSubjectsMigration> _log;
 
-    public ChildSubjectsMigration(UserStore users, ILogger<ChildSubjectsMigration> log)
+    public ChildSubjectsMigration(UserStore users, SessionManager sessions, ILogger<ChildSubjectsMigration> log)
     {
         _users = users;
+        _sessions = sessions;
         _log = log;
     }
 
@@ -39,8 +51,13 @@ public class ChildSubjectsMigration : IHostedService
                 if (user.ChildMode is not { } profile) continue; // обычный пользователь
                 if (_users.SeedChildSubjectsIfEmpty(user.Id, SeedSubjectsOf(profile))) seeded++;
             }
+            // Проход по чатам — на сторе сессий (там же и проверка «предмета нет», и запись):
+            // параллельное создание детского чата с предметом пишет то же поле.
+            var backfilled = _sessions.BackfillChildSubject(DefaultSubjectId);
             if (seeded > 0)
                 _log.LogInformation("Засев предметов волны 1: обновлено детских профилей {Count}", seeded);
+            if (backfilled > 0)
+                _log.LogInformation("Досев предмета старым детским чатам: изменено чатов {Count}", backfilled);
         }
         catch (Exception ex)
         {
@@ -53,7 +70,7 @@ public class ChildSubjectsMigration : IHostedService
     // Маршрут (тьютор, провайдер, модель) берётся из профиля: засев не выдумывает своего
     // маршрута — предмет идёт в те же «Уроки», что у ребёнка уже есть.
     private static List<ChildSubject> SeedSubjectsOf(ChildProfile profile) => [
-        new() { Id = "math", Label = "Математика", Glyph = "×÷", Color = "info",
+        new() { Id = DefaultSubjectId, Label = "Математика", Glyph = "×÷", Color = "info",
             TutorPersonaId = profile.TutorPersonaId, ProviderKey = profile.ProviderKey, Model = profile.Model },
         new() { Id = "russian", Label = "Русский язык", Glyph = "Аа", Color = "rose",
             TutorPersonaId = profile.TutorPersonaId, ProviderKey = profile.ProviderKey, Model = profile.Model },

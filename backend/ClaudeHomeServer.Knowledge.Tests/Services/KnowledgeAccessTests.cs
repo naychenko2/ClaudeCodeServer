@@ -66,6 +66,24 @@ public class KnowledgeAccessTests
         KnowledgeAccess.IsTutorAttachable(name, "admin", AttachOthers).Should().BeFalse();
     }
 
+    // Из ревью К1a (953ef02f): отсутствие владельца в others — не «чужая»: предикат считает
+    // имя глобальным (KnowledgeAccess.cs:41). Значит вызывающий обязан передавать ВСЕХ
+    // пользователей, включая других адменов: без них их «своя» база привязалась бы как общая.
+    [Theory]
+    [InlineData("secondadmin:kb:физика")]  // владельца нет в others → тот же ответ, что у глобальной
+    [InlineData("whoever:kb:химия")]      // любого неперечисленного пользователя
+    public void IsTutorAttachable_ВладельцаНетВOthers_КакГлобальная_True(string name)
+    {
+        KnowledgeAccess.IsTutorAttachable(name, "admin", AttachOthers).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsTutorAttachable_ПеречисленныйВладелец_УжеЧужая_False()
+    {
+        KnowledgeAccess.IsTutorAttachable("secondadmin:kb:физика", "admin", new[] { "other", "secondadmin" })
+            .Should().BeFalse("с названным владельцем та же база — чужая, не общая");
+    }
+
     // --- IsDeletable (удаление из раздела → иначе 403) ---
 
     [Fact]

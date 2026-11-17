@@ -1,22 +1,30 @@
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services.ChildMode;
 
-// Засев трёх предметов волны 1 существующим профилям детей (Т1b, срез §1). Контракт:
-// пустой Subjects → math/russian/english в порядке плиток, маршрут — из профиля; непустой
-// не трогается; второй прогон — без изменений (идемпотентность состоянием, маркера нет);
-// обычный пользователь не трогается; исключение стора — лог, старт идёт; параллельный PUT
-// админа засевом не затирается.
+// Засев трёх предметов волны 1 существующим профилям детей (Т1b, срез §1) и досев предмета
+// старым детским чатам (Т1b2).
+// Контракт профилей: пустой Subjects → math/russian/english в порядке плиток, маршрут — из
+// профиля; непустой не трогается; второй прогон — без изменений (идемпотентность состоянием,
+// маркера нет); обычный пользователь не трогается; исключение стора — лог, старт идёт;
+// параллельный PUT админа засевом не затирается.
+// Контракт чатов: ChildSpace без предмета → math; чат с заданным предметом и не-детский чат —
+// без изменений; UpdatedAt не двигается; чат, создающийся параллельно с досевом, своим
+// предметом не затирается.
+// Фикстура — общий хост ядра сессий: миграции нужны оба стора (users.json и sessions.json).
 public class ChildSubjectsMigrationTests : IDisposable
 {
     private readonly string _tempDir;
+    private readonly SessionCoreTestHost _host;
     private readonly UserStore _users;
+    private readonly SessionManager _sessions;
     private readonly ChildSubjectsMigration _sut;
     private readonly string _childId;
     private readonly string _adultId;
@@ -26,12 +34,9 @@ public class ChildSubjectsMigrationTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), "cc_child_subjects_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
 
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
-        }).Build();
-
-        _users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _host = SessionCoreTestHost.Build(_tempDir);
+        _users = _host.Services.GetRequiredService<UserStore>();
+        _sessions = _host.Manager;
         _adultId = _users.GetFirst()!.Id; // дефолтный admin пустого стора — обычный пользователь
         _childId = _users.Add("kid.subjects", "kid-pw-123456", "user").Id;
         // Профиль ребёнка с маршрутом пишет админ (его PUT — KM-B1e); здесь — прямо в стор.
@@ -43,14 +48,20 @@ public class ChildSubjectsMigrationTests : IDisposable
             Model = "sonnet",
         };
 
-        _sut = new ChildSubjectsMigration(_users, NullLogger<ChildSubjectsMigration>.Instance);
+        _sut = new ChildSubjectsMigration(_users, _sessions, NullLogger<ChildSubjectsMigration>.Instance);
     }
 
     public void Dispose()
     {
         GC.SuppressFinalize(this);
-        try { if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true); } catch { }
+        // Контейнер гасится ДО удаления каталога: синглтоны стора дописывают несохранённое
+        // в _tempDir. Запись history.json идёт из fire-and-forget обработчиков ядра — отсюда
+        // ретрай в общем хелпере.
+        _host.Dispose();
+        TestFs.DeleteDirectoryResilient(_tempDir);
     }
+
+    // ======== Первый проход: засев предметов профиля (Т1b) ========
 
     [Fact]
     public async Task StartAsync_ПустойПрофиль_ЗасеваетТриПредмета_ВПорядкеПлиток_СМаршрутомПрофиля()
@@ -164,6 +175,80 @@ public class ChildSubjectsMigrationTests : IDisposable
         }
     }
 
+    // ======== Второй проход: досев предмета старым детским чатам (Т1b2) ========
+
+    [Fact]
+    public async Task StartAsync_ДетскийЧатБезПредмета_ПолучаетMath_ЧатСПредметомИВзрослый_БезИзменений()
+    {
+        var noSubject = await MkChildChatAsync("no-subj", subject: null);
+        var pinned = await MkChildChatAsync("pinned", subject: "english");
+        var adult = await MkPlainChatAsync("adult");
+        var noSubjectBefore = noSubject.UpdatedAt;
+        var pinnedBefore = pinned.UpdatedAt;
+        var adultBefore = adult.UpdatedAt;
+
+        await _sut.StartAsync(CancellationToken.None);
+
+        // Детский чат без предмета получает первый предмет тройки — тот же id, что засев пишет
+        // его профилю (тот же ключ в обоих проходах)
+        _sessions.GetById(noSubject.Id)!.ChildSubject.Should().Be(ChildSubjectsMigration.DefaultSubjectId);
+        _sessions.GetById(pinned.Id)!.ChildSubject.Should().Be("english",
+            "записанный предмет досев не перезаписывает");
+        _sessions.GetById(adult.Id)!.ChildSubject.Should().BeNull("обычный чат досев не трогает");
+
+        // UpdatedAt не двигается: по нему сортировка и непрочитанность (инвариант роли)
+        _sessions.GetById(noSubject.Id)!.UpdatedAt.Should().Be(noSubjectBefore);
+        _sessions.GetById(pinned.Id)!.UpdatedAt.Should().Be(pinnedBefore);
+        _sessions.GetById(adult.Id)!.UpdatedAt.Should().Be(adultBefore);
+
+        // Досев доехал до стора, а не только до памяти
+        StoredChildSubject(noSubject.Id).Should().Be(ChildSubjectsMigration.DefaultSubjectId);
+        StoredChildSubject(pinned.Id).Should().Be("english");
+        StoredChildSubject(adult.Id).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task StartAsync_ВторойПрогон_ЧатыНеМеняются()
+    {
+        var chat = await MkChildChatAsync("twice", subject: null);
+
+        await _sut.StartAsync(CancellationToken.None);
+        var after = _sessions.GetById(chat.Id)!;
+        after.ChildSubject.Should().Be(ChildSubjectsMigration.DefaultSubjectId);
+        var updatedBefore = after.UpdatedAt;
+
+        // Идемпотентность состоянием: второй проход видит записанный предмет и ничего не пишет
+        await _sut.StartAsync(CancellationToken.None);
+
+        _sessions.GetById(chat.Id)!.ChildSubject.Should().Be(ChildSubjectsMigration.DefaultSubjectId);
+        _sessions.GetById(chat.Id)!.UpdatedAt.Should().Be(updatedBefore,
+            "повторный проход не должен двигать метку чата");
+    }
+
+    [Fact]
+    public async Task Backfill_ParallelWithPinnedChat_KeepsPinnedSubject()
+    {
+        // Момент, ради которого тест: запись УЖЕ в реестре стора (StartNewSessionAsync вставляет
+        // её ДО старта прогона и SaveSessions — TurnProcessHost.cs:117), а создание чата ещё не
+        // закончено — здесь досев встречает записанный предмет. Без проверки == null ВНУТРИ
+        // замка он затёр бы «english» своим «math» (мутация краснеет); с ней — пропускает.
+        // Владелец — не ребёнок: И1-бис к такому чату не применяется, поэтому он создаётся без
+        // полного детского профиля (тот же приём, что ChildChatReadTests.cs:56-60).
+        var before = _sessions.GetAll().Select(s => s.Id).ToHashSet();
+
+        var creating = Task.Run(() => _sessions.CreateChatAsync(_adultId, ClaudeMode.Auto,
+            name: "новый урок", childSpace: ChildSpaces.Lessons, childSubject: "english"));
+        var newId = await WaitForNewChatIdAsync(before);
+
+        var backfilled = _sessions.BackfillChildSubject(ChildSubjectsMigration.DefaultSubjectId);
+        var created = await creating;
+
+        backfilled.Should().Be(0, "прикреплённый человеком предмет — не пропущенный");
+        _sessions.GetById(newId)!.ChildSubject.Should().Be("english",
+            "созданный параллельно чат досевом не перезаписывается");
+        created.ChildSubject.Should().Be("english");
+    }
+
     // ======== Помощники ========
 
     private static ChildSubject CustomSubject() =>
@@ -175,4 +260,45 @@ public class ChildSubjectsMigrationTests : IDisposable
         new() { Id = "seed-b", Label = "Предмет Б", Glyph = "Б", Color = "rose" },
         new() { Id = "seed-c", Label = "Предмет В", Glyph = "В", Color = "success" },
     ];
+
+    // Чат вне проекта обычного пользователя: И1-бис к нему не применяется (политики нет) —
+    // им же создаётся и «прикреплённый» чат теста гонки.
+    private Task<Session> MkPlainChatAsync(string suffix) =>
+        _sessions.CreateChatAsync(_adultId, ClaudeMode.Auto, name: "чат " + suffix);
+
+    // Чат «Уроков» без предмета — ровно запись до Т1b: ChildSpace есть, ChildSubject null.
+    // Проставляется напрямую (прецедент ChildChatReadTests.cs:71): создать такой чат фабрикой
+    // больше нельзя — И1-бис отказывает ему «Этот предмет закрыт», и это ровно тот дефект,
+    // который досев правит.
+    private async Task<Session> MkChildChatAsync(string suffix, string? subject)
+    {
+        var chat = await MkPlainChatAsync(suffix);
+        chat.ChildSpace = ChildSpaces.Lessons;
+        chat.ChildSubject = subject;
+        _sessions.SaveSessions();
+        return chat;
+    }
+
+    private string? StoredChildSubject(string sessionId)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(_tempDir, "sessions.json")));
+        var entry = doc.RootElement.EnumerateArray()
+            .Single(e => e.GetProperty("Id").GetString() == sessionId);
+        return entry.TryGetProperty("ChildSubject", out var v) && v.ValueKind != JsonValueKind.Null
+            ? v.GetString() : null;
+    }
+
+    // Ждать, пока новый чат встанет в реестр стора (не直到 его создание закончится): именно в
+    // этом окне досев и должен его встретить.
+    private async Task<string> WaitForNewChatIdAsync(HashSet<string> before)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (DateTime.UtcNow < deadline)
+        {
+            var fresh = _sessions.GetAll().Select(s => s.Id).FirstOrDefault(id => !before.Contains(id));
+            if (fresh is not null) return fresh;
+            await Task.Delay(5);
+        }
+        throw new TimeoutException("новый чат не появился в реестре стора");
+    }
 }

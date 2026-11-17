@@ -787,6 +787,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // То же с произвольным сведением: map(id) → новое значение или null (не менять).
     public int RemapModels(Func<string, string?> map) => _settings.RemapModels(map);
 
+    // Досев предмета старым детским чатам (миграция Т1b2): ChildSpace есть, предмета нет →
+    // subjectId; чаты с предметом и не-детские не трогает. Возвращает число изменённых чатов.
+    public int BackfillChildSubject(string subjectId) => _settings.BackfillChildSubject(subjectId);
+
     // Рабочая папка чата, принадлежащего пользователю (для загрузки вложений): у чата вне
     // проекта — {дом}/Chats, у проектного — рабочая папка сессии (worktree, иначе корень
     // проекта), чтобы Claude нашёл вложение по относительному пути из своего cwd.

@@ -55,7 +55,7 @@ public class UserStoreChildSubjectsTests : IDisposable
     private static ChildSubjectDto Subject(
         string id = "math", string label = "Математика", string glyph = "Аа", string color = "info",
         string providerKey = KidsKey, string model = "sonnet", bool enabled = true, string? tutor = null) =>
-        new(id, label, glyph, color, providerKey, model, enabled, tutor);
+        new(id, label, glyph, color, providerKey, model, enabled, tutor, Knowledge: null);
 
     // Тело с валидным профилем (provider — запись пула с ApiKey) и указанными предметами.
     private static ChildProfileDto Body(params ChildSubjectDto[] subjects) =>

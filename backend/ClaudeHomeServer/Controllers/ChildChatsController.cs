@@ -64,12 +64,6 @@ public class ChildChatsController(
             var chat = await sessions.CreateChatAsync(UserId, ChildModeLaunch.RequiredMode,
                 model: profile.Model, personaId: profile.TutorPersonaId,
                 childSpace: space, providerKey: profile.ProviderKey);
-            // CanonicalizeModel мог переписать модель — закрепляем ровно профильную
-            if (chat.Model != profile.Model)
-            {
-                chat.Model = profile.Model;
-                sessions.SaveSessions();
-            }
             return StatusCode(201, new { sessionId = chat.Id });
         }
         catch (Exception e)

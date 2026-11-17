@@ -22,7 +22,27 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
 {
     public sealed class Hosts : TestWebApplicationFactory
     {
-        public Hosts() => ExtraServices = services => services.AddSingleton<IOwnerSpendReader>(new FixedSpend());
+        public Hosts() => ExtraServices = services =>
+        {
+            services.AddSingleton<IOwnerSpendReader>(new FixedSpend());
+            // Обёртка над боевым гейтом: по флагу отказывает на старте хода (И1-бис), иначе прозрачна
+            services.AddSingleton(sp => new RefusingGate(new ChildModeGate(
+                sp.GetRequiredService<IChildModePolicy>(), sp.GetService<ChildLimitsCalculator>())));
+            services.AddSingleton<IChildModeGate>(sp => sp.GetRequiredService<RefusingGate>());
+        };
+    }
+
+    public sealed class RefusingGate(IChildModeGate inner) : IChildModeGate
+    {
+        public volatile bool Refuse;
+        public string? Denied(string server, string tool, string? ownerId) => inner.Denied(server, tool, ownerId);
+        public bool AllowsServer(string? ownerId, string server) => inner.AllowsServer(ownerId, server);
+        public bool IsChild(string? ownerId) => inner.IsChild(ownerId);
+        public string? LaunchMismatch(string? ownerId, Session session)
+            => Refuse ? "тестовый отказ старта" : inner.LaunchMismatch(ownerId, session);
+        public string? LaunchLimitRefusal(string? ownerId, Session session, DateTimeOffset now)
+            => inner.LaunchLimitRefusal(ownerId, session, now);
+        public ChildPolicySnapshot? PolicyFor(string ownerId) => inner.PolicyFor(ownerId);
     }
 
     private sealed class FixedSpend : IOwnerSpendReader
@@ -208,6 +228,40 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
             _hosts.Services.GetRequiredService<IChildModeGate>().LaunchMismatch(id, Sessions.GetById(sid)!).Should().BeNull();
     }
 
+    [Fact]
+    public async Task Create_СостояниеWarn_201()
+    {
+        // Лимит 5 минут при пороге «предупредить за» 5 (по умолчанию): осталось ровно 5 — Warn
+        var id = await NewChild("kid-chat-warn", dailyMinutes: 5);
+        AgreeRules(id);
+        _hosts.Services.GetRequiredService<ChildLimitsCalculator>()
+            .Evaluate(id, ChildSpaces.Lessons, DateTimeOffset.UtcNow)!.State.Should().Be(ChildState.Warn);
+
+        var sid = await CreateChatAs(ChildClient("kid-chat-warn"));
+        Sessions.GetById(sid)!.ChildSpace.Should().Be("lessons");
+    }
+
+    [Fact]
+    public async Task Create_ГейтОтказалНаСтарте_503_ЧатНеОстаётсяВСписке()
+    {
+        var id = await NewChild("kid-chat-refuse");
+        AgreeRules(id);
+        var client = ChildClient("kid-chat-refuse");
+        var gate = _hosts.Services.GetRequiredService<RefusingGate>();
+        gate.Refuse = true;
+        try
+        {
+            var (s, _) = await ReadAsync(await client.PostAsync("/api/child/spaces/lessons/chat", null));
+            s.Should().Be(HttpStatusCode.ServiceUnavailable);
+        }
+        finally { gate.Refuse = false; }
+
+        var (ls, lb) = await ReadAsync(await client.GetAsync("/api/child/spaces/lessons/chats"));
+        ls.Should().Be(HttpStatusCode.OK);
+        lb.GetProperty("chats").GetArrayLength().Should().Be(0);
+        Sessions.GetProjectlessChats(id).Should().BeEmpty();
+    }
+
     // ─── №4: список ───
 
     [Fact]
@@ -311,6 +365,33 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
             CodeOf(b).Should().Be("chat_not_found");
         }
         Sessions.GetById(adultChat)!.VoiceMode.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Voice_ЧужойДетскийЧат_404_chat_not_found_ПоляНеМеняются()
+    {
+        var a = await NewChild("kid-voice-a");
+        var b = await NewChild("kid-voice-b");
+        AgreeRules(a);
+        AgreeRules(b);
+        var sidB = await CreateChatAs(ChildClient("kid-voice-b"));
+        var clientA = ChildClient("kid-voice-a");
+        var before = Sessions.GetById(sidB)!;
+        var (voiceBefore, styleBefore) = (before.VoiceMode, before.VoiceStyle);
+
+        var (s, body) = await ReadAsync(await clientA.PutAsJsonAsync($"/api/child/chats/{sidB}/voice",
+            new { enabled = !voiceBefore, style = "digest" }));
+        var (sMissing, bodyMissing) = await ReadAsync(await clientA.PutAsJsonAsync(
+            $"/api/child/chats/{Guid.NewGuid():N}/voice", new { enabled = true }));
+
+        s.Should().Be(HttpStatusCode.NotFound);
+        CodeOf(body).Should().Be("chat_not_found");
+        // существование чужого чата не раскрывается: тело то же, что у несуществующего
+        sMissing.Should().Be(s);
+        body.GetRawText().Should().Be(bodyMissing.GetRawText());
+        var after = Sessions.GetById(sidB)!;
+        after.VoiceMode.Should().Be(voiceBefore);
+        after.VoiceStyle.Should().Be(styleBefore);
     }
 
     [Fact]

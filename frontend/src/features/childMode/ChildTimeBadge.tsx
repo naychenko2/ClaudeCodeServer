@@ -84,7 +84,7 @@ export function ChildTimeBadge({ status, totalMinutes, compact }: ChildTimeBadge
     }
   } else if (window) {
     plain = `до ${window}`;
-    spoken = `Занятие закончится в ${window}`;
+    spoken = `Разрешённое время до ${window}`;
   }
   if (number === null && plain === null) return null;
 

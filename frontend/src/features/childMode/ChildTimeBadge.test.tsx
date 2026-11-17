@@ -35,10 +35,13 @@ describe('остаток минут', () => {
     expect(render({ status: status({ minutesLeft: 11 }) })).toContain('>10 мин<');
   });
 
-  it('≤10 — точно и со склонением: 1 минута, 3 минуты, 8 минут', () => {
+  it('≤10 — точно и со склонением: 1 минута, 3 минуты, 8 минут, 10 минут', () => {
     expect(render({ status: status({ minutesLeft: 1 }) })).toContain('>1 минута<');
     expect(render({ status: status({ minutesLeft: 3 }) })).toContain('>3 минуты<');
     expect(render({ status: status({ minutesLeft: 8 }) })).toContain('>8 минут<');
+    // 10 — верхняя граница точной ветки: при `>=10` она ушла бы в округление
+    // («10 мин» через roundTo5), и эта проверка покраснела бы.
+    expect(render({ status: status({ minutesLeft: 10 }) })).toContain('>10 минут<');
   });
 
   it('warn при 5 — «Ещё 5 минут», тон warning: плашка и полоса в warning-токенах', () => {
@@ -69,9 +72,11 @@ describe('остаток минут', () => {
 
 describe('без лимита минут — только конец окна', () => {
   it('minutesLeft=null — «до 19:00» из литеральных часов строки, без перевода на часы браузера', () => {
-    const html = render({ status: status({ minutesLeft: null, windowEndsAt: '2026-11-17T19:00:00+03:00' }) });
+    // Смещение +05:00 нарочно отличное от таймзоны машины: fixture в таймзоне машины
+    // (например +03:00 на MSK-машине) даёт «19:00» и при неверном переводе через Date.
+    const html = render({ status: status({ minutesLeft: null, windowEndsAt: '2026-11-17T19:00:00+05:00' }) });
     expect(html).toContain('до 19:00');
-    expect(html).toContain('aria-label="Занятие закончится в 19:00"');
+    expect(html).toContain('aria-label="Разрешённое время до 19:00"');
     expect(html).not.toContain('role="progressbar"');
   });
 

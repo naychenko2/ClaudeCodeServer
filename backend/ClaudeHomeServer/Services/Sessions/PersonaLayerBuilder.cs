@@ -232,8 +232,8 @@ public sealed class PersonaLayerBuilder
                 // по убыванию: без этой сортировки определения per-run --agents (ClaudeAgentsJson →
                 // turnAgentsFingerprint) и порядок pmem-серверов менялись бы от чата к чату —
                 // отпечаток запуска расходился бы при одинаковом составе (та же причина, что у
-                // AppendPersonaLines). На состав это не влияет: CLI сортирует агентов сам,
-                // порядок держит только отпечаток.
+                // AppendPersonaLines). На состав агентов это не влияет: порядок определений
+                // влияет на отпечаток запуска (turnAgentsFingerprint, ClaudeSession.cs:3861-3870).
                 subagents.Sort((a, b) => string.CompareOrdinal(a.Handle, b.Handle));
                 var apiUrl = _endpoint.ResolveTasksApiUrl(ownerId);
                 var tokenFactory = () => _endpoint.GetServiceToken(ownerId);

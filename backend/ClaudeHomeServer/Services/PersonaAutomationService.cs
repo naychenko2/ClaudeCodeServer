@@ -3,6 +3,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Time;
 using ClaudeHomeServer.Services.TriggerSources;
 
 namespace ClaudeHomeServer.Services;
@@ -97,7 +98,7 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
                 // изменения обнаружатся первым разрешённым тиком. Для File это же экономит дорогой
                 // обход дерева проекта: скан идёт не чаще кулдауна, а изменения за время ожидания
                 // копятся в самом дереве и выходят одним сводным батч-событием.
-                if (InQuietWindow(rule, TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz))) continue;
+                if (InQuietWindow(rule, nowUtc, tz)) continue;
                 var minInterval = EffectiveMinIntervalMinutes(rule);
                 if (state.LastFiredAt is { } lastFired && nowUtc - lastFired < TimeSpan.FromMinutes(minInterval))
                     continue;
@@ -189,8 +190,7 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
         // правило, без лока два потока проходили throttle-проверку и дублировали реакцию.
         if (!bypassThrottle)
         {
-            var localNow = TimeZoneInfo.ConvertTimeFromUtc(now, tz);
-            if (InQuietWindow(rule, localNow)) { MarkResult(state, "quiet"); return; }
+            if (InQuietWindow(rule, now, tz)) { MarkResult(state, "quiet"); return; }
             var minInterval = EffectiveMinIntervalMinutes(rule);
             lock (state)
             {
@@ -569,16 +569,16 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
 
-    internal static bool InQuietWindow(PersonaAutomationRule rule, DateTime localNow)
-    {
-        var c = rule.Condition;
-        if (c is null || string.IsNullOrWhiteSpace(c.QuietFrom) || string.IsNullOrWhiteSpace(c.QuietTo)) return false;
-        if (!TimeOnly.TryParseExact(c.QuietFrom, "HH:mm", out var from)) return false;
-        if (!TimeOnly.TryParseExact(c.QuietTo, "HH:mm", out var to)) return false;
-        var now = new TimeOnly(localNow.TimeOfDay.Ticks);
-        return from <= to ? (now >= from && now < to)   // обычный диапазон
-                          : (now >= from || now < to);   // переход через полночь
-    }
+    // Тихие часы правила — одно дневное окно из Condition, местное время владельца (tz).
+    // Вся арифметика окна — в Core-хелпере DailyTimeWindow (единственная реализация).
+    internal static bool InQuietWindow(PersonaAutomationRule rule, DateTime nowUtc, TimeZoneInfo tz)
+        => QuietWindow(rule) is { } w
+            && DailyTimeWindow.Contains(new DateTimeOffset(nowUtc, TimeSpan.Zero), new[] { w }, tz);
+
+    private static DailyTimeWindow? QuietWindow(PersonaAutomationRule rule)
+        => rule.Condition is not { QuietFrom: { Length: > 0 } qf, QuietTo: { Length: > 0 } qt }
+            ? null
+            : new DailyTimeWindow(qf, qt);
 
     // ─── Хелперы ─────────────────────────────────────────────────────────────────
 

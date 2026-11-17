@@ -319,9 +319,10 @@ public static class WikiGate
             taken[key] = path;
     }
 
-    // Ссылки — только внутри раздела и вверх по цепочке (ADR-036, решение 4).
-    // Голая ссылка резолвится ТОЛЬКО в текущем разделе и вверх: глобального поиска по
-    // имени нет, и имя, живущее в чужом разделе, — нарушение «вбок/вниз», а не тихая подмена.
+    // Ссылки — только внутри раздела и вверх по цепочке (ADR-036, решение 4). Голая ссылка
+    // резолвится ТОЛЬКО в текущем разделе и вверх: глобального поиска по имени нет, и имя,
+    // живущее в чужом разделе, — нарушение «вбок/вниз», а не тихая подмена. Правила —
+    // одни на проект: ResolveLink; здесь только формулировка нарушения по его исходу.
     private static void CheckLinks(
         List<(Draft Draft, WikiPage Page)> target,
         string sectionKey,
@@ -335,39 +336,95 @@ public static class WikiGate
         {
             foreach (var link in page.OutboundLinks())
             {
-                if (link.Text.Contains('/'))
+                var res = ResolveLink(link.Text, sectionKey, upChain, allSections);
+                switch (res.Outcome)
                 {
-                    // Ссылка с префиксом раздела — путь под pages/: префикс должен быть
-                    // разделом и лежать в «вверх».
-                    var section = WikiSections.Parse(link.Text);
-                    var title = link.Text.Split('/')[^1];
-                    if (section is null)
+                    case LinkOutcome.Resolved:
+                        break;
+                    case LinkOutcome.BadPrefix:
                         violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' с неразобранным префиксом раздела");
-                    else if (!allowed.Contains(section))
-                        violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' в раздел '{section}' — вбок или вниз, допустимы только {string.Join(", ", allowed)}");
-                    else if (FindPage(title, [section], allSections) is null)
+                        break;
+                    case LinkOutcome.Sideways when link.Text.Contains('/'):
+                        violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' в раздел '{res.Section}' — вбок или вниз, допустимы только {string.Join(", ", allowed)}");
+                        break;
+                    case LinkOutcome.Sideways:
+                        violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' резолвится только в чужом разделе '{res.Section}' — вбок или вниз");
+                        break;
+                    case LinkOutcome.PrefixedUnknown:
                         violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' на неизвестную страницу");
-                    continue;
+                        break;
+                    default:
+                        violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' не найдена в разделе и вверх по цепочке");
+                        break;
                 }
-                // Голая ссылка: свой раздел, потом вверх по цепочке; нигде больше.
-                if (FindPage(link.Text, [sectionKey], allSections) is not null)
-                    continue;
-                if (FindPage(link.Text, upChain, allSections) is not null)
-                    continue;
-                var elsewhere = FindPage(link.Text,
-                    allSections.Select(s => s.Section).Distinct().Where(s => !allowed.Contains(s)), allSections);
-                if (elsewhere is not null)
-                    violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' резолвится только в чужом разделе '{elsewhere.Value.Section}' — вбок или вниз");
-                else
-                    violations.Add($"{draft.Path}: ссылка '[[{link.Text}]]' не найдена в разделе и вверх по цепочке");
             }
         }
+    }
+
+    internal enum LinkOutcome
+    {
+        /// <summary>Ссылка найдена в разделе или вверх по цепочке; Section — где найдена.</summary>
+        Resolved,
+        /// <summary>Префикс ссылки — не раздел вики.</summary>
+        BadPrefix,
+        /// <summary>Раздел префиксной ссылки вне допустимых; или голая ссылка резолвится
+        /// только в чужом разделе. Section — чужой раздел.</summary>
+        Sideways,
+        /// <summary>Раздел префиксной ссылки допустим, страницы в нём нет.</summary>
+        PrefixedUnknown,
+        /// <summary>Голая ссылка не найдена в разделе и вверх по цепочке.</summary>
+        NotFound,
+    }
+
+    internal readonly record struct LinkResolution(LinkOutcome Outcome, string? Section);
+
+    /// <summary>Резолв одной ссылки [[text]] — те же правила, что у всего гейта
+    /// (ADR-036, решение 4): голая — свой раздел, потом вверх по цепочке; с префиксом —
+    /// только раздел из «вверх». Снимок — разобранные страницы всех данных вызывающим
+    /// разделов: для гейта это состояние пакета, для валидатора синтеза — снимок раздела
+    /// и цепочки; имя из чужого раздела — не право на ссылку, а находка «вбок/вниз».
+    /// Формулирует нарушение по исходу CheckLinks: второй копии правил в проекте нет.
+    /// internal — им пользуется WikiPlanValidator (снятие неразрешимых ссылок в claim,
+    /// очередь 1, 2А); сам гейт от этого не ослабляется.</summary>
+    internal static LinkResolution ResolveLink(
+        string text,
+        string sectionKey,
+        IReadOnlyList<string> upChain,
+        IReadOnlyList<(string Section, WikiPage Page, string Path)> snapshot)
+    {
+        var allowed = new HashSet<string>(StringComparer.Ordinal) { sectionKey };
+        allowed.UnionWith(upChain);
+        if (text.Contains('/'))
+        {
+            // Ссылка с префиксом раздела — путь под pages/: префикс должен быть
+            // разделом и лежать в «вверх».
+            var section = WikiSections.Parse(text);
+            if (section is null)
+                return new(LinkOutcome.BadPrefix, null);
+            if (!allowed.Contains(section))
+                return new(LinkOutcome.Sideways, section);
+            var title = text.Split('/')[^1];
+            return FindPage(title, [section], snapshot) is not null
+                ? new(LinkOutcome.Resolved, section)
+                : new(LinkOutcome.PrefixedUnknown, section);
+        }
+        // Голая ссылка: свой раздел, потом вверх по цепочке; нигде больше.
+        if (FindPage(text, [sectionKey], snapshot) is not null)
+            return new(LinkOutcome.Resolved, sectionKey);
+        foreach (var section in upChain)
+            if (FindPage(text, [section], snapshot) is not null)
+                return new(LinkOutcome.Resolved, section);
+        var elsewhere = FindPage(text,
+            snapshot.Select(s => s.Section).Distinct().Where(s => !allowed.Contains(s)), snapshot);
+        return elsewhere is not null
+            ? new(LinkOutcome.Sideways, elsewhere.Value.Section)
+            : new(LinkOutcome.NotFound, null);
     }
 
     private static (string Section, WikiPage Page, string Path)? FindPage(
         string title,
         IEnumerable<string> sections,
-        List<(string Section, WikiPage Page, string Path)> allSections)
+        IReadOnlyList<(string Section, WikiPage Page, string Path)> allSections)
     {
         var wanted = new HashSet<string>(sections, StringComparer.Ordinal);
         var norm = Norm(title);

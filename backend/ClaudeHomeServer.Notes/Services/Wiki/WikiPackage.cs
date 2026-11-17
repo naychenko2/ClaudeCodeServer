@@ -248,6 +248,11 @@ public sealed record WikiPackage
         /// решает код, а не текст Reason. Ставит код (WikiApplyPolicy / WikiPlanValidator);
         /// старые пакеты без поля читаются как null — к судье не допускаются (И4′).</summary>
         public string? ReasonCode { get; init; }
+        /// <summary>Число неразрешимых `[[…]]`-ссылок, снятых валидатором синтеза из claim
+        /// (очередь 1, 2А): каждая заменена своим текстом без скобок. null — старая форма
+        /// плана (такого понятия в ней нет); 0 — ссылок не было или все разрешены. Поле
+        /// нужно шагу журнала (Q1-S5), который доложит о снятии.</summary>
+        public int? StrippedLinks { get; init; }
         /// <summary>Хэши базового состояния страниц, на которые опирается намерение
         /// (та же форма, что в манифесте — WikiManifest.Sha256Hex). Пусто для create.</summary>
         public IReadOnlyDictionary<string, string> BaseHashes { get; init; } = new Dictionary<string, string>();

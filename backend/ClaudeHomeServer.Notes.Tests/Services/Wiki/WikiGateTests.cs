@@ -311,6 +311,42 @@ public class WikiGateTests
         NoViolations([D(P1Dir + "Тет.md", page), CardDraft]);
     }
 
+    // —— ResolveLink: резолв одной ссылки — те же правила, что у всего гейта (очередь 1, 2А:
+    // им же пользуется валидатор синтеза, снимая неразрешимые ссылки в claim). Формулировку
+    // нарушения даёт CheckLinks по исходу; здесь — только исход. Гейт от выноса не слабее:
+    // CheckLinks проходит через ResolveLink для каждой ссылки страницы. ——
+
+    private static List<(string Section, WikiPage Page, string Path)> Snapshot(params (string Path, string Content)[] pages) =>
+        [.. pages.Select(p => (WikiSections.Parse(p.Path)!, WikiPage.Parse(p.Content).Model!, p.Path))];
+
+    [Fact]
+    public void ResolveLink_исходы_те_же_что_у_строгого_гейта()
+    {
+        var snap = Snapshot(
+            (P1Dir + "Тет.md", Page()),
+            (P1Dir + "Другая.md", Page(title: "Другая")),
+            ("Общее/Знание.md", Page(title: "Знание", dir: "Общее/")),
+            ("Проекты/p2/Чужое.md", Page(title: "Чужое", dir: "Проекты/p2/")));
+        string[] chain = ["common"];
+
+        WikiGate.ResolveLink("Тет", P1, chain, snap).Outcome.Should().Be(WikiGate.LinkOutcome.Resolved);
+        WikiGate.ResolveLink("Другая", P1, chain, snap).Outcome.Should().Be(WikiGate.LinkOutcome.Resolved);
+        WikiGate.ResolveLink("Знание", P1, chain, snap).Outcome.Should().Be(WikiGate.LinkOutcome.Resolved);
+        WikiGate.ResolveLink("Общее/Знание", P1, chain, snap).Outcome.Should().Be(WikiGate.LinkOutcome.Resolved);
+
+        var sidewaysBare = WikiGate.ResolveLink("Чужое", P1, chain, snap);
+        sidewaysBare.Outcome.Should().Be(WikiGate.LinkOutcome.Sideways);
+        sidewaysBare.Section.Should().Be("projects/p2");
+
+        var sidewaysPref = WikiGate.ResolveLink("Проекты/p2/Чужое", P1, chain, snap);
+        sidewaysPref.Outcome.Should().Be(WikiGate.LinkOutcome.Sideways);
+        sidewaysPref.Section.Should().Be("projects/p2");
+
+        WikiGate.ResolveLink("Призрак", P1, chain, snap).Outcome.Should().Be(WikiGate.LinkOutcome.NotFound);
+        WikiGate.ResolveLink("Общее/Призрак", P1, chain, snap).Outcome.Should().Be(WikiGate.LinkOutcome.PrefixedUnknown);
+        WikiGate.ResolveLink("щ/тот", P1, chain, snap).Outcome.Should().Be(WikiGate.LinkOutcome.BadPrefix);
+    }
+
     // —— Гейт: запись в '_*', запись в неписемый раздел ——
 
     [Fact]

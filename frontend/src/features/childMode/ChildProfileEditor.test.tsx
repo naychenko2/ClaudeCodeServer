@@ -119,6 +119,17 @@ async function click(el: HTMLElement) {
   await act(async () => { el.click(); });
 }
 
+// Вкладка редактора: кнопка role="tab" с подписью. Клик переключает экран (onChange → setTab).
+const tabBtn = (host: HTMLElement, label: string) =>
+  Array.from(panel(host).querySelectorAll('[role="tab"]')).find((b) => (b.textContent ?? '').includes(label)) as HTMLElement | undefined;
+const clickTab = async (host: HTMLElement, label: string) => {
+  const b = tabBtn(host, label);
+  if (!b) throw new Error(`вкладка «${label}» не найдена`);
+  await click(b);
+};
+const tabSelected = (host: HTMLElement, label: string) =>
+  (tabBtn(host, label)?.getAttribute('aria-selected') ?? 'false') === 'true';
+
 // Набрать в поле ввода: React держит props узла под __reactProps$…; зовём onChange напрямую
 // (тот же путь, что событие ввода), без событийной обвязки linkedom.
 const reactProps = (el: HTMLElement): { onChange?: (e: { target: { value: string } }) => void } | undefined => {
@@ -182,7 +193,10 @@ describe('ChildProfileEditor: тело PUT child-profile', () => {
 
   it('профиля нет — пустой черновик с warnMinutes 5; пустые лимиты и бюджеты уходят null', async () => {
     const { host } = await mount({ id: 'u-new', username: 'Новый' });
-    expect(inputByPlaceholder(host, 'anthropic-api-kids').value).toBe('');
+    // providerKey на вкладке «Предметы»: переключаемся на неё, проверяем пустой черновик, возвращаемся.
+    await clickTab(host, 'Предметы');
+    expect(inputByPlaceholder(host, 'anthropic-api-kids')!.value).toBe('');
+    await clickTab(host, 'Режим и время');
     const warn = Array.from(panel(host).querySelectorAll('input')).find((i) => i.value === '5');
     expect(warn, 'warnMinutes по умолчанию 5').toBeTruthy();
     await click(toggle(host, 'Детский режим'));
@@ -326,9 +340,10 @@ describe('ChildProfileEditor: отказы ручки №10', () => {
       expect(n!.textContent).toContain(r.text);
       expect(n!.textContent).toContain('Серверный текст отказа'); // message ответа — как есть
       expect(n!.textContent).not.toContain(r.code);
-      // черновик сохранён: поля и окно прежние
+      // черновик сохранён: окно на «Режиме и времени», providerKey на «Предметах»
       expect(windowInputs(host).map((i) => i.value)).toEqual(['09:00', '20:00']);
-      expect(inputByPlaceholder(host, 'anthropic-api-kids').value).toBe('anthropic-api-kids');
+      await clickTab(host, 'Предметы');
+      expect(inputByPlaceholder(host, 'anthropic-api-kids')!.value).toBe('anthropic-api-kids');
       expect(saveBtn(host).disabled).toBe(false);
     });
   }
@@ -381,8 +396,10 @@ describe('ChildProfileEditor: гонка и только-чтение', () => {
     await click(saveBtn(host));
     expect(calls.map((c) => c.userId)).toEqual(['u-liza']);
     await rerender({ id: 'u-other', username: 'Другой' });
-    // черновик прежнего пользователя сброшен вместе с его id
-    expect(inputByPlaceholder(host, 'anthropic-api-kids').value).toBe('');
+    // черновик прежнего пользователя сброшен вместе с его id: providerKey пуст на «Предметах»
+    await clickTab(host, 'Предметы');
+    expect(inputByPlaceholder(host, 'anthropic-api-kids')!.value).toBe('');
+    await clickTab(host, 'Режим и время');
     expect(textOf(host, 'tutor-state')).toContain('ещё нет');
     await settle(() => pending.get(0)!.resolve({ profile: fullProfile(), tutorPersonaId: 'p-tutor-late' }));
     expect(saved.length, 'onSaved для прежнего пользователя не зовётся').toBe(0);
@@ -423,7 +440,57 @@ describe('ChildProfileEditor: гонка и только-чтение', () => {
   });
 });
 
+describe('ChildProfileEditor: вкладки «Режим и время» / «Предметы»', () => {
+  it('две вкладки; по умолчанию «Режим и время»; поля маршрута только на «Предметах»', async () => {
+    const { host } = await mount(liza());
+    expect(panel(host).querySelectorAll('[role="tab"]').length, 'две вкладки').toBe(2);
+    expect(tabSelected(host, 'Режим и время'), 'вкладка по умолчанию').toBe(true);
+    expect(tabSelected(host, 'Предметы')).toBe(false);
+    // на «Режиме и времени» — окно есть, полей маршрута нет
+    expect(windowInputs(host).map((i) => i.value)).toEqual(['09:00', '20:00']);
+    expect(inputByPlaceholder(host, 'anthropic-api-kids'), 'providerKey вне этой вкладки').toBeNull();
+    // на «Предметах» — поля маршрута есть, окна нет, слот под предметы есть
+    await clickTab(host, 'Предметы');
+    expect(tabSelected(host, 'Предметы')).toBe(true);
+    expect(inputByPlaceholder(host, 'anthropic-api-kids')!.value).toBe('anthropic-api-kids');
+    expect(inputByPlaceholder(host, 'sonnet')!.value).toBe('sonnet');
+    expect(windowInputs(host).length, 'окно скрыто на другой вкладке').toBe(0);
+    expect(panel(host).querySelector('[data-testid="subjects-list"]'), 'пустой слот под предметы').toBeTruthy();
+  });
+
+  it('переключение вкладки не теряет ввод; «Сохранить» одна на обе вкладки, тело прежнее', async () => {
+    const { host } = await mount(liza());
+    await clickTab(host, 'Предметы');
+    await typeInto(inputByPlaceholder(host, 'anthropic-api-kids')!, 'new-key');
+    await clickTab(host, 'Режим и время');
+    await clickTab(host, 'Предметы');
+    expect(inputByPlaceholder(host, 'anthropic-api-kids')!.value, 'ввод живёт на обеих вкладках').toBe('new-key');
+    // сохранение с «Предметов»: тело строится из общего черновика — прежний набор + новый providerKey
+    await click(saveBtn(host));
+    expect(wire(0)).toEqual({
+      enabled: true,
+      guardianUserIds: ['u-papa', 'u-mama'],
+      providerKey: 'new-key',
+      model: 'sonnet',
+      spaces: { lessons: { windows: [{ from: '09:00', to: '20:00', weekdays: [1, 3, 5] }], dailyMinutes: 40 } },
+      dailyBudgetUsd: 2,
+      monthlyBudgetUsd: 40,
+      warnMinutes: 5,
+    });
+  });
+});
+
 describe('ChildProfileEditor: мобила (360)', () => {
+  it('вкладки: тач-цель ≥ 40px', async () => {
+    mobile = true;
+    const { host } = await mount(liza());
+    const tabs = Array.from(panel(host).querySelectorAll('[role="tab"]')) as HTMLElement[];
+    expect(tabs.length).toBe(2);
+    for (const t of tabs) {
+      expect(Number.parseFloat(t.style.height), 'тач-цель вкладки (Tabs size=md, mobile=44)').toBeGreaterThanOrEqual(40);
+    }
+  });
+
   it('поля окна в одну колонку, тач-цели ≥ 40px', async () => {
     mobile = true;
     const { host } = await mount(liza());

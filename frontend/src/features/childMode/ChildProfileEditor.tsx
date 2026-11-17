@@ -19,6 +19,7 @@ import { Notice } from '../../components/ui/Notice';
 import { Button } from '../../components/ui/Button';
 import { Checkbox } from '../../components/ui/Checkbox';
 import { Field, TextField } from '../../components/ui/Field';
+import { Tabs } from '../../components/ui/Tabs';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { childApi } from './api';
@@ -41,6 +42,14 @@ interface Props {
 
 // Единственное пространство волны 1 («Уроки»); ключ — из ADR-041.
 const LESSONS = 'lessons';
+// Вкладки редактора (макет Д1, «Вкладки редактора»): «Режим и время» — ограничения времени/бюджета,
+// «Предметы» — модель помощника правил и (в Т4f) список предметов. Вкладка — только выбор экрана:
+// черновик общий, переключение ввода не теряет. По умолчанию — «Режим и время».
+type EditorTab = 'mode' | 'subjects';
+const TAB_ITEMS = [
+  { value: 'mode' as EditorTab, label: 'Режим и время' },
+  { value: 'subjects' as EditorTab, label: 'Предметы' },
+];
 const DEFAULT_WARN_MINUTES = 5;
 // Строгий формат времени контракта: две цифры часа 00..23, две цифры минуты 00..59.
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -180,6 +189,8 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
   // Пустое поле окна подсвечивается только после попытки сохранить; некорректное — сразу, пока правят.
   const [attempted, setAttempted] = useState(false);
   const [reject, setReject] = useState<{ text: string; server?: string } | null>(null);
+  // Текущая вкладка — только выбор экрана; черновик (snap.draft) от неё не зависит.
+  const [tab, setTab] = useState<EditorTab>('mode');
   // Текущий пользователь на момент прихода ответа: по нему отбрасываем устаревший ответ.
   const activeIdRef = useRef(user.id);
   activeIdRef.current = user.id;
@@ -288,16 +299,19 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
         </Notice>
       )}
 
-      <div style={fieldStyle}>
-        {sectionTitle('Маршрут модели')}
-        <Field label="Провайдер (ключ записи пула)" hint="Запись пула с API-ключом: ход ребёнка не идёт по подписке (И2)">
-          <TextField value={d.providerKey} mono onChange={(v) => patch((prev) => ({ ...prev, providerKey: v }))} placeholder="anthropic-api-kids" />
-        </Field>
-        <Field label="Модель" hint="Закреплённая модель «Уроков», например sonnet">
-          <TextField value={d.model} onChange={(v) => patch((prev) => ({ ...prev, model: v }))} placeholder="sonnet" />
-        </Field>
+      <div data-testid="profile-tabs">
+        <Tabs
+          transparent
+          size="md"
+          isMobile={isMobile}
+          ariaLabel="Разделы профиля"
+          value={tab}
+          items={TAB_ITEMS}
+          onChange={setTab}
+        />
       </div>
 
+      {tab === 'mode' && (<>
       <div style={fieldStyle}>
         {sectionTitle('Окно «Уроков»')}
         {d.windows.length === 0 && (
@@ -373,6 +387,21 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
         {staticRow('Персона-тьютор', snap.tutorPersonaId ?? 'ещё нет', 'tutor-state', true)}
         {staticRow('Правила договорены', snap.rulesAgreedAt ? fmtDate(snap.rulesAgreedAt) : 'ещё нет', 'rules-state')}
       </div>
+      </>)}
+
+      {tab === 'subjects' && (<>
+      <div style={fieldStyle}>
+        {sectionTitle('Помощник (правила)')}
+        <Field label="Провайдер (ключ записи пула)" hint="Запись пула с API-ключом: ход ребёнка не идёт по подписке (И2)">
+          <TextField value={d.providerKey} mono onChange={(v) => patch((prev) => ({ ...prev, providerKey: v }))} placeholder="anthropic-api-kids" />
+        </Field>
+        <Field label="Модель" hint="Закреплённая модель «Уроков», например sonnet">
+          <TextField value={d.model} onChange={(v) => patch((prev) => ({ ...prev, model: v }))} placeholder="sonnet" />
+        </Field>
+      </div>
+      {/* Пустой слот под список предметов — наполняется в Т4f. */}
+      <div data-testid="subjects-list" />
+      </>)}
 
       <Button variant="primary" size="md" fullWidth loading={saving} dataTestId="save-profile" onClick={save}>
         Сохранить

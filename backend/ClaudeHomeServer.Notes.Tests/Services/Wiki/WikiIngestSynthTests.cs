@@ -330,7 +330,31 @@ public class WikiIngestSynthTests : IDisposable
 
         res.Dropped.Should().Be(0);
         res.DropReasons.Should().BeNull();
+        res.StrippedLinks.Should().Be(0, "в этих claim ссылок нет — пустой случай счётчика");
         WikiPackageStore.TryRead(Root, res.PackageId!).Package!.Operations.Should().HaveCount(2);
+    }
+
+    // Q1-S5: число ссылок, снятых валидатором из claim, — сумма по окну в исходе (только
+    // число). В плане две принятые операции: в одном claim два призрака, в другом один —
+    // валидатор снимает их текстом без скобок (Q1-S4), итог окна называет 2+1=3. Мутация
+    // «не суммировать» (убрать сумму в WithSectionIssues) → StrippedLinks 0, тест красный.
+    [Fact]
+    public async Task СнятыеСсылкиВКлимах_СуммаПоОкнуВИсходе()
+    {
+        var plan = WikiSynthJson.Ok(
+            WikiSynthJson.Op("append", PageTitle,
+                "Сборку решено перенести на Linux, см. [[Призрак1]] и [[Призрак2]]", [Quote1]),
+            WikiSynthJson.Op("append", PageTitle,
+                "Контейнер собран отдельно, связан с [[Призрак3]]", [Quote2]));
+        var llm = new FakeLlm(plan);
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().NotBe(WikiIngestService.OutcomeRejected, res.Reason);
+        res.StrippedLinks.Should().Be(3, "2 ссылки первой операции + 1 второй — сумма по окну");
+        var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
+        pkg.Operations.Sum(o => o.StrippedLinks ?? 0).Should().Be(3,
+            "та же сумма, что по операциям пакета: счётчик не живёт отдельным счётом");
     }
 
     // Минор ревью C2R-Sh1, п.3: сбой хранилища пакета не отменяет, что часть операций была

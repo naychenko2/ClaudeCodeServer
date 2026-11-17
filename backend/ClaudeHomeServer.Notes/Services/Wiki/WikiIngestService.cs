@@ -141,10 +141,14 @@ public sealed class WikiIngestService
     /// MaxDropReasons причин; 0/null — отбрасывать было нечего. CatalogChars (Q1-S2, риск 1
     /// разреза) — символы каталога промпта, построенного этим прогоном: каталог — часть входа
     /// окна, ночь прибавляет его /4 к оценке расхода. 0 — прогон не дошёл до каталога (отказ
-    /// входа, карточки) или раздел был пуст (пустой раздел каталога не даёт).</summary>
+    /// входа, карточки) или раздел был пуст (пустой раздел каталога не даёт). StrippedLinks
+    /// (Q1-S5) — сумма по окну ссылок, снятых валидатором из claim принятых операций
+    /// (Operation.StrippedLinks, Q1-S4): только число, без текста — снятые ссылки уже лежат
+    /// обычным текстом в утверждении, счётчик говорит лишь, сколько их было снято.
+    /// 0 — снимать было нечего.</summary>
     public readonly record struct IngestResult(string Outcome, string? Reason, string? PackageId,
         long InputTokens = 0, int Dropped = 0, IReadOnlyList<string>? DropReasons = null,
-        int Operations = 0, int CatalogChars = 0);
+        int Operations = 0, int CatalogChars = 0, int StrippedLinks = 0);
 
     /// <summary>Сколько причин отброшенных операций нести в исходе.</summary>
     public const int MaxDropReasons = 3;
@@ -1087,6 +1091,16 @@ public sealed class WikiIngestService
                 Dropped = verdict.Rejected.Count,
                 DropReasons = verdict.Rejected.Take(MaxDropReasons).Select(i => i.Reason).ToList(),
             };
+        // Q1-S5: число ссылок, снятых валидатором из claim принятых операций, — сумма по
+        // окну в исходе (только число, без текста): снятые ссылки уже лежат обычным текстом
+        // в утверждении (Q1-S4), вызывающему нужно лишь знать, сколько их было снято.
+        // Сумма — по финальному вердикту (после ремонта — по вердикту ремонта): тот же
+        // набор, из которого собран пакет.
+        var stripped = 0;
+        foreach (var op in verdict.Accepted)
+            stripped += op.StrippedLinks ?? 0;
+        if (stripped > 0)
+            r = r with { StrippedLinks = stripped };
         if (verdict.Violations.Count == 0)
             return r;
         var issues = "в разделе есть нарушения: " + string.Join("; ", verdict.Violations);

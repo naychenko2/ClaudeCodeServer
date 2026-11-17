@@ -173,6 +173,70 @@ public class WikiKeeperPromptsTests
         Assert.Contains("Entries marked \"— source\"", prompt);
     }
 
+    // Q1-S5: сначала append к странице того же предмета; create — только предмету, у которого
+    // страницы ещё нет; квота «4–10 страниц» убрана (она подавляла append).
+    [Fact]
+    public void Synth_СначалаAppendКСтраницеПредмета_CreateТолькоНовому_КвотыСтраницНет()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        Assert.Contains("First append to a page of the same subject", prompt);
+        Assert.Contains("\"create\" is only for a subject that", prompt);
+        Assert.Contains("has no page yet.", prompt);
+        Assert.DoesNotContain("4–10", prompt);
+    }
+
+    // Q1-S5: заголовок create — предмет (существительное), а не предложение; один короткий
+    // пример «плохо/хорошо».
+    [Fact]
+    public void Synth_ЗаголовокCreate_ПредметАНеПредложение_ПримерПлохоХорошо()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        Assert.Contains("a noun naming the subject", prompt);
+        Assert.Contains("never a sentence with a verb", prompt);
+        Assert.Contains("Bad: \"Сборку перенесли на Linux\"", prompt);
+        Assert.Contains("good: \"Перенос сборки на Linux\"", prompt);
+    }
+
+    // Q1-S5: ссылка в claim разрешена дословно по каталогу: без хвоста «— вид», без префикса
+    // раздела и без алиаса «|» (гейт читает «x|y» как целое имя, и ссылка с алиасом молча
+    // снимается в текст — рабочая ссылка теряется).
+    [Fact]
+    public void Synth_СсылкаВКлиме_ТолькоГолаяПоКаталогу_БезХвостаПрефиксаИАлиаса()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        Assert.Contains("In a claim you may link another page as [[Title]]", prompt);
+        Assert.Contains("no \"— type\" tail, no section prefix,", prompt);
+        Assert.Contains("no alias after \"|\".", prompt);
+    }
+
+    // Q1-S5 (c2): схема операции не меняется: набор полей равен базе, поля summary нет
+    // (сводка — проекция каталога, а не поле ответа).
+    [Fact]
+    public void Synth_СхемаОперации_РавнаБазе_ПоляSummaryНету()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        var start = prompt.IndexOf("{\"outcome\":\"ok\",\"operations\":[{", StringComparison.Ordinal);
+        Assert.True(start >= 0, "блок схемы не в промпте");
+        var end = prompt.IndexOf("\"}]}", start, StringComparison.Ordinal);
+        Assert.True(end >= 0, "блок схемы не закрыт");
+        Assert.Equal(SynthSchemaBase, prompt[start..(end + 4)]);
+        Assert.DoesNotContain("\"summary\"", prompt);
+    }
+
+    // База схемы — часть контракта ответа: любое изменение набора полей отдельным решением
+    // краснит сравнение выше.
+    private const string SynthSchemaBase = """
+        {"outcome":"ok","operations":[{"op":"create|append|conflict|link",
+        "kind":"decision|rule|term|state","page":"<title>",
+        "claim":"<own words, up to 600 characters>",
+        "quotes":["<verbatim quote 1>","<verbatim quote 2, optional>","<verbatim quote 3, optional>"],
+        "target":"<only for conflict and link>"}]}
+        """;
+
     [Fact]
     public void Synth_БлокСуществующихСтраниц_ПоявляетсяТолькоКогдаПереданы()
     {

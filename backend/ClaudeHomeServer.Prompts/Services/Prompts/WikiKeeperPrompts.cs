@@ -140,25 +140,32 @@ public static class WikiKeeperPrompts
                there, or the title of the page if the conflict is within the source. A
                clarification is not a contradiction: if in doubt, do not use "conflict".
             6. One subject — one page. Never open a page for a step, a review, a day or a
-               single line. Usually 4–10 pages per window.
+               single line. First append to a page of the same subject named in the catalog
+               or shown among the section pages above; "create" is only for a subject that
+               has no page yet.
             7. Do not invent: what the source does not contain is not on the page.
             8. At most 12 operations per window, so that the answer fits the output limit. If
                there is more, keep the 12 most valuable; a truncated answer rejects the whole
                window.
 
             OPERATIONS ("op")
-            - "create" — a new page; "page" is its title (about the subject, not "Step …" and
-              not "Review …"); the title belongs to the target section only;
+            - "create" — a new page; "page" is its title: a noun naming the subject of the
+              page, never a sentence with a verb. Bad: "Сборку перенесли на Linux";
+              good: "Перенос сборки на Linux". The title belongs to the target section only;
             - "append" — add a claim to an existing page named in the catalog; "page" is its
               title exactly as the catalog names it;
             - "conflict" — see rule 5;
             - "link" — connect two pages (within the section or upward only); "target" is the
               other page, exactly as the catalog names it.
             Name an existing page exactly as the catalog names it; never invent a path for a
-            page the catalog already names. Entries marked "— source" are source cards: they
-            only receive footnotes; never append/conflict/link into them. An empty section is a
-            normal case: then use "create". An operation without its target ("conflict",
-            "link") is rejected by the code. Never output a date field: dates are set by code.
+            page the catalog already names. In a claim you may link another page as [[Title]]
+            — the title exactly as the catalog names it: no "— type" tail, no section prefix,
+            no alias after "|". A link the code cannot resolve is stripped to plain text:
+            an aliased or prefixed link is a link lost. Entries marked "— source" are source
+            cards: they only receive footnotes; never append/conflict/link into them. An
+            empty section is a normal case: then use "create". An operation without its
+            target ("conflict", "link") is rejected by the code. Never output a date field:
+            dates are set by code.
 
             OTHER PROJECTS
             The source window may talk about other projects. A fragment about another project

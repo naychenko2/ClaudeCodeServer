@@ -79,4 +79,6 @@ export interface ChildChatListItem {
   updatedAt: string;
   subject: string | null;
   subjectClosed: boolean;
+  // Озвучка ответов чата: оболочка восстанавливает её при открытии (субзадача Т3c)
+  voiceMode: boolean;
 }

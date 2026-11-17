@@ -226,13 +226,18 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
         var russianId = await CreateChatAs(client);
 
         _users.GetById(id)!.ChildMode!.Subjects.Single(x => x.Id == "math").Enabled = false;
+        // Озвучка включена на одном чате: список несёт voiceMode, оболочка восстанавливает
+        // её при открытии (субзадача Т3c из отчёта Т3a)
+        Sessions.GetById(mathId)!.VoiceMode = true;
         var (ls, lb) = await ReadAsync(await client.GetAsync("/api/child/spaces/lessons/chats"));
         ls.Should().Be(HttpStatusCode.OK);
         var chats = lb.GetProperty("chats").EnumerateArray().ToDictionary(c => c.GetProperty("sessionId").GetString()!);
         chats[mathId].GetProperty("subject").GetString().Should().Be("math");
         chats[mathId].GetProperty("subjectClosed").GetBoolean().Should().BeTrue();
+        chats[mathId].GetProperty("voiceMode").GetBoolean().Should().BeTrue();
         chats[russianId].GetProperty("subject").GetString().Should().Be("russian");
         chats[russianId].GetProperty("subjectClosed").GetBoolean().Should().BeFalse();
+        chats[russianId].GetProperty("voiceMode").GetBoolean().Should().BeFalse();
     }
 
     [Fact]

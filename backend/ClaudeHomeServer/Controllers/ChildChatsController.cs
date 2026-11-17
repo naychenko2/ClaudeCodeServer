@@ -101,6 +101,9 @@ public class ChildChatsController(
                     // Предмет выключен или удалён: чат остаётся в списке, но только для чтения
                     subjectClosed = !subjects.Any(x => x.Enabled &&
                         string.Equals(x.Id, s.ChildSubject, StringComparison.OrdinalIgnoreCase)),
+                    // Озвучка чата: оболочка восстанавливает её при открытии (Т3c, субзадача
+                    // из отчёта Т3a — без этого поля старая озвучка терялась при открытии)
+                    voiceMode = s.VoiceMode,
                 })
                 .ToList();
             return Ok(new { chats });

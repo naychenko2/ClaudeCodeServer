@@ -128,13 +128,16 @@ public class ChildSubjectsMigrationTests : IDisposable
     [Fact]
     public async Task Seed_ParallelWithAdminSet_AdminListWins()
     {
-        // Гонка повторяется: окно между проверкой «пусто» и записью — наносекунды, одиночная
-        // гонка её пропускает. При правильном коде (проверка и запись под одним локом) оба
-        // порядка дают список админа: засев либо проигрывает лок (видит непустой Subjects и
-        // пропускает), либо выигрывает (параллельный PUT затем заменяет профиль целиком).
-        // Мутация «проверка пустоты вне лока» на 50 гонках гаранти хотя бы раз попадает в
-        // запись стора и затирает предмет адмена своим тройным списком — тест краснеет.
-        for (var iter = 0; iter < 50; iter++)
+        // Гонка с конструктором окна: третий вызов стора (Add — хеш пароля под локом, ~80 мс)
+        // держит лок, пока админ и засев встают в очередь на него. Админ queued раньше,
+        // но при мутации «проверка пустоты вне лока» засев успевает прочесть пустой Subjects
+        // ДО очереди — и после админа пишет свой тройный список поверх его предмета (красный).
+        // При правильном коде (проверка и запись под одним локом) любой порядок отдачи лока
+        // даёт список админа: засев проиграл очередь — видит непустой Subjects и пропускает;
+        // выиграл — параллельный PUT затем заменяет профиль целиком.
+        // Отдача Monitor-лока не FIFO, поэтому гонка повторяется: 20 повторов хватает,
+        // чтобы мутация попала в запись хотя бы раз.
+        for (var iter = 0; iter < 20; iter++)
         {
             // Возвращаем ребёнка в состояние «пустой Subjects»
             _users.GetById(_childId)!.ChildMode!.Subjects = [];
@@ -148,12 +151,11 @@ public class ChildSubjectsMigrationTests : IDisposable
                 Subjects = [CustomSubject()],
             };
 
-            // Старт всех участников — по одному барьеру: иначе «гонка» растянется по очереди потоков
-            using var gate = new ManualResetEventSlim();
-            var seedTask = Task.Run(() => { gate.Wait(); _users.SeedChildSubjectsIfEmpty(_childId, SeedTriple()); });
-            var adminTask = Task.Run(() => { gate.Wait(); _users.SetChildProfile(_childId, admin, resetRules: false); });
-            gate.Set();
-            var all = Task.WhenAll(seedTask, adminTask);
+            var blocker = Task.Run(() => _users.Add("blocker_" + iter, "blocker-pw-123456", "user"));
+            await Task.Delay(5); // хеш идёт: лок занят
+            var adminTask = Task.Run(() => _users.SetChildProfile(_childId, admin, resetRules: false));
+            var seedTask = Task.Run(() => _users.SeedChildSubjectsIfEmpty(_childId, SeedTriple()));
+            var all = Task.WhenAll(blocker, adminTask, seedTask);
             (await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(30)))).Should().Be(all, "гонка не завершилась");
 
             var subjects = _users.GetById(_childId)!.ChildMode!.Subjects;

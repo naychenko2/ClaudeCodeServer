@@ -20,6 +20,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// (ADR-041 «Контракт», ручка №8; решение Андрея №5, вариант «б»). Тип — по сигнатуре байтов
 /// (переименованный .exe в .png остаётся .exe → 415), PDF конвертируется на сервере
 /// (тот же путь, что files_document_read), текст отдаётся рядом .txt, скан/битый PDF — 422.
+/// Расширение сохраняемого имени нормализуется по определённому типу (доработка R-KM-B6e):
+/// текст под .png сохраняется как .txt, PNG под .txt — как .png, PDF под .png — как .pdf;
+/// kind ответа и расширение path не расходятся.
 ///
 /// Конвертер — «печать файла как есть» (Markitdown:Command = cat/type, приём
 /// FilesControllerEditorDenialsTests): тест меряет мою цепочку (сигнатура → SaveChatAttachment →
@@ -275,6 +278,68 @@ public class ChildAttachmentsControllerTests : IClassFixture<ChildAttachmentsCon
         var inlined = AttachmentInliner.BuildMessageText(root, "объясни задачу", [txtRel]);
         inlined.Should().Contain(marker);
         inlined.Should().NotContain("открой инструментом чтения");
+    }
+
+    // R-KM-B6e (major): текст под именем .png — тип по сигнатуре (текст), расширение
+    // нормализовано в .txt: kind и расширение path не расходятся, и inliner несёт такой файл
+    // текстом, а не картинкой (SplitImagePaths выбирает по расширению).
+    [Fact]
+    public async Task Upload_ТекстПодИменемPng_200_Text_РасширениеНормализованоВtxt()
+    {
+        var (_, chat, root) = await NewChildWithChat("kid-att-text-as-png");
+        var client = ChildClient("kid-att-text-as-png");
+        var bytes = Encoding.UTF8.GetBytes("домашнее задание: три урока");
+
+        var (s, b, _) = await ReadAsync(await client.PostAsync($"/api/child/chats/{chat}/attachments", Multipart("задание.png", bytes)));
+
+        s.Should().Be(HttpStatusCode.OK);
+        b.GetProperty("kind").GetString().Should().Be("text");
+        var path = b.GetProperty("path").GetString()!;
+        path.Should().MatchRegex(PathRegex("задание.txt"));
+        SameBytes(root, path, bytes);
+        AttachmentInliner.SplitImagePaths([path]).images.Should().BeEmpty("текст под .txt не считается картинкой");
+    }
+
+    // R-KM-B6e: PDF под именем .png — оригинал сохраняется как .pdf (конвертер Markitdown
+    // выбирается по расширению), наружу — соседний .txt с текстом, kind=text.
+    [Fact]
+    public async Task Upload_PdfПодИменемPng_200_Text_ОригиналPdf_ОтветTxt()
+    {
+        var (_, chat, root) = await NewChildWithChat("kid-att-pdf-as-png");
+        var client = ChildClient("kid-att-pdf-as-png");
+        var marker = "МАРКЕР-" + Guid.NewGuid().ToString("N");
+        var pdf = Encoding.UTF8.GetBytes($"%PDF-1.7\nBT /F1 24 Tf 72 700 Td ({marker}) Tj ET\n%%EOF\n");
+
+        var (s, b, _) = await ReadAsync(await client.PostAsync($"/api/child/chats/{chat}/attachments", Multipart("урок.png", pdf)));
+
+        s.Should().Be(HttpStatusCode.OK);
+        b.GetProperty("kind").GetString().Should().Be("text");
+        var txtRel = b.GetProperty("path").GetString()!;
+        txtRel.Should().MatchRegex(PathRegex("урок.txt"));
+
+        // учтённый оригинал — .pdf, не .png: байты целы, расширение соответствует типу
+        var pdfRel = Sessions.GetById(chat)!.Attachments.Should().ContainSingle().Which;
+        pdfRel.Should().MatchRegex(PathRegex("урок.pdf"));
+        Path.GetDirectoryName(txtRel).Should().Be(Path.GetDirectoryName(pdfRel), "тот же {guid}-каталог");
+        SameBytes(root, pdfRel, pdf);
+    }
+
+    // R-KM-B6e: PNG под именем .txt — тип по сигнатуре (картинка), расширение нормализовано
+    // в .png: kind=image и расширение path не расходятся, inliner относит файл к картинкам.
+    [Fact]
+    public async Task Upload_PngПодИменемTxt_200_Image_РасширениеНормализованоВpng()
+    {
+        var (_, chat, root) = await NewChildWithChat("kid-att-png-as-txt");
+        var client = ChildClient("kid-att-png-as-txt");
+
+        var (s, b, _) = await ReadAsync(await client.PostAsync($"/api/child/chats/{chat}/attachments", Multipart("схема.txt", Png)));
+
+        s.Should().Be(HttpStatusCode.OK);
+        b.GetProperty("kind").GetString().Should().Be("image");
+        var path = b.GetProperty("path").GetString()!;
+        path.Should().MatchRegex(PathRegex("схема.png"));
+        SameBytes(root, path, Png);
+        AttachmentInliner.SplitImagePaths([path]).images.Should().ContainSingle().Which.Should().Be(path);
     }
 
     // Текст больше бюджета инлайна (256 КБ) — обрезан с явной пометкой на месте обрыва

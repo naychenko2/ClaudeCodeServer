@@ -31,15 +31,47 @@ public static class ChildAttachmentPolicy
     public static Kind Detect(byte[] bytes)
     {
         if (bytes.Length == 0) return Kind.Unsupported;
-        if (StartsWith(bytes, Png) || StartsWith(bytes, Jpeg)) return Kind.Image;
-        // WEBP: RIFF????WEBP — четыре байта длины между маркерами, их не смотрим
-        if (bytes.Length >= 12 &&
-            System.Text.Encoding.ASCII.GetString(bytes, 0, 4) == Riff &&
-            System.Text.Encoding.ASCII.GetString(bytes, 8, 4) == Webp)
-            return Kind.Image;
+        if (ImageExtOf(bytes) is not null) return Kind.Image;
         if (StartsWith(bytes, Pdf)) return Kind.Pdf;
         return IsUsableText(bytes) ? Kind.Text : Kind.Unsupported;
     }
+
+    // Формат картинки по сигнатуре: расширение для сохранения (NormalizeExtension) или null,
+    // если это не картинка. PNG / JPEG / WEBP (RIFF????WEBP — четыре байта длины между
+    // маркерами, их не смотрим) — тот же порядок проверок, что был в Detect.
+    private static string? ImageExtOf(byte[] bytes)
+    {
+        if (StartsWith(bytes, Png)) return ".png";
+        if (StartsWith(bytes, Jpeg)) return ".jpg";
+        if (bytes.Length >= 12 &&
+            System.Text.Encoding.ASCII.GetString(bytes, 0, 4) == Riff &&
+            System.Text.Encoding.ASCII.GetString(bytes, 8, 4) == Webp)
+            return ".webp";
+        return null;
+    }
+
+    // Допустимые расширения картинки (написание того же формата, что сигнатуры выше):
+    // своё оставшееся расширение не противоречит kind=image.
+    private static readonly HashSet<string> AllowedImageExts =
+        new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".webp" };
+
+    /// <summary>
+    /// Расширение сохраняемого имени по определённому типу (возврат ревью R-KM-B6e): тип
+    /// определяется по сигнатуре, но downstream читает его снова по расширению —
+    /// AttachmentInliner.SplitImagePaths относит файл к картинкам по расширению,
+    /// MarkitdownService выбирает конвертер по нему же. Расширение не должно расходиться
+    /// с kind: Image оставляет допустимое расширение из allow-list, иначе ставит по сигнатуре;
+    /// Text ставит .txt; Pdf ставит .pdf. Меняется только расширение — имя остаётся читаемым.
+    /// Unsupported не трогается: такой файл отказан вызывающим до сохранения.
+    /// </summary>
+    public static string NormalizeExtension(string fileName, Kind kind, byte[] bytes) => kind switch
+    {
+        Kind.Image when AllowedImageExts.Contains(Path.GetExtension(fileName)) => fileName,
+        Kind.Image => Path.ChangeExtension(fileName, ImageExtOf(bytes) ?? ".png"),
+        Kind.Pdf => Path.ChangeExtension(fileName, ".pdf"),
+        Kind.Text => Path.ChangeExtension(fileName, ".txt"),
+        _ => fileName,
+    };
 
     /// <summary>
     /// Тот же критерий text/plain, что у Detect: валидный UTF-8 без нулевых байтов.

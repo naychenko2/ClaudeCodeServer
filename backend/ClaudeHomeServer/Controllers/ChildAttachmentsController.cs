@@ -15,7 +15,9 @@ namespace ClaudeHomeServer.Controllers;
 /// вариант «б»): allow-list типов по сигнатуре байтов (ChildAttachmentPolicy), PDF превращается
 /// в текст на сервере (тот же путь, что files_document_read: MarkitdownService), инструмент Read
 /// ребёнку не открывается. Картинка доходит до модели image-блоком, текст — инлайном
-/// (AttachmentInliner, как у обычных вложений).
+/// (AttachmentInliner, как у обычных вложений). Расширение сохраняемого имени нормализуется
+/// по определённому типу (NormalizeExtension): kind в ответе и расширение path не расходятся —
+/// их читает по расширению downstream.
 ///
 /// Владелец — только из JWT; ребёнок опознаётся по стору через IChildModePolicy (как у
 /// ChildChatsController). Чат — свой, вне проекта и с ChildSpace: чужой, не детский и
@@ -86,10 +88,16 @@ public class ChildAttachmentsController(
 
         try
         {
+            // Расширение сохраняемого имени — по определённому типу (возврат ревью R-KM-B6e):
+            // downstream читает тип снова по расширению (AttachmentInliner.SplitImagePaths,
+            // MarkitdownService) — оно не должно расходиться с kind. Имя остаётся читаемым,
+            // меняется только расширение.
+            var saveName = ChildAttachmentPolicy.NormalizeExtension(file.FileName, kind, bytes);
+
             // Раскладка и учёт — те же, что у обычной загрузки (ChatsController.Upload):
             // {AttachmentsDir}/{guid}/{имя}; своя подпапка на каждый файл — два файла с одним
             // именем не затирают друг друга.
-            var rel = sessions.SaveChatAttachment(id, UserId, file.FileName, r => files.WriteFileBytes(root, r, bytes));
+            var rel = sessions.SaveChatAttachment(id, UserId, saveName, r => files.WriteFileBytes(root, r, bytes));
             if (rel is null) return ChildError(422, "empty_file", "Файл пустой или без имени.");
 
             if (kind is ChildAttachmentPolicy.Kind.Image)

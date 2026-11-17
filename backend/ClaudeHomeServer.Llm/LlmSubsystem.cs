@@ -283,6 +283,12 @@ public sealed class LlmSubsystem : IAppSubsystem
         // и тот же круг зависимостей — имена и потолки берёт из NamedLocalEngines/реестра.
         services.AddSingleton<LocalActionExecutorsStore>();
         services.AddSingleton<LocalActionRouter>();
+        // Сторож при старте: NumCtx именованного движка меньше NumCtx его мест — то, что
+        // сейчас режет вход молча (разбор 8d66a3d3 §2–3), должно быть сказано прямым
+        // текстом в журнале. Singleton + hosted через AddGatedHostedFrom: Mismatches
+        // читаются с того же инстанса, что проверял (показ в UI админа — отдельный шаг).
+        services.AddSingleton<LocalEngineContextGuard>();
+        services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<LocalEngineContextGuard>(), Key);
         services.AddSingleton<ICheapTextRunner, CheapTextRunner>();
         // Шов разметки картинок моделью со зрением (ADR-027 §4): ImageEditor видит только интерфейс.
         services.AddSingleton<IImageLabeler, ImageLabeler>();

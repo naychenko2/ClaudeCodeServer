@@ -950,4 +950,30 @@ public class McpHttpTransportConfigTests : IDisposable
         legacyEnv["DIFY_SEARCH_ONLY"]!.GetValue<string>().Should().Be("true");
         legacyKeys.Should().Contain("dify", "внешний узел — без отпечатка состава, как до волны 4");
     }
+
+    // --- порядок ключей в конфиге хода (стабильность префикса системного промпта) ---
+
+    /// <summary>
+    /// Порядок ключей mcpServers в temp-конфиге хода — это порядок инструментов в системном
+    /// промпте CLI. Он обязан быть Ordinal-сортировкой, а не порядком вставки: порядок вставки
+    /// зависит от того, какие контексты собрались в этом ходу, и префикс промпта у бесед
+    /// одинакового состава разошёлся бы байт-в-байт — локальная модель не взяла бы его из кэша.
+    /// Контексты подобраны так, что порядок вставки (tasks→notes→widgets→memory) заведомо
+    /// расходится с Ordinal (memory→notes→tasks→widgets): без сортировки тест краснеет.
+    /// Серверов ≥ 3 — иначе проверка вакуумна (один-два ключа «отсортированы» всегда).
+    /// </summary>
+    [Fact]
+    public void КлючиMcpСерверовКонфигаХода_ИдутПоРядкуOrdinal()
+    {
+        var (servers, _) = BuildConfig(
+            tasks: new TasksMcpContext("http://localhost:5000", () => "tok-t", "proj-1", UseHttp: true),
+            notes: new NotesMcpContext("http://localhost:5000", () => "tok-n", "proj-1", UseHttp: true),
+            widgets: new WidgetsMcpContext("http://localhost:5000", () => "tok-w", UseHttp: true),
+            memory: new MemoryMcpContext("http://localhost:5000", () => "tok-m", "persona-1", UseHttp: true));
+
+        var keys = servers.Select(entry => entry.Key).ToList();
+        keys.Count.Should().BeGreaterThanOrEqualTo(3, "один-два ключа «отсортированы» тривиально");
+        keys.Should().Equal(keys.OrderBy(k => k, StringComparer.Ordinal),
+            "ключи temp-конфига — порядок инструментов в системном промпте: он детерминирован по ключу");
+    }
 }

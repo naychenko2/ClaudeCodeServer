@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Детский режим — предметы и репетиторы · макет v1</title>
+<!--
+  Макет «Предметы и репетиторы». Эпик 45af8178-8435-4746-8f13-bd3cc781585e, задача-макет Д1 (52fe3366).
+  Макетом пользуются шаги Т3 (детская оболочка на серверных предметах), Т4 (вкладка «Предметы»,
+  пикер пачки 1) и Т6 (пикер пачки 2: облачные и локальные поставщики, согласие).
+  Разрез — docs/research/kids-mode-tutors-cut-2026-11.md §5, ADR-041 «Редакция 2».
+  Записка со спецификацией для реализации — kids-tutors-proposal.md.
+
+  Устройство файла — как у kids-shell-v2.html:
+    1) ТЕМА — значения --c-* дословно из frontend/src/lib/theme.css. Сырой hex живёт только здесь.
+       Новых цветов макет не вводит; --group-* — палитра аватаров GROUP_COLORS из design.ts.
+    2) КОМПОНЕНТЫ — классы с именами живых компонентов (.btn = Button, .field = Field/TextField,
+       .tabs = Tabs size="md", .toggle = Toggle, .notice = Notice), только var(--c-*) и шкалы FS/SP/R.
+    3) ПРОТОТИП — состояние в JS. Пульт сверху — рычаги макета, не продукт.
+-->
+<style>
+/* ===== 1. Тема: frontend/src/lib/theme.css ===== */
+:root, [data-theme="light"] {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-on-dark:#FFFFFF;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-track:#D8CFBE; --c-smoke:#B4A899;
+  --c-overlay:rgba(23,19,15,.42); --c-msg-bg:rgba(251,248,242,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-rose:#B0527C; --c-rose-text:#8E3D62;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-peek:0 2px 6px rgba(60,50,35,.14),0 20px 48px rgba(23,19,15,.32);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --canvas-glow:radial-gradient(140% 70% at 50% 0%,rgba(217,119,87,.13),transparent 55%),radial-gradient(120% 60% at 50% 110%,rgba(110,140,120,.10),transparent 60%);
+  /* GROUP_COLORS из design.ts — палитра аватаров-инициалов, от темы не зависит */
+  --group-blue:#3E7CA6; --group-violet:#8E4A82; --group-green:#3F7A4F; --group-orange:#C2693B; --group-indigo:#4B6BB0; --group-khaki:#7A7250;
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-track:#453F37; --c-smoke:#7E7566;
+  --c-overlay:rgba(0,0,0,.62); --c-msg-bg:rgba(46,42,37,.38);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-rose:#D683A6; --c-rose-text:#E7A3C0;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+  --shadow-peek:0 2px 8px rgba(0,0,0,.50),0 24px 56px rgba(0,0,0,.68);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+  --canvas-glow:radial-gradient(140% 70% at 50% 0%,rgba(227,138,106,.11),transparent 55%),radial-gradient(120% 60% at 50% 110%,rgba(110,140,120,.08),transparent 60%);
+}
+
+/* ===== 2. Палитра предметов: ключ → пара C.* (контракт с бэком, валидатор Т2a) =====
+   info    → C.infoBg / C.info
+   rose    → color-mix(C.rose 14%, C.bgCard) / C.roseText   (как живой ChildHome.tsx:24)
+   success → C.successBg / C.successText
+   warning → C.warningBg / C.warningText
+   accent  → C.accentLight / C.accent                                                   */
+.pal-info{background:var(--c-info-bg);color:var(--c-info)}
+.pal-rose{background:color-mix(in srgb,var(--c-rose) 14%,var(--c-bg-card));color:var(--c-rose-text)}
+.pal-success{background:var(--c-success-bg);color:var(--c-success-text)}
+.pal-warning{background:var(--c-warning-bg);color:var(--c-warning-text)}
+.pal-accent{background:var(--c-accent-light);color:var(--c-accent)}
+
+/* ===== 3. Компоненты ===== */
+*{box-sizing:border-box}
+body{margin:0;font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--c-bg-inset);color:var(--c-text-primary)}
+.serif{font-family:'PT Serif',Georgia,serif}
+.mono{font-family:'JetBrains Mono','Courier New',monospace}
+button,input,textarea,select{font-family:inherit}
+svg.i{display:block;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+/* Пульт прототипа (не продукт) */
+.pult{position:sticky;top:0;z-index:2000;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:8px 16px;background:var(--c-bg-panel);border-bottom:1px solid var(--c-border);font-size:12px;color:var(--c-text-secondary)}
+.pult b{font-weight:600;color:var(--c-text-heading);margin-right:4px}
+.pult .grp{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.pill{display:flex;gap:3px;padding:3px;border-radius:10px;background:var(--c-bg-selected);flex-wrap:wrap}
+.pill button{border:none;cursor:pointer;background:transparent;border-radius:7px;padding:4px 9px;font-size:12px;font-weight:600;color:var(--c-text-secondary)}
+.pill button[aria-pressed="true"]{background:var(--c-bg-white);box-shadow:var(--shadow-thumb);color:var(--c-text-heading)}
+.pill button:disabled{opacity:.4;cursor:default}
+.pult .note{flex-basis:100%;color:var(--c-text-muted);font-size:11px}
+.stage{padding:24px 16px 48px;display:flex;justify-content:center;overflow-x:auto}
+
+/* Окно устройства: CanvasBackdrop */
+.frame{position:relative;isolation:isolate;flex-shrink:0;height:860px;border-radius:14px;overflow:hidden;background:var(--c-bg-main);color:var(--c-text-primary);display:flex;flex-direction:column;box-shadow:var(--shadow-peek)}
+.frame::before{content:"";position:absolute;inset:0;z-index:-1;background:var(--canvas-glow)}
+
+/* HubHeader */
+.hub{flex-shrink:0;height:52px;display:flex;align-items:center;gap:8px;padding:0 16px}
+.hub.mob{height:56px;padding:0 8px 0 4px;border-bottom:1px solid var(--c-border)}
+.logo{display:flex;align-items:center;gap:8px;padding:4px 12px 4px 7px;border-radius:8px;background:var(--c-bg-panel);border:none;color:inherit}
+.logo .mark{width:26px;height:26px;border-radius:8px;background:var(--c-accent);color:var(--c-on-accent);display:grid;place-items:center}
+.logo .name{font-family:'PT Serif',Georgia,serif;font-size:18px;font-weight:500;color:var(--c-text-heading)}
+.hub .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.timepill{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:999px;background:var(--c-bg-inset);color:var(--c-text-secondary);font-size:13px;white-space:nowrap}
+.timepill b{color:var(--c-text-heading);font-weight:600}
+.timepill .bar{width:48px;height:4px;border-radius:999px;background:var(--c-track);overflow:hidden}
+.timepill .bar i{display:block;height:100%;width:60%;border-radius:999px;background:var(--c-success)}
+
+/* Аватар персоны (PersonaAvatar): круг R.full; без картинки — инициалы на GROUP_COLORS */
+.pav{border-radius:50%;flex-shrink:0;display:grid;place-items:center;color:var(--c-on-dark);font-weight:700;line-height:1;overflow:hidden;user-select:none}
+.pav.img{background:var(--c-accent-light);color:var(--c-accent)}
+.pav svg{width:100%;height:100%}
+
+/* Глиф предмета (SubjectGlyph из ChildHome): квадрат 40, R.lg, serif */
+.glyph{width:40px;height:40px;flex-shrink:0;border-radius:10px;display:grid;place-items:center;font-family:'PT Serif',Georgia,serif;font-size:16px;font-weight:700;line-height:1;white-space:nowrap;letter-spacing:-.02em}
+.glyph.sm{width:22px;height:22px;border-radius:6px;font-size:11px}
+
+/* Island */
+.island{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island)}
+.ihead{flex-shrink:0;height:40px;display:flex;align-items:center;gap:7px;padding:0 6px 0 12px;border-bottom:1px solid var(--c-border);background:var(--c-bg-main);font-size:13px;font-weight:600;color:var(--c-text-heading)}
+.ihead .cnt{font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:6px;background:var(--c-bg-inset);color:var(--c-text-secondary)}
+
+/* Button (ui/Button.tsx) */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-weight:600;border:none;cursor:pointer;white-space:nowrap;transition:background .12s,box-shadow .12s;color:inherit}
+.btn:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+.btn.sm{min-height:32px;padding:7px 13px;font-size:13px;border-radius:10px}
+.btn.md{min-height:40px;padding:11px 16px;font-size:14px;border-radius:12px}
+.btn.lg{min-height:52px;padding:0 16px;font-size:16px;border-radius:14px}
+.btn.primary{background:var(--c-accent);color:var(--c-on-accent)}
+.btn.primary.glow{box-shadow:var(--shadow-button)}
+.btn.primary[aria-busy="true"]{background:var(--c-accent-soft);cursor:progress}
+.btn.secondary{background:var(--c-bg-panel);color:var(--c-text-secondary)}
+.btn.secondary:hover{background:var(--c-bg-selected)}
+.btn.ghost{background:transparent;border:1px solid var(--c-border);color:var(--c-text-secondary)}
+.btn.ghost:hover{background:var(--c-bg-selected)}
+.btn.ghost:disabled{opacity:.45;cursor:not-allowed;background:transparent}
+.btn.danger{background:transparent;border:1px solid var(--c-danger-border);color:var(--c-danger-text)}
+.btn.danger:hover{background:var(--c-danger-bg)}
+.btn.danger.solid{background:var(--c-danger);border-color:var(--c-danger);color:var(--c-on-dark)}
+.btn.dashed{background:transparent;border:1.5px dashed var(--c-dashed);color:var(--c-accent)}
+.btn.full{width:100%}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:sp 0.8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+/* IconButton */
+.ib{width:32px;height:32px;border-radius:8px;border:none;background:transparent;color:var(--c-text-muted);display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+.ib:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.ib:disabled{opacity:.35;cursor:default;background:transparent}
+.ib.lg{width:40px;height:40px;border-radius:10px}
+.ib:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+
+/* Badge / Notice */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;line-height:1.4;white-space:nowrap}
+.badge.neutral{background:var(--c-bg-inset);color:var(--c-text-muted)}
+.badge.success{background:var(--c-success-bg);color:var(--c-success-text)}
+.badge.warning{background:var(--c-warning-bg);color:var(--c-warning-text)}
+.badge.info{background:var(--c-info-bg);color:var(--c-info)}
+.badge.plan{background:var(--c-plan-light);color:var(--c-plan-text)}
+.notice{display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border-radius:8px;font-size:12px;line-height:1.45;border:1px solid}
+.notice .tx{flex:1;min-width:0}
+.notice .tt{font-weight:600;margin-bottom:2px}
+.notice.warning{background:var(--c-warning-bg);color:var(--c-warning-text);border-color:var(--c-warning)}
+.notice.danger{background:var(--c-danger-bg);color:var(--c-danger-text);border-color:var(--c-danger-border)}
+.notice.info{background:var(--c-info-bg);color:var(--c-text-primary);border-color:var(--c-info)}
+.notice.info .ic{color:var(--c-info)}
+.notice.big{font-size:14px;padding:12px 16px}
+
+/* Checkbox (ui/Checkbox.tsx, строчный вариант редактора) */
+.cbrow{display:flex;align-items:center;gap:8px;min-height:40px;cursor:pointer;font-size:14px;color:var(--c-text-primary);background:none;border:none;padding:0;text-align:left}
+.cbrow .box{width:18px;height:18px;border-radius:5px;border:1.5px solid var(--c-border);display:grid;place-items:center;color:var(--c-on-accent);flex-shrink:0;background:var(--c-bg-white)}
+.cbrow[aria-checked="true"] .box{background:var(--c-accent);border-color:var(--c-accent)}
+.cbrow:focus-visible{outline:none}
+.cbrow:focus-visible .box{box-shadow:var(--shadow-focus)}
+.cbrow.bad .box{border-color:var(--c-danger)}
+
+/* Toggle (ui/Toggle.tsx: 42×25) — в строке предмета обёрнут в зону 40 по высоте */
+.toggle{width:42px;height:25px;border-radius:25px;padding:3px;background:var(--c-track);border:none;cursor:pointer;flex-shrink:0;transition:background .15s}
+.toggle i{display:block;width:19px;height:19px;border-radius:50%;background:var(--c-bg-white);box-shadow:var(--shadow-thumb);transition:margin .15s}
+.toggle[aria-checked="true"]{background:var(--c-success)}
+.toggle[aria-checked="true"] i{margin-left:17px}
+.toggle:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+.tz{min-width:44px;min-height:40px;display:grid;place-items:center}
+
+/* Field / TextField / Select */
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field>label,.field>.lb{font-size:12px;font-weight:600;color:var(--c-text-secondary)}
+.field .hint{font-size:12px;color:var(--c-text-muted);line-height:1.4}
+.field .err{font-size:12px;color:var(--c-danger-text)}
+.inp{height:40px;width:100%;padding:0 12px;border-radius:12px;border:1px solid var(--c-border);background:var(--c-bg-white);color:var(--c-text-primary);font-size:14px}
+textarea.inp{height:auto;min-height:88px;padding:10px 12px;line-height:1.5;resize:vertical}
+select.inp{appearance:auto;padding-right:8px}
+.inp:focus{outline:none;border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.inp[aria-invalid="true"]{border-color:var(--c-danger)}
+.inp:disabled{opacity:.6}
+.cnt-l{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.cnt-l label{font-size:12px;font-weight:600;color:var(--c-text-secondary)}
+
+/* Tabs size="md" (ui/Tabs.tsx): 38 / на мобиле 44, подчёркивание активной */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--c-border)}
+.tab{height:38px;padding:0 10px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:600;color:var(--c-text-secondary);display:inline-flex;align-items:center;gap:6px;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab[aria-selected="true"]{color:var(--c-text-heading);border-bottom-color:var(--c-accent)}
+.tab .n{font-family:'JetBrains Mono',monospace;font-size:10.5px;padding:1px 6px;border-radius:6px;background:var(--c-bg-inset);color:var(--c-text-secondary)}
+.tab:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+.m .tab{height:44px;padding:0 12px;flex:1;justify-content:center}
+
+/* Modal «Пользователи» */
+.overlay{position:absolute;inset:0;background:var(--c-overlay);display:flex;align-items:center;justify-content:center;padding:24px}
+.modal{width:620px;max-height:100%;display:flex;flex-direction:column;background:var(--c-bg-card);border-radius:16px;box-shadow:var(--shadow-modal);overflow:hidden}
+.m .overlay{padding:0;align-items:stretch}
+.m .modal{width:100%;border-radius:0}
+.mhead{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:16px 20px;font-family:'PT Serif',Georgia,serif;font-size:20px;font-weight:500;color:var(--c-text-heading);border-bottom:1px solid var(--c-border-light)}
+.mbody{flex:1;min-height:0;overflow:auto;padding:12px 16px}
+.mfoot{flex-shrink:0;display:flex;justify-content:flex-end;padding:12px 16px;border-top:1px solid var(--c-border-light)}
+.m .mbody{padding:12px}
+.urow{display:flex;align-items:center;gap:10px;padding:10px 4px;font-size:14px}
+.urow .un{font-weight:600;color:var(--c-text-heading)}
+.urow .ue{font-size:12px;color:var(--c-text-muted)}
+
+/* ChildProfileEditor: panelStyle */
+.editor{display:flex;flex-direction:column;gap:12px;padding:12px;border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-card);box-shadow:var(--shadow-card);margin-top:8px}
+.m .editor{padding:8px 12px}
+.sec{font-size:11px;font-weight:600;color:var(--c-text-secondary);text-transform:uppercase;letter-spacing:.05em}
+.muted{font-size:12px;color:var(--c-text-muted);line-height:1.45}
+.row2{display:flex;gap:12px}
+.m .row2{flex-direction:column;gap:8px}
+.row2>*{flex:1;min-width:0}
+
+/* Строка «Помощник (правила)» и предмета */
+.srow{border:1px solid var(--c-border-light);border-radius:12px;background:var(--c-bg-white);overflow:hidden}
+.srow.off .shead .lbl,.srow.off .glyph{opacity:.55}
+.srow.bad{border-color:var(--c-danger)}
+.shead{display:flex;align-items:center;gap:10px;padding:8px 6px 8px 10px;min-height:56px}
+.shead .txt{flex:1;min-width:0;min-height:40px;justify-content:center;display:flex;flex-direction:column;gap:2px;cursor:pointer;background:none;border:none;padding:0;text-align:left;color:inherit}
+.shead .txt:focus-visible{outline:none;box-shadow:var(--shadow-focus);border-radius:6px}
+.shead .lbl{font-size:14px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px}
+.shead .sub{font-size:12px;color:var(--c-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px}
+.shead .arrows{display:flex;gap:2px}
+.sbody{border-top:1px solid var(--c-border-light);padding:12px;display:flex;flex-direction:column;gap:12px;background:var(--c-bg-card)}
+.m .sbody{padding:10px}
+.sgroup{display:flex;flex-direction:column;gap:8px}
+.sfoot{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.m .sfoot .mv{display:flex;gap:8px;width:100%}
+.m .sfoot .mv .btn{flex:1}
+.m .sfoot>.btn{width:100%}
+
+/* Выбор цвета: 5 образцов-кнопок 40×40 с глифом предмета */
+.swatches{display:flex;gap:8px;flex-wrap:wrap}
+.sw{width:40px;height:40px;border-radius:10px;border:2px solid transparent;cursor:pointer;display:grid;place-items:center;font-family:'PT Serif',serif;font-weight:700;font-size:14px;padding:0}
+.sw[aria-checked="true"]{border-color:var(--c-text-heading)}
+.sw:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+.preview{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--c-border-light);border-radius:12px;background:var(--c-bg-card);box-shadow:var(--shadow-card)}
+
+/* Репетитор */
+.tutor{display:flex;gap:12px;align-items:flex-start}
+.m .tutor{flex-direction:column}
+.tutor .acts{display:flex;gap:8px;flex-wrap:wrap}
+.voice{display:flex;align-items:center;gap:10px;min-height:40px;padding:0 4px 0 12px;border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-white);font-size:14px}
+.voice .vn{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vlist{border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-white);padding:4px}
+.vopt{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;padding:0 10px;border:none;background:none;border-radius:8px;cursor:pointer;font-size:14px;color:var(--c-text-primary);text-align:left}
+.vopt:hover{background:var(--c-bg-selected)}
+.vopt[aria-checked="true"]{color:var(--c-accent);font-weight:600}
+
+/* Пикер «поставщик → модель» */
+.picker{display:flex;flex-direction:column;gap:8px;padding:10px;border-radius:12px;background:var(--c-bg-panel)}
+.ack{display:flex;flex-direction:column;gap:2px}
+
+/* EmptyState (компактный, в карточке) */
+.empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:24px 12px;border:1.5px dashed var(--c-dashed);border-radius:12px}
+.empty .ic{width:48px;height:48px;border-radius:12px;background:var(--c-bg-inset);color:var(--c-text-muted);display:grid;place-items:center}
+.empty .t{font-size:16px;font-weight:600;color:var(--c-text-heading)}
+
+/* ===== Ребёнок ===== */
+.home{max-width:760px;width:100%;margin:0 auto;padding:48px 24px;display:flex;flex-direction:column;gap:16px}
+.m .home{padding:24px 16px}
+.hello{font-family:'PT Serif',Georgia,serif;font-size:34px;font-weight:500;line-height:1.2;color:var(--c-text-heading)}
+.m .hello{font-size:28px}
+.secl{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted)}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.m .tiles{grid-template-columns:1fr}
+.tile{display:flex;align-items:center;gap:12px;padding:16px;min-height:76px;background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:12px;box-shadow:var(--shadow-card);cursor:pointer;text-align:left;color:inherit;font:inherit}
+.tile:hover{border-color:var(--c-border)}
+.tile:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+.tile .tl{font-size:14px;font-weight:600;color:var(--c-text-heading)}
+.tile .tt{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:12px;color:var(--c-text-muted);min-width:0}
+.tile .tt span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card{background:var(--c-bg-card);border:1px solid var(--c-border-light);box-shadow:var(--shadow-card);border-radius:12px;padding:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.dash{display:flex;align-items:center;gap:12px;padding:16px;min-height:40px;border:1.5px dashed var(--c-dashed);border-radius:12px}
+
+.body{flex:1;min-height:0;display:flex;gap:8px;padding:8px 16px 16px}
+.m .body{padding:0}
+.side{width:280px;flex-shrink:0}
+.lrow{display:flex;align-items:center;gap:10px;width:calc(100% - 16px);margin:0 8px 2px;padding:8px 10px;min-height:48px;border-radius:10px;border:none;background:transparent;text-align:left;cursor:pointer;color:inherit}
+.lrow:hover,.lrow[aria-current="true"]{background:var(--c-bg-selected)}
+.lrow .t{font-size:13px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lrow .p{font-size:12px;color:var(--c-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;gap:6px;align-items:center}
+.lrow.closed .glyph{opacity:.5}
+.chat{flex:1;min-width:0;display:flex;flex-direction:column}
+.chathead{flex-shrink:0;display:flex;align-items:center;gap:12px;padding:12px 18px 10px;max-width:950px;width:100%;margin:0 auto;border-bottom:1px solid var(--c-border-light)}
+.chathead h1{margin:0;font-family:'PT Serif',Georgia,serif;font-size:28px;font-weight:500;line-height:1.25;color:var(--c-text-heading)}
+.chathead .meta{display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;align-items:center}
+.m .chathead{display:none}
+.mobt{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
+.mobt .n{font-size:15px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mobt .s{font-size:12px;color:var(--c-text-muted)}
+.feed{flex:1;min-height:0;overflow:auto;padding:20px 16px 24px}
+.col{max-width:950px;margin:0 auto;display:flex;flex-direction:column}
+.msg{margin-bottom:15px}
+.msg.u{align-self:flex-end;max-width:80%}
+.msg.u .bub{background:var(--c-bg-white);border:1px solid var(--c-border-light);box-shadow:var(--shadow-card);border-radius:18px 18px 4px 18px;padding:12px 17px}
+.msg.a .bub{background:var(--c-msg-bg);border-radius:12px;padding:9px 12px;color:var(--c-text-heading);display:flow-root}
+.bub{font-size:16px;line-height:1.55}
+.bub .pav{float:left;margin:1px 9px 2px -3px}
+.closed-feed .bub{opacity:.85}
+.composer{flex-shrink:0;max-width:950px;width:100%;margin:0 auto;padding:0 16px 16px}
+.m .composer{padding:0 8px 8px}
+.cbox{display:flex;align-items:flex-end;gap:8px;padding:10px 10px 10px 16px;border-radius:18px;border:1px solid var(--c-border);background:var(--c-bg-white);box-shadow:var(--shadow-card)}
+.cbox .ph{flex:1;font-size:16px;color:var(--c-text-muted);padding:8px 0}
+.closedbar{display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-radius:14px;border:1px solid var(--c-border);background:var(--c-bg-panel)}
+.closedbar .h{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:600;color:var(--c-text-heading)}
+.closedbar .h .ic{width:32px;height:32px;border-radius:8px;background:var(--c-bg-inset);color:var(--c-text-secondary);display:grid;place-items:center}
+.closedbar .x{font-size:14px;color:var(--c-text-secondary);line-height:1.5}
+
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+</style>
+</head>
+<body>
+<div class="pult" id="pult"></div>
+<div class="stage"><div id="root"></div></div>
+
+<script>
+/* ===== Иконки (lucide, stroke 2) ===== */
+const P = {
+  up:'<path d="m18 15-6-6-6 6"/>', down:'<path d="m6 9 6 6 6-6"/>', right:'<path d="m9 18 6-6-6-6"/>', left:'<path d="m15 18-6-6 6-6"/>',
+  trash:'<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  plus:'<path d="M12 5v14"/><path d="M5 12h14"/>', check:'<path d="M20 6 9 17l-5-5"/>',
+  alert:'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  lock:'<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  sparkles:'<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>',
+  upload:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+  play:'<path d="m6 3 14 9-14 9z"/>', book:'<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>',
+  brush:'<path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>',
+  send:'<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>', mic:'<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>',
+  x:'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', cpu:'<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/>',
+  users:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
+};
+const ic = (n, s = 16) => `<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24" aria-hidden="true">${P[n]}</svg>`;
+const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+
+/* ===== Данные ===== */
+const PALETTE = [
+  { key:'info', name:'Синий' }, { key:'rose', name:'Розовый' }, { key:'success', name:'Зелёный' },
+  { key:'warning', name:'Янтарный' }, { key:'accent', name:'Терракотовый' },
+];
+// Поставщики: kind pool — запись пула с API-ключом (пачка 1); cloud / local — пачка 2.
+const PROVIDERS = [
+  { key:'anthropic-api-kids', title:'Anthropic · ключ «kids»', kind:'pool',
+    models:[{ id:'claude-sonnet-5-5' }, { id:'claude-haiku-5-5' }, { id:'claude-opus-5-5' }] },
+  { key:'deepseek', title:'DeepSeek', kind:'cloud',
+    models:[{ id:'deepseek-chat' }, { id:'deepseek-reasoner' }, { id:'deepseek-v4-lite', unpriced:true }] },
+  { key:'glm', title:'GLM (Zhipu)', kind:'cloud', models:[{ id:'glm-5' }, { id:'glm-5-air' }] },
+  { key:'strata', title:'Локальная · Strata', kind:'local', models:[{ id:'qwen3.8-27b' }] },
+];
+const VOICES = ['Алёна · обычно', 'Филипп · медленно', 'Джейн · обычно', 'Мадирус · быстро', 'Ермил · обычно'];
+const PAV = ['blue','violet','green','orange','indigo','khaki'];
+
+const seed = () => ([
+  { id:'math', label:'Математика', glyph:'×÷', color:'info', enabled:true,
+    tutor:{ name:'Сова Ульяна', avatar:'img', c:0, voice:0, character:'Спокойная сова-учительница. Не даёт ответ сразу: задаёт наводящий вопрос и хвалит за попытку.' },
+    providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null },
+  { id:'russian', label:'Русский язык', glyph:'Аа', color:'rose', enabled:true,
+    tutor:{ name:'Кот Буквоед', avatar:'img', c:1, voice:1, character:'Неторопливый кот, любит словарные слова и шутки про буквы.' },
+    providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null },
+  { id:'english', label:'Английский', glyph:'Ab', color:'success', enabled:true,
+    tutor:{ name:'Мисс Пиппа', avatar:null, c:2, voice:2, character:'Весёлая англичанка, говорит простыми фразами и сразу переводит новое слово.' },
+    providerKey:'anthropic-api-kids', model:'claude-haiku-5-5', ack:null },
+  { id:'literature', label:'Литература', glyph:'Лит', color:'warning', enabled:true,
+    tutor:{ name:'Сказочница Агата', avatar:null, c:3, voice:0, character:'Рассказывает истории и спрашивает, что почувствовал герой.' },
+    providerKey:'deepseek', model:'deepseek-chat', ack:{ at:'17 ноября', by:'admin' } },
+  { id:'world', label:'Окружающий мир', glyph:'Мир', color:'accent', enabled:true, isNew:true,
+    tutor:{ name:'Лесовичок Тим', avatar:null, c:4, voice:4, character:'' },
+    providerKey:'strata', model:'qwen3.8-27b', ack:null },
+  { id:'chess', label:'Шахматы', glyph:'Шх', color:'info', enabled:true,
+    tutor:{ name:'Гроссмейстер Ёж', avatar:'img', c:5, voice:3, character:'Терпеливый ёж, объясняет ходы на сказочных примерах.' },
+    providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null },
+  { id:'history', label:'История', glyph:'Ис', color:'rose', enabled:false,
+    tutor:{ name:'Летописец Пётр', avatar:null, c:0, voice:1, character:'' },
+    providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null },
+]);
+
+/* ===== Состояние макета ===== */
+const S = {
+  theme:'light', width:1280, screen:'admin',
+  pack:1, adminState:'normal', tab:'subjects', homeN:3,
+  subjects: seed(), open:'world', voiceOpen:null, confirmDel:null,
+  helper:{ providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null },
+};
+const isM = () => S.width === 360;
+
+/* ===== Общие кусочки ===== */
+function initials(n){ return n.split(/\s+/).map(w => w[0]).slice(0,2).join('').toUpperCase(); }
+// PersonaAvatar: картинка (в макете — рисунок токенами) или инициалы на GROUP_COLORS
+function pav(t, size){
+  const fs = Math.round(size * 0.4);
+  if (t.avatar === 'img') return `<span class="pav img" style="width:${size}px;height:${size}px" aria-hidden="true"><svg viewBox="0 0 40 40"><circle cx="20" cy="23" r="12" fill="var(--c-accent-soft)"/><circle cx="15.5" cy="21" r="3.2" fill="var(--c-bg-white)"/><circle cx="24.5" cy="21" r="3.2" fill="var(--c-bg-white)"/><circle cx="15.5" cy="21" r="1.5" fill="var(--c-text-heading)"/><circle cx="24.5" cy="21" r="1.5" fill="var(--c-text-heading)"/><path d="M18.5 26.5 20 28l1.5-1.5" stroke="var(--c-text-heading)" stroke-width="1.4" fill="none"/></svg></span>`;
+  return `<span class="pav" style="width:${size}px;height:${size}px;font-size:${fs}px;background:var(--group-${PAV[t.c % PAV.length]})" aria-hidden="true">${esc(initials(t.name))}</span>`;
+}
+const glyph = (s, cls = '') => `<span class="glyph pal-${s.color} ${cls}" aria-hidden="true">${esc(s.glyph || '?')}</span>`;
+const provOf = (k) => PROVIDERS.find(p => p.key === k);
+// Пачка 1 знает только пул с API-ключом: маршруты пачки 2 в ней показываем как пул (до Т5 их и нет).
+const routeOf = (t) => (S.pack === 1 && provOf(t.providerKey).kind !== 'pool')
+  ? { providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null } : t;
+
+/* ===== Пикер «поставщик → модель» ===== */
+function picker(src, ref, err){
+  const pack1 = S.pack === 1;
+  const target = routeOf(src);
+  const list = PROVIDERS.filter(p => !pack1 || p.kind === 'pool');
+  const groups = [['pool','Anthropic · записи пула с API-ключом'], ['cloud','Облачные поставщики'], ['local','Локальные модели']];
+  const opts = groups.map(([k, g]) => {
+    const ps = list.filter(p => p.kind === k);
+    if (!ps.length) return '';
+    return `<optgroup label="${g}">${ps.map(p => `<option value="${p.key}" ${p.key === target.providerKey ? 'selected' : ''}>${esc(p.title)}</option>`).join('')}</optgroup>`;
+  }).join('');
+  const prov = provOf(target.providerKey) || list[0];
+  const mopts = prov.models.map(m => `<option value="${m.id}" ${m.id === target.model ? 'selected' : ''} ${m.unpriced ? 'disabled' : ''}>${m.id}${m.unpriced ? ' — без цены, бюджет не ограничит' : ''}</option>`).join('');
+  const dis = S.adminState === 'saving' ? 'disabled' : '';
+  let extra = '';
+  if (pack1) {
+    extra = `<div class="muted">Только записи пула с API-ключом: ход ребёнка не идёт по подписке. Другие поставщики подключатся позже.</div>`;
+  } else if (prov.kind === 'pool') {
+    extra = `<div class="muted">Anthropic по API-ключу. Расход считается по ценам модели и входит в бюджет ребёнка.</div>`;
+  } else {
+    const ackOk = !!target.ack?.at || target.ack === true;
+    const warn = prov.kind === 'cloud'
+      ? `<div class="notice warning"><span class="ic">${ic('alert',14)}</span><div class="tx"><div class="tt">Переписка уходит поставщику ${esc(prov.title)}</div>Всё, что пишет ребёнок, обрабатывает ${esc(prov.title)} на своих серверах, по своим правилам хранения данных, в том числе данных детей. Расход считается по ценам модели.</div></div>`
+      : `<div class="notice warning"><span class="ic">${ic('alert',14)}</span><div class="tx"><div class="tt">Локальная модель слабее держит правила безопасности</div>Правила детского режима до неё доедут, но она может решить задачу за ребёнка или не заметить стоп-сигнал. Кнопка «Мне неприятно» работает всегда.</div></div>`;
+    const free = prov.kind === 'local' ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="badge success">${ic('cpu',12)} бюджет не тратится</span><span class="muted">Ограничивают только окна и минуты в день.</span></div>` : '';
+    extra = `${warn}${free}
+      <div class="ack">
+        <button class="cbrow ${err ? 'bad' : ''}" role="checkbox" aria-checked="${ackOk}" data-ack="${ref}" ${dis}>
+          <span class="box">${ackOk ? ic('check',12) : ''}</span>Понимаю риск и разрешаю этот маршрут
+        </button>
+        ${err ? `<span class="field"><span class="err">Без согласия предмет с этим поставщиком не сохранится.</span></span>` : ''}
+        ${target.ack?.at ? `<span class="muted">Разрешено ${target.ack.at}, ${esc(target.ack.by)}. Сменишь поставщика — согласие сбросится.</span>` : ''}
+      </div>`;
+  }
+  return `<div class="picker">
+    <div class="row2">
+      <div class="field"><label for="pv-${ref}">Поставщик</label><select class="inp" id="pv-${ref}" data-prov="${ref}" ${dis}>${opts}</select></div>
+      <div class="field"><label for="md-${ref}">Модель</label><select class="inp mono" id="md-${ref}" data-model="${ref}" ${dis} ${err && pack1 ? 'aria-invalid="true"' : ''}>${mopts}</select>${err && pack1 ? '<span class="err">Выбери конкретную модель из списка</span>' : ''}</div>
+    </div>
+    ${extra}
+  </div>`;
+}
+
+/* ===== Админ: строка предмета ===== */
+function subjectRow(s, i, n){
+  const open = S.open === s.id;
+  const prov = provOf(routeOf(s).providerKey);
+  const dis = S.adminState === 'saving' ? 'disabled' : '';
+  const bad = S.adminState === 'error' && s.id === 'world';
+  const provBadge = S.pack === 2 && prov.kind === 'cloud' ? `<span class="badge warning">${esc(prov.title)}</span>`
+    : S.pack === 2 && prov.kind === 'local' ? `<span class="badge neutral">локальная</span>` : '';
+  const arrows = isM() ? '' : `<span class="arrows">
+      <button class="ib" aria-label="Выше: ${esc(s.label)}" data-mv="${i}:-1" ${i === 0 || dis ? 'disabled' : ''}>${ic('up')}</button>
+      <button class="ib" aria-label="Ниже: ${esc(s.label)}" data-mv="${i}:1" ${i === n - 1 || dis ? 'disabled' : ''}>${ic('down')}</button>
+    </span>`;
+  let body = '';
+  if (open) {
+    const t = s.tutor;
+        const voiceList = S.voiceOpen === s.id ? `<div class="vlist" role="radiogroup" aria-label="Голос репетитора">${VOICES.map((v, k) =>
+      `<button class="vopt" role="radio" aria-checked="${t.voice === k}" data-voice="${s.id}:${k}">${ic('play',14)}${esc(v)}</button>`).join('')}</div>` : '';
+    const delConfirm = S.confirmDel === s.id ? `<div class="notice danger" role="alert"><span class="ic">${ic('trash',14)}</span><div class="tx"><div class="tt">Удалить «${esc(s.label)}»?</div>Плитка пропадёт с главной. Чаты этого предмета останутся у ребёнка только для чтения. Репетитор удалится, если он не ведёт другие предметы.
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn ${isM() ? 'md' : 'sm'} danger solid" data-del="${s.id}">Удалить</button><button class="btn ${isM() ? 'md' : 'sm'} ghost" data-delno="1">Отмена</button></div></div></div>` : '';
+    body = `<div class="sbody">
+      <div class="sgroup">
+        <span class="sec">Плитка</span>
+        <div class="row2">
+          <div class="field" style="flex:2">
+            <span class="cnt-l"><label for="lb-${s.id}">Название</label><span class="muted">${s.label.length}/40</span></span>
+            <input class="inp" id="lb-${s.id}" value="${esc(s.label)}" maxlength="40" data-label="${s.id}" ${dis}>
+          </div>
+          <div class="field" style="flex:1">
+            <span class="cnt-l"><label for="gl-${s.id}">Глиф</label><span class="muted">1–3</span></span>
+            <input class="inp serif" id="gl-${s.id}" value="${esc(s.glyph)}" maxlength="3" data-glyph="${s.id}" ${dis}>
+          </div>
+        </div>
+        <div class="field"><span class="lb" id="cl-${s.id}">Цвет</span>
+          <div class="swatches" role="radiogroup" aria-labelledby="cl-${s.id}">${PALETTE.map(p =>
+            `<button class="sw pal-${p.key}" role="radio" aria-checked="${s.color === p.key}" aria-label="${p.name}" title="${p.name}" data-color="${s.id}:${p.key}" ${dis}>${esc(s.glyph || '?')}</button>`).join('')}</div>
+        </div>
+        <div class="field"><span class="lb">Так увидит ребёнок</span>
+          <div class="preview">${glyph(s)}<div style="min-width:0"><div style="font-size:14px;font-weight:600;color:var(--c-text-heading)">${esc(s.label || 'Без названия')}</div><div style="display:flex;gap:6px;align-items:center;margin-top:4px;font-size:12px;color:var(--c-text-muted)">${pav(t,20)}${esc(t.name)}</div></div></div>
+        </div>
+      </div>
+
+      <div class="sgroup">
+        <span class="sec">Репетитор</span>
+        <div class="tutor">
+          ${pav(t, 64)}
+          <div style="display:flex;flex-direction:column;gap:6px;flex:1;min-width:0">
+            <div class="acts">
+              <button class="btn ${isM() ? 'md' : 'sm'} ghost" ${s.isNew || dis ? 'disabled' : ''}>${ic('sparkles',14)}Нарисовать</button>
+              <button class="btn ${isM() ? 'md' : 'sm'} ghost" ${s.isNew || dis ? 'disabled' : ''}>${ic('upload',14)}Загрузить</button>
+            </div>
+            <span class="muted">${s.isNew ? 'Репетитор появится после сохранения — тогда можно нарисовать или загрузить аватар.' : 'Без аватара на плитке будут инициалы. Генерация списывается с бюджета администратора, не ребёнка.'}</span>
+          </div>
+        </div>
+        <div class="field"><label for="tn-${s.id}">Имя</label><input class="inp" id="tn-${s.id}" value="${esc(t.name)}" data-tname="${s.id}" ${dis}></div>
+        <div class="field"><span class="lb">Голос</span>
+          <div class="voice"><span>${ic('mic',14)}</span><span class="vn">${esc(VOICES[t.voice])}</span>
+            <button class="btn ${isM() ? 'md' : 'sm'} secondary" aria-expanded="${S.voiceOpen === s.id}" data-vopen="${s.id}" ${dis}>${S.voiceOpen === s.id ? 'Готово' : 'Выбрать'}</button></div>
+          ${voiceList}
+        </div>
+        <div class="field"><label for="ch-${s.id}">Характер</label>
+          <textarea class="inp" id="ch-${s.id}" placeholder="Как репетитор говорит и объясняет: «добрый лесовичок, рассказывает про природу на примерах из леса»" ${dis}>${esc(t.character)}</textarea>
+          <span class="hint">Правила безопасности детского режима добавятся сами — этим полем их не отменить.</span>
+        </div>
+      </div>
+
+      <div class="sgroup">
+        <span class="sec">Модель</span>
+        ${picker(s, s.id, bad)}
+      </div>
+
+      ${delConfirm}
+      <div class="sfoot">
+        ${isM() ? `<div class="mv"><button class="btn md ghost" data-mv="${i}:-1" ${i === 0 || dis ? 'disabled' : ''}>${ic('up',14)}Выше</button><button class="btn md ghost" data-mv="${i}:1" ${i === n - 1 || dis ? 'disabled' : ''}>${ic('down',14)}Ниже</button></div>` : '<span></span>'}
+        <button class="btn ${isM() ? 'md' : 'sm'} danger" data-delask="${s.id}" ${dis}>${ic('trash',14)}Удалить предмет</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="srow ${s.enabled ? '' : 'off'} ${bad ? 'bad' : ''}" data-testid="subject-row">
+    <div class="shead">
+      ${glyph(s)}
+      <button class="txt" aria-expanded="${open}" data-open="${s.id}">
+        <span class="lbl">${esc(s.label || 'Без названия')}${s.isNew ? '<span class="badge plan">новый</span>' : ''}${s.enabled ? '' : '<span class="badge neutral">выключен</span>'}</span>
+        <span class="sub">${pav(s.tutor,16)}<span style="overflow:hidden;text-overflow:ellipsis">${esc(s.tutor.name)} · <span class="mono">${esc(routeOf(s).model)}</span></span>${provBadge}</span>
+      </button>
+      <span class="tz"><button class="toggle" role="switch" aria-checked="${s.enabled}" aria-label="Предмет «${esc(s.label)}» включён" data-tg="${s.id}" ${dis}><i></i></button></span>
+      ${arrows}
+      <button class="ib ${isM() ? 'lg' : ''}" aria-label="${open ? 'Свернуть' : 'Развернуть'}: ${esc(s.label)}" data-open="${s.id}">${ic(open ? 'up' : 'down')}</button>
+    </div>
+    ${body}
+  </div>`;
+}
+
+/* ===== Админ: редактор профиля ===== */
+function editor(){
+  const st = S.adminState;
+  const subjects = st === 'empty' ? [] : S.subjects;
+  const dis = st === 'saving' ? 'disabled' : '';
+  const tabs = `<div class="tabs" role="tablist" aria-label="Разделы профиля">
+    <button class="tab" role="tab" aria-selected="${S.tab === 'mode'}" data-tab="mode">Режим и время</button>
+    <button class="tab" role="tab" aria-selected="${S.tab === 'subjects'}" data-tab="subjects">Предметы <span class="n">${subjects.length}</span></button>
+  </div>`;
+  const reject = st === 'error' ? `<div class="notice warning" role="alert"><span class="ic">${ic('alert',14)}</span><div class="tx"><div class="tt">Сохранить не удалось</div>
+      <div>${S.pack === 2 ? 'Предмет «Окружающий мир» идёт через локальную модель — отметь согласие на этот маршрут.' : 'У предмета «Окружающий мир» не задана модель.'}</div>
+      <div class="mono" style="margin-top:2px;opacity:.85">${S.pack === 2 ? 'route_risk_unacknowledged: subjects[4] (world)' : 'model_not_concrete: subjects[4] (world)'}</div></div></div>` : '';
+
+  let content;
+  if (S.tab === 'mode') {
+    content = `<div class="sgroup">
+        <span class="sec">Окно «Уроков»</span>
+        <div class="srow" style="padding:10px;display:flex;flex-direction:column;gap:8px">
+          <div class="row2"><div class="field"><label>С</label><input class="inp mono" value="15:00"></div><div class="field"><label>По</label><input class="inp mono" value="19:30"></div></div>
+          <div class="muted">Дни: Пн, Вт, Ср, Чт, Пт</div>
+        </div>
+        <button class="btn md dashed">${ic('plus',14)}Добавить окно</button>
+        <div class="field"><label>Минут в день</label><input class="inp" value="60"><span class="hint">Пусто — дневного лимита нет</span></div>
+      </div>
+      <div class="sgroup"><span class="sec">Бюджет</span>
+        <div class="row2"><div class="field"><label>День, $</label><input class="inp" value="2"></div><div class="field"><label>Месяц, $</label><input class="inp" value="40"></div></div>
+      </div>
+      <div class="field"><label>Опекуны (id через запятую)</label><input class="inp mono" value="u-papa"></div>
+      <div class="muted">Блок «Маршрут модели» отсюда ушёл: модель помощника правил и предметов — во вкладке «Предметы».</div>`;
+  } else {
+    const h = S.helper;
+    const list = subjects.length
+      ? subjects.map((s, i) => subjectRow(s, i, subjects.length)).join('')
+      : `<div class="empty"><span class="ic">${ic('book',22)}</span><span class="t">Предметов нет</span><span class="muted" style="max-width:340px">Главная у ребёнка будет пустой: уроки открыть будет нечем. Добавь хотя бы один предмет.</span><button class="btn md primary">${ic('plus',14)}Добавить предмет</button></div>`;
+    content = `<div class="sgroup">
+        <span class="sec">Помощник (правила)</span>
+        <div class="srow"><div class="shead">${pav({ name:'Помощник', avatar:null, c:2 }, 40)}
+          <div class="txt" style="cursor:default"><span class="lbl">Помощник</span><span class="sub" style="white-space:normal">Ведёт договорённость о правилах в первый день</span></div></div>
+          <div class="sbody">${picker(h, 'helper', false)}</div>
+        </div>
+      </div>
+      <div class="sgroup">
+        <span class="sec">Предметы на главной</span>
+        <span class="muted" style="margin-top:-4px">Порядок списка — порядок плиток у ребёнка. Выключенный предмет скрыт с главной, его чаты только для чтения.</span>
+        ${list}
+        ${subjects.length ? `<button class="btn md dashed" ${dis}>${ic('plus',14)}Добавить предмет</button>` : ''}
+      </div>`;
+  }
+  const saveBtn = st === 'saving'
+    ? `<button class="btn md primary full" aria-busy="true" disabled><span class="spin"></span>Сохраняю…</button><span class="muted" style="text-align:center" aria-live="polite">Создаю репетитора для «Окружающий мир» — шаг 2 из 2</span>`
+    : `<button class="btn md primary full">Сохранить</button>`;
+  return `<div class="editor" data-testid="child-profile-editor">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:16px;font-weight:600;color:var(--c-text-heading)">Детский режим</span><span class="muted">liza</span></div>
+    <button class="cbrow" role="checkbox" aria-checked="true"><span class="box">${ic('check',12)}</span>Детский режим</button>
+    ${reject}
+    ${tabs}
+    ${content}
+    ${saveBtn}
+  </div>`;
+}
+
+function adminScreen(){
+  return `<div class="overlay"><div class="modal" role="dialog" aria-label="Пользователи">
+    <div class="mhead"><span>Пользователи</span><button class="btn ${isM() ? 'md' : 'sm'} primary">${ic('plus',14)}Добавить</button></div>
+    <div class="mbody">
+      <div class="urow">${pav({ name:'Андрей', avatar:null, c:3 }, 32)}<div><div class="un">andrey</div><div class="ue">admin · локально</div></div></div>
+      <div class="urow">${pav({ name:'Лиза', avatar:null, c:2 }, 32)}<div><div class="un">liza</div><div class="ue">user · песочница</div></div></div>
+      <button class="btn md ghost full" aria-expanded="true">${ic('down',14)}Детский режим: включён</button>
+      ${editor()}
+    </div>
+    <div class="mfoot"><button class="btn md secondary">Закрыть</button></div>
+  </div></div>`;
+}
+
+/* ===== Ребёнок ===== */
+function hub(mobTitle){
+  if (isM() && mobTitle) return `<div class="hub mob"><button class="ib lg" aria-label="К предметам" data-screen="home">${ic('left',20)}</button>${mobTitle}<div class="right"><span class="timepill"><b>35</b> мин</span></div></div>`;
+  return `<div class="hub ${isM() ? 'mob' : ''}"><span class="logo" style="${isM() ? 'margin-left:8px' : ''}"><span class="mark">${ic('book',14)}</span><span class="name">Уроки</span></span>
+    <div class="right"><span class="timepill">Ещё <b>35 мин</b><span class="bar"><i></i></span></span>${pav({ name:'Лиза', avatar:null, c:2 }, 28)}</div></div>`;
+}
+function homeSubjects(){ return S.subjects.filter(s => s.enabled).slice(0, S.homeN); }
+function homeScreen(){
+  const list = homeSubjects();
+  const last = list[0];
+  return `${hub()}<div style="flex:1;overflow:auto"><div class="home">
+    <div><div class="hello">Привет, Лиза</div><div style="font-size:16px;line-height:1.55;color:var(--c-text-secondary);margin-top:8px">Уроки открыты до 19:30.</div></div>
+    <div class="card">${glyph(last)}<div style="flex:1;min-width:200px"><div class="muted">Вчера остановились тут</div><div style="font-size:16px;font-weight:600;color:var(--c-text-heading);margin-top:2px">${esc(last.label)} · Задача про яблоки</div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:4px;font-size:12px;color:var(--c-text-muted)">${pav(last.tutor,20)}${esc(last.tutor.name)} · Шаг 2 из 3</div></div>
+      <button class="btn md primary ${isM() ? 'full' : ''}" data-screen="lesson">Продолжить</button></div>
+    <div class="secl">Предметы</div>
+    <div class="tiles">${list.map(s => `<button class="tile" data-screen="lesson" data-subj="${s.id}">${glyph(s)}<div style="min-width:0"><div class="tl">${esc(s.label)}</div><div class="tt">${pav(s.tutor,20)}<span>${esc(s.tutor.name)}</span></div></div></button>`).join('')}</div>
+    <div class="dash" aria-disabled="true"><span class="glyph" style="background:var(--c-plan-light);color:var(--c-plan-text)">${ic('brush',18)}</span><div><div style="font-size:14px;font-weight:600;color:var(--c-text-heading);display:flex;gap:8px;align-items:center">Студия <span class="badge plan">скоро</span></div><div class="muted" style="margin-top:2px">Здесь можно будет рисовать и сочинять вместе с помощником.</div></div></div>
+  </div></div>`;
+}
+function lessonScreen(closed){
+  const s = closed ? S.subjects.find(x => x.id === 'history') : (S.subjects.find(x => x.id === S.subj) || S.subjects[0]);
+  const t = s.tutor;
+  const lessons = [
+    { s:S.subjects[0], t:'Задача про яблоки' }, { s:S.subjects[1], t:'Жи-ши пиши с И' },
+    { s:S.subjects[4], t:'Почему идёт дождь' }, { s:S.subjects[6], t:'Кто построил пирамиды', closed:true },
+  ];
+  const side = isM() ? '' : `<div class="island side"><div class="ihead">Уроки <span class="cnt">${lessons.length}</span></div><div style="padding-top:8px;overflow:auto">
+    ${lessons.map(l => `<button class="lrow ${l.closed ? 'closed' : ''}" aria-current="${(closed && l.closed) || (!closed && !l.closed && l.s.id === s.id)}" data-screen="${l.closed ? 'closed' : 'lesson'}" data-subj="${l.s.id}">${glyph(l.s,'sm')}<div style="min-width:0;flex:1"><div class="t">${esc(l.t)}</div><div class="p">${esc(l.s.label)}${l.closed ? '<span class="badge neutral">закрыт</span>' : ' · ' + esc(l.s.tutor.name)}</div></div></button>`).join('')}
+  </div></div>`;
+  const meta = `<span class="badge neutral" style="gap:6px">${glyph(s,'sm')}${esc(s.label)}</span>${closed ? '<span class="badge neutral">' + ic('lock',11) + 'закрыт</span>' : ''}`;
+  const msgs = closed
+    ? [['a','Пирамиды строили много лет тысячи людей. Как думаешь, чем они поднимали камни?'],['u','Верёвками?'],['a','Верно, и ещё деревянными катками и насыпями!']]
+    : [['a',`Привет, Лиза! Я ${esc(t.name)}. В корзине было 7 яблок, 3 съели. Сколько осталось?`],['u','Наверное 4'],['a','Проверим вместе: досчитай от 3 до 7 на пальцах. Сколько пальцев загнула?']];
+  const feed = `<div class="feed ${closed ? 'closed-feed' : ''}"><div class="col">${msgs.map(([r, x]) => `<div class="msg ${r}"><div class="bub">${r === 'a' ? pav(t,28) : ''}${x}</div></div>`).join('')}</div></div>`;
+  const bottom = closed
+    ? `<div class="composer"><div class="closedbar" role="status"><div class="h"><span class="ic">${ic('lock',16)}</span>Этот предмет закрыт</div><div class="x">Переписку можно перечитать, а новые сообщения сюда не уйдут. Хочешь продолжить — спроси папу.</div><button class="btn md secondary ${isM() ? 'full' : ''}" data-screen="home" style="align-self:flex-start">К предметам</button></div></div>`
+    : `<div class="composer"><div class="cbox"><span class="ph">Напиши ответ…</span><button class="ib lg" aria-label="Голосом">${ic('mic',18)}</button><button class="btn md primary" aria-label="Отправить" style="width:40px;padding:0">${ic('send',16)}</button></div></div>`;
+  const mobTitle = `<div class="mobt">${pav(t,28)}<div style="min-width:0"><div class="n">${esc(t.name)}</div><div class="s">${esc(s.label)}${closed ? ' · закрыт' : ''}</div></div></div>`;
+  return `${hub(mobTitle)}<div class="body">${side}<div class="chat">
+    <div class="chathead">${pav(t,52)}<div style="min-width:0"><h1>${esc(t.name)}</h1><div class="meta">${meta}</div></div></div>
+    ${feed}${bottom}</div></div>`;
+}
+
+/* ===== Пульт ===== */
+function pill(name, key, opts){
+  return `<div class="grp"><b>${name}</b><div class="pill">${opts.map(([v, l, d]) => `<button aria-pressed="${S[key] === v}" data-set="${key}:${v}" ${d ? 'disabled' : ''}>${l}</button>`).join('')}</div></div>`;
+}
+function render(){
+  const adm = S.screen === 'admin';
+  document.getElementById('pult').innerHTML = [
+    pill('Экран', 'screen', [['admin','Админ: профиль'], ['home','Ребёнок: главная'], ['lesson','Урок'], ['closed','Закрытый предмет']]),
+    pill('Тема', 'theme', [['light','Светлая'], ['dark','Тёмная']]),
+    pill('Ширина', 'width', [[1280,'1280'], [360,'360']]),
+    pill('Пикер', 'pack', [[1,'Пачка 1'], [2,'Пачка 2']].map(x => [...x, !adm])),
+    pill('Состояние', 'adminState', [['normal','Обычное'], ['empty','Пусто'], ['error','Ошибка 400'], ['saving','Сохранение']].map(x => [...x, !adm])),
+    pill('Предметов', 'homeN', [[3,'3'], [6,'6']].map(x => [...x, S.screen !== 'home'])),
+    `<span class="note">Пульт — рычаги макета, не продукт. Пачка 1 — пикер Т4 (только пул с API-ключом); пачка 2 — Т6 (облачные и локальные, согласие). Выключенный предмет «История» показан в списке админа и как закрытый чат у ребёнка.</span>`
+  ].join('');
+  const root = document.getElementById('root');
+  const body = S.screen === 'admin' ? adminScreen() : S.screen === 'home' ? homeScreen() : lessonScreen(S.screen === 'closed');
+  root.innerHTML = `<div data-theme="${S.theme}" style="color-scheme:${S.theme}"><div class="frame ${isM() ? 'm' : ''}" style="width:${S.width}px" data-testid="frame">${body}</div></div>`;
+  document.documentElement.setAttribute('data-theme', S.theme);
+}
+
+/* ===== События ===== */
+const find = (id) => S.subjects.find(s => s.id === id);
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b || b.disabled) return;
+  const d = b.dataset;
+  if (d.set) { const [k, v] = d.set.split(':'); S[k] = isNaN(+v) ? v : +v; if (k === 'adminState' && v === 'empty') S.tab = 'subjects'; if (k === 'adminState' && v === 'error') { S.tab = 'subjects'; S.open = 'world'; const w = find('world'); w.ack = null; } }
+  else if (d.tab) S.tab = d.tab;
+  else if (d.open) { S.open = S.open === d.open ? null : d.open; S.voiceOpen = null; S.confirmDel = null; }
+  else if (d.tg) { const s = find(d.tg); s.enabled = !s.enabled; }
+  else if (d.mv) { const [i, dir] = d.mv.split(':').map(Number); const a = S.subjects; const j = i + dir; if (j >= 0 && j < a.length) [a[i], a[j]] = [a[j], a[i]]; }
+  else if (d.color) { const [id, k] = d.color.split(':'); find(id).color = k; }
+  else if (d.vopen) S.voiceOpen = S.voiceOpen === d.vopen ? null : d.vopen;
+  else if (d.voice) { const [id, k] = d.voice.split(':'); find(id).tutor.voice = +k; }
+  else if (d.delask) S.confirmDel = d.delask;
+  else if (d.delno) S.confirmDel = null;
+  else if (d.del) { S.subjects = S.subjects.filter(s => s.id !== d.del); S.confirmDel = null; S.open = null; }
+  else if (d.ack) { const t = d.ack === 'helper' ? S.helper : find(d.ack); t.ack = t.ack ? null : true; if (S.adminState === 'error') S.adminState = 'normal'; }
+  else if (d.screen) { S.screen = d.screen; if (d.subj) S.subj = d.subj; }
+  else return;
+  render();
+});
+document.addEventListener('change', (e) => {
+  const el = e.target, d = el.dataset;
+  if (d.prov) { const t = d.prov === 'helper' ? S.helper : find(d.prov); t.providerKey = el.value; t.model = provOf(el.value).models[0].id; t.ack = null; render(); }
+  else if (d.model) { const t = d.model === 'helper' ? S.helper : find(d.model); t.model = el.value; }
+});
+document.addEventListener('input', (e) => {
+  const el = e.target, d = el.dataset;
+  if (d.label) { find(d.label).label = el.value; }
+  else if (d.glyph) { find(d.glyph).glyph = el.value; }
+  else if (d.tname) { find(d.tname).tutor.name = el.value; }
+});
+document.addEventListener('focusout', (e) => { if (e.target.matches('[data-label],[data-glyph],[data-tname]')) render(); });
+render();
+</script>
+</body>
+</html>

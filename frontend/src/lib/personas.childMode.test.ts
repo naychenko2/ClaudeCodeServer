@@ -22,4 +22,13 @@ describe('стор персон в детском режиме', () => {
     const m = await import('./personas');
     await expect(m.ensurePersonasLoaded()).resolves.toBeUndefined();
   });
+
+  it('после выхода из детского режима список снова грузится (один запрос)', async () => {
+    list.mockResolvedValue([]);
+    const m = await import('./personas');
+    m.setPersonasChildMode(true);
+    m.setPersonasChildMode(false);
+    await m.ensurePersonasLoaded();
+    expect(list).toHaveBeenCalledTimes(1);
+  });
 });

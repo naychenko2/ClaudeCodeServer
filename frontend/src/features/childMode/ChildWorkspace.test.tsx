@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   status: null as unknown,
   offline: false,
   mounts: [] as string[],
+  childMode: vi.fn(),
   api: {
     spaceChats: vi.fn(),
     spaceChat: vi.fn(),
@@ -35,6 +36,7 @@ const h = vi.hoisted(() => ({
   },
 }));
 
+vi.mock('../../lib/personas', () => ({ setPersonasChildMode: (on: boolean) => h.childMode(on) }));
 vi.mock('./useChildStatus', () => ({ useChildStatus: () => ({ status: h.status, offline: h.offline }) }));
 vi.mock('./api', () => ({ childApi: h.api, ChildAttachmentRejectedError: class extends Error {} }));
 vi.mock('./ChildLessonChat', async () => {
@@ -170,5 +172,13 @@ describe('ChildWorkspace', () => {
     const text = doc.body.textContent ?? '';
     for (const word of ['Проекты', 'Календарь', 'Заметки', 'Персоны', 'Уведомления', 'Поиск']) expect(text).not.toContain(word);
     expect(doc.querySelector('[data-rail-item]')).toBeNull();
+  });
+
+  it('флаг детского режима персон живёт, пока оболочка смонтирована, и гаснет при размонтировании', async () => {
+    h.childMode.mockClear();
+    const root = await mount();
+    expect(h.childMode).toHaveBeenLastCalledWith(true);
+    await act(async () => { root.unmount(); });
+    expect(h.childMode).toHaveBeenLastCalledWith(false);
   });
 });

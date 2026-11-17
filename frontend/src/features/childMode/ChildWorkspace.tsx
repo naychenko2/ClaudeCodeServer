@@ -135,6 +135,8 @@ function LessonRow({ chat, active, onOpen }: { chat: Chat; active: boolean; onOp
 export function ChildWorkspace({ auth, onLogout }: Props) {
   // Синхронно до эффектов дочерних чат-компонентов: те зовут ensurePersonasLoaded (взрослая ручка → 403)
   setPersonasChildMode(true);
+  // Флаг живёт, пока смонтирована детская оболочка: после выхода ребёнка взрослый грузит персоны как обычно
+  useEffect(() => { setPersonasChildMode(true); return () => setPersonasChildMode(false); }, []); // true повторно — для StrictMode
   const isMobile = useIsMobile();
   const w = useWindowWidth();
   const { status, offline } = useChildStatus(SPACE);

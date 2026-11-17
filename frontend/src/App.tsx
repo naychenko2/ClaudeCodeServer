@@ -53,6 +53,7 @@ import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { wireTabOwnerGuard } from './lib/tabOwnerGuard'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
+import { setPersonasChildMode } from './lib/personas'
 import { useWallFocusProject, resetWallOwner } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { resetCacheWarnOnLogout, setCacheWarnThresholdsFromServer } from './lib/cacheWarnPrefs'
@@ -587,6 +588,7 @@ export default function App() {
       // следующий вход поднял бы пороги прежнего до ответа нового /me
       resetCacheWarnOnLogout()
       resetWallOwner()
+      setPersonasChildMode(false) // детская оболочка могла не успеть размонтироваться
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
       runLogoutResets() // сторы модулей (персонажи «Картинок» и др.) прежнего пользователя
       resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки (Х-6)
@@ -1415,6 +1417,7 @@ export default function App() {
     clearMe()
     resetCacheWarnOnLogout() // пороги кэша прежнего владельца — см. cc-unauthorized выше
     resetWallOwner()
+    setPersonasChildMode(false)
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
     runLogoutResets() // сторы модулей (персонажи «Картинок» и др.) прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки

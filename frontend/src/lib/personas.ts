@@ -20,7 +20,14 @@ let _realtimeWired = false;
 // Детская оболочка: /api/personas вне детского allow-list (ADR-041, И1) — стор не ходит в сеть
 let _childMode = false;
 
-export function setPersonasChildMode(on: boolean): void { _childMode = on; }
+export function setPersonasChildMode(on: boolean): void {
+  if (_childMode === on) return;
+  _childMode = on;
+  // Смена режима: прежний снимок и загрузка принадлежат другому пользователю — не переносим
+  _personas = [];
+  _loaded = false;
+  _loading = null;
+}
 
 function emit() {
   _version++;

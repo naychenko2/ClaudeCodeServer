@@ -601,6 +601,17 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.ChatUserStateService>();
 builder.Services.AddSingleton(sp => new ChildUsageStore(
     ChildUsageStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
     sp.GetRequiredService<ILogger<ChildUsageStore>>()));
+// Одна точка расчёта детских лимитов (KM-B5c, ADR-041 И3): статус/heartbeat (KM-B5e),
+// создание чата (KM-B6a) и гейт запуска (KM-B5d) читают только её. Шва Spend ОПЦИОНАЛЬНА:
+// GetService, а не GetRequiredService — при выключенной подсистеме её нет, и калькулятор
+// сам решает «бюджет не проверить» как budget_exhausted (fail-closed).
+builder.Services.AddSingleton(sp => new ChildLimitsCalculator(
+    sp.GetRequiredService<IChildModePolicy>(),
+    sp.GetRequiredService<ChildUsageStore>(),
+    sp.GetService<ClaudeHomeServer.Services.Spend.IOwnerSpendReader>(),
+    sp.GetRequiredService<IUserStore>(),
+    sp.GetRequiredService<IConfiguration>(),
+    sp.GetRequiredService<ILogger<ChildLimitsCalculator>>()));
 // Провижн персоны-тьютора ребёнка (KM-B1d, ADR-041): «Помощник» с ключом в
 // ChildProfile.TutorPersonaId. Вызывается только точками записи детского профиля (KM-B1e).
 builder.Services.AddSingleton<ChildTutorProvisioner>();

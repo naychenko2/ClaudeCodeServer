@@ -22,10 +22,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // 2. Карточка источника читается с диска: она уже захвачена (S6h) и лежит в разделе
 //    назначения; её заголовок — цель сносок. Карточки нет или она не страница type: source —
 //    отказ до обращения к модели (неожиданный вход — отказ с причиной, не исключение).
-// 3. Код уточняет кандидатов-страниц: страницы раздела назначения и цепочки вверх, чей
-//    заголовок или алиас встречается в тексте выдержки (тот же порядок нормализации,
-//    что у индекса ByName — WikiDedup.NormalizeName), не больше MaxCandidatePages. Их текст —
-//    в промпт синтеза («CURRENT CONTENT»), чтобы supersede/conflict называли цель дословно.
+// 3. Код уточняет кандидатов-страниц: страницы раздела назначения и цепочки вверх по
+//    пересечению значимых слов выдержки с заголовком (×2), сводкой и алиасами; дословное
+//    совпадение заголовка или алиаса — первой очереди, прежней нормализацией (Q1-S3,
+//    WikiCandidates), не больше MaxCandidatePages. Их текст — в промпт синтеза
+//    («CURRENT CONTENT»), чтобы supersede/conflict называли цель дословно.
 // 4. Синтез — one-shot без инструментов (ICheapTextRunner; место задаёт заявка,
 //    по умолчанию wiki-ingest): операции с утверждением и цитатами (ADR-039, решение 2).
 //    В промпт — каталог только раздела назначения и цепочки вверх, построенный из того же
@@ -98,7 +99,8 @@ public sealed class WikiIngestService
     public const string OutcomeRejected = "rejected";
 
     /// <summary>Кандидатов-страниц, чей текст показывается модели в промпте синтеза, не больше
-    /// пяти: промпт не должен разрастись до половины раздела.</summary>
+    /// пяти: промпт не должен разрастись до половины раздела. Это внешний потолок: порядок
+    /// кандидатов — top-6 в WikiCandidates, до промпта доходит не больше этого числа.</summary>
     public const int MaxCandidatePages = 5;
 
     /// <summary>Потолок каталога промпта, символов (Q1-S2, риск 1 разреза): полный каталог
@@ -383,8 +385,10 @@ public sealed class WikiIngestService
             // прежний Rejected: там расхода нет (usage пуст и сам, но форма называет смысл).
             IngestResult RejectedUsed(string reason) => Res(OutcomeRejected, reason, null, usage.InputTokens);
 
-            // 3. Кандидаты-страницы: чей заголовок или алиас встречается в тексте окна
-            //    (нормализация — та же, что у индекса ByName), не больше MaxCandidatePages.
+            // 3. Кандидаты-страницы: пересечение значимых слов окна с заголовком, сводкой
+            //    и алиасами; дословное совпадение заголовка — первой очереди, как раньше
+            //    (WikiCandidates, Q1-S3). Тот же снимок sectionPages, что у каталога.
+            //    Не больше MaxCandidatePages.
             var candidates = PickCandidatePages(sectionPages, request.SourceText);
             string? existingPages = candidates.Count == 0
                 ? null
@@ -789,30 +793,21 @@ public sealed class WikiIngestService
         }
     }
 
-    /// <summary>Кандидаты-страницы: существующие страницы раздела назначения и вверх, чей
-    /// заголовок или алиас встречается в тексте окна (нормализация — та же, что у индекса
-    /// резолва ByName: WikiDedup.NormalizeName). Карточки источников не кандидаты: они цель
-    /// сносок, а не страницы знаний. Не больше MaxCandidatePages.</summary>
+    /// <summary>Кандидаты-страницы: существующие страницы раздела назначения и вверх по
+    /// пересечению значимых слов окна с заголовком (вес ×2), сводкой (та же проекция, что
+    /// у строки каталога) и алиасами; дословное совпадение заголовка или алиаса — первой
+    /// очереди, прежней нормализацией (WikiDedup.NormalizeName). Порядок и потолок TopN —
+    /// в WikiCandidates; MaxCandidatePages остаётся внешним потолком промпта. Карточки
+    /// источников не кандидаты: они цель сносок, а не страницы знаний (предикат тот же).
+    /// Вход — тот же снимок sectionPages, что у каталога промпта: второй точки правды о
+    /// состоянии раздела в окне нет.</summary>
     private static List<WikiGate.Draft> PickCandidatePages(IReadOnlyList<WikiGate.Draft> sectionPages,
         string sourceText)
     {
-        var wanted = WikiDedup.NormalizeName(sourceText);
-        var picked = new List<WikiGate.Draft>();
-        foreach (var draft in sectionPages)
-        {
-            var page = WikiPage.Parse(draft.Content).Model;
-            if (page is null || page.Frontmatter.Type == WikiFrontmatter.TypeSource)
-                continue;
-            var names = new List<string> { WikiDedup.NormalizeName(page.Title) };
-            names.AddRange(page.Frontmatter.Aliases.Select(WikiDedup.NormalizeName));
-            if (names.Any(n => n.Length > 0 && wanted.Contains(n, StringComparison.Ordinal)))
-            {
-                picked.Add(draft);
-                if (picked.Count >= MaxCandidatePages)
-                    break;
-            }
-        }
-        return picked;
+        var picked = WikiCandidates.Pick(sectionPages, sourceText, WikiCandidates.TopN);
+        // TopN упорядочивает кандидатов; потолок промпта — внешний и остаётся за этим
+        // сервисом: «не больше пяти», промпт не должен разрастись до половины раздела.
+        return picked.Count > MaxCandidatePages ? picked[..MaxCandidatePages] : picked;
     }
 
     // ── модель и разбор её ответов ─────────────────────────────────────────────────

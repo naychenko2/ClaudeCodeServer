@@ -202,7 +202,9 @@ public static class WikiProjections
     // строки складываются в одну, сноски [^sN] снимаются (в разобранной странице ссылки уже
     // канонические), [[x|y]] заменяется видимым текстом, пробелы схлопываются, обрезка по
     // слову на SummaryMaxChars. Неразобранная страница не проектируется: у неё нет секций.
-    private static string? SummaryOf(WikiFrontmatter fm, string text)
+    // internal — та же проекция нужна оценке кандидатов (WikiCandidates, Q1-S3): отдельного
+    // определения «что такое сводка страницы» в вики нет.
+    internal static string? SummaryOf(WikiFrontmatter fm, string text)
     {
         if (fm.Summary is { Length: > 0 })
             return fm.Summary;

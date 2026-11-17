@@ -610,6 +610,24 @@ public class WikiIngestSynthTests : IDisposable
     }
 
     [Fact]
+    public async Task КандидатыПоЗначимымСловам_СтраницаБезДословногоЗаголовка_ВПромпте()
+    {
+        // Q1-S3 (1А): в окне нет дословного заголовка страницы («Сущность»), но её сводка
+        // делит с окном значимые слова («прежний план … Windows») — страница становится
+        // кандидатом, и её текст входит в промпт синтеза. Под прежним правилом («заголовок
+        // или алиас дословно») этот тест красный: ни заголовок, ни алиас в окне не стоят.
+        var llm = new FakeLlm(WikiSynthJson.Ok());
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew, res.Reason);
+        llm.Calls.Should().ContainSingle().Which.Prompt
+            .Should().Contain("CURRENT CONTENT OF THE SECTION PAGES")
+            .And.Contain("Прежний план был остаться на Windows",
+                "сводка делит слова с окном — страница кандидат, а не по дословному заголовку");
+    }
+
+    [Fact]
     public void КаталогПромпта_ПустойРаздел_КаталогаНетВовсе()
     {
         // Пустой раздел был в промпте без описания и раньше: ни заголовка, ни строк.

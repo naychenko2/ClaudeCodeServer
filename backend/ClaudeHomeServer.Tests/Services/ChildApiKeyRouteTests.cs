@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Services.Turn;
+using ClaudeHomeServer.Tests.Services.Gateway;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;

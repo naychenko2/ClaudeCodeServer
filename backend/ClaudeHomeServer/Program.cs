@@ -357,6 +357,8 @@ builder.Services.AddSignalR(o =>
         o.HandshakeTimeout = TimeSpan.FromSeconds(30);
         // Отказ файловой группы для локального проекта (ADR-016 §4, G1) на методах хабов
         Microsoft.AspNetCore.SignalR.HubOptionsExtensions.AddFilter(o, new ProjectCapabilityHubFilter());
+        // Гейт И1 детского режима на хабах: ребёнку — только SendMessage и подписки своего чата
+        Microsoft.AspNetCore.SignalR.HubOptionsExtensions.AddFilter(o, new ClaudeHomeServer.Hubs.ChildHubFilter());
     })
     .AddJsonProtocol(o =>
     {
@@ -1121,6 +1123,10 @@ ClaudeHomeServer.Services.Devices.DeviceChannelGuard.UseDeviceChannelGuard(app);
 app.UseAuthentication();
 app.UseAuthorization();
 
+// Гейт И1 детского режима (ADR-041): ребёнку — только эндпоинты с [ChildAllowed], остальное 403.
+// После авторизации (нужны ctx.User и метаданные эндпоинта), до шлюза модулей и YARP
+app.UseChildModeGate();
+
 // Наблюдаемость продуктовых MCP-серверов: их вызовы к бэкенду видно по заголовку
 // X-Caller-Session-Id. Ставим ПОСЛЕ авторизации: иначе 401 попадал бы в статистику как
 // отказ инструмента, хотя до контроллера запрос и не дошёл
@@ -1248,6 +1254,13 @@ app.Use(async (ctx, next) =>
             {
                 ctx.Response.StatusCode = 401;
                 await ctx.Response.WriteAsync("{\"error\":\"Требуется авторизация\"}");
+                return;
+            }
+            // Ребёнку превью дев-серверов закрыто (гейт И1: токен тут приходит из cookie, ctx.User пуст)
+            if (ctx.RequestServices.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>().For(previewUserId) is not null)
+            {
+                ctx.Response.StatusCode = 403;
+                await ctx.Response.WriteAsync("{\"error\":\"child_mode\"}");
                 return;
             }
             var previewProject = ctx.RequestServices.GetRequiredService<ProjectManager>().GetById(projectId);
@@ -1493,7 +1506,7 @@ app.MapReverseProxy(proxyPipeline =>
     proxyPipeline.UsePassiveHealthChecks();
 });
 app.MapControllers();
-app.MapHub<SessionHub>("/hubs/session");
+app.MapHub<SessionHub>("/hubs/session").WithMetadata(new ClaudeHomeServer.Services.ChildMode.ChildAllowedAttribute());
 app.MapHub<TerminalHub>("/hubs/terminal");
 // Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT

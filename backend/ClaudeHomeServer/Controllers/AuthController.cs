@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -16,6 +17,7 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
     PersonaManager personas, SubsystemStateStore subsystems) : ControllerBase
 {
     [AllowAnonymous]
+    [ChildAllowed]
     [EnableRateLimiting("auth-login")]
     [HttpPost("login")]
     public IActionResult Login([FromBody] LoginRequest req)
@@ -32,6 +34,7 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
     }
 
     [Authorize]
+    [ChildAllowed]
     [HttpGet("me")]
     public IActionResult Me()
     {

@@ -3,6 +3,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tts;
 using Microsoft.AspNetCore.Authorization;
@@ -84,6 +85,7 @@ public class TtsController(
                 v.Model, TtsVoiceCatalog.SupportsSpeed(v.Voice))).ToList()));
     }
 
+    [ChildAllowed]
     [HttpPost]
     public async Task<IActionResult> Synthesize([FromBody] TtsRequest req, CancellationToken ct)
     {

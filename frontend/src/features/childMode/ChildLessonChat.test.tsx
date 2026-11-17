@@ -28,6 +28,7 @@ vi.stubGlobal('Event', win.Event);
 
 // childApi: uploadAttachment отдаёт управляемый promise — ответ приходит в удобный момент
 let uploadResolve: ((v: { path: string; kind: 'image' | 'text'; name: string }) => void) | null = null;
+let uploadReject: ((e: unknown) => void) | null = null;
 const uploadCalls: { id: string }[] = [];
 
 vi.mock('./api', () => {
@@ -45,7 +46,7 @@ vi.mock('./api', () => {
     childApi: {
       uploadAttachment: (id: string) => {
         uploadCalls.push({ id });
-        return new Promise(res => { uploadResolve = res; });
+        return new Promise((res, rej) => { uploadResolve = res; uploadReject = rej; });
       },
       voice: async () => ({ voiceMode: false, voiceStyle: 'talk' }),
     },
@@ -66,6 +67,7 @@ vi.mock('../../components/Composer', () => ({
 }));
 
 const { ChildLessonChat } = await import('./ChildLessonChat');
+const { ChildAttachmentRejectedError } = await import('./api');
 
 const STATUS = {
   state: 'ok' as const, space: 'lessons', minutesLeft: null, windowEndsAt: null, nextWindowAt: null,
@@ -74,10 +76,10 @@ const STATUS = {
   rulesAgreedAt: null,
 };
 
-function renderChat(root: ReturnType<typeof createRoot>, sessionId: string) {
+function renderChat(root: ReturnType<typeof createRoot>, sessionId: string, status = STATUS) {
   act(() => {
     root.render(createElement(ChildLessonChat, {
-      sessionId, subjectId: 'math', title: 'Сравнение дробей', status: STATUS,
+      sessionId, subjectId: 'math', title: 'Сравнение дробей', status,
     }));
   });
 }
@@ -91,7 +93,7 @@ async function flush() {
 }
 
 describe('ChildLessonChat: загрузка вложения', () => {
-  beforeEach(() => { uploadResolve = null; uploadCalls.length = 0; });
+  beforeEach(() => { uploadResolve = null; uploadReject = null; uploadCalls.length = 0; });
 
   it('upload response after chat switch is dropped', async () => {
     const root = createRoot(doc.getElementById('root')!);
@@ -116,6 +118,19 @@ describe('ChildLessonChat: загрузка вложения', () => {
     await flush();
 
     expect(chips()).toEqual(['.cc-attachments/chat-7/zadacha.jpg']);
+    root.unmount();
+  });
+
+  it.each([[10 * 1024 * 1024, '10'], [5 * 1024 * 1024, '5']])('413 too_large: «до N МБ» берётся из status.maxAttachmentBytes (%i → %s)', async (bytes, mb) => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-9', { ...STATUS, maxAttachmentBytes: bytes });
+    act(() => { (doc.querySelector('[data-mock-attach]') as HTMLElement).click(); });
+    await act(async () => { uploadReject?.(new ChildAttachmentRejectedError(413, 'too_large', 'серверный текст')); await Promise.resolve(); });
+    await flush();
+
+    const alert = doc.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain(`можно до ${mb} МБ`);
+    expect(chips()).toEqual([]);
     root.unmount();
   });
 });

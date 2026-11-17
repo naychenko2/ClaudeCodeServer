@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Lock, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Lock, Plus, Trash2 } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { api } from '../lib/api';
-import { C, R, FONT, SHADOW, MODAL_W } from '../lib/design';
+import { C, R, FONT, SHADOW, MODAL_W, SP } from '../lib/design';
 import { Modal, ModalActions, TextField, Button, SegmentedControl } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useIsMobile } from '../lib/breakpoints';
@@ -97,14 +97,38 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
   // То, что здесь сохранили о профиле: список пользователей childProfile не отдаёт, отдельной
   // GET профиля нет (ADR-041, ручка №10 — только PUT). Черновик редактора живёт, пока открыта модалка.
   const [childProfiles, setChildProfiles] = useState<Record<string, ChildProfile>>({});
+  // Какие разделы раскрыты в этой сессии. По умолчанию свёрнуты: на десятке пользователей
+  // десяток открытых редакторов утащил бы строки (R-KM-F12, минор 3, решение Софьи).
+  const [childOpen, setChildOpen] = useState<Record<string, boolean>>({});
 
-  // Раздел «Детский режим» после основных полей пользователя — под флагом, по user.id.
-  const childSection = (user: UserProfile) => (
-    <ChildProfileEditor
-      user={{ id: user.id, username: user.username, childProfile: childProfiles[user.id] }}
-      onSaved={(p) => setChildProfiles(prev => ({ ...prev, [user.id]: p }))}
-    />
-  );
+  // Раздел «Детский режим» — только пользователям песочницы: ограничения ребёнка работают
+  // только в container, `local`-пользователям сервер отказывает not_container (REJECT_TEXT
+  // в ChildProfileEditor). Свёрнут в строку статуса; редактор — только в раскрытом виде.
+  const childSection = (user: UserProfile) => {
+    if (user.executionEnvironment !== 'container') return null;
+    const open = childOpen[user.id] === true;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, ...(isMobile ? {} : { padding: '0 16px 12px' }) }}>
+        <Button
+          variant="ghost" size="md" fullWidth
+          dataTestId="child-section-toggle"
+          ariaExpanded={open}
+          leftIcon={open
+            ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          onClick={() => setChildOpen(prev => ({ ...prev, [user.id]: !(prev[user.id] === true) }))}
+        >
+          Детский режим: {childProfiles[user.id]?.enabled === true ? 'включён' : 'выключен'}
+        </Button>
+        {open && (
+          <ChildProfileEditor
+            user={{ id: user.id, username: user.username, childProfile: childProfiles[user.id] }}
+            onSaved={(p) => setChildProfiles(prev => ({ ...prev, [user.id]: p }))}
+          />
+        )}
+      </div>
+    );
+  };
 
   useEffect(() => {
     api.users.list()
@@ -297,9 +321,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                       </button>
                     </div>
                   </div>
-                  {childModeUi && (
-                    <div style={{ padding: '0 16px 12px' }}>{childSection(user)}</div>
-                  )}
+                  {childModeUi && childSection(user)}
                 </div>
               );
             })}

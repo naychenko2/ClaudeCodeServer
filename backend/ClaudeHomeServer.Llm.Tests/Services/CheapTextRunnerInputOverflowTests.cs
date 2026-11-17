@@ -148,17 +148,19 @@ public class CheapTextRunnerInputOverflowTests
     [Fact]
     public async Task RunOnNamedEngine_WikiPlaceOverflows_ThrowsBeforeEngineCall()
     {
-        // c1: ночь на движке с окном 32768 (боевой NumCtx до правки Андрея) и промптом 60 000
+        // c1: ночь на движке с окном 32768 (боевой NumCtx до правки Андрея) и промптом 80 000
         // симв. — отказ окна ДО вызова: движок не звался, облако и claude не звались.
+        // Число промпта поднято с 60 000 (Q1-S14): после NumPredict 8192 бюджет этого движка
+        // 73 472 симв., и 60 000-символьный промпт в него влезает — отказ не случился бы.
         var engine = new FakeLocalClient();
         var (runner, http, claude, router) = Stand(engines: Engines(engine));
         var budget = BudgetOf(router, LocalActionCatalog.WikiNightly, EngineNumCtx);
-        Assert.True(60_000 > budget); // промпт критерия действительно за границей
+        Assert.True(80_000 > budget); // промпт критерия действительно за границей
 
         var ex = await Assert.ThrowsAsync<LocalInputOverflowException>(() =>
-            runner.RunOnLocalEngineDetailedAsync(Engine, LocalActionCatalog.WikiNightly, new string('а', 60_000)));
+            runner.RunOnLocalEngineDetailedAsync(Engine, LocalActionCatalog.WikiNightly, new string('а', 80_000)));
         // Причина с цифрами: их называет вызывающий (Q1-S12) в своём итоге отказа окна.
-        Assert.Contains("60000", ex.Message);
+        Assert.Contains("80000", ex.Message);
         Assert.Contains($"при бюджете {budget}", ex.Message);
         Assert.Contains($"NumCtx {EngineNumCtx}", ex.Message);
         Assert.Equal(0, engine.Calls);

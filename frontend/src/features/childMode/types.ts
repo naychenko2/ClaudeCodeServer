@@ -46,3 +46,37 @@ export interface ChildProfile {
 
 // Коды отказа загрузки вложения (413/415/422) — ADR-041, «Ручки» п. 8.
 export type ChildAttachmentRejectCode = 'too_large' | 'unsupported_type' | 'pdf_no_text' | 'empty_file';
+
+// Цвет плитки предмета: тот же набор, что ChildSubject.ColorKeys на бэке
+// (ClaudeHomeServer.Core/Models/ChildProfile.cs:81). Ключ — в профиль, маппит фронт.
+export type ChildSubjectColor = 'info' | 'rose' | 'success' | 'warning' | 'accent';
+
+// Репетитор в плитке предмета (И5: ребёнку — имя, аватар, плитка; не промпт и не маршрут).
+// null — висящий ключ персоны (удалена или чужая): имени и аватара нет, проекция их не выдумывает
+// (ChildSubjectsController.cs:53-55); интерфейс замещает плитку глифом без репетитора.
+export interface ChildSubjectTutor {
+  personaId: string;
+  name: string;
+  hasAvatar: boolean;
+}
+
+// Элемент GET /api/child/subjects: только включённые предметы, порядок — порядок профиля (И5).
+export interface ChildSubjectView {
+  id: string;
+  label: string;
+  glyph: string;
+  color: ChildSubjectColor;
+  tutor: ChildSubjectTutor | null;
+}
+
+// Элемент GET /api/child/spaces/{space}/chats (ADR-041, ручка 4). subject — с сервера, не из
+// localStorage; у старых (до-предметных) чатов бэк отдаёт null (Session.ChildSubject — additive
+// nullable). subjectClosed — предмет выключен или удалён: чат остаётся в списке, только для
+// чтения (И1-бис); для closed-чата subject всегда не совпадает с живым предметом.
+export interface ChildChatListItem {
+  sessionId: string;
+  name: string;
+  updatedAt: string;
+  subject: string | null;
+  subjectClosed: boolean;
+}

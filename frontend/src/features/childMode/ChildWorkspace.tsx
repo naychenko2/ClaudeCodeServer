@@ -184,7 +184,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
     setStarting(true);
     setError(null);
     try {
-      const r = await childApi.spaceChat(SPACE);
+      const r = await childApi.spaceChat(SPACE, subject);
       rememberSubject(r.sessionId, subject);
       setSubjectId(subject);
       setSessionId(r.sessionId);

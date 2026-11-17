@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { childApi, ChildAttachmentRejectedError } from './api';
-import type { ChildProfile } from './types';
+import { childApi, ChildAttachmentRejectedError, tutorAvatarUrl } from './api';
+import type { ChildProfile, ChildSubjectView } from './types';
 
 // Клиент проверяем по его запросам: моким request (lib/offline) утверждаем URL, метод
 // и тело по таблице «Ручки» ADR-041 («Контракт /api/child/*»). Путь request() строит
@@ -79,12 +79,25 @@ describe('POST /api/child/heartbeat', () => {
 });
 
 describe('POST /api/child/spaces/{space}/chat', () => {
-  it('пустое тело на путь пространства', async () => {
-    await childApi.spaceChat('lessons');
+  it('тело { subject } на путь пространства', async () => {
+    await childApi.spaceChat('lessons', 'russian');
     const { url, opts } = await lastCall();
     expect(url).toBe('/child/spaces/lessons/chat');
     expect(opts.method).toBe('POST');
-    expect(opts.body).toBeUndefined();
+    expect(JSON.parse(opts.body as string)).toEqual({ subject: 'russian' });
+  });
+
+  it('400 unknown_subject и 403 subject_disabled — как прочие отказы: status + body.code', async () => {
+    const r = await req();
+    r.mockRejectedValueOnce(httpErr(400, 'unknown_subject', 'Такого предмета нет.'));
+    const e400 = (await rejection(childApi.spaceChat('lessons', 'nope'))) as { status?: number; body?: { code?: string } };
+    expect(e400.status).toBe(400);
+    expect(e400.body?.code).toBe('unknown_subject');
+
+    r.mockRejectedValueOnce(httpErr(403, 'subject_disabled', 'Этот предмет закрыт.'));
+    const e403 = (await rejection(childApi.spaceChat('lessons', 'sport'))) as { status?: number; body?: { code?: string } };
+    expect(e403.status).toBe(403);
+    expect(e403.body?.code).toBe('subject_disabled');
   });
 });
 
@@ -97,6 +110,50 @@ describe('GET /api/child/spaces/{space}/chats', () => {
     expect((opts.method ?? 'GET').toUpperCase()).toBe('GET');
     expect(opts.live).toBe(true);
     expect(opts.signal).toBe(ac.signal);
+  });
+
+  it('чаты проходят как есть: subject с сервера, subjectClosed сохранён', async () => {
+    const chats = [
+      { sessionId: 's1', name: 'Дроби', updatedAt: '2026-11-17T10:00:00Z', subject: 'math', subjectClosed: false },
+      { sessionId: 's2', name: 'Старый урок', updatedAt: '2026-11-16T10:00:00Z', subject: null, subjectClosed: true },
+    ];
+    const r = await req();
+    r.mockResolvedValueOnce({ chats });
+    const got = await childApi.spaceChats('lessons');
+    expect(got.chats).toEqual(chats);
+  });
+});
+
+describe('GET /api/child/subjects', () => {
+  const subjects: ChildSubjectView[] = [
+    { id: 'russian', label: 'Русский язык', glyph: 'Аа', color: 'info', tutor: { personaId: 'p1', name: 'Репетитор русский', hasAvatar: true } },
+    // висящий ключ персоны — бэк отдаёт tutor: null (ChildSubjectsController)
+    { id: 'math', label: 'Математика', glyph: '×÷', color: 'accent', tutor: null },
+  ];
+
+  it('live, GET; { subjects } разворачивается, порядок — как пришёл с сервера', async () => {
+    const r = await req();
+    r.mockResolvedValueOnce({ subjects });
+    const got = await childApi.getSubjects();
+    const { url, opts } = await lastCall();
+    expect(url).toBe('/child/subjects');
+    expect((opts.method ?? 'GET').toUpperCase()).toBe('GET');
+    expect(opts.live).toBe(true);
+    expect(got).toEqual(subjects);
+  });
+
+  it('signal вызывающего доходит до request', async () => {
+    const ac = new AbortController();
+    await childApi.getSubjects({ signal: ac.signal });
+    const { opts } = await lastCall();
+    expect(opts.signal).toBe(ac.signal);
+  });
+});
+
+describe('tutorAvatarUrl', () => {
+  it('одна точка /api/personas/{id}/avatar; id и токен — экранированы', () => {
+    expect(tutorAvatarUrl('p 1')).toBe('/api/personas/p%201/avatar');
+    expect(tutorAvatarUrl('p1', 'tok&1')).toBe('/api/personas/p1/avatar?access_token=tok%261');
   });
 });
 

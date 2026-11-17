@@ -6,7 +6,13 @@
 // пробрасывается в request (lib/offline).
 
 import { request } from '../../lib/offline';
-import type { ChildAttachmentRejectCode, ChildProfile, ChildStatus } from './types';
+import type {
+  ChildAttachmentRejectCode,
+  ChildChatListItem,
+  ChildProfile,
+  ChildStatus,
+  ChildSubjectView,
+} from './types';
 
 // Отказ вложения (413/415/422 с code) — типизированная ошибка вызывающему:
 // code — для действия интерфейса, message — серверный текст для ребёнка по-русски
@@ -40,19 +46,35 @@ export const childApi = {
   heartbeat: (space: string) =>
     request<ChildStatus>('/child/heartbeat', { method: 'POST', body: JSON.stringify({ space }) }),
 
-  // POST /api/child/spaces/{space}/chat — новый чат с закреплёнными тьютором, провайдером,
-  // моделью, ChildSpace, ProjectId = null. Отказ 409 с code = state
-  // (rules_pending/budget_exhausted/out_of_window/time_up) — на error.body.code (request).
-  spaceChat: (space: string) =>
-    request<{ sessionId: string }>(`/child/spaces/${encodeURIComponent(space)}/chat`, { method: 'POST' }),
+  // POST /api/child/spaces/{space}/chat — новый чат с предметом: тьютор, провайдер и модель
+  // берутся из записи предмета профиля (не из полей профиля), плюс ChildSpace, ChildSubject,
+  // ProjectId = null. Отказы — на error.body.code (request): 400 unknown_subject (пустой или
+  // нет в профиле), 403 subject_disabled, 409 с code = state (rules_pending/…/time_up).
+  spaceChat: (space: string, subject: string) =>
+    request<{ sessionId: string }>(`/child/spaces/${encodeURIComponent(space)}/chat`, {
+      method: 'POST',
+      body: JSON.stringify({ subject }),
+    }),
 
   // GET /api/child/spaces/{space}/chats — детские чаты пространства, новые сверху.
   // live и signal — по тем же причинам, что у status.
   spaceChats: (space: string, opts?: { signal?: AbortSignal }) =>
-    request<{ chats: { sessionId: string; name: string; updatedAt: string; voiceMode?: boolean }[] }>(
+    request<{ chats: ChildChatListItem[] }>(
       `/child/spaces/${encodeURIComponent(space)}/chats`,
       { live: true, signal: opts?.signal },
     ),
+
+  // GET /api/child/subjects — проекция репетиторов ребёнка: только включённые предметы,
+  // в порядке профиля (И5); без промпта, маршрута и голоса. Порядок не переставляем.
+  // live — проекция per-owner, а ключ IDB-кэша — по URL, общий для владельцев (тот же
+  // повод, что у live у status). Отказы 403 not_child / 503 policy_unavailable — на error.body.
+  getSubjects: async (opts?: { signal?: AbortSignal }): Promise<ChildSubjectView[]> => {
+    const r = await request<{ subjects: ChildSubjectView[] }>('/child/subjects', {
+      live: true,
+      signal: opts?.signal,
+    });
+    return r.subjects;
+  },
 
   // PUT /api/child/chats/{id}/voice — озвучка ответов (TTS, расход — в бюджет; решение Андрея 4:
   // голосового ввода без микрофона нет). style отсутствует в теле — сервер берёт своё.
@@ -116,3 +138,12 @@ export const childApi = {
       body: JSON.stringify(profile),
     }),
 };
+
+// URL аватара репетитора — одна точка построения (И5: GET /api/personas/{id}/avatar, [ChildAllowed],
+// PersonasController.cs:654). hasAvatar=true ⟺ ручка отдаёт картинку (тот же признак, что у 404
+// в ней, ChildSubjectsController.HasAvatar); пропал файл с диска — 404, вызывающий возвращается
+// к инициалам. Тег <img> — без JWT-заголовка, токен в ?access_token= (тот же путь, что у raw-картинок).
+export function tutorAvatarUrl(personaId: string, accessToken?: string): string {
+  const base = `/api/personas/${encodeURIComponent(personaId)}/avatar`;
+  return accessToken ? `${base}?access_token=${encodeURIComponent(accessToken)}` : base;
+}

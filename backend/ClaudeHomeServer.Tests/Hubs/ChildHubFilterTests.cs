@@ -73,16 +73,53 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
         (await act.Should().ThrowAsync<HubException>()).Which.Message.Should().Contain("child_mode");
     }
 
-    [Fact]
-    public async Task Child_AllowedMethods_PassFilter()
-    {
-        var conn = await ConnectChildSessionHubAsync();
-        // Фильтр пропустил: отказ приходит уже от самого хаба (чата нет), а не child_mode
-        var join = () => conn.InvokeAsync("JoinSession", "no-such");
-        (await join.Should().ThrowAsync<HubException>()).Which.Message.Should().NotContain("child_mode");
+    private SessionManager Sessions => factory.Services.GetRequiredService<SessionManager>();
 
-        var send = () => conn.InvokeAsync<string>("SendMessage", "no-such", "привет", (List<string>?)null, "bypassPermissions", true);
-        (await send.Should().ThrowAsync<HubException>()).Which.Message.Should().NotContain("child_mode");
+    private string ChildId => factory.Services.GetRequiredService<UserStore>()
+        .FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+
+    private async Task<string> ChatAsync(string ownerId, string? childSpace)
+    {
+        // Создание чата при включённом детском режиме запрещено — гасим профиль на время создания
+        factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.SecondUsername)!.ChildMode = null;
+        var chat = await Sessions.CreateChatAsync(ownerId, ClaudeMode.Auto, name: "чат");
+        chat.ChildSpace = childSpace;
+        return chat.Id;
+    }
+
+    [Fact]
+    public async Task Child_OwnChildChat_PassesFilter()
+    {
+        var chatId = await ChatAsync(ChildId, ChildSpaces.Lessons);
+        var conn = await ConnectChildSessionHubAsync();
+        // Фильтр пропустил: JoinSession своего детского чата отрабатывает штатно
+        await conn.InvokeAsync("JoinSession", chatId);
+
+        // SendMessage дошёл до хаба: отказ может прийти от самого хаба, но не child_mode
+        var send = () => conn.InvokeAsync<string>("SendMessage", chatId, "привет", (List<string>?)null, "bypassPermissions", true);
+        try { await send(); }
+        catch (HubException e) { e.Message.Should().NotContain("child_mode"); }
+    }
+
+    [Theory]
+    [InlineData("JoinSession")]
+    [InlineData("SendMessage")]
+    public async Task Child_ForeignOrNonChildOrMissingChat_ThrowsChildMode(string method)
+    {
+        var adminId = factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var foreignWithSpace = await ChatAsync(adminId, ChildSpaces.Lessons);
+        var ownWithoutSpace = await ChatAsync(ChildId, null);
+        var conn = await ConnectChildSessionHubAsync();
+
+        foreach (var id in new[] { foreignWithSpace, ownWithoutSpace, "no-such" })
+        {
+            var act = () => method == "JoinSession"
+                ? conn.InvokeAsync(method, id)
+                : conn.InvokeAsync<string>(method, id, "привет", (List<string>?)null, null, false);
+            (await act.Should().ThrowAsync<HubException>(id)).Which.Message.Should().Contain("child_mode");
+        }
     }
 
     [Theory]
@@ -117,9 +154,9 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
     }
 
     [Fact]
-    public void SendMessageArgs_ModeAndAuto_AreDropped()
+    public void SendMessageArgs_AttachedPathsModeAndAuto_AreDropped()
     {
-        var args = ChildHubFilter.SanitizeSendMessageArgs(["s", "t", null, "bypassPermissions", true]);
+        var args = ChildHubFilter.SanitizeSendMessageArgs(["s", "t", new List<string> { "/etc/passwd" }, "bypassPermissions", true]);
         args.Should().Equal("s", "t", null, null, false);
     }
 
@@ -143,18 +180,20 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
     [Fact]
     public async Task SendMessage_ThroughFilter_NextGetsSanitizedArgs()
     {
-        var services = new ServiceCollection().AddSingleton<IChildModePolicy, ChildPolicy>().BuildServiceProvider();
+        var chatId = await ChatAsync(ChildId, ChildSpaces.Lessons);
+        var services = new ServiceCollection().AddSingleton<IChildModePolicy, ChildPolicy>()
+            .AddSingleton(Sessions).BuildServiceProvider();
         var user = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
-            [new System.Security.Claims.Claim(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub, "kid")], "test"));
+            [new System.Security.Claims.Claim(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub, ChildId)], "test"));
         var hub = (SessionHub)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SessionHub));
         var method = typeof(SessionHub).GetMethod(nameof(SessionHub.SendMessage))!;
         var ctx = new HubInvocationContext(new FakeCaller(user), services, hub, method,
-            new object?[] { "s", "t", null, "bypassPermissions", true });
+            new object?[] { chatId, "t", new List<string> { "/etc/passwd" }, "bypassPermissions", true });
 
         IReadOnlyList<object?>? seen = null;
         await new ChildHubFilter().InvokeMethodAsync(ctx, c => { seen = c.HubMethodArguments; return ValueTask.FromResult<object?>(null); });
 
         seen.Should().NotBeNull();
-        seen!.Should().Equal("s", "t", null, null, false);
+        seen!.Should().Equal(chatId, "t", null, null, false);
     }
 }

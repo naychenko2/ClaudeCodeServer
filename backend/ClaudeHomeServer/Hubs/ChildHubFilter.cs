@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
 using Microsoft.AspNetCore.SignalR;
 
@@ -20,6 +21,8 @@ public sealed class ChildHubFilter : IHubFilter
     internal static readonly string[] AllowedMethods =
         ["SendMessage", "JoinSession", "LeaveSession", "JoinUser", "LeaveUser"];
 
+    private const int SessionIdArg = 0;
+    private const int AttachedPathsArg = 2;
     private const int ModeArg = 3;
     private const int AutoArg = 4;
 
@@ -33,9 +36,14 @@ public sealed class ChildHubFilter : IHubFilter
                 || !AllowedMethods.Contains(name, StringComparer.Ordinal))
                 throw new HubException("child_mode");
 
+            // Ребёнку — только свои детские чаты (владелец + ChildSpace); остальные — child_mode
+            if (name is "SendMessage" or "JoinSession"
+                && !IsOwnChildChat(invocationContext, snapshot.OwnerId))
+                throw new HubException("child_mode");
+
             if (name == "SendMessage")
             {
-                // mode/auto от ребёнка не доверяем: подменяем аргументы до вызова метода хаба
+                // mode/auto/attachedPaths от ребёнка не доверяем: подменяем аргументы до вызова метода хаба
                 var args = SanitizeSendMessageArgs(invocationContext.HubMethodArguments);
                 invocationContext = new HubInvocationContext(invocationContext.Context,
                     invocationContext.ServiceProvider, invocationContext.Hub,
@@ -45,10 +53,29 @@ public sealed class ChildHubFilter : IHubFilter
         return next(invocationContext);
     }
 
-    // SendMessage(sessionId, text, attachedPaths, mode, auto): mode → null, auto → false
+    // Fail-closed: нет id, чат не найден, чужой, без ChildSpace или сбой чтения — отказ.
+    private static bool IsOwnChildChat(HubInvocationContext ctx, string ownerId)
+    {
+        try
+        {
+            if (ctx.HubMethodArguments.Count <= SessionIdArg
+                || ctx.HubMethodArguments[SessionIdArg] is not string sessionId) return false;
+            var session = ctx.ServiceProvider.GetService<SessionManager>()?.GetById(sessionId);
+            return session is { ChildSpace: not null }
+                && ownerId.Length > 0
+                && string.Equals(session.OwnerId, ownerId, StringComparison.Ordinal);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    // SendMessage(sessionId, text, attachedPaths, mode, auto): attachedPaths → null, mode → null, auto → false
     internal static object?[] SanitizeSendMessageArgs(IReadOnlyList<object?> arguments)
     {
         var args = arguments.ToArray();
+        if (args.Length > AttachedPathsArg) args[AttachedPathsArg] = null;
         if (args.Length > ModeArg) args[ModeArg] = null;
         if (args.Length > AutoArg) args[AutoArg] = false;
         return args;

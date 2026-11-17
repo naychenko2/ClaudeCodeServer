@@ -370,12 +370,14 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         {
             // Плотная серия «согласий» ребёнка: прямые записи в живой профиль, пока профиль
             // не заменён. Значения монотонны и различимы (по минуте на запись).
+            // Пишем только в initial: после замены стора GetById вернул бы новый профиль,
+            // и последняя итерация серии записалась бы в него — любое значение выглядело
+            // «свежим» и проверка теряла смысл.
             while (!Volatile.Read(ref stop) && ReferenceEquals(_users.GetById(id)!.ChildMode, initial))
             {
                 lastTicks += minute;
-                var profile = _users.GetById(id)!.ChildMode!;
-                profile.RulesAgreedAt = new DateTime(Volatile.Read(ref lastTicks), DateTimeKind.Utc);
-                profile.RulesSummary = "Согласие во время правки";
+                initial.RulesAgreedAt = new DateTime(Volatile.Read(ref lastTicks), DateTimeKind.Utc);
+                initial.RulesSummary = "Согласие во время правки";
             }
         });
 
@@ -387,12 +389,12 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         _users.SetModelTiers(AdminId, "sonnet", null, null);
         _users.RemapModels(_ => null);
 
-        // Marker — значение серии на момент пуска запроса. Дальше по потоку только
-        // прибавляется: и атомарная запись, и «чтение вне блокировки» видят значение >=
-        // marker; разница между ними — записи серии за путь запроса от первого чтения до
-        // записи под локом (60 опекунов — десятки обращений к стору). Порог заведомо
-        // меньше этой разницы и заведомо больше того, что успевает добавиться до первого
-        // чтения запроса.
+        // Marker — значение серии на момент пуска запроса; дальше по потоку только
+        // прибавляется. Сравнение — с КОНЦОМ серии, а не с marker: атомарная запись берёт
+        // живое значение, и оно отличается от последнего записанного на 1–2 итерации
+        // (текущая итерация серии, начатая до замены). «Снимок первого чтения» отстаёт на
+        // весь путь запроса от чтения до записи (60 опекунов — десятки обращений к стору
+        // при живой серии): на замере — 187 минут против порога 60.
         var atStart = new DateTime(Volatile.Read(ref lastTicks), DateTimeKind.Utc);
         var (status, _) = await PutAsync(id, body);
         Volatile.Write(ref stop, true);
@@ -402,7 +404,9 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         var kept = _users.GetById(id)!.ChildMode!.RulesAgreedAt!.Value;
         var duringEdit = new DateTime(Volatile.Read(ref lastTicks), DateTimeKind.Utc);
         duringEdit.Should().BeOnOrAfter(atStart.AddMinutes(20), "плотная серия согласия во время правки была");
-        kept.Should().BeOnOrAfter(atStart.AddMinutes(10),
+        // Живое значение на момент записи = последнее значение серии (±1–2 итерации).
+        var lagMinutes = (duringEdit.Ticks - kept.Ticks) / minute;
+        lagMinutes.Should().BeLessThan(60,
             "согласие ребёнка во время правки сохранено: RulesAgreedAt — живое значение стора на момент записи, не снимок первого чтения");
     }
 

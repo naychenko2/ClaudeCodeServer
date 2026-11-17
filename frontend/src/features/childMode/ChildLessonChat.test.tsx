@@ -110,6 +110,14 @@ describe('ChildLessonChat: загрузка вложения', () => {
     root.unmount();
   });
 
+  it('под чатом урока постоянно видна строка «Помощник — компьютерная программа»', async () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-d');
+    await flush();
+    expect(doc.querySelector('[data-child-disclosure]')?.textContent).toBe('Помощник — компьютерная программа');
+    root.unmount();
+  });
+
   it('upload response in the same chat adds a chip', async () => {
     const root = createRoot(doc.getElementById('root')!);
     renderChat(root, 'chat-7');

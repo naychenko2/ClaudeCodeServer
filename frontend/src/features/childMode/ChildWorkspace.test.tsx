@@ -41,7 +41,7 @@ vi.mock('./ChildLessonChat', async () => {
   const React = await import('react');
   return {
     ChildLessonChat: (p: { sessionId: string; initialVoiceMode?: boolean }) => {
-      React.useEffect(() => { h.mounts.push(`${p.sessionId}:${p.initialVoiceMode}`); }, [p.sessionId]);
+      React.useEffect(() => { h.mounts.push(`${p.sessionId}:${p.initialVoiceMode}`); }, []);
       return React.createElement('div', { 'data-testid': 'lesson-chat' }, p.sessionId);
     },
   };
@@ -56,6 +56,11 @@ vi.mock('../../components/ui/PageCanvas', async () => {
     PageCanvas: (p: { project?: { icon?: { color?: string } }; children: unknown }) =>
       React.createElement('div', { 'data-canvas': p.project?.icon?.color ?? 'neutral' }, p.children as never),
   };
+});
+
+vi.mock('./ChildTimeUpScreen', async () => {
+  const React = await import('react');
+  return { ChildTimeUpScreen: (p: { status: { state: string } }) => React.createElement('div', { 'data-testid': 'timeup', 'data-state': p.status.state }) };
 });
 
 const { ChildWorkspace } = await import('./ChildWorkspace');
@@ -136,5 +141,27 @@ describe('ChildWorkspace', () => {
     // смена урока — новый экземпляр чата, а не переиспользование
     expect(h.mounts).toEqual(['s1:true', 's2:false']);
     expect(doc.querySelector('[data-canvas]')!.getAttribute('data-canvas')).toBe('green');
+  });
+
+  it.each([
+    ['ok', { timeup: false, text: null }],
+    ['warn', { timeup: false, text: 'Осталось 5 минут' }],
+    ['rules_pending', { timeup: false, text: 'Начать вместе с папой' }],
+    ['time_up', { timeup: true, text: null }],
+    ['out_of_window', { timeup: true, text: null }],
+    ['budget_exhausted', { timeup: true, text: null }],
+  ] as const)('state=%s: экран «время вышло» — только для time_up/out_of_window/budget_exhausted', async (state, exp) => {
+    h.status = status({ state, minutesLeft: 5, rulesAgreedAt: state === 'rules_pending' ? null : '2026-11-10T12:00:00+03:00' });
+    await mount();
+    expect(!!doc.querySelector('[data-testid="timeup"]')).toBe(exp.timeup);
+    if (exp.timeup) expect(doc.querySelector('[data-testid="timeup"]')!.getAttribute('data-state')).toBe(state);
+    if (exp.text) expect(doc.body.textContent).toContain(exp.text);
+  });
+
+  it('взрослых слоёв нет: ни хаб-табов, ни поиска, ни уведомлений, ни дока проектов', async () => {
+    await mount();
+    const text = doc.body.textContent ?? '';
+    for (const word of ['Проекты', 'Календарь', 'Заметки', 'Персоны', 'Уведомления', 'Поиск']) expect(text).not.toContain(word);
+    expect(doc.querySelector('[data-rail-item]')).toBeNull();
   });
 });

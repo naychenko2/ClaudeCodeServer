@@ -185,6 +185,45 @@ public class ChildStopSignalTests : IClassFixture<ChildStopSignalTests.Hosts>
     }
 
     [Fact]
+    public async Task Кнопка_СвойНеДетскийЧат_404()
+    {
+        var child = await NewUser("kss-own-adult", child: true);
+        var sid = await CreateChat(As("kss-own-adult"));
+        var own = Sessions.GetOwnedVisible(sid, child)!;
+        own.ChildSpace = null; // свой чат ребёнка, но не детского пространства
+        var before = (await StopSignals(AdminId)).Count;
+
+        var (status, _, code) = await Post(As("kss-own-adult"), new { sessionId = own.Id });
+
+        status.Should().Be(HttpStatusCode.NotFound);
+        code.Should().Be("chat_not_found");
+        (await StopSignals(AdminId)).Count.Should().Be(before, "отказ до рассылки");
+    }
+
+    [Fact]
+    public async Task Raise_БезSessionIdИСSessionId_ОдноУведомление()
+    {
+        var guardian = await NewUser("kss-mix-g", child: false);
+        var child = await NewUser("kss-mix", child: true, guardians: [guardian]);
+        var svc = _hosts.Services.GetRequiredService<ChildStopSignalService>();
+
+        var first = await svc.RaiseAsync(child, null, StopSignalSource.Child);
+        var second = await svc.RaiseAsync(child, "chat-mix", StopSignalSource.Tutor);
+
+        first.Should().Be(StopSignalOutcome.Raised);
+        second.Should().Be(StopSignalOutcome.Collapsed);
+        (await StopSignals(guardian)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Маркер_ПричинаСУглойСкобкой_Распознаётся()
+    {
+        var text = "до <ccs-stop-signal reason=\"ребёнок пишет <плохое> слово\"/> после";
+        TeamProtocolMarkers.HasStopSignalMarker(text).Should().BeTrue();
+        TeamProtocolMarkers.StripTeamProtocolMarkers(text).Should().Be("до  после");
+    }
+
+    [Fact]
     public async Task Кнопка_НеРебёнок_403NotChild()
     {
         await NewUser("kss-adult", child: false);

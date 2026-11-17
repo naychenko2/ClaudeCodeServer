@@ -120,9 +120,10 @@ public static class TeamProtocolMarkers
     private static readonly Regex NoReplyMarkerRegex =
         new(@"<no-reply\s*/>", RegexOptions.Compiled);
     // Стоп-сигнал тьютора детского чата (KM-B6d): `<ccs-stop-signal reason="…"/>`. Причина
-    // свободным текстом без «<», поэтому тело маркера ищем лениво до первого «/>».
+    // свободным текстом (может содержать «<»), поэтому тело маркера ищем лениво до первого «/>»,
+    // но не дальше 500 символов — незакрытый маркер не съест текст до случайного «/>» ниже.
     private static readonly Regex StopSignalMarkerRegex =
-        new(Regex.Escape(ChildSafetyPrompts.StopSignalOpen) + @"\b[^<]*?/>", RegexOptions.Compiled);
+        new(Regex.Escape(ChildSafetyPrompts.StopSignalOpen) + @"\b[\s\S]{0,500}?/>", RegexOptions.Compiled);
 
     // Есть ли в тексте хода активный стоп-сигнал тьютора — вне код-блоков: процитированный
     // примером маркер сигнала не поднимает (тот же приём, что у HasNoReplyMarker).

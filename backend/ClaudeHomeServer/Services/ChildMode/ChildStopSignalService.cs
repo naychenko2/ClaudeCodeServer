@@ -18,7 +18,8 @@ public enum StopSignalOutcome { Raised, Collapsed }
 /// ни текста сообщений, ни причины из маркера, ни id чата, ни ссылки на чат (Url/SessionId/
 /// ProjectId уведомления пусты). В логе — тоже только id владельца и источник.
 ///
-/// Схлопывание: не чаще раза в минуту на пару (ownerId, sessionId); решение принимается под
+/// Схлопывание: не чаще раза в минуту на ребёнка (ключ — только ownerId: кнопка без sessionId и маркер
+/// с sessionId — один и тот же сигнал); решение принимается под
 /// блокировкой ключа ДО первого await, поэтому два одновременных сигнала дают одно уведомление.
 /// Сбой NotificationService — только лог: ни ход, ни ручка не падают.
 /// Зависимости намеренно без SessionManager: сервис зовёт TurnCompletion, цикла быть не должно.
@@ -41,7 +42,7 @@ public sealed class ChildStopSignalService(
     public async Task<StopSignalOutcome> RaiseAsync(string ownerId, string? sessionId, StopSignalSource source)
     {
         var now = _time.GetUtcNow();
-        if (!TryClaim(ownerId, sessionId, now)) return StopSignalOutcome.Collapsed;
+        if (!TryClaim(ownerId, now)) return StopSignalOutcome.Collapsed;
 
         try
         {
@@ -77,13 +78,13 @@ public sealed class ChildStopSignalService(
     }
 
     // Окно по ключу занимается под блокировкой слота; false — в окне уже есть отправленный сигнал
-    private bool TryClaim(string ownerId, string? sessionId, DateTimeOffset now)
+    private bool TryClaim(string ownerId, DateTimeOffset now)
     {
         if (_slots.Count > 256)
             foreach (var (key, stale) in _slots)
                 if (stale.Last is { } l && now - l >= Window) _slots.TryRemove(key, out _);
 
-        var slot = _slots.GetOrAdd(ownerId + "\n" + (sessionId ?? ""), _ => new Slot());
+        var slot = _slots.GetOrAdd(ownerId, _ => new Slot());
         lock (slot)
         {
             if (slot.Last is { } last && now - last < Window) return false;

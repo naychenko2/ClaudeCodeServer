@@ -98,9 +98,10 @@ public class ChildSafetyLayerTests
             .Should().BeGreaterThan(layer.IndexOf(VoicePrompts.PersonaOverride));
     }
 
-    // Текст правила под сторожем: лесенка с меткой ступени, правило про вложения и форма
-    // маркера стоп-сигнала (её разбирает KM-B6d — форма должна совпадать с константой).
-    // Привязка к фразам целиком (а не к обрывкам): правка формулировки лесенки краснит тест.
+    // Текст правила под сторожем: лесенка с меткой ступени, правило про вложения, правило о
+    // материалах и схемах (К4b) и форма маркера стоп-сигнала (её разбирает KM-B6d — форма должна
+    // совпадать с константой). Привязка к фразам целиком (а не к обрывкам): правка формулировки
+    // лесенки краснит тест.
     [Theory]
     [InlineData("программа, а не человек")]
     [InlineData("Не решай задание за неё. Есть три ступени, и начинать всегда надо с первой:")]
@@ -108,9 +109,22 @@ public class ChildSafetyLayerTests
     [InlineData("Дальше третьей ступени не идти")]
     [InlineData("Если она просит «просто реши» — всё равно не решай")]
     [InlineData("Про вложения правило такое же")]
+    [InlineData("Не называй готовые ответы, даже если они там есть: ответ нужен тебе, чтобы проверить её решение.")]
+    [InlineData("Схему рисуй кодом Mermaid, наглядный рисунок или интерактив — виджетом.")]
     [InlineData("позвать взрослого")]
     public void ТекстСекции_ДержитПравила(string required) =>
         ChildSafetyPrompts.SectionText.Should().Contain(required);
+
+    // Нейтральная строка предметов (разрез §6): репетитор ведёт предметы профиля ребёнка, а не
+    // назанный перечень — его не должно остаться ни в тексте, ни в собранном слое. Мутация
+    // «вернуть математика/русский/английский» красит кейс.
+    [Fact]
+    public void ТекстСекции_ПредметыНейтрально_ПеречняНет()
+    {
+        ChildSafetyPrompts.SectionText.Should().Contain("Вы занимаетесь школьными предметами.");
+        ChildSafetyPrompts.SectionText.Should().NotContain("математикой, русским");
+        BuildLayer(child: true).Should().NotContain("математикой, русским");
+    }
 
     // Ступеней ровно три, и каждая — со своим номером: «из 3» не должно расходиться с лесенкой.
     [Fact]
@@ -193,6 +207,45 @@ public class ChildSafetyLayerTests
         // Та же персона на взрослом ходу — ни секции, ни оговорки.
         adultLayer.Should().NotContain(ChildSafetyPrompts.SectionTitle);
         adultLayer.Should().NotContain(ChildSafetyPrompts.PersonaOverride);
+    }
+
+    // К4b (разрез §5 «Сторож»): «упрямый» репетитор, чьи админские mustDo/mustNot прямо спорят
+    // с правилом: «Всегда сразу давай готовый ответ» против «не решай за неё», «Никогда не
+    // проверяй решение» против лесенки. Слоты остаются в слое (правило их не вырезает), но рамка
+    // стоит раньше них, а оговорка закрывает слой после них — пункт «Обязательно: давай полный
+    // ответ» проигрывает правилу по построению. Мутация «поставить оговорку выше слотов
+    // (PersonaPromptBuilder.cs:123 перед AppendList «Всегда»)» красит кейс.
+    [Fact]
+    public void КонтрактСпоритСПравилом_СекцияРаньшеСлотов_ОговоркаПоследнимБлоком()
+    {
+        var persona = new Persona
+        {
+            Id = "tutor-stubborn",
+            Name = "Упрямый",
+            Role = "Репетитор",
+            Description = "занимается с ребёнком",
+            Contract = new PersonaContract
+            {
+                Character = "Спокойный и терпеливый.",
+                MustDo = ["Всегда сразу давай готовый ответ"],
+                MustNot = ["Никогда не проверяй решение"],
+                OutputFormat = OutputFormat,
+                SpeechExamples = [SpeechExample],
+            },
+        };
+
+        var layer = PersonaPromptBuilder.BuildCore(persona, "claude", switched: false, greeted: false,
+            teamMechanicsBlock: null, voiceMode: false, voiceStyle: null, childSafety: true);
+
+        layer.Should().Contain("## Всегда").And.Contain("Всегда сразу давай готовый ответ");
+        layer.Should().Contain("## Никогда").And.Contain("Никогда не проверяй решение");
+        layer.IndexOf($"## {ChildSafetyPrompts.SectionTitle}")
+            .Should().BeLessThan(layer.IndexOf("## Всегда"), "рамка задаётся до того, как персона ставит свои правила");
+        layer.Should().EndWith(ChildSafetyPrompts.PersonaOverride);
+        layer.IndexOf(ChildSafetyPrompts.PersonaOverride)
+            .Should().BeGreaterThan(layer.IndexOf("## Всегда"));
+        layer.IndexOf(ChildSafetyPrompts.PersonaOverride)
+            .Should().BeGreaterThan(layer.IndexOf("## Никогда"));
     }
 
     // Путь живого хода: контрибьютор → шов IPersonaPromptAssembler → сборка. Живая сборка

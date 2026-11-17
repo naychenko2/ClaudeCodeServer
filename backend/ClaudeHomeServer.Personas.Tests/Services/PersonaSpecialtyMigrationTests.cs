@@ -300,6 +300,41 @@ public class PersonaSpecialtyMigrationTests : IDisposable
         manager.GetRaw("tutor", Owner)!.SectionsSeenVersion.Should().BeNull();
     }
 
+    // Разрез §5 «Фоновая переписка»: у репетитора Specialty=None и TemplateKey=null, поэтому
+    // ни миграция прав, ни авто-обновление регламентов пантеона не пишут его «Обязательно /
+    // Никогда» (PersonaContract.MustDo/MustNot, их даёт админская ручка Т2c). Сторож: после
+    // живого пуска стора списки равны исходным — и в сырой записи, и на пути чтения (Hydrate
+    // наследует права, не текст персоны). Мутация «миграция обнуляет контракт» красит кейс.
+    [Fact]
+    public void Репетитор_ФоноваяПереписка_НеТрогаетMustDoИMustNot()
+    {
+        var config = Config(migrationOn: true);
+        var specialty = SpecialtyStore(config);
+        var tutor = Stored("tutor", PersonaSpecialty.None, PersonaAccess.Full, ["tasks", "notes"]);
+        tutor.Name = "Помощник";
+        tutor.Role = "Репетитор 4–5 класс: математика, русский, английский";
+        tutor.MemoryEnabled = false;
+        tutor.Contract = new PersonaContract
+        {
+            Character = "Спокойный и терпеливый.",
+            MustDo = ["Всегда сразу давай готовый ответ"],
+            MustNot = ["Никогда не проверяй решение"],
+        };
+        WriteStore(tutor);
+
+        var manager = NewManager(config, specialty); // Load: RefreshPantheon + миграция при загрузке
+
+        var raw = manager.GetRaw("tutor", Owner)!;
+        // Переписка дошла до этой персоны и приняла по ней решение — но текст не тронут.
+        raw.InheritsAccessMigratedAt.Should().NotBeNull();
+        raw.TemplateKey.Should().BeNull();
+        raw.Contract!.MustDo.Should().Equal("Всегда сразу давай готовый ответ");
+        raw.Contract!.MustNot.Should().Equal("Никогда не проверяй решение");
+
+        manager.Get("tutor", Owner)!.Contract!.MustDo.Should().Equal("Всегда сразу давай готовый ответ");
+        manager.Get("tutor", Owner)!.Contract!.MustNot.Should().Equal("Никогда не проверяй решение");
+    }
+
     [Fact]
     public void СухойПрогон_НичегоНеПишет_НиPersonasНиSpecialtySettings()
     {

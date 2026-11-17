@@ -392,7 +392,10 @@ public sealed class ChildLimitsCalculatorTests : IDisposable
         // работает только атрибут уровня свойства.
         var status = new ChildStatus(
             ChildState.OutOfWindow, "lessons", null, null, NextDayStart, 5,
-            10_485_760, ChildLimitsCalculator.AttachmentTypesAllowList, null);
+            10_485_760, ChildLimitsCalculator.AttachmentTypesAllowList, null,
+            // Добавочные поля KM-B5e2: здесь — «не заданы» (null / пусто), их содержательные
+            // значения проверяет Status_ПрофильСУстановками (тест ручки).
+            null, [], null);
         var json = JsonSerializer.Serialize(status, new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -413,6 +416,10 @@ public sealed class ChildLimitsCalculatorTests : IDisposable
         root.GetProperty("attachmentTypes").EnumerateArray().Select(e => e.GetString())
             .Should().Equal("image/png", "image/jpeg", "image/webp", "application/pdf", "text/plain");
         root.GetProperty("rulesAgreedAt").ValueKind.Should().Be(JsonValueKind.Null);
+        // Добавочные поля KM-B5e2 — те же camelCase-имена контракта (ADR-041 «DTO»).
+        root.GetProperty("dailyMinutes").ValueKind.Should().Be(JsonValueKind.Null);
+        root.GetProperty("windows").GetArrayLength().Should().Be(0);
+        root.GetProperty("minutesToday").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     private sealed class FixedSpend(decimal todayUsd, decimal monthUsd) : IOwnerSpendReader

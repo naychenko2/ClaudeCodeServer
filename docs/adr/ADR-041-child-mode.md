@@ -116,6 +116,9 @@ interface ChildStatus {
   maxAttachmentBytes: number;   // ChildMode:MaxAttachmentBytes, по умолчанию 10 МБ
   attachmentTypes: string[];    // MIME из allow-list: image/png, image/jpeg, image/webp, application/pdf, text/plain
   rulesAgreedAt: string | null;
+  dailyMinutes: number | null;  // дневной лимит пространства из профиля; null — лимита нет (KM-B5e2)
+  windows: { from: string; to: string; weekdays?: number[] }[]; // окна профиля как есть, формат — как у ChildProfileDto; [] — окон нет
+  minutesToday: number | null;  // минуты, засчитанные сегодня по журналу; null — журнал не читается (fail-closed)
 }
 
 interface ChildProfileDto {     // тело PUT child-profile и поле ответа

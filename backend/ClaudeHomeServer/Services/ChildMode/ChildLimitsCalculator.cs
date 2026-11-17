@@ -76,10 +76,17 @@ public sealed class ChildLimitsCalculator(
         // Пространства нет в профиле: окон и лимита нет — для ручки это сначала 403 space_disabled,
         // для калькулятора — out_of_window («входить некуда», как и пустые окна у хелпера).
         List<DailyTimeWindow?> windows = [];
+        // Окна в ответе статуса (KM-B5e2): записи профиля как есть, в формате профиля — тем же
+        // wire-типом, что ручка №10: оболочка показывает расписание так, как его задал взрослый,
+        // а не подставленные из minutesLeft цифры. Пусто — [].
+        List<ChildTimeWindowDto> statusWindows = [];
         if (profile.Spaces.TryGetValue(space, out var limits))
             foreach (var w in limits.Windows)
                 if (w is not null)
+                {
                     windows.Add(new DailyTimeWindow(w.From, w.To, w.Weekdays));
+                    statusWindows.Add(new ChildTimeWindowDto(w.From, w.To, w.Weekdays));
+                }
 
         var inWindow = DailyTimeWindow.Contains(now, windows, tz);
         // CurrentEnd вне окон сам отдаёт null — контрактное «null — окон нет или сейчас вне окна».
@@ -87,24 +94,28 @@ public sealed class ChildLimitsCalculator(
         var nextWindowAt = DailyTimeWindow.NextStart(now, windows, tz);
 
         // Присутствие сегодня — по журналу (KM-B5b): время в пространстве считается heartbeat'ом,
-        // а не длительностью ходов. Журнала не прочитать — времени не проверить → time_up (fail-closed).
+        // а не длительностью ходов. Итог дня читается и без лимита (KM-B5e2): оболочке нужен итог,
+        // а не только остаток. Журнала не прочитать — времени не проверить → time_up (fail-closed)
+        // только когда лимит есть: без лимита состояния по времени нет, итог дня — null
+        // («не прочитать»), а не 0 («прочитали ноль»).
         // Остаток — целые минуты (R-KM-F3): журнал хранит целые минуты округлением вниз,
         // текущая неполная минута в него не входит — остаток никогда не дробный, оболочка
         // ребёнка показывает целое число минут без своего счёта.
-        int? minutesLeft = null;
+        int? minutesToday = null;
         var timeUncheckable = false;
-        if (limits?.DailyMinutes is int dailyLimit)
+        try
         {
-            try
-            {
-                minutesLeft = Math.Max(0, dailyLimit - usage.MinutesToday(ownerId, space, now, tz));
-            }
-            catch (Exception e)
-            {
-                log?.LogWarning(e, "Детский режим: журнал присутствия не читается (owner {Owner}, space {Space})", ownerId, space);
-                timeUncheckable = true;
-            }
+            minutesToday = usage.MinutesToday(ownerId, space, now, tz);
         }
+        catch (Exception e)
+        {
+            log?.LogWarning(e, "Детский режим: журнал присутствия не читается (owner {Owner}, space {Space})", ownerId, space);
+            timeUncheckable = limits?.DailyMinutes is int;
+        }
+
+        int? minutesLeft = null;
+        if (limits?.DailyMinutes is int dailyLimit && !timeUncheckable)
+            minutesLeft = Math.Max(0, dailyLimit - minutesToday!.Value);
 
         // Бюджет — через Core-шов (ADR-041 решение 4): читателя нет или чтение сорвалось —
         // «бюджет не проверить»: ход ребёнка отказывается, задан бюджет в профиле или нет.
@@ -146,7 +157,12 @@ public sealed class ChildLimitsCalculator(
             warnMinutes,
             MaxAttachmentBytes(),
             AttachmentTypesAllowList,
-            profile.RulesAgreedAt?.ToString("O"));
+            profile.RulesAgreedAt?.ToString("O"),
+            // Добавочные поля статуса (KM-B5e2): лимит и окна — из профиля как есть, итог дня —
+            // из журнала. Существующие поля не меняются: старый клиент их игнорирует.
+            limits?.DailyMinutes,
+            statusWindows,
+            minutesToday);
     }
 
     // Таймзона (решение Андрея 3): User.TimeZone → ChildMode:DefaultTimeZone → фолбэк инстанса.
@@ -235,6 +251,10 @@ public sealed class ChildStateJsonConverter : JsonConverter<ChildState>
 /// MinutesLeft — остаток дневного лимита (null — лимита нет); WindowEndsAt — конец текущего
 /// окна (null — окон нет или сейчас вне окна); NextWindowAt — ближайшее окно, только при
 /// OutOfWindow; время — ISO 8601 с явным смещением таймзоны ребёнка.
+/// DailyMinutes/Windows (KM-B5e2) — дневный лимит и окна профиля как есть (null / пусто —
+/// не заданы), формат окон — тот же, что у ручки №10; MinutesToday — минуты, засчитанные
+/// сегодня по журналу (null — журнал не читается). Три последних поля — добавочные:
+/// существующие не менялись, старый клиент их игнорирует.
 /// </summary>
 public sealed record ChildStatus(
     [property: JsonConverter(typeof(ChildStateJsonConverter))] ChildState State,
@@ -245,7 +265,10 @@ public sealed record ChildStatus(
     int WarnMinutes,
     long MaxAttachmentBytes,
     IReadOnlyList<string> AttachmentTypes,
-    string? RulesAgreedAt);
+    string? RulesAgreedAt,
+    int? DailyMinutes,
+    IReadOnlyList<ChildTimeWindowDto> Windows,
+    int? MinutesToday);
 
 /// <summary>
 /// Типизированный отказ «политика не читается» (fail-closed): детский профиль есть, но

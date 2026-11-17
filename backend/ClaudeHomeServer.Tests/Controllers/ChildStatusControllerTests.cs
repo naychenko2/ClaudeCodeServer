@@ -112,8 +112,13 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
 
     /// <summary>Контейнерный пользователь + включённый режим через админскую ручку:
     /// «Уроки» с окном ±2 ч и дневным лимитом 40 минут (withLessons=false — профиль без
-    /// пространства: законное значение, которое проверяет 403 space_disabled).</summary>
-    private async Task<string> NewChild(string name, bool withLessons = true)
+    /// пространства: законное значение, которое проверяет 403 space_disabled).
+    /// fixedWindow — фиксированное окно вместо «вокруг сейчас» (тестам добавочных полей
+    /// статус важен сам формат, а не состояние); dailyMinutes=null — лимита нет;
+    /// noWindows — запись пространства без окон (законное значение: «каждый день, без окон»).</summary>
+    private async Task<string> NewChild(
+        string name, bool withLessons = true, int? dailyMinutes = 40,
+        (string From, string To)? fixedWindow = null, bool noWindows = false)
     {
         var resp = await _admin.PostAsJsonAsync("/api/users", new
         {
@@ -126,7 +131,8 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
         var id = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync())
             .GetProperty("id").GetString()!;
 
-        var (fromH, toH) = WindowAroundNow();
+        var (fromH, toH) = fixedWindow ?? WindowAroundNow();
+        object[] windowRecords = noWindows ? [] : [new { from = fromH, to = toH }];
         var body = new
         {
             enabled = true,
@@ -135,7 +141,7 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
             spaces = withLessons
                 ? new Dictionary<string, object>
                 {
-                    ["lessons"] = new { windows = new[] { new { from = fromH, to = toH } }, dailyMinutes = 40 },
+                    ["lessons"] = new { windows = windowRecords, dailyMinutes },
                 }
                 : new Dictionary<string, object>(),
             dailyBudgetUsd = 2,
@@ -172,7 +178,7 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
     // ─── ручка №1: status ───
 
     [Fact]
-    public async Task Status_Ребёнок_200_Все9ПолейChildStatus()
+    public async Task Status_Ребёнок_200_Базовые9ПолейChildStatus()
     {
         var id = await NewChild("kid-status-ok");
         AgreeRules(id);
@@ -250,6 +256,55 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
         status.Should().Be(HttpStatusCode.ServiceUnavailable);
         CodeOf(body).Should().Be("policy_unavailable");
         body.GetProperty("message").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
+    // ─── добавочные поля статуса (KM-B5e2): dailyMinutes, windows, minutesToday ───
+
+    [Fact]
+    public async Task Status_ПрофильСУстановками_ДобавочныеПоляСтатуса()
+    {
+        // Фиксированное окно 16:00–18:00 и лимит 40: поля статуса — цифры профиля как есть,
+        // а не подстановка minutesLeft и пустых окон (решение 3 финала 703c954f).
+        var id = await NewChild("kid-status-fields", fixedWindow: ("16:00", "18:00"));
+        AgreeRules(id);
+
+        // 12 целых минут сегодня — записью в боевой store (тот же путь журнала, что у
+        // heartbeat): 02:00 МСК текущего местного дня — всегда внутри него, тест не зависит
+        // от того, насколько «сейчас» близко к полуночи.
+        var usage = _hosts.Services.GetRequiredService<ChildUsageStore>();
+        var dayStart = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Moscow).Date;
+        for (var m = 0; m < 12; m++)
+            usage.RecordMinute(id, "lessons", new DateTimeOffset(dayStart.AddHours(2).AddMinutes(m), TimeSpan.FromHours(3)), Moscow);
+
+        var client = ChildClient("kid-status-fields");
+        var (status, body) = await ReadAsync(await client.GetAsync("/api/child/status"));
+
+        status.Should().Be(HttpStatusCode.OK);
+        body.GetProperty("dailyMinutes").GetInt32().Should().Be(40);
+        var windows = body.GetProperty("windows").EnumerateArray().ToList();
+        windows.Should().HaveCount(1, "окна отдаются из профиля как есть, в формате профиля");
+        windows[0].GetProperty("from").GetString().Should().Be("16:00");
+        windows[0].GetProperty("to").GetString().Should().Be("18:00");
+        // Мутация «minutesToday всегда 0» краснит эту строку: итог дня — из журнала, не константа.
+        body.GetProperty("minutesToday").GetInt32().Should().Be(12);
+        // Существующее поле согласно новому: остаток = лимит − итог дня.
+        body.GetProperty("minutesLeft").GetInt32().Should().Be(28);
+    }
+
+    [Fact]
+    public async Task Status_ПрофильБезЛимитаИОкон_DailyMinutesNull_WindowsEmpty()
+    {
+        await NewChild("kid-status-nolimit", dailyMinutes: null, noWindows: true);
+        var client = ChildClient("kid-status-nolimit");
+
+        var (status, body) = await ReadAsync(await client.GetAsync("/api/child/status"));
+
+        status.Should().Be(HttpStatusCode.OK);
+        body.GetProperty("dailyMinutes").ValueKind.Should().Be(JsonValueKind.Null, "лимита нет — null, не 0");
+        body.GetProperty("windows").GetArrayLength().Should().Be(0, "окон нет — пустой список, не null");
+        // Итог дня виден и без лимита: журнала нет — честный 0.
+        body.GetProperty("minutesToday").GetInt32().Should().Be(0);
+        body.GetProperty("minutesLeft").ValueKind.Should().Be(JsonValueKind.Null, "без лимита остатка нет");
     }
 
     // ─── ручка №2: heartbeat ───

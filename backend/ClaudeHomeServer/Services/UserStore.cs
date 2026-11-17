@@ -666,6 +666,26 @@ public class UserStore : IForgejoAccountStore, IUserStore
     }
 
     /// <summary>
+    /// Засев предметов детского профиля (Т1b, срез §1): пустой Subjects — пишется, непустой —
+    /// не трогается никогда (список админа авторитетнее засева). Проверка пустоты и запись —
+    /// под этим одним локом: иначе параллельный PUT админа (SetChildProfile) затёрся бы
+    /// снимком засевом, а два одновременных засев дали бы два тройных списка — кто взял
+    /// лок позже, тот видит непустой Subjects и пропускает. Возвращает false, если
+    /// пользователя или профиля нет либо Subjects уже непустой.
+    /// </summary>
+    public bool SeedChildSubjectsIfEmpty(string id, List<ChildSubject> subjects)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user?.ChildMode is null || user.ChildMode.Subjects.Count > 0) return false;
+            user.ChildMode.Subjects = [.. subjects];
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Согласие ребёнка с правилами (KM-B6b, ADR-041 ручка №7): под тем же локом, что и
     /// SetChildProfile, пишет ТОЛЬКО RulesAgreedAt/RulesSummary в живой профиль — лимиты и
     /// тьютора не трогает никогда. Уже согласован, пользователя или профиля нет — false;

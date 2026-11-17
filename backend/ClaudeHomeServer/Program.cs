@@ -400,6 +400,10 @@ builder.Services.AddPersonas(builder.Configuration);
 // gated hosted: в Testing не стартует, повторный проход отсекается marker-файлом в data.
 // Живёт в спине рядом с прочими миграциями сторов, а не в вертикали Llm (см. шапку файла).
 builder.Services.AddGatedHostedService<GlmModelAliasMigration>(builder.Configuration);
+// Засев трёх предметов волны 1 существующим профилям детей (срез §1, Т1b): gated hosted,
+// идемпотентен состоянием — непустой Subjects не трогается; проверка пустоты — в одном
+// локе UserStore, в миграции не дублируется. Ошибка стора не роняет старт (лог).
+builder.Services.AddGatedHostedService<ChildSubjectsMigration>(builder.Configuration);
 // Разовое сведение моделей родного Claude к семействам (opus/fable/sonnet/haiku) во всех сторах —
 // gated hosted, повторный проход отсекается маркером model-families-migration-v1.done в data.
 builder.Services.AddGatedHostedService<ClaudeModelFamilyMigration>(builder.Configuration);

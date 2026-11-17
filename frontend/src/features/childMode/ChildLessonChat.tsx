@@ -6,13 +6,12 @@
 // Шапку рисуем сами, а не ChatHeaderBar: тот несёт взрослые действия (переименование,
 // удаление, теги, баланс провайдера), ручки которых ребёнку закрыты allow-list'ом (403).
 //
-// Т3d: когда родитель принёс предмет пропом `subject` (Т3c) — шапка по макету Д1
-// (docs/mockups/kids-tutors.html, «Урок»): аватар репетитора и его имя вместо бейджа
-// названия, метка предмета — бейдж с глифом из палитры ключа. `subjectClosed` — вместо
-// композера спокойная панель «Этот предмет закрыт» (дефолтный вариант разреза; ждёт
-// ответа Андрея на вопрос 2). Без `subject` — прежняя шапка по CHILD_SUBJECTS (мост до Т3e).
-// На мобиле шапка урока скрыта целиком (.m .chathead): имя и метку несёт родительский
-// хаб (.mobt) — это оболочка, не этот файл.
+// Т3d: шапка по макету Д1 (docs/mockups/kids-tutors.html, «Урок»): аватар репетитора
+// и его имя вместо бейджа названия, метка предмета — бейдж с глифом из палитры ключа.
+// `subjectClosed` — вместо композера спокойная панель «Этот предмет закрыт» (дефолтный
+// вариант разреза; ждёт ответа Андрея на вопрос 2). `subject = null` — закрытый или
+// до-предметный чат: шапка без метки предмета. На мобиле шапка урока скрыта целиком
+// (.m .chathead): имя и метку несёт родительский хаб (.mobt) — это оболочка, не этот файл.
 //
 // Запросы урока и строка allow-list ребёнка (ADR-041, «Существующие ручки и методы»):
 //  • GET  api/chats/{id}                      — рефреш состояния сессии в useSession → allow-list
@@ -42,7 +41,7 @@ import { Composer } from '../../components/Composer';
 import { ChatItemView } from '../../components/chat/ChatItemView';
 import { ChatSessionContext } from '../../components/chat/contexts';
 import { childApi, ChildAttachmentRejectedError } from './api';
-import { CHILD_SUBJECTS, TutorMark, type ChildSubjectId } from './ChildHome';
+import { TutorMark } from './ChildHome';
 import { subjectColors } from './subjectPalette';
 import type { ChatItem } from '../../types';
 import type { ChildStatus, ChildSubjectTutor, ChildSubjectView } from './types';
@@ -91,11 +90,9 @@ function childFeed(items: ChatItem[]): { item: ChatItem; i: number; plate: boole
 
 interface Props {
   sessionId: string;
-  // Мост до Т3e: поиск по CHILD_SUBJECTS, когда `subject` не передан вовсе
-  subjectId?: ChildSubjectId;
   // Предмет чата с сервера (Т3c): view — живой предмет; null — закрытый или
-  // до-предметный чат (шапка без метки предмета); не передан — мост по subjectId (до Т3e)
-  subject?: ChildSubjectView | null;
+  // до-предметный чат (шапка без метки предмета)
+  subject: ChildSubjectView | null;
   // Предмет выключен или удалён (И1-бис): чат только для чтения
   subjectClosed?: boolean;
   title: string;
@@ -106,16 +103,12 @@ interface Props {
   initialVoiceMode?: boolean;
 }
 
-// Предмет шапки в нормализованном виде: серверный (цвет — из палитры ключа, Т3b) или
-// константа волны 1 (мост до Т3e). null — закрытый/до-предметный чат: метки предмета нет.
+// Предмет шапки: цвет — из палитры ключа (Т3b). null — закрытый/до-предметный чат:
+// метки предмета нет.
 interface HeaderSubject { label: string; glyph: string; bg: string; fg: string; tutor: ChildSubjectTutor | null }
-function headerSubject(subject: ChildSubjectView | null | undefined, subjectId?: ChildSubjectId): HeaderSubject | null {
-  if (subject !== undefined) {
-    if (!subject) return null;
-    return { label: subject.label, glyph: subject.glyph || '?', ...subjectColors(subject.color), tutor: subject.tutor };
-  }
-  const legacy = CHILD_SUBJECTS.find(s => s.id === subjectId);
-  return legacy ? { label: legacy.label, glyph: legacy.glyph, bg: legacy.bg, fg: legacy.fg, tutor: null } : null;
+function headerSubject(subject: ChildSubjectView | null): HeaderSubject | null {
+  if (!subject) return null;
+  return { label: subject.label, glyph: subject.glyph || '?', ...subjectColors(subject.color), tutor: subject.tutor };
 }
 
 interface Attached { path: string; name: string }
@@ -135,11 +128,10 @@ function rejectText(e: unknown, maxBytes: number): string {
   return 'Не получилось загрузить файл. Попробуй ещё раз.';
 }
 
-export function ChildLessonChat({ sessionId, subjectId, subject, subjectClosed = false, title, status, onHintStep, initialVoiceMode = false }: Props) {
+export function ChildLessonChat({ sessionId, subject, subjectClosed = false, title, status, onHintStep, initialVoiceMode = false }: Props) {
   const isMobile = useIsMobile();
   const online = useOnline();
-  const serverMode = subject !== undefined;
-  const view = headerSubject(subject, subjectId);
+  const view = headerSubject(subject);
   const { items, isWaiting, send, interrupt } = useSession(sessionId);
 
   // Состояния привязаны к чату: ключ — sessionId, чужой чат их не видит
@@ -222,32 +214,22 @@ export function ChildLessonChat({ sessionId, subjectId, subject, subjectClosed =
     <ChatSessionContext.Provider value={sessionId}>
       <section data-child-lesson="" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {/* Макет Д1: на мобиле шапка урока скрыта (.m .chathead) — имя репетитора и метку
-            предмета несёт родительский хаб (.mobt), это оболочка. Мост (без subject) —
-            прежняя шапка на обеих ширинах. */}
-        {(!serverMode || !isMobile) && (
+            предмета несёт родительский хаб (.mobt), это оболочка. */}
+        {!isMobile && (
         <header style={{ ...col, paddingTop: SP.lg, paddingBottom: SP.md, display: 'flex', alignItems: 'center', gap: SP.md }}>
-          {serverMode
-            ? view?.tutor && <TutorMark tutor={view.tutor} size={52} />
-            : view && !isMobile && (
-              <span aria-hidden style={{
-                width: 44, height: 44, borderRadius: R.xl, flexShrink: 0, background: view.bg, color: view.fg,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT.serif, fontSize: FS.xl, fontWeight: 600,
-              }}>{view.glyph}</span>
-            )}
+          {view?.tutor && <TutorMark tutor={view.tutor} size={52} />}
           <div style={{ minWidth: 0 }}>
             <h1 style={{
-              margin: 0, fontFamily: FONT.serif, fontSize: serverMode ? FS.h1 : (isMobile ? FS.h1 : FS.display), fontWeight: 500, lineHeight: 1.25,
+              margin: 0, fontFamily: FONT.serif, fontSize: FS.h1, fontWeight: 500, lineHeight: 1.25,
               color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>{serverMode ? (view?.tutor?.name ?? title) : title}</h1>
+            }}>{view?.tutor?.name ?? title}</h1>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: SP.xs }}>
               {view && (
                 <Badge tone="neutral">
-                  {serverMode && (
-                    <span aria-hidden style={{
-                      width: 22, height: 22, borderRadius: R.sm, flexShrink: 0, background: view.bg, color: view.fg,
-                      display: 'grid', placeItems: 'center', fontFamily: FONT.serif, fontSize: FS.xs, fontWeight: 700,
-                    }}>{view.glyph}</span>
-                  )}
+                  <span aria-hidden style={{
+                    width: 22, height: 22, borderRadius: R.sm, flexShrink: 0, background: view.bg, color: view.fg,
+                    display: 'grid', placeItems: 'center', fontFamily: FONT.serif, fontSize: FS.xs, fontWeight: 700,
+                  }}>{view.glyph}</span>
                   {view.label}
                 </Badge>
               )}

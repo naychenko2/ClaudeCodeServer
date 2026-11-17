@@ -1,6 +1,7 @@
 // KM-F5: главная ребёнка — обычный день и первый день (правила не согласованы).
 // Окружение — node + linkedom, как в taskCardAssignee.test: проверяются элементы,
 // порядок плиток и вызовы колбэков пропсов; цвета/тени (CSSOM-значения) — не здесь.
+// Т3e: проп subjects обязателен — фолбэка волны 1 больше нет, плитки всегда из пропа.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, createElement } from 'react';
@@ -28,8 +29,8 @@ vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeIt
 vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { ChildHome, CHILD_SUBJECTS } = await import('./ChildHome');
-import type { ChildLastLesson, ChildSubjectId } from './ChildHome';
+const { ChildHome } = await import('./ChildHome');
+import type { ChildLastLesson } from './ChildHome';
 
 const status = (over: Partial<ChildStatus> = {}): ChildStatus => ({
   state: 'ok', space: 'lessons', minutesLeft: 40,
@@ -43,7 +44,7 @@ const lastLesson: ChildLastLesson = { subjectId: 'math', title: 'Сравнен�
 // Моки типуются как сами колбэки пропсов: createElement(ChildHome, props) проверяется
 // типом Props, «голый» vi.fn под него не подходит.
 type Handlers = {
-  // С Т3b id в колбэке — строка: и литерал CHILD_SUBJECTS, и серверный ключ предмета.
+  // id в колбэке — серверный ключ предмета (строка).
   onOpenSubject: ((id: string) => void) & ReturnType<typeof vi.fn>;
   onResume: (() => void) & ReturnType<typeof vi.fn>;
   onStartRules: (() => void) & ReturnType<typeof vi.fn>;
@@ -57,9 +58,21 @@ function handlers(): Handlers {
   };
 }
 
+// Плитки всегда с сервера (форма — как у GET /api/child/subjects). Порядок фикстуры
+// намеренно произвольный: порядок плиток берётся из пропа.
+const tutorOf = (personaId: string, name: string, hasAvatar: boolean): ChildSubjectTutor => ({ personaId, name, hasAvatar });
+const SERVER_SUBJECTS: ChildSubjectView[] = [
+  { id: 'history', label: 'История', glyph: 'Ии', color: 'lilac' as ChildSubjectColor, tutor: tutorOf('p-hist', 'Летописец Пётр', false) },
+  { id: 'english', label: 'Английский', glyph: 'Ab', color: 'success', tutor: tutorOf('p-en', 'Мисс Пиппа', false) },
+  { id: 'math', label: 'Математика', glyph: '×÷', color: 'info', tutor: tutorOf('p-math', 'Сова Ульяна', true) },
+  { id: 'russian', label: 'Русский язык', glyph: 'Аа', color: 'rose', tutor: tutorOf('p-ru', 'Кот Буквоед', false) },
+  { id: 'chess', label: 'Шахматы', glyph: '♞', color: 'accent', tutor: tutorOf('p-chess', 'Гроссмейстер Ёж', false) },
+  { id: 'biology', label: 'Окружающий мир', glyph: '', color: 'warning', tutor: null },
+];
+
 async function render(
   over: Partial<ChildStatus> = {}, h: Handlers = handlers(), last: ChildLastLesson | null = lastLesson,
-  subjects?: ChildSubjectView[],
+  subjects: ChildSubjectView[] = SERVER_SUBJECTS,
 ) {
   mobile = false;
   const host = doc.createElement('div');
@@ -72,7 +85,7 @@ async function render(
 }
 
 // Мобильная ветка: тот же рендер при matchMedia.matches = true.
-async function renderMobile(h: Handlers = handlers(), subjects?: ChildSubjectView[]) {
+async function renderMobile(h: Handlers = handlers(), subjects: ChildSubjectView[] = SERVER_SUBJECTS) {
   mobile = true;
   const host = doc.createElement('div');
   doc.getElementById('root')!.appendChild(host);
@@ -87,8 +100,14 @@ const buttons = (host: HTMLElement) => Array.from(host.querySelectorAll('button'
 // контрол, а не его родителя-обёртку.
 const byText = (host: HTMLElement, t: string) =>
   Array.from(host.querySelectorAll('*')).filter((el) => (el.textContent ?? '').includes(t)).pop() as HTMLElement | undefined;
-const subjectButtons = (host: HTMLElement) =>
-  buttons(host).filter((b) => CHILD_SUBJECTS.some((s) => (b.textContent ?? '').includes(s.label)));
+const serverTileButtons = (host: HTMLElement) =>
+  buttons(host).filter((b) => SERVER_SUBJECTS.some((s) => (b.textContent ?? '').includes(s.label)));
+const tileOf = (host: HTMLElement, id: string) => {
+  const s = SERVER_SUBJECTS.find((x) => x.id === id)!;
+  return serverTileButtons(host).find((b) => (b.textContent ?? '').includes(s.label))!;
+};
+// Первый span плитки — её глиф (SubjectGlyph), дальше идёт блок метки
+const glyphOf = (tile: HTMLElement) => tile.querySelector('span') as HTMLElement;
 
 async function click(el: HTMLElement) {
   await act(async () => { el.click(); });
@@ -110,17 +129,6 @@ describe('ChildHome: обычный день', () => {
     expect(html).toContain('Математика');
     expect(html).toContain('Сравнение дробей');
     expect(html).toContain('Шаг 2 из 3');
-  });
-
-  it('три плитки предметов в порядке CHILD_SUBJECTS; клик по «Математике» → onOpenSubject(math)', async () => {
-    const { host, h } = await render();
-    // Порядок — по id предмета: текст плитки включает глиф («×÷Математика»), сравнивать строки нельзя.
-    const order = subjectButtons(host).map((b) => CHILD_SUBJECTS.find((s) => (b.textContent ?? '').includes(s.label))!.id);
-    expect(order).toEqual(CHILD_SUBJECTS.map((s) => s.id));
-    const math = subjectButtons(host)[0];
-    await click(math);
-    expect(h.onOpenSubject).toHaveBeenCalledTimes(1);
-    expect(h.onOpenSubject).toHaveBeenCalledWith('math' satisfies ChildSubjectId);
   });
 
   it('«Студия» неактивна: бейдж «скоро», клик по ней не зовёт ни один колбэк', async () => {
@@ -145,29 +153,8 @@ describe('ChildHome: обычный день', () => {
   });
 });
 
-// ─── Т3b: плитки с сервера (форма — как у GET /api/child/subjects) ───
-// Порядок списка нарочно не совпадает с CHILD_SUBJECTS: порядок плиток берётся из пропа.
-const tutorOf = (personaId: string, name: string, hasAvatar: boolean): ChildSubjectTutor => ({ personaId, name, hasAvatar });
-const SERVER_SUBJECTS: ChildSubjectView[] = [
-  { id: 'history', label: 'История', glyph: 'Ии', color: 'lilac' as ChildSubjectColor, tutor: tutorOf('p-hist', 'Летописец Пётр', false) },
-  { id: 'english', label: 'Английский', glyph: 'Ab', color: 'success', tutor: tutorOf('p-en', 'Мисс Пиппа', false) },
-  { id: 'math', label: 'Математика', glyph: '×÷', color: 'info', tutor: tutorOf('p-math', 'Сова Ульяна', true) },
-  { id: 'russian', label: 'Русский язык', glyph: 'Аа', color: 'rose', tutor: tutorOf('p-ru', 'Кот Буквоед', false) },
-  { id: 'chess', label: 'Шахматы', glyph: '♞', color: 'accent', tutor: tutorOf('p-chess', 'Гроссмейстер Ёж', false) },
-  { id: 'biology', label: 'Окружающий мир', glyph: '', color: 'warning', tutor: null },
-];
-
-const serverTileButtons = (host: HTMLElement) =>
-  buttons(host).filter((b) => SERVER_SUBJECTS.some((s) => (b.textContent ?? '').includes(s.label)));
-const tileOf = (host: HTMLElement, id: string) => {
-  const s = SERVER_SUBJECTS.find((x) => x.id === id)!;
-  return serverTileButtons(host).find((b) => (b.textContent ?? '').includes(s.label))!;
-};
-// Первый span плитки — её глиф (SubjectGlyph), дальше идёт блок метки
-const glyphOf = (tile: HTMLElement) => tile.querySelector('span') as HTMLElement;
-
 describe('ChildHome: плитки с сервера', () => {
-  it('шесть предметов — шесть плиток в порядке пропа, а не CHILD_SUBJECTS', async () => {
+  it('шесть предметов — шесть плиток в порядке пропа', async () => {
     const { host } = await render({}, handlers(), null, SERVER_SUBJECTS);
     const tiles = serverTileButtons(host);
     expect(tiles).toHaveLength(6);
@@ -235,7 +222,7 @@ describe('ChildHome: плитки с сервера', () => {
 describe('ChildHome: rules_pending', () => {
   it('плиток предметов нет; «Начать вместе с папой» зовёт onStartRules ровно 1 раз', async () => {
     const { host, h } = await render({ state: 'rules_pending', windowEndsAt: null, rulesAgreedAt: null });
-    expect(subjectButtons(host)).toHaveLength(0);
+    expect(serverTileButtons(host)).toHaveLength(0);
     expect(host.innerHTML).not.toContain('Математика');
     expect(host.innerHTML).toContain('Сначала договоримся о правилах');
     await click(byText(host, 'Начать вместе с папой')!);
@@ -245,17 +232,6 @@ describe('ChildHome: rules_pending', () => {
 });
 
 describe('ChildHome: мобила (360)', () => {
-  it('плитки в одну колонку; тач-цель каждой плитки ≥ 40px', async () => {
-    const { host } = await renderMobile();
-    const subjects = subjectButtons(host);
-    expect(subjects).toHaveLength(3);
-    const grid = subjects[0].parentElement!;
-    expect(grid.style.gridTemplateColumns).toBe('1fr');
-    for (const b of subjects) {
-      expect(Number.parseFloat(b.style.minHeight), `тач-цель «${b.textContent}»`).toBeGreaterThanOrEqual(40);
-    }
-  });
-
   it('мобила на шести серверных предметах: сетка не ломается — одна колонка, тач-цель ≥ 40px', async () => {
     const { host } = await renderMobile(handlers(), SERVER_SUBJECTS);
     const tiles = serverTileButtons(host);

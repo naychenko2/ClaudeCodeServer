@@ -3,9 +3,8 @@
 // Образец: docs/mockups/kids-tutors.html (Д1), раздел «Ребёнок · Главная» — плитки
 // с глифом, именем предмета и строкой репетитора.
 //
-// Плитки: когда родитель принёс `subjects` (Т3b, GET /api/child/subjects) — они из него,
-// порядок = порядок серверного списка (И5). Без него — CHILD_SUBJECTS (единственный
-// источник волны 1: KM-F8/F10 импортируют её отсюда; удаляется в Т3e вместе с фолбэком).
+// Плитки: только из пропа `subjects` (GET /api/child/subjects, Т3c), порядок = порядок
+// серверного списка (И5). Пустой список — пустой список: выдумывать нечего.
 
 import { useState, type ReactNode } from 'react';
 import { Brush, Users } from 'lucide-react';
@@ -23,20 +22,8 @@ import { subjectColors } from './subjectPalette';
 import { tutorAvatarUrl } from './api';
 import type { ChildStatus, ChildSubjectTutor, ChildSubjectView } from './types';
 
-// Предметы волны 1. Цвета не новые: макет красит глифы существующими парами токенов
-// (math → info, russian → rose, english → success); подложка rose смешана из токена —
-// как .g-ru в макете (color-mix из var(), не новый hex).
-export const CHILD_SUBJECTS = [
-  { id: 'math', label: 'Математика', glyph: '×÷', bg: C.infoBg, fg: C.info },
-  { id: 'russian', label: 'Русский язык', glyph: 'Аа', bg: `color-mix(in srgb, ${C.rose} 14%, ${C.bgCard})`, fg: C.roseText },
-  { id: 'english', label: 'Английский', glyph: 'Ab', bg: C.successBg, fg: C.successText },
-] as const;
-
-export type ChildSubjectId = (typeof CHILD_SUBJECTS)[number]['id'];
-
-// «Вчера остановились тут»: subjectId резолвится по списку плиток — с сервера это ключ
-// предмета из профиля (slug ^[a-z0-9-]{1,32}$), поэтому тип — строка, не ChildSubjectId:
-// подпись и цвет карточки приходят из найденной плитки (subjects или CHILD_SUBJECTS).
+// «Вчера остановились тут»: subjectId — ключ предмета из профиля (slug ^[a-z0-9-]{1,32}$),
+// поэтому тип — строка; подпись и цвет карточки приходят из найденной в subjects плитки.
 export interface ChildLastLesson {
   subjectId: string;
   title: string;
@@ -48,18 +35,16 @@ interface Props {
   childName: string;
   // Старшая причина состояния (И3): rules_pending меняет экран на договорённость
   status: ChildStatus;
-  // Плитки с сервера (Т3c приносит их из GET /api/child/subjects); нет — CHILD_SUBJECTS
-  // волны 1, до её удаления в Т3e. Пустой список — пустой список: выдумывать нечего.
-  subjects?: ChildSubjectView[];
+  // Плитки с сервера (GET /api/child/subjects). Пустой список — пустой список.
+  subjects: ChildSubjectView[];
   lastLesson?: ChildLastLesson | null;
-  // Тот же колбэк, что раньше; с Т3b id — и серверный ключ предмета, не ChildSubjectId.
+  // id — серверный ключ предмета (строка).
   onOpenSubject: (id: string) => void;
   onResume: () => void;
   onStartRules: () => void;
 }
 
-// Плитка в нормализованном виде: серверный предмет (цвет — из палитры ключа) и константа
-// волны 1 (цвет уже в константе) рисуются одним кодом: плитка остаётся одной плиткой.
+// Плитка в нормализованном виде: цвет — из палитры ключа, пустой глиф — «?».
 interface Tile {
   id: string;
   label: string;
@@ -70,8 +55,6 @@ interface Tile {
   // null — висящий ключ персоны: имени и аватара нет, строки репетитора на плитке тоже нет
   tutor: ChildSubjectTutor | null;
 }
-
-const legacyTiles = (): Tile[] => CHILD_SUBJECTS.map((s) => ({ ...s, tutor: null }));
 
 const serverTiles = (subjects: ChildSubjectView[]): Tile[] => subjects.map((s) => {
   const { bg, fg } = subjectColors(s.color);
@@ -160,7 +143,7 @@ export function ChildHome({ childName, status, subjects, lastLesson, onOpenSubje
   }
 
   const endsClock = status.windowEndsAt ? windowEndsClock(status.windowEndsAt) : null;
-  const tiles = subjects ? serverTiles(subjects) : legacyTiles();
+  const tiles = serverTiles(subjects);
   const lastSubject = lastLesson ? tiles.find((t) => t.id === lastLesson.subjectId) : undefined;
 
   return (

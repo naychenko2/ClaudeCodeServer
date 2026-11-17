@@ -8,8 +8,8 @@
 // Т3c: предметы и предмет чата — с сервера. Плитки ChildHome получает из GET /api/child/subjects
 // (порядок — порядок сервера, И5), предмет открытого чата — поле subject элемента списка чатов
 // (ключ — sessionId). Предмета нет ни в клиентском хранилище, ни в фолбэке 'math': их не стало
-// вместе с серверным источником. Константа волны 1 (CHILD_SUBJECTS) остаётся только мостом
-// до Т3e — пока списка предметов нет на экране.
+// вместе с серверным источником. Моста волны 1 больше нет: пока список предметов
+// не пришёл, плиток нет.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Brush, Lightbulb, ListChecks, LogOut, User, WifiOff } from 'lucide-react';
@@ -36,7 +36,7 @@ import { PillSwitch } from '../../components/Toolbar';
 import { setPersonasChildMode } from '../../lib/personas';
 import { childApi } from './api';
 import { useChildStatus } from './useChildStatus';
-import { ChildHome, CHILD_SUBJECTS, TutorMark } from './ChildHome';
+import { ChildHome, TutorMark } from './ChildHome';
 import { ChildHintsPanel } from './ChildHintsPanel';
 import { ChildLessonChat } from './ChildLessonChat';
 import { ChildRulesOnboarding, type ChildRulesBrief } from './ChildRulesOnboarding';
@@ -58,17 +58,6 @@ const PANEL_W = 300;
 const SUBJECT_INK: Record<ChildSubjectColor, string> = { info: 'blue', rose: 'purple', success: 'green', warning: 'yellow', accent: 'orange' };
 const subjectAsProject = (color: ChildSubjectColor): Project =>
   ({ id: `child-subject-${color}`, icon: { color: SUBJECT_INK[color] } }) as unknown as Project;
-
-// Мост до Т3e: константа волны 1 описана ключами той же палитры (ChildHome: math→info,
-// russian→rose, english→success) — приводим её к серверному виду предмета: интерфейс
-// не различает, откуда предмет. Работает только пока списка предметов нет (он ещё не
-// пришёл или его загрузка не удалась — тот же спокойный случай, что у сбоя списка чатов).
-const LEGACY_COLOR: Record<string, ChildSubjectColor> = { math: 'info', russian: 'rose', english: 'success' };
-const legacySubjectView = (id: string): ChildSubjectView | null => {
-  const color = LEGACY_COLOR[id];
-  const legacy = CHILD_SUBJECTS.find(s => s.id === id);
-  return legacy && color ? { id: legacy.id, label: legacy.label, glyph: legacy.glyph, color, tutor: null } : null;
-};
 
 type Tab = 'lessons' | 'studio' | 'rules';
 
@@ -180,7 +169,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
   const [subjectId, setSubjectId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [chats, setChats] = useState<ChildChatListItem[]>([]);
-  // null — список предметов ещё не пришёл (или его загрузка не удалась): до Т3e плитки — мост волны 1
+  // null — список предметов ещё не пришёл (или его загрузка не удалась): плиток до ответа нет
   const [subjects, setSubjects] = useState<ChildSubjectView[] | null>(null);
   const [hint, setHint] = useState<{ sid: string; step: number }>({ sid: '', step: 0 });
   const [panelOpen, setPanelOpen] = useState(false);
@@ -210,7 +199,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
     childApi.getSubjects({ signal: ac.signal })
       .then(r => { if (loadSeq.current === mine) setSubjects(r); })
       // Сбой предметов — тот же спокойный случай, что у сбоя списка чатов: технического
-      // текста нет, офлайн покажет опрос статуса, плитки останутся мостом волны 1.
+      // текста нет, офлайн покажет опрос статуса; плиток нет, пока список не придёт снова.
       .catch(() => { /* офлайн покажет опрос статуса */ });
     childApi.spaceChats(SPACE, { signal: ac.signal })
       .then(r => { if (loadSeq.current === mine) setChats(r.chats); })
@@ -224,8 +213,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
   // закрытый или до-предметный чат (только для чтения, И1-бис).
   const subjectViewOf = (id: string | null): ChildSubjectView | null => {
     if (!id) return null;
-    if (subjects) return subjects.find(s => s.id === id) ?? null;
-    return legacySubjectView(id);
+    return subjects?.find(s => s.id === id) ?? null;
   };
   const activeChat = sessionId ? chats.find(c => c.sessionId === sessionId) : undefined;
   const activeSubject = subjectViewOf(activeChat ? activeChat.subject : subjectId);
@@ -350,7 +338,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
       <ChildHome
         childName={childName}
         status={eff}
-        subjects={subjects ?? undefined}
+        subjects={subjects ?? []}
         lastLesson={chats[0] ? { subjectId: chats[0].subject ?? '', title: chats[0].name || 'Новый урок' } : null}
         onOpenSubject={id => { setSubjectId(id); setSessionId(null); }}
         onResume={() => { if (chats[0]) openLesson(chats[0].sessionId); }}

@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { parseHTML } from 'linkedom';
+import type { ChildSubjectView } from './types';
 
 const { window: win, document: doc } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
 Object.assign(win, {
@@ -91,8 +92,9 @@ const STATUS = {
 
 function renderChat(root: ReturnType<typeof createRoot>, sessionId: string, status = STATUS) {
   act(() => {
+    // subject=null — до-предметный/закрытый чат: эти тесты проверяют ленту и загрузку, не шапку
     root.render(createElement(ChildLessonChat, {
-      sessionId, subjectId: 'math', title: 'Сравнение дробей', status,
+      sessionId, subject: null, title: 'Сравнение дробей', status,
     }));
   });
 }
@@ -236,7 +238,7 @@ describe('ChildLessonChat: шапка с репетитором и закрыт�
     id: 'math', label: 'Математика', glyph: '×÷', color: 'info' as const,
     tutor: { personaId: 'p1', name: 'Марья Ивановна', hasAvatar: true },
   };
-  function renderWith(root: ReturnType<typeof createRoot>, props: Record<string, unknown>) {
+  function renderWith(root: ReturnType<typeof createRoot>, props: { subject: ChildSubjectView | null } & Record<string, unknown>) {
     act(() => {
       root.render(createElement(ChildLessonChat, { sessionId: 'chat-h', title: 'Дроби', status: STATUS, ...props }));
     });
@@ -287,12 +289,4 @@ describe('ChildLessonChat: шапка с репетитором и закрыт�
     root.unmount();
   });
 
-  it('мост до Т3e: без subject — прежняя шапка по CHILD_SUBJECTS (заголовок чата, метка предмета)', () => {
-    const root = createRoot(doc.getElementById('root')!);
-    renderWith(root, { subjectId: 'math' });
-    expect(doc.querySelector('h1')?.textContent).toBe('Дроби');
-    expect(doc.querySelector('header')!.textContent).toContain('Математика');
-    expect(doc.querySelector('[data-mock-attach]')).not.toBeNull();
-    root.unmount();
-  });
 });

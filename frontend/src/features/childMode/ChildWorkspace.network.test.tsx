@@ -81,21 +81,34 @@ describe('ChildWorkspace: сеть', () => {
     const root = await mount();
     expect(subjectsQ.length).toBe(1); // первый запрос — при монтировании
 
-    // Новый запрос предметов идёт вместе со списком чатов после «Начать урок» (loadLists).
-    // Пока первый ответ не пришёл, плитки — мост волны 1: по нему и идём в урок.
+    // Моста волны 1 (Т3e) больше нет: пока первый ответ не пришёл, плиток нет.
+    expect(doc.body.textContent ?? '').not.toContain('Математика');
+
+    // Плитки — только из ответа сервера. Первый «Начать урок» зовёт loadLists: новый запрос
+    // предметов (subjectsQ[1]) идёт вместе со списком чатов.
+    await act(async () => { subjectsQ[0]({ subjects: [
+      { id: 'math', label: 'Математика', glyph: '×÷', color: 'info', tutor: null },
+      { id: 'english', label: 'Английский', glyph: 'Ab', color: 'success', tutor: null },
+    ] }); });
     await click(byText(/Математика/));
     await click(byText(/^Начать урок$/));
     expect(subjectsQ.length).toBe(2);
 
-    // Ответы приезжают в обратном порядке: сначала новый, потом старый.
-    await act(async () => { subjectsQ[1]({ subjects: [{ id: 'history', label: 'История', glyph: 'И', color: 'warning', tutor: null }] }); });
-    await act(async () => { subjectsQ[0]({ subjects: [{ id: 'math', label: 'Математика', glyph: '×÷', color: 'info', tutor: null }] }); });
+    // Не дождавшись ответа первого запроса — назад на главную и второй урок: ещё запрос
+    // (subjectsQ[2]); его ответ придёт раньше ответа первого.
+    await click(doc.querySelector('button[aria-label="Уроки"]')!);
+    await click(byText(/Английский/));
+    await click(byText(/^Начать урок$/));
+    expect(subjectsQ.length).toBe(3);
+
+    await act(async () => { subjectsQ[2]({ subjects: [{ id: 'history', label: 'История', glyph: 'И', color: 'warning', tutor: null }] }); });
+    await act(async () => { subjectsQ[1]({ subjects: [{ id: 'english', label: 'Английский', glyph: 'Ab', color: 'success', tutor: null }] }); });
 
     // На главную — плитки того, что принёс последний запрос: старый ответ отброшен счётчиком.
     await click(doc.querySelector('button[aria-label="Уроки"]')!);
     const text = doc.body.textContent ?? '';
     expect(text).toContain('История');
-    expect(text).not.toContain('Математика');
+    expect(text).not.toContain('Английский');
     root.unmount();
   });
 });

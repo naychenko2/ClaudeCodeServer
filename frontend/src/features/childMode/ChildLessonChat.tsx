@@ -35,6 +35,7 @@ import { ChatItemView } from '../../components/chat/ChatItemView';
 import { ChatSessionContext } from '../../components/chat/contexts';
 import { childApi, ChildAttachmentRejectedError } from './api';
 import { CHILD_SUBJECTS, type ChildSubjectId } from './ChildHome';
+import type { ChatItem } from '../../types';
 import type { ChildStatus } from './types';
 
 // Лесенка подсказок: чип отправляет свою фразу как сообщение (макет, ASK).
@@ -45,6 +46,39 @@ const MB = 1024 * 1024;
 // Сбой хода: сырой текст провайдера («Invalid API key», «проверьте API-ключ») ребёнку не показываем —
 // он остаётся в логе сервера. Вместо него — один спокойный текст на «ты».
 export const CHILD_TURN_ERROR_TEXT = 'Помощник сейчас не может ответить. Попробуй чуть позже или позови взрослого.';
+
+// Детская лента — белый список видов: реплики ребёнка и тьютора и успешный итог хода идут
+// в ChatItemView как есть; любая ошибка или технический вид (в том числе result с ошибкой API,
+// rate_limit, tool_use с isError…) — плашка CHILD_TURN_ERROR_TEXT; всё остальное, включая
+// будущие виды, не показывается.
+function childFeed(items: ChatItem[]): { item: ChatItem; i: number; plate: boolean }[] {
+  const out: { item: ChatItem; i: number; plate: boolean }[] = [];
+  items.forEach((item, i) => {
+    switch (item.kind) {
+      case 'user_message':
+      case 'text':
+        out.push({ item, i, plate: false });
+        return;
+      case 'result':
+        out.push({ item, i, plate: item.subtype !== 'success' });
+        return;
+      case 'error':
+      case 'error_group':
+      case 'rate_limit':
+      case 'provider_limit':
+      case 'model_switched':
+      case 'work_loop_stopped':
+      case 'hands_notice':
+        out.push({ item, i, plate: true });
+        return;
+      case 'tool_use':
+        if (item.isError) out.push({ item, i, plate: true });
+        return;
+      default:
+    }
+  });
+  return out;
+}
 
 interface Props {
   sessionId: string;
@@ -151,6 +185,7 @@ export function ChildLessonChat({ sessionId, subjectId, title, status, onHintSte
     onHintStep?.(next);
   };
 
+  const feed = childFeed(items);
   const labels = Object.fromEntries(attached.map(a => [a.path, a.name]));
   const gutter = isMobile ? CHAT_GUTTER_MOBILE : SP.xl;
   const col = { width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', boxSizing: 'border-box', padding: `0 ${gutter}px` } as const;
@@ -179,9 +214,9 @@ export function ChildLessonChat({ sessionId, subjectId, title, status, onHintSte
 
         <div data-child-feed="" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <div style={{ ...col, display: 'flex', flexDirection: 'column', gap: SP.md, fontSize: FS.lg, paddingBottom: SP.lg }}>
-            {items.map((item, i) => (item.kind === 'error' || item.kind === 'error_group') ? (
+            {feed.map(({ item, i, plate }, k) => plate ? (
               // Подряд идущие сбои сворачиваем в одну плашку
-              items[i - 1]?.kind === 'error' || items[i - 1]?.kind === 'error_group' ? null : (
+              feed[k - 1]?.plate ? null : (
                 <div key={i} data-child-turn-error="">
                   <Notice tone="warning" icon={Lightbulb} role="alert">{CHILD_TURN_ERROR_TEXT}</Notice>
                 </div>

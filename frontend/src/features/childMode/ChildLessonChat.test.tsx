@@ -58,7 +58,14 @@ let mockItems: unknown[] = [];
 vi.mock('../../hooks/useSession', () => ({
   useSession: () => ({ items: mockItems, isWaiting: false, isJoined: true, send: vi.fn(), interrupt: vi.fn() }),
 }));
-vi.mock('../../components/chat/ChatItemView', () => ({ ChatItemView: () => null }));
+// Стенд ChatItemView печатает вид и «сырой» технический текст — утечка через него видна в ленте
+vi.mock('../../components/chat/ChatItemView', () => ({
+  ChatItemView: (p: { item: { kind: string; text?: string; subtype?: string; apiErrorStatus?: string } }) =>
+    createElement('div', { 'data-civ': p.item.kind },
+      p.item.kind === 'result' && p.item.subtype !== 'success'
+        ? `ошибка API: ${p.item.apiErrorStatus} проверьте API-ключ ${p.item.subtype}`
+        : (p.item.text ?? p.item.kind)),
+}));
 vi.mock('../../components/ui/WaitingIndicator', () => ({ WaitingIndicator: () => null }));
 // Стенд композера: кнопка «прикрепить» отдаёт файл хостуChildLessonChat и печатает чипы
 vi.mock('../../components/Composer', () => ({
@@ -160,6 +167,59 @@ describe('ChildLessonChat: сбой хода в ленте', () => {
     expect(blocks.length).toBe(1);
     expect(blocks[0].textContent).toContain(CHILD_TURN_ERROR_TEXT);
     expect(CHILD_TURN_ERROR_TEXT).toContain('Попробуй');
+    root.unmount();
+  });
+
+  it('result с ошибкой API (401) — без «API/ключ/error_», вместо него плашка', () => {
+    mockItems = [{ kind: 'result', subtype: 'error_during_execution', apiErrorStatus: '401', durationMs: 1, numTurns: 1 }];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-res');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    expect(feed.textContent).not.toMatch(/API|ключ|error_/i);
+    expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(1);
+    expect(feed.querySelector('[data-civ="result"]')).toBeNull();
+    root.unmount();
+  });
+
+  it('успешный result показывается как раньше', () => {
+    mockItems = [{ kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1 }];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-ok');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    expect(feed.querySelector('[data-civ="result"]')).not.toBeNull();
+    expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(0);
+    root.unmount();
+  });
+
+  it('неизвестный вид не показывается, реплики ребёнка и тьютора — да', () => {
+    mockItems = [
+      { kind: 'user_message', text: 'привет' },
+      { kind: 'brand_new_kind', text: 'секрет' },
+      { kind: 'session_started', model: 'm', mode: 'default' },
+      { kind: 'text', text: 'здравствуй' },
+    ];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-unk');
+    const kinds = Array.from(doc.querySelectorAll('[data-civ]')).map(e => e.getAttribute('data-civ'));
+    expect(kinds).toEqual(['user_message', 'text']);
+    expect(doc.querySelector('[data-child-feed]')!.textContent).not.toContain('секрет');
+    root.unmount();
+  });
+
+  it.each([
+    { kind: 'rate_limit', limitType: 'x' },
+    { kind: 'provider_limit', providers: [] },
+    { kind: 'model_switched', model: 'a', previousModel: 'b' },
+    { kind: 'work_loop_stopped', reason: 'r', text: 'technical' },
+    { kind: 'hands_notice', text: 'technical', tone: 'warning' },
+    { kind: 'tool_use', id: '1', name: 'Bash', input: {}, isError: true, result: 'technical' },
+  ])('технический вид $kind — спокойная плашка, подряд идущие сворачиваются в одну', item => {
+    mockItems = [item, { kind: 'error', text: 'raw' }];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-tech');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    expect(feed.querySelectorAll('[data-civ]').length).toBe(0);
+    expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(1);
     root.unmount();
   });
 });

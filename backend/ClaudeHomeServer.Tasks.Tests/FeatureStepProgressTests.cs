@@ -550,6 +550,47 @@ public class FeatureStepProgressTests
         FeatureStepAccounting.ActivePlans([p2, p3, p1]).Select(p => p.Id).Should().Equal("p3");
     }
 
+    // План-дополнение (перекрытие меньше половины ключей раннего) не вытесняет большой план:
+    // оба действующие, знаменатель — объединение. Граница: ровно половина — это замена.
+    [Fact]
+    public void ПланДополнение_НеВытесняетБольшойПлан_ГраницаПоловины()
+    {
+        var big = Plan("p-big", 0, ("A", "back"), ("B", "back"), ("C", "back"), ("D", "back"));
+        var addOne = Plan("p-add1", 5, ("D", "back"), ("E", "back"));
+        var addHalf = Plan("p-add2", 6, ("C", "back"), ("D", "back"), ("F", "back"));
+
+        FeatureStepAccounting.ActivePlans([big, addOne]).Select(p => p.Id).Should().Equal("p-big", "p-add1");
+        var run = Run(Feature(), big, addOne);
+        run.StepProgress.Total.Should().Be(5, "A–D из большого плана и E из дополнения");
+        run.StepProgress.NotCreated.Should().Be(5);
+
+        // 2 из 4 — ровно половина: большой план замещён целиком (граница включена).
+        FeatureStepAccounting.ActivePlans([big, addHalf]).Select(p => p.Id).Should().Equal("p-add2");
+        // Пустой ранний план ничем не замещается.
+        FeatureStepAccounting.PlanReplaces(["A"], []).Should().BeFalse();
+    }
+
+    // Шаги большого плана после мержа не превращаются в «доработки» из-за плана-дополнения:
+    // они остаются в знаменателе и принимаются как шаги плана.
+    [Fact]
+    public void ПланДополнение_ШагиБольшогоПлана_НеДоработкиПослеМержа()
+    {
+        var merge = new TaskItem
+        {
+            Id = "m", FeatureId = Epic, Role = TaskRoles.Merge, Status = TaskItemStatus.Done,
+            CreatedAt = T0.AddMinutes(1), CompletedAt = T0.AddMinutes(2),
+        };
+        var run = Run(Feature(),
+            Plan("p-big", 0, ("A", "back"), ("B", "back"), ("C", "back"), ("D", "back")),
+            Plan("p-add", 5, ("D", "back"), ("E", "back")),
+            merge, Step("sa", "A", 10), Step("sb", "B", 11),
+            Verdict("ra", TaskRoles.Review, TaskVerdicts.Accepted, 12, "sa"));
+
+        run.StepProgress.FollowUpTotal.Should().Be(0, "A и B — шаги плана, а не доработки после мержа");
+        run.StepProgress.Total.Should().Be(5);
+        run.StepProgress.Accepted.Should().Be(1, "принятый ревью шаг A считается в «принято», а не в доработках");
+    }
+
     // B3b: run.ActivePlanIds — ровно действующие планы (тот же ActivePlans): вытесненный и снятый
     // в списке отсутствуют, независимый (без пересечений) присутствует; SlimRun id не теряет.
     [Fact]

@@ -75,9 +75,22 @@ internal static class FeatureStepAccounting
         return keys;
     }
 
-    // Действующие планы в исходном порядке: не снятые и не замещённые более поздним планом с
-    // пересекающимися ключами. Правило попарное: план вытесняется, если существует более поздний
-    // (CreatedAt, Id) план с пересекающимися ключами — сам ли тот принят, неважно. Иначе
+    // Замена плана: поздний план замещает ранний, если его ключи покрывают не меньше половины
+    // ключей раннего. Меньшее перекрытие — план-дополнение (волна доработок, перечисляющая один-два
+    // уже существующих шага): целиком большой план он вытеснять не должен, иначе шаги раннего плана
+    // выпадают из знаменателя, а сверка трекера видит их «вне плана» (эпик 45af8178: план из 38
+    // шагов вытеснен планом из 3 по одному общему ключу). Определение одно — им же пользуется
+    // снятие замещённых планов при создании (TaskManager.InsertWithPlanReplacement).
+    internal static bool PlanReplaces(HashSet<string> laterKeys, HashSet<string> earlierKeys)
+    {
+        if (earlierKeys.Count == 0) return false;
+        var common = earlierKeys.Count(laterKeys.Contains);
+        return common > 0 && common * 2 >= earlierKeys.Count;
+    }
+
+    // Действующие планы в исходном порядке: не снятые и не замещённые более поздним планом
+    // (PlanReplaces). Правило попарное: план вытесняется, если существует более поздний
+    // (CreatedAt, Id) замещающий его план — сам ли тот принят, неважно. Иначе
     // вытесненный план через третий воскрешал бы свои шаги (p1[B], p2[A,B], p3[A] → живёт только p3).
     internal static List<TaskItem> ActivePlans(IEnumerable<TaskItem> plans)
     {
@@ -92,7 +105,7 @@ internal static class FeatureStepAccounting
         {
             var superseded = false;
             for (var j = 0; j < i && !superseded; j++)
-                superseded = live[i].Keys.Overlaps(live[j].Keys);
+                superseded = PlanReplaces(live[j].Keys, live[i].Keys);
             if (!superseded) accepted.Add(live[i].Plan);
         }
         return plans.Where(accepted.Contains).ToList();

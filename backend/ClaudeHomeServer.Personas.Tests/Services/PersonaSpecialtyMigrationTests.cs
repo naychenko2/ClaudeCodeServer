@@ -253,6 +253,53 @@ public class PersonaSpecialtyMigrationTests : IDisposable
         again.GetRaw("match", Owner)!.InheritsAccess.Should().BeTrue();
     }
 
+    // И5 №10 (разрез §2): персона-репетитор в форме провижера (Specialty=None, TemplateKey
+    // = null, MemoryEnabled=false — ChildTutorProvisioner.cs:74-87) не переписывается
+    // фоновой синхронизацией. Механизмы при этом живые: миграция при загрузке доходит до
+    // этой персоны (маркер решения стоит), но её текст остаётся байт в байт; авто-обновление
+    // регламентов пантеона пропускает её по TemplateKey==null (PersonaManager.cs:737);
+    // SectionsVersion для None не считается вовсе (PersonaManager.cs:177), и MarkSectionsSeen
+    // при null-версии ничего не пишет.
+    [Fact]
+    public void Репетитор_БезСпециальностиИШаблона_НеПереписывается()
+    {
+        var config = Config(migrationOn: true);
+        var specialty = SpecialtyStore(config);
+        var stamp = new DateTime(2026, 11, 1, 12, 0, 0, DateTimeKind.Utc);
+        var tutor = Stored("tutor", PersonaSpecialty.None, PersonaAccess.Full, ["tasks", "notes"],
+            updatedAt: stamp);
+        // Форма реальной персоны-тьютора (ChildTutorProvisioner.cs:74-87) и её текст:
+        // legacy-промпт и собственные оверрайды секций — не из каталога и не из специальности.
+        tutor.Name = "Помощник";
+        tutor.Role = "Репетитор 4–5 класс: математика, русский, английский";
+        tutor.MemoryEnabled = false;
+        tutor.SystemPrompt = "Объясняй коротко и по-русски.";
+        tutor.PromptSections = [new PromptSectionOverride("roleRules", true, "Свой текст репетитора.")];
+        WriteStore(tutor);
+
+        var manager = NewManager(config, specialty); // Load: RefreshPantheon + миграция при загрузке
+
+        var raw = manager.GetRaw("tutor", Owner)!;
+        // Фоновая миграция живая: она видела эту персону и приняла по ней решение…
+        raw.InheritsAccessMigratedAt.Should().NotBeNull();
+        // …но текст не тронут ни ей, ни авто-обновлением регламентов (TemplateKey null — пропуск).
+        raw.Name.Should().Be("Помощник");
+        raw.Role.Should().Be("Репетитор 4–5 класс: математика, русский, английский");
+        raw.SystemPrompt.Should().Be("Объясняй коротко и по-русски.");
+        raw.PromptSections!.Single().Text.Should().Be("Свой текст репетитора.");
+        raw.MemoryEnabled.Should().BeFalse();
+        raw.TemplateKey.Should().BeNull();
+        raw.UpdatedAt.Should().Be(stamp, "фоновая переписка не трогает и отметку времени персоны");
+
+        // SectionsVersion: у None нет набора секций (SpecialtySettingsStore.cs:264) — версия
+        // не считается, отмечать нечего, стора не касаются.
+        manager.CurrentSectionsVersion(raw).Should().BeNull();
+        var hashAfterLoad = Hash(_storePath);
+        manager.MarkSectionsSeen("tutor", Owner);
+        Hash(_storePath).Should().Be(hashAfterLoad, "MarkSectionsSeen при null-версии ничего не пишет");
+        manager.GetRaw("tutor", Owner)!.SectionsSeenVersion.Should().BeNull();
+    }
+
     [Fact]
     public void СухойПрогон_НичегоНеПишет_НиPersonasНиSpecialtySettings()
     {

@@ -86,33 +86,75 @@ public class DailyTimeWindowTests
         Assert.False(DailyTimeWindow.Contains(Ms(13, 17, 0), new[] { W("16:00", "16:00") }, TzMsk)); // пустое окно
     }
 
+    // ─── CurrentEnd / NextStart (статус windowEndsAt / nextWindowAt, ADR-041) ───
+    // Ожидаемое время — настенные часы МСК; Ms() даёт тот же instant, что вернул бы хелпер.
+
     [Fact]
-    public void MinutesUntilEnd_ОбычноеОкноИПереходЧерезПолночь()
+    public void CurrentEnd_ОбычноеОкно_КонецТогоЖеДня()
     {
-        Assert.Equal(60, DailyTimeWindow.MinutesUntilEnd(Ms(13, 17, 0), new[] { W("16:00", "18:00") }, TzMsk));
-        Assert.Equal(120, DailyTimeWindow.MinutesUntilEnd(Ms(13, 16, 0), new[] { W("16:00", "18:00") }, TzMsk));
-        Assert.Equal(450, DailyTimeWindow.MinutesUntilEnd(Ms(13, 23, 30), new[] { W("22:00", "07:00") }, TzMsk)); // до 07:00 следующих суток
-        Assert.Equal(240, DailyTimeWindow.MinutesUntilEnd(Ms(13, 3, 0), new[] { W("22:00", "07:00") }, TzMsk));
+        var windows = new[] { W("16:00", "18:00") };
+        Assert.Equal(Ms(13, 18, 0), DailyTimeWindow.CurrentEnd(Ms(13, 17, 0), windows, TzMsk)); // 17:00 → 18:00 того же дня
+        Assert.Equal(Ms(13, 18, 0), DailyTimeWindow.CurrentEnd(Ms(13, 16, 0), windows, TzMsk)); // с левой границы
     }
 
     [Fact]
-    public void MinutesUntilEnd_ВнеОкна_ИНаПравойГранице_Null()
+    public void CurrentEnd_ПереходЧерезПолночь_КонецСледующихСуток()
     {
-        Assert.Null(DailyTimeWindow.MinutesUntilEnd(Ms(13, 19, 0), new[] { W("16:00", "18:00") }, TzMsk));
-        Assert.Null(DailyTimeWindow.MinutesUntilEnd(Ms(13, 18, 0), new[] { W("16:00", "18:00") }, TzMsk));
-        Assert.Null(DailyTimeWindow.MinutesUntilEnd(Ms(13, 17, 0), null, TzMsk));
+        var windows = new[] { W("22:00", "07:00") };
+        Assert.Equal(Ms(14, 7, 0), DailyTimeWindow.CurrentEnd(Ms(13, 23, 30), windows, TzMsk));  // 23:30 → 07:00 следующих суток
+        Assert.Equal(Ms(13, 7, 0), DailyTimeWindow.CurrentEnd(Ms(13, 3, 0), windows, TzMsk));    // 03:00 → 07:00 этих суток
     }
 
     [Fact]
-    public void MinutesUntilEnd_НесколькоОкон_БлижайшийКонец()
+    public void CurrentEnd_ВнеОкон_ИНаПравойГранице_Null()
+    {
+        Assert.Null(DailyTimeWindow.CurrentEnd(Ms(13, 19, 0), new[] { W("16:00", "18:00") }, TzMsk));
+        Assert.Null(DailyTimeWindow.CurrentEnd(Ms(13, 18, 0), new[] { W("16:00", "18:00") }, TzMsk));
+        Assert.Null(DailyTimeWindow.CurrentEnd(Ms(13, 17, 0), null, TzMsk));
+    }
+
+    [Fact]
+    public void CurrentEnd_НесколькоОкон_БлижайшийКонец()
     {
         var windows = new[] { W("16:00", "18:00"), W("17:00", "17:30") };
-        Assert.Equal(30, DailyTimeWindow.MinutesUntilEnd(Ms(13, 17, 0), windows, TzMsk));
+        Assert.Equal(Ms(13, 17, 30), DailyTimeWindow.CurrentEnd(Ms(13, 17, 0), windows, TzMsk));
     }
 
     [Fact]
-    public void MinutesUntilEnd_ДробныеМинуты_OкруглениеВниз()
+    public void NextStart_ВнеОкна_БлижайшееНачалоСтрогоПослеМомента()
     {
-        Assert.Equal(29, DailyTimeWindow.MinutesUntilEnd(Ms(13, 17, 30, 30), new[] { W("16:00", "18:00") }, TzMsk)); // 17:30:30 → 29.5 мин, floor
+        var windows = new[] { W("16:00", "18:00") };
+        Assert.Equal(Ms(14, 16, 0), DailyTimeWindow.NextStart(Ms(13, 19, 0), windows, TzMsk));  // 19:00 → 16:00 следующего дня
+        Assert.Equal(Ms(13, 16, 0), DailyTimeWindow.NextStart(Ms(13, 10, 0), windows, TzMsk));  // утро → 16:00 этих же суток
+    }
+
+    [Fact]
+    public void NextStart_ВнутриОкна_НачалоТекущегоОкнаНеВозвращается()
+    {
+        var windows = new[] { W("16:00", "18:00") };
+        Assert.Equal(Ms(14, 16, 0), DailyTimeWindow.NextStart(Ms(13, 17, 0), windows, TzMsk)); // внутри — начало следующих суток
+        Assert.Equal(Ms(14, 16, 0), DailyTimeWindow.NextStart(Ms(13, 16, 0), windows, TzMsk)); // ровно на From: окно уже открыто → следующих суток
+    }
+
+    [Fact]
+    public void NextStart_ДниНедели_ПятницаВечер_ВозвращаетПонедельник()
+    {
+        var windows = new[] { W("16:00", "18:00", new[] { 1, 2, 3, 4, 5 }) };
+        Assert.Equal(Ms(20, 16, 0), DailyTimeWindow.NextStart(Ms(17, 19, 0), windows, TzMsk)); // пт 17.07 19:00 → пн 20.07 16:00
+    }
+
+    [Fact]
+    public void NextStart_ПереходЧерезПолночьСДнями_УтроСубботы_ВозвращаетПонедельник()
+    {
+        var windows = new[] { W("22:00", "07:00", new[] { 1, 2, 3, 4, 5 }) };
+        Assert.Equal(Ms(20, 22, 0), DailyTimeWindow.NextStart(Ms(18, 3, 0), windows, TzMsk)); // сб 18.07 03:00 → пн 20.07 22:00
+    }
+
+    [Fact]
+    public void NextStart_НетВалидныхОкон_Null()
+    {
+        Assert.Null(DailyTimeWindow.NextStart(Ms(13, 10, 0), null, TzMsk));
+        Assert.Null(DailyTimeWindow.NextStart(Ms(13, 10, 0), new[] { W("abc", "18:00") }, TzMsk));
+        Assert.Null(DailyTimeWindow.NextStart(Ms(13, 10, 0), new[] { W("16:00", "18:00", new[] { 8 }) }, TzMsk)); // ISO 8 — не день
     }
 }

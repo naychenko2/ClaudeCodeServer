@@ -26,24 +26,60 @@ public sealed record DailyTimeWindow(string From, string To, IReadOnlyList<int>?
         return false;
     }
 
-    // Целых минут до конца БЛИЖАЙШЕГО окна, содержащего момент (floor; на правой границе
-    // момента уже нет — null). Вне всех окон — null. Нужен статусу «конец окна» (KM-B5c).
-    public static int? MinutesUntilEnd(DateTimeOffset now, IReadOnlyList<DailyTimeWindow?>? windows, TimeZoneInfo tz)
+    // Конец БЛИЖАЙШЕГО окна, содержащего момент, как instant в tz (статус windowEndsAt, ADR-041).
+    // Для окна через полночь конец — на «следующих сутках». Вне всех окон — null
+    // (на правой границе момента уже нет — полунтервал [From, To)).
+    public static DateTimeOffset? CurrentEnd(DateTimeOffset now, IReadOnlyList<DailyTimeWindow?>? windows, TimeZoneInfo tz)
     {
         if (windows is null or { Count: 0 }) return null;
         var local = TimeZoneInfo.ConvertTime(now, tz);
-        int? best = null;
+        DateTimeOffset? best = null;
         foreach (var w in windows)
         {
             if (w is null) continue;
             if (!w.TryParseBounds(out var from, out var to)) continue;
             if (!w.InRange(local, from, to)) continue;
-            var delta = to - new TimeOnly(local.TimeOfDay.Ticks);
-            if (delta < TimeSpan.Zero) delta += TimeSpan.FromDays(1);   // конец — на «следующих сутках» окна
-            best = best is { } cur ? Math.Min(cur, (int)delta.TotalMinutes) : (int)delta.TotalMinutes;
+            var end = AtLocal(local.DateTime.Date, to, tz);
+            if (end <= local) end = end.AddDays(1);   // переход через полночь: конец — следующих суток
+            best = best is { } cur && cur <= end ? cur : end;
         }
         return best;
     }
+
+    // Начало БЛИЖАЙШЕГО окна строго после момента, как instant в tz (статус nextWindowAt, ADR-041).
+    // Окно с днями начинается в ближайший разрешённый день (пт 19:00 при [1..5] → пн 16:00).
+    // Нет валидных окон — null. Поиск на неделю вперёд: любое валидное окно начинается в пределах
+    // следующих 7 дней (дней больше — нет), глубина полная.
+    public static DateTimeOffset? NextStart(DateTimeOffset now, IReadOnlyList<DailyTimeWindow?>? windows, TimeZoneInfo tz)
+    {
+        if (windows is null or { Count: 0 }) return null;
+        var local = TimeZoneInfo.ConvertTime(now, tz);
+        var wall = local.DateTime;
+        DateTimeOffset? best = null;
+        foreach (var w in windows)
+        {
+            if (w is null) continue;
+            if (!w.TryParseBounds(out var from, out _)) continue;
+            for (var d = 0; d <= 7; d++)
+            {
+                var start = AtLocal(wall.Date.AddDays(d), from, tz);
+                if (start <= local) continue;   // начало уже прошло (в т.ч. текущее окно)
+                if (w.Weekdays is { Count: > 0 } days && !days.Contains(IsoDay(start.DateTime.DayOfWeek))) continue;
+                if (best is null || start < best) best = start;
+                break;   // ближайшее начало этого окна найдено
+            }
+        }
+        return best;
+    }
+
+    // Настенные часы (дата + время) как instant с фактическим offset таймзоны (с учётом DST).
+    private static DateTimeOffset AtLocal(DateTime date, TimeOnly time, TimeZoneInfo tz)
+    {
+        var wall = date.Date + time.ToTimeSpan();
+        return new DateTimeOffset(wall, tz.GetUtcOffset(wall));
+    }
+
+    private static int IsoDay(DayOfWeek dow) => dow == DayOfWeek.Sunday ? 7 : (int)dow;
 
     private bool TryParseBounds(out TimeOnly from, out TimeOnly to)
     {
@@ -55,11 +91,7 @@ public sealed record DailyTimeWindow(string From, string To, IReadOnlyList<int>?
 
     private bool InRange(DateTimeOffset local, TimeOnly from, TimeOnly to)
     {
-        if (Weekdays is { Count: > 0 } days)
-        {
-            var iso = local.DateTime.DayOfWeek == DayOfWeek.Sunday ? 7 : (int)local.DateTime.DayOfWeek;
-            if (!days.Contains(iso)) return false;
-        }
+        if (Weekdays is { Count: > 0 } days && !days.Contains(IsoDay(local.DateTime.DayOfWeek))) return false;
         var now = new TimeOnly(local.TimeOfDay.Ticks);
         return from <= to ? (now >= from && now < to)   // обычный диапазон
                           : (now >= from || now < to);   // переход через полночь

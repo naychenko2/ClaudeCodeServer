@@ -484,17 +484,17 @@ public class WikiIngestSynthTests : IDisposable
     public async Task НепарсимыйОтвет_ПричинаНазываетВыводПротивЛимита_ИНачалоОднойСтрокой()
     {
         // D3: «вывод N из лимита M» + начало ответа. N = M — ответ упёрся в потолок вывода места
-        // (NumPredict записи каталога wiki-nightly = 16 384). Мутация «вернуть reason без
+        // (NumPredict записи каталога wiki-nightly = 8 192, Q1-S14). Мутация «вернуть reason без
         // WithUnparsedDiagnostics» → оба новых assert красные.
         var lines = Enumerable.Range(0, 40).Select(i => $"строка {i}: {new string('о', 20)}").ToList();
         var answer = string.Join("\n", lines); // ~1200 симв. с переводами строк: и не JSON, и длиннее 300
-        var llm = new FakeLlm(answer) { LocalOutputTokens = 16_384 };
+        var llm = new FakeLlm(answer) { LocalOutputTokens = 8_192 };
 
         var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
         res.Reason.Should().Contain("ответ модели не разобран");
-        res.Reason.Should().Contain("вывод 16384 ток. из лимита 16384",
+        res.Reason.Should().Contain("вывод 8192 ток. из лимита 8192",
             "N против M: по ним видно, обрезан ли ответ по лимиту вывода");
         var head = string.Join(" ", lines)[..300];
         res.Reason.Should().Contain($"начало ответа: «{head}»");
@@ -510,16 +510,76 @@ public class WikiIngestSynthTests : IDisposable
         // на :461 (копия дерева); здесь она краснит тем же снятым вызовом хелпера.
         var bad = WikiSynthJson.Append(PageTitle, Claim1, BadQuote);
         var lines = Enumerable.Range(0, 40).Select(i => $"строка {i}: {new string('о', 20)}").ToList();
-        var llm = new FakeLlm(bad, repair: string.Join("\n", lines)) { LocalOutputTokens = 16_384 };
+        var llm = new FakeLlm(bad, repair: string.Join("\n", lines)) { LocalOutputTokens = 8_192 };
 
         var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
 
         llm.Calls.Select(c => c.Pass).Should().Equal("S", "R");
         res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
         res.Reason.Should().Contain("ремонт не дал плана")
-            .And.Contain("вывод 16384 ток. из лимита 16384")
+            .And.Contain("вывод 8192 ток. из лимита 8192")
             .And.Contain($"начало ответа: «{string.Join(" ", lines)[..300]}»");
         PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НепарсимыйОтвет_ХвостПробельнойПетли_ВиденСимволамиПробелиПереносов()
+    {
+        // D9 (Q1-S14): вырожденная генерация (бесконечные пробелы) отличается от петли повтора
+        // только по хвосту: последние 200 симв. — с видимой пробелью (пробел → ·, \n → ⏎).
+        // Мутация «не добавлять хвост» (WithUnparsedDiagnostics) → оба новых assert красные.
+        var answer = new string('x', 700) + new string(' ', 250) + "\n" + new string(' ', 49);
+        var llm = new FakeLlm(answer) { LocalOutputTokens = 8_192 };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("вывод 8192 ток. из лимита 8192");
+        // Хвост (символы 800..999 ответа): 150 пробелов, перевод строки, 49 пробелов —
+        // ровно 200 видимых символов.
+        var tail = new string('·', 150) + "⏎" + new string('·', 49);
+        res.Reason.Should().Contain($"хвост ответа: «{tail}»");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НепарсимыйОтвет_ЭмодзиНаГраницахСреза_ОдиночногоСуррогатаВЖурналеНет()
+    {
+        // D9 (Q1-S14), остаток ревью S12: граница среза головы (300) и хвоста (200) попадает
+        // внутрь суррогатной пары → сдвиг на 1 символ, пара целиком остаётся за фрагментом.
+        // Мутация «убрать сдвиг границы в SafeCut» (return s[from..to]) → краснеют assert'ы
+        // HaveLength и IsSurrogate (в журнале появляется одиночный суррогат); проверено на
+        // копии дерева.
+        var emoji = char.ConvertFromUtf32(0x1F600); // 😀 = высокая + низкая суррогатная пара
+        var answer = new string('a', 299) + emoji + new string('b', 499) + emoji + new string('c', 199);
+        // Длина 1001: эмодзи на 299–300 — ровно внутри границы головы (срез [..300));
+        // эмодзи на 800–801 — ровно внутри границы хвоста (он начинается с 1001−200 = 801).
+        var llm = new FakeLlm(answer) { LocalOutputTokens = 8_192 };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        var head = ExtractQuoted(res.Reason!, "начало ответа: «");
+        var tail = ExtractQuoted(res.Reason!, "хвост ответа: «");
+        head.Should().HaveLength(299, "граница 300 внутри пары — сдвиг назад, пара не входит во фрагмент");
+        tail.Should().HaveLength(199, "граница 801 внутри пары — сдвиг вперёд, пара не входит во фрагмент");
+        char.IsSurrogate(head[0]).Should().BeFalse();
+        char.IsSurrogate(head[^1]).Should().BeFalse();
+        char.IsSurrogate(tail[0]).Should().BeFalse();
+        char.IsSurrogate(tail[^1]).Should().BeFalse();
+        head.Should().StartWith(new string('a', 299));
+        tail.Should().Be(new string('c', 199));
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    private static string ExtractQuoted(string reason, string marker)
+    {
+        var i = reason.IndexOf(marker, StringComparison.Ordinal);
+        i.Should().BeGreaterThanOrEqualTo(0, $"в причине есть «{marker}…»");
+        var start = i + marker.Length;
+        var end = reason.IndexOf('»', start);
+        end.Should().BeGreaterThan(start, "фрагмент непустой");
+        return reason[start..end];
     }
 
     // ── гонка ──

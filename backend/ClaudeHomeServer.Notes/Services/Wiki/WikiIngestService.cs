@@ -259,6 +259,13 @@ public sealed class WikiIngestService
     // JSON-плана) от «ответ не JSON вовсе» (проза с самого начала).
     private const int UnparsedAnswerHeadChars = 300;
 
+    // D9 (Q1-S14): длина «хвоста ответа» — последние UnparsedAnswerTailChars символов с
+    // видимой пробелью (пробел → ·, \n → ⏎, \t → →). Начало не отличает петлю повтора от
+    // бесконечных пробелов: у gemma DisableThinking, вырожденная генерация видна только по
+    // хвосту. Хвоста нет, когда ответа не больше начала: при 300 символов он совпал бы с
+    // началом символ в символ.
+    private const int UnparsedAnswerTailChars = 200;
+
     /// <summary>Ключ заявки — версия источника, а не только его ссылка. Путь карточки —
     /// функция (ref, version): имя карточки строится из хэша версии (WikiSourceCapture.cs:309,
     /// CardName :454), поэтому он различает версии одного и того же окна. Без версии две
@@ -970,8 +977,13 @@ public sealed class WikiIngestService
     /// ему локальный было бы ложью. По отношению N к M человек отличает «ответ обрезан по
     /// лимиту вывода» (N = M) от «ответ не JSON вовсе» (N ≪ M) — настоящий finish_reason для
     /// этого же вне шага. «начало ответа» — первые UnparsedAnswerHeadChars символов дословно,
-    /// переводы строк пробелом: одна строка журнала вместо разорванной. Код ремонта JSON не
-    /// писать: он не ответ модели, он текст промпта, который модель не увидела.</summary>
+    /// переводы строк пробелом: одна строка журнала вместо разорванной. «хвост ответа» —
+    /// последние UnparsedAnswerTailChars с видимой пробелью (пробел → ·, \n → ⏎, \r → пусто,
+    /// \t → →): петля повтора и бесконечные пробелы различимы только по хвосту (у gemma
+    /// DisableThinking — это не рассуждения). Ответ не длиннее UnparsedAnswerHeadChars — хвоста
+    /// нет: он повторил бы начало. Границы среза головы и хвоста не режут суррогатную пару
+    /// (SafeCut). Код ремонта JSON не писать: он не ответ модели, он текст промпта, который
+    /// модель не увидела.</summary>
     private static string WithUnparsedDiagnostics(string reason, ModelAnswer answer, string? actionKey)
     {
         var diag = new StringBuilder(reason);
@@ -984,10 +996,34 @@ public sealed class WikiIngestService
         {
             var head = text.ReplaceLineEndings(" ");
             if (head.Length > UnparsedAnswerHeadChars)
-                head = head[..UnparsedAnswerHeadChars];
-            diag.Append($" начало ответа: «{head}»");
+            {
+                // Порог по длине начала ДО среза: при 300 символов хвост был бы тем же началом.
+                // Хвост — из дословного текста: ReplaceLineEndings стёр бы различие «пробел» /
+                // «перевод строки», а в нём весь смысл.
+                diag.Append($" начало ответа: «{SafeCut(head, UnparsedAnswerHeadChars, 0)}»");
+                var tail = SafeCut(text, text.Length, text.Length - UnparsedAnswerTailChars);
+                foreach (var ch in new[] { ' ', '\n', '\r', '\t' })
+                    tail = tail.Replace(ch, ch switch { ' ' => '·', '\n' => '⏎', '\r' => '\0', '\t' => '→' });
+                diag.Append($" хвост ответа: «{tail.Replace("\0", "")}»");
+            }
+            else
+            {
+                diag.Append($" начало ответа: «{head}»");
+            }
         }
         return diag.ToString();
+    }
+
+    /// <summary>Срез [from..to) без резаной суррогатной пары (остаток ревью S12): граница
+    /// внутри пары сдвигается на 1 символ так, чтобы пара осталась целой и не вошла во
+    /// фрагмент — одиночного суррогата в журнале не будет. Правило одно для головы и хвоста.</summary>
+    private static string SafeCut(string s, int to, int from)
+    {
+        if (to < s.Length && char.IsHighSurrogate(s[to - 1]) && char.IsLowSurrogate(s[to]))
+            to--;
+        if (from > 0 && char.IsHighSurrogate(s[from - 1]) && char.IsLowSurrogate(s[from]))
+            from++;
+        return s[from..to];
     }
 
     private sealed class UsageAccumulator

@@ -249,9 +249,11 @@ public static class LocalActionCatalog
         // это бюджет обрезки промпта), ответ не влезает в потолок вывода, работа не
         // укладывается в профильное время. Значения только у этих мест, остальные
         // места Large — с профилем.
+        // NumPredict 8192 (Q1-S14): законный ответ раздела — ≤ ~7k токенов, вырожденная
+        // генерация держит GPU вдвое меньше; бюджет входа (NumCtx − NumPredict) от этого растёт.
         new(WikiIngest, "Разбор источника в вики", "Заметки", CheapProfile.Large,
             DefaultLocal: true, Tier: ModelTier.Medium,
-            NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000,
+            NumCtx: 65_536, NumPredict: 8_192, TimeoutMs: 600_000,
             FailOnInputOverflow: true),
         // Факт по заявке агента (wiki_add_fact): одно утверждение с дословной цитатой.
         // Text, а не Small: на Small num_ctx обрезал бы выдержку источника, и цитата
@@ -266,9 +268,10 @@ public static class LocalActionCatalog
         // ParallelExecutors: true — единственное место, которое делит свою работу между
         // движками: ночь разбирает отобранные чаты параллельно (W1a → W2a). Остальные места —
         // одна работа за один проход цепочки.
+        // NumPredict 8192 — то же, что у wiki-ingest выше (Q1-S14).
         new(WikiNightly, "Ночной разбор вики", "Заметки", CheapProfile.Large,
             DefaultLocal: true, Tier: ModelTier.Medium,
-            NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000,
+            NumCtx: 65_536, NumPredict: 8_192, TimeoutMs: 600_000,
             ParallelExecutors: true, FailOnInputOverflow: true),
         // Ступень 2 отбора чатов для вики (Ф2, ADR-035 решение 12а): вердикт «есть ли в чате
         // что-то стоящее» — вход готовит вызывающий (обрезанный отрезок чата), ответ —

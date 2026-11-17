@@ -254,6 +254,11 @@ public sealed class WikiIngestService
 
     private const string SynthUnparsed = "синтез: ответ модели не разобран";
 
+    // D3 (Q1-S12): длина «начала ответа» в причине непарсимого ответа. Это диагностика, а не
+    // цитата: ровно столько, чтобы отличить «ответ обрезан по лимиту вывода» (ровный хвост
+    // JSON-плана) от «ответ не JSON вовсе» (проза с самого начала).
+    private const int UnparsedAnswerHeadChars = 300;
+
     /// <summary>Ключ заявки — версия источника, а не только его ссылка. Путь карточки —
     /// функция (ref, version): имя карточки строится из хэша версии (WikiSourceCapture.cs:309,
     /// CardName :454), поэтому он различает версии одного и того же окна. Без версии две
@@ -458,7 +463,9 @@ public sealed class WikiIngestService
             else if (nothingS)
                 return Res(OutcomeNothingNew, modelReasonS, tokens: usage.InputTokens);
             else if (plan is null)
-                return RejectedUsed(parseErrorS ?? SynthUnparsed);
+                // D3: к причине — сколько этот вызов отдал вывода против лимита вывода места и
+                // чем ответ начинается: по этому видно, обрезан ли он по лимиту или не JSON вовсе.
+                return RejectedUsed(WithUnparsedDiagnostics(parseErrorS ?? SynthUnparsed, answerS, actionKey));
             else if (plan.Operations is { Count: 0 })
                 return Res(OutcomeNothingNew, "план без операций: писать нечего", tokens: usage.InputTokens);
 
@@ -511,7 +518,10 @@ public sealed class WikiIngestService
                 if (nothingR)
                     return WithSectionIssues(Res(OutcomeNothingNew, modelReasonR, tokens: usage.InputTokens), verdict);
                 if (planR is null)
-                    return WithSectionIssues(RejectedUsed("ремонт не дал плана: " + parseErrorR), verdict);
+                    // Та же диагностика D3, но по ответу ремонта: его вывод и есть то, что не
+                    // разобрано (ответ первого вызова здесь уже разобран — он прошёл в ремонт).
+                    return WithSectionIssues(RejectedUsed(
+                        WithUnparsedDiagnostics("ремонт не дал плана: " + parseErrorR, answerR, actionKey)), verdict);
                 if (planR.Operations is { Count: 0 })
                     return WithSectionIssues(
                         Res(OutcomeNothingNew, "после ремонта план без операций", tokens: usage.InputTokens), verdict);
@@ -817,7 +827,11 @@ public sealed class WikiIngestService
 
     // ── модель и разбор её ответов ─────────────────────────────────────────────────
 
-    private readonly record struct ModelAnswer(string? Text, string? Reason);
+    /// <summary>Ответ одного вызова или причина его отказа. OutputTokens — токены вывода ЭТОГО
+    /// вызова (метрик движок не дал — null): по ним WithUnparsedDiagnostics описывает непарсимый
+    /// ответ (D3) — расход накопленного аккумулятора для этого не годится, там сумма по всем
+    /// вызовам окна.</summary>
+    private readonly record struct ModelAnswer(string? Text, string? Reason, long? OutputTokens = null);
 
     /// <summary>Один one-shot вызов места разбора (без инструментов; формат — «json»):
     /// actionKey — место заявки (N7a), null — прежний wiki-ingest; все вызовы передают его
@@ -915,6 +929,18 @@ public sealed class WikiIngestService
             // дословно — в rejected и firstRejectReason (WN-4).
             return new ModelAnswer(null, $"{passName}: {e.Message}");
         }
+        catch (LocalInputOverflowException e)
+        {
+            // Q1-S12: вход промпта не влез в контекст движка (FailOnInputOverflow мест вики,
+            // Q1-S10): модель не звалась ни разу, слот не занят. Общий catch подписал бы это
+            // «модель не ответила» — ложь: её не звали, и по такой формулировке ночной журнал
+            // читал бы переполнение как сбой модели. Причина доезжает дословно (тот же приём,
+            // что у отказа по слоту выше): в ней нет ReasonLocalUnavailable, поэтому
+            // IsLocalDownRejection (WikiNightlyService.Pass.cs:640) не считает отказ мёртвым
+            // движком и исполнитель не выбывает; окно уходит обычным rejected — курсор стоит,
+            // окно остаётся в дельте.
+            return new ModelAnswer(null, $"{passName}: {e.Message}");
+        }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Ожидание слота прервано остановкой ночи / закрытием окна / остановкой службы:
@@ -933,7 +959,35 @@ public sealed class WikiIngestService
             usage.InputTokens += u.TotalInputTokens;
             usage.OutputTokens += u.OutputTokens;
         }
-        return new ModelAnswer(text, null);
+        return new ModelAnswer(text, null, used?.OutputTokens);
+    }
+
+    /// <summary>D3 (Q1-S12): к отказу непарсимого ответа — чем он был непарсим. «вывод {N} ток.
+    /// из лимита {M}»: N — токены вывода ЭТОГО вызова (метрик движок не дал — строки нет:
+    /// выдуманного числа в журнале быть не должно); M — потолок вывода места по каталогу
+    /// (NumPredict записи; у мест вики он задан). Без ключа заявки — только N: человеческий
+    /// «Разобрать» идёт облачным путём, у облака свой потолок (CloudNumPredict), и подставлять
+    /// ему локальный было бы ложью. По отношению N к M человек отличает «ответ обрезан по
+    /// лимиту вывода» (N = M) от «ответ не JSON вовсе» (N ≪ M) — настоящий finish_reason для
+    /// этого же вне шага. «начало ответа» — первые UnparsedAnswerHeadChars символов дословно,
+    /// переводы строк пробелом: одна строка журнала вместо разорванной. Код ремонта JSON не
+    /// писать: он не ответ модели, он текст промпта, который модель не увидела.</summary>
+    private static string WithUnparsedDiagnostics(string reason, ModelAnswer answer, string? actionKey)
+    {
+        var diag = new StringBuilder(reason);
+        if (answer.OutputTokens is { } outTokens)
+        {
+            var limit = actionKey is not null ? LocalActionCatalog.Find(actionKey)?.NumPredict : null;
+            diag.Append(limit is { } m ? $" вывод {outTokens} ток. из лимита {m}" : $" вывод {outTokens} ток.");
+        }
+        if (answer.Text is { } text)
+        {
+            var head = text.ReplaceLineEndings(" ");
+            if (head.Length > UnparsedAnswerHeadChars)
+                head = head[..UnparsedAnswerHeadChars];
+            diag.Append($" начало ответа: «{head}»");
+        }
+        return diag.ToString();
     }
 
     private sealed class UsageAccumulator

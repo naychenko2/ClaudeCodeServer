@@ -454,6 +454,74 @@ public class WikiIngestSynthTests : IDisposable
         PackagesOnDisk().Should().BeEmpty("частичного пакета нет");
     }
 
+    // ── Q1-S12: переполнение входа синтеза — отказ окна (D1) и описание непарсимого ответа (D3) ──
+
+    [Fact]
+    public async Task ПереполнениеВходаСинтеза_ОтказОкна_АНеСбойМодели()
+    {
+        // Мутация «удалить catch (LocalInputOverflowException)» (WikiIngestService.CallModelAsync):
+        // общий catch подписывает «модель не ответила» — первый StartWith красный, второй NotContain
+        // красный (проверено на копии мутации).
+        var llm = new FakeLlm(WikiSynthJson.Append(PageTitle, Claim1, Quote1))
+        {
+            ThrowOnLocal = new LocalInputOverflowException(
+                promptChars: 120_000, budgetChars: 49_152, numCtx: 32_768, numPredict: 16_384),
+        };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().StartWith("синтез: вход окна не влезает в контекст движка",
+            "модель не звалась ни разу: причина называет переполнение входа, а не сбой модели");
+        res.Reason.Should().NotContain("модель не ответила", "общий catch на этом отказе лжёт");
+        res.Reason.Should().NotContain(WikiIngestService.ReasonLocalUnavailable,
+            "это не отказ мёртвого движка: IsLocalDownRejection (WikiNightlyService.Pass.cs:640) его не признаёт");
+        llm.Calls.Should().BeEmpty("переполнение отказывает до обращения к движку — ответа не было ни разу");
+        PackagesOnDisk().Should().BeEmpty("отказанное окно не оставляет пакета; курсор стоит, окно в дельте");
+    }
+
+    [Fact]
+    public async Task НепарсимыйОтвет_ПричинаНазываетВыводПротивЛимита_ИНачалоОднойСтрокой()
+    {
+        // D3: «вывод N из лимита M» + начало ответа. N = M — ответ упёрся в потолок вывода места
+        // (NumPredict записи каталога wiki-nightly = 16 384). Мутация «вернуть reason без
+        // WithUnparsedDiagnostics» → оба новых assert красные.
+        var lines = Enumerable.Range(0, 40).Select(i => $"строка {i}: {new string('о', 20)}").ToList();
+        var answer = string.Join("\n", lines); // ~1200 симв. с переводами строк: и не JSON, и длиннее 300
+        var llm = new FakeLlm(answer) { LocalOutputTokens = 16_384 };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("ответ модели не разобран");
+        res.Reason.Should().Contain("вывод 16384 ток. из лимита 16384",
+            "N против M: по ним видно, обрезан ли ответ по лимиту вывода");
+        var head = string.Join(" ", lines)[..300];
+        res.Reason.Should().Contain($"начало ответа: «{head}»");
+        res.Reason.Should().NotContain("\n", "переводы строк заменены пробелом: журнал — одна строка");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task РемонтНеДалПлана_ТажеДиагностикаПоОтветуРемонта()
+    {
+        // :514 — та же диагностика, но по ответу ЭТОГО ремонта: первый вызов дал план (он прошёл
+        // в ремонт), непарсим — ответ ремонта. Мутация «без WithUnparsedDiagnostics» прогонялась
+        // на :461 (копия дерева); здесь она краснит тем же снятым вызовом хелпера.
+        var bad = WikiSynthJson.Append(PageTitle, Claim1, BadQuote);
+        var lines = Enumerable.Range(0, 40).Select(i => $"строка {i}: {new string('о', 20)}").ToList();
+        var llm = new FakeLlm(bad, repair: string.Join("\n", lines)) { LocalOutputTokens = 16_384 };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        llm.Calls.Select(c => c.Pass).Should().Equal("S", "R");
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("ремонт не дал плана")
+            .And.Contain("вывод 16384 ток. из лимита 16384")
+            .And.Contain($"начало ответа: «{string.Join(" ", lines)[..300]}»");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
     // ── гонка ──
 
     [Fact]
@@ -702,6 +770,13 @@ public class WikiIngestSynthTests : IDisposable
         public List<(string ActionKey, string Prompt, string Pass, string Route)> Calls { get; } = [];
         public bool LocalRoute { get; init; } = true;
 
+        // Q1-S12: поведение локального шага для новых кейсов. ThrowOnLocal — бросить отказ
+        // переполнения входа ДО ответа (как раннер: до обращения к движку, поэтому ни одной
+        // записи в Calls). LocalOutputTokens — отдать ответ с метриками движка; без него —
+        // usage=null, как тело по умолчанию шва, то есть прежнее поведение всех тестов файла.
+        public Exception? ThrowOnLocal { get; init; }
+        public long? LocalOutputTokens { get; init; }
+
         private readonly Dictionary<string, Queue<string>> _answers = new();
 
         public FakeLlm(string synth, string? repair = null, string? emptySection = null, string? judge = null)
@@ -724,6 +799,18 @@ public class WikiIngestSynthTests : IDisposable
         public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
             object? jsonFormat = null, CancellationToken ct = default) =>
             Task.FromResult<string?>(Answer(actionKey, prompt, "local"));
+
+        // Локальный шаг с расходом (путь ночи): без LocalOutputTokens — usage=null, ровно как
+        // тело по умолчанию шва, на котором стоят прежние тесты файла.
+        public Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            if (ThrowOnLocal is { } ex)
+                throw ex;
+            var text = Answer(actionKey, prompt, "local");
+            OneShotUsage? usage = LocalOutputTokens is { } ot ? new OneShotUsage(10, 0, 0, ot, 0.0, "fake") : null;
+            return Task.FromResult<OneShotResult?>(new OneShotResult(text, usage, 1));
+        }
 
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,

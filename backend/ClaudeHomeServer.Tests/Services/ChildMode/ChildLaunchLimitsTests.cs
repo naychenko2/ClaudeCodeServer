@@ -8,6 +8,7 @@ using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services.ChildMode;
@@ -135,7 +136,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     /// </summary>
     private (TurnLaunchContextFactory Factory, TestWebApplicationFactory Host, string OwnerId) Build(
         ChildProfile profile, IOwnerSpendReader? spend = null, bool withoutCalculator = false,
-        IChildModePolicy? calcPolicy = null)
+        IChildModePolicy? calcPolicy = null, ILogger<ChildModeGate>? gateLog = null)
     {
         var ownerId = AddChild(profile);
         var host = new TestWebApplicationFactory();
@@ -147,7 +148,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
                 [ChildLimitsCalculator.ConfigTimeZoneKey] = "Europe/Moscow",
             }).Build(),
             NullLogger<ChildLimitsCalculator>.Instance);
-        var gate = new ChildModeGate(_policy, withoutCalculator ? null : calc);
+        var gate = new ChildModeGate(_policy, withoutCalculator ? null : calc, gateLog);
         // BuiltinMcpContexts строим заново — со своим гейтом; остальное берём из DI как есть
         var builtin = new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(), sp.GetRequiredService<FeatureFlagService>(),
@@ -181,6 +182,19 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     private sealed class ThrowingPolicy : IChildModePolicy
     {
         public ChildPolicySnapshot? For(string ownerId) => throw new InvalidOperationException("технический сбой расчёта");
+    }
+
+    // Фейковый логгер: собирает отформатированные сообщения гейта — на них проверяется,
+    // что причина сбоя записана (мутация «убрать LogWarning» краснит тест журнала).
+    private sealed class RecordingLogger : ILogger<ChildModeGate>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Messages.Add(formatter(state, exception));
     }
 
     private sealed class FixedSpend(decimal todayUsd, decimal monthUsd) : IOwnerSpendReader
@@ -308,5 +322,26 @@ public sealed class ChildLaunchLimitsTests : IDisposable
         var act = () => LaunchNew(factory, ChildChat(ownerId));
         act.Should().Throw<InvalidOperationException>().WithMessage(ChildLimitTexts.Uncheckable,
             "технический текст исключения ребёнку не уходит");
+    }
+
+    // ─── Причина в журнале (хвост R-KM-B5d) ─────────────────────────────────────
+
+    [Fact]
+    public void КалькуляторБросаетИсключение_ПричинаЗаписанаВЖурнал_БезДетскогоТекста()
+    {
+        // Тот же сбой расчёта, что выше, но с фейковым логгером на гейте: отказ ребёнку
+        // не меняется, причина становится видимой на сервере (LogWarning в catch гейта).
+        var log = new RecordingLogger();
+        var (factory, host, ownerId) = Build(Profile(), calcPolicy: new ThrowingPolicy(), gateLog: log);
+        using var _ = host;
+
+        var act = () => LaunchNew(factory, ChildChat(ownerId));
+        act.Should().Throw<InvalidOperationException>().WithMessage(ChildLimitTexts.Uncheckable);
+
+        // В журнале — id владельца и тип исключения; текста отказа ребёнку там нет.
+        var messages = string.Join("\n", log.Messages);
+        messages.Should().Contain(ownerId, "причина сбоя привязана к владельцу");
+        messages.Should().Contain(nameof(InvalidOperationException), "тип исключения виден в журнале");
+        messages.Should().NotContain(ChildLimitTexts.Uncheckable, "детский текст отказа в журнал не уходит");
     }
 }

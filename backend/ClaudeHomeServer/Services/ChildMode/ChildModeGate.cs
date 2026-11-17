@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.ChildMode;
 
@@ -11,7 +12,8 @@ namespace ClaudeHomeServer.Services.ChildMode;
 // «разрешить всё»: для ребёнка отказ текстом Uncheckable (fail-closed), тот же смысл, что у
 // «бюджет не проверить» в калькуляторе. В боевом составе он есть всегда — сторож
 // ChildPolicyWiringGuardTests проверяет, что гейт из контейнера держит непустой калькулятор.
-public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator? limits = null) : IChildModeGate
+public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator? limits = null,
+    ILogger<ChildModeGate>? log = null) : IChildModeGate
 {
     private const string DeniedText = "Этот инструмент недоступен в детском режиме";
 
@@ -60,11 +62,16 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
                 return null;
             status = s;
         }
-        catch (Exception)
+        catch (Exception e)
         {
             // Любой сбой расчёта (профиль перестал читаться между сверкой И1-бис и расчётом — это
-            // ChildPolicyUnavailableException, а также любое иное исключение): отказ хода, fail-closed.
-            // Наружу — детский текст, технического имени и сообщения ошибки ребёнок не видит.
+            // ChildPolicyUnavailableException, а также любое иное исключение, включая отмену):
+            // отказ хода, fail-closed. Наружу — детский текст, технического имени и сообщения
+            // ошибки ребёнок не видит; причина остаётся в серверном журнале: id владельца и тип
+            // исключения, без текста ребёнка (хвост R-KM-B5d). Без логгера отказ тот же —
+            // просто не записанный (тот же стиль, что у опционального логгера политики).
+            log?.LogWarning(e, "Детский режим: расчёт лимитов не прошёл (ребёнок {Owner}, {ErrorType})",
+                ownerId, e.GetType().Name);
             return ChildLimitTexts.Uncheckable;
         }
 

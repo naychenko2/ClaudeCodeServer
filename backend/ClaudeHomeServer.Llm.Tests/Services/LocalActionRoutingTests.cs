@@ -2703,6 +2703,29 @@ public class LocalActionRoutingTests
         emptyModel.EffectiveTurnModel.Should().Be("owner-kimi");
     }
 
+    // KM-B4: у взрослого фабрика всё равно выдаёт делегат политики ребёнка, но он возвращает null —
+    // фолбэк ADR-007 (хвост пресета) обязан жить; у ребёнка цепочка — из одной модели.
+    [Theory]
+    [InlineData(false, new[] { "owner-kimi", "owner-glm" })]
+    [InlineData(true, new[] { "owner-kimi" })]
+    public void ЦепочкаХода_РешаетСнимокПолитикиРебёнка_АНеНаличиеДелегата(bool child, string[] expected)
+    {
+        var (resolver, ownerId) = BuildOwnerSlotFixture();
+        var context = new LlmSessionContext(
+            RootPath: Path.GetTempPath(),
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null, TasksMcp: null,
+            OwnerId: ownerId,
+            ChildPolicyProvider: () => child
+                ? new ClaudeHomeServer.Services.ChildMode.ChildPolicySnapshot(ownerId, new ChildProfile { Enabled = true }, false)
+                : null);
+        var session = new ClaudeSession(new Session { Model = "owner-kimi", OwnerId = ownerId },
+            context, assignments: resolver);
+
+        session.EffectiveTurnChain.Should().Equal(expected);
+    }
+
     private sealed class SingleFactory(System.Net.Http.HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler);

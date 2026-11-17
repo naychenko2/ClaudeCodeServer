@@ -91,8 +91,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // _turnOwnerId; по Info.OwnerId хвост чата проекта брался из общего слота инстанса
     // (DEC-FALLBACK 3f2f33fb).
     internal IReadOnlyList<string> EffectiveTurnChain =>
-        // И2: у ребёнка фолбэка нет — цепочка из одной модели, отказ провайдера = ошибка хода
-        _childPolicy is not null && EffectiveModel is { } childModel ? new[] { childModel } :
+        // И2: у ребёнка фолбэка нет — цепочка из одной модели, отказ провайдера = ошибка хода.
+        // Решает снимок политики, а не наличие делегата: фабрика выдаёт делегат любому владельцу,
+        // у взрослого он возвращает null — и фолбэк ADR-007 обязан жить.
+        _childPolicy?.Invoke() is not null && EffectiveModel is { } childModel ? new[] { childModel } :
         _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 

@@ -659,7 +659,10 @@ public class PersonasController(
         // Чужая и не-репетитор — один 404 (существование персоны не раскрываем); DenyAll и
         // нечитаемый профиль — тоже 404: репетиторов назвать нечем (fail-closed). Взрослому
         // (политика null) ветка не выполняется — поведение ручки не меняется.
-        if (_childPolicy?.For(UserId) is { } child && !IsChildTutor(child.Profile, id))
+        // Статичный DenyAll до этой строки не доходит: его отбивает 403 сам гейт
+        // (ChildModeGateMiddleware.cs:37). Сюда DenyAll приходит гонкой двух чтений — профиль
+        // стал невалидным между чтением гейта и этим (тот же случай, что у ChildStatusController).
+        if (_childPolicy?.For(UserId) is { } child && (child.DenyAll || !IsChildTutor(child.Profile, id)))
             return NotFound();
 
         // W3-B1c (разрез §3.1 строка GET {id}/avatar; И-2): ключ чтения персоны — арендатор:

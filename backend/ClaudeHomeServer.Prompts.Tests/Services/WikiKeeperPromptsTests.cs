@@ -74,6 +74,18 @@ public class WikiKeeperPromptsTests
             Assert.Contains(noise, prompt);
     }
 
+    // Q1-S13: потолок create — не больше 3 операций из 12 на окно: чаще пропуск, чем новая
+    // страница (создание страницы стоило модели 5.4 на окно против 11 % у append).
+    [Fact]
+    public void Synth_ПотолокCreate_ТриИзДвенадцати_ЧащеПропускЧемНоваяСтраница()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        Assert.Contains("At most 12 operations per window, at most 3 of them \"create\"", prompt);
+        Assert.Contains("usually fewer —", prompt);
+        Assert.Contains("skip rather than open a page", prompt);
+    }
+
     [Fact]
     public void Synth_КонтрактДлиныЦитатыИЧислаПравилаВПромпте()
     {
@@ -102,12 +114,26 @@ public class WikiKeeperPromptsTests
         Assert.Contains("and 300 characters", prompt);
     }
 
+    // Q1-S13: вид — вид утверждения, а не страницы: правило/решение/состояние о том же предмете
+    // дописывается на его существующую страницу любого вида; заголовок create — предмет без
+    // префикса «Правило…/Решение по…/Состояние…» (из-за них один предмет дробился на страницы).
+    [Fact]
+    public void Synth_ВидЭтоВидУтверждения_АНеСтраницы_ЗаголовокCreateБезПрефиксаВида()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        Assert.Contains("kind\" is the kind of the STATEMENT, not of the page", prompt);
+        Assert.Contains("existing page of any kind", prompt);
+        Assert.Contains("Bad: create \"Правило тональной кнопки под B\"", prompt);
+        Assert.Contains("append to \"ADR-012: Визуальный язык B\"", prompt);
+    }
+
     [Fact]
     public void Synth_ПравилоЧисел_ЕстьВПромпте()
     {
         var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
 
-        Assert.Contains("4. NUMBERS.", prompt);
+        Assert.Contains("5. NUMBERS.", prompt);
         Assert.Contains("must stand verbatim in a quote", prompt);
         // Сами запреты — не только заголовок правила.
         Assert.Contains("A number not in the quotes", prompt);
@@ -173,16 +199,20 @@ public class WikiKeeperPromptsTests
         Assert.Contains("Entries marked \"— source\"", prompt);
     }
 
-    // Q1-S5: сначала append к странице того же предмета; create — только предмету, у которого
-    // страницы ещё нет; квота «4–10 страниц» убрана (она подавляла append).
+    // Q1-S13 (было Q1-S5): правило 1 — процедура append-first: для каждого утверждения сначала
+    // цель из каталога или страниц раздела, create — только когда такой страницы нет. Квота
+    // «4–10 страниц» убрана (она подавляла append); «section pages above» исправлено: страницы
+    // раздела в промпте идут ниже правил.
     [Fact]
     public void Synth_СначалаAppendКСтраницеПредмета_CreateТолькоНовому_КвотыСтраницНет()
     {
         var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
 
-        Assert.Contains("First append to a page of the same subject", prompt);
-        Assert.Contains("\"create\" is only for a subject that", prompt);
-        Assert.Contains("has no page yet.", prompt);
+        Assert.Contains("1. APPEND FIRST.", prompt);
+        Assert.Contains("for each statement", prompt);
+        Assert.Contains("→ \"append\" to it", prompt);
+        Assert.Contains("page exists → \"create\" one.", prompt);
+        Assert.DoesNotContain("section pages above", prompt);
         Assert.DoesNotContain("4–10", prompt);
     }
 
@@ -199,17 +229,20 @@ public class WikiKeeperPromptsTests
         Assert.Contains("good: \"Перенос сборки на Linux\"", prompt);
     }
 
-    // Q1-S5: ссылка в claim разрешена дословно по каталогу: без хвоста «— вид», без префикса
-    // раздела и без алиаса «|» (гейт читает «x|y» как целое имя, и ссылка с алиасом молча
-    // снимается в текст — рабочая ссылка теряется).
+    // Q1-S5 + Q1-S13: ссылка в claim — обязательна и дословна по каталогу: без хвоста «— вид»,
+    // без префикса раздела и без алиаса «|» (гейт читает «x|y» как целое имя, и ссылка с алиасом
+    // молча снимается в текст — рабочая ссылка теряется). «may» убрано: ссылка не право модели,
+    // а обязанность по уже названному предмету; один пример «правильно/неправильно».
     [Fact]
     public void Synth_СсылкаВКлиме_ТолькоГолаяПоКаталогу_БезХвостаПрефиксаИАлиаса()
     {
         var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
 
-        Assert.Contains("In a claim you may link another page as [[Title]]", prompt);
+        Assert.Contains("If the claim names the subject of a catalog page", prompt);
         Assert.Contains("no \"— type\" tail, no section prefix,", prompt);
         Assert.Contains("no alias after \"|\".", prompt);
+        Assert.Contains("[[ADR-012: Визуальный язык B]]", prompt);
+        Assert.DoesNotContain("you may link another page", prompt);
     }
 
     // Q1-S5 (c2): схема операции не меняется: набор полей равен базе, поля summary нет
@@ -225,6 +258,19 @@ public class WikiKeeperPromptsTests
         Assert.True(end >= 0, "блок схемы не закрыт");
         Assert.Equal(SynthSchemaBase, prompt[start..(end + 4)]);
         Assert.DoesNotContain("\"summary\"", prompt);
+        // Q1-S13: цель append — поле «page» той же операции; отдельного «append_to» нет.
+        Assert.DoesNotContain("append_to", prompt);
+    }
+
+    // Q1-S13: строкой после схемы (сам блок — нет): вид обязателен только create; у прочих
+    // операций код его игнорирует (WikiPlanValidator.cs:483).
+    [Fact]
+    public void Synth_ВидОбязателенТолькоДляCreate_УПрочихОперацийИгнорируется()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        Assert.Contains(
+            "\"kind\" is required only for \"create\"; for other ops it is ignored.", prompt);
     }
 
     // База схемы — часть контракта ответа: любое изменение набора полей отдельным решением
@@ -249,6 +295,18 @@ public class WikiKeeperPromptsTests
         Assert.Contains("CURRENT CONTENT OF THE SECTION PAGES", with);
         Assert.Contains("PAGE-TEXT-42", with);
         Assert.Contains("CAT-IDX", with);
+    }
+
+    // Q1-S13: блок страниц раздела — «вероятные цели append»: в них дописывают, а не повторяют;
+    // строка «must skip» ссылается на них, а не на «section content shown below».
+    [Fact]
+    public void Synth_СтраницыРаздела_ЭтоВероятныеЦелиAppend_ИхУтвержденийНеПовторять()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "CAT-IDX", "n1", "PAGE-TEXT-42", 8, 300);
+
+        Assert.Contains("LIKELY APPEND TARGETS — CURRENT CONTENT OF THE SECTION PAGES", prompt);
+        Assert.Contains("statements already present on the likely append targets below", prompt);
+        Assert.DoesNotContain("anything already present in the section content", prompt);
     }
 
     [Theory]

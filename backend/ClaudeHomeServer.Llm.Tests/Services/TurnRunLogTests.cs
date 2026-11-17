@@ -98,13 +98,22 @@ public class TurnRunLogTests
                 InitToFirstEventMs = 0,
                 SlowSections = new Dictionary<string, long> { ["code-graph"] = 7000 },
                 PrevRunStopWaitMs = 6500,
+                // Хвост R-TS-19 + TS-20: поля, которых здесь не было — первое содержимое,
+                // явный факт спавна, первый байт stdout и число MCP-серверов конфига хода.
+                FirstContentMs = 4500,
+                Spawned = true,
+                SpawnToFirstByteMs = 1900,
+                McpServerCount = 36,
             });
 
             var lines = File.ReadAllLines(Path.Combine(dir, $"turn-runs-{DateTime.UtcNow:yyyyMMdd}.jsonl"));
-            lines[0].Should().NotContain("promptAssemblyMs").And.NotContain("slowSections").And.NotContain("prevRunStopWaitMs");
+            lines[0].Should().NotContain("promptAssemblyMs").And.NotContain("slowSections").And.NotContain("prevRunStopWaitMs")
+                .And.NotContain("firstContentMs").And.NotContain("spawnToFirstByteMs").And.NotContain("mcpServerCount");
             lines[1].Should().Contain("\"queueWaitMs\":12").And.Contain("\"promptAssemblyMs\":8800")
                 .And.Contain("\"prevRunStopWaitMs\":6500").And.Contain("\"initToFirstEventMs\":0").And.Contain("\"slowSections\":{\"code-graph\":7000}")
-                .And.NotContain("spawnToInitMs", "повторно используемый процесс — null, а не 0");
+                .And.NotContain("spawnToInitMs", "повторно используемый процесс — null, а не 0")
+                .And.Contain("\"firstContentMs\":4500").And.Contain("\"spawned\":true")
+                .And.Contain("\"spawnToFirstByteMs\":1900").And.Contain("\"mcpServerCount\":36");
         }
         finally
         {
@@ -133,6 +142,11 @@ public class TurnRunLogTests
         p.SpawnToInitMs.Should().BeNull();
         p.InitToFirstEventMs.Should().BeNull();
         p.SlowSections.Should().BeNull();
+        // Новые поля (TS-19/TS-20) в старой строке — по умолчанию: null / false.
+        p.FirstContentMs.Should().BeNull();
+        p.Spawned.Should().BeFalse();
+        p.SpawnToFirstByteMs.Should().BeNull();
+        p.McpServerCount.Should().BeNull();
     }
 
     // Порог медленной секции — строго больше 500 мс: ровно на границе не пишем; пусто → null.

@@ -34,6 +34,10 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         typeof(ClaudeSession).GetMethod("NoteFirstEvent", BindingFlags.NonPublic | BindingFlags.Instance)!;
     private static readonly MethodInfo NoteFirstContentM =
         typeof(ClaudeSession).GetMethod("NoteFirstContent", BindingFlags.NonPublic | BindingFlags.Instance)!;
+    private static readonly MethodInfo NoteFirstByteM =
+        typeof(ClaudeSession).GetMethod("NoteFirstByte", BindingFlags.NonPublic | BindingFlags.Instance)!;
+    private static readonly FieldInfo McpServerCountField =
+        typeof(ClaudeSession).GetField("_turnMcpServerCount", BindingFlags.NonPublic | BindingFlags.Instance)!;
     private static readonly FieldInfo QueuedTurnsField =
         typeof(ClaudeSession).GetField("_queuedTurns", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
@@ -95,6 +99,7 @@ public class ClaudeSessionStartPhaseTests : IDisposable
     private static void Init(ClaudeSession s) => _ = NoteInitM.Invoke(s, []);
     private static void FirstEvent(ClaudeSession s) => _ = NoteFirstEventM.Invoke(s, [JsonDocument.Parse(Event).RootElement]);
     private static void FirstContent(ClaudeSession s, string line) => _ = NoteFirstContentM.Invoke(s, [JsonDocument.Parse(line).RootElement]);
+    private static void FirstByte(ClaudeSession s) => _ = NoteFirstByteM.Invoke(s, []);
     private static void SetQueued(ClaudeSession s, int n) => QueuedTurnsField.SetValue(s, n);
 
     [Fact]
@@ -300,6 +305,65 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         Begin(s);
         s.GetStartTimings().Spawned.Should().BeFalse();
         s.GetStartTimings().FirstContentMs.Should().BeNull("BeginStartTimings сбрасывает и защёлку первого содержимого");
+    }
+
+    // ——— TS-20: от спавна до первого байта stdout (SpawnToFirstByteMs), число MCP-серверов конфига ———
+
+    [Fact]
+    public void ПервыйБайт_БезСпавнаNull_СтавитсяОдинРазНаНесколькихЧанках()
+    {
+        var (s, _) = NewSession();
+        Begin(s);
+        // same-process ход: спавна нет — замера нет (null, а не 0), тот же смысл, что у NoteInit.
+        FirstByte(s);
+        s.GetStartTimings().SpawnToFirstByteMs.Should().BeNull("без спавна фаза не измеряется");
+        Spawn(s, Stopwatch.GetTimestamp());
+        FirstByte(s);
+        var v = s.GetStartTimings().SpawnToFirstByteMs;
+        v.Should().NotBeNull();
+        v.Should().BeGreaterThanOrEqualTo(0);
+        // Несколько чанков подряд защёлку не двигают: мерится первый байт, а не каждый следующий.
+        FirstByte(s);
+        FirstByte(s);
+        s.GetStartTimings().SpawnToFirstByteMs.Should().Be(v, "защёлка срабатывает один раз за попытку");
+    }
+
+    [Fact]
+    public async Task ПервыйБайт_ПослеНовогоСпавнаСбрасываетсяИМеряетсяОтНового()
+    {
+        // Названный тест мутации «убрать сброс защёлки первого байта в NoteSpawn»: без сброса
+        // в защёлке остаётся значение первой попытки — краснеют обе проверки после второго спавна.
+        var (s, _) = NewSession();
+        Begin(s);
+        Spawn(s, Stopwatch.GetTimestamp());
+        await Task.Delay(120);
+        FirstByte(s);
+        s.GetStartTimings().SpawnToFirstByteMs.Should().BeGreaterThanOrEqualTo(100, "фаза первой попытки — первая");
+
+        // Ретрай: новый процесс. Сброс открыл защёлку до записи _turnSpawnTs (хвост e33b6bd2).
+        Spawn(s, Stopwatch.GetTimestamp());
+        s.GetStartTimings().SpawnToFirstByteMs.Should().BeNull("новый спавн открывает защёлку первого байта");
+        FirstByte(s);
+        s.GetStartTimings().SpawnToFirstByteMs.Should().NotBeNull().And.BeLessThan(60,
+            "после нового спавна фаза меряется от нового спавна, а не от старого");
+    }
+
+    [Fact]
+    public void ПервыйБайтИЧислоMcpСерверов_НовыйХодСбрасывает()
+    {
+        var (s, _) = NewSession();
+        Begin(s);
+        Spawn(s, Stopwatch.GetTimestamp());
+        FirstByte(s);
+        s.GetStartTimings().SpawnToFirstByteMs.Should().NotBeNull();
+        // Счётчик пишет место сборки конфига (Volatile-поле, см. вызов BuildTurnMcpConfig); здесь
+        // задан напрямую: проверяется сброс и null-семантика, а не подсчёт (он = mcpServerNames.Count).
+        McpServerCountField.SetValue(s, 36);
+        s.GetStartTimings().McpServerCount.Should().Be(36);
+        // Следующий ход (same-process) сбрасывает оба: замер принадлежит ходу, а не сессии.
+        Begin(s);
+        s.GetStartTimings().SpawnToFirstByteMs.Should().BeNull("BeginStartTimings сбрасывает защёлку первого байта");
+        s.GetStartTimings().McpServerCount.Should().BeNull("BeginStartTimings сбрасывает счётчик MCP-серверов");
     }
 
     // ——— Остановка несовместимого прогона (PrevRunStopWaitMs) ———

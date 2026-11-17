@@ -1362,6 +1362,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         Spawned = startTimings?.Spawned ?? false,
                         SlowSections = startTimings?.SlowSections,
                         PrevRunStopWaitMs = startTimings?.PrevRunStopWaitMs,
+                        // TS-20: от спавна до первого байта stdout и число MCP-серверов собранного
+                        // конфига хода; null — фаза/состав не наблюдались (не 0)
+                        SpawnToFirstByteMs = startTimings?.SpawnToFirstByteMs,
+                        McpServerCount = startTimings?.McpServerCount,
                     };
                 }
                 catch (Exception ex)

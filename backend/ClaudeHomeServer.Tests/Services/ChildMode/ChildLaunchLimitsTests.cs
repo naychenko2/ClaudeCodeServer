@@ -35,8 +35,8 @@ public sealed class ChildLaunchLimitsTests : IDisposable
 {
     private const string TimeUpText = "На сегодня уроки закончились. Отдохни и возвращайся завтра.";
     private const string OutOfWindowText = "Сейчас уроки отдыхают. Вернись, когда они снова начнутся.";
-    private const string BudgetText = "На сегодня всё по деньгам закончилось. Позови взрослого.";
-    private const string RulesText = "Сначала надо договорить о правилах. Позови взрослого — правила вы ставите вместе.";
+    private const string BudgetText = "Сегодня помощник больше не может заниматься. Позови взрослого — он поможет.";
+    private const string RulesText = "Сначала давай вместе с папой или мамой прочитаем правила — без них уроки не откроются.";
 
     private static readonly TimeZoneInfo Moscow = TimeZoneInfo.FindSystemTimeZoneById("Europe/Moscow");
 
@@ -134,19 +134,20 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     /// Возвращает и ownerId ребёнка, которого добавила.
     /// </summary>
     private (TurnLaunchContextFactory Factory, TestWebApplicationFactory Host, string OwnerId) Build(
-        ChildProfile profile, IOwnerSpendReader? spend = null)
+        ChildProfile profile, IOwnerSpendReader? spend = null, bool withoutCalculator = false,
+        IChildModePolicy? calcPolicy = null)
     {
         var ownerId = AddChild(profile);
         var host = new TestWebApplicationFactory();
         _ = host.CreateClient();
         var sp = host.Services;
-        var calc = new ChildLimitsCalculator(_policy, _usage, spend ?? new FixedSpend(0m, 0m), _users,
+        var calc = new ChildLimitsCalculator(calcPolicy ?? _policy, _usage, spend ?? new FixedSpend(0m, 0m), _users,
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
                 [ChildLimitsCalculator.ConfigTimeZoneKey] = "Europe/Moscow",
             }).Build(),
             NullLogger<ChildLimitsCalculator>.Instance);
-        var gate = new ChildModeGate(_policy, calc);
+        var gate = new ChildModeGate(_policy, withoutCalculator ? null : calc);
         // BuiltinMcpContexts строим заново — со своим гейтом; остальное берём из DI как есть
         var builtin = new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(), sp.GetRequiredService<FeatureFlagService>(),
@@ -175,6 +176,12 @@ public sealed class ChildLaunchLimitsTests : IDisposable
         f.BuildForReconnect(new SessionEntry { Info = s }, null, Path.GetTempPath(),
             new TurnAccumulator(new List<StoredMessage>()), 1, null,
             (_, _, _, _, _) => Task.CompletedTask, null, Path.GetTempPath(), true);
+
+    // Политика, которая бросает произвольное исключение (не ChildPolicyUnavailableException)
+    private sealed class ThrowingPolicy : IChildModePolicy
+    {
+        public ChildPolicySnapshot? For(string ownerId) => throw new InvalidOperationException("технический сбой расчёта");
+    }
 
     private sealed class FixedSpend(decimal todayUsd, decimal monthUsd) : IOwnerSpendReader
     {
@@ -280,5 +287,26 @@ public sealed class ChildLaunchLimitsTests : IDisposable
         using var _ = host;
         var act = () => LaunchNew(factory, ChildChat(ownerId));
         act.Should().Throw<InvalidOperationException>().WithMessage(BudgetText);
+    }
+
+    // ─── Fail-closed: расчёт невозможен (KM-B5d, доработка) ────────────────────
+
+    [Fact]
+    public void КалькулятораНет_ХодНеСтартует_ТекстомUncheckable()
+    {
+        var (factory, host, ownerId) = Build(Profile(), withoutCalculator: true);
+        using var _ = host;
+        var act = () => LaunchNew(factory, ChildChat(ownerId));
+        act.Should().Throw<InvalidOperationException>().WithMessage(ChildLimitTexts.Uncheckable);
+    }
+
+    [Fact]
+    public void КалькуляторБросаетИсключение_ХодНеСтартует_ТекстомUncheckable()
+    {
+        var (factory, host, ownerId) = Build(Profile(), calcPolicy: new ThrowingPolicy());
+        using var _ = host;
+        var act = () => LaunchNew(factory, ChildChat(ownerId));
+        act.Should().Throw<InvalidOperationException>().WithMessage(ChildLimitTexts.Uncheckable,
+            "технический текст исключения ребёнку не уходит");
     }
 }

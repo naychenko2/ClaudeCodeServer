@@ -60,10 +60,11 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
                 return null;
             status = s;
         }
-        catch (ChildPolicyUnavailableException)
+        catch (Exception)
         {
-            // Профиль перестал читаться между сверкой И1-бис и расчётом: отказ хода, наружу — детский
-            // текст, технического имени ошибки ребёнок не видит.
+            // Любой сбой расчёта (профиль перестал читаться между сверкой И1-бис и расчётом — это
+            // ChildPolicyUnavailableException, а также любое иное исключение): отказ хода, fail-closed.
+            // Наружу — детский текст, технического имени и сообщения ошибки ребёнок не видит.
             return ChildLimitTexts.Uncheckable;
         }
 

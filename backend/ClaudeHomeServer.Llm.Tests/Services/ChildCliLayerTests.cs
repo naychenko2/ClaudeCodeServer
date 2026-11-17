@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Plugins;
+using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using FluentAssertions.Execution;
 using Microsoft.Extensions.Configuration;
@@ -167,7 +168,8 @@ public class ChildCliLayerTests : IDisposable
     }
 
     private async Task<(ProcessSpec? Spec, List<string> Errors)> LaunchAsync(
-        Func<ChildPolicySnapshot?>? childPolicy, string model, LlmProviderRegistry? providersOverride)
+        Func<ChildPolicySnapshot?>? childPolicy, string model, LlmProviderRegistry? providersOverride,
+        TurnEventBus? events = null)
     {
         var errors = new List<string>();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -182,7 +184,7 @@ public class ChildCliLayerTests : IDisposable
             RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null, TasksMcp: null,
             Launcher: launcher, ContentRootPath: root, OwnerId: "kid",
-            PluginDirSource: new FixedPlugins(), ChildPolicyProvider: childPolicy);
+            PluginDirSource: new FixedPlugins(), ChildPolicyProvider: childPolicy, Events: events);
         var providers = providersOverride ?? new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection().Build());
         var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?> { [$"{ClaudeSubscriptionPool.Section}:kids-api:ApiKey"] = "sk-ant-kids" }).Build());
@@ -192,6 +194,27 @@ public class ChildCliLayerTests : IDisposable
         await session.SendMessageAsync("тестовый ход");
         await Task.WhenAny(started.Task, failed.Task).WaitAsync(TimeSpan.FromSeconds(30));
         return (launcher.Captured, errors);
+    }
+
+    // R-KM-B6c2 п.1: звено «снимок политики → PromptSessionContext.IsChild». Контрибьюторы recall
+    // закрываются по этому признаку; мутация «IsChild: false» в ClaudeSession обязана красить тест.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task СборкаПромпта_IsChildСледуетЗаСнимкомПолитики(bool child)
+    {
+        var bus = new TurnEventBus();
+        var seen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        bus.OnFilter<PromptAssembling>(100, async (e, next) =>
+        {
+            seen.TrySetResult(e.Session.IsChild);
+            await next();
+        }, "Test.IsChildProbe");
+
+        await LaunchAsync(() => child ? Child() : null, "sonnet", null, bus);
+
+        seen.Task.IsCompleted.Should().BeTrue("шина сборки промпта обязана отработать до старта CLI");
+        (await seen.Task).Should().Be(child);
     }
 
     [Fact]

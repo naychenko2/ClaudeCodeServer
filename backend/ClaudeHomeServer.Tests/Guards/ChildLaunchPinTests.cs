@@ -5,7 +5,10 @@ using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using ClaudeHomeServer.Services.Spend;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Guards;
 
@@ -26,15 +29,32 @@ public class ChildLaunchPinTests
         public ChildPolicySnapshot? For(string ownerId) => snapshot;
     }
 
+    // Сутки целиком, дневной лимит с запасом, правила согласованы: И3 (KM-B5d) этим тестом не проверяется,
+    // ему нужно лишь пропустить ход, чтобы дойти до сверки И1-бис и сборки контекста.
     private static ChildProfile Profile() => new()
     {
         Enabled = true, TutorPersonaId = "tutor-1", ProviderKey = "pool-key", Model = "sonnet",
+        RulesAgreedAt = new DateTime(2026, 11, 16, 10, 0, 0, DateTimeKind.Utc),
+        Spaces =
+        {
+            ["lessons"] = new SpaceLimits
+            {
+                Windows = [new TimeWindow { From = "00:00", To = "23:59" }],
+                DailyMinutes = 1000,
+            },
+        },
     };
+
+    private sealed class ZeroSpend : IOwnerSpendReader
+    {
+        public decimal TodayUsd(string ownerId, TimeZoneInfo timeZone) => 0m;
+        public decimal MonthUsd(string ownerId, TimeZoneInfo timeZone) => 0m;
+    }
 
     private static Session ValidSession() => new()
     {
         Id = "s-1", OwnerId = Kid, PersonaId = "tutor-1", Provider = "pool-key", Model = "sonnet",
-        ProjectId = null, Mode = ChildModeLaunch.RequiredMode,
+        ProjectId = null, Mode = ChildModeLaunch.RequiredMode, ChildSpace = "lessons",
     };
 
     private static (TurnLaunchContextFactory Factory, TestWebApplicationFactory Host) Build(ChildPolicySnapshot? snapshot)
@@ -42,7 +62,19 @@ public class ChildLaunchPinTests
         var host = new TestWebApplicationFactory();
         _ = host.CreateClient();
         var sp = host.Services;
-        var gate = new ChildModeGate(new FakePolicy(snapshot));
+        var tempDir = Path.Combine(Path.GetTempPath(), "ccs-pin-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var users = new UserStore(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["DataPath"] = Path.Combine(tempDir, "projects.json") }).Build(),
+            new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var policy = new FakePolicy(snapshot);
+        var calc = new ChildLimitsCalculator(policy, new ChildUsageStore(Path.Combine(tempDir, ChildUsageStore.DirName)),
+            new ZeroSpend(), users,
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [ChildLimitsCalculator.ConfigTimeZoneKey] = "Europe/Moscow",
+            }).Build(), NullLogger<ChildLimitsCalculator>.Instance);
+        var gate = new ChildModeGate(policy, calc);
         // BuiltinMcpContexts строим заново — с подменённым гейтом; остальное берём из DI как есть
         var builtin = new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(), sp.GetRequiredService<FeatureFlagService>(),

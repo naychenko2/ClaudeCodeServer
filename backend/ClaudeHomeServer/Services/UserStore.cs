@@ -636,6 +636,14 @@ public class UserStore : IForgejoAccountStore, IUserStore
     /// «Помощника». profile=null — профиля нет (отказ включению:
     /// провижн тьютора не удался, вызывающий откатывает прежний). Возвращает false, если
     /// пользователь не найден.
+    /// Предметы (Т2a, разрез §2): список тела авторитетен (админ правит его, порядок
+    /// сохраняется), но TutorPersonaId каждого предмета берётся из ЖИВОГО профиля по Id,
+    /// как тьютор профиля: админ не может подменить персону через DTO, её пишет только
+    /// SetChildSubjectTutor. Новый Id — пустой (провижн Т2b); без живого профиля новые все
+    /// Id — тьюторы тела обнуляются так же. profile.Subjects=null —
+    /// сигнал вызывающего «предметов в теле нет»: живой список сохраняется как есть
+    /// (PUT вкладки «Режим и время» не стирает предметы); без живого профиля — [].
+    /// В сохранённом профиле Subjects никогда не null (тот же сигнал нормализуется здесь).
     /// </summary>
     public bool SetChildProfile(string id, ChildProfile? profile, bool resetRules)
     {
@@ -653,6 +661,44 @@ public class UserStore : IForgejoAccountStore, IUserStore
                         profile.RulesSummary = live.RulesSummary;
                     }
                     profile.TutorPersonaId = live.TutorPersonaId;
+                    if (profile.Subjects is null)
+                    {
+                        // Тела без предметов — живой список копиями (сами предметы
+                        // неизменяемы здесь; копия — чтобы новый профиль не делил список
+                        // с откатываемым снимком вызывающего).
+                        profile.Subjects = [.. live.Subjects];
+                    }
+                    else
+                    {
+                        var tutors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var subject in live.Subjects)
+                            if (subject is not null)
+                                tutors[subject.Id] = subject.TutorPersonaId;
+                        foreach (var subject in profile.Subjects)
+                        {
+                            if (subject is null) continue;
+                            // Тьютор предмета никогда не берётся из тела: живой по Id
+                            // (админ список правит, персону не подменяет), новый Id — пусто.
+                            subject.TutorPersonaId =
+                                tutors.TryGetValue(subject.Id, out var tutor) ? tutor : "";
+                        }
+                    }
+                }
+                else
+                {
+                    if (profile.Subjects is null)
+                    {
+                        profile.Subjects = [];
+                    }
+                    else
+                    {
+                        // Нет живого профиля — новые все Id: тьюторы тела обнуляются
+                        // (тот же контракт, что в живой ветке: персону пишет только
+                        // SetChildSubjectTutor, Т2b).
+                        foreach (var subject in profile.Subjects)
+                            if (subject is not null)
+                                subject.TutorPersonaId = "";
+                    }
                 }
                 user.ChildMode = profile;
             }
@@ -660,6 +706,26 @@ public class UserStore : IForgejoAccountStore, IUserStore
             {
                 user.ChildMode = null;
             }
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Id персоны-репетитора предмета (ChildSubject.TutorPersonaId, Т2a; провижн Т2b
+    /// закрепляет персону только этим методом — через DTO профиля её подменить нельзя).
+    /// Пишет только в существующий предмет существующего профиля ребёнка, по образцу
+    /// SetChildTutorPersona: возвращает false, если пользователя, профиля или предмета нет.
+    /// </summary>
+    public bool SetChildSubjectTutor(string userId, string subjectId, string personaId)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == userId);
+            if (user?.ChildMode is null) return false;
+            var subject = user.ChildMode.Subjects.FirstOrDefault(s => s.Id == subjectId);
+            if (subject is null) return false;
+            subject.TutorPersonaId = personaId;
             Save();
             return true;
         }

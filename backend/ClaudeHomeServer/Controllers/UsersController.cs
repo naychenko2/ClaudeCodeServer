@@ -256,6 +256,23 @@ public class UsersController(UserStore users, SessionManager sessions,
                 })],
                 DailyMinutes = kv.Value?.DailyMinutes,
             }),
+        // Предметы (Т2a): тела нет — null как сигнал стору «предметы не трогать» (живое
+        // слияние в SetChildProfile; без живого профиля он нормализует его в []). Явный []
+        // — очистить. Порядок сохраняется. Тьютора предмета из тела НЕ читаем: слияние
+        // берёт его по Id из живого профиля, новый предмет остаётся пустым — персону
+        // пишет SetChildSubjectTutor (Т2b).
+        Subjects = req.Subjects is null
+            ? null!
+            : [.. req.Subjects.Select(s => new ChildSubject
+                {
+                    Id = s?.Id ?? "",
+                    Label = s?.Label ?? "",
+                    Glyph = s?.Glyph ?? "",
+                    Color = s?.Color ?? "",
+                    ProviderKey = s?.ProviderKey ?? "",
+                    Model = s?.Model ?? "",
+                    Enabled = s?.Enabled ?? true,
+                })],
         DailyBudgetUsd = req.DailyBudgetUsd,
         MonthlyBudgetUsd = req.MonthlyBudgetUsd,
         WarnMinutes = req.WarnMinutes ?? 5,
@@ -271,6 +288,10 @@ public class UsersController(UserStore users, SessionManager sessions,
                 kv => new ChildSpaceLimitsDto([.. kv.Value.Windows.Select(
                     w => new ChildTimeWindowDto(w.From, w.To, w.Weekdays is { } days ? [.. days] : null))],
                     kv.Value.DailyMinutes)),
+            // Предметы — в порядке стора (он же порядок плиток); тьютор — живой (Т2a:
+            // поле ответа, из тела оно не читалось).
+            [.. p.Subjects.Select(s => new ChildSubjectDto(
+                s.Id, s.Label, s.Glyph, s.Color, s.ProviderKey, s.Model, s.Enabled, s.TutorPersonaId))],
             p.DailyBudgetUsd, p.MonthlyBudgetUsd, p.WarnMinutes, null);
 
     private static string? ValidateUsername(string? username)

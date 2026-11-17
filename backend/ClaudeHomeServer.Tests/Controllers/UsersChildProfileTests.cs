@@ -308,6 +308,30 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         _policy.For(id).Should().BeNull("выключенный профиль — обычный пользователь");
     }
 
+    [Fact]
+    public async Task Put_БезSubjects_ЖивыеПредметыСохранены_ОтветНесётЖивогоТьютора()
+    {
+        var id = await EnableChild("kid-subjects-keep");
+        var tutor = _users.GetById(id)!.ChildMode!.TutorPersonaId;
+        // Засев предмета прямой записью в живой профиль (как делает миграция): предмет
+        // несёт поля профиля и его тьютора.
+        ChildTestSubjects.Seed(_hosts.Services, id);
+
+        // PUT вкладки «Режим и время»: тела без subjects — правка лимитов не стирает
+        // предметы (живое слияние Т2a: ToChildProfile даёт стору сигнал null, он сохраняет живой список).
+        var (status, body) = await PutAsync(id, ValidBody());
+        status.Should().Be(HttpStatusCode.OK);
+
+        var stored = _users.GetById(id)!.ChildMode!;
+        stored.Subjects.Should().ContainSingle("PUT без subjects не стирает предметы")
+            .Which.Id.Should().Be(ChildTestSubjects.Key);
+        stored.Subjects[0].TutorPersonaId.Should().Be(tutor, "живой тьютор предмета сохранён");
+
+        // Ответ отдаёт предметы с живым тьютором (Т2a: tutorPersonaId — поле ответа, из тела не читалось).
+        body.GetProperty("profile").GetProperty("subjects")[0].GetProperty("tutorPersonaId")
+            .GetString().Should().Be(tutor);
+    }
+
     // --- правила ребёнка: их не принимает тело, resetRules — единственный сброс ---
 
     [Fact]

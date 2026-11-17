@@ -35,6 +35,12 @@ public interface IChildModeGate
     /// всё сошлось. Профиль с DenyAll — всегда отказ.
     /// </summary>
     string? LaunchMismatch(string? ownerId, Session session);
+
+    /// <summary>
+    /// Снимок политики владельца (null — обычный пользователь). Нужен запуску хода, чтобы CLI читал
+    /// признак ребёнка на каждом ходу; отдельной зависимостью политика в фабрику не едет.
+    /// </summary>
+    ChildPolicySnapshot? PolicyFor(string ownerId);
 }
 
 /// <summary>

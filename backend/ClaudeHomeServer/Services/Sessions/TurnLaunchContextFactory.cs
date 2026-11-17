@@ -43,16 +43,13 @@ internal sealed class TurnLaunchContextFactory
     private readonly SessionStore _store;
     private readonly Lazy<ITurnMessageSink> _messageSink;
     private readonly Lazy<ITurnStarter> _turnStarter;
-    private readonly ChildMode.IChildModePolicy? _childPolicy;
 
     public TurnLaunchContextFactory(BuiltinMcpContexts builtin, PersonaLayerBuilder personaLayer,
         ExternalMcpContexts external, ModulesMcpContexts moduleContexts,
         Execution.ILauncherFactory launchers, Plugins.IPluginDirSource? pluginDirSource,
         IConfiguration config, SessionStore store,
-        Lazy<ITurnMessageSink> messageSink, Lazy<ITurnStarter> turnStarter,
-        ChildMode.IChildModePolicy? childPolicy = null)
+        Lazy<ITurnMessageSink> messageSink, Lazy<ITurnStarter> turnStarter)
     {
-        _childPolicy = childPolicy;
         _builtin = builtin;
         _persona = personaLayer;
         _external = external;
@@ -265,8 +262,9 @@ internal sealed class TurnLaunchContextFactory
             Project: project,
             FrameSource: _store,
             // И2: признак «ход ребёнка» живёт в контексте запуска и читается на каждом ходу
-            ChildPolicyProvider: _childPolicy is { } childPolicy && !string.IsNullOrEmpty(ownerId)
-                ? () => childPolicy.For(ownerId)
+            // Политика берётся из гейта билдера (он обязателен), а не отдельной опциональной зависимостью
+            ChildPolicyProvider: !string.IsNullOrEmpty(ownerId)
+                ? () => childGate.PolicyFor(ownerId)
                 : null);
     }
 }

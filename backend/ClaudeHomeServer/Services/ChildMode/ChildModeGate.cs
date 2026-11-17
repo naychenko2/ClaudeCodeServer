@@ -29,6 +29,8 @@ public sealed class ChildModeGate(IChildModePolicy policy) : IChildModeGate
     public bool IsChild(string? ownerId) =>
         string.IsNullOrWhiteSpace(ownerId) || policy.For(ownerId) is not null;
 
+    public ChildPolicySnapshot? PolicyFor(string ownerId) => policy.For(ownerId);
+
     public string? LaunchMismatch(string? ownerId, Session session)
     {
         // Детский чат всегда имеет владельца-ребёнка: чат без владельца — не детский, сверять нечего

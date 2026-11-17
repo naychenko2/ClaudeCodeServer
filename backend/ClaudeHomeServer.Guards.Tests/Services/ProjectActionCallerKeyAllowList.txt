@@ -208,7 +208,12 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # запись траты ключуется владельцем из RequestScope, id — лишь адрес чата-вызывателя.
 # W3-SYNC (слияние master в ветку): 29 + 9 = 38 — миграция ключа волны цела (ни одной строки
 # 29 мерж не снял), к ней легла атрибуция траты master (+9).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|38
+# Т1e доработа (остаток 2e840b0aa, тот же класс мест, что вердикт ChildSubjectsController ниже):
+# 38→39 — «_childPolicy?.For(UserId)» в детской ветке GET {id}/avatar (PersonasController.cs:665):
+# id вызывающего — актор проверки «это репетитор этого ребёнка» (чтение своего детского профиля
+# вызывающего). Ключом хранилищ не служит: ничего не пишется, дальше чтение персоны — по
+# TenantOwnerId из RequestScope (строка 671).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|39
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 # R-ФИНАЛ (сведение feat/opt-components с master): ProjectBackgroundsController 0→1 — явный
 # IProjectAccess.Resolve вместо [ProjectScope] (тот же путь, что CodeGraphController): на выключенной

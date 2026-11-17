@@ -244,6 +244,25 @@ public sealed class ChildLimitsCalculatorTests : IDisposable
     }
 
     [Fact]
+    public void ПорядокПричин_БюджетСтаршеВнеОкнаАВнеОкнаСтаршеИсчерпанногоЛимита()
+    {
+        // Ревью R-KM-B5c: границы между соседними причинами И3.
+        // Бюджет превышен И время вне окна → budget_exhausted, не out_of_window.
+        var budgetId = AddChild(Profile(dailyBudgetUsd: 10m));
+        var overBudget = Calc(new FixedSpend(10m, 0m)).Evaluate(budgetId, "lessons", AfterWindow)!;
+        overBudget.State.Should().Be(ChildState.BudgetExhausted);
+        overBudget.NextWindowAt.Should().BeNull(); // nextWindowAt — только при out_of_window
+
+        // Дневный лимит исчерпан И время вне окна → out_of_window, не time_up:
+        // до проверки лимита дело не доходит — отсутствие окна старше.
+        var limitId = AddChild(Profile(dailyMinutes: 40));
+        RecordMinutes(limitId, 40);
+        var overLimit = Calc().Evaluate(limitId, "lessons", AfterWindow)!;
+        overLimit.State.Should().Be(ChildState.OutOfWindow);
+        overLimit.NextWindowAt.Should().Be(NextDayStart);
+    }
+
+    [Fact]
     public void БюджетДостигнутИлиПревышен_БюджетЭкзостед()
     {
         // достигнут = >=: новый ход переведёт бюджет, поэтому ровно на границе уже отказ
@@ -279,6 +298,24 @@ public sealed class ChildLimitsCalculatorTests : IDisposable
     }
 
     [Fact]
+    public void ЖурналБросает_ВремениНеПроверить_TimeUp()
+    {
+        // Ревью R-KM-B5c: журнала не прочитать — fail-closed time_up, а не исключение наружу.
+        // Триггер — отказ стора читать журнал по недопустимому имени пространства
+        // (ChildUsageStore.RequireSpace бросает ArgumentException): сам файл цел,
+        // отказывает сам вызов чтения — для калькулятора это «времени не проверить».
+        var profile = Profile();
+        var limits = profile.Spaces["lessons"];
+        profile.Spaces.Remove("lessons");
+        profile.Spaces["bad space"] = limits;
+        var id = AddChild(profile);
+
+        var status = Calc().Evaluate(id, "bad space", InWindow)!;
+        status.State.Should().Be(ChildState.TimeUp);
+        status.MinutesLeft.Should().BeNull(); // «времени не проверить» — остатка не выдумываем
+    }
+
+    [Fact]
     public void ТаймзонаБезПользовательской_DefaultTimeZoneИнстансаАПяtermUtc()
     {
         // 14:30 UTC = 17:30 МСК внутри окна 16:00–18:00: по UTC это было бы out_of_window.
@@ -298,6 +335,33 @@ public sealed class ChildLimitsCalculatorTests : IDisposable
 
         status.State.Should().Be(ChildState.Ok);
         status.WindowEndsAt.Should().Be("2026-11-17T18:00:00.0000000+03:00");
+    }
+
+    [Fact]
+    public void ТаймзонаИзКонфигурации_ПользовательскойНет_СмещениеПятьЧасов()
+    {
+        // Ревью R-KM-B5c: зона из конфигурации — не декоративная строка, а живая зона:
+        // пользовательской TimeZone нет → окна и время наружу считаются по Asia/Yekaterinburg
+        // (её смещение +05:00), а не по фолбэку инстанса Europe/Moscow (+03:00).
+        var id = AddChild(Profile(dailyMinutes: null, from: "16:00", to: "18:00")); // TimeZone пользователя нет
+        var status = Calc(defaultTimeZone: "Asia/Yekaterinburg")
+            .Evaluate(id, "lessons", new DateTimeOffset(2026, 11, 17, 17, 30, 0, TimeSpan.FromHours(5)))!;
+
+        status.State.Should().Be(ChildState.Ok);
+        status.WindowEndsAt.Should().Be("2026-11-17T18:00:00.0000000+05:00");
+    }
+
+    [Fact]
+    public void ТаймзонаПользователяНеразборная_БерётсяЗонаКонфигурации()
+    {
+        // "Mars/Base" не разбирается — это не отказ и не прыжок к фолбэку инстанса:
+        // следующий кандидат после пользователя существует, и это зона из конфигурации.
+        var id = AddChild(Profile(dailyMinutes: null, from: "16:00", to: "18:00"), timeZone: "Mars/Base");
+        var status = Calc(defaultTimeZone: "Asia/Yekaterinburg")
+            .Evaluate(id, "lessons", new DateTimeOffset(2026, 11, 17, 17, 30, 0, TimeSpan.FromHours(5)))!;
+
+        status.State.Should().Be(ChildState.Ok);
+        status.WindowEndsAt.Should().Be("2026-11-17T18:00:00.0000000+05:00");
     }
 
     [Fact]

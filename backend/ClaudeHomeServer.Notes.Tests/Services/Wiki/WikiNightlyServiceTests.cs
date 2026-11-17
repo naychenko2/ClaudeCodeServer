@@ -164,7 +164,7 @@ public class WikiNightlyServiceTests : IDisposable
     private WikiChatIngestService RealIngest(
         Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? midJudge = null) =>
         new(new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
-            new WikiIngestService(_llm, new NoSpheres(), _apply, _config, null, midJudge), _sessions, _keeper, _config);
+            new WikiIngestService(_llm, new NoSpheres(), _apply, _config, null, midJudge), _sessions, _keeper, new NoSpheres(), _config);
 
     // log — захват журнала для тестов строки итога (J-O1); без него — тихий SUT, как раньше.
     // judge — фейк точки (а) (проход судьи в конце), midJudge — фейк точки (б) в настоящей цепочке.

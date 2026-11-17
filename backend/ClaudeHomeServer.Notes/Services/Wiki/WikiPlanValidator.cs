@@ -303,7 +303,7 @@ public static class WikiPlanValidator
             // «link» и правка человека — строгий гейт без изменений.
             var strippedLinks = 0;
             if (synth)
-                claimText = StripUnresolvedLinks(claimText, sectionKey, chain, linkSnapshot, out strippedLinks);
+                claimText = WikiGate.StripUnresolvedLinks(claimText, sectionKey, chain, linkSnapshot, out strippedLinks);
 
             // Мера 1: каждая цитата дословно в тексте источника. Нет — анти-петля (c3): цитата
             // дословна на странице вики, а не в источнике — модель пересказала вики.
@@ -828,45 +828,12 @@ public static class WikiPlanValidator
     }
 
     // ─── Ссылки в claim (очередь 1, 2А) ────────────────────────────────────────
-    // Ссылка в тексте утверждения — та же [[…]], что читает гейт со страницы (тот же
-    // образец, что WikiPage.LinkRx: «]]» внутри цели не встречается). Резолв — только
-    // WikiGate.ResolveLink: второй копии правил в проекте нет. Неразрешимая заменяется
-    // своим текстом без скобок: алиасом после первого «|», а если его нет — заголовком
-    // без префикса раздела. Уцелевшая остаётся как написана.
+    // Снятие неразрешимых ссылок и сам резолв живут в WikiGate (StripUnresolvedLinks /
+    // ResolveLink): второй копии правил в проекте нет. Здесь остаётся только форма
+    // [[…]] для WithoutLinkSpans (тот же образец, что WikiPage.LinkRx).
 
     private static readonly System.Text.RegularExpressions.Regex ClaimLinkRx =
         new(@"\[\[([^]\r\n]+)\]\]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-
-    private static string StripUnresolvedLinks(
-        string claim, string sectionKey, IReadOnlyList<string> upChain,
-        IReadOnlyList<(string Section, WikiPage Page, string Path)> snapshot, out int removed)
-    {
-        removed = 0;
-        var sb = new StringBuilder(claim.Length);
-        var pos = 0;
-        foreach (System.Text.RegularExpressions.Match m in ClaimLinkRx.Matches(claim))
-        {
-            var inner = m.Groups[1].Value;
-            if (WikiGate.ResolveLink(inner, sectionKey, upChain, snapshot).Outcome == WikiGate.LinkOutcome.Resolved)
-                continue;
-            sb.Append(claim, pos, m.Index - pos).Append(PlainLinkText(inner));
-            pos = m.Index + m.Length;
-            removed++;
-        }
-        return removed == 0 ? claim : sb.Append(claim, pos, claim.Length - pos).ToString();
-    }
-
-    // Текст снятой ссылки: алиас после первого «|» (если он непустой), иначе — заголовок
-    // без префикса раздела.
-    private static string PlainLinkText(string inner)
-    {
-        var bar = inner.IndexOf('|');
-        if (bar >= 0 && inner.Length > bar + 1)
-            return inner[(bar + 1)..];
-        var title = bar >= 0 ? inner[..bar] : inner;
-        var slash = title.LastIndexOf('/');
-        return slash >= 0 ? title[(slash + 1)..] : title;
-    }
 
     // Claim для проверки чисел: текст уцелевших ссылок вырезается пробелом — число в
     // заголовке ссылки не число утверждения; пробел, а не пустая строка, чтобы числа

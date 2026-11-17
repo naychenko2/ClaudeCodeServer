@@ -616,8 +616,10 @@ public sealed class WikiIngestService
 
     /// <summary>Снимок страниц раздела назначения и цепочки вверх: все .md их папок,
     /// служебные «_*» — не страницы (тот же предикат, что у Хранителя). Нечитаемый файл —
-    /// отказ прогона: половины состояния раздела в проверку плана не пускаем.</summary>
-    private static IReadOnlyList<WikiGate.Draft> ReadSectionState(string root, string sectionKey,
+    /// отказ прогона: половины состояния раздела в проверку плана не пускаем.
+    /// internal — тот же снимок нужен записи хроники (WikiChatIngestService.
+    /// AppendChronicleAsync, Q1-S4b): второй читатель состояния раздела не заводим.</summary>
+    internal static IReadOnlyList<WikiGate.Draft> ReadSectionState(string root, string sectionKey,
         IReadOnlyList<string> upChain)
     {
         var drafts = new List<WikiGate.Draft>();

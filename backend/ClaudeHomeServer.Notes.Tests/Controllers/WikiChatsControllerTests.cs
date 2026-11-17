@@ -102,7 +102,7 @@ public class WikiChatsControllerTests : IDisposable
         _chat = new WikiChatIngestService(
             new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
             new WikiIngestService(_llm, new NoSpheres(), apply, _config),
-            _sessions, _keeper, _config);
+            _sessions, _keeper, new NoSpheres(), _config);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
         // Страница знаний, которую план разбора пополняет: без неё применённый исход
         // невозможен (цепка та же, что в WikiChatIngestTests).

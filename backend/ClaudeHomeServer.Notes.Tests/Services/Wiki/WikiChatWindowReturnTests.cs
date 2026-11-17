@@ -132,7 +132,7 @@ public class WikiChatWindowReturnTests : IDisposable
     private WikiChatIngestService Sut(FakeLlm llm) =>
         new(new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
             new WikiIngestService(llm, new NoSpheres(), _apply, _config),
-            _sessions, _keeper, _config);
+            _sessions, _keeper, new NoSpheres(), _config);
 
     // Состояние «разбор закрыл окно курсором 9»: прямая запись стора (тот же путь, что у
     // теста C2R в WikiChatIngestTests), плюс поля скорера через UpdateScoring.

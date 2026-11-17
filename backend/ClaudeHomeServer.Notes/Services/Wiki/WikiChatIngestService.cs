@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Spheres;
 
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
@@ -153,6 +154,9 @@ public sealed class WikiChatIngestService
     private readonly WikiIngestService _ingest;
     private readonly ISessionDirectory _sessions;
     private readonly WikiKeeper _keeper;
+    // Цепочка «вверх» от дома хроники для резолва ссылок при её записи (Q1-S4b):
+    // тот же справочник сфер, что у очереди заявок и применения.
+    private readonly ISphereDirectory _spheres;
     private readonly string _dataDir;
 
     private readonly object _inFlightLock = new();
@@ -170,12 +174,13 @@ public sealed class WikiChatIngestService
     private const int LastCap = 200;
 
     public WikiChatIngestService(WikiSourceCapture capture, WikiIngestService ingest,
-        ISessionDirectory sessions, WikiKeeper keeper, IConfiguration config)
+        ISessionDirectory sessions, WikiKeeper keeper, ISphereDirectory spheres, IConfiguration config)
     {
         _capture = capture;
         _ingest = ingest;
         _sessions = sessions;
         _keeper = keeper;
+        _spheres = spheres;
         // Каталог данных — как у всех сервисов вертикали (тот же корень, что у Хранителя).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -775,7 +780,9 @@ public sealed class WikiChatIngestService
     /// <summary>Дописать хронику чата утверждениями применённых пакетов. Первой
     /// успешный разбор создаёт страницу, следующий — дописывает «Что выяснили».
     /// Существующая нечитаемая хроника — отказ: её строки уже написанное,
-    /// перезаписывать молча нельзя.</summary>
+    /// перезаписывать молча нельзя. Каждую [[…]]-ссылку claim строка несёт только
+    /// разрешённой для раздела дома хроники и его цепочки вверх (Q1-S4b): неразрешимая
+    /// заменяется своим видимым текстом — боковая ссылка не попадает на диск.</summary>
     internal async Task<(bool Ok, string? Reason)> AppendChronicleAsync(
         string ownerId, string home, Session session, string sessionId,
         IReadOnlyList<(string PackageId, string CardTitle)> applied)
@@ -785,6 +792,33 @@ public sealed class WikiChatIngestService
         // для проектного дома формула полна.
         var pageKey = ChroniclePath(home, sessionId)!;
         var full = SafePath.JoinBelowRoot(root, "pages/" + pageKey);
+
+        // Q1-S4b (риск 8 разреза): после Q1-S4 в claim остаются уцелевшие [[…]], разрешённые
+        // в разделе пакета. При записи хроники каждая прогоняется тем же резолвером
+        // (WikiGate.StripUnresolvedLinks — второй копии правил нет) уже для раздела дома
+        // хроники и его цепочки вверх: неразрешимая заменяется видимым текстом (алиасом,
+        // а если его нет — заголовком без префикса). Снимок — состояние дома и цепочки на
+        // момент записи хроники: после того как разбор применил свои страницы, а не до него
+        // (ссылка на страницу, поставленную этим же разом, — не боковая). Запись самой
+        // страницы — под шлюзом раздела как была (WritePageAsync); шаг замков не трогает.
+        // Нечитаемый раздел — пустой снимок: ссылки снимаются до текста, исключения наружу
+        // нет (отказ шага).
+        var upChain = WikiSections.UpChain(home, ownerId, _spheres);
+        var linkSnapshot = new List<(string Section, WikiPage Page, string Path)>();
+        try
+        {
+            foreach (var draft in WikiIngestService.ReadSectionState(root, home, upChain))
+            {
+                if (WikiSections.Parse(draft.Path) is not { } draftSection)
+                    continue;
+                if (WikiPage.Parse(draft.Content).Model is { } model)
+                    linkSnapshot.Add((draftSection, model, draft.Path));
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            linkSnapshot.Clear();
+        }
 
         WikiPage? page = null;
         if (File.Exists(full))
@@ -814,6 +848,10 @@ public sealed class WikiChatIngestService
                 // Text), а сноска — дословную цитату (Quotes, у старого пакета — Text). Текст с
                 // переводом строки складываем в одну строку: формат страницы строчный (WikiPage).
                 var statement = WikiPage.OneLine(op.Claim is { Length: > 0 } ? op.Claim : op.Text);
+                // Та же мера, что у применения плана (Q1-S4), но для дома хроники: боковая
+                // или несуществующая ссылка в хронику не идёт ни в каком виде — её видимый
+                // текст остаётся. Цитата сноски — дословная, в том числе с её [[…]]:
+                // сноска не утверждение, она не правится.
                 IEnumerable<string> candidates = op.Quotes is { Count: > 0 } ? op.Quotes : [op.Text];
                 // Мера контракта гейта (8–300, одна с гейтом) — только на сноске: цитату не
                 // обрезаем, она обязана остаться дословной, а пропускаем — иначе гейт отвергает

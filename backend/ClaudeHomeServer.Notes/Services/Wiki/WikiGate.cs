@@ -437,4 +437,47 @@ public static class WikiGate
     // Нормализация для сравнения заголовков/алиасов/owns (ADR-036, решение 5:
     // «заголовок или aliases после нормализации»): регистр и обрамляющие пробелы.
     internal static string Norm(string text) => text.Trim().Normalize(NormalizationForm.FormC).ToLowerInvariant();
+
+    // ─── Снятие неразрешимых ссылок из текста (очередь 1, 2А; хроника — Q1-S4b) ────
+    // Ссылка в тексте утверждения — та же [[…]], что читает парсер страницы (тот же
+    // образец, что WikiPage.LinkRx: «]]» внутри цели не встречается). Резолв — только
+    // ResolveLink выше: второй копии правил в проекте нет. Неразрешимая заменяется
+    // своим текстом без скобок: алиасом после первого «|», а если его нет — заголовком
+    // без префикса раздела. Уцелевшая остаётся как написана.
+    // internal — пользуются: WikiPlanValidator (снятие неразрешимых ссылок в claim
+    // при применении плана) и WikiChatIngestService.AppendChronicleAsync (снятие при
+    // записи claim в хронику — для раздела дома хроники и его цепочки вверх, Q1-S4b).
+
+    private static readonly Regex ClaimLinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
+
+    internal static string StripUnresolvedLinks(
+        string claim, string sectionKey, IReadOnlyList<string> upChain,
+        IReadOnlyList<(string Section, WikiPage Page, string Path)> snapshot, out int removed)
+    {
+        removed = 0;
+        var sb = new StringBuilder(claim.Length);
+        var pos = 0;
+        foreach (Match m in ClaimLinkRx.Matches(claim))
+        {
+            var inner = m.Groups[1].Value;
+            if (ResolveLink(inner, sectionKey, upChain, snapshot).Outcome == LinkOutcome.Resolved)
+                continue;
+            sb.Append(claim, pos, m.Index - pos).Append(PlainLinkText(inner));
+            pos = m.Index + m.Length;
+            removed++;
+        }
+        return removed == 0 ? claim : sb.Append(claim, pos, claim.Length - pos).ToString();
+    }
+
+    // Текст снятой ссылки: алиас после первого «|» (если он непустой), иначе — заголовок
+    // без префикса раздела.
+    private static string PlainLinkText(string inner)
+    {
+        var bar = inner.IndexOf('|');
+        if (bar >= 0 && inner.Length > bar + 1)
+            return inner[(bar + 1)..];
+        var title = bar >= 0 ? inner[..bar] : inner;
+        var slash = title.LastIndexOf('/');
+        return slash >= 0 ? title[(slash + 1)..] : title;
+    }
 }

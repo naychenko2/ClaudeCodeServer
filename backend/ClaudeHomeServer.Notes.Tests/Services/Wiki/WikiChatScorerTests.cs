@@ -60,7 +60,7 @@ public class WikiChatScorerTests : IDisposable
             new WikiSourceCapture(notes, projects, _sessions, _config, _keeper),
             new WikiIngestService(new NoopCheapRunner(), new NoSpheres(),
                 new WikiApplyService(notes, _keeper, new NoSpheres(), _config), _config),
-            _sessions, _keeper, _config);
+            _sessions, _keeper, new NoSpheres(), _config);
     }
 
     public void Dispose()

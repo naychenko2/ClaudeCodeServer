@@ -850,7 +850,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 .Where(t => t.Role == TaskRoles.Plan && t.OwnerId == ownerId
                     && string.Equals(t.FeatureId, task.FeatureId, StringComparison.Ordinal)
                     && t.Verification is null
-                    && FeatureStepAccounting.PlanStepKeys(t).Overlaps(keys))
+                    && ReplacesEitherWay(t, task, keys))
                 .ToList();
             PlanReplaceInterleaveHook?.Invoke();
             var newer = overlapping.FirstOrDefault(t => IsLaterPlan(t, task));
@@ -864,6 +864,16 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             _tasks[task.Id] = task;
         }
         if (changedOthers) ScheduleSave();
+    }
+
+    // Замещает ли один из двух планов другой (по PlanReplaces, в сторону более позднего):
+    // план-дополнение с одним общим ключом большой план не снимает.
+    private static bool ReplacesEitherWay(TaskItem existing, TaskItem created, HashSet<string> createdKeys)
+    {
+        var existingKeys = FeatureStepAccounting.PlanStepKeys(existing);
+        return IsLaterPlan(existing, created)
+            ? FeatureStepAccounting.PlanReplaces(existingKeys, createdKeys)
+            : FeatureStepAccounting.PlanReplaces(createdKeys, existingKeys);
     }
 
     private static bool IsLaterPlan(TaskItem a, TaskItem b) =>

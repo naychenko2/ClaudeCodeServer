@@ -423,6 +423,19 @@ public class FeatureTrackerTests
         up[0].TaskId.Should().Be("s31");
     }
 
+    // Эпик 45af8178: большой план + малый план-дополнение с одним общим ключом (KM-B7). Раньше малый
+    // вытеснял большой целиком, и все шаги большого плана считались «вне плана».
+    [Fact]
+    public void UnplannedStep_ПланДополнениеСОдНимОбщимКлючом_ШагиБольшогоПланаНаМесте()
+    {
+        var issues = Track(Feature(),
+            Plan("p-big", 0, "KM-00", "KM-B1a", "KM-B1b", "KM-B7"),
+            Plan("p-add", 5, "KM-B7", "KM-F13a"),
+            Step("s0", "KM-00", 1), Step("s1", "KM-B1a", 2), Step("s2", "KM-B1b", 3), Step("s3", "KM-F13a", 4));
+
+        OfKind(issues, FeatureTracker.UnplannedStep).Should().BeEmpty();
+    }
+
     [Fact]
     public void UnplannedStep_ШагИзПлана_Ничего()
     {

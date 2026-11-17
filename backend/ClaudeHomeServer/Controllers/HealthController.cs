@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Deploy;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,6 +16,11 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/health")]
 public class HealthController(BuildIdProvider build) : ControllerBase
 {
+    // Пинг ребёнка (хвост дельта-ревью R-KM-F10): фронт шлёт GET /api/health со своим токеном
+    // (offline.ts → probeHealth), без метки гейт детского режима отвечал 403. Тело остаётся
+    // пустым: здесь нет ни версий, ни путей, ни состава подсистем — только признак живого.
+    // X-Build (ADR-010) — идентификатор экземпляра выкатки (UTC-штамп), он не меняется.
+    [ChildAllowed]
     [AllowAnonymous]
     [HttpGet]
     [HttpHead]

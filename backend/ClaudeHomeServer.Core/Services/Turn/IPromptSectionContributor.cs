@@ -96,7 +96,14 @@ public sealed record PromptSessionContext(
     // вердикт в IsEnabled/BuildAsync. Продакшен-место (ClaudeSession) ставит его всегда по
     // ITurnFrameSource; дефолт Wide — «вердикта нет»: тестовые пути без источника и чат вне проекта
     // (личное пространство и так его).
-    TurnFrameKind Frame = TurnFrameKind.Wide);
+    TurnFrameKind Frame = TurnFrameKind.Wide,
+    // Детский ход (KM-B6c, ADR-041 §4 «Защита данных несовершеннолетнего»): долгая память
+    // персоны и команды, заметки, досье и граф кода ребёнку не собираются — это политика
+    // волны 1, а не следствие пустого ChildModeAllowList (список волны 2 расширяется,
+    // политика — нет). Ставится по снимку политики того же хода, что и весь детский слой
+    // (ChildPolicyProvider, KM-B3b): отдельного чтения стора контрибьюторы не делают.
+    // Контрибьюторы личных данных проверяют признак в IsEnabled — тот же приём, что у Frame.
+    bool IsChild = false);
 
 public static class TurnAudience
 {

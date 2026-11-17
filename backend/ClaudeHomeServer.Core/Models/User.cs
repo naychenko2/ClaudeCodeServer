@@ -98,6 +98,11 @@ public class User
     // VideoFavorites.Defaults), пустой — «снял все звёздочки» и полоса честно пуста.
     // Мёртвые ключи (канал пропал из каталога) не каскадятся — фронт их просто не находит.
     public List<string>? FavoriteVideoChannels { get; set; }
+    // Профиль детского режима (ADR-041): null — обычный пользователь. Включает только админ
+    // (PUT /api/users/{id}/child-profile); политика читает профиль по стору, не по claim.
+    // Аддитивное nullable-поле: старые записи users.json читаются с null,
+    // BackupSchema.Version не двигается.
+    public ChildProfile? ChildMode { get; set; }
 }
 
 // Значения User.ExecutionEnvironment

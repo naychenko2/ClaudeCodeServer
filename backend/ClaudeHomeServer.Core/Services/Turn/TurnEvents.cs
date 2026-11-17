@@ -155,3 +155,12 @@ public sealed record HumanMessageAccepted(TurnContext Turn) : ITurnNotification
 {
     public const string Event = "turn/human-message-accepted";
 }
+
+// child/stop-signal-marker — тьютор детского чата поставил в ответе маркер стоп-сигнала (KM-B6d).
+// Издатель — TurnCompletion (разбор конца хода, ровно одна публикация на ход, маркер из ленты уже
+// вырезан); Turn.OwnerId — ребёнок. Текста хода и причины в событии нет намеренно: подписчик
+// (ChildStopSignalService, Main) шлёт взрослым уведомление без переписки.
+public sealed record ChildStopSignalMarker(TurnContext Turn) : ITurnNotification
+{
+    public const string Event = "child/stop-signal-marker";
+}

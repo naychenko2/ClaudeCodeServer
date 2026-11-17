@@ -21,6 +21,10 @@ export const FLAGS = {
   // «Вики») и источник wiki от агентов; гейт записи в заведённую вику от него не зависит.
   // Dark launch, выключено по умолчанию. Ключ дублирует бэковый FeatureFlagCatalog.
   llmWiki: 'llm-wiki',
+  // Детский режим (ADR-041): флаг прячет только интерфейс включения — редактор профиля ребёнка
+  // в «Пользователях». Ограничения ребёнка зависят только от профиля, не от флага.
+  // Dark launch, выключено по умолчанию.
+  childMode: 'child-mode',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

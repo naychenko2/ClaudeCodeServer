@@ -15,34 +15,36 @@ public class PersonaAutomationServiceTests
         Condition = new AutomationCondition { QuietFrom = from, QuietTo = to },
     };
 
+    // Момент передаётся как UTC-instant + таймзона (как в проде); tz=Utc — местное время равно UTC.
     private static DateTime Local(int hour, int minute = 0) =>
-        new(2026, 7, 13, hour, minute, 0, DateTimeKind.Unspecified);
+        new(2026, 7, 13, hour, minute, 0, DateTimeKind.Utc);
+    private static readonly TimeZoneInfo TzUtc = TimeZoneInfo.Utc;
 
     [Fact]
     public void InQuietWindow_без_условия_всегда_false()
     {
         var rule = new PersonaAutomationRule { Trigger = new AutomationTrigger() };
-        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(3, 0)));
+        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(3, 0), TzUtc));
     }
 
     [Fact]
     public void InQuietWindow_обычный_диапазон()
     {
         var rule = RuleWithQuiet("12:00", "14:00");
-        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(11, 59)));
-        Assert.True(PersonaAutomationService.InQuietWindow(rule, Local(13, 0)));
-        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(14, 0))); // правая граница не входит
-        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(15, 0)));
+        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(11, 59), TzUtc));
+        Assert.True(PersonaAutomationService.InQuietWindow(rule, Local(13, 0), TzUtc));
+        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(14, 0), TzUtc)); // правая граница не входит
+        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(15, 0), TzUtc));
     }
 
     [Fact]
     public void InQuietWindow_переход_через_полночь()
     {
         var rule = RuleWithQuiet("23:00", "07:00");
-        Assert.True(PersonaAutomationService.InQuietWindow(rule, Local(2, 0)));   // ночь
-        Assert.True(PersonaAutomationService.InQuietWindow(rule, Local(23, 30))); // вечер
-        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(10, 0))); // день
-        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(7, 0)));  // правая граница не входит
+        Assert.True(PersonaAutomationService.InQuietWindow(rule, Local(2, 0), TzUtc));   // ночь
+        Assert.True(PersonaAutomationService.InQuietWindow(rule, Local(23, 30), TzUtc)); // вечер
+        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(10, 0), TzUtc)); // день
+        Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(7, 0), TzUtc));  // правая граница не входит
     }
 
     // --- Потолок реакций в час: HasHourlyBudget (peek) не потребляет квоту ---

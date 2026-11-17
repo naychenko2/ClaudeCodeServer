@@ -81,8 +81,10 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     public int Order => 620;
     public string Group => "project";
 
+    // KM-B6c (ADR-041 §4): граф кода детскому ходу не собирается — тот же рубеж, что у CodeGraphContributor.
     public bool IsEnabled(PromptSessionContext sessionContext) =>
-        sessionContext.Session.TaskExecution
+        !sessionContext.IsChild
+        && sessionContext.Session.TaskExecution
         && sessionContext.Session.MessageCount <= 1
         && sessionContext.ServerContent
         && !string.IsNullOrWhiteSpace(sessionContext.RootPath)

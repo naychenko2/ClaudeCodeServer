@@ -104,6 +104,14 @@ public static class ModuleGatewayMiddleware
             return;
         }
 
+        // Гейт И1 детского режима: токен мог прийти через ?access_token (мимо ctx.User) — модули ребёнку закрыты
+        if (ctx.RequestServices.GetService<Services.ChildMode.IChildModePolicy>()?.For(user.Id) is not null)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await ctx.Response.WriteAsJsonAsync(new { error = "child_mode" });
+            return;
+        }
+
         // Гейт видимости (R8): выключенный модуль недоступен и через gateway
         if (!flags.IsEnabled(user.Id, module.FeatureFlagKey))
         {

@@ -43,6 +43,12 @@ public sealed class SpendSubsystem : IAppSubsystem
         // и потребитель (TasksController, шаг Б9b) берёт его опциональным.
         services.AddSingleton<ISpendFeatureReader, SpendFeatureReader>();
 
+        // Шва чтения расхода владельца (детский режим, шаг KM-B5a): читает тот же SpendStore.
+        // Регистрация здесь, а не в Main: при выключенной подсистеме (гейт
+        // Subsystems:spend:Enabled) Register не вызывается, швы нет (`null` у потребителя
+        // KM-B5c — он решает «бюджет не проверить», fail-closed), это законно.
+        services.AddSingleton<IOwnerSpendReader, OwnerSpendReader>();
+
         // Замеры размера постановки задач по секциям (разрез «Задача» в аналитике).
         services.AddSingleton<TaskPromptMetricsStore>();
 

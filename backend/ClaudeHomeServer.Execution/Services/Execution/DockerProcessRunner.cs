@@ -264,7 +264,9 @@ public sealed class DockerProcessRunner : IProcessLauncher
         // при docker run (SandboxManager.BuildRunArgs), поэтому контейнер, созданный ДО
         // появления токена, жил без него навсегда. Докладываем на каждый exec, кроме ходов
         // на чужой эндпоинт/аккаунт пула — токен подписки не должен уезжать чужому эндпоинту.
-        if (!env.ContainsKey("CLAUDE_CODE_OAUTH_TOKEN")
+        // Ход ребёнка (И2): метку ставит ClaudeSession — токен подписки ему не доставляется никогда.
+        if (!env.ContainsKey(Services.ChildMode.ChildTurnMarker.EnvKey)
+            && !env.ContainsKey("CLAUDE_CODE_OAUTH_TOKEN")
             && !env.ContainsKey("ANTHROPIC_AUTH_TOKEN")
             && !env.ContainsKey("ANTHROPIC_API_KEY")
             && Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN") is { Length: > 0 } token)

@@ -43,7 +43,8 @@ public sealed class PersonasCrudService(
     // ADR-014). Явный вызов генерации отвечает отказом с причиной, автогенерация аватара —
     // best-effort путь: персона остаётся с инициалами
     Services.Images.ImageGenerationService? images = null,
-    Services.Images.ImageBackfillService? imageBackfill = null)
+    Services.Images.ImageBackfillService? imageBackfill = null,
+    ChildMode.IChildModeGate? childGate = null)
 {
     // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
     private const string ImageGenerationOffError =
@@ -1255,10 +1256,15 @@ public sealed class PersonasCrudService(
 
     // --- Автоматизации (тела POST/PUT/DELETE /automation) ---
 
+    internal const string ChildAutomationRefusal = "В детском режиме автоматика персон недоступна.";
+
     // Добавить правило (мгновенное сохранение)
     public async Task<ActionResult<PersonaAutomationRule>> AddAutomationRuleAsync(string userId,
         string id, AutomationRuleRequest req)
     {
+        // П.18 (ADR-041): у персон детского владельца автоматика не создаётся — правило само
+        // запускало бы ходы без ребёнка у экрана. Раньше поиска персоны: отказ не зависит от неё.
+        if (childGate?.IsChild(userId) == true) return StatusCode(403, new { error = ChildAutomationRefusal });
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
         // Валидация projectId в triggerArgs
@@ -1280,6 +1286,7 @@ public sealed class PersonasCrudService(
     public async Task<ActionResult<PersonaAutomationRule>> UpdateAutomationRuleAsync(string userId,
         string id, string ruleId, AutomationRuleRequest req)
     {
+        if (childGate?.IsChild(userId) == true) return StatusCode(403, new { error = ChildAutomationRefusal });
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
         var current = persona.AutomationRules?.FirstOrDefault(r => r.Id == ruleId);

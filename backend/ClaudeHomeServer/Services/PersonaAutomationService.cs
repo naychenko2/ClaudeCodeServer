@@ -3,6 +3,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Time;
 using ClaudeHomeServer.Services.TriggerSources;
 
 namespace ClaudeHomeServer.Services;
@@ -33,6 +34,8 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
     // Готовность устройства проекта правила (ADR-016, вариант А плана §5): офлайн — срабатывание
     // пропускается с отметкой, после онлайна догоняется одно последнее. null — проверки нет.
     private readonly Execution.IProjectDeviceGate? _deviceGate;
+    // П.18 (ADR-041): правила детского владельца не срабатывают, даже если появились до включения профиля.
+    private readonly ChildMode.IChildModeGate? _childGate;
 
     private int DefaultMinIntervalMinutes => _config.GetValue("Persona:AutomationMinIntervalMinutes", 5);
     private int HourlyCap => _config.GetValue("Persona:AutomationHourlyCap", 8);
@@ -54,9 +57,10 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
         AutomationStateStore state, MentionTriggerSource mentions, ProjectManager projects,
         UserStore users, AutomationRootResolver roots, IEnumerable<ITriggerSource> sources,
         IConfiguration config, Llm.ICheapTextRunner cheap, ILogger<PersonaAutomationService> log,
-        Execution.IProjectDeviceGate? deviceGate = null)
+        Execution.IProjectDeviceGate? deviceGate = null, ChildMode.IChildModeGate? childGate = null)
     {
         _deviceGate = deviceGate;
+        _childGate = childGate;
         _personas = personas; _sessions = sessions; _push = push; _notif = notif;
         _state = state; _mentions = mentions; _projects = projects; _users = users; _roots = roots;
         _config = config; _cheap = cheap; _log = log;
@@ -77,6 +81,7 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
 
     public async Task MaybeRunAutomationsAsync(User user, TimeZoneInfo tz, DateTime nowUtc, CancellationToken ct)
     {
+        if (_childGate?.IsChild(user.Id) == true) return;
         foreach (var persona in _personas.GetByOwner(user.Id))
         {
             // Снимаем снапшот списка правил: UpdateRules заменяет ссылку, итерация по старой ссылке безопасна.
@@ -97,7 +102,7 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
                 // изменения обнаружатся первым разрешённым тиком. Для File это же экономит дорогой
                 // обход дерева проекта: скан идёт не чаще кулдауна, а изменения за время ожидания
                 // копятся в самом дереве и выходят одним сводным батч-событием.
-                if (InQuietWindow(rule, TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz))) continue;
+                if (InQuietWindow(rule, nowUtc, tz)) continue;
                 var minInterval = EffectiveMinIntervalMinutes(rule);
                 if (state.LastFiredAt is { } lastFired && nowUtc - lastFired < TimeSpan.FromMinutes(minInterval))
                     continue;
@@ -150,6 +155,8 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
     private async Task FireAsync(Persona persona, PersonaAutomationRule rule, TimeZoneInfo tz,
         TriggerEvent ev, CancellationToken ct, bool bypassThrottle = false)
     {
+        // П.18: единая точка всех путей срабатывания (тик, @упоминание, ручной прогон) — детскому владельцу отказ.
+        if (_childGate?.IsChild(persona.OwnerId) == true) return;
         var state = _state.GetRule(persona.Id, rule.Id);
         var now = DateTime.UtcNow;
 
@@ -189,8 +196,7 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
         // правило, без лока два потока проходили throttle-проверку и дублировали реакцию.
         if (!bypassThrottle)
         {
-            var localNow = TimeZoneInfo.ConvertTimeFromUtc(now, tz);
-            if (InQuietWindow(rule, localNow)) { MarkResult(state, "quiet"); return; }
+            if (InQuietWindow(rule, now, tz)) { MarkResult(state, "quiet"); return; }
             var minInterval = EffectiveMinIntervalMinutes(rule);
             lock (state)
             {
@@ -569,16 +575,16 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
 
-    internal static bool InQuietWindow(PersonaAutomationRule rule, DateTime localNow)
-    {
-        var c = rule.Condition;
-        if (c is null || string.IsNullOrWhiteSpace(c.QuietFrom) || string.IsNullOrWhiteSpace(c.QuietTo)) return false;
-        if (!TimeOnly.TryParseExact(c.QuietFrom, "HH:mm", out var from)) return false;
-        if (!TimeOnly.TryParseExact(c.QuietTo, "HH:mm", out var to)) return false;
-        var now = new TimeOnly(localNow.TimeOfDay.Ticks);
-        return from <= to ? (now >= from && now < to)   // обычный диапазон
-                          : (now >= from || now < to);   // переход через полночь
-    }
+    // Тихие часы правила — одно дневное окно из Condition, местное время владельца (tz).
+    // Вся арифметика окна — в Core-хелпере DailyTimeWindow (единственная реализация).
+    internal static bool InQuietWindow(PersonaAutomationRule rule, DateTime nowUtc, TimeZoneInfo tz)
+        => QuietWindow(rule) is { } w
+            && DailyTimeWindow.Contains(new DateTimeOffset(nowUtc, TimeSpan.Zero), new[] { w }, tz);
+
+    private static DailyTimeWindow? QuietWindow(PersonaAutomationRule rule)
+        => rule.Condition is not { QuietFrom: { Length: > 0 } qf, QuietTo: { Length: > 0 } qt }
+            ? null
+            : new DailyTimeWindow(qf, qt);
 
     // ─── Хелперы ─────────────────────────────────────────────────────────────────
 

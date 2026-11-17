@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
@@ -356,6 +357,8 @@ builder.Services.AddSignalR(o =>
         o.HandshakeTimeout = TimeSpan.FromSeconds(30);
         // Отказ файловой группы для локального проекта (ADR-016 §4, G1) на методах хабов
         Microsoft.AspNetCore.SignalR.HubOptionsExtensions.AddFilter(o, new ProjectCapabilityHubFilter());
+        // Гейт И1 детского режима на хабах: ребёнку — только SendMessage и подписки своего чата
+        Microsoft.AspNetCore.SignalR.HubOptionsExtensions.AddFilter(o, new ClaudeHomeServer.Hubs.ChildHubFilter());
     })
     .AddJsonProtocol(o =>
     {
@@ -592,6 +595,29 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore(
     ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore.RootFromConfig(sp.GetRequiredService<IConfiguration>())));
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ChatUserStateService>();
+// IChildModePolicy и IChildModeGate регистрирует AddSessionCore (ядро берёт гейт обязательным).
+// Журнал присутствия ребёнка по пространствам (KM-B5b, разрез §3): минуты по дням в
+// data/child-usage/. Пишет его ручка heartbeat (KM-B5e), читает — статус «остаток минут» (KM-B5c).
+builder.Services.AddSingleton(sp => new ChildUsageStore(
+    ChildUsageStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
+    sp.GetRequiredService<ILogger<ChildUsageStore>>()));
+// Одна точка расчёта детских лимитов (KM-B5c, ADR-041 И3): статус/heartbeat (KM-B5e),
+// создание чата (KM-B6a) и гейт запуска (KM-B5d) читают только её. Шва Spend ОПЦИОНАЛЬНА:
+// GetService, а не GetRequiredService — при выключенной подсистеме её нет, и калькулятор
+// сам решает «бюджет не проверить» как budget_exhausted (fail-closed).
+builder.Services.AddSingleton(sp => new ChildLimitsCalculator(
+    sp.GetRequiredService<IChildModePolicy>(),
+    sp.GetRequiredService<ChildUsageStore>(),
+    sp.GetService<ClaudeHomeServer.Services.Spend.IOwnerSpendReader>(),
+    sp.GetRequiredService<IUserStore>(),
+    sp.GetRequiredService<IConfiguration>(),
+    sp.GetRequiredService<ILogger<ChildLimitsCalculator>>()));
+// Провижн персоны-тьютора ребёнка (KM-B1d, ADR-041): «Помощник» с ключом в
+// ChildProfile.TutorPersonaId. Вызывается только точками записи детского профиля (KM-B1e).
+builder.Services.AddSingleton<ChildTutorProvisioner>();
+// Стоп-сигнал ребёнка → уведомление взрослым без текста переписки (KM-B6d, ADR-041 решение 1).
+builder.Services.AddSingleton<ChildStopSignalService>();
+builder.Services.AddHostedService<ChildStopSignalSubscriber>();
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),
@@ -1111,6 +1137,10 @@ ClaudeHomeServer.Services.Devices.DeviceChannelGuard.UseDeviceChannelGuard(app);
 app.UseAuthentication();
 app.UseAuthorization();
 
+// Гейт И1 детского режима (ADR-041): ребёнку — только эндпоинты с [ChildAllowed], остальное 403.
+// После авторизации (нужны ctx.User и метаданные эндпоинта), до шлюза модулей и YARP
+app.UseChildModeGate();
+
 // Наблюдаемость продуктовых MCP-серверов: их вызовы к бэкенду видно по заголовку
 // X-Caller-Session-Id. Ставим ПОСЛЕ авторизации: иначе 401 попадал бы в статистику как
 // отказ инструмента, хотя до контроллера запрос и не дошёл
@@ -1238,6 +1268,13 @@ app.Use(async (ctx, next) =>
             {
                 ctx.Response.StatusCode = 401;
                 await ctx.Response.WriteAsync("{\"error\":\"Требуется авторизация\"}");
+                return;
+            }
+            // Ребёнку превью дев-серверов закрыто (гейт И1: токен тут приходит из cookie, ctx.User пуст)
+            if (ctx.RequestServices.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>().For(previewUserId) is not null)
+            {
+                ctx.Response.StatusCode = 403;
+                await ctx.Response.WriteAsync("{\"error\":\"child_mode\"}");
                 return;
             }
             var previewProject = ctx.RequestServices.GetRequiredService<ProjectManager>().GetById(projectId);
@@ -1431,7 +1468,11 @@ if (Directory.Exists(distPath))
     // контроллерам (MVC-роутинг специфичнее fallback'а). `/hubs/*`, `/mcp/*` и
     // `/api/modules` (ModuleGateway, регистрируется раньше строкой 1512) не задеты.
     app.MapFallback("/api/{**rest}", ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; });
-    app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
+    // SPA-фолбэк — интерфейс, а не управляющая поверхность: ребёнку он нужен, чтобы
+    // открыть приложение (гейт И1 закрывает API и хабы, статику не трогает).
+    app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders })
+        .WithMetadata(new ClaudeHomeServer.Services.ChildMode.ChildAllowedAttribute(),
+            new ClaudeHomeServer.Services.ChildMode.ChildSpaFallbackAttribute());
 }
 else
 {
@@ -1483,7 +1524,7 @@ app.MapReverseProxy(proxyPipeline =>
     proxyPipeline.UsePassiveHealthChecks();
 });
 app.MapControllers();
-app.MapHub<SessionHub>("/hubs/session");
+app.MapHub<SessionHub>("/hubs/session").WithMetadata(new ClaudeHomeServer.Services.ChildMode.ChildAllowedAttribute());
 app.MapHub<TerminalHub>("/hubs/terminal");
 // Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT

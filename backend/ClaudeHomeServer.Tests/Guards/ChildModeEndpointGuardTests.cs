@@ -35,6 +35,8 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         "POST api/child/spaces/{space}/chat",
         "GET api/child/spaces/{space}/chats",
         "PUT api/child/chats/{id}/voice",
+        // Вложения ребёнка (KM-B6e, ADR-041 ручка №8)
+        "POST api/child/chats/{id}/attachments",
         // Онбординг правил (KM-B6b, ADR-041 ручки №6–7)
         "POST api/child/rules/start",
         "POST api/child/rules/agree",

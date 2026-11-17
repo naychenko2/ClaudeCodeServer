@@ -818,6 +818,12 @@ internal sealed class TeamDecisionService
         if (_sessions.GetById(stabSessionId) is not { } session) return false;
         if (session.TeamImplement is not { } team) return false;
 
+        // Момент действия гашения — граница стора «Since <= at» при снятии ожидания задачи (Ф-2.48,
+        // R-Ф-2.48 минор): берётся в начале гашения, а не в момент клира. Ожидание, поднятое во время
+        // гашения (новый доклад, пока мы закрываем карточку), этим действием не снимается; взятый в
+        // момент клира «at» делал бы сторож вырожденным (Since<=now всегда, окно — микросекунды).
+        var resolvedAt = DateTime.UtcNow;
+
         // Открытые карточки блокера по задаче: для неактивного чата живут на диске, для
         // активного — в аккумуляторе. Гасим обе развилки и помогаем всем блокер-карточкам
         // задачи сразу. Сторона гашения — ResolveEscalationAsync (единая точка, как у кнопки).
@@ -849,7 +855,7 @@ internal sealed class TeamDecisionService
             // «ждёт вас» на странице фичи при снятом блокере (тот же живой случай, что вне
             // штаба). Карточки без TaskId (общий карточный блокер) — ожидания нет у чего.
             if (card.TaskId is { Length: > 0 } cardTaskId)
-                await ClearAwaitingHumanByFactAsync(cardTaskId);
+                await ClearAwaitingHumanByFactAsync(cardTaskId, resolvedAt);
         }
 
         // Возврат стадии ТОЛЬКО если решающих открытых карточек больше нет.
@@ -893,17 +899,17 @@ internal sealed class TeamDecisionService
 
     // Ф-2.48: снять ожидание человека задачи, чью карточку блокера мы погасили по факту.
     // Тот же клир, что у всех остальных точек снятия (TaskManager.ClearAwaitingHuman): он же
-    // пишет waiting_cleared в журнал фичи. Сторож «Since <= at» — в сторе: ожидание,
-    // поставленное после этого момента (одновременно с гашением поднял его новый доклад),
+    // пишет waiting_cleared в журнал фичи. Сторож «Since <= at» — в сторе; «at» — момент начала
+    // гашения (resolvedAt, R-Ф-2.48): ожидание, поднятое во время гашения новым докладом,
     // этим действием не снимается. task_changed — после успешного снятия и только при нём:
     // «updated» без изменения не шлём (тот же порядок, что у AwaitingHumanAnswerSubscriber).
     // Сбой не роняет гашение карточки: карточка уже погашена, это главный эффект вызова.
-    private async Task ClearAwaitingHumanByFactAsync(string taskId)
+    private async Task ClearAwaitingHumanByFactAsync(string taskId, DateTime resolvedAt)
     {
         if (_tasks is null) return;
         try
         {
-            var cleared = _tasks.ClearAwaitingHuman(taskId, DateTime.UtcNow);
+            var cleared = _tasks.ClearAwaitingHuman(taskId, resolvedAt);
             if (cleared is null || _broadcaster is null) return;
             await _broadcaster.ToTaskBoard(cleared.OwnerId ?? "", cleared.ProjectId,
                 new TaskChangedMessage("updated", cleared));

@@ -18,6 +18,9 @@ export interface ChildStatus {
   maxAttachmentBytes: number; // ChildMode:MaxAttachmentBytes, по умолчанию 10 МБ
   attachmentTypes: string[]; // MIME из allow-list (image/png, image/jpeg, image/webp, application/pdf, text/plain)
   rulesAgreedAt: string | null;
+  dailyMinutes: number | null; // дневной лимит из профиля; null — лимита нет
+  windows: { from: string; to: string }[]; // окна доступа «HH:mm»; [] — окон нет
+  minutesToday: number | null; // минуты с уроками за сегодня; null — журнал не прочитать
 }
 
 // Окно времени пространства: from/to — «HH:mm», to < from — окно через полночь;

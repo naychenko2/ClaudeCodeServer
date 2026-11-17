@@ -22,6 +22,7 @@ function status(over: Partial<ChildStatus> = {}): ChildStatus {
     windowEndsAt: null, nextWindowAt: null, warnMinutes: 5,
     maxAttachmentBytes: 10 * 1024 * 1024,
     attachmentTypes: ['image/png'], rulesAgreedAt: '2026-11-16T12:00:00+03:00',
+    dailyMinutes: 60, windows: [], minutesToday: 0,
     ...over,
   };
 }

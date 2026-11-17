@@ -77,8 +77,8 @@ interface Props {
   // Старшая причина состояния (И3): здесь живут только time_up / out_of_window / budget_exhausted;
   // для чужых состояний компонент возвращает null (их рисует другой экран)
   status: ChildStatus;
-  // Минуты с уроками за сегодня — итог дня для time_up. 0 или меньше — строки итога нет
-  minutesToday: number;
+  // Минуты с уроками за сегодня — итог дня для time_up. null (журнал не прочитать) или 0 — строки итога нет
+  minutesToday: number | null;
 }
 
 export function ChildTimeUpScreen({ status, minutesToday }: Props) {
@@ -125,7 +125,7 @@ export function ChildTimeUpScreen({ status, minutesToday }: Props) {
       />
 
       {/* Итог дня — только у time_up: у «вне окна» дня ещё нет, у exhausted итог не в минутах. */}
-      {kind === 'time_up' && minutesToday > 0 && (
+      {kind === 'time_up' && minutesToday != null && minutesToday > 0 && (
         <Island bg={C.bgCard} borderColor={C.borderLight} shadow={SHADOW.card} style={{ borderRadius: R.xxl, padding: SP.lg }}>
           <div style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading, marginBottom: SP.sm }}>
             Итог дня

@@ -16,6 +16,7 @@ const status = (over: Partial<ChildStatus> = {}): ChildStatus => ({
   maxAttachmentBytes: 10 * 1024 * 1024,
   attachmentTypes: [],
   rulesAgreedAt: null,
+  dailyMinutes: 60, windows: [], minutesToday: 0,
   ...over,
 });
 

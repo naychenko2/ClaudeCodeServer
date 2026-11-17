@@ -82,6 +82,7 @@ const STATUS = {
   warnMinutes: 5, maxAttachmentBytes: 10 * 1024 * 1024,
   attachmentTypes: ['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'text/plain'],
   rulesAgreedAt: null,
+  dailyMinutes: null, windows: [], minutesToday: null,
 };
 
 function renderChat(root: ReturnType<typeof createRoot>, sessionId: string, status = STATUS) {

@@ -62,7 +62,7 @@ vi.mock('../../components/ui/PageCanvas', async () => {
 
 vi.mock('./ChildTimeUpScreen', async () => {
   const React = await import('react');
-  return { ChildTimeUpScreen: (p: { status: { state: string } }) => React.createElement('div', { 'data-testid': 'timeup', 'data-state': p.status.state }) };
+  return { ChildTimeUpScreen: (p: { status: { state: string }; minutesToday: number | null }) => React.createElement('div', { 'data-testid': 'timeup', 'data-state': p.status.state, 'data-minutes': String(p.minutesToday) }) };
 });
 
 const { ChildWorkspace } = await import('./ChildWorkspace');
@@ -71,7 +71,8 @@ const status = (over: Partial<ChildStatus> = {}): ChildStatus => ({
   state: 'ok', space: 'lessons', minutesLeft: 40,
   windowEndsAt: '2026-11-17T19:00:00+03:00', nextWindowAt: null,
   warnMinutes: 5, maxAttachmentBytes: 10_000_000,
-  attachmentTypes: ['image/png'], rulesAgreedAt: '2026-11-10T12:00:00+03:00', ...over,
+  attachmentTypes: ['image/png'], rulesAgreedAt: '2026-11-10T12:00:00+03:00',
+  dailyMinutes: 60, windows: [], minutesToday: 0, ...over,
 });
 
 const auth = { serverUrl: '', token: 't', username: 'liza', displayName: 'Лиза' };
@@ -135,6 +136,33 @@ describe('ChildWorkspace', () => {
     const start = Array.from(doc.querySelectorAll('button')).find(b => /Начать вместе с папой/.test(b.textContent ?? ''))!;
     await click(start);
     expect(h.api.rulesStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('правила показывают настоящий лимит и окна профиля, а не minutesLeft', async () => {
+    h.status = status({ state: 'rules_pending', rulesAgreedAt: null, minutesLeft: 7, dailyMinutes: 40, windows: [{ from: '16:00', to: '18:00' }] });
+    await mount();
+    const start = Array.from(doc.querySelectorAll('button')).find(b => /Начать вместе с папой/.test(b.textContent ?? ''))!;
+    await click(start);
+    // модалка предыдущего теста остаётся порталом в body — берём последнюю «Дальше», свою
+    const next = Array.from(doc.querySelectorAll('button')).filter(b => /^Дальше$/.test((b.textContent ?? '').trim())).pop()!;
+    await click(next);
+    const text = doc.body.textContent ?? '';
+    expect(text).toContain('40 минут');
+    expect(text).toMatch(/16:00/);
+    expect(text).toMatch(/18:00/);
+    expect(text).not.toContain('7 минут');
+  });
+
+  it('time_up: minutesToday=12 уходит на экран итога', async () => {
+    h.status = status({ state: 'time_up', minutesToday: 12 });
+    await mount();
+    expect(doc.querySelector('[data-testid="timeup"]')?.getAttribute('data-minutes')).toBe('12');
+  });
+
+  it('time_up: minutesToday=null не превращается в 0', async () => {
+    h.status = status({ state: 'time_up', minutesToday: null });
+    await mount();
+    expect(doc.querySelector('[data-testid="timeup"]')?.getAttribute('data-minutes')).toBe('null');
   });
 
   it('урок монтируется с key=sessionId и берёт озвучку с сервера; холст красится предметом', async () => {

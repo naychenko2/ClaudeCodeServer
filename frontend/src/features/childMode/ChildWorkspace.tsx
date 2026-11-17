@@ -267,7 +267,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
   if (!eff) {
     center = null;
   } else if (timeUp) {
-    center = <ChildTimeUpScreen status={eff} minutesToday={0} />;
+    center = <ChildTimeUpScreen status={eff} minutesToday={eff.minutesToday} />;
   } else if (inLesson && sessionId && activeSubject) {
     center = (
       <ChildLessonChat
@@ -414,13 +414,12 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
   );
 }
 
-// ChildRulesBrief собирается из status и имени ребёнка; лимиты профиля статус не несёт,
-// поэтому окна пустые, а дневной лимит — текущий остаток (форма окна онбординга не меняется)
+// ChildRulesBrief собирается из status и имени ребёнка: лимит и окна — настоящие, из профиля
 function briefFrom(status: ChildStatus, childName: string, sessionId: string): ChildRulesBrief {
   return {
     childName,
-    dailyMinutes: status.minutesLeft,
-    windows: [],
+    dailyMinutes: status.dailyMinutes,
+    windows: status.windows,
     warnMinutes: status.warnMinutes,
     sessionId,
     agreedAt: status.rulesAgreedAt,

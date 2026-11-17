@@ -35,7 +35,7 @@ const status = (over: Partial<ChildStatus> = {}): ChildStatus => ({
   state: 'ok', space: 'lessons', minutesLeft: 40,
   windowEndsAt: '2026-11-17T19:00:00+03:00', nextWindowAt: null,
   warnMinutes: 5, maxAttachmentBytes: 10_000_000,
-  attachmentTypes: ['image/png'], rulesAgreedAt: '2026-11-10T12:00:00+03:00', ...over,
+  attachmentTypes: ['image/png'], rulesAgreedAt: '2026-11-10T12:00:00+03:00', dailyMinutes: 60, windows: [], minutesToday: 0, ...over,
 });
 
 const lastLesson: ChildLastLesson = { subjectId: 'math', title: 'Сравнение дробей', progress: 'Шаг 2 из 3' };

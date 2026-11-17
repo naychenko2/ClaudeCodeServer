@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Route("api/auth")]
 public class AuthController(UserStore users, JwtService jwt, FeatureFlagService flags,
-    PersonaManager personas, SubsystemStateStore subsystems) : ControllerBase
+    PersonaManager personas, SubsystemStateStore subsystems, IChildModePolicy childPolicy) : ControllerBase
 {
     [AllowAnonymous]
     [ChildAllowed]
@@ -71,12 +71,20 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         // Активные подсистемы: список ключей, реально зарегистрированных в текущем
         // процессе. Снимок берётся из `SubsystemStateStore` — он наполняется на старте
         // через `AddSubsystems` и не меняется в рантайме (гейт одноразовый).
+        // Детский режим (KM-B5e, ADR-041 ручка №11): isChild — факт личности по стору через
+        // IChildModePolicy (не по claim — тот же приём, что у гейта); childSpaces — ключи
+        // включённых пространств профиля. У взрослого — false и []; у ребёнка с нечитаемым
+        // профилем (DenyAll) — остаётся ребёнком, но ни одно пространство не называем ([]).
+        var childSnapshot = userId is null ? null : childPolicy.For(userId);
+        var isChild = childSnapshot is not null;
+        var childSpaces = childSnapshot?.Profile?.Spaces.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList() ?? [];
         return Ok(new
         {
             userId, username, displayName = me?.DisplayName, role, featureFlags,
             contextThresholds, cacheWarnThresholds, executionEnvironment,
             defaultPersonaId, needsOnboarding, onboardingSessionId = me?.OnboardingSessionId,
             subsystems = subsystems.ActiveKeys(),
+            isChild, childSpaces,
         });
     }
 

@@ -28,6 +28,9 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         "GET api/auth/me",
         "POST api/auth/login",
         "POST api/tts",
+        // Статус и присутствие ребёнка (KM-B5e, ADR-041 ручки №1–2)
+        "POST api/child/heartbeat",
+        "GET api/child/status",
         // Чтение своего детского чата (KM-B6f): обе формы истории — с курсором и без
         "GET api/chats/{id}",
         "GET api/chats/{id}/history",

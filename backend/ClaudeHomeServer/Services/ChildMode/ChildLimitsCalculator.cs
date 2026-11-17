@@ -144,7 +144,10 @@ public sealed class ChildLimitsCalculator(
     // Таймзона (решение Андрея 3): User.TimeZone → ChildMode:DefaultTimeZone → фолбэк инстанса.
     // Пользовательское значение неразборное или стор бросил — не отказ, переход к следующему
     // кандидату: окна продолжат считаться по таймзоне инстанса, а не по UTC.
-    private TimeZoneInfo ResolveTimeZone(string ownerId)
+    // Публичный: ручка heartbeat (KM-B5e) пишет минуту журнала той же таймзоной, которой этот
+    // калькулятор читает «минут сегодня» (MinutesToday берёт местный день переданной зоны) —
+    // вторая реализации резолвера здесь не будет: расхождение двух дат сломало бы остаток минут.
+    public TimeZoneInfo ResolveTimeZone(string ownerId)
     {
         string? userZone = null;
         try { userZone = users.GetById(ownerId)?.TimeZone; }

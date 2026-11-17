@@ -122,6 +122,19 @@ describe('ChildTimeUpScreen: спокойный текст и холст', () =>
   });
 });
 
+describe('ChildTimeUpScreen: чужие состояния — экран молчит', () => {
+  // ok/warn/rules_pending рисует другой экран. Фолбэк на «Уроки отдыхают» здесь был
+  // ложью: ребёнок с warn (урок идёт, осталось 5 минут) прочитал бы «время уроков
+  // закрыто» (вердикт KM-F4). Пустой вывод — зафиксированное поведение: тест краснеет,
+  // если фолбэк вернётся в любую форму.
+  it('ok/warn/rules_pending: ничего не рисуется — ни заставки, ни обещания окна', () => {
+    for (const state of ['ok', 'warn', 'rules_pending'] as const) {
+      const html = render(state, { minutesLeft: 5, windowEndsAt: '2026-11-17T18:00:00+03:00' });
+      expect(html, `${state}: не пустой вывод`).toBe('');
+    }
+  });
+});
+
 describe('ChildTimeUpScreen: «когда откроются» по таймзоне ребёнка', () => {
   const open = (iso: string) => render('out_of_window', { nextWindowAt: iso });
 

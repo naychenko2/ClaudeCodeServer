@@ -17,8 +17,9 @@ import type { ChildStatus } from './types';
 
 // Тексты заставки по старшей причине (И3). Слов «ошибка», «лимит», «бюджет», «403» здесь
 // нет намеренно: это не отказ взрослому, а спокойный конец ребёнку (записка, «Новое №3»).
-// Фолбэк на «Уроки отдыхают» — для состояний, которым этот экран не принадлежит
-// (ok/warn/rules_pending: их рисует не он, но молча пустой экран был бы хуже).
+// Экран принадлежит только трём состояниям конца дня. Для чужих (ok/warn/rules_pending)
+// он молчит: фолбэк на «Уроки отдыхают» был бы ложью о дне, который ещё не кончился
+// (вердикт KM-F4: экран обещает только то, что принёс сервер).
 const HEADLINES = {
   time_up: {
     title: 'На сегодня с уроками всё',
@@ -73,18 +74,22 @@ function opensLabel(iso: string, nowMs: number): string | null {
 }
 
 interface Props {
-  // Старшая причина состояния (И3): здесь живут только time_up / out_of_window / budget_exhausted
+  // Старшая причина состояния (И3): здесь живут только time_up / out_of_window / budget_exhausted;
+  // для чужых состояний компонент возвращает null (их рисует другой экран)
   status: ChildStatus;
   // Минуты с уроками за сегодня — итог дня для time_up. 0 или меньше — строки итога нет
   minutesToday: number;
 }
 
 export function ChildTimeUpScreen({ status, minutesToday }: Props) {
-  const isMobile = useIsMobile();
-  const kind: HeadlineKind =
+  const isMobile = useIsMobile(); // хук до раннего выхода: порядок хуков не зависит от состояния
+  // Чужое состояние (ok/warn/rules_pending) рисует другой экран — этот не говорит
+  // о конце дня и ничего не рисует (вердикт KM-F4).
+  const kind: HeadlineKind | null =
     status.state === 'time_up' || status.state === 'out_of_window' || status.state === 'budget_exhausted'
       ? status.state
-      : 'out_of_window';
+      : null;
+  if (!kind) return null;
   const head = HEADLINES[kind];
   // Обещание времени — только когда его принёс сервер (nextWindowAt заполнен при
   // out_of_window, И3); без него заставка остаётся спокойной, но ничего не обещает.

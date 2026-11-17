@@ -28,6 +28,9 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         "GET api/auth/me",
         "POST api/auth/login",
         "POST api/tts",
+        // Чтение своего детского чата (KM-B6f): обе формы истории — с курсором и без
+        "GET api/chats/{id}",
+        "GET api/chats/{id}/history",
         "ANY /hubs/session",
         "ANY /hubs/session/negotiate",
         // SPA-фолбэк — интерфейс, а не управляющая поверхность
@@ -145,6 +148,7 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         SetChild();
         using var client = ChildClient();
         var resp = await client.GetAsync("/");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
         (await resp.Content.ReadAsStringAsync()).Should().NotContain("child_mode");
     }
 

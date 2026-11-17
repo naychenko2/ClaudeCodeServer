@@ -4,6 +4,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Team;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -45,6 +46,18 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         sessions.GetOwnedVisible(id, UserId) is null && sessions.GetAccessible(id, UserId) is { Session.ProjectId: not null }
             ? ChatAuthorGate.Denied()
             : NotFound();
+
+    // Ребёнку чат без ChildSpace неотличим от чужого и несуществующего: одно тело 404 (как в
+    // редакторских гейтах ScopeGate) — существование чата не раскрываем (ADR-041, KM-B6f).
+    private IActionResult ChildChatNotFound() =>
+        NotFound(new { error = "Чат не найден", code = "chat_not_found" });
+
+    // Текущий владелец — ребёнок? Та же точка правды, что у гейта И1: IChildModePolicy по стору,
+    // а не по claim. Резолвим из RequestServices (тот же приём, что Options в BuildDigest ниже):
+    // в синтетических юнит-тестах без DI-скопа — null, то есть не ребёнок; реальные детские
+    // запросы на прочие ручки всё равно не доходят — их отсекает сам гейт И1.
+    private bool CurrentOwnerIsChild() =>
+        HttpContext.RequestServices?.GetService<IChildModePolicy>()?.For(UserId) is not null;
 
     [HttpGet]
     public IActionResult GetAll() =>
@@ -123,11 +136,20 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
     // Получить сессию по ID независимо от типа (проектная / чат вне проекта).
     // Используется для ссылки «Связанная сессия» в карточке задачи без проекта.
+    [ChildAllowed]
     [HttpGet("{id}")]
     public IActionResult Get(string id)
     {
+        var child = CurrentOwnerIsChild();
         // Чтение: чат виден и участнику общего проекта (GetAccessible), запись остаётся на GetOwned
-        return sessions.GetAccessible(id, UserId) is { } found ? Ok(found.Session) : NotFound();
+        if (sessions.GetAccessible(id, UserId) is { } found)
+        {
+            // Ребёнку — только детские пространства (ADR-041): чат без ChildSpace неотличим от чужого
+            if (child && found.Session.ChildSpace is null) return ChildChatNotFound();
+            return Ok(found.Session);
+        }
+        // Ребёнку чужой и несуществующий неотличимы — то же тело, что и «не детское пространство»
+        return child ? ChildChatNotFound() : NotFound();
     }
 
     [HttpPost]
@@ -745,10 +767,16 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // С after (+ fp) — докачка хвоста (Перф-2 B5): объект { reset, messages, anchorIndex,
     // anchorFp }, как у проектной сессии (SessionsController.GetHistory) — одна логика в
     // ChatHistoryTail, изоляция per-owner та же (OwnedChat).
+    [ChildAllowed]
     [HttpGet("{id}/history")]
     public async Task<IActionResult> GetHistory(string id, [FromQuery] int? after = null, [FromQuery] string? fp = null)
     {
-        if (OwnedChat(id) is not { } session) return NotFound();
+        var child = CurrentOwnerIsChild();
+        var session = OwnedChat(id);
+        // Чужой и несуществующий ребёнку неотличимы: то же тело, что и «не детское пространство»
+        if (session is null) return child ? ChildChatNotFound() : NotFound();
+        // Ребёнку — только детские пространства (ADR-041): чат без ChildSpace неотличим от чужого
+        if (child && session.ChildSpace is null) return ChildChatNotFound();
         var history = await sessions.GetHistoryAsync(id);
         if (after is null) return Ok(history);
         // Ключ кэша — csid (HistoryKeyOf): отпечатки префиксов не пересчитываются на каждый запрос

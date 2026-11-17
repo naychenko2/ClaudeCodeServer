@@ -44,7 +44,10 @@ public sealed class PersonaBindingsContributor : IPromptSectionContributor
         // привязок не строится вовсе — его Always-выжимки несут личное содержимое
         // владельца, а текст хода при Narrow видит его целиком (тот же приём, что
         // NotesRecallContributor.IsEnabled).
-        && sessionContext.Frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Wide;
+        && sessionContext.Frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Wide
+        // KM-B6c (ADR-041 §4): Always-выжимки заметок и баз знаний ребёнку не собираются —
+        // политика волны 1, независимая от состава ChildModeAllowList.
+        && !sessionContext.IsChild;
 
     public async Task<PromptSectionContribution?> BuildAsync(
         PromptSessionContext sessionContext, string? turnText)

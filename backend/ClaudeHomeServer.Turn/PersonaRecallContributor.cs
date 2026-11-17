@@ -62,8 +62,13 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
     // Внутренний таймаут (Persona:RecallTimeoutMs) и исключения — как раньше.
     public bool ParallelSafe => true;
 
+    // Детский ход (KM-B6c, ADR-041 §4): ни личной памяти, ни памяти команды, ни досье ребёнку
+    // не собираются — политика волны 1 («долгая память тьютора выключена»), а не следствие
+    // пустого ChildModeAllowList: список волны 2 расширяется, эта политика — нет. Отключение
+    // здесь, а не в склейке: работа не делается вовсе (тот же приём, что у Frame выше).
     public bool IsEnabled(PromptSessionContext sessionContext) =>
-        sessionContext.HasMemoryMcp && sessionContext.OwnerId is not null && sessionContext.Persona is not null;
+        !sessionContext.IsChild
+        && sessionContext.HasMemoryMcp && sessionContext.OwnerId is not null && sessionContext.Persona is not null;
 
     public async Task<PromptSectionContribution?> BuildAsync(
         PromptSessionContext sessionContext, string? turnText)

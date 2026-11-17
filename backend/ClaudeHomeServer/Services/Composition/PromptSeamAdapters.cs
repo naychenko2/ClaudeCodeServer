@@ -88,8 +88,9 @@ public sealed class PersonaResolverAdapter(PersonaManager personas) : IPersonaRe
 public sealed class PersonaPromptAssemblerAdapter(PersonaPromptBuilder builder) : IPersonaPromptAssembler
 {
     public string Build(Persona persona, string? model, bool switched = false, bool greeted = false,
-        string? teamMechanicsBlock = null, bool voiceMode = false, string? voiceStyle = null) =>
-        builder.Build(persona, model, switched, greeted, teamMechanicsBlock, voiceMode, voiceStyle);
+        string? teamMechanicsBlock = null, bool voiceMode = false, string? voiceStyle = null,
+        bool childSafety = false) =>
+        builder.Build(persona, model, switched, greeted, teamMechanicsBlock, voiceMode, voiceStyle, childSafety);
 }
 
 public sealed class PersonaBindingsSourceAdapter(PersonaBindingsService bindings) : IPersonaBindingsSource

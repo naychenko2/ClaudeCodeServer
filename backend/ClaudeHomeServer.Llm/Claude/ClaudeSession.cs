@@ -4034,7 +4034,11 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasVideoEditorMcp: _videoEditorMcp is not null && McpDelivered(McpEndpoints.VideoEditorName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth),
                     ConsumersHookActive: ConsumersHookDelivered,
-                    Frame: turnFrame);
+                    Frame: turnFrame,
+                    // Детский ход — по тому же снимку политики, по которому живёт весь детский
+                    // слой (ChildPolicyProvider, KM-B3b): контрибьюторы recall-секций
+                    // проверяют признак в IsEnabled (KM-B6c), второго чтения стора нет.
+                    IsChild: _childPolicy?.Invoke() is not null);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
                 try

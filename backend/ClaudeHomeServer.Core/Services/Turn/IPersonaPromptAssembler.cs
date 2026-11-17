@@ -24,5 +24,9 @@ public interface IPersonaPromptAssembler
         bool greeted = false,
         string? teamMechanicsBlock = null,
         bool voiceMode = false,
-        string? voiceStyle = null);
+        string? voiceStyle = null,
+        // Детский слой (KM-B6c): правила тьютора (ChildSafetyPrompts) — секцией перед слотами
+        // характера и оговоркой последним блоком. Признак держит вызывающий (снимок политики
+        // хода), а не персона: правило ставится независимо от того, какой тьютор закреплён.
+        bool childSafety = false);
 }

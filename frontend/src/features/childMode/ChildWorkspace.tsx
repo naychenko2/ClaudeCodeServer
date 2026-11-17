@@ -2,8 +2,14 @@
 // Собрана из примитивов взрослого каркаса: шапка, рельса RailCapsule, острова Island,
 // холст CanvasBackdrop. Взрослые экраны, хаб-табы, поиск, уведомления, док проектов,
 // стена и взрослые панели здесь не монтируются — а значит, не шлют запросов.
-// Запросы оболочки: только /api/child/* (status, heartbeat, spaces/*/chats, rules/start)
-// и то, что делает чат урока (ChildLessonChat).
+// Запросы оболочки: только /api/child/* (status, heartbeat, subjects, spaces/*/chats,
+// spaces/*/chat, rules/start) и то, что делает чат урока (ChildLessonChat).
+//
+// Т3c: предметы и предмет чата — с сервера. Плитки ChildHome получает из GET /api/child/subjects
+// (порядок — порядок сервера, И5), предмет открытого чата — поле subject элемента списка чатов
+// (ключ — sessionId). Предмета нет ни в клиентском хранилище, ни в фолбэке 'math': их не стало
+// вместе с серверным источником. Константа волны 1 (CHILD_SUBJECTS) остаётся только мостом
+// до Т3e — пока списка предметов нет на экране.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Brush, Lightbulb, ListChecks, LogOut, User, WifiOff } from 'lucide-react';
@@ -30,38 +36,41 @@ import { PillSwitch } from '../../components/Toolbar';
 import { setPersonasChildMode } from '../../lib/personas';
 import { childApi } from './api';
 import { useChildStatus } from './useChildStatus';
-import { ChildHome, CHILD_SUBJECTS, type ChildSubjectId } from './ChildHome';
+import { ChildHome, CHILD_SUBJECTS, TutorMark } from './ChildHome';
 import { ChildHintsPanel } from './ChildHintsPanel';
 import { ChildLessonChat } from './ChildLessonChat';
 import { ChildRulesOnboarding, type ChildRulesBrief } from './ChildRulesOnboarding';
 import { ChildTimeBadge } from './ChildTimeBadge';
 import { ChildTimeUpScreen } from './ChildTimeUpScreen';
-import type { ChildStatus } from './types';
+import type { ChildChatListItem, ChildStatus, ChildSubjectColor, ChildSubjectTutor, ChildSubjectView } from './types';
 
 // Единственное пространство волны 1 (ADR-041)
 const SPACE = 'lessons';
-const SUBJECTS_KEY = 'cc_child_lesson_subjects';
 // Ширины раскладки панели «Как мы учимся» (спека макета): >1200 — в зоне, 900–1200 — поверх, <900 — поверх без сайдбара
 const PANEL_INLINE_MIN = 1200;
 const SIDEBAR_MIN = 900;
 const SIDEBAR_W = 280;
 const PANEL_W = 300;
 
-// Цвет холста предмета — ключ палитры проекта (ADR-008): математика синяя, русский сливовый, английский зелёный
-const SUBJECT_INK: Record<ChildSubjectId, string> = { math: 'blue', russian: 'purple', english: 'green' };
-const subjectAsProject = (id: ChildSubjectId): Project =>
-  ({ id: `child-subject-${id}`, icon: { color: SUBJECT_INK[id] } }) as unknown as Project;
+// Цвет холста по ключу цвета предмета — та же строка, что у палитры subjectPalette (Т3b):
+// CanvasBackdrop берёт hex из AGENT_COLORS по ключу, а не пару токенов (accent = #D97757,
+// он же AGENT orange; warning — тот же жёлтый ряд).
+const SUBJECT_INK: Record<ChildSubjectColor, string> = { info: 'blue', rose: 'purple', success: 'green', warning: 'yellow', accent: 'orange' };
+const subjectAsProject = (color: ChildSubjectColor): Project =>
+  ({ id: `child-subject-${color}`, icon: { color: SUBJECT_INK[color] } }) as unknown as Project;
 
-type Chat = { sessionId: string; name: string; updatedAt: string; voiceMode?: boolean };
+// Мост до Т3e: константа волны 1 описана ключами той же палитры (ChildHome: math→info,
+// russian→rose, english→success) — приводим её к серверному виду предмета: интерфейс
+// не различает, откуда предмет. Работает только пока списка предметов нет (он ещё не
+// пришёл или его загрузка не удалась — тот же спокойный случай, что у сбоя списка чатов).
+const LEGACY_COLOR: Record<string, ChildSubjectColor> = { math: 'info', russian: 'rose', english: 'success' };
+const legacySubjectView = (id: string): ChildSubjectView | null => {
+  const color = LEGACY_COLOR[id];
+  const legacy = CHILD_SUBJECTS.find(s => s.id === id);
+  return legacy && color ? { id: legacy.id, label: legacy.label, glyph: legacy.glyph, color, tutor: null } : null;
+};
+
 type Tab = 'lessons' | 'studio' | 'rules';
-
-// Предмет урока хранит клиент: контракт чатов пространства поля «предмет» не несёт
-function readSubjects(): Record<string, ChildSubjectId> {
-  try { return JSON.parse(localStorage.getItem(SUBJECTS_KEY) ?? '{}') as Record<string, ChildSubjectId>; } catch { return {}; }
-}
-function rememberSubject(sessionId: string, subject: ChildSubjectId) {
-  try { localStorage.setItem(SUBJECTS_KEY, JSON.stringify({ ...readSubjects(), [sessionId]: subject })); } catch { /* квота — не страшно */ }
-}
 
 const isTimeUp = (s: ChildStatus) => s.state === 'time_up' || s.state === 'out_of_window' || s.state === 'budget_exhausted';
 
@@ -70,9 +79,11 @@ interface Props {
   onLogout: () => void;
 }
 
-// Шапка: логотип, крошка предмета, «спокойное время», меню аватара с одним пунктом «Выйти»
-function ChildHeader({ crumb, status, isMobile, onLogout }: {
-  crumb: string | null; status: ChildStatus | null; isMobile: boolean; onLogout: () => void;
+// Шапка: логотип, крошка предмета, «спокойное время», меню аватара с одним пунктом «Выйти».
+// На мобиле вместо крошки — .mobt макета Д1: аватар репетитора, его имя и строка предмета
+// (шапка самого урока на мобиле скрыта, T3d — .m .chathead): хаб и есть мобильная шапка урока.
+function ChildHeader({ crumb, crumbClosed, tutor, status, isMobile, onLogout }: {
+  crumb: string | null; crumbClosed: boolean; tutor: ChildSubjectTutor | null; status: ChildStatus | null; isMobile: boolean; onLogout: () => void;
 }) {
   const [menu, setMenu] = useState(false);
   return (
@@ -87,14 +98,28 @@ function ChildHeader({ crumb, status, isMobile, onLogout }: {
         {!isMobile && (
           <span style={{ fontFamily: FONT.serif, fontSize: FS.xl, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap' }}>Home AI</span>
         )}
-        {crumb && (
-          <>
-            <span aria-hidden style={{ color: C.textMuted }}>›</span>
-            <span style={{
-              fontFamily: FONT.sans, fontSize: FS.lg, fontWeight: 500, color: C.textHeading,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>{crumb}</span>
-          </>
+        {isMobile && tutor ? (
+          <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0, flex: 1 }}>
+            <TutorMark tutor={tutor} size={28} />
+            <span style={{ minWidth: 0 }}>
+              <span style={{ display: 'block', fontSize: FS.md, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tutor.name}</span>
+              {crumb && (
+                <span style={{ display: 'block', fontSize: FS.sm, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {crumb}{crumbClosed ? ' · закрыт' : ''}
+                </span>
+              )}
+            </span>
+          </span>
+        ) : (
+          crumb && (
+            <>
+              <span aria-hidden style={{ color: C.textMuted }}>›</span>
+              <span style={{
+                fontFamily: FONT.sans, fontSize: FS.lg, fontWeight: 500, color: C.textHeading,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{crumb}</span>
+            </>
+          )
         )}
       </div>
       {status && <ChildTimeBadge status={status} compact={isMobile} />}
@@ -113,7 +138,7 @@ function ChildHeader({ crumb, status, isMobile, onLogout }: {
 }
 
 // Строка урока в сайдбаре предмета
-function LessonRow({ chat, active, onOpen }: { chat: Chat; active: boolean; onOpen: () => void }) {
+function LessonRow({ chat, subjectLabel, active, onOpen }: { chat: ChildChatListItem; subjectLabel: string | null; active: boolean; onOpen: () => void }) {
   return (
     <button
       type="button"
@@ -128,6 +153,13 @@ function LessonRow({ chat, active, onOpen }: { chat: Chat; active: boolean; onOp
       }}
     >
       {chat.name || 'Новый урок'}
+      {/* строка предмета (макет .lrow .p): label · репетитор; closed — метка «закрыт».
+          Метки предмета нет (закрытый/до-предметный чат) — строки нет вовсе: выдумывать нечем */}
+      {subjectLabel && (
+        <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted }}>
+          {subjectLabel}{chat.subjectClosed ? ' · закрыт' : ''}
+        </span>
+      )}
     </button>
   );
 }
@@ -143,9 +175,13 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
   const childName = displayNameOf(auth);
 
   const [tab, setTab] = useState<Tab>('lessons');
-  const [subjectId, setSubjectId] = useState<ChildSubjectId | null>(null);
+  // Выбранный предмет (плитка) — серверный ключ (slug), не литерал: с Т3c их два источника —
+  // плитка и поле subject чата
+  const [subjectId, setSubjectId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [chats, setChats] = useState<Chat[]>([]);
+  const [chats, setChats] = useState<ChildChatListItem[]>([]);
+  // null — список предметов ещё не пришёл (или его загрузка не удалась): до Т3e плитки — мост волны 1
+  const [subjects, setSubjects] = useState<ChildSubjectView[] | null>(null);
   const [hint, setHint] = useState<{ sid: string; step: number }>({ sid: '', step: 0 });
   const [panelOpen, setPanelOpen] = useState(false);
   const [rulesBrief, setRulesBrief] = useState<ChildRulesBrief | null>(null);
@@ -162,41 +198,59 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
       : status;
   }, [status, agreedLocal]);
 
-  // Список уроков — только когда он нужен ребёнку: не при rules_pending и не при «время вышло»
+  // Уроки и предметы — только когда они нужны ребёнку: не при rules_pending и не при «время вышло»
   const lessonsAllowed = !!eff && eff.state !== 'rules_pending' && !isTimeUp(eff);
-  const loadChats = useCallback(() => {
+  // Предметы и список уроков грузятся вместе, одной функцией и одним счётчиком: ответ
+  // прежнего запроса не перетирает новый (тот же порядок, что у опроса статуса в
+  // useChildStatus); при размонтировании и перезапуске in-flight отменяется AbortController.
+  const loadSeq = useRef(0);
+  const loadLists = useCallback(() => {
+    const mine = ++loadSeq.current;
     const ac = new AbortController();
+    childApi.getSubjects({ signal: ac.signal })
+      .then(r => { if (loadSeq.current === mine) setSubjects(r); })
+      // Сбой предметов — тот же спокойный случай, что у сбоя списка чатов: технического
+      // текста нет, офлайн покажет опрос статуса, плитки останутся мостом волны 1.
+      .catch(() => { /* офлайн покажет опрос статуса */ });
     childApi.spaceChats(SPACE, { signal: ac.signal })
-      .then(r => setChats(r.chats))
+      .then(r => { if (loadSeq.current === mine) setChats(r.chats); })
       .catch(() => { /* офлайн покажет опрос статуса */ });
     return () => ac.abort();
   }, []);
-  useEffect(() => (lessonsAllowed ? loadChats() : undefined), [lessonsAllowed, loadChats]);
+  useEffect(() => (lessonsAllowed ? loadLists() : undefined), [lessonsAllowed, loadLists]);
 
-  const subjects = readSubjects();
-  const subjectOf = (sid: string): ChildSubjectId => subjects[sid] ?? 'math';
-  const activeSubject: ChildSubjectId | null = sessionId ? subjectOf(sessionId) : subjectId;
-  const subjectMeta = CHILD_SUBJECTS.find(s => s.id === activeSubject);
-  const activeChat = chats.find(c => c.sessionId === sessionId);
+  // Предмет открытого чата — поле subject элемента списка (ключ — sessionId); предмет
+  // выбранной плитки — локальный ключ. Фолбэка 'math' больше нет: нет предмета —
+  // закрытый или до-предметный чат (только для чтения, И1-бис).
+  const subjectViewOf = (id: string | null): ChildSubjectView | null => {
+    if (!id) return null;
+    if (subjects) return subjects.find(s => s.id === id) ?? null;
+    return legacySubjectView(id);
+  };
+  const activeChat = sessionId ? chats.find(c => c.sessionId === sessionId) : undefined;
+  const activeSubject = subjectViewOf(activeChat ? activeChat.subject : subjectId);
+  const subjectClosed = !!activeChat && activeChat.subjectClosed;
 
-  async function startLesson(subject: ChildSubjectId) {
-    if (starting) return;
+  async function startLesson(subject: string) {
+    if (starting) return; // двойной клик: второй игнорируется, пока первый в полёте
     setStarting(true);
     setError(null);
     try {
       const r = await childApi.spaceChat(SPACE, subject);
-      rememberSubject(r.sessionId, subject);
       setSubjectId(subject);
       setSessionId(r.sessionId);
-      loadChats();
-    } catch {
-      setError('Сейчас урок не получится начать. Попробуй чуть позже.');
+      loadLists();
+    } catch (e) {
+      // Отказ по предмету (unknown_subject/subject_disabled) или по состоянию (time_up/…) —
+      // спокойный серверный текст как есть (ADR-041, «Общие правила»), без технических кодов
+      const msg = (e as { body?: { message?: string } }).body?.message;
+      setError(msg ?? 'Сейчас урок не получится начать. Попробуй чуть позже.');
     } finally {
       setStarting(false);
     }
   }
 
-  const openLesson = (sid: string) => { setSessionId(sid); setSubjectId(subjectOf(sid)); setPanelOpen(false); };
+  const openLesson = (sid: string) => { setSessionId(sid); setPanelOpen(false); };
   const goHome = () => { setSessionId(null); setSubjectId(null); setTab('lessons'); setPanelOpen(false); };
 
   async function startRules() {
@@ -231,7 +285,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
   const panelInline = w > PANEL_INLINE_MIN;
   const showSidebar = wide && (!!activeSubject || inLesson) && lessonsAllowed;
   const step = hint.sid === sessionId ? hint.step : 0;
-  const canvasProject = !timeUp && activeSubject ? subjectAsProject(activeSubject) : undefined;
+  const canvasProject = !timeUp && activeSubject ? subjectAsProject(activeSubject.color) : undefined;
 
   const hintsBody = sessionId ? <ChildHintsPanel step={step} sessionId={sessionId} /> : null;
   const showPanel = inLesson && (panelInline || panelOpen) && !isMobile;
@@ -268,12 +322,14 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
     center = null;
   } else if (timeUp) {
     center = <ChildTimeUpScreen status={eff} minutesToday={eff.minutesToday} />;
-  } else if (inLesson && sessionId && activeSubject) {
+  } else if (inLesson && sessionId) {
     center = (
       <ChildLessonChat
         key={sessionId}
         sessionId={sessionId}
-        subjectId={activeSubject}
+        // Предмет чата — с сервера: живой view или null (закрытый/до-предметный чат)
+        subject={activeSubject}
+        subjectClosed={subjectClosed}
         title={activeChat?.name || 'Новый урок'}
         status={eff}
         initialVoiceMode={activeChat?.voiceMode === true}
@@ -284,9 +340,9 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
     center = (
       <EmptyState
         icon={<BookOpen size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
-        title={subjectMeta?.label ?? 'Урок'}
+        title={activeSubject.label}
         subtitle="Выбери урок слева или начни новый."
-        action={<Button size="lg" onClick={() => void startLesson(activeSubject)} disabled={starting}>Начать урок</Button>}
+        action={<Button size="lg" onClick={() => void startLesson(activeSubject.id)} disabled={starting}>Начать урок</Button>}
       />
     );
   } else {
@@ -294,10 +350,9 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
       <ChildHome
         childName={childName}
         status={eff}
-        lastLesson={chats[0] ? { subjectId: subjectOf(chats[0].sessionId), title: chats[0].name || 'Новый урок' } : null}
-        // Мост до Т3c: id в колбэке — строка (с Т3b это и серверный ключ предмета),
-        // состояние родителя пока держит литералы CHILD_SUBJECTS.
-        onOpenSubject={id => { setSubjectId(id as ChildSubjectId); setSessionId(null); }}
+        subjects={subjects ?? undefined}
+        lastLesson={chats[0] ? { subjectId: chats[0].subject ?? '', title: chats[0].name || 'Новый урок' } : null}
+        onOpenSubject={id => { setSubjectId(id); setSessionId(null); }}
         onResume={() => { if (chats[0]) openLesson(chats[0].sessionId); }}
         onStartRules={() => void startRules()}
       />
@@ -306,7 +361,14 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
 
   return (
     <PageCanvas project={canvasProject}>
-      <ChildHeader crumb={timeUp ? null : subjectMeta?.label ?? null} status={timeUp ? null : eff} isMobile={isMobile} onLogout={onLogout} />
+      <ChildHeader
+        crumb={timeUp ? null : activeSubject?.label ?? null}
+        crumbClosed={subjectClosed}
+        tutor={!timeUp && inLesson ? activeSubject?.tutor ?? null : null}
+        status={timeUp ? null : eff}
+        isMobile={isMobile}
+        onLogout={onLogout}
+      />
 
       {isMobile && (
         <div style={{ padding: `0 ${TB.padXMobile}px ${SP.sm}px` }}>
@@ -348,16 +410,22 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
 
         {showSidebar && (
           <Island style={{ width: SIDEBAR_W, flexShrink: 0 }}>
-            <IslandHeader title={subjectMeta?.label ?? 'Уроки'} />
+            <IslandHeader title={activeSubject?.label ?? 'Уроки'} />
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: SP.sm }}>
               {chats.length === 0 && <div style={{ padding: SP.md, color: C.textMuted, fontSize: FS.sm }}>Уроков пока нет.</div>}
               {chats.map(c => (
-                <LessonRow key={c.sessionId} chat={c} active={c.sessionId === sessionId} onOpen={() => openLesson(c.sessionId)} />
+                <LessonRow
+                  key={c.sessionId}
+                  chat={c}
+                  subjectLabel={subjectViewOf(c.subject)?.label ?? null}
+                  active={c.sessionId === sessionId}
+                  onOpen={() => openLesson(c.sessionId)}
+                />
               ))}
             </div>
             {activeSubject && (
               <div style={{ padding: SP.sm }}>
-                <Button size="md" fullWidth onClick={() => void startLesson(activeSubject)} disabled={starting}>Новый урок</Button>
+                <Button size="md" fullWidth onClick={() => void startLesson(activeSubject.id)} disabled={starting}>Новый урок</Button>
               </div>
             )}
           </Island>

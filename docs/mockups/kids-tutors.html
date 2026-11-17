@@ -11,6 +11,11 @@
   Разрез — docs/research/kids-mode-tutors-cut-2026-11.md §5, ADR-041 «Редакция 2».
   Записка со спецификацией для реализации — kids-tutors-proposal.md.
 
+  Д2 (задача c3b3ab23): блок «Знания предмета» в раскрытом предмете и списки «Обязательно / Никогда»
+  под «Характером». Пользуются шаги К5 (ChildSubjectMaterials.tsx) и Т4e (ChildTutorCard).
+  Разрез — docs/research/kids-mode-tutor-knowledge-cut-2026-11.md §2, §4, §5; ADR-041 «Редакция 3».
+  Состояния — рычаги «Д2 · Знания» и «Д2 · Отказ» на пульте или якоря (#k=…&err=…), список — в записке.
+
   Устройство файла — как у kids-shell-v2.html:
     1) ТЕМА — значения --c-* дословно из frontend/src/lib/theme.css. Сырой hex живёт только здесь.
        Новых цветов макет не вводит; --group-* — палитра аватаров GROUP_COLORS из design.ts.
@@ -254,6 +259,22 @@ select.inp{appearance:auto;padding-right:8px}
 .m .sfoot .mv .btn{flex:1}
 .m .sfoot>.btn{width:100%}
 
+/* Д2 · «Знания предмета» (будущий ChildSubjectMaterials.tsx) */
+.kbar{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.flist{border:1px solid var(--c-border-light);border-radius:12px;background:var(--c-bg-white);overflow:hidden}
+.frow{display:flex;align-items:center;gap:10px;min-height:52px;padding:6px 4px 6px 10px}
+.frow+.frow,.frow+.fconfirm,.fconfirm+.frow{border-top:1px solid var(--c-border-light)}
+.frow .fn{font-size:14px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frow .fm{font-size:12px;color:var(--c-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frow .fx{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.frow.busy .fn{color:var(--c-text-secondary)}
+.ftile{width:28px;height:28px;flex-shrink:0;border-radius:6px;display:grid;place-items:center;font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:700;text-transform:lowercase;background:var(--c-bg-inset);color:var(--c-text-secondary)}
+.fconfirm{padding:8px}
+.pbar{height:4px;border-radius:999px;background:var(--c-track);overflow:hidden;margin-top:4px}
+.pbar i{display:block;height:100%;width:35%;border-radius:999px;background:var(--c-accent);animation:pb 1.2s ease-in-out infinite}
+@keyframes pb{0%{margin-left:-35%}100%{margin-left:100%}}
+.m .kup .btn{width:100%}
+
 /* Выбор цвета: 5 образцов-кнопок 40×40 с глифом предмета */
 .swatches{display:flex;gap:8px;flex-wrap:wrap}
 .sw{width:40px;height:40px;border-radius:10px;border:2px solid transparent;cursor:pointer;display:grid;place-items:center;font-family:'PT Serif',serif;font-weight:700;font-size:14px;padding:0}
@@ -354,7 +375,9 @@ const P = {
   brush:'<path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>',
   send:'<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>', mic:'<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>',
   x:'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', cpu:'<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/>',
-  users:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
+  users:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  file:'<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  eyeoff:'<path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/>'
 };
 const ic = (n, s = 16) => `<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24" aria-hidden="true">${P[n]}</svg>`;
 const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
@@ -378,8 +401,9 @@ const PAV = ['blue','violet','green','orange','indigo','khaki'];
 
 const seed = () => ([
   { id:'math', label:'Математика', glyph:'×÷', color:'info', enabled:true,
-    tutor:{ name:'Сова Ульяна', avatar:'img', c:0, voice:0, character:'Спокойная сова-учительница. Не даёт ответ сразу: задаёт наводящий вопрос и хвалит за попытку.' },
-    providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null },
+    tutor:{ name:'Сова Ульяна', avatar:'img', c:0, voice:0, character:'Спокойная сова-учительница. Не даёт ответ сразу: задаёт наводящий вопрос и хвалит за попытку.',
+      mustDo:'Хвали за попытку, даже если ответ неверный\nПроси рассказать, как получилось', mustNot:'Не торопи с ответом\nНе сравнивай с другими детьми' },
+    providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null, kb:'ds-moro' },
   { id:'russian', label:'Русский язык', glyph:'Аа', color:'rose', enabled:true,
     tutor:{ name:'Кот Буквоед', avatar:'img', c:1, voice:1, character:'Неторопливый кот, любит словарные слова и шутки про буквы.' },
     providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null },
@@ -400,11 +424,45 @@ const seed = () => ([
     providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null },
 ]);
 
+// Д2: базы админа, которые МОЖНО привязать (IsTutorAttachable): самостоятельные {admin}:kb:… и общие.
+// Базы заметок, проектов и память persona:/team:/sphere: в список не попадают вовсе.
+const DATASETS = [
+  { id:'ds-moro', title:'Математика 2 класс — Моро', docs:14, group:'own' },
+  { id:'ds-tetrad', title:'Рабочая тетрадь, 2 класс', docs:6, group:'own' },
+  { id:'ds-school', title:'Школьная программа НОО', docs:41, group:'shared' },
+];
+const FILES = [
+  { id:'m_a1', name:'Моро. Математика 2 класс, часть 1.pdf', ext:'pdf', size:'8,4 МБ', at:'12 нояб.' },
+  { id:'m_b2', name:'Задачи на сложение — сентябрь.docx', ext:'docx', size:'214 КБ', at:'15 нояб.' },
+  { id:'m_c3', name:'Таблица умножения.md', ext:'md', size:'3 КБ', at:'17 нояб.' },
+];
+// Отказы сервера: знания — при «Сохранить» (400), файлы — сразу на загрузке.
+const KERR = {
+  dataset_not_attachable:{ http:'400', where:'save', t:'Эту базу привязать нельзя',
+    x:'«Рабочая тетрадь, 2 класс» больше не самостоятельная база администратора: её переименовали или передали. Выбери другую базу или «Без базы».' },
+  knowledge_unavailable:{ http:'400', where:'save', t:'Знания сейчас недоступны',
+    x:'Раздел «Знания» выключен или не настроен — привязать базу нельзя. Сохрани предмет «Без базы», файлы работают и так.' },
+  too_large:{ http:'413', where:'file', t:'Файл больше 20 МБ',
+    x:'«Сборник олимпиадных задач.pdf» весит 34 МБ. Раздели его на части или сожми.' },
+  subject_full:{ http:'413', where:'file', t:'У предмета кончилось место',
+    x:'Все файлы предмета вместе — не больше 200 МБ, занято 196. Удали ненужный файл и загрузи снова.' },
+  unsupported_type:{ http:'415', where:'file', t:'Такой файл не подойдёт',
+    x:'«Схема.png» — картинка. Подходят PDF, TXT, MD и DOCX; картинки репетитор научится читать позже.' },
+  pdf_no_text:{ http:'422', where:'file', t:'В PDF нет текста',
+    x:'Похоже, это скан страниц: репетитор читает только текст. Найди версию с текстовым слоем.' },
+  docx_no_text:{ http:'422', where:'file', t:'В документе нет текста',
+    x:'В «Прописи.docx» не нашлось текста — похоже, внутри только картинки.' },
+  subject_not_found:{ http:'404', where:'file', t:'Предмет не найден',
+    x:'Предмет удалили в другой вкладке. Закрой профиль и открой заново.' },
+};
+
 /* ===== Состояние макета ===== */
+// Якоря: #k=empty&err=too_large&theme=dark&w=360 — открывают состояние сразу (список — в kids-tutors-proposal.md).
 const S = {
   theme:'light', width:1280, screen:'admin',
   pack:1, adminState:'normal', tab:'subjects', homeN:3,
-  subjects: seed(), open:'world', voiceOpen:null, confirmDel:null,
+  k:'normal', kerr:'none', fileDel:null,
+  subjects: seed(), open:'math', voiceOpen:null, confirmDel:null,
   helper:{ providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null },
 };
 const isM = () => S.width === 360;
@@ -463,6 +521,75 @@ function picker(src, ref, err){
       <div class="field"><label for="md-${ref}">Модель</label><select class="inp mono" id="md-${ref}" data-model="${ref}" ${dis} ${err && pack1 ? 'aria-invalid="true"' : ''}>${mopts}</select>${err && pack1 ? '<span class="err">Выбери конкретную модель из списка</span>' : ''}</div>
     </div>
     ${extra}
+  </div>`;
+}
+
+/* ===== Д2 · «Обязательно / Никогда» репетитора (TextArea, строка = пункт, как в PersonaForm) ===== */
+function rules(s, key, title, ph, dis){
+  const v = s.tutor[key] || '';
+  const n = v.split('\n').filter(x => x.trim()).length;
+  return `<div class="field" data-testid="tutor-${key}"><span class="cnt-l"><label for="${key}-${s.id}">${title}</label><span class="muted">${n}/12</span></span>
+    <textarea class="inp" id="${key}-${s.id}" style="min-height:72px" placeholder="${esc(ph)}" ${dis}>${esc(v)}</textarea></div>`;
+}
+
+/* ===== Д2 · Знания предмета ===== */
+function knowledge(s){
+  const k = S.k, e = KERR[S.kerr] ? S.kerr : null, er = e && KERR[e];
+  const dis = S.adminState === 'saving' ? 'disabled' : '';
+  const bsz = isM() ? 'md' : 'sm';
+  const unsaved = s.isNew || k === 'new';
+  const off = e === 'knowledge_unavailable';
+  const gone = k === 'gone';
+  const notAtt = e === 'dataset_not_attachable';
+
+  // Выбор базы — Select (ui/Select.tsx) с группами; «Без базы» — первый пункт.
+  const val = off || k === 'empty' || unsaved ? '' : notAtt ? 'ds-tetrad' : gone ? 'gone' : (s.kb || '');
+  const grp = (g, label) => `<optgroup label="${label}">${DATASETS.filter(d => d.group === g).map(d =>
+    `<option value="${d.id}" ${d.id === val ? 'selected' : ''}>${esc(d.title)} · ${d.docs} док.</option>`).join('')}</optgroup>`;
+  const opts = `<option value="" ${val === '' ? 'selected' : ''}>Без базы</option>`
+    + (gone ? `<option value="gone" selected disabled>База недоступна</option>` : '')
+    + grp('own', 'Мои базы') + grp('shared', 'Общие базы');
+  const kbHint = off
+    ? `<span class="hint">Раздел «Знания» выключен или не настроен. Привязать базу сейчас нельзя.</span>`
+    : notAtt ? `<span class="err">${KERR.dataset_not_attachable.x}</span>`
+    : `<span class="hint">Здесь только твои самостоятельные базы и общие. Базы заметок и проектов привязать нельзя: через репетитора ребёнок увидел бы их содержимое.</span>`;
+  const goneLine = gone ? `<div class="notice warning" role="status"><span class="ic">${ic('alert',14)}</span><div class="tx"><div class="tt">База недоступна</div>Привязанную базу удалили, переименовали или передали другому владельцу. Репетитор по ней не ищет. Выбери другую базу или «Без базы».</div></div>` : '';
+  const base = `<div class="field"><label for="kb-${s.id}">База знаний</label>
+      <select class="inp" id="kb-${s.id}" ${off || dis ? 'disabled' : ''} ${notAtt ? 'aria-invalid="true"' : ''}>${off ? '<option selected>Знания недоступны</option>' : opts}</select>
+      ${kbHint}</div>${goneLine}`;
+
+  // Опись файлов
+  let files;
+  if (unsaved) {
+    files = `<div class="notice info"><span class="ic">${ic('info',14)}</span><div class="tx">Файлы можно добавить после сохранения профиля.</div></div>`;
+  } else {
+    const list = k === 'empty' ? [] : FILES;
+    const rows = list.map(f => S.fileDel === f.id
+      ? `<div class="fconfirm"><div class="notice danger" role="alert"><span class="ic">${ic('trash',14)}</span><div class="tx"><div class="tt">Удалить «${esc(f.name)}»?</div>Репетитор больше не сможет его читать. Вернуть нельзя — только загрузить снова.
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn ${bsz} danger solid" data-fdel="${f.id}">Удалить</button><button class="btn ${bsz} ghost" data-fdelno="1">Отмена</button></div></div></div></div>`
+      : `<div class="frow"><span class="ftile" aria-hidden="true">${f.ext}</span><div class="fx"><span class="fn" title="${esc(f.name)}">${esc(f.name)}</span><span class="fm">${f.ext.toUpperCase()} · ${f.size} · ${f.at}</span></div>
+          <button class="ib ${isM() ? 'lg' : ''}" aria-label="Удалить файл ${esc(f.name)}" data-fask="${f.id}" ${dis}>${ic('trash')}</button></div>`).join('');
+    const up = k === 'uploading' ? `<div class="frow busy" aria-live="polite"><span class="ftile" aria-hidden="true">pdf</span><div class="fx"><span class="fn">Окружающий мир — тетрадь.pdf</span><span class="fm">Загружаю и достаю текст…</span><div class="pbar"><i></i></div></div><span class="ib ${isM() ? 'lg' : ''}" aria-hidden="true"><span class="spin"></span></span></div>` : '';
+    const ferr = er && er.where === 'file' ? `<div class="notice danger" role="alert"><span class="ic">${ic('alert',14)}</span><div class="tx"><div class="tt">${er.t}</div>${er.x}</div><button class="ib" aria-label="Скрыть" data-kerrx="1">${ic('x',14)}</button></div>` : '';
+    const upBtn = k === 'uploading'
+      ? `<button class="btn md dashed" aria-busy="true" disabled><span class="spin"></span>Загружаю…</button>`
+      : `<button class="btn md dashed" ${dis}>${ic('upload',14)}Загрузить файл</button>`;
+    const body = list.length || up
+      ? `<div class="flist">${rows}${up}</div>`
+      : `<div class="empty"><span class="ic">${ic('file',22)}</span><span class="t">Файлов пока нет</span><span class="muted" style="max-width:360px">Положи сюда учебник или задания — репетитор будет брать из них правила и похожие примеры.</span></div>`;
+    const used = list.length ? `${list.length} файла · 8,6 из 200 МБ` : '0 из 200 МБ';
+    files = `<div class="kbar"><span class="lb" style="font-size:12px;font-weight:600;color:var(--c-text-secondary)">Файлы предмета</span><span class="muted mono">${used}</span></div>
+      ${body}${ferr}
+      <div class="kup">${upBtn}</div>
+      <span class="muted">PDF, TXT, MD или DOCX, до 20 МБ. Картинки — позже.</span>`;
+  }
+
+  return `<div class="sgroup" data-testid="subject-knowledge">
+    <span class="sec">Знания предмета</span>
+    <div class="notice warning" data-testid="knowledge-warning"><span class="ic">${ic('alert',14)}</span><div class="tx">Не загружайте решебники и файлы с готовыми ответами — репетитор может их пересказать.</div></div>
+    <span class="muted" style="display:flex;gap:6px;align-items:flex-start">${ic('eyeoff',14)}<span>Ребёнок материалы не видит: их читает только репетитор этого предмета.</span></span>
+    ${base}
+    ${files}
   </div>`;
 }
 
@@ -529,7 +656,12 @@ function subjectRow(s, i, n){
           <textarea class="inp" id="ch-${s.id}" placeholder="Как репетитор говорит и объясняет: «добрый лесовичок, рассказывает про природу на примерах из леса»" ${dis}>${esc(t.character)}</textarea>
           <span class="hint">Правила безопасности детского режима добавятся сами — этим полем их не отменить.</span>
         </div>
+        ${rules(s, 'mustDo', 'Обязательно', 'Хвали за попытку, даже если ответ неверный\nПроси рассказать, как получилось', dis)}
+        ${rules(s, 'mustNot', 'Никогда', 'Не торопи с ответом\nНе сравнивай с другими детьми', dis)}
+        <span class="muted">По одному правилу на строку, до 12 строк. Правила безопасности сильнее этих списков: «сразу давай ответ» репетитор не выполнит.</span>
       </div>
+
+      ${knowledge(s)}
 
       <div class="sgroup">
         <span class="sec">Модель</span>
@@ -569,7 +701,10 @@ function editor(){
   </div>`;
   const reject = st === 'error' ? `<div class="notice warning" role="alert"><span class="ic">${ic('alert',14)}</span><div class="tx"><div class="tt">Сохранить не удалось</div>
       <div>${S.pack === 2 ? 'Предмет «Окружающий мир» идёт через локальную модель — отметь согласие на этот маршрут.' : 'У предмета «Окружающий мир» не задана модель.'}</div>
-      <div class="mono" style="margin-top:2px;opacity:.85">${S.pack === 2 ? 'route_risk_unacknowledged: subjects[4] (world)' : 'model_not_concrete: subjects[4] (world)'}</div></div></div>` : '';
+      <div class="mono" style="margin-top:2px;opacity:.85">${S.pack === 2 ? 'route_risk_unacknowledged: subjects[4] (world)' : 'model_not_concrete: subjects[4] (world)'}</div></div></div>`
+    : KERR[S.kerr]?.where === 'save' ? `<div class="notice warning" role="alert"><span class="ic">${ic('alert',14)}</span><div class="tx"><div class="tt">Сохранить не удалось</div>
+      <div>Предмет «Математика»: ${KERR[S.kerr].t.toLowerCase()}.</div>
+      <div class="mono" style="margin-top:2px;opacity:.85">${S.kerr}: subjects[0].knowledge (math)</div></div></div>` : '';
 
   let content;
   if (S.tab === 'mode') {
@@ -689,6 +824,8 @@ function render(){
     pill('Пикер', 'pack', [[1,'Пачка 1'], [2,'Пачка 2']].map(x => [...x, !adm])),
     pill('Состояние', 'adminState', [['normal','Обычное'], ['empty','Пусто'], ['error','Ошибка 400'], ['saving','Сохранение']].map(x => [...x, !adm])),
     pill('Предметов', 'homeN', [[3,'3'], [6,'6']].map(x => [...x, S.screen !== 'home'])),
+    pill('Д2 · Знания', 'k', [['normal','База + 3 файла'], ['empty','Без базы, пусто'], ['uploading','Идёт загрузка'], ['gone','База недоступна'], ['new','Новый предмет']].map(x => [...x, !adm])),
+    pill('Д2 · Отказ', 'kerr', [['none','Нет'], ...Object.keys(KERR).map(c => [c, c])].map(x => [...x, !adm])),
     `<span class="note">Пульт — рычаги макета, не продукт. Пачка 1 — пикер Т4 (только пул с API-ключом); пачка 2 — Т6 (облачные и локальные, согласие). Выключенный предмет «История» показан в списке админа и как закрытый чат у ребёнка.</span>`
   ].join('');
   const root = document.getElementById('root');
@@ -702,7 +839,11 @@ const find = (id) => S.subjects.find(s => s.id === id);
 document.addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b || b.disabled) return;
   const d = b.dataset;
-  if (d.set) { const [k, v] = d.set.split(':'); S[k] = isNaN(+v) ? v : +v; if (k === 'adminState' && v === 'empty') S.tab = 'subjects'; if (k === 'adminState' && v === 'error') { S.tab = 'subjects'; S.open = 'world'; const w = find('world'); w.ack = null; } }
+  if (d.set) { const i = d.set.indexOf(':'); const k = d.set.slice(0, i), v = d.set.slice(i + 1); S[k] = isNaN(+v) ? v : +v; if (k === 'adminState' && v === 'empty') S.tab = 'subjects'; if (k === 'adminState' && v === 'error') { S.tab = 'subjects'; S.open = 'world'; const w = find('world'); w.ack = null; S.kerr = 'none'; } if (k === 'k' || k === 'kerr') kSync(); }
+  else if (d.fask) S.fileDel = d.fask;
+  else if (d.fdelno) S.fileDel = null;
+  else if (d.fdel) S.fileDel = null;
+  else if (d.kerrx) S.kerr = 'none';
   else if (d.tab) S.tab = d.tab;
   else if (d.open) { S.open = S.open === d.open ? null : d.open; S.voiceOpen = null; S.confirmDel = null; }
   else if (d.tg) { const s = find(d.tg); s.enabled = !s.enabled; }
@@ -730,7 +871,27 @@ document.addEventListener('input', (e) => {
   else if (d.tname) { find(d.tname).tutor.name = el.value; }
 });
 document.addEventListener('focusout', (e) => { if (e.target.matches('[data-label],[data-glyph],[data-tname]')) render(); });
+
+// Д2: состояние знаний живёт на раскрытом предмете — «Математика», у нового — «Окружающий мир».
+function kSync(){
+  S.screen = 'admin'; S.tab = 'subjects'; S.fileDel = null;
+  if (S.adminState === 'error') S.adminState = 'normal';
+  S.open = S.k === 'new' ? 'world' : 'math';
+}
+// Якоря: k, err, del (=1 — подтверждение удаления первого файла), theme, w.
+(function fromHash(){
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (!h.toString()) return;
+  if (h.get('theme')) S.theme = h.get('theme');
+  if (h.get('w')) S.width = +h.get('w');
+  if (h.get('k')) S.k = h.get('k');
+  if (h.get('err') && KERR[h.get('err')]) S.kerr = h.get('err');
+  kSync();
+  if (h.get('del')) S.fileDel = FILES[0].id;
+})();
 render();
+// Кадр сразу на блоке знаний (для якорей и скриншотов)
+if (location.hash) document.querySelector('[data-testid="subject-knowledge"]')?.scrollIntoView({ block:'start' });
 </script>
 </body>
 </html>

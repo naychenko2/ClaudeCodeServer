@@ -177,9 +177,14 @@ public static class SessionCoreRegistration
             new ClaudeHomeServer.Services.ChildMode.ChildModePolicy(
                 sp.GetService<IUserStore>() ?? new UserStoreAdapter(sp.GetRequiredService<UserStore>()),
                 sp.GetService<ILogger<ClaudeHomeServer.Services.ChildMode.ChildModePolicy>>()));
+        // Калькулятор лимитов (И3, KM-B5d) — GetService: он зарегистрирован в Main-составе
+        // (Program.cs: журнал присутствия + шов Spend), а тестовый хост ядра их не поднимает.
+        // Отсутствие — не разрешение: для ребёнка гейт отказывает текстом Uncheckable (fail-closed);
+        // непустую проводку боевого состава проверяет ChildPolicyWiringGuardTests.
         services.TryAddSingleton<ClaudeHomeServer.Services.ChildMode.IChildModeGate>(sp =>
             new ClaudeHomeServer.Services.ChildMode.ChildModeGate(
-                sp.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>()));
+                sp.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>(),
+                sp.GetService<ClaudeHomeServer.Services.ChildMode.ChildLimitsCalculator>()));
         services.AddSingleton(sp => new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(),
             sp.GetRequiredService<FeatureFlagService>(),

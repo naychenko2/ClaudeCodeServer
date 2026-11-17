@@ -153,6 +153,18 @@ internal sealed class TurnLaunchContextFactory
         // ДО сборки любого контекста; расхождение — ход не стартует, тихой подстановки нет.
         if (_builtin.ChildGate.LaunchMismatch(ownerId, session) is { } mismatch)
             throw new InvalidOperationException("Детский режим: ход не запущен — " + mismatch);
+        // И3 (ADR-041, KM-B5d): вне окна, сверх дневного лимита пространства и сверх бюджета новый
+        // ход ребёнка не стартует. Место — здесь, а не на входах: через Compose идут и SendMessage
+        // хаба, и автопродолжение после рестарта (BuildForReconnect), и ретраи, и цикл «до готово»
+        // (фолбэк у ребёнка пуст, KM-B4). Начатый ход доживает: доживающий процесс не пересобирается
+        // — EnsureProcessCoreAsync выходит при entry.Process is not null (TurnProcessHost.cs:179),
+        // поэтому отказ бьёт только по ещё не начатому ходу. Состояние считает ChildLimitsCalculator
+        // (одна точка, KM-B5c); здесь — только штатная ошибка хода с детским текстом, без технических
+        // слов. Решение на каждом запуске заново, без кэша: правка профиля действует со следующего хода.
+        // Текст ошибки — сам детский текст состояния, без технического префикса (И3): его читает
+        // ребёнок в ленте чата.
+        if (_builtin.ChildGate.LaunchLimitRefusal(ownerId, session, DateTimeOffset.UtcNow) is { } refusal)
+            throw new InvalidOperationException(refusal);
         // И1 п.10: детскому владельцу объявляются только серверы с парами в детском allow-list.
         // Решение зависит от владельца, не от хода — состав tools/list не мерцает.
         var childGate = _builtin.ChildGate;

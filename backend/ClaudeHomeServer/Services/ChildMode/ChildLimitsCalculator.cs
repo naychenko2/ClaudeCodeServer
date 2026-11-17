@@ -52,8 +52,14 @@ public sealed class ChildLimitsCalculator(
     /// <summary>
     /// Статус ребёнка в пространстве `space` на момент `now`. null — владелец не ребёнок
     /// (политики нет): вызывающий идёт обычным путём. DenyAll — <see cref="ChildPolicyUnavailableException"/>.
+    ///
+    /// `rulesExempt` — единственное исключение И3 в точке запуска хода (KM-B5d): чат онбординга
+    /// правил (Session.OnboardingKind == OnboardingKinds.ChildRules) идёт и до согласия, поэтому
+    /// rules_pending для него не вычисляется; окно, дневной лимит и бюджет действуют и на него.
+    /// Значение решает вызывающий по свойству чата, не по состоянию: статус ручки и heartbeat
+    /// вызывают без него — оболочка ребёнка rules_pending видит всегда, как и раньше.
     /// </summary>
-    public ChildStatus? Evaluate(string ownerId, string space, DateTimeOffset now)
+    public ChildStatus? Evaluate(string ownerId, string space, DateTimeOffset now, bool rulesExempt = false)
     {
         var snapshot = policy.For(ownerId);
         if (snapshot is null) return null;
@@ -121,7 +127,9 @@ public sealed class ChildLimitsCalculator(
         var warnMinutes = profile.WarnMinutes; // порог из профиля, по умолчанию 5 (ChildProfile)
 
         var state =
-            profile.RulesAgreedAt is null ? ChildState.RulesPending :
+            // rulesExempt — чат онбординга правил: отсутствие согласия его не останавливает
+            // (исключение И3, KM-B5d), остальные причины ниже действуют и на него.
+            profile.RulesAgreedAt is null && !rulesExempt ? ChildState.RulesPending :
             budgetUncheckable ? ChildState.BudgetExhausted :
             !inWindow ? ChildState.OutOfWindow :
             timeUncheckable || minutesLeft == 0 ? ChildState.TimeUp :

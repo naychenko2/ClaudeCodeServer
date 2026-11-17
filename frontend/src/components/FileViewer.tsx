@@ -25,6 +25,7 @@ import { isPersonalFilesId } from '../features/files/personalFiles';
 import { basename } from '../lib/paths';
 import { conflictCopyName } from '../lib/conflictCopyName';
 import { lineDiff } from '../lib/lineDiff';
+import { downloadProjectFile } from '../lib/fileDownload';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { FileConflictError } from '../features/files/api';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
@@ -1288,6 +1289,13 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     a.click();
     URL.revokeObjectURL(url);
   };
+  // Файл проекта качаем потоком (любой, включая текст и MIDI); base64 — запасной путь
+  // для хост-файла вне проекта и для офлайна, когда байты уже лежат в fileContent
+  const canStreamDownload = !isHostMode && !personalFiles && online && can('GET files/stream');
+  // Файл проекта — потоком: сырые байты любого файла, без буфера base64
+  const streamDownload = () => {
+    downloadProjectFile(project.id, filePath, viaAgent).catch(() => setActionError('Не удалось скачать файл'));
+  };
 
   // basename (не split('/').pop()): хост-путь может прийти с обратными слэшами
   // (Windows), как есть — relPath не нормализует то, что вне корня проекта
@@ -1446,7 +1454,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     if (!r.ok) throw new Error(`Не удалось загрузить MIDI-файл (код ${r.status})`);
     return r.arrayBuffer();
   };
-  // Скачиваем сырые байты из потока: content из files/content испорчен текстовой кодировкой
+
+  // Резерв без потока (хост-файл вне проекта, офлайн): сырые байты из loadMidi —
+  // content из files/content испорчен текстовой кодировкой
   const downloadMidi = () => {
     loadMidi().then(buf => {
       const url = URL.createObjectURL(new Blob([buf], { type: 'audio/midi' }));
@@ -1776,8 +1786,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         });
       }
     }
-    if (!editing && (fileContent?.base64 || isMidiViewing || (personalFiles && !loadError && fileContent))) {
-      const download = isMidiViewing ? downloadMidi : handleDownload;
+    if (!editing && fileContent && (canStreamDownload || fileContent.base64 || isMidiViewing || (personalFiles && !loadError))) {
+      const download = canStreamDownload
+        ? streamDownload
+        : isMidiViewing ? downloadMidi : handleDownload;
       secondary.push({
         key: 'download',
         node: (
@@ -2399,7 +2411,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   variant="full"
                   fileName={fileName}
                   load={loadMidi}
-                  onDownload={downloadMidi}
+                  onDownload={canStreamDownload ? streamDownload : downloadMidi}
                 />
               </Suspense>
             )}

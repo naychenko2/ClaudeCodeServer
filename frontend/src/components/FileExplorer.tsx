@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow, SquareStack, Pencil, Sparkles } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow, SquareStack, Pencil, Sparkles, Download } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { ProjectFeature } from '../types';
 import { api } from '../lib/api';
@@ -29,6 +29,7 @@ import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded
 import { bumpNotes, getNotesSnapshot, useNotesByFile } from '../lib/notes';
 import { onFilesChanged } from '../lib/signalr';
 import { showToast } from '../lib/toast';
+import { downloadProjectFile, downloadProjectFolder } from '../lib/fileDownload';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 import { useSubsystem } from '../lib/subsystems';
 import { useSlotItem } from '../lib/subsystems/registry';
@@ -403,6 +404,9 @@ function FilesInlineErrorRow({ depth, type, onRetry }: { depth: number; type: 'o
 // Иконки для контекстного меню — 16×16, currentColor, Lucide-style
 function MI_Attach() {
   return <Paperclip size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
+}
+function MI_Download() {
+  return <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 }
 function MI_Copy() {
   return <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
@@ -781,7 +785,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   const online = useOnline();
   // Контрол записи рисуется, только если у проекта сейчас есть его маршрут: у агента — не все,
   // с другого устройства (ретранслятор) — ни одного. Список маршрутов — deviceAgentRoutes.ts
-  const { can } = useProjectRoutes(project);
+  const { route: filesRoute, can } = useProjectRoutes(project);
   // «Мои файлы» личного чата (ADR-040 Ф2-9): те же компоненты, маршруты — личные (features/files/personalFiles)
   const personalFiles = isPersonalFilesId(project.id);
   // Подписи корня: у личной панели корень — папка «Личное», у проекта — корень проекта
@@ -790,6 +794,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // есть маршрут И роль умеет эту дверь контента (contentRights.ts). Закрытый — ПРЯЧЕТ,
   // не отключён: решение живёт в одном месте, а не по каждому контролу.
   const canUpload = can('POST files/upload') && canWriteContent(project, 'file.upload');
+  const canDownload = can('GET files/stream');
   const canToMarkdown = can('POST files/document/to-markdown') && canWriteContent(project, 'file.toMarkdown');
   const canCreateFile = can('POST files/create') && canWriteContent(project, 'file.create');
   const canMkdir = can('POST files/mkdir') && canWriteContent(project, 'file.mkdir');
@@ -2226,6 +2231,19 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
             onClick={() => { close(); openEditor({ kind: 'create', folder: entry.path }); }} />);
         add(!entry.isDirectory && onAttachToChat,
           <MenuItem key="attach" icon={<MI_Attach />} label="Прикрепить к чату" onClick={() => { close(); onAttachToChat!(entry.path); }} />);
+        add(!entry.isDirectory && online && !personalFiles && canDownload,
+          <MenuItem key="download" icon={<MI_Download />} label="Скачать" onClick={() => {
+            close();
+            downloadProjectFile(project.id, entry.path, filesRoute === 'agent').catch(() => showToast('Не удалось скачать файл', entry.name, 'error'));
+          }} />);
+        // Архив папки собирает только сервер: у локального проекта и с другого устройства пункта нет.
+        // Виртуальную папку «Заметки» не пакуем — её содержимое живёт не только в notes/ проекта
+        add(entry.isDirectory && online && !personalFiles && can('GET files/zip') && !isNotesRoot(entry),
+          <MenuItem key="download-zip" icon={<MI_Download />} label="Скачать архивом" onClick={() => {
+            close();
+            showToast('Собираю архив…', `${entry.name}.zip — служебные папки (.git, node_modules, bin, obj и т.п.) не включаются`);
+            downloadProjectFolder(project.id, entry.path);
+          }} />);
         add(!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name),
           <MenuItem key="copy-md" icon={<MI_Copy />} label="Копировать Markdown" onClick={() => { close(); void copyMdFromTree(entry.path); }} />);
         add(!entry.isDirectory && online && canToMarkdown && isMdConvertible(entry.name),

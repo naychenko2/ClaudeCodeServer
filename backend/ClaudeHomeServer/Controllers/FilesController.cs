@@ -1283,6 +1283,49 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
+    // Папка проекта zip-архивом («Скачать архивом» в дереве файлов). Токен — через
+    // ?access_token=, как у stream: скачивание идёт ссылкой, а она заголовков не шлёт.
+    // Служебные каталоги в архив не попадают; слишком большая папка — 413 с причиной.
+    [HttpGet("zip")]
+    [ProjectScope]
+    public async Task<IActionResult> Zip(string projectId, [FromQuery] string path = "")
+    {
+        try
+        {
+            var project = GetProject(projectId);
+            // Чужое приватное вложение и контейнер .cc-attachments — 404, как у соседних читающих ручек;
+            // корень проекта (пустой путь) — законный вход, служебные каталоги из него исключает FolderZip
+            if (ForeignPrivateDenied(project.RootPath, path) is { } denied) return denied;
+            if (!string.IsNullOrWhiteSpace(path.Trim('/', '\\')) && PrivateContainerDenied(project.RootPath, path) is { } container) return container;
+            var folder = SafePath.Join(project.RootPath, path);
+            if (!Directory.Exists(folder)) return NotFound();
+            // Ссылка на пути (ln -s / host внутри проекта) увела бы архив на файлы хоста
+            if (FolderZip.HasLinkOnPath(project.RootPath, folder)) return StatusCode(403);
+            var name = string.IsNullOrEmpty(path.Trim('/', '\\'))
+                ? project.Name
+                : Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            // Сверх лимита параллельных сборок — 429, а не очередь: каждая сборка держит до 2 ГБ во временной папке
+            if (!await FolderZip.BuildSlot.WaitAsync(0)) return StatusCode(429, new { error = "Уже собираются другие архивы — повторите позже" });
+            FolderZip.Result zip;
+            try
+            {
+                // Сборка уходит с потока запроса; отмена загрузки клиентом обрывает её — файл до 2 ГБ не дособирается зря
+                var ct = HttpContext.RequestAborted;
+                zip = await Task.Run(() => FolderZip.Build(folder, ct), ct);
+            }
+            finally { FolderZip.BuildSlot.Release(); }
+            if (zip.Skipped > 0)
+                logger.LogWarning("Архив папки {Path} проекта {ProjectId}: пропущено {Skipped} файлов (заняты или недоступны)",
+                    path, projectId, zip.Skipped);
+            return File(zip.Stream, "application/zip", $"{name}.zip");
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
+        catch (FolderZip.TooLargeException ex) { return StatusCode(413, new { error = ex.Message }); }
+        // 499 — клиент закрыл соединение, отвечать уже некому
+        catch (OperationCanceledException) when (HttpContext.RequestAborted.IsCancellationRequested) { return StatusCode(499); }
+    }
+
     // Отдаёт байты файла OnlyOffice Document Server (без Authorization — DS не знает API-ключ).
     // Защита: проверка download-токена, который DS получает через office-config.
     [HttpGet("office-download")]

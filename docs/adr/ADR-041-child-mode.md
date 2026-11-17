@@ -34,6 +34,7 @@
 3. **Окна без `User.TimeZone` считаются по таймзоне инстанса** `ChildMode:DefaultTimeZone` = `Europe/Moscow`, не по UTC.
 4. **Без микрофона — голосового ввода нет:** браузерное распознавание (`voiceInput.ts`, Chrome отправляет звук в Google) у ребёнка не включается, микрофона в оболочке нет. Озвучка ответов (TTS) остаётся и входит в бюджет.
 5. **Вложения — вариант «б»:** узкая ручка `POST /api/child/chats/{id}/attachments`, allow-list типов по сигнатуре файла, PDF превращается в текст на сервере, инструмент `Read` ребёнку не открывается. Картинка доходит до модели image-блоком, текст — инлайном (`AttachmentInliner`, как у обычных вложений).
+6. **Миниатюра картинки в пузыре — для всех пользователей** (решение 17.11, после плана волны). Приложенная картинка показывается в пузыре сообщения миниатюрой, у взрослых и у ребёнка одинаково; не-картинка остаётся ярлыком с именем. Источник — одна читающая ручка №12 (вариант «а» Александра): одна граница доступа и одна точка URL на фронте. Ресайза на сервере в волне 1 нет: оригинал до `maxAttachmentBytes`, `loading="lazy"`, размер ограничен CSS; `?w=` можно добавить за той же ручкой без смены контракта.
 
 ## Инвариант И1 и таблица путей
 
@@ -62,6 +63,7 @@
 | 19 | Цикл «до готово» и автопродолжение хода | закрыто п.1 и п.7, пускает ли ход — И3 | Б5 |
 | 20 | Загрузка вложений | `files/upload` (`ChatsController`, `FilesController`, `PersonalFilesController`) закрыт п.1; `POST /api/child/chats/{id}/attachments` открыт, ограничен allow-list типов и размером | Б2, Б6 |
 | 21 | Веб-поиск | `websearch` вне детского allow-list (п.9–10), `WebFetch`/`WebSearch` CLI — п.11 | Б3 |
+| 22 | Чтение вложений чата (миниатюры) | `GET /api/chats/{id}/attachments/raw` (№12) — `[ChildAllowed]`, у ребёнка только свой чат с `ChildSpace`; файл — только учтённый в `Session.Attachments` этого чата; `files/stream` и `PersonalFilesController` закрыты п.1 | Б2, Б6 |
 
 **И1-бис** — сверка полей чата при запуске хода (решение 3). **Правило `tools/list`:** состав зависит только от владельца (профиль — свойство пользователя, не хода), включение профиля один раз перезапускает процесс CLI.
 
@@ -142,8 +144,9 @@ interface ChildProfileDto {     // тело PUT child-profile и поле отв
 | 9 | `POST /api/child/stop-signal` | `{ sessionId?: string }` | 202 `{ accepted: true }`; уведомление админу и опекунам без текста переписки. Тот же путь вызывает разбор маркера тьютора на сервере (источник `tutor`), ручка — источник `child` | 404 `chat_not_found` (передан чужой или не детский `sessionId`), 429 `too_frequent` (не чаще раза в минуту на чат; повтор не теряется, а схлопывается) |
 | 10 | `PUT /api/users/{id}/child-profile` | `ChildProfileDto` или `{ enabled: false }` для выключения; только `[Authorize(Roles="admin")]` + `AdminByStore`, без `[ChildAllowed]` | 200 `{ profile: ChildProfileDto, tutorPersonaId: string }` | 400 `not_container` (`ExecutionEnvironment != container`), 400 `provider_not_api_key` (`providerKey` не резолвится в запись пула с `ApiKey`), 400 `invalid_window`, 400 `invalid_space`, 400 `guardian_not_found`, 404 `user_not_found`, 403 — не админ |
 | 11 | `GET /api/auth/me` | — | существующий ответ плюс `isChild: boolean` и `childSpaces: string[]` (ключи включённых пространств; у не ребёнка — пустой массив) | без изменений |
+| 12 | `GET /api/chats/{id}/attachments/raw?path=` | `path` — относительный путь вложения ровно в той форме, что вернула загрузка (`.cc-attachments/…`); JWT для `<img>` — `?access_token=` | 200 — байты картинки, `Content-Type` по сигнатуре (`image/png`, `image/jpeg`, `image/webp`, `image/gif`), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox`, `Cache-Control: private, max-age=86400`. Только чтение, нового хранилища нет. Общая ручка для всех пользователей, ребёнку открыта `[ChildAllowed]` | 404 `chat_not_found` (чат не виден вызывающему; у ребёнка — не свой или без `ChildSpace`), 404 `file_not_found` — одинаково для всех случаев: путь не равен записи `Session.Attachments` (точное сравнение после нормализации, не префикс), `..` или выход за корень (`SafePath.Join` от `GetChatRoot`), чужой автор `private/{author}/…` (`PrivateAttachments.IsForeign`), сигнатура не картинка, файла нет. 415 не отдаётся: ответ не раскрывает, что файл есть |
 
-**Существующие ручки и методы в allow-list ребёнка** (получают `[ChildAllowed]`, состав замораживается сторожем Б2): `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/tts` (расход — в бюджет), чтение своего детского чата `GET /api/chats/{id}` и `GET /api/chats/{id}/history` (только `ChildSpace`-чаты — проверка в ручке), хаб `/hubs/session` с методами из п.7 таблицы И1. Всё прочее — 403 `child_mode`.
+**Существующие ручки и методы в allow-list ребёнка** (получают `[ChildAllowed]`, состав замораживается сторожем Б2): `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/tts` (расход — в бюджет), чтение своего детского чата `GET /api/chats/{id}`, `GET /api/chats/{id}/history` и `GET /api/chats/{id}/attachments/raw` (№12; только `ChildSpace`-чаты — проверка в ручке), хаб `/hubs/session` с методами из п.7 таблицы И1. Всё прочее — 403 `child_mode`.
 
 ## Последствия
 
@@ -151,3 +154,7 @@ interface ChildProfileDto {     // тело PUT child-profile и поле отв
 - Новое хранилище `data/child-usage/{owner}.json` (журнал присутствия) — сверка с бэкапом обязательна в Б5.
 - Профиль меняет состав `tools/list` владельца — один перезапуск CLI на включение.
 - Студия волны 2 — добавление пар `image-editor`/`local-media` в детский allow-list и квота, без нового гейта; кабинет родителя опирается на `GuardianUserIds`.
+
+## Хвосты волны 1 (доработка документов в конце волны)
+
+- **Миниатюра картинки в пузыре** (решение 6, шаги KM-B7 и KM-F13): описать ручку №12 в `docs/architecture/api.md`, а показ миниатюры в пузыре — в `docs/architecture/features.md` (раздел о вложениях чата); сторож гейта И1 — строка №12 в замороженном списке. Вложения, взятые из дерева проекта (не загрузкой), и старые чаты без `Session.Attachments` остаются ярлыком, бэкфилла нет.

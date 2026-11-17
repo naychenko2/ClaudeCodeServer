@@ -12,6 +12,9 @@ public static class FolderZip
     public const long MaxTotalBytes = 2L * 1024 * 1024 * 1024;
     public const int MaxFiles = 50_000;
 
+    // Одновременных сборок на процесс: временные файлы до 2 ГБ (/tmp может быть tmpfs) и занятые потоки пула
+    public static readonly SemaphoreSlim BuildSlot = new(2, 2);
+
     // Что в архив не кладём. Список намеренно уже TreeExcludes: тот режет и build/, vendor/,
     // dist/, target/ — а в них у пользователя бывают нужные файлы (скрипты сборки, вендоринг).
     // Здесь только заведомый мусор: VCS, зависимости, выходы сборки .NET, кэши IDE и Python
@@ -87,7 +90,7 @@ public static class FolderZip
                 if (result.Count + 1 > MaxFiles)
                     throw new TooLargeException($"В папке больше {MaxFiles} файлов — архивом её не скачать");
                 if (total > MaxTotalBytes)
-                    throw new TooLargeException("Папка больше 2 ГБ — архивом её не скачать");
+                    throw new TooLargeException("Папка больше 2 ГБ (считаются исходные, несжатые байты) — архивом её не скачать");
                 result.Add((file.FullName, Path.GetRelativePath(folder, file.FullName).Replace('\\', '/')));
             }
         }

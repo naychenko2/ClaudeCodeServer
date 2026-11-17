@@ -1288,7 +1288,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // Служебные каталоги в архив не попадают; слишком большая папка — 413 с причиной.
     [HttpGet("zip")]
     [ProjectScope]
-    public IActionResult Zip(string projectId, [FromQuery] string path = "")
+    public async Task<IActionResult> Zip(string projectId, [FromQuery] string path = "")
     {
         try
         {
@@ -1304,8 +1304,16 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             var name = string.IsNullOrEmpty(path.Trim('/', '\\'))
                 ? project.Name
                 : Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            // Отмена загрузки клиентом обрывает сборку: временный файл до 2 ГБ не дособирается зря
-            var zip = FolderZip.Build(folder, HttpContext.RequestAborted);
+            // Сверх лимита параллельных сборок — 429, а не очередь: каждая сборка держит до 2 ГБ во временной папке
+            if (!await FolderZip.BuildSlot.WaitAsync(0)) return StatusCode(429, new { error = "Уже собираются другие архивы — повторите позже" });
+            FolderZip.Result zip;
+            try
+            {
+                // Сборка уходит с потока запроса; отмена загрузки клиентом обрывает её — файл до 2 ГБ не дособирается зря
+                var ct = HttpContext.RequestAborted;
+                zip = await Task.Run(() => FolderZip.Build(folder, ct), ct);
+            }
+            finally { FolderZip.BuildSlot.Release(); }
             if (zip.Skipped > 0)
                 logger.LogWarning("Архив папки {Path} проекта {ProjectId}: пропущено {Skipped} файлов (заняты или недоступны)",
                     path, projectId, zip.Skipped);

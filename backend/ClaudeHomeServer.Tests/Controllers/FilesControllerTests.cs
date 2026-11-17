@@ -1690,4 +1690,37 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         var response = await _client.GetAsync($"/api/projects/{id}/files/zip?path=..");
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
+
+    [Fact]
+    public async Task Zip_ProjectRoot_NeverContainsAttachments()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("root.txt", "root");
+        var foreign = Path.Combine(dir, ".cc-attachments", "private", "other-user");
+        var shared = Path.Combine(dir, ".cc-attachments", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(foreign);
+        Directory.CreateDirectory(shared);
+        File.WriteAllText(Path.Combine(foreign, "x"), "secret");
+        File.WriteAllText(Path.Combine(shared, "y"), "shared");
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/zip?path=");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var zip = new System.IO.Compression.ZipArchive(await response.Content.ReadAsStreamAsync());
+        var names = zip.Entries.Select(e => e.FullName).ToList();
+        names.Should().Contain("root.txt");
+        names.Should().NotContain(n => n.StartsWith(".cc-attachments"));
+    }
+
+    [Fact]
+    public async Task Zip_ForeignPrivateAttachments_Returns404()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("root.txt", "root");
+        var foreign = Path.Combine(dir, ".cc-attachments", "private", "other-user");
+        Directory.CreateDirectory(foreign);
+        File.WriteAllText(Path.Combine(foreign, "x"), "secret");
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/zip?path=.cc-attachments/private/other-user");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
 }

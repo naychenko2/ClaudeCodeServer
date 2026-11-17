@@ -181,10 +181,15 @@ public static class SessionCoreRegistration
         // (Program.cs: журнал присутствия + шов Spend), а тестовый хост ядра их не поднимает.
         // Отсутствие — не разрешение: для ребёнка гейт отказывает текстом Uncheckable (fail-closed);
         // непустую проводку боевого состава проверяет ChildPolicyWiringGuardTests.
+        // Логгер — GetService, как у логгера политики выше: параметр гейта необязателен (default
+        // null), поэтому контейнер без зарегистрированного логгера остаётся рабочим. Без логгера
+        // LogWarning в catch гейта молчит — причину сбоя расчёта видно не будет (хвост R-KM-B5d);
+        // что проводка его передаёт, проверяет ChildPolicyWiringGuardTests.
         services.TryAddSingleton<ClaudeHomeServer.Services.ChildMode.IChildModeGate>(sp =>
             new ClaudeHomeServer.Services.ChildMode.ChildModeGate(
                 sp.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>(),
-                sp.GetService<ClaudeHomeServer.Services.ChildMode.ChildLimitsCalculator>()));
+                sp.GetService<ClaudeHomeServer.Services.ChildMode.ChildLimitsCalculator>(),
+                sp.GetService<ILogger<ClaudeHomeServer.Services.ChildMode.ChildModeGate>>()));
         services.AddSingleton(sp => new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(),
             sp.GetRequiredService<FeatureFlagService>(),

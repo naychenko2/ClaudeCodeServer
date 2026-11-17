@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Guards;
 
@@ -81,5 +82,22 @@ public class ChildPolicyWiringGuardTests
         var held = HeldDependencies(gate, typeof(ChildLimitsCalculator));
         held.Should().ContainSingle("гейт держит ровно одно поле калькулятора")
             .Which.Should().BeSameAs(calc, "и это тот же экземпляр, что в контейнере (не null — иначе И3 глухо отказывает всем детям)");
+    }
+
+    // Хвост R-KM-B5d: логгер в боевую проводку. Параметр гейта необязательный (default null), поэтому
+    // отсутствие третьего аргумента в регистрации ядра не ломает ни сборку, ни старт — молчит только
+    // LogWarning в catch, и причину сбоя расчёта лимитов на сервере не видно вовсе. Он и GetService
+    // (тот же стиль, что у логгера политики): контейнер без логгера остаётся рабочим.
+    [Fact]
+    public void ГейтНаРеальномХосте_ДержитЛоггер()
+    {
+        using var factory = new TestWebApplicationFactory();
+        _ = factory.CreateClient();
+        var sp = factory.Services;
+        var gate = sp.GetRequiredService<IChildModeGate>();
+
+        var held = HeldDependencies(gate, typeof(ILogger<ChildModeGate>));
+        held.Should().ContainSingle("гейт держит ровно одно поле логгера")
+            .Which.Should().NotBeNull("иначе LogWarning в catch гейта молчит: причина сбоя расчёта в журнал не попадает");
     }
 }

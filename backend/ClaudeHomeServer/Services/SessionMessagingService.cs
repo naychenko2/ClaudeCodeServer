@@ -169,9 +169,13 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
         };
 
         // Ф-2.48: принятое сообщение (busy/queue_full — не принято, ожидания не трогаем).
+        // Дубль — тоже не действие адресата (R-Ф-2.48, минор): тот же текст того же отправителя уже стоит
+        // в очереди и будет доставлен, первое его принятие уже учлось как действие (то же чтение, что у
+        // рефанда выше — «не дошло»). Дублем можно ошибочно снять новое ожидание, поднятое между первой
+        // копией и ретраем: хронологически оно раньше дубля, и сторож по acceptedAt тут бессилен.
         // «at» для стора — принятый до подачи acceptedAt, а не время возврата ожидания хода.
         if (callerSessionId is { Length: > 0 } caller
-            && outcome is SendOutcome.Queued or SendOutcome.Completed or SendOutcome.Running)
+            && outcome is SendOutcome.Queued { Duplicate: false } or SendOutcome.Completed or SendOutcome.Running)
             await TryClearAwaitingForAddresseeAsync(session, caller, acceptedAt);
 
         return outcome;

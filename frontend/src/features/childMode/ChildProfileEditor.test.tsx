@@ -263,6 +263,48 @@ describe('ChildProfileEditor: «Минут в день»', () => {
     await click(saveBtn(host));
     expect(spacesOf(0).lessons.dailyMinutes).toBe(30);
   });
+
+  it('режим выключен: «9999» в «Минут в день» не подсвечено, сохранение проходит (R-KM-F11)', async () => {
+    const { host } = await mount(liza());
+    await click(toggle(host, 'Детский режим'));
+    await typeInto(minutesInput(host), '9999');
+    expect(minutesInput(host).style.border, 'при выключенном режиме поле не краснеет').not.toContain('var(--c-danger-border)');
+    await click(saveBtn(host));
+    expect(wire(0)).toEqual({ enabled: false });
+  });
+});
+
+describe('ChildProfileEditor: «Предупредить за»', () => {
+  const warnInput = (host: HTMLElement) => inputByLabel(host, 'Предупредить за') as HTMLInputElement;
+
+  for (const bad of ['abc', '0', '99']) {
+    it(`«${bad}» — поле подсвечено и названо, запросов нет (R-KM-F11)`, async () => {
+      const { host } = await mount(liza());
+      await typeInto(warnInput(host), bad);
+      const el = warnInput(host);
+      expect(el.style.border, 'рамка поля C.dangerBorder').toContain('var(--c-danger-border)');
+      // текст ошибки поля — в обороте Field (input → обёртка TextField → div Field)
+      expect(el.parentElement?.parentElement?.textContent ?? '').toContain('Введи число от 1 до 60, например 5');
+      await click(saveBtn(host));
+      expect(calls.length, 'некорректное предупреждение — без запроса').toBe(0);
+    });
+  }
+
+  it('пустое — значение по умолчанию: без подсветки, в теле warnMinutes 5', async () => {
+    const { host } = await mount(liza());
+    await typeInto(warnInput(host), '');
+    expect(warnInput(host).style.border).not.toContain('var(--c-danger-border)');
+    await click(saveBtn(host));
+    expect(wire(0).warnMinutes).toBe(5);
+  });
+
+  it('«15» — корректно: без подсветки, в теле 15', async () => {
+    const { host } = await mount(liza());
+    await typeInto(warnInput(host), '15');
+    expect(warnInput(host).style.border).not.toContain('var(--c-danger-border)');
+    await click(saveBtn(host));
+    expect(wire(0).warnMinutes).toBe(15);
+  });
 });
 
 describe('ChildProfileEditor: отказы ручки №10', () => {

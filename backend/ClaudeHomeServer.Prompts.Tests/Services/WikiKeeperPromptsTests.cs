@@ -124,8 +124,8 @@ public class WikiKeeperPromptsTests
 
         Assert.Contains("kind\" is the kind of the STATEMENT, not of the page", prompt);
         Assert.Contains("existing page of any kind", prompt);
-        Assert.Contains("Bad: create \"Правило тональной кнопки под B\"", prompt);
-        Assert.Contains("append to \"ADR-012: Визуальный язык B\"", prompt);
+        Assert.Contains("Bad: create \"Правило версий в конвейере сборки\"", prompt);
+        Assert.Contains("append to \"Конвейер сборки\"", prompt);
     }
 
     [Fact]
@@ -232,7 +232,10 @@ public class WikiKeeperPromptsTests
     // Q1-S5 + Q1-S13: ссылка в claim — обязательна и дословна по каталогу: без хвоста «— вид»,
     // без префикса раздела и без алиаса «|» (гейт читает «x|y» как целое имя, и ссылка с алиасом
     // молча снимается в текст — рабочая ссылка теряется). «may» убрано: ссылка не право модели,
-    // а обязанность по уже названному предмету; один пример «правильно/неправильно».
+    // а обязанность по уже названному предмету. Пример один и только правильный, без алиаса
+    // (ревью Q1-S13: локальная модель копирует то, что видит, а негативные примеры работают
+    // хуже позитивных) — запрет алиаса выражен словами «no alias after "|"». Пример нейтрален:
+    // в промпте нет данных конкретного владельца.
     [Fact]
     public void Synth_СсылкаВКлиме_ТолькоГолаяПоКаталогу_БезХвостаПрефиксаИАлиаса()
     {
@@ -241,7 +244,7 @@ public class WikiKeeperPromptsTests
         Assert.Contains("If the claim names the subject of a catalog page", prompt);
         Assert.Contains("no \"— type\" tail, no section prefix,", prompt);
         Assert.Contains("no alias after \"|\".", prompt);
-        Assert.Contains("[[ADR-012: Визуальный язык B]]", prompt);
+        Assert.Contains("[[Конвейер сборки]]", prompt);
         Assert.DoesNotContain("you may link another page", prompt);
     }
 
@@ -307,6 +310,18 @@ public class WikiKeeperPromptsTests
         Assert.Contains("LIKELY APPEND TARGETS — CURRENT CONTENT OF THE SECTION PAGES", prompt);
         Assert.Contains("statements already present on the likely append targets below", prompt);
         Assert.DoesNotContain("anything already present in the section content", prompt);
+    }
+
+    // Ревью Q1-S13 (minor, берём): в блоке кандидатов — явный выход на правило 1, когда предмет
+    // утверждения отличается от страниц-кандидатов: иначе модель тащит лишние append в чужую
+    // страницу вместо create по правилу 1.
+    [Fact]
+    public void Synth_ЕслиПредметОтличаетсяОтКандидатов_ВыходНаПравило1()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "CAT-IDX", "n1", "PAGE-TEXT-42", 8, 300);
+
+        Assert.Contains(
+            "if the subject of a statement differs from these pages, follow rule 1", prompt);
     }
 
     [Theory]

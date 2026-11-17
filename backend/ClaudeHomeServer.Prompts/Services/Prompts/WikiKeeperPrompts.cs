@@ -103,8 +103,8 @@ public static class WikiKeeperPrompts
             "kind" is the kind of the STATEMENT, not of the page. A rule, decision or state
             about the same subject is appended to that subject's existing page of any kind. The
             title of a "create" names the subject itself — without "Правило…", "Решение по…" or
-            "Состояние…" as its prefix. Bad: create "Правило тональной кнопки под B"; good:
-            append to "ADR-012: Визуальный язык B".
+            "Состояние…" as its prefix. Bad: create "Правило версий в конвейере сборки"; good:
+            append to "Конвейер сборки".
 
             PROCESS OR KNOWLEDGE
             Process is not knowledge: the course of steps and tasks, who handed what to whom,
@@ -167,8 +167,7 @@ public static class WikiKeeperPrompts
             page the catalog already names. If the claim names the subject of a catalog page,
             write it as [[Title]] exactly as the catalog names it:
             no "— type" tail, no section prefix, no alias after "|". Example: a claim about the
-            visual language of B is linked as [[ADR-012: Визуальный язык B]] — not as
-            [[Визуальный язык B]] and not as [[ADR-012: Визуальный язык B|язык B]]. A link the
+            build pipeline is linked as [[Конвейер сборки]]. A link the
             code cannot resolve is stripped to plain text: an aliased or prefixed link is a
             link lost. Entries marked "— source" are source
             cards: they only receive footnotes; never append/conflict/link into them. An
@@ -222,6 +221,7 @@ public static class WikiKeeperPrompts
             ? ""
             : "LIKELY APPEND TARGETS — CURRENT CONTENT OF THE SECTION PAGES: pages of subjects "
               + "this window probably continues; add new statements to them, do not repeat "
-              + "statements already there.\n"
+              + "statements already there; if the subject of a statement differs from these "
+              + "pages, follow rule 1.\n"
               + existingPages + "\n";
 }

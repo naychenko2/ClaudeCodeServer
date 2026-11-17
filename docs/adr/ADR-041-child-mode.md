@@ -134,7 +134,7 @@ interface ChildProfileDto {     // тело PUT child-profile и поле отв
 | # | Метод и путь | Запрос | Ответ 2xx | Отказы |
 |---|---|---|---|---|
 | 1 | `GET /api/child/status?space=lessons` | `space` необязателен, по умолчанию `lessons` | 200 `ChildStatus` | 400 `unknown_space`, 403 `space_disabled`, 403 `not_child`, 503 `policy_unavailable` (профиль не читается — fail-closed) |
-| 2 | `POST /api/child/heartbeat` | `{ space: string }` | 200 `ChildStatus` (тот же, что у status — экономит второй запрос) | 400 `unknown_space`, 403 `space_disabled`, 403 `not_child` |
+| 2 | `POST /api/child/heartbeat` | `{ space: string }` | 200 `ChildStatus` (тот же, что у status — экономит второй запрос) | 400 `unknown_space`, 403 `space_disabled`, 403 `not_child`, 503 `policy_unavailable` (профиль не читается или минута присутствия не записана — fail-closed) |
 | 3 | `POST /api/child/spaces/{space}/chat` | тело пустое | 201 `{ sessionId: string }` — новый чат с закреплёнными персоной-тьютором, провайдером, моделью, `ChildSpace`, `ProjectId = null` | 400 `unknown_space`, 403 `space_disabled`, 409 `{code: <state>}` при `rules_pending`, `budget_exhausted`, `out_of_window`, `time_up` |
 | 4 | `GET /api/child/spaces/{space}/chats` | — | 200 `{ chats: { sessionId, name, updatedAt }[] }` — детские чаты пространства, новые сверху | 400 `unknown_space`, 403 `space_disabled` |
 | 5 | `PUT /api/child/chats/{id}/voice` | `{ enabled: boolean, style?: "talk" \| "digest" }` | 200 `{ voiceMode: boolean, voiceStyle: string }` | 400 `invalid_style`, 404 `chat_not_found` |

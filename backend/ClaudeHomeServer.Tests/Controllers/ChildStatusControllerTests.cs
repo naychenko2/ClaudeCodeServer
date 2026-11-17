@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
@@ -25,6 +26,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// User.TimeZone таймзона — ChildMode:DefaultTimeZone = Europe/Moscow (appsettings, решение
 /// Андрея 3), а «ok» требует быть в окне в момент запроса. «HH:mm» оборачивает циферблат —
 /// окно через полночь законно (ADR, ChildProfileValidator.cs:70).
+///
+/// 503 policy_unavailable (хвосты R-KM-B5e2): сбой записи журнала — настоящим store'ом, у
+/// которого путь журнала этого ребёнка занят каталогом (Heartbeat_СбойЗаписиЖурнала…);
+/// нечитаемый профиль — единственной достижимой через HTTP дорогой в эту ветку контроллера,
+/// гонкой гейта и контроллера (Status_ГонкаСГатом…): гейт читает профиль до правки,
+/// контроллер — после (ChildStatusController.cs:21).
 /// </summary>
 [Trait("Category", "Host")]
 public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTests.Hosts>
@@ -33,7 +40,13 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
     /// и именно его резолвит GetService&lt;IOwnerSpendReader&gt; в фабрике калькулятора (Program.cs:611).</summary>
     public sealed class Hosts : TestWebApplicationFactory
     {
-        public Hosts() => ExtraServices = services => services.AddSingleton<IOwnerSpendReader>(new FixedSpend());
+        public Hosts() => ExtraServices = services =>
+        {
+            services.AddSingleton<IOwnerSpendReader>(new FixedSpend());
+            // Политика — обёртка RacePolicy (см. ниже): для одного ребёнка по имени она роняет
+            // профиль после первого чтения, для всех прочих — точная делегация боевой политике.
+            services.AddSingleton<IChildModePolicy>(sp => new RacePolicy(sp.GetRequiredService<IUserStore>()));
+        };
     }
 
     // Расход ниже любого бюджета профиля: «бюджет не проверить» не должно быть ни в одном тесте.
@@ -41,6 +54,31 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
     {
         public decimal TodayUsd(string ownerId, TimeZoneInfo timeZone) => 0.1m;
         public decimal MonthUsd(string ownerId, TimeZoneInfo timeZone) => 0.5m;
+    }
+
+    // Ребёнок теста-гонки (Status_ГонкаСГатом…): единственный, чей профиль обёртка роняет
+    // после первого успешного чтения; остальные имена проходят насквозь без изменений.
+    private const string RaceUsername = "kid-denyall-race";
+
+    /// <summary>
+    /// Обёртка боевой политики, воспроизводящая гонку гейта и контроллера — единственную
+    /// HTTP-дорогу к ветке DenyAll в контроллере (ChildStatusController.cs:21): гейт не пускает
+    /// DenyAll-ребёнка ни на какой эндпоинт. Первое успешное чтение профиля RaceUsername
+    /// отдаётся как есть (гейт проходит) и сразу роняет профиль в сторе — правка «взрослого»
+    /// посреди запроса; следующее чтение (контроллера) — настоящий DenyAll боевого
+    /// ChildModePolicy, без синтетических снимков.
+    /// </summary>
+    private sealed class RacePolicy(IUserStore users) : IChildModePolicy
+    {
+        private readonly ChildModePolicy _inner = new(users);
+
+        public ChildPolicySnapshot? For(string ownerId)
+        {
+            var snapshot = _inner.For(ownerId);
+            if (snapshot is { DenyAll: false } && users.GetById(ownerId) is { Username: RaceUsername, ChildMode: { } profile })
+                profile.TutorPersonaId = ""; // невалиден по IsValid (ChildModePolicy.cs:36) → следующее чтение — DenyAll
+            return snapshot;
+        }
     }
 
     private const string KidsKey = "kids-api";
@@ -196,6 +234,24 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
         CodeOf(body).Should().Be("space_disabled");
     }
 
+    [Fact]
+    public async Task Status_ГонкаСГатом_НечитаемыйПрофиль_503_PolicyUnavailable()
+    {
+        var id = await NewChild(RaceUsername);
+        AgreeRules(id);
+        var client = ChildClient(RaceUsername);
+
+        // Единственная достижимая через HTTP дорога к отказу «профиль не читается» (И3, ADR №1):
+        // гейт читает профиль валидным и пропускает запрос; к чтению контроллера профиль уже
+        // нечитаем (RacePolicy — «правка взрослого» посреди запроса). Ответ — 503, не 403 гейта
+        // и не 500: необработанного исключения наружу нет (ChildStatusController.cs:68).
+        var (status, body) = await ReadAsync(await client.GetAsync("/api/child/status"));
+
+        status.Should().Be(HttpStatusCode.ServiceUnavailable);
+        CodeOf(body).Should().Be("policy_unavailable");
+        body.GetProperty("message").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
     // ─── ручка №2: heartbeat ───
 
     [Fact]
@@ -251,6 +307,36 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
         var (_, after) = await ReadAsync(await client.GetAsync("/api/child/status"));
         after.GetProperty("minutesLeft").GetInt32().Should().Be(39,
             "одновременные вызовы засчитывают одну минуту: read-modify-write под общим локом по пути файла");
+    }
+
+    [Fact]
+    public async Task Heartbeat_СбойЗаписиЖурнала_503_PolicyUnavailable_МинутаНеЗасчитана()
+    {
+        var id = await NewChild("kid-hb-journal-fail");
+        AgreeRules(id);
+        var client = ChildClient("kid-hb-journal-fail");
+
+        // Боевой store, отказ на записи: путь журнала этого ребёнка занят каталогом —
+        // File.Move внутри JsonFileStore.Save бросает. Подмены стора нет: тот же
+        // ChildUsageStore, что поднят в хосте, по тому же корню (RootFromConfig).
+        var root = ChildUsageStore.RootFromConfig(_hosts.Services.GetRequiredService<IConfiguration>());
+        Directory.CreateDirectory(Path.Combine(root, id + ".json"));
+
+        var (status, body) = await ReadAsync(await client.PostAsJsonAsync("/api/child/heartbeat", new { space = "lessons" }));
+
+        // Сбой журнала — 503 с причиной, не 500: необработанное исключение из try/catch
+        // вокруг RecordMinute (ChildStatusController.cs:79-91) наружу не выходит.
+        status.Should().Be(HttpStatusCode.ServiceUnavailable);
+        CodeOf(body).Should().Be("policy_unavailable");
+        body.GetProperty("message").GetString().Should().NotBeNullOrWhiteSpace();
+
+        // Минута не засчитана: запись не состоялась — журнал пуст, остаток полный.
+        // Read минуты не читает каталог как файл (File.Exists false → 0), поэтому status
+        // отвечает обычно: 503 heartbeat не должен ломать и саму ручку статуса.
+        var (afterStatus, after) = await ReadAsync(await client.GetAsync("/api/child/status"));
+        afterStatus.Should().Be(HttpStatusCode.OK);
+        after.GetProperty("minutesLeft").GetInt32().Should().Be(40,
+            "не состоявшаяся запись минуты не добавляет минуты в журнал");
     }
 
     // ─── ручка №11: isChild/childSpaces в /api/auth/me ───

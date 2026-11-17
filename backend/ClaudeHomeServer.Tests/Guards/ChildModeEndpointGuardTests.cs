@@ -45,6 +45,8 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         // Чтение своего детского чата (KM-B6f): обе формы истории — с курсором и без
         "GET api/chats/{id}",
         "GET api/chats/{id}/history",
+        // Чтение картинки-вложения чата для миниатюры (KM-B7, ADR-041 ручка №12); у ребёнка — только свой ChildSpace-чат
+        "GET api/chats/{id}/attachments/raw",
         // Health-пинг (хвост дельта-ревью R-KM-F10): probeHealth фронта шлёт GET /api/health
         // со своим токеном; ответ — пустой 204, данных нет
         "GET,HEAD api/health",

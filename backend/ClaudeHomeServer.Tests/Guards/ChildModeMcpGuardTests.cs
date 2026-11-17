@@ -90,7 +90,20 @@ public class ChildModeMcpGuardTests
         var gate = Gate(child: false);
         gate.Denied("wsp", "files_read", owner).Should().NotBeNull();
         gate.AllowsServer(owner, "wsp").Should().BeFalse();
-        gate.IsChild(owner).Should().BeTrue();
+    }
+
+    // R-KM-B3b: чат без владельца (пустой или null ownerId) — не детский, IsChild и PolicyFor
+    // отвечают одинаково. Проверка на рабочей детской политике: FakePolicy отдаёт снимок на любой
+    // id, поэтому утверждение ровно о том, что правило держит гейт, а не политика.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void ПустойВладелец_НеРебёнок_IsChildИPolicyForОтвечаютОдинаково(string? owner)
+    {
+        var gate = Gate(child: true);
+        gate.IsChild(owner).Should().BeFalse("чат без владельца — не детский");
+        gate.PolicyFor(owner!).Should().BeNull("тот же ответ, что у IsChild: снимка нет");
     }
 
     [Theory]

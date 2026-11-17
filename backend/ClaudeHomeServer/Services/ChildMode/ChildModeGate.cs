@@ -33,8 +33,11 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
         return !snapshot.DenyAll && ChildModeAllowList.AllowsServer(server);
     }
 
+    // Чат без владельца (пустой или null ownerId) — не детский (R-KM-B3b): тот же корень, что у
+    // LaunchMismatch и LaunchLimitRefusal. IsChild и PolicyFor для пустого владельца отвечают
+    // одинаково — «не ребёнок».
     public bool IsChild(string? ownerId) =>
-        string.IsNullOrWhiteSpace(ownerId) || policy.For(ownerId) is not null;
+        !string.IsNullOrWhiteSpace(ownerId) && policy.For(ownerId) is not null;
 
     // И3 (KM-B5d): состояние считает калькулятор (KM-B5c) — здесь только перевод состояния в детский
     // отказ и единственное исключение (чат онбординга правил). Своего состояния у гейта нет: каждый
@@ -78,7 +81,10 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
         return status.State is ChildState.Ok or ChildState.Warn ? null : ChildLimitTexts.For(status.State);
     }
 
-    public ChildPolicySnapshot? PolicyFor(string ownerId) => policy.For(ownerId);
+    // Чат без владельца — не детский: правило держит сам гейт, а не политика — пустому владельцу
+    // снимка нет даже если политика отдала бы снимок на любой id (тот же ответ, что у IsChild).
+    public ChildPolicySnapshot? PolicyFor(string ownerId) =>
+        string.IsNullOrWhiteSpace(ownerId) ? null : policy.For(ownerId);
 
     public string? LaunchMismatch(string? ownerId, Session session)
     {

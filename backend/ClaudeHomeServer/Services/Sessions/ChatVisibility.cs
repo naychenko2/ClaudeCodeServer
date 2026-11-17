@@ -177,6 +177,18 @@ public sealed class ChatVisibility
         return rel;
     }
 
+    // Учтено ли вложение в этом чате (ручка чтения №12): точное совпадение с записью
+    // Session.Attachments, не префикс. Список читается под VisibilityLock — тем же замком, под
+    // которым SaveChatAttachment дописывает, а SetChatVisibility переписывает пути: перечисление
+    // живого List параллельно с записью бросило бы InvalidOperationException, а старый путь
+    // после переноса должен перестать совпадать. Чата нет — false.
+    public bool IsRecordedAttachment(string sessionId, string rel)
+    {
+        if (!_store.Sessions.TryGetValue(sessionId, out var entry)) return false;
+        lock (entry.VisibilityLock)
+            return entry.Info.Attachments is { } list && list.Contains(rel, StringComparer.Ordinal);
+    }
+
     // Переписывает пути вложений в сообщениях чата (память и history.json) по карте переноса.
     // Активный аккумулятор — в памяти плюс снимок на диск; неактивный чат — прямо файл истории.
     // Отложенные сообщения очереди (entry.Pending и pending.json) — тем же проходом: иначе

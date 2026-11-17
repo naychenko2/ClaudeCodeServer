@@ -39,15 +39,37 @@ public static class ChildAttachmentPolicy
     // Формат картинки по сигнатуре: расширение для сохранения (NormalizeExtension) или null,
     // если это не картинка. PNG / JPEG / WEBP (RIFF????WEBP — четыре байта длины между
     // маркерами, их не смотрим) — тот же порядок проверок, что был в Detect.
-    private static string? ImageExtOf(byte[] bytes)
+    private static string? ImageExtOf(ReadOnlySpan<byte> bytes)
     {
         if (StartsWith(bytes, Png)) return ".png";
         if (StartsWith(bytes, Jpeg)) return ".jpg";
         if (bytes.Length >= 12 &&
-            System.Text.Encoding.ASCII.GetString(bytes, 0, 4) == Riff &&
-            System.Text.Encoding.ASCII.GetString(bytes, 8, 4) == Webp)
+            System.Text.Encoding.ASCII.GetString(bytes[..4]) == Riff &&
+            System.Text.Encoding.ASCII.GetString(bytes.Slice(8, 4)) == Webp)
             return ".webp";
         return null;
+    }
+
+    // Сигнатуры GIF — только для ЧТЕНИЯ вложений (ручка №12, миниатюра): в allow-list загрузки
+    // ребёнка GIF не входит, Detect его не принимает.
+    private static readonly byte[] Gif87 = "GIF87a"u8.ToArray();
+    private static readonly byte[] Gif89 = "GIF89a"u8.ToArray();
+
+    /// <summary>
+    /// MIME картинки по сигнатуре начала файла (достаточно первых 12 байт): PNG/JPEG/WEBP плюс GIF.
+    /// null — не картинка. Расширение и Content-Type не смотрятся (ADR-041, ручка №12).
+    /// Состав загрузки (Detect) этим методом не расширяется.
+    /// </summary>
+    public static string? ImageMimeBySignature(ReadOnlySpan<byte> head)
+    {
+        if (StartsWith(head, Gif87) || StartsWith(head, Gif89)) return "image/gif";
+        return ImageExtOf(head) switch
+        {
+            ".png" => "image/png",
+            ".jpg" => "image/jpeg",
+            ".webp" => "image/webp",
+            _ => null,
+        };
     }
 
     // Допустимые расширения картинки (написание того же формата, что сигнатуры выше):
@@ -113,6 +135,6 @@ public static class ChildAttachmentPolicy
         return StrictUtf8.GetString(bytes, 0, cut) + note;
     }
 
-    private static bool StartsWith(byte[] bytes, byte[] prefix) =>
-        bytes.Length >= prefix.Length && bytes.AsSpan(0, prefix.Length).SequenceEqual(prefix);
+    private static bool StartsWith(ReadOnlySpan<byte> bytes, byte[] prefix) =>
+        bytes.Length >= prefix.Length && bytes[..prefix.Length].SequenceEqual(prefix);
 }

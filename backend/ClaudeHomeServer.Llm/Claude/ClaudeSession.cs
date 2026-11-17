@@ -3780,7 +3780,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var currentDatasetId = currentWk?.DatasetId;
         var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents, handsActive);
         // Число MCP-серверов в конфиге этого запуска: ключи собранного temp-конфига — ровно то,
-        // что поехло в --mcp-config (тот же источник правды, что у deliveredMcp ниже). При откате
+        // что поехало в --mcp-config (тот же источник правды, что у deliveredMcp ниже). При откате
         // к базовому внешнему конфигу (turnMcpPath == null) состав его здесь не известен без
         // дополнительного разбора файла — замер остаёт null, не 0: отсутствие замера не ноль.
         // Повторный спавн в ретрае берёт тот же конфиг — счётчик относится к ходу, не к попытке,

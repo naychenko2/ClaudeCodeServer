@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
@@ -329,22 +330,24 @@ public class ClaudeSessionStartPhaseTests : IDisposable
     }
 
     [Fact]
-    public async Task ПервыйБайт_ПослеНовогоСпавнаСбрасываетсяИМеряетсяОтНового()
+    public void ПервыйБайт_ПослеНовогоСпавнаСбрасываетсяИМеряетсяОтНового()
     {
         // Названный тест мутации «убрать сброс защёлки первого байта в NoteSpawn»: без сброса
         // в защёлке остаётся значение первой попытки — краснеют обе проверки после второго спавна.
+        // Время не ждём: первый спавн «сдвинут в прошлое» на секунду через подставной timestamp,
+        // поэтому фаза первой попытки заведомо не меньше 1000 мс, а вторая — от «сейчас».
         var (s, _) = NewSession();
         Begin(s);
-        Spawn(s, Stopwatch.GetTimestamp());
-        await Task.Delay(120);
+        Spawn(s, Stopwatch.GetTimestamp() - Stopwatch.Frequency);
         FirstByte(s);
-        s.GetStartTimings().SpawnToFirstByteMs.Should().BeGreaterThanOrEqualTo(100, "фаза первой попытки — первая");
+        var first = s.GetStartTimings().SpawnToFirstByteMs;
+        first.Should().BeGreaterThanOrEqualTo(1000, "фаза первой попытки — от подставного спавна секундой раньше");
 
         // Ретрай: новый процесс. Сброс открыл защёлку до записи _turnSpawnTs (хвост e33b6bd2).
         Spawn(s, Stopwatch.GetTimestamp());
         s.GetStartTimings().SpawnToFirstByteMs.Should().BeNull("новый спавн открывает защёлку первого байта");
         FirstByte(s);
-        s.GetStartTimings().SpawnToFirstByteMs.Should().NotBeNull().And.BeLessThan(60,
+        s.GetStartTimings().SpawnToFirstByteMs.Should().NotBeNull().And.BeLessThan(first!.Value,
             "после нового спавна фаза меряется от нового спавна, а не от старого");
     }
 
@@ -364,6 +367,93 @@ public class ClaudeSessionStartPhaseTests : IDisposable
         Begin(s);
         s.GetStartTimings().SpawnToFirstByteMs.Should().BeNull("BeginStartTimings сбрасывает защёлку первого байта");
         s.GetStartTimings().McpServerCount.Should().BeNull("BeginStartTimings сбрасывает счётчик MCP-серверов");
+    }
+
+    // Лаунчер-«CLI»: молчаливый сон; в момент Start читает temp-конфиг, на который указывает
+    // --mcp-config, и запоминает число его серверов — то, что реально поехало в запуск хода.
+    private sealed class McpConfigCapturingLauncher(TaskCompletionSource started)
+        : ClaudeHomeServer.Services.Execution.IProcessLauncher
+    {
+        public int? ConfigServerCount { get; private set; }
+        public bool IsSandboxed => false;
+        public bool TargetIsWindows => OperatingSystem.IsWindows();
+        public ClaudeHomeServer.Services.Execution.IPathMapper Paths => ClaudeHomeServer.Services.Execution.IdentityPathMapper.Instance;
+        public string ClaudeCliCommand => "fake-claude";
+        public string HostTempDir => Path.GetTempPath();
+        public string? McpApiUrlOverride => null;
+        public Process? Started { get; private set; }
+
+        public Process Start(ClaudeHomeServer.Services.Execution.ProcessSpec spec)
+        {
+            var i = spec.Args.ToList().IndexOf("--mcp-config");
+            if (i >= 0)
+                ConfigServerCount = JsonNode.Parse(File.ReadAllText(spec.Args[i + 1]))!["mcpServers"]!.AsObject().Count;
+
+            var fake = new ClaudeHomeServer.Services.Execution.ProcessSpec
+            {
+                FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                Args = OperatingSystem.IsWindows()
+                    ? ["/c", "ping -n 120 127.0.0.1 >nul"]
+                    : ["-c", "exec sleep 120"],
+                WorkingDirectory = spec.WorkingDirectory,
+                StdioEncoding = spec.StdioEncoding,
+                EnableRaisingEvents = spec.EnableRaisingEvents,
+                RedirectStdin = spec.RedirectStdin,
+                Track = false,
+            };
+            Started = ClaudeHomeServer.Services.Execution.LocalProcessRunner.Instance.Start(fake);
+            started.TrySetResult();
+            return Started;
+        }
+
+        public int EstimateCommandLineLength(ClaudeHomeServer.Services.Execution.ProcessSpec spec) => 0;
+
+        public void Kill(Process process, string? turnId = null)
+        {
+            try { process.Kill(entireProcessTree: true); }
+            catch { /* уже мёртв */ }
+        }
+    }
+
+    // TS-20: mcpServerCount паспорта берётся из РЕАЛЬНОГО BuildTurnMcpConfig хода, а не задан
+    // тестом напрямую. Названный тест мутации «подменить mcpServerNames.Count в записи счётчика»:
+    // число в паспорте перестаёт совпадать с числом серверов, которое лаунчер прочитал из --mcp-config.
+    [Fact]
+    public async Task ЧислоMcpСерверов_БерётсяИзРеальногоКонфигаХода()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ccs-mcpcount-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var launcher = new McpConfigCapturingLauncher(started);
+        var context = new LlmSessionContext(
+            RootPath: root,
+            OnMessage: m =>
+            {
+                if (m is ExitedMessage) exited.TrySetResult();
+                return Task.CompletedTask;
+            },
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: new TasksMcpContext("http://localhost:5000", () => "tok", null, UseHttp: true),
+            Launcher: launcher);
+        var session = new ClaudeSession(new Session(), context);
+        try
+        {
+            await session.SendMessageAsync("тестовый ход");
+            var done = await Task.WhenAny(started.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+            done.Should().Be(started.Task, "процесс хода обязан стартовать");
+
+            launcher.ConfigServerCount.Should().BeGreaterThan(0, "в конфиге хода есть хотя бы tasks");
+            session.GetStartTimings().McpServerCount.Should().Be(launcher.ConfigServerCount,
+                "число серверов паспорта = число серверов собранного --mcp-config этого хода");
+        }
+        finally
+        {
+            if (launcher.Started is { } cli) { try { cli.Kill(entireProcessTree: true); } catch { } }
+            await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
     }
 
     // ——— Остановка несовместимого прогона (PrevRunStopWaitMs) ———

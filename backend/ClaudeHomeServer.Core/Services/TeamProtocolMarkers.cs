@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Prompts;
 
 namespace ClaudeHomeServer.Services;
 
@@ -118,6 +119,21 @@ public static class TeamProtocolMarkers
         new(@"<team:talk\s*/>", RegexOptions.Compiled);
     private static readonly Regex NoReplyMarkerRegex =
         new(@"<no-reply\s*/>", RegexOptions.Compiled);
+    // Стоп-сигнал тьютора детского чата (KM-B6d): `<ccs-stop-signal reason="…"/>`. Причина
+    // свободным текстом без «<», поэтому тело маркера ищем лениво до первого «/>».
+    private static readonly Regex StopSignalMarkerRegex =
+        new(Regex.Escape(ChildSafetyPrompts.StopSignalOpen) + @"\b[^<]*?/>", RegexOptions.Compiled);
+
+    // Есть ли в тексте хода активный стоп-сигнал тьютора — вне код-блоков: процитированный
+    // примером маркер сигнала не поднимает (тот же приём, что у HasNoReplyMarker).
+    public static bool HasStopSignalMarker(string text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.Contains('<')) return false;
+        var ranges = GetCodeBlockRanges(text);
+        foreach (Match m in StopSignalMarkerRegex.Matches(text))
+            if (IsRangeOutsideCode(ranges, m.Index, m.Index + m.Length)) return true;
+        return false;
+    }
 
     // Открывающие/закрывающие теги маркеров — и для РАЗБОРА (Parse*/Has* выше), и для
     // зачистки ленты (RemovePairedMarkers ниже) один и тот же позиционный поиск пары:
@@ -191,6 +207,7 @@ public static class TeamProtocolMarkers
         if (text.Length == 0 || !text.Contains('<')) return text;
         text = TalkMarkerRegex.Replace(text, "");
         text = NoReplyMarkerRegex.Replace(text, "");
+        text = StopSignalMarkerRegex.Replace(text, "");
         text = OrphanCloserRegex.Replace(text, "");
         return text;
     }
@@ -253,6 +270,9 @@ public static class TeamProtocolMarkers
         // Самозакрывающийся маркер молчания целиком: любой его префикс («<n», «<no-repl»,
         // «<no-reply/») ещё может дорасти до маркера — до этого показывать хвост нельзя
         NoReplyMarker,
+        // Маркер стоп-сигнала: «reason="…"» вариативен, держим хвост по собственному префиксу
+        // открывающей части; дальше (тег открыт, «/>» ещё нет) прячет TrimUnresolvedMarkerOpen
+        ChildSafetyPrompts.StopSignalOpen,
     ];
 
     public static bool IsAmbiguousMarkerTail(string tail)
@@ -289,6 +309,7 @@ public static class TeamProtocolMarkers
     [
         "<escalate:deviation>", "<escalate:check>", "<escalate:decision>", "<escalate:clarify>",
         "<team:work>", "<team:resolved>", "<team:talk", "<no-reply",
+        ChildSafetyPrompts.StopSignalOpen,
     ];
 
     public static string TrimUnresolvedMarkerOpen(string strippedText)

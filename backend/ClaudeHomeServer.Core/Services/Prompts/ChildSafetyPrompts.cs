@@ -24,7 +24,8 @@ public static class ChildSafetyPrompts
     // Маркер тревожного сообщения: одной строкой в конце ответа, Лизе о нём не говорить.
     // Разбирает его KM-B6d (стоп-сигнал → уведомление взрослым без доступа к переписке),
     // поэтому форма — константа: промпт и разбор должны смотреть на одну строку.
-    public const string StopSignalMarker = "<ccs-stop-signal reason=\"…\"/>";
+    public const string StopSignalOpen = "<ccs-stop-signal";
+    public const string StopSignalMarker = StopSignalOpen + " reason=\"…\"/>";
 
     // Секция слоя персоны детского хода. Порядок внутри неё важен: сначала «ты — программа»
     // (раскрытие ИИ — требование Anthropic для несовершеннолетних), затем способ работы

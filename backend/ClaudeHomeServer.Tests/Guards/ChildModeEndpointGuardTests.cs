@@ -35,6 +35,8 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         "POST api/child/spaces/{space}/chat",
         "GET api/child/spaces/{space}/chats",
         "PUT api/child/chats/{id}/voice",
+        // Стоп-сигнал «Мне неприятно» (KM-B6d, ADR-041 ручка №9)
+        "POST api/child/stop-signal",
         // Чтение своего детского чата (KM-B6f): обе формы истории — с курсором и без
         "GET api/chats/{id}",
         "GET api/chats/{id}/history",

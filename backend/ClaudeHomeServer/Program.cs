@@ -615,6 +615,8 @@ builder.Services.AddSingleton(sp => new ChildLimitsCalculator(
 // Провижн персоны-тьютора ребёнка (KM-B1d, ADR-041): «Помощник» с ключом в
 // ChildProfile.TutorPersonaId. Вызывается только точками записи детского профиля (KM-B1e).
 builder.Services.AddSingleton<ChildTutorProvisioner>();
+// Стоп-сигнал ребёнка → уведомление взрослым без текста переписки (KM-B6d, ADR-041 решение 1).
+builder.Services.AddSingleton<ChildStopSignalService>();
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),

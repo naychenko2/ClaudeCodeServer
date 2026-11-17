@@ -57,9 +57,9 @@ public class ChildSubjectsMigrationTests : IDisposable
     {
         await _sut.StartAsync(CancellationToken.None);
 
+        // Порядок списка — порядок плиток на главной ребёнка
         var subjects = _users.GetById(_childId)!.ChildMode!.Subjects;
-        subjects.Select(s => s.Id).Should().Equal("math", "russian", "english",
-            "порядок списка — порядок плиток на главной ребёнка");
+        subjects.Select(s => s.Id).Should().Equal("math", "russian", "english");
         subjects[0].Label.Should().Be("Математика");
         subjects[0].Glyph.Should().Be("×÷");
         subjects[0].Color.Should().Be("info");
@@ -152,6 +152,7 @@ public class ChildSubjectsMigrationTests : IDisposable
             using var gate = new ManualResetEventSlim();
             var seedTask = Task.Run(() => { gate.Wait(); _users.SeedChildSubjectsIfEmpty(_childId, SeedTriple()); });
             var adminTask = Task.Run(() => { gate.Wait(); _users.SetChildProfile(_childId, admin, resetRules: false); });
+            gate.Set();
             var all = Task.WhenAll(seedTask, adminTask);
             (await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(30)))).Should().Be(all, "гонка не завершилась");
 

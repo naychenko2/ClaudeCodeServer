@@ -47,6 +47,11 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         "GET api/chats/{id}/history",
         // Чтение картинки-вложения чата для миниатюры (KM-B7, ADR-041 ручка №12); у ребёнка — только свой ChildSpace-чат
         "GET api/chats/{id}/attachments/raw",
+        // Проекция репетиторов (KM-T1e, разрез §4 №3–4): список плиток включённых предметов и
+        // аватар репетитора; сама аватар-ручка дополнительно проверяет «это репетитор этого
+        // ребёнка» — чужая персона даёт 404 уже внутри ручки
+        "GET api/child/subjects",
+        "GET api/personas/{id}/avatar",
         // Health-пинг (хвост дельта-ревью R-KM-F10): probeHealth фронта шлёт GET /api/health
         // со своим токеном; ответ — пустой 204, данных нет
         "GET,HEAD api/health",

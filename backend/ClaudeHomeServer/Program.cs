@@ -599,6 +599,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.ChatUserStateService>();
 builder.Services.AddSingleton<IChildModePolicy, ChildModePolicy>();
 // Журнал присутствия ребёнка по пространствам (KM-B5b, разрез §3): минуты по дням в
 // data/child-usage/. Пишет его ручка heartbeat (KM-B5e), читает — статус «остаток минут» (KM-B5c).
+// Детский гейт И1 для MCP-транспорта и состава MCP хода (KM-B3a): allow-list пар, fail-closed.
+builder.Services.AddSingleton<IChildModeGate, ChildModeGate>();
 builder.Services.AddSingleton(sp => new ChildUsageStore(
     ChildUsageStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
     sp.GetRequiredService<ILogger<ChildUsageStore>>()));

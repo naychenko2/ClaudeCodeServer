@@ -177,7 +177,8 @@ public static class SessionCoreRegistration
             sp.GetService<ClaudeHomeServer.Services.Composition.SubsystemStateStore>(),
             sp.GetRequiredService<ProjectManager>(),
             sp.GetService<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>(),
-            sp.GetRequiredService<IConfiguration>()));
+            sp.GetRequiredService<IConfiguration>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModeGate>()));
         // Слой персоны. ISphereDirectory — GetService: без подсистемы сфер зона персоны
         // работает через NoSphereDirectory, как и раньше.
         services.AddSingleton(sp => new PersonaLayerBuilder(

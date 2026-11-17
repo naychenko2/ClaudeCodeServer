@@ -152,11 +152,19 @@ internal sealed class TurnLaunchContextFactory
         Func<string, string, IReadOnlyList<string>?, int, bool, Task> enqueueBypass,
         ITurnEventBus? events, string cliConfigRoot, bool transcriptOnServer)
     {
+        // И1-бис (ADR-041): последний рубеж детского режима. Поля чата ребёнка сверяются с профилем
+        // ДО сборки любого контекста; расхождение — ход не стартует, тихой подстановки нет.
+        if (_builtin.ChildGate.LaunchMismatch(ownerId, session) is { } mismatch)
+            throw new InvalidOperationException("Детский режим: ход не запущен — " + mismatch);
+        // И1 п.10: детскому владельцу объявляются только серверы с парами в детском allow-list.
+        // Решение зависит от владельца, не от хода — состав tools/list не мерцает.
+        var childGate = _builtin.ChildGate;
         var persona = BuildPersonaLayer(session, ownerId);
         // Сужение набора MCP слепком этапа (И5): свойство сессии, зафиксированное при её создании
         var stageAllow = session.StageMcpAllow;
         T? Gate<T>(string serverKey, T? context) where T : class =>
-            BuiltinMcpContexts.StageAllows(stageAllow, serverKey) ? context : null;
+            BuiltinMcpContexts.StageAllows(stageAllow, serverKey) && childGate.AllowsServer(ownerId, serverKey)
+                ? context : null;
         var workspace = Gate("wsp", _external.BuildWorkspaceContext(ownerId, session.ProjectId, session.Id, persona.Persona));
 
         var widgetsMcp = Gate("widgets", _builtin.BuildWidgetsContext(ownerId, persona.Persona));
@@ -172,8 +180,10 @@ internal sealed class TurnLaunchContextFactory
         var testsMcp = Gate("tests", _builtin.BuildTestsContext(ownerId, session.ProjectId, persona.Persona));
         var memoryMcp = Gate("memory", persona.Memory ?? _builtin.BuildTeamMemoryContext(ownerId, session.ProjectId));
         var tasksMcp = _builtin.TasksMcpEnabled(ownerId, session, persona.Persona)
+            && childGate.AllowsServer(ownerId, "tasks")
             ? _builtin.BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
         var notesMcp = _builtin.NotesMcpEnabled(ownerId, persona.Persona)
+            && childGate.AllowsServer(ownerId, "notes")
             ? Gate("notes", _builtin.BuildNotesContext(ownerId, session.ProjectId, persona.Persona)) : null;
         var personasMcp = Gate("personas", _persona.BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona));
         var notificationsMcp = Gate("notifications", _external.BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona));
@@ -204,14 +214,15 @@ internal sealed class TurnLaunchContextFactory
             PersonaAgentsProvider: _persona.BuildPersonaAgentsProvider(ownerId, session, persona.Persona),
             // Проектный чат — среда проекта (ADR-016: локальный проект исполняется на устройстве)
             Launcher: launcher,
-            ModulesMcp: _moduleContexts.BuildModulesContext(ownerId),
+            ModulesMcp: childGate.IsChild(ownerId) ? null : _moduleContexts.BuildModulesContext(ownerId),
             WidgetsMcp: widgetsMcp,
             CodeGraphMcp: codeGraphMcp,
             DifyMcp: difyMcp,
-            BrowserEnabled: _builtin.BrowserEnabled(ownerId, persona.Persona),
+            BrowserEnabled: !childGate.IsChild(ownerId) && _builtin.BrowserEnabled(ownerId, persona.Persona),
             SystemPromptViaFile: SystemPromptViaFile,
             CliConfigRoot: cliConfigRoot,
-            ExternalMcpProvider: _external.BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona, session.Id, stageAllow),
+            // Внешние серверы владельца ребёнку не объявляются вовсе (И1 п.10)
+            ExternalMcpProvider: childGate.IsChild(ownerId) ? null : _external.BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona, session.Id, stageAllow),
             PersistSessions: _store.SaveSessions,
             EnqueueBypass: enqueueBypass,
             OrchestrationDone: BuildOrchestrationDone(session.Id),

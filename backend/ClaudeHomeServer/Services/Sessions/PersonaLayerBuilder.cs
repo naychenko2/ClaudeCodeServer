@@ -241,7 +241,11 @@ public sealed class PersonaLayerBuilder
                         PersonaConsultantToolset.PmemServerKey(p.Handle),
                         apiUrl, tokenFactory, p.Id, projectId, useHttp))
                     .ToList();
-                var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
+                // Порядок — по handle (Ordinal): список «Доступные agentType» в промпте и состав
+                // --agents не должны зависеть от выборки GetForContext (та же причина, что у
+                // AppendPersonaLines — стабильность префикса промпта).
+                var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h))
+                    .OrderBy(h => h, StringComparer.Ordinal).ToList()!;
                 // Определения для per-run --agents JSON: omitClaudeMd ClaudeSession дополнит
                 // по факту BareMode (свойство прогона, известное только там)
                 var agents = _agentSync.GetAgentsDefs(subagents, omitClaudeMd: false);
@@ -313,9 +317,16 @@ public sealed class PersonaLayerBuilder
     internal void AppendPersonaLines(System.Text.StringBuilder sb, List<Persona> personas, string? currentProjectId)
     {
         // Персоны сферы — отдельной группой «Команда сферы»: в одном списке с проектными и
-        // глобальными их не отличить
+        // глобальными их не отличить.
+        // Порядок внутри группы — по handle (Ordinal): строки подсказки не должны зависеть ни от
+        // выборки (GetForContext — по UpdatedAt по убыванию: любое касание персоны переставляло бы
+        // строки), ни от порядка входного списка — префикс системного промпта стабилен между
+        // беседами (кэш префикса локальной модели).
         var ordered = personas.Where(p => !PersonaZone.IsSpherePersona(p))
-            .Concat(personas.Where(PersonaZone.IsSpherePersona)).ToList();
+            .OrderBy(p => p.Handle, StringComparer.Ordinal)
+            .Concat(personas.Where(PersonaZone.IsSpherePersona)
+                .OrderBy(p => p.Handle, StringComparer.Ordinal))
+            .ToList();
         var sphereHeaderDone = false;
         foreach (var p in ordered)
         {

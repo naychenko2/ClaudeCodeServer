@@ -2623,6 +2623,16 @@ public class ClaudeSession : ILlmSessionAdapter
                 shapes[DeviceExecPlaceholders.HandsServerName] = vision ? "v1" : "v0";
             }
             if (servers.Count == 0) return (null, "", []);
+            // Порядок ключей в temp-конфиге — это порядок инструментов в системном промпте CLI.
+            // Он обязан быть детерминированным (по ключу, Ordinal), а не порядком вставки:
+            // порядок вставки зависит от того, какие контексты собрались в этом ходу, и префикс
+            // промпта у бесед одинакового состава разошёлся бы байт-в-байт — локальная модель
+            // не взяла бы его из кэша. JsonNode нельзя переприсоединить к другому родителю,
+            // поэтому переписываем ключи на месте: Clear() снимает родителя, повторная вставка
+            // идёт в тот же объект. ServerKeys/ServerNames сортируются отдельно — их не трогаем.
+            var sorted = servers.OrderBy(entry => entry.Key, StringComparer.Ordinal).ToList();
+            servers.Clear();
+            foreach (var entry in sorted) servers[entry.Key] = entry.Value;
             var combined = new System.Text.Json.Nodes.JsonObject { ["mcpServers"] = servers };
             // HostTempDir среды: для песочницы это bind-mount — процесс claude увидит файл
             var tmpPath = Path.Combine(_launcher.HostTempDir, $"claude-mcp-{Guid.NewGuid():N}.json");

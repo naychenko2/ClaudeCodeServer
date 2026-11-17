@@ -6,6 +6,14 @@
 // Шапку рисуем сами, а не ChatHeaderBar: тот несёт взрослые действия (переименование,
 // удаление, теги, баланс провайдера), ручки которых ребёнку закрыты allow-list'ом (403).
 //
+// Т3d: когда родитель принёс предмет пропом `subject` (Т3c) — шапка по макету Д1
+// (docs/mockups/kids-tutors.html, «Урок»): аватар репетитора и его имя вместо бейджа
+// названия, метка предмета — бейдж с глифом из палитры ключа. `subjectClosed` — вместо
+// композера спокойная панель «Этот предмет закрыт» (дефолтный вариант разреза; ждёт
+// ответа Андрея на вопрос 2). Без `subject` — прежняя шапка по CHILD_SUBJECTS (мост до Т3e).
+// На мобиле шапка урока скрыта целиком (.m .chathead): имя и метку несёт родительский
+// хаб (.mobt) — это оболочка, не этот файл.
+//
 // Запросы урока и строка allow-list ребёнка (ADR-041, «Существующие ручки и методы»):
 //  • GET  api/chats/{id}                      — рефреш состояния сессии в useSession → allow-list
 //  • GET  api/chats/{id}/history              — история чата (useSession) → allow-list
@@ -19,7 +27,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { speak, stopSpeaking } from '../../lib/tts';
 import { turnText } from '../../lib/turnSpeechStream';
-import { Bot, Lightbulb, X } from 'lucide-react';
+import { Bot, Lightbulb, Lock, X } from 'lucide-react';
 import { C, CHAT_GUTTER_MOBILE, CHAT_MAX_W, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -34,9 +42,10 @@ import { Composer } from '../../components/Composer';
 import { ChatItemView } from '../../components/chat/ChatItemView';
 import { ChatSessionContext } from '../../components/chat/contexts';
 import { childApi, ChildAttachmentRejectedError } from './api';
-import { CHILD_SUBJECTS, type ChildSubjectId } from './ChildHome';
+import { CHILD_SUBJECTS, TutorMark, type ChildSubjectId } from './ChildHome';
+import { subjectColors } from './subjectPalette';
 import type { ChatItem } from '../../types';
-import type { ChildStatus } from './types';
+import type { ChildStatus, ChildSubjectTutor, ChildSubjectView } from './types';
 
 // Лесенка подсказок: чип отправляет свою фразу как сообщение (макет, ASK).
 const LADDER = ['Дай подсказку', 'Покажи похожий пример', 'Разбери со мной один шаг'] as const;
@@ -82,13 +91,31 @@ function childFeed(items: ChatItem[]): { item: ChatItem; i: number; plate: boole
 
 interface Props {
   sessionId: string;
-  subjectId: ChildSubjectId;
+  // Мост до Т3e: поиск по CHILD_SUBJECTS, когда `subject` не передан вовсе
+  subjectId?: ChildSubjectId;
+  // Предмет чата с сервера (Т3c): view — живой предмет; null — закрытый или
+  // до-предметный чат (шапка без метки предмета); не передан — мост по subjectId (до Т3e)
+  subject?: ChildSubjectView | null;
+  // Предмет выключен или удалён (И1-бис): чат только для чтения
+  subjectClosed?: boolean;
   title: string;
   status: ChildStatus;
   // Сколько ступеней лесенки уже пройдено (0..3) — панель «Как мы учимся» (KM-F7) рисует по нему
   onHintStep?: (step: number) => void;
   // Озвучка ответов включена на сервере к моменту открытия чата
   initialVoiceMode?: boolean;
+}
+
+// Предмет шапки в нормализованном виде: серверный (цвет — из палитры ключа, Т3b) или
+// константа волны 1 (мост до Т3e). null — закрытый/до-предметный чат: метки предмета нет.
+interface HeaderSubject { label: string; glyph: string; bg: string; fg: string; tutor: ChildSubjectTutor | null }
+function headerSubject(subject: ChildSubjectView | null | undefined, subjectId?: ChildSubjectId): HeaderSubject | null {
+  if (subject !== undefined) {
+    if (!subject) return null;
+    return { label: subject.label, glyph: subject.glyph || '?', ...subjectColors(subject.color), tutor: subject.tutor };
+  }
+  const legacy = CHILD_SUBJECTS.find(s => s.id === subjectId);
+  return legacy ? { label: legacy.label, glyph: legacy.glyph, bg: legacy.bg, fg: legacy.fg, tutor: null } : null;
 }
 
 interface Attached { path: string; name: string }
@@ -108,10 +135,11 @@ function rejectText(e: unknown, maxBytes: number): string {
   return 'Не получилось загрузить файл. Попробуй ещё раз.';
 }
 
-export function ChildLessonChat({ sessionId, subjectId, title, status, onHintStep, initialVoiceMode = false }: Props) {
+export function ChildLessonChat({ sessionId, subjectId, subject, subjectClosed = false, title, status, onHintStep, initialVoiceMode = false }: Props) {
   const isMobile = useIsMobile();
   const online = useOnline();
-  const subject = CHILD_SUBJECTS.find(s => s.id === subjectId);
+  const serverMode = subject !== undefined;
+  const view = headerSubject(subject, subjectId);
   const { items, isWaiting, send, interrupt } = useSession(sessionId);
 
   // Состояния привязаны к чату: ключ — sessionId, чужой чат их не видит
@@ -193,24 +221,42 @@ export function ChildLessonChat({ sessionId, subjectId, title, status, onHintSte
   return (
     <ChatSessionContext.Provider value={sessionId}>
       <section data-child-lesson="" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        {/* Макет Д1: на мобиле шапка урока скрыта (.m .chathead) — имя репетитора и метку
+            предмета несёт родительский хаб (.mobt), это оболочка. Мост (без subject) —
+            прежняя шапка на обеих ширинах. */}
+        {(!serverMode || !isMobile) && (
         <header style={{ ...col, paddingTop: SP.lg, paddingBottom: SP.md, display: 'flex', alignItems: 'center', gap: SP.md }}>
-          {subject && !isMobile && (
-            <span aria-hidden style={{
-              width: 44, height: 44, borderRadius: R.xl, flexShrink: 0, background: subject.bg, color: subject.fg,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT.serif, fontSize: FS.xl, fontWeight: 600,
-            }}>{subject.glyph}</span>
-          )}
+          {serverMode
+            ? view?.tutor && <TutorMark tutor={view.tutor} size={52} />
+            : view && !isMobile && (
+              <span aria-hidden style={{
+                width: 44, height: 44, borderRadius: R.xl, flexShrink: 0, background: view.bg, color: view.fg,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT.serif, fontSize: FS.xl, fontWeight: 600,
+              }}>{view.glyph}</span>
+            )}
           <div style={{ minWidth: 0 }}>
             <h1 style={{
-              margin: 0, fontFamily: FONT.serif, fontSize: isMobile ? FS.h1 : FS.display, fontWeight: 500, lineHeight: 1.25,
+              margin: 0, fontFamily: FONT.serif, fontSize: serverMode ? FS.h1 : (isMobile ? FS.h1 : FS.display), fontWeight: 500, lineHeight: 1.25,
               color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>{title}</h1>
+            }}>{serverMode ? (view?.tutor?.name ?? title) : title}</h1>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: SP.xs }}>
-              {subject && <Badge tone="neutral">{subject.label}</Badge>}
+              {view && (
+                <Badge tone="neutral">
+                  {serverMode && (
+                    <span aria-hidden style={{
+                      width: 22, height: 22, borderRadius: R.sm, flexShrink: 0, background: view.bg, color: view.fg,
+                      display: 'grid', placeItems: 'center', fontFamily: FONT.serif, fontSize: FS.xs, fontWeight: 700,
+                    }}>{view.glyph}</span>
+                  )}
+                  {view.label}
+                </Badge>
+              )}
+              {subjectClosed && <Badge tone="neutral" icon={<Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>закрыт</Badge>}
               <Badge tone="info" icon={<Bot size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>Помощник · программа</Badge>
             </div>
           </div>
         </header>
+        )}
 
         <div data-child-feed="" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <div style={{ ...col, display: 'flex', flexDirection: 'column', gap: SP.md, fontSize: FS.lg, paddingBottom: SP.lg }}>
@@ -259,51 +305,73 @@ export function ChildLessonChat({ sessionId, subjectId, title, status, onHintSte
               {error}
             </Notice>
           )}
-          {step < LADDER.length && (
-            <div role="group" aria-label="Подсказки" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm }}>
-              <Chip variant="toggle" large={isMobile} onClick={() => askHint(step)}>
-                {step > 0 && <span style={{ fontWeight: 700, marginRight: SP.xs }}>{step + 1}</span>}
-                {LADDER[step]}
-              </Chip>
-              {step < LADDER.length - 1 && (
-                <Chip variant="toggle" large={isMobile} disabled>
-                  <span style={{ fontWeight: 700, marginRight: SP.xs }}>{step + 2}</span>
-                  {LADDER[step + 1]}
-                </Chip>
-              )}
+          {subjectClosed ? (
+            /* Закрытый предмет (И1-бис): композера и лесенки нет — чат только для чтения.
+               Спокойная панель по макету Д1 (.closedbar); кнопка «К предметам» в макете —
+               это навигация оболочки (рейл/сайдбар/PillSwitch), не колонка чтения. */
+            <div data-child-closed="" role="status" style={{
+              display: 'flex', flexDirection: 'column', gap: SP.sm, padding: `${SP.md}px ${SP.lg}px`,
+              borderRadius: R.xxl, border: `1px solid ${C.border}`, background: C.bgPanel,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.lg, fontWeight: 600, color: C.textHeading }}>
+                <span aria-hidden style={{ width: 32, height: 32, flexShrink: 0, borderRadius: R.md, background: C.bgInset, color: C.textSecondary, display: 'grid', placeItems: 'center' }}>
+                  <Lock size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+                </span>
+                Этот предмет закрыт
+              </div>
+              <div style={{ fontSize: FS.md, color: C.textSecondary, lineHeight: 1.5 }}>
+                Переписку можно перечитать, а новые сообщения сюда не уйдут. Хочешь продолжить — спроси папу.
+              </div>
             </div>
+          ) : (
+            <>
+              {step < LADDER.length && (
+                <div role="group" aria-label="Подсказки" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm }}>
+                  <Chip variant="toggle" large={isMobile} onClick={() => askHint(step)}>
+                    {step > 0 && <span style={{ fontWeight: 700, marginRight: SP.xs }}>{step + 1}</span>}
+                    {LADDER[step]}
+                  </Chip>
+                  {step < LADDER.length - 1 && (
+                    <Chip variant="toggle" large={isMobile} disabled>
+                      <span style={{ fontWeight: 700, marginRight: SP.xs }}>{step + 2}</span>
+                      {LADDER[step + 1]}
+                    </Chip>
+                  )}
+                </div>
+              )}
+              <input
+                ref={fileRef}
+                type="file"
+                data-child-file=""
+                hidden
+                multiple
+                accept={status.attachmentTypes.join(',')}
+                onChange={e => {
+                  const files = Array.from(e.target.files ?? []);
+                  e.target.value = '';
+                  if (files.length) uploadFiles(files);
+                }}
+              />
+              <Composer
+                variant="child"
+                sessionId={sessionId}
+                isMobile={isMobile}
+                offline={!online}
+                mode="default"
+                onModeChange={noop}
+                isGenerating={isWaiting}
+                onSend={(text, paths) => sendMessage(text, paths)}
+                onStop={() => { void interrupt(); }}
+                onAttach={() => fileRef.current?.click()}
+                onAttachFiles={uploadFiles}
+                attachments={attached.map(a => a.path)}
+                attachmentLabels={labels}
+                onRemoveAttachment={path => setAtt({ sid: sessionId, list: attached.filter(a => a.path !== path) })}
+                voiceMode={voiceOn}
+                onToggleVoiceMode={toggleVoice}
+              />
+            </>
           )}
-          <input
-            ref={fileRef}
-            type="file"
-            data-child-file=""
-            hidden
-            multiple
-            accept={status.attachmentTypes.join(',')}
-            onChange={e => {
-              const files = Array.from(e.target.files ?? []);
-              e.target.value = '';
-              if (files.length) uploadFiles(files);
-            }}
-          />
-          <Composer
-            variant="child"
-            sessionId={sessionId}
-            isMobile={isMobile}
-            offline={!online}
-            mode="default"
-            onModeChange={noop}
-            isGenerating={isWaiting}
-            onSend={(text, paths) => sendMessage(text, paths)}
-            onStop={() => { void interrupt(); }}
-            onAttach={() => fileRef.current?.click()}
-            onAttachFiles={uploadFiles}
-            attachments={attached.map(a => a.path)}
-            attachmentLabels={labels}
-            onRemoveAttachment={path => setAtt({ sid: sessionId, list: attached.filter(a => a.path !== path) })}
-            voiceMode={voiceOn}
-            onToggleVoiceMode={toggleVoice}
-          />
           <p data-child-disclosure="" style={{ margin: 0, textAlign: 'center', fontSize: FS.xs, color: C.textMuted }}>
             Помощник — компьютерная программа
           </p>

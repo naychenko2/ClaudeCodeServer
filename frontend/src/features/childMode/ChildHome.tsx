@@ -103,7 +103,9 @@ function SubjectGlyph({ bg, fg, children }: { bg: string; fg: string; children: 
 // инициалам: onError, тот же приём, что у PersonaAvatar). Нет аватара — инициалы имени на
 // стабильном цвете по id персоны (тот же ключ цвета, что у ui/UserAvatar: тёзки не сливаются).
 // Репетитор null (висящий ключ персоны) — этот компонент не зовут вовсе.
-function TutorMark({ tutor, size }: { tutor: ChildSubjectTutor; size: number }) {
+// Экспортирован: та же метка стоит в шапке урока (ChildLessonChat, Т3d) и в мобильном хабе
+// оболочки (ChildWorkspace, .mobt) — три места рисуют её одним кодом.
+export function TutorMark({ tutor, size }: { tutor: ChildSubjectTutor; size: number }) {
   const [imgFailed, setImgFailed] = useState(false);
   const round = { width: size, height: size, borderRadius: R.full, flexShrink: 0 } as const;
   if (tutor.hasAvatar && !imgFailed) {

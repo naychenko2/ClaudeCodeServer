@@ -24,6 +24,9 @@ vi.stubGlobal('navigator', { language: 'ru-RU', onLine: true, userAgent: 'node' 
 vi.stubGlobal('HTMLElement', win.HTMLElement);
 vi.stubGlobal('Node', win.Node);
 vi.stubGlobal('Event', win.Event);
+// cachedToken (аватар репетитора строит URL с токеном) читает localStorage — в тесте пустом
+vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // childApi: uploadAttachment отдаёт управляемый promise — ответ приходит в удобный момент
@@ -50,6 +53,7 @@ vi.mock('./api', () => {
       },
       voice: async () => ({ voiceMode: false, voiceStyle: 'talk' }),
     },
+    tutorAvatarUrl: (id: string) => `/api/personas/${id}/avatar`,
   };
 });
 
@@ -221,6 +225,74 @@ describe('ChildLessonChat: сбой хода в ленте', () => {
     const feed = doc.querySelector('[data-child-feed]')!;
     expect(feed.querySelectorAll('[data-civ]').length).toBe(0);
     expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(1);
+    root.unmount();
+  });
+});
+
+// Т3d: шапка по макету Д1 — аватар и имя репетитора вместо бейджа названия; метка предмета
+// — бейдж с глифом из палитры ключа; closed — спокойная панель вместо композера.
+describe('ChildLessonChat: шапка с репетитором и закрытый предмет', () => {
+  const SUBJECT = {
+    id: 'math', label: 'Математика', glyph: '×÷', color: 'info' as const,
+    tutor: { personaId: 'p1', name: 'Марья Ивановна', hasAvatar: true },
+  };
+  function renderWith(root: ReturnType<typeof createRoot>, props: Record<string, unknown>) {
+    act(() => {
+      root.render(createElement(ChildLessonChat, { sessionId: 'chat-h', title: 'Дроби', status: STATUS, ...props }));
+    });
+  }
+
+  it('живой предмет: имя репетитора в шапке, аватар — /api/personas/{id}/avatar, метка предмета на месте', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: SUBJECT });
+    expect(doc.querySelector('h1')?.textContent).toBe('Марья Ивановна');
+    expect(doc.querySelector('header img')?.getAttribute('src')).toContain('/api/personas/p1/avatar');
+    expect(doc.querySelector('header')!.textContent).toContain('Математика');
+    root.unmount();
+  });
+
+  it('нет аватара — инициалы имени вместо картинки', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: { ...SUBJECT, tutor: { ...SUBJECT.tutor, hasAvatar: false } } });
+    expect(doc.querySelector('header img')).toBeNull();
+    expect(doc.querySelector('header')!.textContent).toContain('МИ');
+    root.unmount();
+  });
+
+  it('висящий ключ персоны (tutor=null): ни имени, ни аватара — остаётся заголовок чата', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: { ...SUBJECT, tutor: null } });
+    expect(doc.querySelector('header img')).toBeNull();
+    expect(doc.querySelector('h1')?.textContent).toBe('Дроби');
+    expect(doc.querySelector('header')!.textContent).toContain('Математика');
+    root.unmount();
+  });
+
+  it('закрытый предмет: ни композера, ни лесенки — вместо них спокойная панель «Этот предмет закрыт»', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: null, subjectClosed: true });
+    expect(doc.querySelector('[data-child-closed]')?.textContent).toContain('Этот предмет закрыт');
+    expect(doc.querySelector('[data-child-closed]')!.getAttribute('role')).toBe('status');
+    expect(doc.querySelector('[data-mock-attach]')).toBeNull();
+    expect(doc.querySelector('[aria-label="Подсказки"]')).toBeNull();
+    root.unmount();
+  });
+
+  it('закрытый живой предмет: метка «закрыт» в шапке рядом с меткой предмета', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: SUBJECT, subjectClosed: true });
+    const head = doc.querySelector('header')!;
+    expect(head.textContent).toContain('закрыт');
+    expect(head.textContent).toContain('Математика');
+    root.unmount();
+  });
+
+  it('мост до Т3e: без subject — прежняя шапка по CHILD_SUBJECTS (заголовок чата, метка предмета)', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subjectId: 'math' });
+    expect(doc.querySelector('h1')?.textContent).toBe('Дроби');
+    expect(doc.querySelector('header')!.textContent).toContain('Математика');
+    expect(doc.querySelector('[data-mock-attach]')).not.toBeNull();
     root.unmount();
   });
 });

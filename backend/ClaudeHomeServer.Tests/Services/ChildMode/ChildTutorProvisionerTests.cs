@@ -9,10 +9,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services.ChildMode;
 
-// Провижн персоны-тьютора ребёнка (ChildTutorProvisioner, KM-B1d). Контракт: тьютор — только
-// ребёнку, владелец — сам ребёнок, Tools без web, долгая память выключена, аватар — инициалы;
-// идемпотентность (повтор → тот же id), гонка (параллельные вызовы → одна персона), ключ
-// закреплён в ChildProfile.TutorPersonaId, висящий ключ провится заново.
+// Провижн персоны-тьютора ребёнка (ChildTutorProvisioner, KM-B1d) и репетитора предмета (Т2b,
+// разрез §2). Контракт: тьютор — только ребёнку, владелец — сам ребёнок, Tools без web, долгая
+// память выключена, аватар — инициалы; идемпотентность (повтор → тот же id), гонка
+// (параллельные вызовы → одна персона), ключ закреплён в ChildProfile.TutorPersonaId /
+// ChildSubject.TutorPersonaId, висящий ключ провится заново.
 public class ChildTutorProvisionerTests : IDisposable
 {
     private readonly string _tempDir;
@@ -39,6 +40,13 @@ public class ChildTutorProvisionerTests : IDisposable
         // Профиль ребёнка пишет админ (его PUT — KM-B1e); здесь — прямо в стор, провижер
         // обязан читать его с той же модели.
         _users.GetById(_childId)!.ChildMode = new ChildProfile { Enabled = true };
+        // Предмет профиля (форма записи Т2a, ключ пустой — как после живого слияния стора):
+        // провижер репетитора читает его с той же модели, что и SetChildSubjectTutor.
+        _users.GetById(_childId)!.ChildMode!.Subjects.Add(new ChildSubject
+        {
+            Id = "math", Label = "Математика", Glyph = "×÷", Color = "info",
+            ProviderKey = "kids", Model = "sonnet",
+        });
 
         _personas = new PersonaManager(config);
         _broadcaster = new TestSessionBroadcaster();
@@ -189,6 +197,111 @@ public class ChildTutorProvisionerTests : IDisposable
         var id = await _sut.EnsureAsync(_childId);
 
         id.Should().BeNull("ключа нет — провижн невозможен");
+        _personas.GetByOwner(_childId).Should().BeEmpty(
+            "полуперсоны не бывает: отказ закрепления ключа не оставляет сироту");
+    }
+
+    // ======== репетитор предмета (Т2b, разрез §2) ========
+
+    [Fact]
+    public async Task EnsureSubjectTutor_СоздаётРепетитора_ВладелецРебёнок_БезWeb_ПамятьВыключена()
+    {
+        var id = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+
+        id.Should().NotBeNull();
+        var persona = _personas.Get(id!, _childId);
+        persona.Should().NotBeNull();
+        persona!.OwnerId.Should().Be(_childId);
+        persona.Name.Should().Be("Репетитор: Математика", "имя несёт предмет: промпт-строитель при пустом role даёт «Ты — {Имя}»");
+        persona.Role.Should().BeNull("роли в спецификации Т2b нет: предмет несёт имя");
+        persona.Specialty.Should().Be(PersonaSpecialty.None);
+        persona.TemplateKey.Should().BeNull();
+        persona.MemoryEnabled.Should().BeFalse("долгая память репетитора предмета выключена");
+        persona.Tools.Should().NotBeNull();
+        persona.Tools!.Should().NotContain("web", "интернет ребёнку не открывается вовсе");
+        persona.Bindings.Should().BeNull("привязок у репетитора предмета нет");
+        persona.AutomationRules.Should().BeNull("правил автоматизации у репетитора предмета нет");
+        persona.Avatar.Kind.Should().Be(PersonaAvatarKind.Initials, "аватар — инициалы, не генерация: не списывает бюджет ребёнка (И5 №12)");
+
+        // Ключ закреплён в записи предмета — признак «это репетитор этого предмета»
+        _users.GetById(_childId)!.ChildMode!.Subjects[0].TutorPersonaId.Should().Be(id);
+
+        // Вещание только «created»: репетитора предмета не бывает дефолт-персоной
+        var actions = _broadcaster.Owner.Select(t => t.Message)
+            .OfType<PersonasChangedMessage>().Select(m => m.Action).ToList();
+        actions.Should().Contain("created");
+        actions.Should().NotContain("default");
+    }
+
+    [Fact]
+    public async Task EnsureSubjectTutor_Повтор_ВозвращаетТотЖеId_БезДубля()
+    {
+        var first = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+        var second = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+
+        first.Should().NotBeNull();
+        second.Should().Be(first, "повторный вызов не плодит второго репетитора предмета");
+        _personas.GetByOwner(_childId).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task EnsureSubjectTutor_Parallel_CreatesOnePersona()
+    {
+        // Гонка на разных потоках: без per-ребёночного семафора оба вызова входят в критическую
+        // секцию одновременно (check → Create) и плодят двух репетитора (тот же разбор, что у
+        // EnsureAsync_Parallel: однопоточный прогон гонку не ловит в принципе). Тот же замок,
+        // что у EnsureAsync: параллельные тьютор и репетитор не должны видеть пустые ключи
+        // одновременно.
+        var first = Task.Run(() => _sut.EnsureSubjectTutorAsync(_childId, "math"));
+        var second = Task.Run(() => _sut.EnsureSubjectTutorAsync(_childId, "math"));
+        var results = await Task.WhenAll(first, second);
+
+        results.Should().NotContainNulls();
+        results.Select(id => id!).Distinct().Should().ContainSingle(
+            "два одновременных вызова на один предмет дают ровно одну персону");
+        _personas.GetByOwner(_childId).Should().HaveCount(1);
+        _broadcaster.Owner.Select(t => t.Message)
+            .OfType<PersonasChangedMessage>().Count(m => m.Action == "created")
+            .Should().Be(1, "вещание «created» — ровно один раз на двух конкурентов");
+    }
+
+    [Fact]
+    public async Task EnsureSubjectTutor_НетПредмета_НичегоНеСоздаёт()
+    {
+        var id = await _sut.EnsureSubjectTutorAsync(_childId, "no-such-subject");
+
+        id.Should().BeNull("предмета в профиле нет — нечем закрепить персону");
+        _personas.GetByOwner(_childId).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EnsureSubjectTutor_ВисящийКлюч_ПровитсяЗаново_ИПерезакрепляется()
+    {
+        // Ключ предмета указывает на удалённую руками персону: он не возвращается —
+        // репетитор провится заново, ключ перезаписывается живым.
+        _users.SetChildSubjectTutor(_childId, "math", Guid.NewGuid().ToString());
+
+        var id = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+
+        id.Should().NotBeNull();
+        _users.GetById(_childId)!.ChildMode!.Subjects[0].TutorPersonaId.Should().Be(id);
+        _personas.GetByOwner(_childId).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task EnsureSubjectTutor_ИсключениеЗаписиКлюча_УдаляетПерсону_ИБросит()
+    {
+        // Отказ стора при закреплении ключа предмета: users.json недостижим (каталог на пути
+        // файла, тот же приём, что у EnsureAsync-теста выше). Персона, созданная до отказа,
+        // не осиротевает: провижер удаляет её и пробрасывает исключение (контроллер — 500
+        // tutor_provision_failed с откатом профиля).
+        var usersPath = Path.Combine(_tempDir, "users.json"); // путь ResolveUsersFilePath (UserStore.cs:55-60)
+        File.Delete(usersPath);
+        Directory.CreateDirectory(usersPath);
+
+        await ((Func<Task>)(() => _sut.EnsureSubjectTutorAsync(_childId, "math")))
+            .Should().ThrowAsync<Exception>("исключение записи ключа доходит до вызывающего");
+
         _personas.GetByOwner(_childId).Should().BeEmpty(
             "полуперсоны не бывает: отказ закрепления ключа не оставляет сироту");
     }

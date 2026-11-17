@@ -254,6 +254,48 @@ public class UsersController(UserStore users, SessionManager sessions,
             return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось закрепить персону-тьютора; профиль не изменён." });
         }
 
+        // Репетиторы предметов (Т2b, разрез §2): после тьютора профиля — по каждому предмету
+        // сохранённого профиля. Провижер идемпотентен: живой ключ возвращает тот же id без
+        // создания (один репетитор может вести несколько предметов, засев миграции даёт
+        // предмету тьютора профиля), пустой или висящий — провится заново.
+        // Снимок ключей берётся ДО провижна: SetChildSubjectTutor пишет в те же объекты,
+        // что живой профиль (а при слиянии «тела без subjects» — и в откатываемый снимок),
+        // поэтому «создана ЭТИМ вызовом» на момент отказа различается только сравнением с
+        // тем, что было до цикла. При отказе любого предмета (исключение или null) все новые
+        // ключи удаляются до RestoreChildProfile: после отката их не найти в профиле.
+        var subjectKeysBefore = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (users.GetById(id)?.ChildMode is { } prepared)
+        {
+            foreach (var subject in prepared.Subjects)
+                subjectKeysBefore[subject.Id] = subject.TutorPersonaId;
+        }
+        try
+        {
+            if (users.GetById(id)?.ChildMode is { } stored)
+            {
+                foreach (var subject in stored.Subjects)
+                {
+                    var subjectTutorId = await childTutorProvisioner.EnsureSubjectTutorAsync(id, subject.Id);
+                    // null — провижн невозможен (ребёнок или предмет исчезли на параллельной
+                    // правке, запрос отменён): ребёнок с предметом без репетитора не остаётся.
+                    if (subjectTutorId is null)
+                    {
+                        logger.LogWarning("Детский режим: провижн репетитора предмета {Subject} не удался для {User}", subject.Id, id);
+                        RollbackSubjectTutors(id, subjectKeysBefore);
+                        RollbackChildProfile(id, previous);
+                        return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось закрепить персону-репетитора предмета; профиль не изменён." });
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Детский режим: провижн репетитора предмета не удался для {User}", id);
+            RollbackSubjectTutors(id, subjectKeysBefore);
+            RollbackChildProfile(id, previous);
+            return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось создать персону-репетитора предмета; профиль не изменён." });
+        }
+
         var saved = users.GetById(id);
         if (saved?.ChildMode is not { } finalProfile)
             return StatusCode(500, new { code = "tutor_provision_failed", message = "Профиль ребёнка не сохранился; повторите." });
@@ -271,6 +313,28 @@ public class UsersController(UserStore users, SessionManager sessions,
         if (!string.IsNullOrWhiteSpace(liveTutor) && liveTutor != previous?.TutorPersonaId)
             personas.Delete(liveTutor, id);
         users.RestoreChildProfile(id, previous);
+    }
+
+    // Откат репетиторов предметов, созданных ЭТИМ вызовом: ключ живого профиля, отличный от
+    // снимка до провижна. Вызывается ДО RestoreChildProfile: после отката ключей новых персон
+    // в профиле нет, и их не найти. Свой откат провижера (отказ закрепления) в этот разбор не
+    // попадает: там ключ живого профиля равен снимку, персона уже удалена им самим. Сбой
+    // самого удаления — только лог: причина 500 уже известна, сирота видна в логе (тот же
+    // приём, что у RollbackDelete в провижере).
+    private void RollbackSubjectTutors(string id, Dictionary<string, string> subjectKeysBefore)
+    {
+        if (users.GetById(id)?.ChildMode is not { } live) return;
+        foreach (var subject in live.Subjects)
+        {
+            var key = subject.TutorPersonaId;
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            if (subjectKeysBefore.TryGetValue(subject.Id, out var before) && before == key) continue;
+            try { personas.Delete(key, id); }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Детский режим: откат персоны-репетитора предмета не прошёл (ребёнок {User}, персона {Persona})", id, key);
+            }
+        }
     }
 
     private static UserDto ToDto(User u) =>

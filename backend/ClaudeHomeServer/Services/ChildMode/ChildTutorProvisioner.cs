@@ -9,6 +9,10 @@ namespace ClaudeHomeServer.Services.ChildMode;
 // владелец — сам ребёнок. Признак «это тьютор» — id в ChildProfile.TutorPersonaId: провижер
 // пишет его сам сразу после Create (паттерн DefaultAssistantProvisioner — обрыв между
 // созданием и закреплением ключа родил бы второго тьютора при следующем Ensure).
+// Тот же класс провит персону-репетитора предмета (Т2b, разрез §2): ключ — в
+// ChildSubject.TutorPersonaId, закрепляется SetChildSubjectTutor. У разных предметов может
+// быть одна и та же персона (засев миграции даёт предмету тьютора профиля) — идемпотентность
+// держится на живом ключе, а не на «одна персона на ребёнка».
 // Вызывается только на точках записи детского профиля (KM-B1e), НИКОГДА на GET.
 // Секция child-safety в промпте — KM-B6c, здесь её нет.
 public class ChildTutorProvisioner
@@ -24,6 +28,9 @@ public class ChildTutorProvisioner
 
     // Идемпотентность провижна: перечитывание под per-ключевым семафором (паттерн
     // DefaultAssistantProvisioner). Реестр статический: сервис Singleton, а гонка межвызовная.
+    // Тот же словарь замков у EnsureAsync и EnsureSubjectTutorAsync: профиль ребёнка — одна
+    // запись стора, два провижна на ней обязаны видеть записи друг друга (в PUT child-profile
+    // они идут последовательно, но параллельный PUT или ручка Т2c — нет).
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
 
     private static SemaphoreSlim LockFor(string childUserId) =>
@@ -134,6 +141,116 @@ public class ChildTutorProvisioner
         catch (OperationCanceledException) { /* клиент ушёл — персона всё равно создана */ }
         return createdId;
     }
+
+    /// <summary>
+    /// Гарантирует, что у предмета ребёнка есть персона-репетитор (Т2b, разрез §2). Возвращает
+    /// её id — уже живую закреплённую или только что созданную; null — только когда провижн
+    /// невозможен (пользователя нет, профиля ребёнка нет, предмета нет, запрос отменён).
+    /// Ошибка записи стора не глотается: исключение доходит до вызывающего (контроллер —
+    /// 500 tutor_provision_failed с откатом профиля). Персона: владелец — ребёнок, имя
+    /// «Репетитор: {label}», Specialty=None, TemplateKey=null, MemoryEnabled=false,
+    /// Tools без web; аватар — инициалы, не генерация (не списывает бюджет ребёнка, И5 №12).
+    /// </summary>
+    public async Task<string?> EnsureSubjectTutorAsync(string childUserId, string subjectId,
+        CancellationToken ct = default)
+    {
+        var me = _users.GetById(childUserId);
+        if (me?.ChildMode is not { } child) return null;
+        // Предмет должен лежать в профиле: контроллер зовёт после записи нового (его ключ
+        // пустой по живому слиянию Т2a), ручка кабинета (Т2c) — по существующему.
+        if (FindSubject(child, subjectId) is not { } subject) return null;
+        if (LiveSubjectTutorId(subject, childUserId) is { } existingId) return existingId;
+
+        var gate = LockFor(childUserId);
+        try
+        {
+            await gate.WaitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+
+        string createdId;
+        try
+        {
+            // Перечитываем ребёнка под локом: параллельный вызов (или EnsureAsync — тот же
+            // замок по ребёнку) мог уже создать репетитора предмета.
+            me = _users.GetById(childUserId);
+            if (me?.ChildMode is not { } freshChild) return null;
+            if (FindSubject(freshChild, subjectId) is not { } freshSubject) return null;
+            if (LiveSubjectTutorId(freshSubject, childUserId) is { } freshId) return freshId;
+
+            var created = _personas.Create(
+                childUserId,
+                $"Репетитор: {freshSubject.Label}",
+                role: null,
+                description: null,
+                systemPrompt: null,
+                model: null,
+                effort: null,
+                scope: PersonaScope.Global,
+                projectId: null,
+                color: null,
+                greeting: null,
+                memoryEnabled: false,
+                tools: TutorTools);
+            createdId = created.Id;
+
+            // Закрепляем ключ ДО вещания — тот же порядок, что у EnsureAsync: обрыв вызова
+            // оставляет либо целую пару (персона + ключ в предмете), либо ничего. Отказ
+            // закрепления компенсируем удалением созданной персоны; false из
+            // SetChildSubjectTutor — ребёнок или предмет исчезли на параллельной правке:
+            // это «предмета нет» из контракта метода — удаляем персону и возвращаем null;
+            // исключение стора — удаляем и пробрасываем (тот же разбор, что в EnsureAsync).
+            bool keyed;
+            try
+            {
+                keyed = _users.SetChildSubjectTutor(childUserId, subjectId, createdId);
+            }
+            catch
+            {
+                RollbackDelete(createdId, childUserId);
+                throw;
+            }
+            if (!keyed)
+            {
+                RollbackDelete(createdId, childUserId);
+                return null;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        // Вещание по факту создания — то же, что у EnsureAsync: стор персон узнаёт о новой
+        // персоне. «default» нет: репетитора предмета не бывает дефолт-персоной ребёнка.
+        try
+        {
+            await _broadcaster.ToOwner(childUserId,
+                new PersonasChangedMessage("created", createdId));
+        }
+        catch (OperationCanceledException) { /* клиент ушёл — персона всё равно создана */ }
+        return createdId;
+    }
+
+    // Предмет по ключу — то же сравнение, что у записи стора SetChildSubjectTutor
+    // (UserStore.cs:726): провижер и стор должны находить одну и ту же запись.
+    private static ChildSubject? FindSubject(ChildProfile child, string subjectId) =>
+        child.Subjects.FirstOrDefault(s => s.Id == subjectId);
+
+    // Ключ предмета живёт, только когда резолвится в живую персону этого ребёнка: висящий id
+    // (персона удалена руками) не возвращается — репетитор провится заново и перезапишется.
+    private string? LiveSubjectTutorId(ChildSubject subject, string childUserId) =>
+        !string.IsNullOrWhiteSpace(subject.TutorPersonaId)
+        && _personas.Get(subject.TutorPersonaId, childUserId) is not null
+            ? subject.TutorPersonaId
+            : null;
 
     // Откат созданной персоны при отказе закрепления ключа. Сбой самого удаления не должен
     // ни маскировать исходное исключение сохранения (ветка catch), ни ломать контракт метода

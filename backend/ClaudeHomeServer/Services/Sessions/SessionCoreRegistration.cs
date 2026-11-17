@@ -264,8 +264,7 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<Lazy<IWorkLoopContinuation>>(),
             sp.GetRequiredService<Lazy<ITeamNotifier>>(),
             sp.GetRequiredService<ILogger<TurnCompletion>>(),
-            new Lazy<ClaudeHomeServer.Services.ChildMode.ChildStopSignalService?>(
-                () => sp.GetService<ClaudeHomeServer.Services.ChildMode.ChildStopSignalService>())));
+            sp.GetService<ClaudeHomeServer.Services.Turn.ITurnEventBus>()));
         // Шов «сообщения процесса → разбор ленты»: ленивый на TurnCompletion — с S3-6 его
         // владелец не фасад. Меняется ровно эта строка и одна строка запасной сборки в
         // конструкторе SessionManager (S3-5 → S3-6).

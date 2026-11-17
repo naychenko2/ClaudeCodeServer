@@ -48,8 +48,8 @@ public class ChatAttachmentRawController(
         Session chat;
         if (childPolicy.For(UserId) is not null)
         {
-            if (sessions.GetById(id) is not { } own || own.ProjectId is not null
-                || own.OwnerId != UserId || own.ChildSpace is null)
+            if (sessions.GetOwnedVisible(id, UserId) is not { } own || own.ProjectId is not null
+                || own.ChildSpace is null)
                 return Error("chat_not_found", "Чат не найден.");
             chat = own;
             tenantOwnerId = UserId;

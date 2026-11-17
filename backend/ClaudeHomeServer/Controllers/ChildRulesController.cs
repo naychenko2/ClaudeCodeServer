@@ -164,8 +164,10 @@ public class ChildRulesController(
             return; // kickoff уже в полёте (параллельный start) — второго не нужно
         try
         {
-            // Перечитываем под локом: статус и история могли смениться с момента резолва в start
-            var fresh = sessions.GetOwned(session.Id, UserId);
+            // Перечитываем под локом: статус и история могли смениться с момента резолва в start.
+            // Путь человека — GetOwnedVisible (сторож HumanSessionAccessGuard): для своего
+            // projectless-чата CanSee = владение (SessionAccess.cs:24), семантика та же.
+            var fresh = sessions.GetOwnedVisible(session.Id, UserId);
             if (fresh is null) return;
             var history = await sessions.GetHistoryAsync(fresh.Id);
             if (!IsMuteRulesChat(history, fresh.Status)) return;

@@ -617,6 +617,7 @@ builder.Services.AddSingleton(sp => new ChildLimitsCalculator(
 builder.Services.AddSingleton<ChildTutorProvisioner>();
 // Стоп-сигнал ребёнка → уведомление взрослым без текста переписки (KM-B6d, ADR-041 решение 1).
 builder.Services.AddSingleton<ChildStopSignalService>();
+builder.Services.AddHostedService<ChildStopSignalSubscriber>();
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),

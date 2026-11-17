@@ -48,9 +48,9 @@ public sealed class TurnCompletion : ITurnMessageSink
     private readonly Lazy<IWorkLoopContinuation> _workLoop;
     private readonly Lazy<ITeamNotifier> _teamNotifier;
     private readonly ILogger<TurnCompletion> _log;
-    // Стоп-сигнал детского чата (KM-B6d): ленивый и необязательный — сервис тянет NotificationService,
-    // а ядро сессий строится раньше него (и без Main-композиции его вовсе нет)
-    private readonly Lazy<ChildMode.ChildStopSignalService?>? _childStopSignal;
+    // Шина событий хода: стоп-сигнал детского чата (KM-B6d) уходит событием, а не прямым вызовом —
+    // сервис рассылки живёт в Main и тянет NotificationService; ядро его не знает
+    private readonly Turn.ITurnEventBus? _turnEvents;
 
     // Наблюдатели сообщения сессии (автоматизация персон, git-автокоммит, журнал событий):
     // подписка идёт через фасадный аксессор на этот экземляр; потребитель — ProcessPipelineItemAsync.
@@ -60,9 +60,9 @@ public sealed class TurnCompletion : ITurnMessageSink
         ChatWorktree worktree, ProviderMigration providerMigration, TurnCostLedger costs,
         Lazy<ITurnStarter> turnStarter, Lazy<IWorkLoopContinuation> workLoop,
         Lazy<ITeamNotifier> teamNotifier, ILogger<TurnCompletion> log,
-        Lazy<ChildMode.ChildStopSignalService?>? childStopSignal = null)
+        Turn.ITurnEventBus? turnEvents = null)
     {
-        _childStopSignal = childStopSignal;
+        _turnEvents = turnEvents;
         _store = store;
         _history = history;
         _route = route;
@@ -606,11 +606,11 @@ public sealed class TurnCompletion : ITurnMessageSink
                 // Стоп-сигнал тьютора детского чата: маркер из текста хода (вне код-блоков) → уведомление
                 // взрослым без доступа к переписке. Сам маркер из ленты и истории уже вырезан тем же
                 // StripTeamProtocolMarkers. Не await: рассылка не должна держать read-loop адаптера,
-                // а решение о схлопывании принимается синхронно до её первого await.
+                // падение подписчика шина гасит сама.
                 if (entry.Info.ChildSpace is not null && entry.Info.OwnerId is { Length: > 0 } childId
-                    && TeamProtocolMarkers.HasStopSignalMarker(turnText)
-                    && _childStopSignal?.Value is { } stopSignals)
-                    _ = stopSignals.RaiseAsync(childId, sessionId, ChildMode.StopSignalSource.Tutor);
+                    && TeamProtocolMarkers.HasStopSignalMarker(turnText))
+                    _ = _turnEvents?.PublishAsync(new Turn.ChildStopSignalMarker(
+                        new Turn.TurnContext(sessionId, childId, entry.LastTurnSeq, 0, entry.Info.ProjectId)));
                 if (!string.IsNullOrEmpty(catchUpDelta))
                 {
                     // Догоняющая дельта — единственная порция придержанного текста: слить её нельзя

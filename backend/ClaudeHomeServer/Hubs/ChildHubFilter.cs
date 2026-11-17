@@ -60,9 +60,11 @@ public sealed class ChildHubFilter : IHubFilter
         {
             if (ctx.HubMethodArguments.Count <= SessionIdArg
                 || ctx.HubMethodArguments[SessionIdArg] is not string sessionId) return false;
-            // «Свой чат» — каноническим GetOwned (арендатор по ResolveOwnerId), без инлайн-сравнения владельца
+            // «Свой чат» — каноническим GetOwnedVisible (арендатор по ResolveOwnerId + видимость
+            // чата), без инлайн-сравнения владельца: человеческий путь хаба (HumanSessionAccessGuard).
+            // Для своего projectless-чата CanSee = владение (SessionAccess.cs:24) — семантика та же.
             var session = ownerId.Length > 0
-                ? ctx.ServiceProvider.GetService<SessionManager>()?.GetOwned(sessionId, ownerId)
+                ? ctx.ServiceProvider.GetService<SessionManager>()?.GetOwnedVisible(sessionId, ownerId)
                 : null;
             return session is { ChildSpace: not null };
         }

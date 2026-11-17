@@ -62,9 +62,9 @@ TimeWindow  { string From "HH:mm"; string To "HH:mm"; int[]? Weekdays }
 | 8 | WebDAV (`WebDav/WebDavHandler.cs`, своя аутентификация, не JWT) | Отказ детскому пользователю в обработчике по `IChildModePolicy` | Б2 |
 | 9 | MCP-over-HTTP `POST /mcp/{name}` (`McpTransportController.cs:247/261`) | Третий гейт рядом с `whitelist` и `actorGate`: `IChildModeGate.Denied(server, tool, ownerId)` по детскому allow-list пар (сервер, инструмент), fail-closed. Отказ возвращается content-ошибкой, как у соседних гейтов. | Б3 |
 | 10 | Состав MCP-серверов хода (`TurnLaunchContextFactory.Compose` :146-211, `BuiltinMcpContexts`) | Для детского владельца объявляются только разрешённые серверы. Внешние серверы личного реестра (`BuildExternalMcpProvider`) не объявляются. | Б3 |
-| 11 | Встроенные инструменты CLI (Bash, Edit, Write, Read, Glob, Grep, Task, Skill, WebFetch/WebSearch…) | `PersonaLayerBuilder.BuildExtraDisallowed` (:393) получает детский слой, где запреты **складываются** с запретами персоны и этапа. Если CLI умеет ограничивать встроенные инструменты по разрешающему списку (`--tools`), используем его. Если нет — список запретов со сторожем, который сверяет его со списком встроенных инструментов текущей версии CLI. Это проверка Б3, на слово не принимать. | Б3 |
+| 11 | Встроенные инструменты CLI (Bash, Edit, Write, Read, Glob, Grep, Task, Skill, WebFetch/WebSearch…) | `PersonaLayerBuilder.BuildExtraDisallowed` (:393) получает детский слой, где запреты **складываются** с запретами персоны и этапа. Выбран разрешающий пустой список `--tools ""` (проверено на CLI 2.1.325, `init.tools = []`); списка запретов нет (ADR-041, решение 10). | Б3 |
 | 12 | Запросы разрешений на ходу (`ClaudeSession.DecidePermissionAsync` :3077, `AutoAllowTools` :1061-1082) | Для детского хода любой запрос вне детского allow-list отклоняется автоматически, без карточки. Ребёнок не одобряет инструменты. | Б3 |
-| 13 | Плагины (`--plugin-dir`, `IPluginDirSource`), навыки, хуки, CLAUDE.md | Для детского хода `BareMode` плюс пустой `IPluginDirSource` | Б3 |
+| 13 | Плагины (`--plugin-dir`, `IPluginDirSource`), навыки, хуки, CLAUDE.md | Для детского хода `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` плюс пустой `IPluginDirSource`; `BareMode` не использован (отклонение от постановки, [ADR-041](../adr/ADR-041-child-mode.md), решение 10) | Б3 |
 | 14 | Смена модели, провайдера и effort: `PUT api/chats/{id}` (:250), `POST {id}/migrate-provider` (:687), `PUT api/me/model-tiers` | Закрыто п.1: широких ручек в allow-list нет. Голос переключается узкой ручкой `PUT /api/child/chats/{id}/voice` (§5). | Б2, Б6 |
 | 15 | Смена персоны чата: `POST api/chats/{id}/persona` (:446), `POST …/sessions/{id}/persona` (:237); создание и правка персон в `PersonasController` (:376, :395, :479, :856, :954) | Закрыто п.1. Повторно — на запуске хода (И1-бис ниже). | Б2, Б3 |
 | 16 | Создание чатов и проектов: `POST api/chats` (:133), `POST api/projects/{id}/sessions` (:45), `POST api/projects` (:248) | Закрыто п.1. Детский чат создаётся единственной ручкой `POST /api/child/spaces/{space}/chat`. | Б2, Б6 |
@@ -141,9 +141,9 @@ TimeWindow  { string From "HH:mm"; string To "HH:mm"; int[]? Weekdays }
 ## 6. Что закладываем сейчас под волну 2
 Закладываем то, что В1 и так использует или что дорого менять в формате:
 - `ChildProfile.GuardianUserIds` — связь для кабинета родителя.
-- `ChildProfile.Spaces` со строковыми ключами и `Session.ChildSpace` (`"lessons"`, позже `"studio"`). Студия добавится записью без миграции.
+- `ChildProfile.Spaces` со строковыми ключами и `Session.ChildSpace` (`"lessons"`, позже `"studio"`). Ключ `studio` добавится записью без миграции; его наполнение — отдельная работа В2.
 - Журнал присутствия `data/child-usage/` — источник недельной сводки (время, пространства).
-- `IChildModeGate` с allow-list пар (сервер, инструмент). «Студия» в В2 — это добавление инструментов `image-editor` и `local-media` в детский allow-list плюс квота, без нового гейта.
+- `IChildModeGate` с allow-list пар (сервер, инструмент). Гейт под «Студию» в В2 уже есть, но сам список пар в В1 пуст, а «Студия = пары `image-editor`/`local-media`» не обещано: какие инструменты безопасны, решается отдельно (фильтр выхода, квота; консультация 1df6eea5).
 
 **Не закладываем** (швы не впрок):
 - **Чтение переписки родителем.** `SessionStore.GetOwned` (:626) остаётся строгим, общего админ-обхода не будет никогда. В В2 появится отдельный метод `GetForGuardian(sessionId, guardianId)`. Он допустим только при открытом стоп-сигнале этого чата, только для `GuardianUserIds` и ставит видимую ребёнку пометку `Session.GuardianViewedAt`. Это единственный путь, и он ляжет в таблицу путей И1 В2.

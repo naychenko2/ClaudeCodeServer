@@ -1914,6 +1914,10 @@ public class SubsystemBoundaryTests
         // windowEndsAt/nextWindowAt — читает фронт. Тот же порядок, что у
         // ChatSubjects/Access: чистая часть в спине Core, своей строки в Boundaries нет.
         "ClaudeHomeServer.Services.Time",
+        // Детский режим (ADR-041, KM-B1): под этим namespace в Core лежат ровно 4 типа-шва
+        // (IChildModePolicy, IChildModeGate, ChildTurnMarker, ChildAllowedAttribute); реализация —
+        // склейка Main, вертикали нет (тот же порядок, что у ChatSubjects/Time выше).
+        "ClaudeHomeServer.Services.ChildMode",
     ];
 
     /// <summary>

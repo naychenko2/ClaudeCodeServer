@@ -1,11 +1,16 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
+using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -198,5 +203,37 @@ public class ChildChatReadTests : IClassFixture<TestWebApplicationFactory>
         await AssertChildDeniedAsync(child, HttpMethod.Post, $"/api/chats/{id}/migrate-provider", new { }, "migrate-provider");
         await AssertChildDeniedAsync(child, HttpMethod.Post, $"/api/chats/{id}/persona", new { }, "persona");
         await AssertChildDeniedAsync(child, HttpMethod.Post, $"/api/chats/{id}/files/upload", null, "files/upload");
+    }
+
+    // ── без политики в скопе запроса — исключение, а не взрослая ветка (R-KM-B6f minor 2) ──
+
+    // Ручной скоп запроса: claims ребёнка есть, регистрации IChildModePolicy в скопе нет —
+    // ровно тот случай, который раньше молчаливо уходил во взрослую ветку. Ручка строится
+    // напрямую (гейт И1 — middleware хоста, здесь его нет): проверяем только CurrentOwnerIsChild.
+    private ChatsController ChatsWithoutChildPolicy() =>
+        new(Sessions, Projects, null!, null!, null!, null!, null!, null!, null!, null!, null!,
+            NullLogger<ChatsController>.Instance)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext
+                {
+                    User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", ChildId)])),
+                    RequestServices = new ServiceCollection().BuildServiceProvider(),
+                },
+            },
+        };
+
+    [Fact]
+    public async Task СвойДетскийЧат_БезПолитикиВСкопе_Исключение_АНеВзрослаяВетка()
+    {
+        var id = await ChildChatAsync(ChildSpaces.Lessons);
+        SetChild();
+
+        // Взрослая ветка на СВОЁМ чате дала бы 200 (GetAccessible проходит); fail-closed даёт
+        // InvalidOperationException от GetRequiredService — отсутствие политики слышно
+        FluentActions.Invoking(() => ChatsWithoutChildPolicy().Get(id))
+            .Should().Throw<InvalidOperationException>("политика не зарегистрирована — не ребёнок по умолчанию")
+            .WithMessage("*IChildModePolicy*");
     }
 }

@@ -53,11 +53,13 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         NotFound(new { error = "Чат не найден", code = "chat_not_found" });
 
     // Текущий владелец — ребёнок? Та же точка правды, что у гейта И1: IChildModePolicy по стору,
-    // а не по claim. Резолвим из RequestServices (тот же приём, что Options в BuildDigest ниже):
-    // в синтетических юнит-тестах без DI-скопа — null, то есть не ребёнок; реальные детские
-    // запросы на прочие ручки всё равно не доходят — их отсекает сам гейт И1.
+    // а не по claim. Резолвим из RequestServices через GetRequiredService (хвост ревью R-KM-B6f):
+    // отсутствие политики в скопе запроса — исключение, а не взрослая ветка (в проде политику
+    // регистрирует AddSessionCore, и молчаливый фолбэк на взрослого прятал бы обрыв связи).
+    // Без DI-скопа (ручные тесты без RequestServices) — не ребёнок; реальные детские запросы
+    // на прочие ручки всё равно не доходят — их отсекает сам гейт И1.
     private bool CurrentOwnerIsChild() =>
-        HttpContext.RequestServices?.GetService<IChildModePolicy>()?.For(UserId) is not null;
+        HttpContext.RequestServices?.GetRequiredService<IChildModePolicy>()?.For(UserId) is not null;
 
     [HttpGet]
     public IActionResult GetAll() =>

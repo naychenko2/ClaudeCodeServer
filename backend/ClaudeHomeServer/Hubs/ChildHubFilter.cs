@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ChildMode;
 using Microsoft.AspNetCore.SignalR;
 
@@ -12,14 +13,15 @@ namespace ClaudeHomeServer.Hubs;
 /// подписка/присоединение к своему чату. Хабы terminal и devices закрыты на negotiate гейтом
 /// REST-слоя: у них нет [ChildAllowed], поэтому ребёнок не доходит до подключения.
 /// Профиль с DenyAll не пускает никуда.
-/// У SendMessage ребёнка <c>mode</c> и <c>auto</c> игнорируются: режим подставляется из профиля (KM-B3a).
+/// У SendMessage ребёнка <c>mode</c> и <c>auto</c> игнорируются: режим подставляется из профиля (KM-B3a);
+/// <c>attachedPaths</c> фильтруются по <c>Session.Attachments</c> этого чата (правило ручки №12).
 /// </summary>
 public sealed class ChildHubFilter : IHubFilter
 {
     // Allow-list методов SessionHub для ребёнка. Join*/Leave* — подписки на группы своего чата и
     // личную комнату; JoinUser сам сверяет userId со своим.
     internal static readonly string[] AllowedMethods =
-        ["SendMessage", "JoinSession", "LeaveSession", "JoinUser", "LeaveUser"];
+        ["SendMessage", "Interrupt", "JoinSession", "LeaveSession", "JoinUser", "LeaveUser"];
 
     private const int SessionIdArg = 0;
     private const int AttachedPathsArg = 2;
@@ -37,14 +39,15 @@ public sealed class ChildHubFilter : IHubFilter
                 throw new HubException("child_mode");
 
             // Ребёнку — только свои детские чаты (владелец + ChildSpace); остальные — child_mode
-            if (name is "SendMessage" or "JoinSession"
+            if (name is "SendMessage" or "Interrupt" or "JoinSession"
                 && !IsOwnChildChat(invocationContext, snapshot.OwnerId))
                 throw new HubException("child_mode");
 
             if (name == "SendMessage")
             {
                 // mode/auto/attachedPaths от ребёнка не доверяем: подменяем аргументы до вызова метода хаба
-                var args = SanitizeSendMessageArgs(invocationContext.HubMethodArguments);
+                var args = SanitizeSendMessageArgs(invocationContext.HubMethodArguments,
+                    invocationContext.ServiceProvider.GetService<SessionManager>(), snapshot.OwnerId);
                 invocationContext = new HubInvocationContext(invocationContext.Context,
                     invocationContext.ServiceProvider, invocationContext.Hub,
                     invocationContext.HubMethod, args);
@@ -74,14 +77,39 @@ public sealed class ChildHubFilter : IHubFilter
         }
     }
 
-    // SendMessage(sessionId, text, attachedPaths, mode, auto): attachedPaths → null, mode → null, auto → false
-    internal static object?[] SanitizeSendMessageArgs(IReadOnlyList<object?> arguments)
+    // SendMessage(sessionId, text, attachedPaths, mode, auto): attachedPaths → только учтённые в чате,
+    // mode → null, auto → false. Пути читает сервер (AttachmentInliner), поэтому пропускаем лишь
+    // записанные в Session.Attachments: точное совпадение после нормализации формы (слеши, ведущий «/»),
+    // SafePath.Join от корня чата и не чужое private-вложение — как в ручке чтения №12.
+    internal static object?[] SanitizeSendMessageArgs(IReadOnlyList<object?> arguments,
+        SessionManager? sessions, string ownerId)
     {
         var args = arguments.ToArray();
-        if (args.Length > AttachedPathsArg) args[AttachedPathsArg] = null;
+        if (args.Length > AttachedPathsArg)
+            args[AttachedPathsArg] = args[AttachedPathsArg] is IEnumerable<string> paths
+                && args[SessionIdArg] is string sessionId
+                ? FilterAttachedPaths(paths, sessions, sessionId, ownerId)
+                : null;
         if (args.Length > ModeArg) args[ModeArg] = null;
         if (args.Length > AutoArg) args[AutoArg] = false;
         return args;
+    }
+
+    private static List<string>? FilterAttachedPaths(IEnumerable<string> paths, SessionManager? sessions,
+        string sessionId, string ownerId)
+    {
+        if (sessions is null || sessions.GetChatRoot(sessionId, ownerId) is not { } root) return null;
+        var result = new List<string>();
+        foreach (var raw in paths)
+        {
+            var rel = (raw ?? "").Replace('\\', '/').TrimStart('/');
+            if (rel.Length == 0 || !sessions.IsRecordedAttachment(sessionId, rel)) continue;
+            if (PrivateAttachments.IsForeign(rel, ownerId)) continue;
+            try { SafePath.Join(root, rel); }
+            catch (Exception) { continue; }
+            result.Add(rel);
+        }
+        return result.Count == 0 ? null : result;
     }
 
     // Пустой владелец при JWT-хабе — fail-closed (For("") дал бы null, «не ребёнок»).

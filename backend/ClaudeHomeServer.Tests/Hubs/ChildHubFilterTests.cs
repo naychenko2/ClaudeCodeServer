@@ -183,11 +183,63 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
         (await act.Should().ThrowAsync<HubException>()).Which.Message.Should().NotContain("child_mode");
     }
 
+    // Учитывает файл в Session.Attachments чата тем же путём, что ручка №8 (SaveChatAttachment)
+    private string Record(string chatId, string name) =>
+        Sessions.SaveChatAttachment(chatId, ChildId, name, rel =>
+        {
+            var root = Sessions.GetChatRoot(chatId, ChildId)!;
+            var full = Path.Combine(root, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, "x");
+        })!;
+
     [Fact]
-    public void SendMessageArgs_AttachedPathsModeAndAuto_AreDropped()
+    public async Task SendMessageArgs_AttachedPaths_FilteredByRecordedAttachments_ModeAndAutoDropped()
     {
-        var args = ChildHubFilter.SanitizeSendMessageArgs(["s", "t", new List<string> { "/etc/passwd" }, "bypassPermissions", true]);
-        args.Should().Equal("s", "t", null, null, false);
+        NoChild();
+        var chatId = await ChatAsync(ChildId, ChildSpaces.Lessons);
+        var rel = Record(chatId, "a.txt");
+        var foreignPrivate = ".cc-attachments/private/other-user/" + Guid.NewGuid() + "/b.txt";
+        var paths = new List<string>
+        {
+            rel, "\\" + rel.Replace('/', '\\'), "/etc/passwd", "../../etc/passwd", rel + "/../../x",
+            foreignPrivate, "", ".cc-attachments"
+        };
+        var args = ChildHubFilter.SanitizeSendMessageArgs([chatId, "t", paths, "bypassPermissions", true], Sessions, ChildId);
+        args[2].Should().BeEquivalentTo(new List<string> { rel, rel }, o => o.WithStrictOrdering());
+        args[3].Should().BeNull();
+        args[4].Should().Be(false);
+    }
+
+    [Fact]
+    public async Task SendMessageArgs_NoRecordedPaths_BecomeNull()
+    {
+        NoChild();
+        var chatId = await ChatAsync(ChildId, ChildSpaces.Lessons);
+        var args = ChildHubFilter.SanitizeSendMessageArgs([chatId, "t", new List<string> { "/etc/passwd" }, null, false], Sessions, ChildId);
+        args[2].Should().BeNull();
+        // чужой чат: учёт чужого файла ребёнку не принадлежит
+        var other = await ChatAsync(ChildId, ChildSpaces.Lessons);
+        var rel = Record(other, "c.txt");
+        ChildHubFilter.SanitizeSendMessageArgs([chatId, "t", new List<string> { rel }, null, false], Sessions, ChildId)[2].Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Interrupt_OwnChildChat_PassesFilter_ForeignIsChildMode()
+    {
+        NoChild();
+        var adminId = factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var own = await ChatAsync(ChildId, ChildSpaces.Lessons);
+        var foreign = await ChatAsync(adminId, ChildSpaces.Lessons);
+        var conn = await ConnectChildSessionHubAsync();
+        ShouldBeChild();
+
+        try { await conn.InvokeAsync("Interrupt", own); }
+        catch (HubException e) { e.Message.Should().NotContain("child_mode"); }
+
+        var act = () => conn.InvokeAsync("Interrupt", foreign);
+        (await act.Should().ThrowAsync<HubException>()).Which.Message.Should().Contain("child_mode");
     }
 
     private sealed class FakeCaller(System.Security.Claims.ClaimsPrincipal user) : HubCallerContext
@@ -227,6 +279,6 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
         await new ChildHubFilter().InvokeMethodAsync(ctx, c => { seen = c.HubMethodArguments; return ValueTask.FromResult<object?>(null); });
 
         seen.Should().NotBeNull();
-        seen!.Should().Equal(chatId, "t", null, null, false);
+        seen!.Should().Equal(chatId, "t", null, null, false); // учёта у чата нет — путь выброшен
     }
 }

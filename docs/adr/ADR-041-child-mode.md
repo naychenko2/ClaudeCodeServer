@@ -52,7 +52,7 @@
 | 4 | Превью дев-серверов `/preview/**` | тот же middleware | Б2 |
 | 5 | Хаб `/hubs/terminal` | отказ на подключении | Б2 |
 | 6 | Хаб `/hubs/devices` | отказ на подключении | Б2 |
-| 7 | Хаб `/hubs/session`: `SendMessage`, `SetMode`, `CompactSession` и прочие | `ChildHubFilter` пускает только `SendMessage` и подписки; `mode` и `auto` у ребёнка сервер игнорирует, режим — из профиля | Б2 |
+| 7 | Хаб `/hubs/session`: `SendMessage`, `SetMode`, `CompactSession` и прочие | `ChildHubFilter` пускает только `SendMessage`, `Interrupt` (свой детский чат) и подписки; `mode` и `auto` у ребёнка сервер игнорирует, режим — из профиля; `attachedPaths` фильтруются по `Session.Attachments` этого чата (правило ручки №12: точное совпадение, `SafePath.Join`, `PrivateAttachments.IsForeign`), прочие отбрасываются | Б2 |
 | 8 | WebDAV (`WebDavHandler`, своя аутентификация) | отказ по `IChildModePolicy` в обработчике | Б2 |
 | 9 | MCP-over-HTTP `POST /mcp/{name}` | третий гейт рядом с `whitelist` и `actorGate`: `IChildModeGate.Denied(server, tool, ownerId)`, fail-closed | Б3 |
 | 10 | Состав MCP-серверов хода (`TurnLaunchContextFactory.Compose`, `BuiltinMcpContexts`) | объявляются только разрешённые серверы; внешние серверы личного реестра — нет | Б3 |

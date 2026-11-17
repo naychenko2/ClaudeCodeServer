@@ -440,14 +440,14 @@ public static class WikiPlanValidator
                 });
 
             // Числа утверждения (ADR-039, решение 2): не подтверждённое цитатой число — не отказ,
-            // а «Входящие» с причиной: решает человек. Проверка — по claim БЕЗ ТЕКСТА уцелевших
-            // ссылок: число в заголовке ссылки — не число утверждения, его автор — страница.
-            // Текст снятой ссылки стал обычным текстом утверждения: его числа считаются
-            // числами claim.
+            // а «Входящие» с причиной: решает человек. Что считается числом утверждения и его
+            // подтверждением — одно место, WikiClaimNumbers.Unconfirmed: там и правило ссылок
+            // (текст уцелевших [[ссылок]] не часть утверждения; текст снятой ссылки уже
+            // обычный текст утверждения, его числа считаются).
             var decision = verdict.Decision;
             var decisionReason = verdict.Reason;
             var decisionReasonCode = verdict.ReasonCode;
-            if (synth && WikiClaimNumbers.Unconfirmed(WithoutLinkSpans(claimText), quotes) is { Count: > 0 } unconfirmed)
+            if (synth && WikiClaimNumbers.Unconfirmed(claimText, quotes) is { Count: > 0 } unconfirmed)
             {
                 decision = WikiPackage.DecisionInbox;
                 // Причина политики дописывается перед причиной чисел только при вердикте
@@ -829,17 +829,8 @@ public static class WikiPlanValidator
 
     // ─── Ссылки в claim (очередь 1, 2А) ────────────────────────────────────────
     // Снятие неразрешимых ссылок и сам резолв живут в WikiGate (StripUnresolvedLinks /
-    // ResolveLink): второй копии правил в проекте нет. Здесь остаётся только форма
-    // [[…]] для WithoutLinkSpans (тот же образец, что WikiPage.LinkRx).
-
-    private static readonly System.Text.RegularExpressions.Regex ClaimLinkRx =
-        new(@"\[\[([^]\r\n]+)\]\]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-
-    // Claim для проверки чисел: текст уцелевших ссылок вырезается пробелом — число в
-    // заголовке ссылки не число утверждения; пробел, а не пустая строка, чтобы числа
-    // не склеивались с заголовком («12[[x]]34» — это 12 и 34, не 1234; тот же приём,
-    // что у меток в WikiClaimNumbers).
-    private static string WithoutLinkSpans(string claim) => ClaimLinkRx.Replace(claim, " ");
+    // ResolveLink), учёт ссылок при проверке чисел — в WikiClaimNumbers: второй копии
+    // правил в проекте нет, здесь их больше нет.
 
     // Форма цепочки «вверх» (ADR-036, решение 4): только сферы и общее, без проектов,
     // повторов, пустых элементов и самого раздела назначения. Содержательную цепочку

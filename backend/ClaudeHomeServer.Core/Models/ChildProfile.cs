@@ -101,7 +101,19 @@ public class ChildSubject
     public string? RouteAcknowledgedBy { get; set; }
     // Выключенный предмет скрыт с главной, его чаты не стартуют.
     public bool Enabled { get; set; } = true;
+    // Привязанная база знаний (срез §3 «Какие датасеты можно привязать»): один датасет Dify
+    // или null — не привязана. Запись — через PUT child-profile (К1b), допустимость проверяется
+    // на каждом вызове (К3); здесь только запись. Поле добавочное: старые записи читаются
+    // с null, BackupSchema.Version не двигается.
+    public ChildSubjectKnowledge? Knowledge { get; set; }
 }
+
+/// <summary>
+/// Привязка базы знаний к предмету ребёнка (срез §1): id датасета Dify, автор и момент привязки.
+/// Запись без логики: допустимость датасета — чистая функция KnowledgeAccess.IsTutorAttachable (К1a),
+/// проверка на входе — валидатор записи (К1b).
+/// </summary>
+public record ChildSubjectKnowledge(string DatasetId, string AttachedByUserId, DateTime AttachedAt);
 
 // Значения ключей ChildProfile.Spaces и Session.ChildSpace (ADR-041): строки, не enum —
 // Студия волны 2 добавляется записью в профиль без миграции формата сторов.

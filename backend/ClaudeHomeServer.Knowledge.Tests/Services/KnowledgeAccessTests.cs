@@ -40,6 +40,32 @@ public class KnowledgeAccessTests
         KnowledgeAccess.IsRelevant(name, "alice", Others).Should().BeFalse();
     }
 
+    // --- IsTutorAttachable (привязка к предмету ребёнка → отказ валидатора, К1b/К3) ---
+    // Та же таблица имён, что у IsRelevant, другая колонка ответа: привязать можно не «всё своё»,
+    // а только глобальную или свою самостоятельную базу.
+
+    private static readonly IEnumerable<string> AttachOthers = new[] { "other" };
+
+    [Theory]
+    [InlineData("учебники")]             // глобальная (без префикса)
+    [InlineData("admin:kb:математика")]  // своя самостоятельная
+    public void IsTutorAttachable_ГлобальнаяИлиСвояСамостоятельная_True(string name)
+    {
+        KnowledgeAccess.IsTutorAttachable(name, "admin", AttachOthers).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("admin:persona:x")]    // своя память персоны — внутренняя
+    [InlineData("admin:team:x")]       // своя память команды — внутренняя
+    [InlineData("admin:sphere:s-1")]   // своя память сферы — внутренняя
+    [InlineData("admin:notes")]        // база заметок админа
+    [InlineData("admin:MyProject")]    // база проекта админа
+    [InlineData("other:kb:x")]         // чужая самостоятельная
+    public void IsTutorAttachable_ВсёОстальное_False(string name)
+    {
+        KnowledgeAccess.IsTutorAttachable(name, "admin", AttachOthers).Should().BeFalse();
+    }
+
     // --- IsDeletable (удаление из раздела → иначе 403) ---
 
     [Fact]

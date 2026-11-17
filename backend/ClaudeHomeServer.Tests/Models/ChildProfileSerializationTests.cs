@@ -107,6 +107,46 @@ public class ChildProfileSerializationTests
     }
 
     [Fact]
+    public void ПредметБезПривязкиЗнаний_ЧитаетсяСNull()
+    {
+        // Запись users.json до появления привязки (К1a): ключа "Knowledge" в json нет —
+        // аддитивное поле читается с null, без миграции формата, BackupSchema.Version не двигается.
+        const string legacy = """{"Id":"u1","Username":"kid","ChildMode":{"Subjects":[{"Id":"world","Label":"Окружающий мир","Enabled":true}]}}""";
+
+        var user = JsonSerializer.Deserialize<User>(legacy, UsersJson)!;
+
+        user.ChildMode!.Subjects[0].Knowledge.Should().BeNull("аддитивное поле: старый профиль читается без привязки");
+    }
+
+    [Fact]
+    public void ПривязкаЗнанийПереживаетКругВсемиТремяПолями()
+    {
+        // К1a: id датасета, автор и момент привязки — все три поля обязаны вернуться после
+        // круга users.json; сама привязка (допустимость датасета) — проверка К1b/К3, не здесь.
+        var profile = FullProfile();
+        profile.Subjects =
+        [
+            new ChildSubject
+            {
+                Id = "math", Label = "Математика", Glyph = "×÷", Color = "info",
+                ProviderKey = "anthropic-api-kids", Model = "sonnet",
+                Knowledge = new ChildSubjectKnowledge(
+                    "dify-ds-math", "u-dad", new DateTime(2026, 11, 17, 12, 0, 0, DateTimeKind.Utc)),
+            },
+        ];
+        var original = new User { Username = "kid", ChildMode = profile };
+
+        var restored = JsonSerializer.Deserialize<User>(
+            JsonSerializer.Serialize(original, UsersJson), UsersJson)!;
+
+        var knowledge = restored.ChildMode!.Subjects[0].Knowledge;
+        knowledge.Should().NotBeNull();
+        knowledge!.DatasetId.Should().Be("dify-ds-math");
+        knowledge.AttachedByUserId.Should().Be("u-dad");
+        knowledge.AttachedAt.Should().Be(new DateTime(2026, 11, 17, 12, 0, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
     public void СтарыйПрофильВолны1_БезSubjects_ЧитаетсяСПустымСписком()
     {
         // Запись users.json до появления предметов: ключа "Subjects" в ней нет —

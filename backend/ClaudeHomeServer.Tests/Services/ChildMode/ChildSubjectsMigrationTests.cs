@@ -288,7 +288,7 @@ public class ChildSubjectsMigrationTests : IDisposable
             ? v.GetString() : null;
     }
 
-    // Ждать, пока новый чат встанет в реестр стора (не直到 его создание закончится): именно в
+    // Ждать, пока новый чат встанет в реестр стора (не пока его создание закончится): именно в
     // этом окне досев и должен его встретить.
     private async Task<string> WaitForNewChatIdAsync(HashSet<string> before)
     {

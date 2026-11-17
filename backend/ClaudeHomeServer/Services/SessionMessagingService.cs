@@ -129,6 +129,15 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
             ? TimeSpan.FromSeconds(Math.Clamp(timeoutSec ?? 90, 5, 240))
             : TimeSpan.Zero;
 
+        // Момент, когда ядро приняло сообщение — «at» для сторожа ожидания (Ф-2.48, ревью
+        // R-Ф-2.48): берётся ДО подачи, а не после SendMessageAndWaitAsync. При wait=… ход
+        // получателя идёт внутри этого вызова (таймаут 5–240 с), и поднятый в нём новый блокер
+        // (report_up → SetAwaitingHuman, Since позже ответа) — не то, что обязано снять данное
+        // действие. Взятый после конца ожидания «at» прошёл бы сторож Since<=at и снял свежий
+        // блокер — ровно та гонка, ради которой сторож и введён. Инвариант: ожидание, поставленное
+        // после начала отправки, этим действием не снимается; поставленное до — снимается.
+        var acceptedAt = DateTime.UtcNow;
+
         SendAndWaitResult result;
         try
         {
@@ -137,10 +146,6 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
                 senderUserId: turnActor);
         }
         catch (InvalidOperationException) { return new SendOutcome.NotFound(); }
-
-        // Момент, когда ядро приняло сообщение — «at» для сторожа ожидания (Ф-2.48):
-        // ожидание, поставленное позже этого момента, действием адресата не снимается.
-        var acceptedAt = DateTime.UtcNow;
 
         // Квота списана авансом, а сообщение не дошло (дубль, переполнение очереди, занято
         // ожиданием человека) — возвращаем единицу: иначе наивные ретраи агента выжигали
@@ -164,7 +169,7 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
         };
 
         // Ф-2.48: принятое сообщение (busy/queue_full — не принято, ожидания не трогаем).
-        // Момент принятия — здесь, до разбора исхода: он и есть «at» для сторожа стора.
+        // «at» для стора — принятый до подачи acceptedAt, а не время возврата ожидания хода.
         if (callerSessionId is { Length: > 0 } caller
             && outcome is SendOutcome.Queued or SendOutcome.Completed or SendOutcome.Running)
             await TryClearAwaitingForAddresseeAsync(session, caller, acceptedAt);
@@ -195,8 +200,9 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
     // - task_changed — после успешного снятия, payload — обновлённая задача: тот же путь, что
     //   FS-E2 и AwaitingHumanAnswerSubscriber (доска и страница фичи живут только по нему).
     //
-    // internal — ровно для теста сторожа: в бою at = момент принятия сообщения, в тесте он
-    // задаётся явно (настоящей гонки в тесте нет, и флейки тут быть не должно).
+    // internal — ровно для теста сторожа: в бою at = момент начала отправки (acceptedAt до
+    // вызова SendMessageAndWaitAsync, R-Ф-2.48), в тесте он задаётся явно (настоящей гонки в
+    // тесте нет, и флейки тут быть не должно).
     internal async Task TryClearAwaitingForAddresseeAsync(Session target, string callerSessionId,
         DateTime acceptedAt)
     {

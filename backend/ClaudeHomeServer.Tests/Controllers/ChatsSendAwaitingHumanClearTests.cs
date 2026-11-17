@@ -5,6 +5,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Tests.Helpers;
@@ -34,7 +35,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 //   «Сторож…» (свежее ожидание снято чужим действием);
 // • снять проверку ParentSessionId (снимать от любого caller) — краснеет «НеАдресат…»;
 // • снять отсечку по пустому callerSessionId — краснеет «АвтоСообщениеСервера…»;
-// • убрать вещание task_changed — краснеет «АдресатВещаетTaskChanged…».
+// • убрать вещание task_changed — краснеет «АдресатВещаетTaskChanged…»;
+// • переставить взятие acceptedAt после await SendMessageAndWaitAsync — краснеет «Гонка…»
+//   (свежее ожидание, поднятое внутри хода адресата, снято прежним моментом).
 [Trait("Category", "Host")]
 public class ChatsSendAwaitingHumanClearTests : IClassFixture<TestWebApplicationFactory>
 {
@@ -133,6 +136,42 @@ public class ChatsSendAwaitingHumanClearTests : IClassFixture<TestWebApplication
         adapter.SetupGet(a => a.OrchestrationActive).Returns(false);
         entry.GetType().GetField("Process")!.SetValue(entry, adapter.Object);
         Sessions.GetById(sessionId)!.Status = SessionStatus.Working;
+    }
+
+    // Доступ к SessionEntry (white-box): тесту на гонку нужны внутренности подачи — подменный
+    // Process и TurnWaiter ожидаемого пути (тот же рефлексивный приём, что у SetWorkingAdapter).
+    private object GetEntry(string sessionId)
+    {
+        var field = typeof(SessionManager).GetProperty("_sessions",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var map = (System.Collections.IDictionary)field.GetValue(Sessions)!;
+        return map[sessionId]!;
+    }
+
+    // Живой ход на месте процесса: мокадтер (тот же приём, что SetWorkingAdapter, но ход не
+    // «висит», а доходит до конца). Когда сообщение подано «ходу»: сначала тестовый хук
+    // (raiseNewAwaiting — тот же продюсер нового ожидания, что боевой report_up:
+    // TaskManager.SetAwaitingHuman; доставка доклада здесь не проверяется), затем разрешение
+    // TurnWaiter подачи — тот же исход, что резолв OnMessageAsync по result: ожидаемый путь
+    // (TurnIntake.SendMessageAndWaitAsync) возвращается Completed, не дожидаясь таймаута.
+    private void SetTurnAdapter(object entry, Action? raiseNewAwaiting)
+    {
+        var info = (Session)entry.GetType().GetField("Info")!.GetValue(entry)!;
+        var adapter = new Mock<ILlmSessionAdapter>();
+        adapter.SetupGet(a => a.Info).Returns(info);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
+        adapter.SetupGet(a => a.OrchestrationActive).Returns(false);
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<bool>()))
+            .Callback(() =>
+            {
+                raiseNewAwaiting?.Invoke();
+                var tcs = (TaskCompletionSource<TurnResult>?)entry.GetType()
+                    .GetField("TurnWaiter")!.GetValue(entry);
+                tcs?.TrySetResult(new TurnResult("Правки внесены.", 1, null, true));
+            })
+            .Returns(Task.CompletedTask);
+        entry.GetType().GetField("Process")!.SetValue(entry, adapter.Object);
     }
 
     // Сервис с тестовым вещателем: DI-вещатель в этой проверке не видим (тот же приём, что
@@ -288,5 +327,55 @@ public class ChatsSendAwaitingHumanClearTests : IClassFixture<TestWebApplication
         await messaging.TryClearAwaitingForAddresseeAsync(target, staff, since + TimeSpan.FromSeconds(10));
         Tasks.GetById(taskId)!.AwaitingHumanSince.Should().BeNull();
         Tasks.GetById(taskId)!.AwaitingHumanReason.Should().BeNull();
+    }
+
+    // Тест на гонку (R-Ф-2.48, major): предыдущий тест проверял стор с явным «at», но не источник
+    // acceptedAt в SendAsync. Дефект был именно там: acceptedAt брался после await
+    // SendMessageAndWaitAsync — это время конца ожидания, а не начала отправки. При wait=… ход
+    // адресата идёт внутри вызова (таймаут 5–240 с), и поднятый в нём новый блокер (Since позже
+    // ответа) ответу не адресован — «прежний» at прошёл бы сторож Since<=at и снял бы его.
+    // Путь — боевой ожидаемый: чат свободен, сообщение само стартует ход; мокадтер поднимает
+    // новое ожидание внутри хода, до ответа. Два момента одной подачи: поставленное до отправки
+    // снимается (этап 1), поднятое внутри хода остаётся (этап 2). Мутация «acceptedAt после
+    // await» краснит этап 2; этап 1 при мутации зелёный — он фиксирует инвариант, не дефект.
+    [Fact]
+    public async Task ГонкаНовыйБлокерВнутриОжиданияХода_НеСнимается_РаннееОжиданиеСнимается()
+    {
+        var (taskId, _, staff, exec) = await ExecutorScenarioAsync("race");
+        await SetAwaitingByBlockerAsync(taskId, exec);
+        var entry = GetEntry(exec);
+        var bc = new TestSessionBroadcaster();
+        var messaging = Messaging(bc);
+
+        // Этап 1: ожидание, поставленное ДО отправки, — действие адресата его снимает
+        // (ожидаемый путь, тот же clear, что в бою).
+        SetTurnAdapter(entry, raiseNewAwaiting: null);
+        var first = await messaging.SendAsync(OwnerId, exec, "Разобрался: правь по мастеру.",
+            callerSessionId: staff, senderSessionId: staff, agentDepthFallback: 0,
+            wait: null, timeoutSec: null);
+        first.Should().BeOfType<SessionMessagingService.SendOutcome.Completed>(
+            "сообщение подняло ход адресата и дождалось его конца — то окно, где живёт гонка");
+        Tasks.GetById(taskId)!.AwaitingHumanSince.Should().BeNull(
+            "ожидание, поставленное до начала отправки, снимается действием адресата");
+
+        // Этап 2: новый блокер внутри хода адресата (Since позже начала отправки) — не снят.
+        // Предыдущий ход оставил чат Working с живым TurnWaiter — возвращаем состояние до
+        // подачи (тот же шов, что WorkspaceDeployDelegationTests:140), чтобы второй вызов шёл
+        // ожидаемым путём, а не через очередь.
+        Sessions.GetById(exec)!.Status = SessionStatus.Active;
+        entry.GetType().GetField("TurnWaiter")!.SetValue(entry, null);
+        var newReason = "Уткнулся в новый блок: нет доступа к прод-конфигу.";
+        SetTurnAdapter(entry, () => Tasks.SetAwaitingHuman(taskId, newReason));
+
+        var second = await messaging.SendAsync(OwnerId, exec, "Понял, жду доступ — держи блок.",
+            callerSessionId: staff, senderSessionId: staff, agentDepthFallback: 0,
+            wait: null, timeoutSec: null);
+        second.Should().BeOfType<SessionMessagingService.SendOutcome.Completed>(
+            "проверка не вакуумна: второй ход тоже состоялся");
+
+        var stored = Tasks.GetById(taskId)!;
+        stored.AwaitingHumanSince.Should().NotBeNull(
+            "ожидание, поднятое внутри хода адресата, этим ответом не снимается");
+        stored.AwaitingHumanReason.Should().Be(newReason);
     }
 }

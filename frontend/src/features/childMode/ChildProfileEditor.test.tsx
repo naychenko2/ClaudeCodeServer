@@ -478,6 +478,21 @@ describe('ChildProfileEditor: вкладки «Режим и время» / «П
       warnMinutes: 5,
     });
   });
+
+  it('«Сохранить» с «Предметов» при невалидных полях на «Режиме и времени»: возврат на ту вкладку, поля красные, запросов нет', async () => {
+    const { host } = await mount(liza());
+    // Пустое окно на «Режиме и времени» — невалидные поля, пока ещё не подсвечены (attempted нет).
+    await click(panel(host).querySelector('[data-testid="add-window"]') as HTMLElement);
+    await clickTab(host, 'Предметы');
+    await click(saveBtn(host));
+    expect(calls.length, 'невалидные поля — без запроса').toBe(0);
+    // Человек не остаётся на вкладке без полей: активная снова «Режим и время».
+    expect(tabSelected(host, 'Режим и время'), 'активная вкладка снова «Режим и время»').toBe(true);
+    expect(tabSelected(host, 'Предметы')).toBe(false);
+    const inputs = windowInputs(host);
+    expect(inputs[2].style.border, 'пустое «С» подсвечено').toContain('var(--c-danger-border)');
+    expect(inputs[3].style.border, 'пустое «По» подсвечено').toContain('var(--c-danger-border)');
+  });
 });
 
 describe('ChildProfileEditor: мобила (360)', () => {

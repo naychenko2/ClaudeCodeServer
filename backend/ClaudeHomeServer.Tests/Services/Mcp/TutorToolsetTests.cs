@@ -226,8 +226,17 @@ public class TutorToolsetTests : IClassFixture<TutorToolsetTests.Hosts>
     {
         var withBase = await NewKidAsync();
         var noBase = await NewKidAsync(withKnowledge: false);
+        var schemasBefore = _tutor.ToolsFor(Ctx(withBase)).Select(t => t.Name + t.Description + t.InputSchema.ToJsonString()).ToList();
         Tools(noBase).Should().BeEquivalentTo(ThreeTools, "привязка меняет ответ, а не состав");
         Tools(withBase).Should().Equal(Tools(noBase));
+
+        // загрузка файла и снятие/постановка привязки состав и схемы не двигают
+        await AddTextAsync(withBase, "новый файл предмета");
+        Subj(withBase).Knowledge = null;
+        Subj(noBase).Knowledge = new ChildSubjectKnowledge(DatasetId, AdminId, DateTime.UtcNow);
+        _tutor.ToolsFor(Ctx(withBase)).Select(t => t.Name + t.Description + t.InputSchema.ToJsonString())
+            .Should().Equal(schemasBefore, "новый файл и смена привязки меняют только ответ инструмента, а не tools/list");
+        Tools(noBase).Should().BeEquivalentTo(ThreeTools);
     }
 
     [Fact]

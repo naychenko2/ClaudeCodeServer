@@ -94,6 +94,7 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
             dailyBudgetUsd, monthlyBudgetUsd = 40,
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
+        ChildTestSubjects.Seed(_hosts.Services, id);
         return id;
     }
 
@@ -116,7 +117,7 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
 
     private async Task<string> CreateChatAs(HttpClient client)
     {
-        var (status, body) = await ReadAsync(await client.PostAsync("/api/child/spaces/lessons/chat", null));
+        var (status, body) = await ReadAsync(await ChildTestSubjects.CreateChat(client));
         status.Should().Be(HttpStatusCode.Created);
         return body.GetProperty("sessionId").GetString()!;
     }
@@ -145,10 +146,99 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
         gate.LaunchMismatch(id, chat).Should().BeNull();
     }
 
+    // Предмет со своими полями, отличными от профиля: тест ловит «поля из профиля, а не из предмета»
+    private void AddMath(string childId, bool enabled = true) =>
+        _users.GetById(childId)!.ChildMode!.Subjects.Add(new ChildSubject
+        {
+            Id = "math", Label = "Математика", Glyph = "×÷", Color = "rose", TutorPersonaId = "tutor-math",
+            ProviderKey = "math-pool", Model = "haiku", Enabled = enabled,
+        });
+
+    [Fact]
+    public async Task Create_Предмет_ПоляИзЗаписиПредмета_ВСтореСессий()
+    {
+        var id = await NewChild("kid-chat-subj");
+        AgreeRules(id);
+        AddMath(id);
+        var (s, b) = await ReadAsync(await ChildTestSubjects.CreateChat(ChildClient("kid-chat-subj"), "math"));
+        s.Should().Be(HttpStatusCode.Created);
+
+        var chat = Sessions.GetById(b.GetProperty("sessionId").GetString()!)!;
+        chat.ChildSubject.Should().Be("math");
+        chat.PersonaId.Should().Be("tutor-math");
+        chat.Provider.Should().Be("math-pool");
+        chat.Model.Should().Be("haiku");
+        chat.ChildSpace.Should().Be("lessons");
+        _hosts.Services.GetRequiredService<IChildModeGate>().LaunchMismatch(id, chat).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("nope")]
+    [InlineData("")]
+    [InlineData(null)]
+    public async Task Create_НеизвестныйПредмет_400_unknown_subject(string? subject)
+    {
+        var name = "kid-chat-nosubj-" + Guid.NewGuid().ToString("N")[..8];
+        var id = await NewChild(name);
+        AgreeRules(id);
+        var (s, b) = await ReadAsync(await ChildTestSubjects.CreateChat(ChildClient(name), subject));
+        s.Should().Be(HttpStatusCode.BadRequest);
+        CodeOf(b).Should().Be("unknown_subject");
+        Sessions.GetProjectlessChats(id).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_ПредметВыключен_403_subject_disabled()
+    {
+        var id = await NewChild("kid-chat-off");
+        AgreeRules(id);
+        AddMath(id, enabled: false);
+        var (s, b) = await ReadAsync(await ChildTestSubjects.CreateChat(ChildClient("kid-chat-off"), "math"));
+        s.Should().Be(HttpStatusCode.Forbidden);
+        CodeOf(b).Should().Be("subject_disabled");
+        Sessions.GetProjectlessChats(id).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_SubjectDisabledAfterSnapshot_TurnRefused()
+    {
+        var id = await NewChild("kid-chat-late");
+        AgreeRules(id);
+        AddMath(id);
+        var (s, b) = await ReadAsync(await ChildTestSubjects.CreateChat(ChildClient("kid-chat-late"), "math"));
+        s.Should().Be(HttpStatusCode.Created);
+        var chat = Sessions.GetById(b.GetProperty("sessionId").GetString()!)!;
+
+        // предмет выключили уже после создания: чат есть, ход не стартует
+        _users.GetById(id)!.ChildMode!.Subjects.Single(x => x.Id == "math").Enabled = false;
+        _hosts.Services.GetRequiredService<IChildModeGate>().LaunchMismatch(id, chat).Should().Be("Этот предмет закрыт");
+    }
+
+    [Fact]
+    public async Task List_ОтдаётSubjectИSubjectClosed_ЗакрытыеОстаются()
+    {
+        var id = await NewChild("kid-chat-closed");
+        AgreeRules(id);
+        AddMath(id);
+        var client = ChildClient("kid-chat-closed");
+        var (_, mb) = await ReadAsync(await ChildTestSubjects.CreateChat(client, "math"));
+        var mathId = mb.GetProperty("sessionId").GetString()!;
+        var russianId = await CreateChatAs(client);
+
+        _users.GetById(id)!.ChildMode!.Subjects.Single(x => x.Id == "math").Enabled = false;
+        var (ls, lb) = await ReadAsync(await client.GetAsync("/api/child/spaces/lessons/chats"));
+        ls.Should().Be(HttpStatusCode.OK);
+        var chats = lb.GetProperty("chats").EnumerateArray().ToDictionary(c => c.GetProperty("sessionId").GetString()!);
+        chats[mathId].GetProperty("subject").GetString().Should().Be("math");
+        chats[mathId].GetProperty("subjectClosed").GetBoolean().Should().BeTrue();
+        chats[russianId].GetProperty("subject").GetString().Should().Be("russian");
+        chats[russianId].GetProperty("subjectClosed").GetBoolean().Should().BeFalse();
+    }
+
     [Fact]
     public async Task Create_Взрослый_403_not_child()
     {
-        var (s, b) = await ReadAsync(await _admin.PostAsync("/api/child/spaces/lessons/chat", null));
+        var (s, b) = await ReadAsync(await ChildTestSubjects.CreateChat(_admin));
         s.Should().Be(HttpStatusCode.Forbidden);
         CodeOf(b).Should().Be("not_child");
     }
@@ -166,7 +256,7 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
     public async Task Create_ПространстваНетВПрофиле_403_space_disabled()
     {
         await NewChild("kid-chat-dis", withLessons: false);
-        var (s, b) = await ReadAsync(await ChildClient("kid-chat-dis").PostAsync("/api/child/spaces/lessons/chat", null));
+        var (s, b) = await ReadAsync(await ChildTestSubjects.CreateChat(ChildClient("kid-chat-dis")));
         s.Should().Be(HttpStatusCode.Forbidden);
         CodeOf(b).Should().Be("space_disabled");
     }
@@ -176,7 +266,7 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
     {
         var id = await NewChild("kid-chat-rules");
         var before = Sessions.GetProjectlessChats(id).Count;
-        var (s, b) = await ReadAsync(await ChildClient("kid-chat-rules").PostAsync("/api/child/spaces/lessons/chat", null));
+        var (s, b) = await ReadAsync(await ChildTestSubjects.CreateChat(ChildClient("kid-chat-rules")));
         s.Should().Be(HttpStatusCode.Conflict);
         CodeOf(b).Should().Be("rules_pending");
         Sessions.GetProjectlessChats(id).Count.Should().Be(before);
@@ -187,7 +277,7 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
     {
         var id = await NewChild("kid-chat-win", inWindow: false);
         AgreeRules(id);
-        var (s, b) = await ReadAsync(await ChildClient("kid-chat-win").PostAsync("/api/child/spaces/lessons/chat", null));
+        var (s, b) = await ReadAsync(await ChildTestSubjects.CreateChat(ChildClient("kid-chat-win")));
         s.Should().Be(HttpStatusCode.Conflict);
         CodeOf(b).Should().Be("out_of_window");
     }
@@ -198,7 +288,7 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
         // Стаб расхода отдаёт 0.1 USD за день — дневной бюджет 0.05 уже превышен
         var id = await NewChild("kid-chat-budget", dailyBudgetUsd: 0.05m);
         AgreeRules(id);
-        var (s, b) = await ReadAsync(await ChildClient("kid-chat-budget").PostAsync("/api/child/spaces/lessons/chat", null));
+        var (s, b) = await ReadAsync(await ChildTestSubjects.CreateChat(ChildClient("kid-chat-budget")));
         s.Should().Be(HttpStatusCode.Conflict);
         CodeOf(b).Should().Be("budget_exhausted");
     }
@@ -211,7 +301,7 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
         var client = ChildClient("kid-chat-timeup");
         // Минута присутствия исчерпывает дневной лимит в 1 минуту
         (await client.PostAsJsonAsync("/api/child/heartbeat", new { space = "lessons" })).StatusCode.Should().Be(HttpStatusCode.OK);
-        var (s, b) = await ReadAsync(await client.PostAsync("/api/child/spaces/lessons/chat", null));
+        var (s, b) = await ReadAsync(await ChildTestSubjects.CreateChat(client));
         s.Should().Be(HttpStatusCode.Conflict);
         CodeOf(b).Should().Be("time_up");
     }
@@ -251,7 +341,7 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
         gate.Refuse = true;
         try
         {
-            var (s, _) = await ReadAsync(await client.PostAsync("/api/child/spaces/lessons/chat", null));
+            var (s, _) = await ReadAsync(await ChildTestSubjects.CreateChat(client));
             s.Should().Be(HttpStatusCode.ServiceUnavailable);
         }
         finally { gate.Refuse = false; }

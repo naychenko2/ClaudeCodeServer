@@ -43,6 +43,14 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
     {
         Enabled = true, TutorPersonaId = "tutor-1", ProviderKey = "pool-key", Model = "sonnet",
         RulesAgreedAt = new DateTime(2026, 11, 16, 10, 0, 0, DateTimeKind.Utc),
+        Subjects =
+        [
+            new ChildSubject
+            {
+                Id = "math", Label = "Математика", Glyph = "×÷", Color = "info",
+                TutorPersonaId = "tutor-math", ProviderKey = "pool-math", Model = "haiku", Enabled = true,
+            },
+        ],
         Spaces =
         {
             ["lessons"] = new SpaceLimits
@@ -61,8 +69,8 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
 
     private static Session ValidSession() => new()
     {
-        Id = "s-1", OwnerId = Kid, PersonaId = "tutor-1", Provider = "pool-key", Model = "sonnet",
-        ProjectId = null, Mode = ChildModeLaunch.RequiredMode, ChildSpace = "lessons",
+        Id = "s-1", OwnerId = Kid, PersonaId = "tutor-math", Provider = "pool-math", Model = "haiku",
+        ProjectId = null, Mode = ChildModeLaunch.RequiredMode, ChildSpace = "lessons", ChildSubject = "math",
     };
 
     private TurnLaunchContextFactory Build(ChildPolicySnapshot? snapshot)
@@ -138,6 +146,37 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
             case "mode": s.Mode = ClaudeMode.Bypass; break;
         }
         var act = () => Launch(factory, s);
+        act.Should().Throw<InvalidOperationException>().WithMessage("Детский режим*");
+    }
+
+    [Theory]
+    [InlineData("disabled")]
+    [InlineData("deleted")]
+    [InlineData("null")]
+    public void ПредметЗакрыт_ХодНеСтартует(string how)
+    {
+        var snapshot = ValidChild();
+        var s = ValidSession();
+        switch (how)
+        {
+            case "disabled": snapshot.Profile!.Subjects[0].Enabled = false; break;
+            case "deleted": snapshot.Profile!.Subjects.Clear(); break;
+            case "null": s.ChildSubject = null; break;
+        }
+        var act = () => Launch(Build(snapshot), s);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Этот предмет закрыт*");
+    }
+
+    [Fact]
+    public void ЧатПравил_СверяетсяСПрофилем_БезПредмета()
+    {
+        var s = ValidSession();
+        s.OnboardingKind = OnboardingKinds.ChildRules;
+        s.ChildSubject = null; s.PersonaId = "tutor-1"; s.Provider = "pool-key"; s.Model = "sonnet";
+        var factory = Build(ValidChild());
+        var act = () => Launch(factory, s);
+        act.Should().NotThrow();
+        s.Model = "haiku"; // запись предмета чату правил не указ
         act.Should().Throw<InvalidOperationException>().WithMessage("Детский режим*");
     }
 

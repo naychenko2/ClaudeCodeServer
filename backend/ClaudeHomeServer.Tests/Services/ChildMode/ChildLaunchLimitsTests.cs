@@ -100,6 +100,11 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
             TutorPersonaId = "tutor-1",
             ProviderKey = "pool-key",
             Model = "sonnet",
+            Subjects = [new ChildSubject
+            {
+                Id = "russian", Label = "Русский язык", Glyph = "Аа", Color = "info",
+                TutorPersonaId = "tutor-1", ProviderKey = "pool-key", Model = "sonnet", Enabled = true,
+            }],
             Spaces =
             {
                 ["lessons"] = new SpaceLimits
@@ -133,6 +138,7 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
         ProjectId = null,
         Mode = ChildModeLaunch.RequiredMode,
         ChildSpace = childSpace,
+        ChildSubject = onboardingKind is null ? "russian" : null,
         OnboardingKind = onboardingKind,
     };
 

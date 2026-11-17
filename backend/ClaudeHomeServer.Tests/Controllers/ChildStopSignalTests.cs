@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Tests.Helpers;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
@@ -85,6 +86,7 @@ public class ChildStopSignalTests : IClassFixture<ChildStopSignalTests.Hosts>
             dailyBudgetUsd = 2, monthlyBudgetUsd = 40,
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
+        ChildTestSubjects.Seed(_hosts.Services, id);
         var profile = Users.GetById(id)!.ChildMode!;
         profile.RulesAgreedAt = new DateTime(2026, 11, 17, 10, 0, 0, DateTimeKind.Utc);
         profile.RulesSummary = "правила";
@@ -95,7 +97,7 @@ public class ChildStopSignalTests : IClassFixture<ChildStopSignalTests.Hosts>
 
     private async Task<string> CreateChat(HttpClient client)
     {
-        var resp = await client.PostAsync("/api/child/spaces/lessons/chat", null);
+        var resp = await ChildTestSubjects.CreateChat(client);
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
         return JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync()).GetProperty("sessionId").GetString()!;
     }

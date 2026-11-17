@@ -38,10 +38,18 @@ public class ChildChatsController(
 
     [ChildAllowed]
     [HttpPost("spaces/{space}/chat")]
-    public async Task<IActionResult> Create(string space)
+    public async Task<IActionResult> Create(string space, [FromBody] ChildCreateChatRequest? req)
     {
         if (CheckSpace(space) is { } refused) return refused;
+        // Один снимок профиля на запрос: предмет и поля чата берутся из одной и той же записи
         var profile = policy.For(UserId)!.Profile!;
+        var subject = string.IsNullOrWhiteSpace(req?.Subject)
+            ? null
+            : profile.Subjects.FirstOrDefault(x => string.Equals(x.Id, req.Subject, StringComparison.OrdinalIgnoreCase));
+        if (subject is null)
+            return ChildError(400, "unknown_subject", "Такого предмета нет.");
+        if (!subject.Enabled)
+            return ChildError(403, "subject_disabled", "Этот предмет закрыт.");
 
         ChildStatus? status;
         try
@@ -62,8 +70,8 @@ public class ChildChatsController(
         {
             // Закреплённые поля уходят в создание: сверка И1-бис и лимиты И3 идут уже внутри старта сессии
             var chat = await sessions.CreateChatAsync(UserId, ChildModeLaunch.RequiredMode,
-                model: profile.Model, personaId: profile.TutorPersonaId,
-                childSpace: space, providerKey: profile.ProviderKey);
+                model: subject.Model, personaId: subject.TutorPersonaId,
+                childSpace: space, providerKey: subject.ProviderKey, childSubject: subject.Id);
             return StatusCode(201, new { sessionId = chat.Id });
         }
         catch (Exception e)
@@ -82,10 +90,18 @@ public class ChildChatsController(
         {
             // Только свои детские чаты пространства вне проектов, без онбординга правил; новые сверху
             // (GetProjectlessChats уже отдаёт по UpdatedAt убыв., порядок фиксируем явно).
+            var subjects = policy.For(UserId)!.Profile!.Subjects;
             var chats = sessions.GetProjectlessChats(UserId)
                 .Where(s => s.ChildSpace == space && s.OnboardingKind != OnboardingKinds.ChildRules)
                 .OrderByDescending(s => s.UpdatedAt)
-                .Select(s => new { sessionId = s.Id, name = s.Name, updatedAt = s.UpdatedAt })
+                .Select(s => new
+                {
+                    sessionId = s.Id, name = s.Name, updatedAt = s.UpdatedAt,
+                    subject = s.ChildSubject,
+                    // Предмет выключен или удалён: чат остаётся в списке, но только для чтения
+                    subjectClosed = !subjects.Any(x => x.Enabled &&
+                        string.Equals(x.Id, s.ChildSubject, StringComparison.OrdinalIgnoreCase)),
+                })
                 .ToList();
             return Ok(new { chats });
         }
@@ -146,6 +162,9 @@ public class ChildChatsController(
     private static JsonResult ChildError(int status, string code, string message) =>
         new(new { code, message }) { StatusCode = status };
 }
+
+// Тело POST /api/child/spaces/{space}/chat (ADR-041 ред. 2): предмет — ключ ChildSubject.Id.
+public record ChildCreateChatRequest(string? Subject);
 
 // Тело PUT /api/child/chats/{id}/voice (ADR-041, ручка №5): style необязателен.
 public record ChildVoiceRequest(bool Enabled, string? Style = null);

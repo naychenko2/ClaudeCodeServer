@@ -84,6 +84,7 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
             dailyBudgetUsd = 2m, monthlyBudgetUsd = 40m,
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
+        ChildTestSubjects.Seed(_hosts.Services, id);
         var p = _hosts.Services.GetRequiredService<UserStore>().GetById(id)!.ChildMode!;
         p.RulesAgreedAt = new DateTime(2026, 11, 17, 10, 0, 0, DateTimeKind.Utc);
         p.RulesSummary = "правила";
@@ -94,7 +95,7 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
     private async Task<(string ChildId, string ChatId, string Root)> ChildChat(string name)
     {
         var id = await NewChild(name);
-        var resp = await _hosts.CreateAuthenticatedClient(name, ChildPassword).PostAsync("/api/child/spaces/lessons/chat", null);
+        var resp = await ChildTestSubjects.CreateChat(_hosts.CreateAuthenticatedClient(name, ChildPassword));
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
         var chatId = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync()).GetProperty("sessionId").GetString()!;
         return (id, chatId, Sessions.GetChatRoot(chatId, id)!);

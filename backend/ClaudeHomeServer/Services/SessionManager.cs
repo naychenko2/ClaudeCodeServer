@@ -928,9 +928,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
         string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null, string? childSpace = null, string? providerKey = null)
+        string? onboardingKind = null, string? childSpace = null, string? providerKey = null,
+        string? childSubject = null)
         => await _creation.CreateChatAsync(ownerId, mode, resumeSessionId, name, model, effort,
-            personaId, taskExecution, taskId, onboardingKind, childSpace, providerKey);
+            personaId, taskExecution, taskId, onboardingKind, childSpace, providerKey, childSubject);
 
     public async Task<Session> CreatePersonaChatAsync(string ownerId, string personaId,
         ClaudeMode mode, string? resumeSessionId = null, string? name = null,

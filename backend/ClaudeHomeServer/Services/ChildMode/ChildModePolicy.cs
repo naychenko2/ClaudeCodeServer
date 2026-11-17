@@ -37,7 +37,30 @@ public sealed class ChildModePolicy(IUserStore users, ILogger<ChildModePolicy>? 
         !string.IsNullOrWhiteSpace(profile.TutorPersonaId) &&
         !string.IsNullOrWhiteSpace(profile.ProviderKey) &&
         !string.IsNullOrWhiteSpace(profile.Model) &&
-        profile.Spaces.Values.All(space => space.Windows.All(WindowParses));
+        profile.Spaces.Values.All(space => space.Windows.All(WindowParses)) &&
+        SubjectsValid(profile.Subjects);
+
+    // И1-бис по предмету (разрез Т1c): id всех предметов — slug и уникален без учёта регистра;
+    // каждый ВКЛЮЧЁННЫЙ предмет несёт персону, поставщика и модель. Выключенный предмет может быть
+    // недозаполнен: его чаты всё равно не стартуют.
+    private static bool SubjectsValid(List<ChildSubject>? subjects)
+    {
+        if (subjects is null) return true;
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var subject in subjects)
+        {
+            if (subject is null || !SubjectId.IsMatch(subject.Id ?? "") || !ids.Add(subject.Id!)) return false;
+            if (subject.Enabled &&
+                (string.IsNullOrWhiteSpace(subject.TutorPersonaId) || string.IsNullOrWhiteSpace(subject.ProviderKey) ||
+                 string.IsNullOrWhiteSpace(subject.Model)))
+                return false;
+        }
+        return true;
+    }
+
+    // [GeneratedRegex] не нужен: проверка редкая; ^…$ без RegexOptions.Multiline, но $ пропускает
+    // хвостовой \n — поэтому \z.
+    private static readonly System.Text.RegularExpressions.Regex SubjectId = new(@"^[a-z0-9-]{1,32}\z");
 
     // Тот же разбор границы окна, что у DailyTimeWindow.TryParseBounds: «25:00» и мусор — не окно.
     private static bool WindowParses(TimeWindow? w) =>

@@ -93,11 +93,24 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
         if (policy.For(ownerId) is not { } snapshot) return null;
         if (snapshot.DenyAll || snapshot.Profile is not { } profile)
             return "профиль детского режима не проходит проверку";
-        if (session.PersonaId != profile.TutorPersonaId)
+        // Чат правил сверяется с полями профиля, чат «Уроков» — с записью включённого предмета.
+        var persona = profile.TutorPersonaId;
+        var provider = profile.ProviderKey;
+        var model = profile.Model;
+        var lessonsChat = session.ChildSpace is not null && session.OnboardingKind != OnboardingKinds.ChildRules;
+        if (lessonsChat)
+        {
+            var subject = session.ChildSubject is { } id
+                ? profile.Subjects?.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase))
+                : null;
+            if (subject is not { Enabled: true }) return "Этот предмет закрыт";
+            (persona, provider, model) = (subject.TutorPersonaId, subject.ProviderKey, subject.Model);
+        }
+        if (session.PersonaId != persona)
             return "персона чата не совпадает с закреплённым тьютором";
-        if (session.Provider != profile.ProviderKey)
+        if (session.Provider != provider)
             return "поставщик чата не совпадает с поставщиком профиля";
-        if (session.Model != profile.Model)
+        if (session.Model != model)
             return "модель чата не совпадает с моделью профиля";
         if (session.ProjectId is not null)
             return "детский чат не может принадлежать проекту";

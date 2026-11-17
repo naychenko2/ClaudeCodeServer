@@ -103,6 +103,7 @@ public class ChildAttachmentsControllerTests : IClassFixture<ChildAttachmentsCon
             dailyBudgetUsd = 2m, monthlyBudgetUsd = 40m,
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
+        ChildTestSubjects.Seed(_hosts.Services, id);
         var p = _users.GetById(id)!.ChildMode!;
         p.RulesAgreedAt = new DateTime(2026, 11, 17, 10, 0, 0, DateTimeKind.Utc);
         p.RulesSummary = "правила";
@@ -113,7 +114,7 @@ public class ChildAttachmentsControllerTests : IClassFixture<ChildAttachmentsCon
 
     private async Task<string> CreateChatAs(HttpClient client)
     {
-        var (status, body, _) = await ReadAsync(await client.PostAsync("/api/child/spaces/lessons/chat", null));
+        var (status, body, _) = await ReadAsync(await ChildTestSubjects.CreateChat(client));
         status.Should().Be(HttpStatusCode.Created);
         return body.GetProperty("sessionId").GetString()!;
     }

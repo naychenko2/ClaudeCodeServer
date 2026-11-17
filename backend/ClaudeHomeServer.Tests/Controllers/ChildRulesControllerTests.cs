@@ -143,6 +143,7 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
             dailyBudgetUsd = 2m, monthlyBudgetUsd = 40m,
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
+        ChildTestSubjects.Seed(_hosts.Services, id);
         return id;
     }
 
@@ -291,7 +292,7 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
         Sessions.GetById(sid)!.OnboardingKind.Should().Be(OnboardingKinds.ChildRules);
 
         // Согласие открывает «Уроки»: обычный чат пространства создаётся
-        var (cs, _) = await ReadAsync(await client.PostAsync("/api/child/spaces/lessons/chat", null));
+        var (cs, _) = await ReadAsync(await ChildTestSubjects.CreateChat(client));
         cs.Should().Be(HttpStatusCode.Created);
     }
 
@@ -331,7 +332,7 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
         var sid = await StartAs(client);
         (await AgreeAsync(client, sid, "договорили")).Item1.Should().Be(HttpStatusCode.OK);
         // Обычный чат «Уроков» (после согласия создаётся) — не чат онбординга
-        var (cs, cb) = await ReadAsync(await client.PostAsync("/api/child/spaces/lessons/chat", null));
+        var (cs, cb) = await ReadAsync(await ChildTestSubjects.CreateChat(client));
         cs.Should().Be(HttpStatusCode.Created);
         var (s1, b1) = await AgreeAsync(client, cb.GetProperty("sessionId").GetString()!, "не туда");
         s1.Should().Be(HttpStatusCode.NotFound);

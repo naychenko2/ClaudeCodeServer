@@ -137,6 +137,40 @@ public sealed class ChildModePolicyTests : IDisposable
         }
     }
 
+    private static ChildSubject Subject(string id, bool enabled = true) => new()
+    {
+        Id = id, Label = "П", Glyph = "П", Color = "info", TutorPersonaId = "t", ProviderKey = "p", Model = "m",
+        Enabled = enabled,
+    };
+
+    [Fact]
+    public void SubjectsValid_NotDenied()
+    {
+        var profile = ValidProfile();
+        profile.Subjects = [Subject("math"), Subject("world-2"), new ChildSubject { Id = "off", Enabled = false }];
+        _policy.For(AddUser(profile))!.DenyAll.Should().BeFalse();
+    }
+
+    [Fact]
+    public void SubjectsInvalid_DeniesAll()
+    {
+        foreach (var subjects in new List<ChildSubject>[]
+        {
+            [Subject("Math_"), ],                          // не slug
+            [Subject("")],                                 // пустой id
+            [Subject(new string('a', 33))],                // длиннее 32
+            [Subject("math"), Subject("MATH")],            // дубль без учёта регистра
+            [new ChildSubject { Id = "a", TutorPersonaId = "", ProviderKey = "p", Model = "m" }],
+            [new ChildSubject { Id = "a", TutorPersonaId = "t", ProviderKey = " ", Model = "m" }],
+            [new ChildSubject { Id = "a", TutorPersonaId = "t", ProviderKey = "p", Model = "" }],
+        })
+        {
+            var profile = ValidProfile();
+            profile.Subjects = subjects;
+            _policy.For(AddUser(profile))!.DenyAll.Should().BeTrue(subjects[0].Id);
+        }
+    }
+
     [Fact]
     public void WindowNotParsable_DeniesAll()
     {

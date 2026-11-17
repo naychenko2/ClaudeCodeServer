@@ -3092,8 +3092,43 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Решение по инструменту: правила проекта → «всегда разрешать» этой сессии → карточка
     // пользователю. Возвращает "allow" | "deny" | "cancelled" (Interrupt во время ожидания).
+    // Решение по разрешению для хода ребёнка (И1, п.12): allow — только MCP-пара (сервер,
+    // инструмент) из детского allow-list; всё остальное, включая встроенные инструменты CLI, —
+    // deny. Имя от CLI — «mcp__{сервер}__{инструмент}»; нераспознанное имя — deny (fail-closed).
+    internal static string ChildPermissionDecision(string toolName)
+    {
+        const string prefix = "mcp__";
+        if (!toolName.StartsWith(prefix, StringComparison.Ordinal)) return "deny";
+        var rest = toolName[prefix.Length..];
+        var sep = rest.IndexOf("__", StringComparison.Ordinal);
+        if (sep <= 0 || sep + 2 >= rest.Length) return "deny";
+        return ChildModeAllowList.Allows(rest[..sep], rest[(sep + 2)..]) ? "allow" : "deny";
+    }
+
+    // Встроенные инструменты CLI ребёнку закрыты разрешающим списком (И1, п.11): «--tools ""»
+    // оставляет у хода ноль встроенных (проверено на CLI 2.1.325: init.tools = []). Список запретов
+    // тут не годится — набор встроенных меняется от версии к версии (в 'default' этого CLI уже нет
+    // Glob/Grep). Прежний «--tools» от BareMode (его BareTools) снимается: детский пустой список
+    // сильнее любого непустого.
+    internal static void ForceNoBuiltinTools(List<string> args)
+    {
+        for (var i = args.Count - 1; i >= 0; i--)
+        {
+            if (args[i] != "--tools") continue;
+            args.RemoveAt(i);
+            if (i < args.Count) args.RemoveAt(i);
+        }
+        args.AddRange(["--tools", ""]);
+    }
+
     private async Task<string> DecidePermissionAsync(string requestId, string toolName, JsonElement inputEl, object toolInput)
     {
+        // И1 (ADR-041, п.12): ход ребёнка решает ТОЛЬКО детский allow-list. Ни карточки, ни
+        // «всегда разрешать», ни авто-allow исполнителя/персоны/режима — любой запрос вне списка
+        // отклоняется сразу. Снимок политики, а не флаг сессии: выключение профиля действует
+        // со следующего запроса.
+        if (_childPolicy?.Invoke() is not null) return ChildPermissionDecision(toolName);
+
         // Гард «координатор не пишет код сам» (Э7-фикс): жёстче project-правил и «всегда
         // разрешать» — иначе достаточно один раз кликнуть «Разрешить всегда» на Bash, и
         // настройка перестаёт что-либо значить. См. CoordinatorWriteGuard про эвристику
@@ -3733,6 +3768,10 @@ public class ClaudeSession : ILlmSessionAdapter
             _lastBareModeMapBytes = 0;
         }
 
+        // Ход ребёнка (И1, п.11): ни одного встроенного инструмента CLI.
+        var childTurn = _childPolicy?.Invoke() is not null;
+        if (childTurn) ForceNoBuiltinTools(args);
+
         // Подсказка следующего сообщения: CLI после result испускает prompt_suggestion
         // (генерация фоном с переиспользованием prompt cache хода; при холодном кэше CLI
         // сам пропускает). Только родной Claude — сторонним провайдерам фоновые запросы
@@ -3806,7 +3845,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // data/plugins смонтирована в /plugins (ro), ToRuntime переводит; локально — identity.
         // Локальный проект (ProjectCapabilities.Plugins = false, MVP) — GetPluginDirs отдаёт [],
         // аргументов нет. _pluginDirSource null — подсистема Plugins выключена.
-        if (_pluginDirSource is not null && _turnOwnerId is { } pluginOwnerId)
+        // Ход ребёнка (И1, п.13): плагинов нет вовсе — пустой набор, а не набор владельца.
+        if (!childTurn && _pluginDirSource is not null && _turnOwnerId is { } pluginOwnerId)
         {
             var pluginDirs = _pluginDirSource.GetPluginDirs(pluginOwnerId, Info.PersonaId, _pluginProject);
             foreach (var dir in pluginDirs)
@@ -4674,7 +4714,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // claude --help (найдена строкой в бинарнике CLI 2.1.270) — сторож на пропажу
         // см. TrackContextTokens. Ставим только когда BareMode реально применён (карта
         // найдена), иначе у облачного провайдера переменная была бы лишним шумом.
-        if (_lastBareModeApplied)
+        // Ход ребёнка (И1, п.13): CLAUDE.md проекта не грузится в любом случае — BareMode тут
+        // не зависит от провайдера модели.
+        if (_lastBareModeApplied || _childPolicy?.Invoke() is not null)
             envOverrides["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1";
 
         // Приватный чат общего проекта (S2d-5c): авто-память CLI пишет факты в общую папку

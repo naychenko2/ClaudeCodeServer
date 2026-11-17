@@ -259,7 +259,8 @@ internal sealed class TurnLaunchContextFactory
             LlmGatewayApiUrl: _builtin.LlmGatewayApiUrlFor(session, ownerId),
             // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально) и проект
             // для проверки локальности (у локального проекта в MVP плагинов нет).
-            PluginDirSource: _pluginDirSource,
+            // Детский ход (И1, п.13): источник плагинов не отдаётся вовсе — пустой набор по построению.
+            PluginDirSource: childGate.IsChild(ownerId) ? null : _pluginDirSource,
             // Рамка хода для подборки (S2a-4): вердикт читает сам ClaudeSession через этот шов
             Project: project,
             FrameSource: _store,

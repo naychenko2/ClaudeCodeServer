@@ -200,7 +200,8 @@ public static class SessionCoreRegistration
             sp.GetService<PersonaAgentFileSync>(),
             sp.GetRequiredService<ProjectManager>(),
             sp.GetService<Spheres.ISphereDirectory>(),
-            sp.GetRequiredService<ILogger<PersonaLayerBuilder>>()));
+            sp.GetRequiredService<ILogger<PersonaLayerBuilder>>(),
+            sp.GetService<ClaudeHomeServer.Services.ChildMode.IChildModeGate>()));
         // Внешние серверы владельца и рабочий пространство. Реестр/секреты/OAuth — GetService:
         // без них реестровых серверов в ход нет (та же опциональность, что у параметров фасада).
         services.AddSingleton(sp => new ExternalMcpContexts(

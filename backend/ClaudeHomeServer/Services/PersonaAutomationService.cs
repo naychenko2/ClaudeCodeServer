@@ -34,6 +34,8 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
     // Готовность устройства проекта правила (ADR-016, вариант А плана §5): офлайн — срабатывание
     // пропускается с отметкой, после онлайна догоняется одно последнее. null — проверки нет.
     private readonly Execution.IProjectDeviceGate? _deviceGate;
+    // П.18 (ADR-041): правила детского владельца не срабатывают, даже если появились до включения профиля.
+    private readonly ChildMode.IChildModeGate? _childGate;
 
     private int DefaultMinIntervalMinutes => _config.GetValue("Persona:AutomationMinIntervalMinutes", 5);
     private int HourlyCap => _config.GetValue("Persona:AutomationHourlyCap", 8);
@@ -55,9 +57,10 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
         AutomationStateStore state, MentionTriggerSource mentions, ProjectManager projects,
         UserStore users, AutomationRootResolver roots, IEnumerable<ITriggerSource> sources,
         IConfiguration config, Llm.ICheapTextRunner cheap, ILogger<PersonaAutomationService> log,
-        Execution.IProjectDeviceGate? deviceGate = null)
+        Execution.IProjectDeviceGate? deviceGate = null, ChildMode.IChildModeGate? childGate = null)
     {
         _deviceGate = deviceGate;
+        _childGate = childGate;
         _personas = personas; _sessions = sessions; _push = push; _notif = notif;
         _state = state; _mentions = mentions; _projects = projects; _users = users; _roots = roots;
         _config = config; _cheap = cheap; _log = log;
@@ -78,6 +81,7 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
 
     public async Task MaybeRunAutomationsAsync(User user, TimeZoneInfo tz, DateTime nowUtc, CancellationToken ct)
     {
+        if (_childGate?.IsChild(user.Id) == true) return;
         foreach (var persona in _personas.GetByOwner(user.Id))
         {
             // Снимаем снапшот списка правил: UpdateRules заменяет ссылку, итерация по старой ссылке безопасна.
@@ -151,6 +155,8 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
     private async Task FireAsync(Persona persona, PersonaAutomationRule rule, TimeZoneInfo tz,
         TriggerEvent ev, CancellationToken ct, bool bypassThrottle = false)
     {
+        // П.18: единая точка всех путей срабатывания (тик, @упоминание, ручной прогон) — детскому владельцу отказ.
+        if (_childGate?.IsChild(persona.OwnerId) == true) return;
         var state = _state.GetRule(persona.Id, rule.Id);
         var now = DateTime.UtcNow;
 

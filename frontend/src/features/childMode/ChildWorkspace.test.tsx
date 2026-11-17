@@ -118,6 +118,13 @@ describe('ChildWorkspace', () => {
     expect(doc.body.textContent).toContain('Нет связи');
   });
 
+  it('offline без статуса — плашка «Нет связи» всё равно видна', async () => {
+    h.status = null;
+    h.offline = true;
+    await mount();
+    expect(doc.body.textContent).toContain('Нет связи');
+  });
+
   it('rules_pending: точка на «Правила», старт правил идёт через rulesStart', async () => {
     h.status = status({ state: 'rules_pending', rulesAgreedAt: null });
     await mount();

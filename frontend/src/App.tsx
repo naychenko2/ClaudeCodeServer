@@ -430,6 +430,9 @@ export default function App() {
   // гейта первого входа больше нет (знакомство — приглашение из раздела «Персоны»,
   // см. п.5), но стор нужен ниже — оверлей знакомства (п.4.5) ждёт me.loaded.
   const me = useMe()
+  // Взрослые побочные эффекты (список проектов, диплинки, уведомления, синхронизация) стартуют
+  // только когда /me получен и профиль не детский: гейт стоит ДО эффектов, а не после них
+  const adultBlocked = !!auth && (authChecking || me.isChild)
 
   const online = useOnline()
   const onlineRef = useRef(online)
@@ -505,9 +508,9 @@ export default function App() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовый зонд доступности сервера по сохранённым credentials
     if (!auth) { setAuthChecking(false); return }
-    // Максимум 3 секунды на проверку доступности сервера.
-    // Если не ответил — показываем приложение в текущем (возможно офлайн) состоянии.
-    const timer = setTimeout(() => setAuthChecking(false), 3_000)
+    // Таймера-«отпускалки» нет намеренно (KM-F10): пока /me не получен, неизвестно, ребёнок
+    // это или нет, поэтому ни взрослый экран, ни взрослые запросы не стартуют. Нейтральную
+    // загрузку закрывает сам запрос: ответом или отказом (офлайн/таймаут запроса).
     api.auth.me()
       .then(me => {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
@@ -522,6 +525,9 @@ export default function App() {
         // Стор дефолт-персоны/онбординга — от него живут приглашение первого входа
         // и резолвер аватаров
         if (me) setMeFromServer(me)
+        // Детский профиль: дальше только детская оболочка — взрослые загрузки (модели, модули,
+        // таймзона, MF-remote подсистем) ребёнку не нужны и вне allow-list ADR-041
+        if (me?.isChild) return
         // Имя могли поправить в профиле после логина — подхватываем без перевхода
         const fresh = me?.displayName?.trim() || undefined
         setAuth(prev => (prev && prev.displayName !== fresh ? { ...prev, displayName: fresh } : prev))
@@ -556,7 +562,6 @@ export default function App() {
       })
       .catch(() => { /* результат отразится в _online */ })
       .finally(() => {
-        clearTimeout(timer)
         setAuthChecking(false)
       })
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -746,7 +751,7 @@ export default function App() {
   // Диплинк #/project/{id}: открываем указанный проект после авторизации
   // (если он отличается от восстановленного из localStorage)
   useEffect(() => {
-    if (!auth || initialHash?.screen !== 'project' || !initialHash.projectId) return
+    if (!auth || adultBlocked || initialHash?.screen !== 'project' || !initialHash.projectId) return
     if (project?.id === initialHash.projectId) return
     api.projects.list()
       .then(list => {
@@ -763,7 +768,7 @@ export default function App() {
       })
       .catch(() => { /* офлайн/нет доступа — остаёмся на восстановленном состоянии */ })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth?.serverUrl])
+  }, [auth?.serverUrl, adultBlocked])
 
   // Снэпшот/drain — только при устойчивом онлайне. На мобиле связь часто «мигает»
   // (online → offline → online за секунды), и каждое возвращение дёргать полную
@@ -776,7 +781,7 @@ export default function App() {
       clearTimeout(stableOnlineTimerRef.current)
       stableOnlineTimerRef.current = null
     }
-    if (!auth || !online) return
+    if (!auth || adultBlocked || !online) return
     const now = Date.now()
     const sinceLast = now - lastHeavySyncRef.current
     if (lastHeavySyncRef.current > 0 && sinceLast < 60_000) return
@@ -794,13 +799,13 @@ export default function App() {
         stableOnlineTimerRef.current = null
       }
     }
-  }, [auth, online])
+  }, [auth, online, adultBlocked])
 
   // Восстановленный из localStorage проект мог быть удалён на сервере (или список очищен).
   // Сверяемся со списком проектов и, если «призрака» там нет, выходим к списку.
   // Только онлайн: офлайн полагаемся на кэш и не выкидываем пользователя.
   useEffect(() => {
-    if (!auth || !online || !project) return
+    if (!auth || adultBlocked || !online || !project) return
     let cancelled = false
     api.projects.list()
       .then(list => {
@@ -819,13 +824,13 @@ export default function App() {
       .catch(() => { /* сервер недоступен — остаёмся в проекте, не трогаем состояние */ })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- реагируем на смену id, а не объекта: эффект сам зовёт setProject(fresh), включение project дало бы цикл перезапросов
-  }, [auth, online, project?.id])
+  }, [auth, online, project?.id, adultBlocked])
 
   // Watcher: сервер уведомил об изменении файлов проекта → инкрементальный ре-синк офлайн-кэша
   useEffect(() => onFilesChanged(({ projectId }) => { syncProjectFiles(projectId) }), [])
 
   // Подписка на уведомления через SignalR (даже если раздел ещё не открыт)
-  useEffect(() => { ensureNotificationsSubscribed(); }, []);
+  useEffect(() => { if (!adultBlocked) ensureNotificationsSubscribed(); }, [adultBlocked]);
 
   // Dev-витрина #/ui-kit — переключение hash (вход/выход из режима) без перезагрузки.
   // Тем же слушателем ловим #/boom: иначе демо экрана ошибки открывалось бы только
@@ -1488,7 +1493,7 @@ export default function App() {
       {authChecking
         ? <LoadingScreen hint="Проверяю вход" />
         : !auth
-          ? <LoginPage onConnect={setAuth} />
+          ? <LoginPage onConnect={a => { setAuthChecking(true); setAuth(a) }} />
           : effectiveHubTab === 'home'
             ? <HomePage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenProject={openProjectFromHome} />
           : effectiveHubTab === 'chats'

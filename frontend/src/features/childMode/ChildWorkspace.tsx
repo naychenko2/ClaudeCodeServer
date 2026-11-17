@@ -231,19 +231,20 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
   const hintsBody = sessionId ? <ChildHintsPanel step={step} sessionId={sessionId} /> : null;
   const showPanel = inLesson && (panelInline || panelOpen) && !isMobile;
 
-  const noticeBar = eff && (
+  // Плашка «Нет связи» видна всегда — и со статусом, и без него (первая загрузка без сети)
+  const noticeBar = (
     <>
       {offline && (
         <Notice tone="danger" icon={WifiOff} role="status">Нет связи. Как только она вернётся, продолжим.</Notice>
       )}
-      {!offline && eff.state === 'warn' && !warnDismissed && (
+      {!offline && eff?.state === 'warn' && !warnDismissed && (
         <Notice
           tone="warning"
           icon={Lightbulb}
           role="status"
           action={<Button size="xs" variant="ghost" onClick={() => setWarnDismissed(true)}>Хорошо</Button>}
         >
-          Осталось {eff.minutesLeft ?? eff.warnMinutes} минут. Доделай то, что начала, и отдохни.
+          Осталось {eff?.minutesLeft ?? eff?.warnMinutes} минут. Доделай то, что начала, и отдохни.
         </Notice>
       )}
       {error && <Notice tone="warning" icon={Lightbulb} role="alert">{error}</Notice>}

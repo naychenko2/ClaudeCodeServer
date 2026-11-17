@@ -43,13 +43,16 @@ internal sealed class TurnLaunchContextFactory
     private readonly SessionStore _store;
     private readonly Lazy<ITurnMessageSink> _messageSink;
     private readonly Lazy<ITurnStarter> _turnStarter;
+    private readonly ChildMode.IChildModePolicy? _childPolicy;
 
     public TurnLaunchContextFactory(BuiltinMcpContexts builtin, PersonaLayerBuilder personaLayer,
         ExternalMcpContexts external, ModulesMcpContexts moduleContexts,
         Execution.ILauncherFactory launchers, Plugins.IPluginDirSource? pluginDirSource,
         IConfiguration config, SessionStore store,
-        Lazy<ITurnMessageSink> messageSink, Lazy<ITurnStarter> turnStarter)
+        Lazy<ITurnMessageSink> messageSink, Lazy<ITurnStarter> turnStarter,
+        ChildMode.IChildModePolicy? childPolicy = null)
     {
+        _childPolicy = childPolicy;
         _builtin = builtin;
         _persona = personaLayer;
         _external = external;
@@ -248,6 +251,10 @@ internal sealed class TurnLaunchContextFactory
             PluginDirSource: _pluginDirSource,
             // Рамка хода для подборки (S2a-4): вердикт читает сам ClaudeSession через этот шов
             Project: project,
-            FrameSource: _store);
+            FrameSource: _store,
+            // И2: признак «ход ребёнка» живёт в контексте запуска и читается на каждом ходу
+            ChildPolicyProvider: _childPolicy is { } childPolicy && !string.IsNullOrEmpty(ownerId)
+                ? () => childPolicy.For(ownerId)
+                : null);
     }
 }

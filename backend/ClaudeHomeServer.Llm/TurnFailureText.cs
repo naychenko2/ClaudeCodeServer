@@ -156,6 +156,8 @@ public static class TurnFailureText
             // человеческий и единственный, по которому понятно, что включить
             if (inner is Execution.DeviceExecRefusedException refused)
                 return refused.Message;
+            if (inner is ChildRouteRefusedException childRefused)
+                return childRefused.Message;
         }
         return Generic;
     }

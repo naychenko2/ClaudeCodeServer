@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Turn;
@@ -53,6 +54,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Владелец хода: у проектной сессии Info.OwnerId пуст, владелец приходит из контекста
     private readonly string? _turnOwnerId;
+    private readonly Func<ChildPolicySnapshot?>? _childPolicy;
     internal string? TurnOwnerId => _turnOwnerId;
 
     // Каталоги плагинов владельца для --plugin-dir (ADR-031 §2.4/§2.5): шов IPluginDirSource
@@ -89,6 +91,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // _turnOwnerId; по Info.OwnerId хвост чата проекта брался из общего слота инстанса
     // (DEC-FALLBACK 3f2f33fb).
     internal IReadOnlyList<string> EffectiveTurnChain =>
+        // И2: у ребёнка фолбэка нет — цепочка из одной модели, отказ провайдера = ошибка хода
+        _childPolicy is not null && EffectiveModel is { } childModel ? new[] { childModel } :
         _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
@@ -1223,6 +1227,17 @@ public class ClaudeSession : ILlmSessionAdapter
 
     private string GatewayBaseUrl(string turnId) => $"{_llmGatewayApiUrl!.TrimEnd('/')}/gw/t/{turnId}/llm";
 
+    // Ключи, вычищаемые из унаследованного env хода. У ребёнка (И2) к ним добавляется токен
+    // подписки: он живёт в окружении бэкенда (Program.cs) и без чистки доехал бы до ключевого хода.
+    // Чистим и при _inheritSystemEnv (там EnvKeysToClear пуст): для ребёнка это не опция.
+    private IReadOnlyList<string> TurnClearEnv()
+    {
+        var keys = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys;
+        if (_childPolicy?.Invoke() is null) return keys;
+        return LlmProviderRegistry.ProviderEnvKeys.Concat(keys)
+            .Append("CLAUDE_CODE_OAUTH_TOKEN").Distinct().ToList();
+    }
+
     // Настоящий токен шлюза новому процессу: заглушки env заменяются уже после сигнатуры.
     // Отзыв — финализация прогона (FinalizeRunAsync) или сбой запуска.
     private (string TurnId, string Token) BindGatewayTurn(IDictionary<string, string> env)
@@ -1312,6 +1327,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _bgLingerTimeout = bgLingerTimeout ?? TimeSpan.FromMinutes(30);
         Info = info;
         _turnOwnerId = context.OwnerId ?? info.OwnerId;
+        _childPolicy = context.ChildPolicyProvider;
         _pluginDirSource = context.PluginDirSource;
         _pluginProject = context.Project;
         _rootPath = context.RootPath;
@@ -4632,6 +4648,25 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
 
+        // И2 (ADR-041): ход ребёнка идёт только по API-ключу записи пула из его профиля. Подписку
+        // не выбираем ни основную, ни пула; нет ключа у записи — отказ запуска, а не откат.
+        // Токен подписки из унаследованного env вычищает ChildTurnClearEnv (CLAUDE_CODE_OAUTH_TOKEN).
+        if (_childPolicy?.Invoke() is { } childSnapshot)
+        {
+            var childSub = ChildApiKeyRoute.Resolve(childSnapshot, _subscriptionPool);
+            envOverrides[ChildTurnMarker.EnvKey] = "1";
+            // Блок пула выше мог положить токен подписки (Info.Provider указывает на setup-token запись)
+            envOverrides.Remove("CLAUDE_CODE_OAUTH_TOKEN");
+            // Сторонний провайдер модели (cliEnv выше) ключ пула не получает — ключ Anthropic чужому эндпоинту не нужен
+            if (_providers?.ResolveByModel(EffectiveModel) is null)
+            {
+                var childEnv = _providers?.BuildOAuthCliEnv(childSub.Key, "", childSub.ApiKey, EffectiveModel)
+                    ?? throw new ChildRouteRefusedException(ChildApiKeyRoute.RefusedText);
+                foreach (var (k, v) in childEnv)
+                    envOverrides[k] = v;
+            }
+        }
+
         // BareMode (замена --bare, задача 2026-09-15): переменная окружения отключает
         // автозагрузку CLAUDE.md, не трогая MCP/хуки/остальное. Не документирована в
         // claude --help (найдена строкой в бинарнике CLI 2.1.270) — сторож на пропажу
@@ -4756,7 +4791,7 @@ public class ClaudeSession : ILlmSessionAdapter
             Args = args,
             WorkingDirectory = _rootPath,
             Env = envOverrides,
-            ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
+            ClearEnv = TurnClearEnv(),
             RedirectStdin = true,
             TurnId = _currentTurnId,
         };
@@ -4977,7 +5012,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     Env = envOverrides,
                     // Маршрут хода определяем только мы: системные ANTHROPIC_*/CLAUDE_CONFIG_DIR
                     // машины в ход не пускаем, иначе чат «на Claude» молча уедет на чужой эндпоинт
-                    ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
+                    ClearEnv = TurnClearEnv(),
                     StdioEncoding = utf8NoBom,
                     TurnId = _currentTurnId,
                     // Раннер устройства привязывает к чату токен шлюза (ADR-016 §2); local/docker поле не читают

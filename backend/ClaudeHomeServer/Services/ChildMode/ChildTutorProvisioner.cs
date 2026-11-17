@@ -89,7 +89,31 @@ public class ChildTutorProvisioner
 
             // Закрепляем ключ ДО вещания: обрыв вызова оставляет либо целую пару
             // (персона + ключ в ChildProfile), либо ничего — полуперсоны не бывает.
-            _users.SetChildTutorPersona(childUserId, createdId);
+            // Отказ закрепления компенсируем удалением созданной персоны (доработка KM-B1d,
+            // вердикт d4fc053c): иначе она осиротевает в personas.json без ключа и второй
+            // Ensure плодит второго «Помощника». false из SetChildTutorPersona — профиль
+            // ребёнка исчез на параллельной правке: это «профиля нет» из контракта метода —
+            // удаляем персону и возвращаем null; исключение стора — удаляем и пробрасываем.
+            bool keyed;
+            try
+            {
+                keyed = _users.SetChildTutorPersona(childUserId, createdId);
+            }
+            catch (OperationCanceledException)
+            {
+                _personas.Delete(createdId, childUserId);
+                return null;
+            }
+            catch
+            {
+                _personas.Delete(createdId, childUserId);
+                throw;
+            }
+            if (!keyed)
+            {
+                _personas.Delete(createdId, childUserId);
+                return null;
+            }
         }
         catch (OperationCanceledException)
         {

@@ -131,4 +131,43 @@ public class ChildTutorProvisionerTests : IDisposable
         _users.GetById(_childId)!.ChildMode!.TutorPersonaId.Should().Be(id);
         _personas.GetByOwner(_childId).Should().HaveCount(1);
     }
+
+    [Fact]
+    public async Task EnsureAsync_ИсключениеЗаписиКлюча_УдаляетПерсону_ИБросит()
+    {
+        // Отказ стора при закреплении ключа (доработка KM-B1d, вердикт d4fc053c): users.json
+        // недостижим — на его пути каталог с тем же именем, File.Move в JsonFileStore.Save
+        // (JsonFileStore.cs:332) бросит на обеих платформах. Create при этом пишет другой
+        // файл (personas.json) и успевает. Персона, созданная до отказа, не должна осиротеть
+        // без ключа: провижер удаляет её и пробрасывает исключение вызывающему (KM-B1e — 500).
+        var usersPath = Path.Combine(_tempDir, "users.json"); // путь ResolveUsersFilePath (UserStore.cs:55-60)
+        File.Delete(usersPath);
+        Directory.CreateDirectory(usersPath);
+
+        await ((Func<Task>)(() => _sut.EnsureAsync(_childId)))
+            .Should().ThrowAsync<Exception>("исключение записи ключа доходит до вызывающего");
+
+        _personas.GetByOwner(_childId).Should().BeEmpty(
+            "полуперсоны не бывает: отказ закрепления ключа не оставляет сироту");
+    }
+
+    [Fact]
+    public async Task EnsureAsync_ПрофильИсчезПриЗакреплении_УдаляетПерсону_ВозвращаетNull()
+    {
+        // Профиль ребёнка исчез между перечитыванием под локом и закреплением ключа
+        // (параллельная правка админа): SetChildTutorPersona (UserStore.cs:616-621)
+        // возвращает false. Это «профиля нет» из контракта EnsureAsync — провижер удаляет
+        // созданную персону и возвращает null, сирота в personas.json не остаётся.
+        // Исчезновение моделируем на единственной точке между проверкой и записью — событии
+        // OnPersonaCreated (PersonaManager.cs:656), которое Create поднимает синхронно ПОСЛЕ
+        // перечитывания провижера: без него профиль пришлось бы снять до вызова, и Ensure
+        // коротко замкнулся бы на ранней проверке, не доходя до закрепления.
+        _personas.OnPersonaCreated += _ => _users.GetById(_childId)!.ChildMode = null;
+
+        var id = await _sut.EnsureAsync(_childId);
+
+        id.Should().BeNull("ключа нет — провижн невозможен");
+        _personas.GetByOwner(_childId).Should().BeEmpty(
+            "полуперсоны не бывает: отказ закрепления ключа не оставляет сироту");
+    }
 }

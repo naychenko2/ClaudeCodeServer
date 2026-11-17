@@ -6,8 +6,9 @@
 // Черновик привязан к user.id: сменили пользователя — черновик и только-чтение сброшены (сброс в рендере,
 // по образцу «derived state» из React: старый вывод не коммитится). Ответ сохранения проверяется тем же
 // id: ответ для прежнего пользователя отбрасывается, он не пишет чужие только-чтение и не зовёт onSaved.
-// Время — строго «HH:mm» (контракт ADR): некорректное — подсветка поля и ни одного запроса; остальное
-// решает сервер, его 400-код переводится в человеческий текст (REJECT_TEXT), message ответа показываем как есть.
+// Время — строго «HH:mm» (контракт ADR), «Минут в день» — пусто (лимита нет) или целое 1..1440:
+// некорректное — подсветка поля и ни одного запроса; остальное решает сервер, его 400-код и отказы
+// 403/404 переводятся в человеческий текст (REJECT_TEXT), message ответа показываем как есть.
 
 import { useRef, useState } from 'react';
 import { AlertTriangle, Plus, Trash2 } from 'lucide-react';
@@ -43,6 +44,18 @@ const DEFAULT_WARN_MINUTES = 5;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 // Дни недели — ISO 1..7 (Пн..Вс); пустой выбор — каждый день (поля в теле нет, ADR-041).
 const DAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+// «Минут в день»: пусто — лимита нет; иначе — целое 1..1440. Всё прочее («3O», «0», «12.5», «2000») —
+// ошибка поля и ни одного запроса: молчаливое «лимита нет» из нечисловых значений опасно для
+// детской границы (R-KM-F11).
+const MINUTES_RE = /^\d+$/;
+const MINUTES_ERROR = 'Введите число минут, например 30';
+const badMinutes = (s: string): boolean => {
+  const t = s.trim();
+  if (!t) return false;
+  if (!MINUTES_RE.test(t)) return true;
+  const n = Number(t);
+  return n < 1 || n > 1440;
+};
 
 // Человеческий текст отказов 400 ручки №10 (ADR-041): код — причина для интерфейса, человеку —
 // что сделать. message ответа добавляется строкой ниже, как есть (ADR-041, «Общие правила»).
@@ -52,8 +65,11 @@ const REJECT_TEXT: Record<string, string> = {
   invalid_window: 'Окно времени задано неверно: формат ЧЧ:ММ, конец позже начала или через полночь.',
   invalid_space: 'Пространство задано неверно. Сейчас доступно только «Уроки».',
   guardian_not_found: 'Среди опекунов есть id, которого нет среди пользователей. Проверь список через запятую.',
+  user_not_found: 'Пользователь не найден — обновите список',
 };
 const REJECT_FALLBACK = 'Сохранить не удалось. Попробуй ещё раз.';
+// 403 гейта авторизации ручки №10 (политика админа): тело отказа пустое, кода нет — текст по status.
+const FORBIDDEN_TEXT = 'Нужны права администратора';
 
 // Черновик — строки полей ввода (пусто = поля нет в теле), окна списком, дни — множества ISO.
 interface DraftWindow { from: string; to: string; days: number[] }
@@ -163,7 +179,7 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
 
   const save = async () => {
     if (saving) return; // два нажатия — один запрос
-    if (d.enabled && d.windows.some((w) => badTime(w.from) || badTime(w.to))) {
+    if (d.enabled && (d.windows.some((w) => badTime(w.from) || badTime(w.to)) || badMinutes(d.dailyMinutes))) {
       setAttempted(true); // подсветка полей, запроса нет
       return;
     }
@@ -192,7 +208,7 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
       const body = err?.body;
       const server = typeof body?.message === 'string' && body.message.trim() ? body.message.trim() : undefined;
       const code = typeof body?.code === 'string' ? body.code : undefined;
-      setReject({ text: (code && REJECT_TEXT[code]) || REJECT_FALLBACK, server });
+      setReject({ text: err?.status === 403 ? FORBIDDEN_TEXT : (code && REJECT_TEXT[code]) || REJECT_FALLBACK, server });
       setSaving(false);
     }
   };
@@ -300,8 +316,8 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
           onClick={() => patch((prev) => ({ ...prev, windows: [...prev.windows, { from: '', to: '', days: [] }] }))}>
           Добавить окно
         </Button>
-        <Field label="Минут в день" hint="Пусто — дневного лимита нет">
-          <TextField value={d.dailyMinutes} inputMode="numeric" onChange={(v) => patch((prev) => ({ ...prev, dailyMinutes: v }))} placeholder="30" />
+        <Field label="Минут в день" hint="Пусто — дневного лимита нет" error={badMinutes(d.dailyMinutes) ? MINUTES_ERROR : undefined}>
+          <TextField value={d.dailyMinutes} inputMode="numeric" invalid={badMinutes(d.dailyMinutes)} onChange={(v) => patch((prev) => ({ ...prev, dailyMinutes: v }))} placeholder="30" />
         </Field>
         <Field label="Предупредить за, мин" hint="Сколько остаётся, когда ребёнок видит предупреждение">
           <TextField value={d.warnMinutes} inputMode="numeric" onChange={(v) => patch((prev) => ({ ...prev, warnMinutes: v }))} />

@@ -113,6 +113,16 @@ async function click(el: HTMLElement) {
   await act(async () => { el.click(); });
 }
 
+// Набрать в поле ввода: React держит props узла под __reactProps$…; зовём onChange напрямую
+// (тот же путь, что событие ввода), без событийной обвязки linkedom.
+const reactProps = (el: HTMLElement): { onChange?: (e: { target: { value: string } }) => void } | undefined => {
+  const key = Object.keys(el).find((k) => k.startsWith('__reactProps$'));
+  return key ? (el as unknown as Record<string, unknown>)[key] as { onChange?: (e: { target: { value: string } }) => void } : undefined;
+};
+const typeInto = async (el: HTMLInputElement, v: string) => {
+  await act(async () => { reactProps(el)?.onChange?.({ target: { value: v } }); });
+};
+
 // Ответ + выгнать цепочку then/catch обработчика (depth hops микротасков с запасом).
 async function settle(fn: () => void) {
   await act(async () => {
@@ -215,6 +225,40 @@ describe('ChildProfileEditor: время', () => {
   });
 });
 
+describe('ChildProfileEditor: «Минут в день»', () => {
+  const minutesInput = (host: HTMLElement) => inputByPlaceholder(host, '30');
+  const spacesOf = (i: number) => wire(i).spaces as Record<string, { dailyMinutes: unknown }>;
+
+  for (const bad of ['3O', '0', '-5', '2000', '12.5']) {
+    it(`«${bad}» — поле подсвечено и названо, запросов нет (R-KM-F11)`, async () => {
+      const { host } = await mount(liza());
+      await typeInto(minutesInput(host), bad);
+      const el = minutesInput(host);
+      expect(el.style.border, 'рамка поля C.dangerBorder').toContain('var(--c-danger-border)');
+      // текст ошибки поля — в обороте Field (input → обёртка TextField → div Field)
+      expect(el.parentElement?.parentElement?.textContent ?? '').toContain('Введите число минут, например 30');
+      await click(saveBtn(host));
+      expect(calls.length, 'некорректные минуты — без запроса').toBe(0);
+    });
+  }
+
+  it('пустое — «лимита нет»: dailyMinutes null в теле, поле не подсвечено', async () => {
+    const { host } = await mount(liza());
+    await typeInto(minutesInput(host), '');
+    expect(minutesInput(host).style.border).not.toContain('var(--c-danger-border)');
+    await click(saveBtn(host));
+    expect(spacesOf(0).lessons.dailyMinutes).toBeNull();
+  });
+
+  it('«30» — корректно: без подсветки, в теле 30', async () => {
+    const { host } = await mount(liza());
+    await typeInto(minutesInput(host), '30');
+    expect(minutesInput(host).style.border).not.toContain('var(--c-danger-border)');
+    await click(saveBtn(host));
+    expect(spacesOf(0).lessons.dailyMinutes).toBe(30);
+  });
+});
+
 describe('ChildProfileEditor: отказы ручки №10', () => {
   const REJECTS = [
     { code: 'not_container', text: 'только пользователям в песочнице' },
@@ -240,6 +284,25 @@ describe('ChildProfileEditor: отказы ручки №10', () => {
       expect(saveBtn(host).disabled).toBe(false);
     });
   }
+
+  it('404 user_not_found: человеческий текст вместо кода', async () => {
+    const { host } = await mount(liza());
+    await click(saveBtn(host));
+    await settle(() => pending.get(0)!.reject(httpErr(404, 'user_not_found', 'Пользователь не найден.')));
+    const n = notice(host);
+    expect(n).toBeTruthy();
+    expect(n!.textContent).toContain('Пользователь не найден — обновите список');
+    expect(n!.textContent).not.toContain('user_not_found');
+  });
+
+  it('403 без тела (гейт авторизации): «Нужны права администратора»', async () => {
+    const { host } = await mount(liza());
+    await click(saveBtn(host));
+    await settle(() => pending.get(0)!.reject(httpErr(403)));
+    const n = notice(host);
+    expect(n).toBeTruthy();
+    expect(n!.textContent).toContain('Нужны права администратора');
+  });
 
   it('500 без кода: общая warning-плашка, черновик цел', async () => {
     const { host } = await mount(liza());

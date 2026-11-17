@@ -212,6 +212,8 @@ public class ChildTutorProvisionerTests : IDisposable
         var persona = _personas.Get(id!, _childId);
         persona.Should().NotBeNull();
         persona!.OwnerId.Should().Be(_childId);
+        persona.Scope.Should().Be(PersonaScope.Global, "область репетитора предмета зафиксирована: Global");
+        persona.ProjectId.Should().BeNull("создаётся без projectId: репетитор не привязан к проекту");
         persona.Name.Should().Be("Репетитор: Математика", "имя несёт предмет: промпт-строитель при пустом role даёт «Ты — {Имя}»");
         persona.Role.Should().BeNull("роли в спецификации Т2b нет: предмет несёт имя");
         persona.Specialty.Should().Be(PersonaSpecialty.None);

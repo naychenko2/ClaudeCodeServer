@@ -75,11 +75,12 @@ describe('buildWidgetSrcDoc', () => {
 
 // --- buildWidgetSrcDoc: оболочка (навигацию фрейма держит оболочка, ADR-031 §3.6) ---
 
-// Первый <meta CSP> в документе — оболочки: у внутреннего атрибут content экранирован
-// (&quot;), прямого content=" у него нет.
-function shellCsp(doc: string): string {
+// Первый <meta CSP> документа: для внешнего — CSP оболочки; для внутреннего
+// (после innerDoc, где srcdoc уже разэкранирован) — CSP внутреннего документа.
+function cspMeta(doc: string): string {
   const m = doc.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/);
-  return m ? m[1] : '';
+  expect(m).not.toBeNull();
+  return m![1];
 }
 
 // Значение srcdoc внутреннего фрейма → сам внутренний документ (обратное экранирование:
@@ -92,11 +93,36 @@ function innerDoc(doc: string): string {
 
 describe('buildWidgetSrcDoc: оболочка и внутренний документ', () => {
   it('CSP оболочки держит навигацию фрейма: frame-src/base-uri none', () => {
-    const csp = shellCsp(buildWidgetSrcDoc('<b>w</b>', 'light'));
+    const csp = cspMeta(buildWidgetSrcDoc('<b>w</b>', 'light'));
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("frame-src 'none'");
     expect(csp).toContain("base-uri 'none'");
     expect(csp).toContain("script-src 'unsafe-inline'");
+  });
+
+  // Одна константа WIDGET_CSP на оба уровня (по образцу PANEL_CSP): srcdoc-документ
+  // наследует CSP создателя, политики складываются пересечением (ADR-031 §3.6) —
+  // более строгая оболочка вырезала бы data:/blob: картинки/шрифты/медиа самого
+  // виджета (картинка data:image/png была бы битой). Список ниже — контракт виджета,
+  // он держится в тесте отдельно от кода: исчезнет директива из константы — тест красный.
+  const WIDGET_REQUIRED_CSP = [
+    "default-src 'none'", "script-src 'unsafe-inline'", "style-src 'unsafe-inline'",
+    "img-src data: blob:", "font-src data:", "media-src data: blob:",
+    "form-action 'none'", "connect-src 'none'", "base-uri 'none'", "frame-src 'none'",
+  ];
+
+  it('CSP оболочки не строже внутренней: директивы виджета есть на обоих уровнях', () => {
+    const doc = buildWidgetSrcDoc('<b>w</b>', 'light');
+    const shell = cspMeta(doc);
+    const inner = cspMeta(innerDoc(doc));
+    for (const d of WIDGET_REQUIRED_CSP) {
+      expect(shell).toContain(d);
+      expect(inner).toContain(d);
+    }
+    // Каждая директива внутренней есть в оболочке: внутренняя строгой не станет
+    for (const d of inner.split(';').map(s => s.trim()).filter(Boolean)) {
+      expect(shell).toContain(d);
+    }
   });
 
   it('ровно один внутренний iframe с sandbox="allow-scripts", без allow-forms/allow-modals', () => {

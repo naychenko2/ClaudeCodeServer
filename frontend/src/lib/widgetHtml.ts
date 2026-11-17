@@ -64,23 +64,18 @@ const THEME_VARS: Record<'light' | 'dark', Record<string, string>> = {
   },
 };
 
-// CSP оболочки (внешний документ): навигацию внутреннего фрейма держит именно оболочка —
-// мета-CSP не ограничивает навигацию того фрейма, в котором документ показан сам (браузер
-// сверяет её с политикой родителя), поэтому location.href и <meta http-equiv=refresh>
-// внутри виджета без оболочки уводили фрейм на внешнюю страницу. frame-src 'none' это
-// закрывает; base-uri 'none' — <base>. style-src нужен для <style> оболочки (растяжка
-// внутреннего iframe): без него default-src 'none' вырезал бы её.
-const SHELL_CSP =
-  "default-src 'none'; frame-src 'none'; base-uri 'none'; script-src 'unsafe-inline'; " +
-  "style-src 'unsafe-inline'";
-
-// Строгая CSP внутреннего документа: никакой сети (default-src 'none'), inline-скрипты/
-// стили работают, картинки/шрифты/медиа — только data:/blob:. form-action не фолбэчится
-// в default-src — задан явно, чтобы submit не утёк наружу. connect-src/base-uri/frame-src
-// 'none' — явные, хотя и фолбэчатся в default-src: это читаемый контракт (та же схема,
-// что PANEL_CSP у панелей). Наша мета первая: даже если модель добавит свою CSP,
-// действует пересечение (строже, не слабее).
-const CSP =
+// Единая CSP на оба уровня (meta оболочки и meta внутреннего документа), по образцу
+// PANEL_CSP (ADR-031 §3.6): srcdoc-документ наследует CSP создателя, и политики
+// складываются пересечением — более строгая оболочка вырезала бы data:/blob: картинки,
+// шрифты и медиа самого виджета. Никакой сети (default-src 'none'), inline-скрипты/
+// стили работают (style-src нужен и <style> оболочки — растяжка внутреннего iframe),
+// картинки/шрифты/медиа — только data:/blob:. form-action не фолбэчится в default-src —
+// задан явно, чтобы submit не утёк наружу. connect-src/base-uri/frame-src 'none' —
+// явные, хотя и фолбэчатся в default-src: это читаемый контракт; frame-src 'none'
+// держит навигацию фрейма (мета-CSP не ограничивает навигацию того фрейма, в котором
+// документ показан сам, — её держит именно оболочка). Наша мета первая: даже если
+// модель добавит свою CSP, действует пересечение (строже, не слабее).
+export const WIDGET_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
   "img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; " +
   "connect-src 'none'; base-uri 'none'; frame-src 'none'";
@@ -118,9 +113,10 @@ function escapeSrcdoc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
-// Полный документ для iframe.srcDoc хоста — ОБОЛОЧКА: meta-CSP оболочки (держит навигацию
-// фрейма) + ровно один <iframe sandbox="allow-scripts" srcdoc=…> с внутренним документом
-// (CSP + тема + авто-высота + html модели, значение экранировано). Модель шлёт фрагмент
+// Полный документ для iframe.srcDoc хоста — ОБОЛОЧКА: meta-CSP оболочки (та же
+// WIDGET_CSP, что у внутреннего: навигацию фрейма держит именно оболочка) + ровно один
+// <iframe sandbox="allow-scripts" srcdoc=…> с внутренним документом
+// (та же CSP + тема + авто-высота + html модели, значение экранировано). Модель шлёт фрагмент
 // без <html>/<head>/<body>; если пришёл полный документ — браузер распарсит вложенные теги
 // лениво (виджет работает, но без нашей темы).
 export function buildWidgetSrcDoc(html: string, theme: 'light' | 'dark'): string {
@@ -129,7 +125,7 @@ export function buildWidgetSrcDoc(html: string, theme: 'light' | 'dark'): string
     .join(';');
   const inner =
     '<!doctype html><html><head><meta charset="utf-8">' +
-    `<meta http-equiv="Content-Security-Policy" content="${CSP}">` +
+    `<meta http-equiv="Content-Security-Policy" content="${WIDGET_CSP}">` +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
     `<style>:root{color-scheme:${theme};${vars}}` +
     'body{margin:0;background:var(--cc-bg);color:var(--cc-text);' +
@@ -140,7 +136,7 @@ export function buildWidgetSrcDoc(html: string, theme: 'light' | 'dark'): string
     '</body></html>';
   return (
     '<!doctype html><html><head>' +
-    `<meta http-equiv="Content-Security-Policy" content="${SHELL_CSP}">` +
+    `<meta http-equiv="Content-Security-Policy" content="${WIDGET_CSP}">` +
     '<style>' + SHELL_STYLE + '</style>' +
     '</head><body>' +
     '<iframe sandbox="allow-scripts" srcdoc="' + escapeSrcdoc(inner) + '"></iframe>' +

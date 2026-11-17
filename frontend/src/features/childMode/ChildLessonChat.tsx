@@ -42,6 +42,10 @@ const LADDER = ['Дай подсказку', 'Покажи похожий при
 
 const MB = 1024 * 1024;
 
+// Сбой хода: сырой текст провайдера («Invalid API key», «проверьте API-ключ») ребёнку не показываем —
+// он остаётся в логе сервера. Вместо него — один спокойный текст на «ты».
+export const CHILD_TURN_ERROR_TEXT = 'Помощник сейчас не может ответить. Попробуй чуть позже или позови взрослого.';
+
 interface Props {
   sessionId: string;
   subjectId: ChildSubjectId;
@@ -175,7 +179,14 @@ export function ChildLessonChat({ sessionId, subjectId, title, status, onHintSte
 
         <div data-child-feed="" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <div style={{ ...col, display: 'flex', flexDirection: 'column', gap: SP.md, fontSize: FS.lg, paddingBottom: SP.lg }}>
-            {items.map((item, i) => (
+            {items.map((item, i) => (item.kind === 'error' || item.kind === 'error_group') ? (
+              // Подряд идущие сбои сворачиваем в одну плашку
+              items[i - 1]?.kind === 'error' || items[i - 1]?.kind === 'error_group' ? null : (
+                <div key={i} data-child-turn-error="">
+                  <Notice tone="warning" icon={Lightbulb} role="alert">{CHILD_TURN_ERROR_TEXT}</Notice>
+                </div>
+              )
+            ) : (
               <ChatItemView
                 key={i}
                 item={item}

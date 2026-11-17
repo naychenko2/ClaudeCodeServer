@@ -54,8 +54,9 @@ vi.mock('./api', () => {
 });
 
 vi.mock('../../hooks/useOnline', () => ({ useOnline: () => true }));
+let mockItems: unknown[] = [];
 vi.mock('../../hooks/useSession', () => ({
-  useSession: () => ({ items: [], isWaiting: false, isJoined: true, send: vi.fn(), interrupt: vi.fn() }),
+  useSession: () => ({ items: mockItems, isWaiting: false, isJoined: true, send: vi.fn(), interrupt: vi.fn() }),
 }));
 vi.mock('../../components/chat/ChatItemView', () => ({ ChatItemView: () => null }));
 vi.mock('../../components/ui/WaitingIndicator', () => ({ WaitingIndicator: () => null }));
@@ -66,7 +67,7 @@ vi.mock('../../components/Composer', () => ({
     ...p.attachments.map(path => createElement('span', { key: path, 'data-att': path }, path))),
 }));
 
-const { ChildLessonChat } = await import('./ChildLessonChat');
+const { ChildLessonChat, CHILD_TURN_ERROR_TEXT } = await import('./ChildLessonChat');
 const { ChildAttachmentRejectedError } = await import('./api');
 
 const STATUS = {
@@ -139,6 +140,26 @@ describe('ChildLessonChat: загрузка вложения', () => {
     const alert = doc.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain(`можно до ${mb} МБ`);
     expect(chips()).toEqual([]);
+    root.unmount();
+  });
+});
+
+describe('ChildLessonChat: сбой хода в ленте', () => {
+  beforeEach(() => { mockItems = []; });
+
+  it('сырой текст ошибки провайдера не попадает в ленту — вместо него спокойный текст на «ты»', () => {
+    mockItems = [
+      { kind: 'error', text: 'Invalid API key · Fix external API key', canRetry: true },
+      { kind: 'error_group', date: 0, items: [{ kind: 'error', text: 'ошибка авторизации — проверьте API-ключ' }] },
+    ];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-err');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    expect(feed.textContent).not.toMatch(/API|ключ/i);
+    const blocks = feed.querySelectorAll('[data-child-turn-error]');
+    expect(blocks.length).toBe(1);
+    expect(blocks[0].textContent).toContain(CHILD_TURN_ERROR_TEXT);
+    expect(CHILD_TURN_ERROR_TEXT).toContain('Попробуй');
     root.unmount();
   });
 });

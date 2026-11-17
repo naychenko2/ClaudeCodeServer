@@ -626,6 +626,59 @@ public class UserStore : IForgejoAccountStore, IUserStore
     }
 
     /// <summary>
+    /// Целый детский профиль пользователя (KM-B1e, ADR-041 ручка №10): чтение-изменение-запись
+    /// под одним локом — иначе параллельный agree ребёнка (RulesAgreedAt/RulesSummary пишет
+    /// только он, KM-B6b) затёрся бы снимком вызывающего, а два одновременных PUT дали бы
+    /// смесь полей вместо одного целого профиля.
+    /// Правила всегда берутся из живого профиля, кроме resetRules=true — тот же resetRules
+    /// просит админ (сбросить оба поля). profile=null — профиля нет (отказ включению:
+    /// провижн тьютора не удался, вызывающий откатывает прежний). Возвращает false, если
+    /// пользователь не найден.
+    /// </summary>
+    public bool SetChildProfile(string id, ChildProfile? profile, bool resetRules)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            if (profile is not null)
+            {
+                if (!resetRules && user.ChildMode is { } live)
+                {
+                    profile.RulesAgreedAt = live.RulesAgreedAt;
+                    profile.RulesSummary = live.RulesSummary;
+                }
+                user.ChildMode = profile;
+            }
+            else
+            {
+                user.ChildMode = null;
+            }
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Выключение детского режима (KM-B1e): Enabled=false на существующем профиле, настройки
+    /// сохраняются — тело {enabled:false} просит выключить режим, а не стереть выставленные
+    /// админом лимиты; «профиль выключен» политика читает как обычного пользователя
+    /// (ChildModePolicy). Профиля нет — выключать нечего: true, состояние уже «не ребёнок».
+    /// </summary>
+    public bool DisableChildMode(string id)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            if (user.ChildMode is null) return true;
+            user.ChildMode.Enabled = false;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Сессия незавершённого онбординга пользователя (null — онбординг завершён/сброшен).
     /// Возвращает false если пользователь не найден.
     /// </summary>

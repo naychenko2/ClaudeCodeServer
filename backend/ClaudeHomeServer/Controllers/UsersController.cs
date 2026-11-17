@@ -3,8 +3,11 @@ using System.Security.Claims;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Auth;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -16,6 +19,7 @@ namespace ClaudeHomeServer.Controllers;
 public class UsersController(UserStore users, SessionManager sessions,
     UserKnowledgeCascade knowledgeCascade, DefaultAssistantProvisioner provisioner,
     ProjectMembershipService membership, IPersonalProjects personalProjects,
+    ChildTutorProvisioner childTutorProvisioner, ClaudeSubscriptionPool subscriptionPool,
     ILogger<UsersController> logger) : ControllerBase
 {
     private static readonly Regex UsernameRegex = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
@@ -147,10 +151,115 @@ public class UsersController(UserStore users, SessionManager sessions,
         return NoContent();
     }
 
+    /// <summary>
+    /// Детский профиль пользователя (ADR-041 «Контракт», ручка №10; KM-B1e): включает и правит
+    /// режим только админ. Роль — и по claim ([Authorize] класса), и по стору (AdminByStore):
+    /// сервисный токен хода — всегда роль "user", без политики он к админ-ручке не допускается,
+    /// а снятое админство не ждало бы истечения токена. [ChildAllowed] здесь нет намеренно:
+    /// ребёнок свой профиль не правит (тот же приём, что у AdminUserModelTiersController).
+    /// Тело — ChildProfileDto или { enabled: false } для выключения. Ответ 200 { profile,
+    /// tutorPersonaId }; отказы — { code, message } с кодами ADR (фронт переводит code сам).
+    /// Правила (RulesAgreedAt/RulesSummary) из тела не принимаются: их пишет только детский
+    /// rules/agree (KM-B6b); resetRules=true — сбросить оба.
+    /// </summary>
+    [HttpPut("{id}/child-profile")]
+    [Authorize(Policy = AdminByStoreRequirement.PolicyName)]
+    public async Task<IActionResult> SetChildProfile(string id, [FromBody] ChildProfileDto req)
+    {
+        var user = users.GetById(id);
+        if (user is null)
+            return NotFound(new { code = "user_not_found", message = "Пользователь не найден." });
+
+        // Выключение — без проверок тела: отказы таблицы ADR — проверки «при включении».
+        // Профиль при этом сохраняется (Enabled=false): тело {enabled:false} просит выключить
+        // режим, а не стереть выставленные админом лимиты; политика «профиль выключен» =
+        // обычный пользователь (ChildModePolicy).
+        if (!req.Enabled)
+        {
+            users.DisableChildMode(id);
+            var off = users.GetById(id)!;
+            return Ok(new ChildProfileResponse(ToChildProfileDto(off.ChildMode), off.ChildMode?.TutorPersonaId ?? ""));
+        }
+
+        if (ChildProfileValidator.Validate(req, user, users, subscriptionPool) is { } reject)
+            return BadRequest(new { code = reject.Code, message = reject.Message });
+
+        // Снимок прежнего профиля — ради отката при отказе провижнера («профиль не сохранён»).
+        var previous = user.ChildMode;
+        // Целый новый профиль, мутация — под локом стора: RulesAgreedAt/RulesSummary стор
+        // возьмёт из живого профиля, а не из нашего снимка (иначе затёрся бы параллельный
+        // agree ребёнка), и два одновременных PUT дают один целый профиль, не смесь полей.
+        users.SetChildProfile(id, ToChildProfile(req), resetRules: req.ResetRules == true);
+
+        // Тьютор провится после записи: EnsureAsync закрепляет id в существующем профиле
+        // (SetChildTutorPersona) и идемпотентен — повторное включение возвращает живого тьютора.
+        string? tutorId;
+        try
+        {
+            tutorId = await childTutorProvisioner.EnsureAsync(id);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Детский режим: провижн тьютора не удался для {User}", id);
+            users.SetChildProfile(id, previous, resetRules: false);
+            return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось создать персону-тьютора; профиль не изменён." });
+        }
+        // null — провижн невозможен (пользователь или профиль исчезли на параллельной правке,
+        // запрос отменён): ребёнок без тьютора не остаётся — тот же откат и 500.
+        if (tutorId is null)
+        {
+            users.SetChildProfile(id, previous, resetRules: false);
+            return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось закрепить персону-тьютора; профиль не изменён." });
+        }
+
+        var saved = users.GetById(id);
+        if (saved?.ChildMode is not { } finalProfile)
+            return StatusCode(500, new { code = "tutor_provision_failed", message = "Профиль ребёнка не сохранился; повторите." });
+        return Ok(new ChildProfileResponse(ToChildProfileDto(finalProfile), tutorId));
+    }
+
     // --- вспомогательные методы ---
 
     private static UserDto ToDto(User u) =>
         new(u.Id, u.Username, u.Role, u.CreatedAt, u.ExecutionEnvironment);
+
+    // Wire-контракт ADR-041 (ChildProfileDto) → модель стора. Правил (RulesAgreedAt/
+    // RulesSummary) в wire-типе нет: они живут только в модели и из тела не принимаются
+    // никогда. Порог предупреждения: нет поля — дефолт 5 (ADR-041).
+    private static ChildProfile ToChildProfile(ChildProfileDto req) => new()
+    {
+        Enabled = true,
+        GuardianUserIds = [.. req.GuardianUserIds ?? []],
+        ProviderKey = req.ProviderKey ?? "",
+        Model = req.Model ?? "",
+        Spaces = (req.Spaces ?? []).ToDictionary(
+            kv => kv.Key,
+            kv => new SpaceLimits
+            {
+                Windows = [.. (kv.Value?.Windows ?? []).Select(w => new TimeWindow
+                {
+                    From = w?.From ?? "",
+                    To = w?.To ?? "",
+                    Weekdays = w?.Weekdays is { } days ? [.. days] : null,
+                })],
+                DailyMinutes = kv.Value?.DailyMinutes,
+            }),
+        DailyBudgetUsd = req.DailyBudgetUsd,
+        MonthlyBudgetUsd = req.MonthlyBudgetUsd,
+        WarnMinutes = req.WarnMinutes ?? 5,
+    };
+
+    // Обратный маппинг — для поля profile ответа (null — профиля нет: выключение пользователя,
+    // который им и не был). Правила наружу не отдаются: их поле — дата согласия ребёнка,
+    // её показывает status-ручка (№1), не этот ответ.
+    private static ChildProfileDto? ToChildProfileDto(ChildProfile? p) => p is null ? null :
+        new ChildProfileDto(p.Enabled, [.. p.GuardianUserIds], p.ProviderKey, p.Model,
+            p.Spaces.ToDictionary(
+                kv => kv.Key,
+                kv => new ChildSpaceLimitsDto([.. kv.Value.Windows.Select(
+                    w => new ChildTimeWindowDto(w.From, w.To, w.Weekdays is { } days ? [.. days] : null))],
+                    kv.Value.DailyMinutes)),
+            p.DailyBudgetUsd, p.MonthlyBudgetUsd, p.WarnMinutes, null);
 
     private static string? ValidateUsername(string? username)
     {

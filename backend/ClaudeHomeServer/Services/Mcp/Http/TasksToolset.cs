@@ -63,7 +63,9 @@ public sealed class TasksToolset(
     INoteTaskSync? noteSync = null,
     // B4c: подбор маршрута при агентском создании эпика — тот же фоновый запуск, что у REST-дверей
     WorkflowRecommender? workflowRecommender = null,
-    ILogger<TasksToolset>? log = null) : IMcpParameterizedToolset
+    ILogger<TasksToolset>? log = null,
+    // Режим ответов (компактный/полный) — живой ключ Mcp:TasksCompactResponses; null — компактный
+    IConfiguration? config = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession); живёт в Core
@@ -90,6 +92,22 @@ public sealed class TasksToolset(
 
     public string Name => ServerName;
     public string Version => "1.0.0";
+
+    // Рубильник читается на каждый вызов: откат на «полный» ответ — правкой appsettings.Local.json
+    // без выкатки (источник перечитывается сам)
+    private bool CompactMode => config?.GetValue(TasksCompactView.ConfigKey, true) ?? true;
+
+    // Ответ изменяющего вызова: в компактном режиме — без эха присланных текстов и пустых полей
+    // (sentKeys — ключи аргументов вызова плюс обязательные к показу), в полном — карточка как раньше
+    private JsonObject? MutationCard(TaskItem view, JsonObject arguments, params string[] alsoSent) =>
+        CompactMode
+            ? TasksCompactView.ForMutation(
+                JsonSerializer.SerializeToNode(view, JsonOpts)!.AsObject(),
+                arguments.Select(kv => kv.Key).Concat(alsoSent))
+            : null;
+
+    private McpToolCallResult MutationJson(TaskItem view, JsonObject arguments, params string[] alsoSent) =>
+        MutationCard(view, arguments, alsoSent) is { } card ? new(card.ToJsonString(JsonOpts)) : Json(view);
 
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
         TryResolve(context, out var session, out _, out _)
@@ -193,7 +211,8 @@ public sealed class TasksToolset(
                 var (task, candidates) = GetForRead(context.OwnerId, projectId, allowed, id, narrow);
                 // S2c-9: актор-участник — та же проекция TaskView, что в REST (одна точка правды).
                 if (task is not null)
-                    return TaskJson(ForCaller(task, session, context.OwnerId), context.OwnerId);
+                    return TaskJson(ForCaller(task, session, context.OwnerId), context.OwnerId,
+                        compact: CompactMode && !(arguments["full"] is JsonValue fv && fv.TryGetValue<bool>(out var wantFull) && wantFull));
                 // Неоднозначный префикс: краткий список кандидатов (id + title, до 5), чтобы модель выбрала
                 if (candidates is { Count: > 0 })
                     return Deny($"Несколько задач начинаются с «{id}» — уточните id: " +
@@ -357,7 +376,7 @@ public sealed class TasksToolset(
                 // B4c: агентски созданный эпик получает предложение маршрута так же, как созданный
                 // через REST; ключ владельца — арендатор записи (внутри Start), сбой не роняет ответ
                 EpicWorkflowRecommend.Start(workflowRecommender, tasks, broadcaster, sessions, projects, log, created);
-                return Json(ForCaller(created, session, context.OwnerId));
+                return MutationJson(ForCaller(created, session, context.OwnerId), arguments);
             }
 
             case "tasks_update":
@@ -704,7 +723,7 @@ public sealed class TasksToolset(
                 // которого не было.
                 FireResolveBlockerByTask(updated, session.Id,
                     "штаб переписал задачу — блокер снят");
-                return Json(ForCaller(updated, session, context.OwnerId));
+                return MutationJson(ForCaller(updated, session, context.OwnerId), arguments);
             }
 
             case "tasks_complete":
@@ -773,7 +792,7 @@ public sealed class TasksToolset(
                 // гасит карточку «штаб закрыл задачу», приписанного действия нет
                 FireResolveBlockerByTask(updated, session.Id,
                     "штаб закрыл задачу — блокер снят");
-                return CompleteResponse(ForCaller(updated, session, context.OwnerId));
+                return CompleteResponse(ForCaller(updated, session, context.OwnerId), arguments);
             }
 
             case "tasks_run_executor":
@@ -911,7 +930,8 @@ public sealed class TasksToolset(
                 }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
                 await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
-                return Json(ForCaller(updated, session, context.OwnerId));
+                // id подзадач нужны следующему tasks_toggle_subtask — список показываем всегда
+                return MutationJson(ForCaller(updated, session, context.OwnerId), arguments, "subtasks");
             }
 
             case "tasks_toggle_subtask":
@@ -941,7 +961,8 @@ public sealed class TasksToolset(
                 }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
                 await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
-                return Json(ForCaller(updated, session, context.OwnerId));
+                // id подзадач нужны следующему tasks_toggle_subtask — список показываем всегда
+                return MutationJson(ForCaller(updated, session, context.OwnerId), arguments, "subtasks");
             }
 
             case "tasks_find_duplicate":
@@ -1312,9 +1333,11 @@ public sealed class TasksToolset(
     // чинит оркестратор (колонка «Кто чинит» разреза 26.10), поэтому здесь нет ни правок, ни
     // напоминаний. Пустой список назван явно: молчание читалось бы как «не смотрели».
     // Роль не feature — ответ прежний, байт в байт.
-    private McpToolCallResult TaskJson(TaskItem task, string ownerId)
+    private McpToolCallResult TaskJson(TaskItem task, string ownerId, bool compact = false)
     {
-        var json = JsonSerializer.Serialize(task, JsonOpts);
+        var json = compact
+            ? TasksCompactView.ForRead(JsonSerializer.SerializeToNode(task, JsonOpts)!.AsObject()).ToJsonString(JsonOpts)
+            : JsonSerializer.Serialize(task, JsonOpts);
         if (task.Role != TaskRoles.Feature) return new McpToolCallResult(json);
 
         var issues = features.ProjectFull(task.Id, ownerId, FeatureChatDoor.Snapshot(sessions, ownerId))
@@ -1343,9 +1366,10 @@ public sealed class TasksToolset(
     // не покажет, а блокировать закрытие ради UI нельзя (разрез §5). Строка и условие — общие
     // с REST (FeatureVerdict.Warning, Core): одна точка правды. Сериализация — теми же
     // JsonOpts, что Json<T>: кириллица без \u-экранирования, enum'ы camelCase.
-    private static McpToolCallResult CompleteResponse(TaskItem task)
+    private McpToolCallResult CompleteResponse(TaskItem task, JsonObject arguments)
     {
-        var json = JsonNode.Parse(JsonSerializer.Serialize(task, JsonOpts))!.AsObject();
+        var json = MutationCard(task, arguments)
+            ?? JsonNode.Parse(JsonSerializer.Serialize(task, JsonOpts))!.AsObject();
         if (FeatureVerdict.Warning(task) is { } warning)
             json["warning"] = warning;
         return new(json.ToJsonString(JsonOpts));
@@ -1530,13 +1554,11 @@ public sealed class TasksToolset(
             : "Контекст — личные задачи пользователя (вне проектов).";
 
         yield return Tool("tasks_list_projects",
-            "Проекты, чьи задачи доступны в этом ходу (текущий плюс кросс-проектные привязки): " +
-            "id, имя, readOnly. По ним выбирай projectId для tasks_create/tasks_list.",
+            "Проекты, чьи задачи доступны в этом ходу: id, имя, readOnly. По ним выбирай projectId.",
             new JsonObject { ["type"] = "object", ["properties"] = new JsonObject() });
 
         yield return Tool("tasks_list",
-            $"Список задач. {context} scope=all — все задачи пользователя по всем проектам и личные. " +
-            $"По умолчанию открытые + закрытые за последние дни (doneDays); детали окна и потолка — в doneDays.",
+            $"Список задач. {context} По умолчанию открытые + закрытые за последние дни (doneDays).",
             new JsonObject
             {
                 ["type"] = "object",
@@ -1546,75 +1568,73 @@ public sealed class TasksToolset(
                     {
                         ["type"] = "string",
                         ["enum"] = new JsonArray { "todo", "inProgress", "done" },
-                        ["description"] = "Фильтр по статусу",
                     },
                     ["priority"] = new JsonObject
                     {
                         ["type"] = "string",
                         ["enum"] = new JsonArray { "urgent", "high", "medium", "low" },
-                        ["description"] = "Фильтр по приоритету",
                     },
                     ["assignee"] = new JsonObject
                     {
                         ["type"] = "string",
                         ["enum"] = new JsonArray { "me", "claude" },
-                        ["description"] = "Фильтр по исполнителю (me — пользователь, claude — Claude)",
                     },
                     ["from"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Срок от даты включительно, YYYY-MM-DD (задачи без срока не попадают)",
+                        ["description"] = "Срок от, YYYY-MM-DD",
                     },
                     ["to"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Срок до даты включительно, YYYY-MM-DD (задачи без срока не попадают)",
+                        ["description"] = "Срок до, YYYY-MM-DD",
                     },
                     ["doneDays"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = $"Окно закрытых задач по дате закрытия: число дней (0 — без закрытых) или all — все закрытые; по умолчанию {DefaultDoneDays}. Не действует при status, featureId и from/to. Потолок выдачи {ListLimit} записей (при обрезке первым элементом note); старое — doneDays=all, status=done или tasks_search.",
+                        ["description"] = $"Закрытые за N дней (0 — без; all — все), по умолчанию {DefaultDoneDays}; не при status/featureId/from/to. Потолок {ListLimit}, при обрезке первым элементом note",
                     },
                     ["scope"] = new JsonObject
                     {
                         ["type"] = "string",
                         ["enum"] = new JsonArray { "context", "all" },
-                        ["description"] = "context (дефолт) — текущий проект/личные; all — все задачи пользователя",
+                        ["description"] = "all — все задачи пользователя",
                     },
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Явный проект — переопределяет scope, только его задачи",
+                        ["description"] = "Проект, переопределяет scope",
                     },
                     ["featureId"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Id задачи-эпика фичи: только задачи этой фичи и сам эпик (окно doneDays не применяется)",
+                        ["description"] = "Эпик фичи: задачи фичи и сам эпик (doneDays не действует)",
                     },
                 },
             });
 
         yield return Tool("tasks_search",
-            "Поиск задач по названию, описанию и меткам — по всем задачам пользователя (все проекты + личные).",
+            "Поиск по названию, описанию и меткам среди всех задач пользователя.",
             new JsonObject
             {
                 ["type"] = "object",
                 ["required"] = new JsonArray { "query" },
                 ["properties"] = new JsonObject
                 {
-                    ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Строка поиска" },
+                    ["query"] = new JsonObject { ["type"] = "string" },
                 },
             });
 
         yield return Tool("tasks_get",
-            "Полная карточка задачи по id: описание (markdown), подзадачи, метки, срок.",
+            "Карточка задачи по id (без пустых и служебных полей; full=true — все).",
             new JsonObject
             {
                 ["type"] = "object",
                 ["required"] = new JsonArray { "id" },
                 ["properties"] = new JsonObject
                 {
-                    ["id"] = new JsonObject { ["type"] = "string", ["description"] = "ID задачи (полный или его начало от 8 символов)" },
+                    ["id"] = new JsonObject { ["type"] = "string" },
+                    ["full"] = new JsonObject { ["type"] = "boolean" },
                 },
             });
 
@@ -1626,23 +1646,22 @@ public sealed class TasksToolset(
                 ["required"] = new JsonArray { "title" },
                 ["properties"] = new JsonObject
                 {
-                    ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Название задачи" },
-                    ["description"] = new JsonObject { ["type"] = "string", ["description"] = "Описание (markdown)" },
+                    ["title"] = new JsonObject { ["type"] = "string" },
+                    ["description"] = new JsonObject { ["type"] = "string" },
                     ["priority"] = new JsonObject
                     {
                         ["type"] = "string",
                         ["enum"] = new JsonArray { "urgent", "high", "medium", "low" },
-                        ["description"] = "Приоритет (по умолчанию medium)",
+                        ["description"] = "По умолчанию medium",
                     },
-                    ["dueDate"] = new JsonObject { ["type"] = "string", ["description"] = "Срок YYYY-MM-DD" },
-                    ["dueTime"] = new JsonObject { ["type"] = "string", ["description"] = "Время HH:MM" },
+                    ["dueDate"] = new JsonObject { ["type"] = "string", ["description"] = "YYYY-MM-DD" },
+                    ["dueTime"] = new JsonObject { ["type"] = "string", ["description"] = "HH:MM" },
                     ["reminderMinutes"] = ReminderMinutesSchema(),
                     ["recurrence"] = RecurrenceSchema(),
                     ["assignee"] = new JsonObject
                     {
                         ["type"] = "string",
                         ["enum"] = new JsonArray { "me", "claude" },
-                        ["description"] = "Исполнитель",
                     },
                     ["personaId"] = PersonaIdSchema(),
                     ["modelTier"] = ModelTierSchema(),
@@ -1652,22 +1671,20 @@ public sealed class TasksToolset(
                     {
                         ["type"] = "array",
                         ["items"] = new JsonObject { ["type"] = "string" },
-                        ["description"] = "Названия подзадач",
                     },
                     ["labels"] = new JsonObject
                     {
                         ["type"] = "array",
                         ["items"] = new JsonObject { ["type"] = "string" },
-                        ["description"] = "Метки",
                     },
                     ["columnId"] = ColumnIdSchema(),
                     ["executionExpiresAfterMinutes"] = ExecutionTtlSchema(),
-                    ["kind"] = KindSchema(),
+                    ["kind"] = NoDesc(KindSchema()),
                     ["repro"] = ReproSchema(),
                     ["featureId"] = FeatureIdSchema(),
                     ["role"] = RoleSchema(),
-                    ["stepRef"] = StepRefSchema(),
-                    ["lane"] = LaneSchema(),
+                    ["stepRef"] = NoDesc(StepRefSchema()),
+                    ["lane"] = NoDesc(LaneSchema()),
                     ["stageId"] = StageIdSchema(),
                     ["reviewOf"] = ReviewOfSchema(),
                     ["acceptance"] = AcceptanceSchema(),
@@ -1675,26 +1692,22 @@ public sealed class TasksToolset(
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Проект задачи, если не текущий (см. tasks_list_projects; нужен полный доступ)",
+                        ["description"] = "Проект, если не текущий (tasks_list_projects)",
                     },
                 },
             });
 
         yield return Tool("tasks_update",
-            "Обновить поля задачи: поля как при создании, передавай только изменяемые. " +
-            "Очистка значений и сброс повторения — см. инструкции сервера tasks.",
+            "Обновить задачу: поля как при создании, только изменяемые. Очистка значений и сброс повторения — см. инструкции сервера tasks.",
             new JsonObject
             {
                 ["type"] = "object",
                 ["required"] = new JsonArray { "id" },
                 ["properties"] = new JsonObject
                 {
-                    ["id"] = new JsonObject { ["type"] = "string", ["description"] = "ID задачи" },
+                    ["id"] = new JsonObject { ["type"] = "string" },
                     ["title"] = new JsonObject { ["type"] = "string" },
-                    ["description"] = new JsonObject
-                    {
-                        ["type"] = "string", ["description"] = "Описание (markdown), заменяет целиком",
-                    },
+                    ["description"] = new JsonObject { ["type"] = "string" },
                     ["status"] = new JsonObject
                     {
                         ["type"] = "string", ["enum"] = new JsonArray { "todo", "inProgress", "done" },
@@ -1705,14 +1718,14 @@ public sealed class TasksToolset(
                     },
                     ["dueDate"] = new JsonObject
                     {
-                        ["type"] = "string", ["description"] = "YYYY-MM-DD; \"\" — убрать срок",
+                        ["type"] = "string", ["description"] = "\"\" — убрать",
                     },
                     ["dueTime"] = new JsonObject
                     {
-                        ["type"] = "string", ["description"] = "HH:MM; \"\" — убрать время",
+                        ["type"] = "string", ["description"] = "\"\" — убрать",
                     },
-                    ["reminderMinutes"] = ReminderMinutesSchema(),
-                    ["recurrence"] = RecurrenceSchema(),
+                    ["reminderMinutes"] = NoDesc(ReminderMinutesSchema()),
+                    ["recurrence"] = NoDesc(RecurrenceSchema()),
                     // S2b-2b: значением может быть username участника проекта задачи — фиксированного
                     // enum здесь быть не может (списка username'ов в схеме нет); «me»/«claude» — прежние.
                     // Описание короткое: tasks_update стоит у лимита суммы описаний параметров (1950,
@@ -1724,46 +1737,41 @@ public sealed class TasksToolset(
                         ["description"] = "me, claude или username участника",
                     },
                     ["personaId"] = PersonaIdSchema(),
-                    ["modelTier"] = ModelTierSchema(),
-                    ["worktreePath"] = WorktreePathSchema(),
-                    ["worktreeBranch"] = WorktreeBranchSchema(),
+                    ["modelTier"] = NoDesc(ModelTierSchema()),
+                    ["worktreePath"] = NoDesc(WorktreePathSchema()),
+                    ["worktreeBranch"] = NoDesc(WorktreeBranchSchema()),
                     ["resultMarkdown"] = ResultMarkdownSchema(),
-                    ["linkedFiles"] = LinkedFilesSchema(),
+                    ["linkedFiles"] = NoDesc(LinkedFilesSchema()),
                     ["labels"] = new JsonObject
                     {
                         ["type"] = "array",
                         ["items"] = new JsonObject { ["type"] = "string" },
-                        ["description"] = "Метки (заменяют целиком)",
                     },
-                    ["columnId"] = ColumnIdSchema(),
-                    ["executionExpiresAfterMinutes"] = ExecutionTtlSchema(),
-                    ["kind"] = KindSchema(),
-                    ["repro"] = ReproSchema(),
-                    ["featureId"] = FeatureIdSchema(),
-                    ["role"] = RoleSchema(),
-                    ["stepRef"] = StepRefSchema(),
-                    ["lane"] = LaneSchema(),
-                    ["reviewOf"] = ReviewOfSchema(),
+                    ["columnId"] = NoDesc(ColumnIdSchema()),
+                    ["executionExpiresAfterMinutes"] = NoDesc(ExecutionTtlSchema()),
+                    ["kind"] = NoDesc(KindSchema()),
+                    ["repro"] = NoDesc(ReproSchema()),
+                    ["featureId"] = NoDesc(FeatureIdSchema()),
+                    ["role"] = NoDesc(RoleSchema()),
+                    ["stepRef"] = NoDesc(StepRefSchema()),
+                    ["lane"] = NoDesc(LaneSchema()),
+                    ["reviewOf"] = NoDesc(ReviewOfSchema()),
                     ["acceptance"] = AcceptanceSchema(),
                     ["evidence"] = EvidenceSchema(),
                     ["planSteps"] = PlanStepsSchema(),
                     ["featureNote"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять с оценкой. Пиши в каждом ходе с featureEstimate.",
+                        ["description"] = "Голос фичи (эпик): ≤600, \"\" — снять с оценкой; пиши в каждом ходе с featureEstimate",
                     },
                     ["featureEstimate"] = FeatureEstimateSchema(),
                     ["awaitingHuman"] = new JsonObject
                     {
                         ["type"] = "object",
-                        ["description"] = "Ждёт человека: {ask} — запрос (≤120); null — снять; Since ставит сервер.",
-                        ["properties"] = new JsonObject
-                        {
-                            ["ask"] = new JsonObject { ["type"] = "string" },
-                        },
+                        ["description"] = "Ждёт человека: {ask ≤120}; null — снять",
                     },
                     ["verification"] = VerificationSchema(),
-                    ["outcome"] = OutcomeSchema(),
+                    ["outcome"] = NoDesc(OutcomeSchema()),
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
@@ -1774,33 +1782,29 @@ public sealed class TasksToolset(
 
         yield return Tool("tasks_board_columns",
             inProject
-                ? "Колонки Kanban-доски текущего проекта: id, name, category (todo/inProgress/done). Нужен, чтобы задать columnId в tasks_create/tasks_update."
-                : "Колонки Kanban-доски (личные задачи используют дефолтные): id, name, category (todo/inProgress/done). Нужен, чтобы задать columnId в tasks_create/tasks_update.",
+                ? "Колонки доски проекта: id, name, category. Для columnId."
+                : "Колонки доски (личные — дефолтные): id, name, category. Для columnId.",
             new JsonObject { ["type"] = "object", ["properties"] = new JsonObject() });
 
         yield return Tool("tasks_complete",
-            "Пометить задачу выполненной (status → done) и сразу прикрепить итог: " +
-            "resultMarkdown (что сделано) и linkedFiles (итоговые файлы). Для дефекта — " +
-            "verification (кто проверил) или outcome (внутренний путь closedWithoutCheck). " +
-            "Шаг с деревом: перед закрытием прогони `pregate` — вердикт увидит ревьюер. " +
-            "Это ТОЛЬКО смена статуса — исполнителя запускает tasks_run_executor.",
+            "Закрыть задачу (status → done) с итогом. Дефект — verification или outcome. Шаг с деревом: сначала `pregate`. Исполнителя запускает tasks_run_executor.",
             new JsonObject
             {
                 ["type"] = "object",
                 ["required"] = new JsonArray { "id" },
                 ["properties"] = new JsonObject
                 {
-                    ["id"] = new JsonObject { ["type"] = "string", ["description"] = "ID задачи" },
+                    ["id"] = new JsonObject { ["type"] = "string" },
                     ["resultMarkdown"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Короткий итог сделанного (markdown)",
+                        ["description"] = "Markdown",
                     },
                     ["linkedFiles"] = new JsonObject
                     {
                         ["type"] = "array",
                         ["items"] = new JsonObject { ["type"] = "string" },
-                        ["description"] = "Итоговые файлы проекта (пути от корня, через /)",
+                        ["description"] = "Файлы от корня проекта",
                     },
                     ["evidence"] = EvidenceSchema(),
                     ["verification"] = VerificationSchema(),
@@ -1816,7 +1820,7 @@ public sealed class TasksToolset(
                 ["required"] = new JsonArray { "id" },
                 ["properties"] = new JsonObject
                 {
-                    ["id"] = new JsonObject { ["type"] = "string", ["description"] = "ID задачи" },
+                    ["id"] = new JsonObject { ["type"] = "string" },
                 },
             });
 
@@ -1828,147 +1832,125 @@ public sealed class TasksToolset(
                 ["required"] = new JsonArray { "taskId", "title" },
                 ["properties"] = new JsonObject
                 {
-                    ["taskId"] = new JsonObject { ["type"] = "string", ["description"] = "ID родительской задачи" },
-                    ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Название подзадачи" },
+                    ["taskId"] = new JsonObject { ["type"] = "string" },
+                    ["title"] = new JsonObject { ["type"] = "string" },
                 },
             });
 
         yield return Tool("tasks_toggle_subtask",
-            "Отметить подзадачу выполненной или снять отметку. Подзадачу можно указать по id или точному названию.",
+            "Отметить подзадачу выполненной или снять отметку; по id или точному названию.",
             new JsonObject
             {
                 ["type"] = "object",
                 ["required"] = new JsonArray { "taskId", "isDone" },
                 ["properties"] = new JsonObject
                 {
-                    ["taskId"] = new JsonObject { ["type"] = "string", ["description"] = "ID задачи" },
-                    ["subtaskId"] = new JsonObject { ["type"] = "string", ["description"] = "ID подзадачи" },
+                    ["taskId"] = new JsonObject { ["type"] = "string" },
+                    ["subtaskId"] = new JsonObject { ["type"] = "string" },
                     ["subtaskTitle"] = new JsonObject
                     {
-                        ["type"] = "string", ["description"] = "Точное название подзадачи (если id неизвестен)",
+                        ["type"] = "string", ["description"] = "Точное название, если id неизвестен",
                     },
                     ["isDone"] = new JsonObject
                     {
-                        ["type"] = "boolean", ["description"] = "true — выполнена",
+                        ["type"] = "boolean",
                     },
                 },
             });
 
         yield return Tool("tasks_find_duplicate",
-            "Проверить, дублирует ли новая задача одну из существующих задач владельца (предотбор по ключевым словам + " +
-            "модель). Возвращает {duplicateId, reason} или duplicateId=null. Полезно перед tasks_create, чтобы не плодить дубли.",
+            "Дублирует ли новая задача существующую: {duplicateId, reason} или duplicateId=null. Полезно перед tasks_create.",
             new JsonObject
             {
                 ["type"] = "object",
                 ["required"] = new JsonArray { "title" },
                 ["properties"] = new JsonObject
                 {
-                    ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Название новой задачи" },
-                    ["description"] = new JsonObject { ["type"] = "string", ["description"] = "Описание (опционально)" },
+                    ["title"] = new JsonObject { ["type"] = "string" },
+                    ["description"] = new JsonObject { ["type"] = "string" },
                 },
             });
 
         yield return Tool("tasks_run_executor",
-            "Запустить Claude-исполнителя задачи: отдельная сессия в проекте задачи " +
-            "(личная — чат вне проекта), работает в фоне и сама ведёт статус через tasks_*. " +
-            "Возвращает задачу с id сессии-исполнителя. " +
-            "НЕ отмечает задачу выполненной — для смены статуса на done используй tasks_complete.",
+            "Запустить исполнителя задачи: отдельная сессия в фоне, сама ведёт статус. Не закрывает задачу — для done есть tasks_complete.",
             new JsonObject
             {
                 ["type"] = "object",
                 ["required"] = new JsonArray { "taskId" },
                 ["properties"] = new JsonObject
                 {
-                    ["taskId"] = new JsonObject { ["type"] = "string", ["description"] = "ID задачи" },
+                    ["taskId"] = new JsonObject { ["type"] = "string" },
                 },
             });
+    }
+
+    // Описание параметра, дословно повторяющее tasks_create, в tasks_update не дублируем (вес стартового запроса)
+    private static JsonObject NoDesc(JsonObject schema)
+    {
+        schema.Remove("description");
+        return schema;
     }
 
     private static JsonObject ReminderMinutesSchema() => new()
     {
         ["type"] = "integer",
-        ["description"] = "Напоминание за N минут до срока (0 = в момент срока). Требует dueDate.",
+        ["description"] = "За N мин до срока (0 — в срок); нужен dueDate",
     };
 
     private static JsonObject RecurrenceSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Повторение задачи, требует dueDate",
-        ["required"] = new JsonArray { "type" },
-        ["properties"] = new JsonObject
-        {
-            ["type"] = new JsonObject
-            {
-                ["type"] = "string",
-                ["enum"] = new JsonArray { "none", "daily", "weekly", "monthly", "yearly" },
-            },
-            ["interval"] = new JsonObject
-            {
-                ["type"] = "integer", ["minimum"] = 1,
-                ["description"] = "Каждые N периодов (дефолт 1)",
-            },
-            ["weekdays"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 7 },
-                ["description"] = "Только для weekly: ISO-дни (1=Пн … 7=Вс)",
-            },
-            ["until"] = new JsonObject
-            {
-                ["type"] = "string",
-                ["description"] = "Последняя дата серии YYYY-MM-DD; опустить — бессрочно",
-            },
-        },
+        ["description"] = "Повтор, нужен dueDate: {type: none|daily|weekly|monthly|yearly, interval ≥1, weekdays: ISO 1=Пн…7=Вс (weekly), until: YYYY-MM-DD}",
     };
 
     private static JsonObject PersonaIdSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "ID персоны-исполнителя (см. personas_list); assignee выставится сам, \"\" — снять",
+        ["description"] = "Персона-исполнитель (assignee выставится сам); \"\" — снять",
     };
 
     private static JsonObject ModelTierSchema() => new()
     {
         ["type"] = "string",
         ["enum"] = new JsonArray { "strong", "medium", "weak" },
-        ["description"] = "Уровень модели исполнения; сомневаешься — не указывай",
+        ["description"] = "Уровень модели; сомневаешься — не указывай",
     };
 
     private static JsonObject WorktreePathSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Абсолютный путь существующего worktree проекта; \"\" — убрать",
+        ["description"] = "Абс. путь worktree; \"\" — убрать",
     };
 
     private static JsonObject WorktreeBranchSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Ветка этого worktree (метка в git-баре чата); пусто — из дерева",
+        ["description"] = "Ветка worktree; пусто — из дерева",
     };
 
     private static JsonObject ExecutionTtlSchema() => new()
     {
         ["type"] = "integer",
-        ["description"] = "TTL чата исполнения в минутах от последней активности (дефолт 1440)",
+        ["description"] = "TTL чата исполнения, мин",
     };
 
     private static JsonObject ResultMarkdownSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Итог (markdown), заменяет целиком; \"\" — очистить",
+        ["description"] = "Итог (markdown), заменяет; \"\" — очистить",
     };
 
     private static JsonObject LinkedFilesSchema() => new()
     {
         ["type"] = "array",
         ["items"] = new JsonObject { ["type"] = "string" },
-        ["description"] = "Файлы проекта (от корня, через /), заменяют целиком",
+        ["description"] = "Файлы от корня проекта, заменяют целиком",
     };
 
     private static JsonObject ColumnIdSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "ID колонки доски (см. tasks_board_columns); статус — по её категории",
+        ["description"] = "Колонка (tasks_board_columns); статус — по её категории",
     };
 
     // Вид карточки: task — обычная, defect — дефект (правила DefectRules).
@@ -1976,7 +1958,7 @@ public sealed class TasksToolset(
     {
         ["type"] = "string",
         ["enum"] = new JsonArray { "task", "defect" },
-        ["description"] = "Тип карточки: обычная задача или дефект",
+        ["description"] = "Задача или дефект",
     };
 
     // Шаги воспроизведения дефекта. steps обязателен у дефекта, expected/actual — пояснения
@@ -1984,13 +1966,7 @@ public sealed class TasksToolset(
     private static JsonObject ReproSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Шаги воспроизведения дефекта",
-        ["properties"] = new JsonObject
-        {
-            ["steps"] = new JsonObject { ["type"] = "string", ["description"] = "Шаги (markdown); обязательны у дефекта" },
-            ["expected"] = new JsonObject { ["type"] = "string", ["description"] = "Ожидаемое поведение (опционально)" },
-            ["actual"] = new JsonObject { ["type"] = "string", ["description"] = "Фактическое поведение (опционально)" },
-        },
+        ["description"] = "Репро дефекта целиком: {steps (обязательны у дефекта), expected, actual}",
     };
 
     // Подтверждение проверки дефекта. Автора (человек/персона) и отметку времени бэкенд ставит
@@ -1998,26 +1974,19 @@ public sealed class TasksToolset(
     private static JsonObject VerificationSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Подтверждение проверки дефекта (см. инструкции сервера tasks)",
+        ["description"] = "Вердикт: исполнитель своего step/rework не снимает; withdrawn агента — только с notes; returnReason — при returned (other — с текстом в notes)",
         ["properties"] = new JsonObject
         {
-            ["notes"] = new JsonObject { ["type"] = "string", ["description"] = "Комментарий проверяющего (опционально)" },
+            ["notes"] = new JsonObject { ["type"] = "string" },
             ["verdict"] = new JsonObject
             {
                 ["type"] = "string",
                 ["enum"] = StringArray(TaskVerdicts.All),
-                // Текст парный VERIFICATION_SCHEMA в mcp/tasks-server/index.js (TasksToolsetParityTests
-                // сверяет узел verification целиком). Вложенные описания не входят в сумму параметров
-                // (SumPropertyDescriptions считает только верхние) — лимит 1950 tasks_update не трогает.
-                ["description"] = "Исход витка: accepted · accepted_with_remarks · returned · withdrawn. "
-                    + "Исполнитель своего step/rework не снимает; агентский withdrawn — только с notes.",
             },
             ["returnReason"] = new JsonObject
             {
                 ["type"] = "string",
                 ["enum"] = StringArray(TaskReturnReasons.All),
-                ["description"] = "Причина возврата (только при verdict=returned; other — с текстом в notes): " +
-                    "size · side-effect · contract · robustness · quality · other",
             },
         },
     };
@@ -2026,16 +1995,11 @@ public sealed class TasksToolset(
     private static JsonObject AcceptanceSchema() => new()
     {
         ["type"] = "array",
-        ["description"] = "Критерии приёмки (измеримые): заменяют список целиком; исполнитель задачи их не меняет",
+        ["description"] = "Критерии приёмки {id?, text}: заменяют список целиком; исполнитель их не меняет; пустой id — c1, c2…",
         ["items"] = new JsonObject
         {
             ["type"] = "object",
             ["required"] = new JsonArray { "text" },
-            ["properties"] = new JsonObject
-            {
-                ["id"] = new JsonObject { ["type"] = "string", ["description"] = "Id критерия (пусто — присвоится c1, c2…)" },
-                ["text"] = new JsonObject { ["type"] = "string", ["description"] = "Измеримая формулировка критерия" },
-            },
         },
     };
 
@@ -2043,17 +2007,11 @@ public sealed class TasksToolset(
     private static JsonObject EvidenceSchema() => new()
     {
         ["type"] = "array",
-        ["description"] = "Свидетельства по критериям приёмки: добавляются к имеющимся; закрытие задачи требует свидетельство на каждый критерий",
+        ["description"] = "Свидетельства {criterionId, how, result}: добавляются; закрытие требует свидетельство на каждый критерий",
         ["items"] = new JsonObject
         {
             ["type"] = "object",
             ["required"] = new JsonArray { "criterionId", "how", "result" },
-            ["properties"] = new JsonObject
-            {
-                ["criterionId"] = new JsonObject { ["type"] = "string", ["description"] = "Id критерия" },
-                ["how"] = new JsonObject { ["type"] = "string", ["description"] = "Чем проверено (команда, замер)" },
-                ["result"] = new JsonObject { ["type"] = "string", ["description"] = "Что получилось (вывод, цифры)" },
-            },
         },
     };
 
@@ -2063,7 +2021,7 @@ public sealed class TasksToolset(
     {
         ["type"] = "string",
         ["enum"] = new JsonArray { "closedWithoutCheck" },
-        ["description"] = "Исход дефекта (закрытие без отдельной проверки; только для kind=defect)",
+        ["description"] = "Закрытие дефекта без проверки (только kind=defect)",
     };
 
     // --- Разметка фичи (режим «Исполнение фичи»). Описания по одной строке: общий лимит на
@@ -2081,39 +2039,39 @@ public sealed class TasksToolset(
     private static JsonObject FeatureIdSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Id задачи-эпика фичи; без роли — частичный мерж",
+        ["description"] = "Эпик фичи; без роли — частичный мерж",
     };
 
     private static JsonObject StageIdSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Id этапа маршрута фичи; нужен, когда роль и линия не выбирают этап однозначно (только при создании)",
+        ["description"] = "Этап маршрута, если роль и линия его не выбирают (только при создании)",
     };
 
     private static JsonObject RoleSchema() => new()
     {
         ["type"] = "string",
         ["enum"] = StringArray(TaskRoles.All),
-        ["description"] = "Роль в фиче: feature · cut · design (задача дизайнера, этап необязателен) · plan · step · rework · review · qa · final · merge (после принятого финала) · consult",
+        ["description"] = "Роль в фиче; design — задача дизайнера, merge — после принятого финала",
     };
 
     private static JsonObject StepRefSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Код шага из плана (у step/rework)",
+        ["description"] = "Код шага плана (step/rework)",
     };
 
     private static JsonObject LaneSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Линия (бэк/фронт; у step/rework)",
+        ["description"] = "Линия бэк/фронт (step/rework)",
     };
 
     private static JsonObject ReviewOfSchema() => new()
     {
         ["type"] = "array",
         ["items"] = new JsonObject { ["type"] = "string" },
-        ["description"] = "Id задач, которые оценивает это ревью/проверка/финал; у role=rework — обязательная связь с review/qa/final той же фичи",
+        ["description"] = "Id оцениваемых задач (review/qa/final); у rework — обязательно review/qa/final той же фичи",
     };
 
     // Структурный список шагов плана (честный прогресс фичи): массив {stepRef, title, lane}.
@@ -2121,24 +2079,13 @@ public sealed class TasksToolset(
     private static JsonObject FeatureEstimateSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Срок и «что дальше» с featureNote, в каждом ходе; why — при расхождении; процент берёт трекер.",
+        ["description"] = "Срок и «что дальше» с featureNote, в каждом ходе: {remaining ≤8×≤40 симв., первая — «дальше»; etaMinutes ≥1; why ≤160, при расхождении; expectedSteps 1..500 — итог шагов, сдвиг сверх порога только с why}",
         ["properties"] = new JsonObject
         {
-            ["remaining"] = new JsonObject
-            {
-                ["type"] = "array",
-                ["items"] = new JsonObject { ["type"] = "string" },
-                ["description"] = "Не начатое, ≤8 пунктов по ≤40 символов; первый — «дальше»",
-            },
-            ["etaMinutes"] = new JsonObject { ["type"] = "integer", ["description"] = "Минут до готовности по самой длинной цепочке, ≥1; нет оценки — не указывай" },
-            ["why"] = new JsonObject { ["type"] = "string", ["description"] = "Почему срок заметно отличается от обычного, ≤160; только при расхождении" },
-            // Описание вложенного свойства не входит в сумму верхних (SumPropertyDescriptions),
-            // лимит 1950 tasks_update не трогает.
-            ["expectedSteps"] = new JsonObject
-            {
-                ["type"] = "integer",
-                ["description"] = "Оценка итога шагов фичи, включая ещё не нарезанные; не процент. 1..500; сдвиг сверх порога — только с why",
-            },
+            ["remaining"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } },
+            ["etaMinutes"] = new JsonObject { ["type"] = "integer" },
+            ["why"] = new JsonObject { ["type"] = "string" },
+            ["expectedSteps"] = new JsonObject { ["type"] = "integer" },
         },
     };
 
@@ -2150,21 +2097,19 @@ public sealed class TasksToolset(
             ["type"] = "object",
             ["properties"] = new JsonObject
             {
-                ["stepRef"] = new JsonObject { ["type"] = "string", ["description"] = "Код шага (уникален, непуст)" },
-                ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Название шага" },
-                ["lane"] = new JsonObject { ["type"] = "string", ["description"] = "Линия (бэк/фронт)" },
+                ["stepRef"] = new JsonObject { ["type"] = "string" },
+                ["title"] = new JsonObject { ["type"] = "string" },
+                ["lane"] = new JsonObject { ["type"] = "string" },
                 ["kind"] = new JsonObject
                 {
                     ["type"] = "string",
                     ["enum"] = new JsonArray("step", "review", "qa", "final"),
-                    ["description"] = "Вид: step (по умолчанию) — исполняемый шаг, в знаменателе; review/qa/final — не шаг плана",
                 },
             },
         },
         // Инструкция (минор 7, паритет со stdio-веткой mcp/tasks-server/index.js): планировщик
         // заполняет planSteps, а доработка (role=rework) обязана ссылаться на review/qa/final.
-        ["description"] = "Шаги плана (role=plan), stepRef уникален. "
-            + "rework обязан ссылаться на review/qa/final через reviewOf, иначе 400",
+        ["description"] = "Шаги плана (role=plan): stepRef уникален; kind step (по умолчанию, в знаменателе) | review/qa/final (не шаг). rework обязан ссылаться на review/qa/final через reviewOf, иначе 400",
     };
 
     private static McpToolSchema Tool(string name, string description, JsonObject schema) =>

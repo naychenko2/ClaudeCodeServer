@@ -239,20 +239,24 @@ public class TasksToolsetScopesTests : IClassFixture<TasksToolsetScopesTests.Hos
         // поле перестаёт держать прежний текст)
         var noDescription = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_update",
             new { id = taskId, description = "" });
-        noDescription.GetProperty("description").GetString().Should().Be("",
+        // Компактный ответ не несёт пустых полей: очищенное описание — отсутствие ключа
+        noDescription.TryGetProperty("description", out _).Should().BeFalse(
             "пустая строка description обязана очистить поле, а не «не менять»");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(taskId)!.Description.Should().Be("");
 
         // Пустой массив меток — снять все метки
         var noLabels = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_update",
             new { id = taskId, labels = Array.Empty<string>() });
-        noLabels.GetProperty("labels").GetArrayLength().Should().Be(0,
+        noLabels.TryGetProperty("labels", out _).Should().BeFalse(
             "пустой массив labels обязан снимать метки");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(taskId)!.Labels.Should().BeEmpty();
 
         // Пустой массив linkedFiles — очистить список итоговых файлов
         var noFiles = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_update",
             new { id = taskId, linkedFiles = Array.Empty<string>() });
-        noFiles.GetProperty("linkedFiles").GetArrayLength().Should().Be(0,
+        (noFiles.TryGetProperty("linkedFiles", out var files) ? files.GetArrayLength() : 0).Should().Be(0,
             "пустой массив linkedFiles обязан очищать список");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(taskId)!.LinkedFiles.Should().BeEmpty();
 
         // Заметка: пустое содержимое — стереть текст файла
         var note = await ToolJsonAsync(Client, "notes", sessionId, "notes_create", new
@@ -287,10 +291,12 @@ public class TasksToolsetScopesTests : IClassFixture<TasksToolsetScopesTests.Hos
 
         var cleared = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_update",
             new { id = stepId, stepRef = "", lane = "" });
-        cleared.GetProperty("stepRef").ValueKind.Should().Be(JsonValueKind.Null,
+        cleared.TryGetProperty("stepRef", out _).Should().BeFalse(
             "пустая строка stepRef обязана очистить поле, а не «не менять»");
-        cleared.GetProperty("lane").ValueKind.Should().Be(JsonValueKind.Null,
+        cleared.TryGetProperty("lane", out _).Should().BeFalse(
             "пустая строка lane обязана очистить поле");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!.StepRef.Should().BeNull();
+        _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!.Lane.Should().BeNull();
         cleared.GetProperty("featureId").GetString().Should().Be(epicId, "featureId не тронут");
         cleared.GetProperty("role").GetString().Should().Be("step", "role не тронут");
     }

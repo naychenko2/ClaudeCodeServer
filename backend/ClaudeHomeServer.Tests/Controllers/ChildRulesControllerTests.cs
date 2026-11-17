@@ -28,16 +28,26 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
         public Hosts() => ExtraServices = services =>
         {
             services.AddSingleton<IOwnerSpendReader>(new FixedSpend());
-            // Политика — обёртка RacePolicy (см. ниже): для одного ребёнка по имени она роняет
-            // профиль после первого чтения (тот же приём, что у ChildStatusControllerTests),
-            // для всех прочих — точная делегация боевой политике.
-            services.AddSingleton<IChildModePolicy>(sp => new RacePolicy(sp.GetRequiredService<IUserStore>()));
+            // Политика — цепочка обёрток (см. ниже): RacePolicy для одного ребёнка по имени роняет
+            // профиль после первого чтения (тот же приём, что у ChildStatusControllerTests);
+            // VanishingPolicy поверх неё для другого — гасит профиль после второго успешного
+            // чтения с момента взвода тестом. Для всех прочих — точная делегация боевой политике.
+            services.AddSingleton<IChildModePolicy>(sp =>
+            {
+                var users = sp.GetRequiredService<IUserStore>();
+                return new VanishingPolicy(new RacePolicy(users), users);
+            });
         };
     }
 
     // Ребёнок теста-гонки: единственный, чей профиль обёртка роняет после первого
     // успешного чтения; остальные имена проходят насквозь без изменений.
     private const string RaceUsername = "kid-rules-denyall-race";
+
+    // Ребёнок теста «профиль пропал между гейтом и записью»: единственный, чей профиль
+    // обёртка гасит после второго успешного чтения с момента взвода — гейт и первая
+    // проверка контроллера проходят по живому профилю, вторая проверка и запись — уже без него.
+    private const string VanishUsername = "kid-rules-profile-vanish";
 
     /// <summary>
     /// Обёртка боевой политики, воспроизводящая гонку гейта и контроллера — единственная
@@ -55,6 +65,34 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
             var snapshot = _inner.For(ownerId);
             if (snapshot is { DenyAll: false } && users.GetById(ownerId) is { Username: RaceUsername, ChildMode: { } profile })
                 profile.TutorPersonaId = ""; // невалиден по IsValid (ChildModePolicy.cs:36) → следующее чтение — DenyAll
+            return snapshot;
+        }
+    }
+
+    /// <summary>
+    /// Обёртка над обёрткой (регистрируется только поверх RacePolicy): для VanishingUsername
+    /// после второго успешного чтения с момента взвода (Arm() теста перед запросом) гасит
+    /// профиль в сторе (ChildMode=null — «отключение режима посреди запроса»). На дороге agree
+    /// первое чтение — гейт, второе — проверка контроллера «уже согласованы?»: третья проверка
+    /// и запись в сторе профиль уже не видят. Отсчёт с момента взвода делает обёртку
+    /// независимой от предшествующих чтений (создание чата через PersonaLayerBuilder читает
+    /// политику само — PersonaLayerBuilder.cs:410). Остальные чтения и остальные имена —
+    /// точная делегация.
+    /// </summary>
+    private sealed class VanishingPolicy(IChildModePolicy inner, IUserStore users) : IChildModePolicy
+    {
+        private bool _armed;
+        private int _armedReads;
+
+        public void Arm() => _armed = true;
+
+        public ChildPolicySnapshot? For(string ownerId)
+        {
+            var snapshot = inner.For(ownerId);
+            // For() зовётся по id владельца (sub claim), имя проверяется по стору — как в RacePolicy.
+            if (_armed && snapshot is { DenyAll: false } && users.GetById(ownerId) is { Username: VanishUsername } &&
+                ++_armedReads == 2)
+                users.GetById(ownerId)!.ChildMode = null;
             return snapshot;
         }
     }
@@ -177,7 +215,7 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
     [Fact]
     public async Task Start_УжеДоговорены_409_rules_already_agreed()
     {
-        var id = await NewChild("kid-rules-agreed-first");
+        await NewChild("kid-rules-agreed-first");
         var client = ChildClient("kid-rules-agreed-first");
         var sid = await StartAs(client);
         (await AgreeAsync(client, sid, "Уроки по будням, время меряет сердцебиение.")).Item1
@@ -357,6 +395,30 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
         var stored = _users.GetById(id)!.ChildMode!;
         stored.RulesAgreedAt.Should().NotBeNull();
         stored.RulesSummary.Should().Be(winner, "запись сделал победитель гонки, проигравший не затёр");
+    }
+
+    [Fact]
+    public async Task Agree_ПрофильПропалМеждуГейтомИЗаписью_503_policy_unavailable()
+    {
+        var id = await NewChild(VanishUsername);
+        var profile = _users.GetById(id)!.ChildMode!;
+        // Чат правил заводится напрямую SessionManager — теми же закрепленными полями, что и
+        // у start: к моменту agree важен только сам чат; счёт обёртки начинается с её взвода,
+        // поэтому предшествующие чтения (включая чтение при создании чата) на него не влияют.
+        var chat = await Sessions.CreateChatAsync(id, ChildModeLaunch.RequiredMode,
+            model: profile.Model, personaId: profile.TutorPersonaId,
+            onboardingKind: OnboardingKinds.ChildRules, childSpace: ChildSpaces.Lessons,
+            providerKey: profile.ProviderKey);
+
+        // Гейт и проверка «уже согласованы?» проходят по живому профилю; обёртка, взведённая
+        // прямо перед запросом, гасит его после второй проверки — запись в сторе уже нечего
+        // писать. Ответ обязан отражать суть: не ложное 409 «уже согласованы», а 503
+        // policy_unavailable.
+        ((VanishingPolicy)_hosts.Services.GetRequiredService<IChildModePolicy>()).Arm();
+        var (s, b) = await AgreeAsync(ChildClient(VanishUsername), chat.Id, "договорились, но профиль пропал");
+        s.Should().Be(HttpStatusCode.ServiceUnavailable);
+        CodeOf(b).Should().Be("policy_unavailable");
+        _users.GetById(id)!.ChildMode.Should().BeNull("согласие при пропавшем профиле не записано");
     }
 
     [Fact]

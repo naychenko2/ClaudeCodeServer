@@ -15,8 +15,8 @@ namespace ClaudeHomeServer.Controllers;
 /// Онбординг правил детского режима: чат-интервью с закреплённым тьютором, в котором ребёнку
 /// объясняют правила, уже выставленные админом (KM-B6b, ADR-041 «Контракт», ручки №6–7).
 ///
-/// start идемпотетен: незавершённый чат онбординга (тот же поиск, что исключает его из списка
-/// чатова KM-B6a: OnboardingKind = ChildRules) возвращается как есть, нового — новый чат с
+/// start идемпотентен: незавершённый чат онбординга (тот же поиск, что исключает его из списка
+/// чатов KM-B6a: OnboardingKind = ChildRules) возвращается как есть, нового — новый чат с
 /// закреплёнными полями как у KM-B6a. agree пишет ТОЛЬКО RulesAgreedAt/RulesSummary под тем же
 /// локом UserStore, что и админский PUT: согласие не затирает лимиты, правка лимитов — согласие.
 /// Сброс согласия — только админ (resetRules, KM-B1e).
@@ -29,7 +29,8 @@ namespace ClaudeHomeServer.Controllers;
 ///
 /// Порядок отказов: start — 403 not_child → 503 policy_unavailable → 409 rules_already_agreed;
 /// agree — 403 not_child → 400 summary_empty → 400 summary_too_long → 404 not_rules_chat →
-/// 409 rules_already_agreed. Необработанного исключения наружу нет: сбой чтения или создания — 503.
+/// 409 rules_already_agreed; если профиль пропал между проверкой согласия и записью —
+/// 503 policy_unavailable. Необработанного исключения наружу нет: сбой чтения или создания — 503.
 /// </summary>
 [ApiController]
 [Authorize]
@@ -45,7 +46,8 @@ public class ChildRulesController(
     // Идемпотентность double-start (две вкладки): поиск и создание чата атомарны под
     // per-ключевым семафором по ownerId — иначе параллельные start породили бы два чата
     // онбординга. Статический реестр: контроллер per-request, а гонка межзапросная
-    // (тот же приём, что у OnboardingController). Ключей — по числу детей, не чистятся.
+    // (тот же приём, что у OnboardingController). Ключей: rules:{userId} — по числу детей,
+    // kickoff:{chatId} — по числу чатов онбординга; не чистятся.
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new();
 
     private static SemaphoreSlim LockFor(string key) =>
@@ -138,10 +140,15 @@ public class ChildRulesController(
 
         // Чтение-изменение-запись под локом UserStore (AgreeChildRules): пишутся ТОЛЬКО
         // RulesAgreedAt/RulesSummary живого профиля — лимиты и тьютор целы при параллельном
-        // PUT админа. false — согласие уже поставил кто-то раньше (одна гонка — один 200).
+        // PUT админа. false — согласие уже поставил кто-то раньше (одна гонка — один 200)
+        // или профиль пропал между проверкой выше и записью (отключение режима взрослым
+        // посреди запроса). Ответ по живому состоянию: 409 только если согласовано на самом
+        // деле, иначе 503 — ложного «уже согласовано» при пропавшем профиле нет.
         var at = DateTime.UtcNow;
         if (!users.AgreeChildRules(UserId, at, summary))
-            return ChildError(409, "rules_already_agreed", "Правила уже согласованы.");
+            return policy.For(UserId)?.Profile?.RulesAgreedAt is not null
+                ? ChildError(409, "rules_already_agreed", "Правила уже согласованы.")
+                : Unavailable();
 
         return Ok(new { rulesAgreedAt = at });
     }

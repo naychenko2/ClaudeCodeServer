@@ -30,6 +30,8 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         "POST api/tts",
         "ANY /hubs/session",
         "ANY /hubs/session/negotiate",
+        // SPA-фолбэк — интерфейс, а не управляющая поверхность
+        "GET,HEAD {*path:nonfile}",
     ];
 
     private void SetChild(bool enabled = true, bool valid = true)

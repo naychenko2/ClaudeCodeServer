@@ -1454,7 +1454,10 @@ if (Directory.Exists(distPath))
     // контроллерам (MVC-роутинг специфичнее fallback'а). `/hubs/*`, `/mcp/*` и
     // `/api/modules` (ModuleGateway, регистрируется раньше строкой 1512) не задеты.
     app.MapFallback("/api/{**rest}", ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; });
-    app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
+    // SPA-фолбэк — интерфейс, а не управляющая поверхность: ребёнку он нужен, чтобы
+    // открыть приложение (гейт И1 закрывает API и хабы, статику не трогает).
+    app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders })
+        .WithMetadata(new ClaudeHomeServer.Services.ChildMode.ChildAllowedAttribute());
 }
 else
 {

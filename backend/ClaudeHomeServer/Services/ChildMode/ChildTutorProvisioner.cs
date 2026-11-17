@@ -94,24 +94,23 @@ public class ChildTutorProvisioner
             // Ensure плодит второго «Помощника». false из SetChildTutorPersona — профиль
             // ребёнка исчез на параллельной правке: это «профиля нет» из контракта метода —
             // удаляем персону и возвращаем null; исключение стора — удаляем и пробрасываем.
+            // Исключение здесь способен дать только Save стора: у SetChildTutorPersona нет ct
+            // (UserStore.cs:616), отдельная ветка OperationCanceledException была недостижимой
+            // (хвост R-KM-B1d, ddbc7a1c). Сбой самого отката не должен маскировать исходную
+            // причину — RollbackDelete глотает его с логом, наружу идёт исключение сохранения.
             bool keyed;
             try
             {
                 keyed = _users.SetChildTutorPersona(childUserId, createdId);
             }
-            catch (OperationCanceledException)
-            {
-                _personas.Delete(createdId, childUserId);
-                return null;
-            }
             catch
             {
-                _personas.Delete(createdId, childUserId);
+                RollbackDelete(createdId, childUserId);
                 throw;
             }
             if (!keyed)
             {
-                _personas.Delete(createdId, childUserId);
+                RollbackDelete(createdId, childUserId);
                 return null;
             }
         }
@@ -134,6 +133,23 @@ public class ChildTutorProvisioner
         }
         catch (OperationCanceledException) { /* клиент ушёл — персона всё равно создана */ }
         return createdId;
+    }
+
+    // Откат созданной персоны при отказе закрепления ключа. Сбой самого удаления не должен
+    // ни маскировать исходное исключение сохранения (ветка catch), ни ломать контракт метода
+    // (null при пропавшем профиле): сирота в этом случае — меньшее зло, чем скрытая причина,
+    // и она видна в логе (хвост R-KM-B1d, ddbc7a1c).
+    private void RollbackDelete(string personaId, string childUserId)
+    {
+        try
+        {
+            _personas.Delete(personaId, childUserId);
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning(e, "Детский режим: откат персоны-тьютора не прошёл (ребёнок {Owner}, персона {Persona})",
+                childUserId, personaId);
+        }
     }
 
     // Ключ живёт, только когда резолвится в живую персону этого ребёнка: висящий id

@@ -152,6 +152,28 @@ public class ChildTutorProvisionerTests : IDisposable
     }
 
     [Fact]
+    public async Task EnsureAsync_ИсключениеЗаписиКлюча_ИОтказОтката_НаружуИсходноеИсключение()
+    {
+        // Продолжение теста выше: отказ закрепления И сбой самого отката (хвост R-KM-B1d,
+        // ddbc7a1c). Отказ удаления моделируем подпиской на OnPersonaDeleted (PersonaManager.cs:1482,
+        // вызывается синхронно внутри Delete): её InvalidOperationException делает исключение
+        // удаления различимым. Откат не должен маскировать причину: наружу — исключение Save
+        // users.json (каталог на пути файла, как в тесте выше), а не исключение удаления.
+        var usersPath = Path.Combine(_tempDir, "users.json"); // путь ResolveUsersFilePath (UserStore.cs:55-60)
+        File.Delete(usersPath);
+        Directory.CreateDirectory(usersPath);
+        _personas.OnPersonaDeleted += _ => throw new InvalidOperationException("откат не проходит");
+
+        var thrown = (await ((Func<Task>)(() => _sut.EnsureAsync(_childId)))
+            .Should().ThrowAsync<Exception>("исключение записи ключа доходит до вызывающего")).Which;
+        thrown.Should().NotBeOfType<InvalidOperationException>(
+            "сбой отката проглатывается с логом: исходное исключение сохранения не маскируется");
+
+        _personas.GetByOwner(_childId).Should().BeEmpty(
+            "полуперсоны не бывает: откат удалён из состояния до отказа OnPersonaDeleted");
+    }
+
+    [Fact]
     public async Task EnsureAsync_ПрофильИсчезПриЗакреплении_УдаляетПерсону_ВозвращаетNull()
     {
         // Профиль ребёнка исчез между перечитыванием под локом и закреплением ключа

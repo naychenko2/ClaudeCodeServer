@@ -619,6 +619,15 @@ builder.Services.AddSingleton(sp => new ChildLimitsCalculator(
 // Провижн персоны-тьютора ребёнка (KM-B1d, ADR-041): «Помощник» с ключом в
 // ChildProfile.TutorPersonaId. Вызывается только точками записи детского профиля (KM-B1e).
 builder.Services.AddSingleton<ChildTutorProvisioner>();
+// Каталог материалов предмета (разрез «Знания репетитора» §2, К2a): data/child-subjects/
+// {childId}/{subjectId}/ — опись, оригиналы и извлечённый текст. Пишет его ручка админа (К2b),
+// читает тулсет репетитора (К3). MarkitdownService регистрирует AddDocs ниже по файлу:
+// синглтон резолвится лениво — порядок строк при резолве не важен.
+builder.Services.AddSingleton(sp => new ChildSubjectMaterialsStore(
+    ChildSubjectMaterialsStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
+    sp.GetRequiredService<MarkitdownService>(),
+    sp.GetRequiredService<IConfiguration>(),
+    sp.GetRequiredService<ILogger<ChildSubjectMaterialsStore>>()));
 // Стоп-сигнал ребёнка → уведомление взрослым без текста переписки (KM-B6d, ADR-041 решение 1).
 builder.Services.AddSingleton<ChildStopSignalService>();
 builder.Services.AddHostedService<ChildStopSignalSubscriber>();

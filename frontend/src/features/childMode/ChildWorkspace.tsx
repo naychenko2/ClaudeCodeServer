@@ -27,6 +27,7 @@ import { Modal } from '../../components/ui/Modal';
 import { Notice } from '../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { PillSwitch } from '../../components/Toolbar';
+import { setPersonasChildMode } from '../../lib/personas';
 import { childApi } from './api';
 import { useChildStatus } from './useChildStatus';
 import { ChildHome, CHILD_SUBJECTS, type ChildSubjectId } from './ChildHome';
@@ -132,6 +133,8 @@ function LessonRow({ chat, active, onOpen }: { chat: Chat; active: boolean; onOp
 }
 
 export function ChildWorkspace({ auth, onLogout }: Props) {
+  // Синхронно до эффектов дочерних чат-компонентов: те зовут ensurePersonasLoaded (взрослая ручка → 403)
+  setPersonasChildMode(true);
   const isMobile = useIsMobile();
   const w = useWindowWidth();
   const { status, offline } = useChildStatus(SPACE);

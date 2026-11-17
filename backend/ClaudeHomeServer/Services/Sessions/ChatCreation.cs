@@ -416,7 +416,7 @@ public sealed class ChatCreation
     internal async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
         string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null)
+        string? onboardingKind = null, string? childSpace = null, string? providerKey = null)
     {
         var rootPath = _route.ResolveChatRoot(ownerId);
 
@@ -432,12 +432,16 @@ public sealed class ChatCreation
             Model = string.IsNullOrWhiteSpace(defaultModel) ? null : defaultModel.Trim(),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
             // Персона-слой подхватится общим механизмом (BuildPersonaLayer)
-            Provider = _route.ResolveSubscriptionProvider(defaultModel),
+            // providerKey — закреплённый поставщик детского чата (KM-B6a): без него сверка И1-бис
+            // внутри StartNewSessionAsync видела бы выведенного из модели
+            Provider = providerKey ?? _route.ResolveSubscriptionProvider(defaultModel),
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
             TaskId = taskId,
             // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
             OnboardingKind = onboardingKind,
+            // Пространство детского чата — тоже до старта: гейты И1-бис/И3 читают его при сборке хода
+            ChildSpace = childSpace,
         };
 
         await _process.StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);

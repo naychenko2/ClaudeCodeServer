@@ -54,6 +54,10 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
         return connection;
     }
 
+    private void NoChild() => factory.Services.GetRequiredService<UserStore>()
+        .FindByUsername(TestWebApplicationFactory.SecondUsername)!.ChildMode = null;
+
+    // Готовит ребёнка (SetChild) и подключает его к session-хабу
     private async Task<HubConnection> ConnectChildSessionHubAsync()
     {
         SetChild();
@@ -62,13 +66,24 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
         return c;
     }
 
+    // Проверка перед детским путём: пользователь действительно ребёнок, иначе тест молча проверил бы взрослый
+    private void ShouldBeChild()
+    {
+        var child = factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.SecondUsername)!.ChildMode;
+        child.Should().NotBeNull("пользователь должен быть ребёнком до проверки детского пути");
+        child!.Enabled.Should().BeTrue();
+    }
+
     [Theory]
     [InlineData("SetMode", "no-such", "bypassPermissions")]
     [InlineData("CompactSession", "no-such", null)]
     [InlineData("JoinProject", "no-such", null)]
     public async Task Child_DeniedMethods_ThrowChildMode(string method, string arg1, string? arg2)
     {
+        NoChild();
         var conn = await ConnectChildSessionHubAsync();
+        ShouldBeChild();
         var act = () => arg2 is null ? conn.InvokeAsync(method, arg1) : conn.InvokeAsync(method, arg1, arg2);
         (await act.Should().ThrowAsync<HubException>()).Which.Message.Should().Contain("child_mode");
     }
@@ -81,18 +96,30 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
     private async Task<string> ChatAsync(string ownerId, string? childSpace)
     {
         // Создание чата при включённом детском режиме запрещено — гасим профиль на время создания
-        factory.Services.GetRequiredService<UserStore>()
-            .FindByUsername(TestWebApplicationFactory.SecondUsername)!.ChildMode = null;
-        var chat = await Sessions.CreateChatAsync(ownerId, ClaudeMode.Auto, name: "чат");
-        chat.ChildSpace = childSpace;
-        return chat.Id;
+        // и возвращаем в finally: после хелпера ребёнок остаётся детским
+        var user = factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.SecondUsername)!;
+        var previous = user.ChildMode;
+        user.ChildMode = null;
+        try
+        {
+            var chat = await Sessions.CreateChatAsync(ownerId, ClaudeMode.Auto, name: "чат");
+            chat.ChildSpace = childSpace;
+            return chat.Id;
+        }
+        finally
+        {
+            user.ChildMode = previous;
+        }
     }
 
     [Fact]
     public async Task Child_OwnChildChat_PassesFilter()
     {
+        NoChild();
         var chatId = await ChatAsync(ChildId, ChildSpaces.Lessons);
         var conn = await ConnectChildSessionHubAsync();
+        ShouldBeChild();
         // Фильтр пропустил: JoinSession своего детского чата отрабатывает штатно
         await conn.InvokeAsync("JoinSession", chatId);
 
@@ -107,11 +134,13 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
     [InlineData("SendMessage")]
     public async Task Child_ForeignOrNonChildOrMissingChat_ThrowsChildMode(string method)
     {
+        NoChild();
         var adminId = factory.Services.GetRequiredService<UserStore>()
             .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         var foreignWithSpace = await ChatAsync(adminId, ChildSpaces.Lessons);
         var ownWithoutSpace = await ChatAsync(ChildId, null);
         var conn = await ConnectChildSessionHubAsync();
+        ShouldBeChild();
 
         foreach (var id in new[] { foreignWithSpace, ownWithoutSpace, "no-such" })
         {
@@ -128,6 +157,7 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
     public async Task Child_CannotConnect_ToTerminalOrDevicesHub(string hub)
     {
         SetChild();
+        ShouldBeChild();
         var c = Build(hub, TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         var act = () => c.StartAsync();
         await act.Should().ThrowAsync<Exception>();
@@ -137,6 +167,7 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
     public async Task DenyAllChild_CannotConnect_ToSessionHub()
     {
         SetChild(valid: false);
+        ShouldBeChild();
         var c = Build("hubs/session", TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         var act = () => c.StartAsync();
         await act.Should().ThrowAsync<Exception>();
@@ -145,8 +176,7 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
     [Fact]
     public async Task Adult_CanUseDeniedMethods()
     {
-        factory.Services.GetRequiredService<UserStore>()
-            .FindByUsername(TestWebApplicationFactory.SecondUsername)!.ChildMode = null;
+        NoChild();
         var c = Build("hubs/session", TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         await c.StartAsync();
         var act = () => c.InvokeAsync("SetMode", "no-such", "plan");
@@ -180,7 +210,10 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
     [Fact]
     public async Task SendMessage_ThroughFilter_NextGetsSanitizedArgs()
     {
+        SetChild();
         var chatId = await ChatAsync(ChildId, ChildSpaces.Lessons);
+        // ChatAsync гасит профиль только на время создания и возвращает его: ребёнок остаётся детским
+        ShouldBeChild();
         var services = new ServiceCollection().AddSingleton<IChildModePolicy, ChildPolicy>()
             .AddSingleton(Sessions).BuildServiceProvider();
         var user = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(

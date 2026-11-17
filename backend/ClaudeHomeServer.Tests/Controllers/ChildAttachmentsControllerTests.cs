@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
@@ -20,6 +21,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// (ADR-041 «Контракт», ручка №8; решение Андрея №5, вариант «б»). Тип — по сигнатуре байтов
 /// (переименованный .exe в .png остаётся .exe → 415), PDF конвертируется на сервере
 /// (тот же путь, что files_document_read), текст отдаётся рядом .txt, скан/битый PDF — 422.
+/// Производный .txt текста учитывается в Session.Attachments рядом с PDF (доработка финала,
+/// п. c3.1): фильтр хаба (ChildHubFilter.SanitizeSendMessageArgs) пропускает его в
+/// attachedPaths — без учёта текст до модели не доходит.
 /// Расширение сохраняемого имени нормализуется по определённому типу (доработка R-KM-B6e):
 /// текст под .png сохраняется как .txt, PNG под .txt — как .png, PDF под .png — как .pdf;
 /// kind ответа и расширение path не расходятся.
@@ -269,8 +273,10 @@ public class ChildAttachmentsControllerTests : IClassFixture<ChildAttachmentsCon
         var txtRel = b.GetProperty("path").GetString()!;
         txtRel.Should().MatchRegex(PathRegex("урок.txt"));
 
-        // .txt рядом с PDF: тот же {guid}-каталог, что у учтённого оригинала
-        var pdfRel = Sessions.GetById(chat)!.Attachments.Should().ContainSingle().Which;
+        // .txt рядом с PDF: тот же {guid}-каталог, что у учтённого оригинала, и оба в учёте
+        var attachments = Sessions.GetById(chat)!.Attachments!;
+        var pdfRel = attachments.Should().ContainSingle(a => a.EndsWith(".pdf", StringComparison.Ordinal), "оригинал учтён").Which;
+        attachments.Should().Contain(txtRel, "производный .txt учтён рядом с PDF");
         Path.GetDirectoryName(txtRel).Should().Be(Path.GetDirectoryName(pdfRel));
         File.Exists(Abs(root, pdfRel)).Should().BeTrue("оригинал остаётся");
         SameBytes(root, pdfRel, pdf);
@@ -317,9 +323,12 @@ public class ChildAttachmentsControllerTests : IClassFixture<ChildAttachmentsCon
         var txtRel = b.GetProperty("path").GetString()!;
         txtRel.Should().MatchRegex(PathRegex("урок.txt"));
 
-        // учтённый оригинал — .pdf, не .png: байты целы, расширение соответствует типу
-        var pdfRel = Sessions.GetById(chat)!.Attachments.Should().ContainSingle().Which;
+        // учтённый оригинал — .pdf, не .png: байты целы, расширение соответствует типу;
+        // производный .txt — в учёте рядом с ним
+        var attachments = Sessions.GetById(chat)!.Attachments!;
+        var pdfRel = attachments.Should().ContainSingle(a => a.EndsWith(".pdf", StringComparison.Ordinal)).Which;
         pdfRel.Should().MatchRegex(PathRegex("урок.pdf"));
+        attachments.Should().Contain(txtRel);
         Path.GetDirectoryName(txtRel).Should().Be(Path.GetDirectoryName(pdfRel), "тот же {guid}-каталог");
         SameBytes(root, pdfRel, pdf);
     }
@@ -363,6 +372,32 @@ public class ChildAttachmentsControllerTests : IClassFixture<ChildAttachmentsCon
         len.Should().BeLessThanOrEqualTo(TextBudget, "итог не больше бюджета вместе с пометкой");
         // обрезан у самой границы, а не произвольно короче: не хватает не больше размера одного символа
         len.Should().BeGreaterThan(TextBudget - 4);
+    }
+
+    // Доработка финала (п. c3.1): текст из PDF доходит до модели. Производный .txt учтён в
+    // Session.Attachments рядом с PDF — фильтр хаба (SanitizeSendMessageArgs, KM-B2) его не
+    // выбрасывает, и по оставленному пути текст входит в сообщение. Без учёта .txt args[2]
+    // — null (мутация проверена: тест красный).
+    [Fact]
+    public async Task Upload_PdfЕгоTxtУчтён_ПроходитSanitizeSendMessageArgs_ТекстДоМодели()
+    {
+        var (childId, chat, root) = await NewChildWithChat("kid-att-pdf-hub");
+        var client = ChildClient("kid-att-pdf-hub");
+        var marker = "МАРКЕР-" + Guid.NewGuid().ToString("N");
+        var pdf = Encoding.UTF8.GetBytes($"%PDF-1.7\nBT /F1 24 Tf 72 700 Td ({marker}) Tj ET\n%%EOF\n");
+
+        var (s, b, _) = await ReadAsync(await client.PostAsync($"/api/child/chats/{chat}/attachments", Multipart("урок.pdf", pdf)));
+        s.Should().Be(HttpStatusCode.OK);
+        var txtRel = b.GetProperty("path").GetString()!;
+
+        Sessions.IsRecordedAttachment(chat, txtRel).Should().BeTrue("производный .txt в учёте чата");
+
+        var args = ChildHubFilter.SanitizeSendMessageArgs(
+            [chat, "объясни задачу", new List<string> { txtRel }, "bypassPermissions", true], Sessions, childId);
+        args[2].Should().BeEquivalentTo(new List<string> { txtRel }, o => o.WithStrictOrdering());
+
+        var inlined = AttachmentInliner.BuildMessageText(root, "объясни задачу", (List<string>)args[2]!);
+        inlined.Should().Contain(marker, "путь прошёл фильтр — текст вошёл в сообщение");
     }
 
     // ─── доступ к чату ───

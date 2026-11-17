@@ -177,6 +177,30 @@ public sealed class ChatVisibility
         return rel;
     }
 
+    // KM-B6e (доработка финала, п. c3.1): учести производный файл уже сохранённого вложения —
+    // рядом с оригиналом, в той же {guid}-папке и с тем же именем (у PDF это .txt с текстом:
+    // его читает модель, и путь обязан быть в учёте, иначе фильтр хаба ChildHubFilter выбросит
+    // его из attachedPaths). Порядок тот же, что в SaveChatAttachment: файл под этим же
+    // VisibilityLock пишет вызывающий (готовые байты), учёт — сразу после записи, автосейв —
+    // после замка. Отказ (null) — оригинала в учёте нет (загрузка не состоялась или её перенесла
+    // смена видимости) либо чата нет. Второго правила «.txt рядом с учтённым PDF» в фильтре
+    // намеренно нет: единственная точка правды — Session.Attachments.
+    public string? SaveDerivedChatAttachment(string sessionId, string originalRel, string derivedExtension, Action<string> write)
+    {
+        if (!_store.Sessions.TryGetValue(sessionId, out var entry)) return null;
+        var info = entry.Info;
+        string derivedRel;
+        lock (entry.VisibilityLock)
+        {
+            if (info.Attachments is not { } list || !list.Contains(originalRel, StringComparer.Ordinal)) return null;
+            derivedRel = Path.ChangeExtension(originalRel, derivedExtension);
+            write(derivedRel);
+            list.Add(derivedRel);
+        }
+        _store.SaveSessions();
+        return derivedRel;
+    }
+
     // Учтено ли вложение в этом чате (ручка чтения №12): точное совпадение с записью
     // Session.Attachments, не префикс. Список читается под VisibilityLock — тем же замком, под
     // которым SaveChatAttachment дописывает, а SetChatVisibility переписывает пути: перечисление

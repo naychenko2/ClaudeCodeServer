@@ -15,7 +15,9 @@ namespace ClaudeHomeServer.Controllers;
 /// вариант «б»): allow-list типов по сигнатуре байтов (ChildAttachmentPolicy), PDF превращается
 /// в текст на сервере (тот же путь, что files_document_read: MarkitdownService), инструмент Read
 /// ребёнку не открывается. Картинка доходит до модели image-блоком, текст — инлайном
-/// (AttachmentInliner, как у обычных вложений). Расширение сохраняемого имени нормализуется
+/// (AttachmentInliner, как у обычных вложений); производный .txt текста учитывается в
+/// Session.Attachments рядом с PDF (SaveDerivedChatAttachment) — фильтр хаба пропускает его
+/// в attachedPaths, иначе текст до модели не дошёл бы. Расширение сохраняемого имени нормализуется
 /// по определённому типу (NormalizeExtension): kind в ответе и расширение path не расходятся —
 /// их читает по расширению downstream.
 ///
@@ -114,8 +116,14 @@ public class ChildAttachmentsController(
                     return ChildError(422, "pdf_no_text", "В этом PDF нет текста — попробуйте картинку или обычный текст.");
 
                 var text = ChildAttachmentPolicy.TruncateToTextBudget(md, out _);
-                var txtRel = ReplaceExtension(rel);
-                files.WriteFileBytes(root, txtRel, System.Text.Encoding.UTF8.GetBytes(text));
+                // Производный .txt учитывается рядом с учтённым PDF (доработка финала, п. c3.1):
+                // путь вне Session.Attachments фильтр хаба (KM-B2) выбрасывает из attachedPaths,
+                // и текст не доходит до модели. Учёт — под тем же VisibilityLock, запись файла —
+                // до учёта (порядок SaveChatAttachment). Отказ — оригинала в учёте уже нет
+                // (чата нет или его перенесла смена видимости): состояние не половиним, 503.
+                var txtRel = sessions.SaveDerivedChatAttachment(id, rel, TextExtension,
+                    r => files.WriteFileBytes(root, r, System.Text.Encoding.UTF8.GetBytes(text)));
+                if (txtRel is null) return Unavailable();
                 return Ok(new { path = txtRel, kind = "text", name = Path.GetFileName(rel) });
             }
 
@@ -129,9 +137,9 @@ public class ChildAttachmentsController(
         }
     }
 
-    // .txt рядом с PDF: та же папка {guid}, то же имя с расширением .txt.
-    private static string ReplaceExtension(string rel) =>
-        Path.ChangeExtension(rel, ".txt");
+    // Расширение производного текста PDF: .txt рядом с оригиналом — ту же {guid}-папку и то же
+    // имя даёт SaveDerivedChatAttachment по учтённому пути.
+    private const string TextExtension = ".txt";
 
     private static JsonResult Unavailable() =>
         ChildError(503, "policy_unavailable", "Настройки режима не читаются — попросите взрослого проверить.");

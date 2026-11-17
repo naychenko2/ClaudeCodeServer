@@ -731,6 +731,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     public string? SaveChatAttachment(string sessionId, string callerId, string? fileName, Action<string> write) =>
         _visibility.SaveChatAttachment(sessionId, callerId, fileName, write);
 
+    public string? SaveDerivedChatAttachment(string sessionId, string originalRel, string derivedExtension, Action<string> write) =>
+        _visibility.SaveDerivedChatAttachment(sessionId, originalRel, derivedExtension, write);
+
     public bool IsRecordedAttachment(string sessionId, string rel) =>
         _visibility.IsRecordedAttachment(sessionId, rel);
 

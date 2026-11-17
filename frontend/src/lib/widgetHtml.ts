@@ -1,6 +1,8 @@
 // Сборка srcDoc для HTML-виджетов чата (mcp__widgets__widget_show) — чистые функции,
-// тестируемое ядро WidgetView. HTML модели оборачивается в наш документ: строгая CSP
-// (никаких внешних запросов), тема приложения через CSS-переменные и скрипт авто-высоты.
+// тестируемое ядро WidgetView. HTML модели оборачивается в наш документ ВНУТРИ оболочки:
+// оболочка держит навигацию фрейма и пересылает высоту, внутренний документ — строгая CSP,
+// тема приложения через CSS-переменные и скрипт авто-высоты (та же схема, что у панелей
+// плагинов, ADR-031 §3.6).
 
 // Защитный cap рендера: MCP-сервер режет html на 64 КБ, но в историю мог попасть input
 // до валидации — совсем гигантский html не рендерим вовсе (плашка вместо iframe).
@@ -62,13 +64,26 @@ const THEME_VARS: Record<'light' | 'dark', Record<string, string>> = {
   },
 };
 
-// Строгая CSP: никакой сети (default-src 'none'), inline-скрипты/стили работают,
-// картинки/шрифты/медиа — только data:/blob:. form-action не фолбэчится в default-src —
-// задан явно, чтобы submit не утёк наружу. Наша мета первая: даже если модель добавит
-// свою CSP, действует пересечение (строже, не слабее).
+// CSP оболочки (внешний документ): навигацию внутреннего фрейма держит именно оболочка —
+// мета-CSP не ограничивает навигацию того фрейма, в котором документ показан сам (браузер
+// сверяет её с политикой родителя), поэтому location.href и <meta http-equiv=refresh>
+// внутри виджета без оболочки уводили фрейм на внешнюю страницу. frame-src 'none' это
+// закрывает; base-uri 'none' — <base>. style-src нужен для <style> оболочки (растяжка
+// внутреннего iframe): без него default-src 'none' вырезал бы её.
+const SHELL_CSP =
+  "default-src 'none'; frame-src 'none'; base-uri 'none'; script-src 'unsafe-inline'; " +
+  "style-src 'unsafe-inline'";
+
+// Строгая CSP внутреннего документа: никакой сети (default-src 'none'), inline-скрипты/
+// стили работают, картинки/шрифты/медиа — только data:/blob:. form-action не фолбэчится
+// в default-src — задан явно, чтобы submit не утёк наружу. connect-src/base-uri/frame-src
+// 'none' — явные, хотя и фолбэчатся в default-src: это читаемый контракт (та же схема,
+// что PANEL_CSP у панелей). Наша мета первая: даже если модель добавит свою CSP,
+// действует пересечение (строже, не слабее).
 const CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-  "img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'";
+  "img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; " +
+  "connect-src 'none'; base-uri 'none'; frame-src 'none'";
 
 // Скрипт авто-высоты: iframe в sandbox без allow-same-origin — DOM недоступен родителю,
 // единственный канал — postMessage. ResizeObserver шлёт высоту при каждом изменении.
@@ -81,14 +96,38 @@ const HEIGHT_SCRIPT =
   'h:Math.ceil(document.body.scrollHeight)},"*")};' +
   'new ResizeObserver(p).observe(document.body);addEventListener("load",p)})();</script>';
 
-// Полный документ для iframe.srcDoc: CSP + тема + авто-высота + html модели.
-// Модель шлёт фрагмент без <html>/<head>/<body>; если пришёл полный документ —
-// браузер распарсит вложенные теги лениво (виджет работает, но без нашей темы).
+// Растяжка оболочки: html/body без полей и прокрутки, внутренний iframe — на 100%×100%.
+// Без неё он жил бы в дефолтных 300×150 (тот же SHELL_STYLE, что у панелей, ADR-031 §3.6).
+const SHELL_STYLE =
+  'html,body{margin:0;height:100%;overflow:hidden}' +
+  ' iframe{display:block;border:0;width:100%;height:100%}';
+
+// Оболочка пересылает наверх только сообщения СВОЕГО iframe: высота от чужого окна
+// (другой виджет на странице) до хоста не доходит. Скрипт — после iframe в body: элемент
+// уже есть. srcdoc-фрейм наследует origin родителя (opaque у sandbox-оболочки), поэтому
+// contentWindow своего iframe оболочке доступен.
+const SHELL_SCRIPT =
+  '<script>(function(){var f=document.querySelector("iframe");' +
+  'addEventListener("message",function(e){if(e.source!==f.contentWindow)return;' +
+  'parent.postMessage(e.data,"*")})})();</script>';
+
+// Экранирование значения srcdoc (как у панелей, ADR-031 §3.6): & → &amp;, " → &quot;.
+// < и > не экранируются: внутри двойнокавычного атрибута они значение не закрывают,
+// а </script> в html модели внутри атрибута безопасен.
+function escapeSrcdoc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+// Полный документ для iframe.srcDoc хоста — ОБОЛОЧКА: meta-CSP оболочки (держит навигацию
+// фрейма) + ровно один <iframe sandbox="allow-scripts" srcdoc=…> с внутренним документом
+// (CSP + тема + авто-высота + html модели, значение экранировано). Модель шлёт фрагмент
+// без <html>/<head>/<body>; если пришёл полный документ — браузер распарсит вложенные теги
+// лениво (виджет работает, но без нашей темы).
 export function buildWidgetSrcDoc(html: string, theme: 'light' | 'dark'): string {
   const vars = Object.entries(THEME_VARS[theme])
     .map(([k, v]) => `${k}:${v}`)
     .join(';');
-  return (
+  const inner =
     '<!doctype html><html><head><meta charset="utf-8">' +
     `<meta http-equiv="Content-Security-Policy" content="${CSP}">` +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
@@ -98,6 +137,14 @@ export function buildWidgetSrcDoc(html: string, theme: 'light' | 'dark'): string
     '</head><body>' +
     html +
     HEIGHT_SCRIPT +
+    '</body></html>';
+  return (
+    '<!doctype html><html><head>' +
+    `<meta http-equiv="Content-Security-Policy" content="${SHELL_CSP}">` +
+    '<style>' + SHELL_STYLE + '</style>' +
+    '</head><body>' +
+    '<iframe sandbox="allow-scripts" srcdoc="' + escapeSrcdoc(inner) + '"></iframe>' +
+    SHELL_SCRIPT +
     '</body></html>'
   );
 }

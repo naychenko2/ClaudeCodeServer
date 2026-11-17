@@ -57,12 +57,18 @@ public sealed record CheapProfileSpec(
 // остальных мест цепочка одна, как раньше: одна работа, один проход по цепочке. Флаг только
 // описательный — он ничего не разрешает сам, он говорит вызывающему, что тому можно делить
 // работу на исполнителей.
+// FailOnInputOverflow — переполнение входа для этого места = отказ окна, а не обрезка хвоста
+// промпта (Q1-S10): местам вики неполный вход дороже отказа — ночной разбор не увидел бы
+// половины дельты, судья судил бы по неполным цитатам, и потеря пропала бы молча. Раннер
+// отказывает LocalInputOverflowException ДО вызова движка (CheapTextRunner.RunOnClientAsync).
+// Флаг стоит только у мест вики (wiki-ingest / wiki-nightly / wiki-judge): остальные места
+// режутся клиентом, как раньше (num_ctx Ollama, TrimToBudget LlamaServerClient).
 public sealed record LocalAction(
     string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
     bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null,
     int? CloudNumPredict = null, ActionInput Input = ActionInput.Text, bool FacePose = false,
     int? NumCtx = null, int? NumPredict = null, int? TimeoutMs = null,
-    bool ParallelExecutors = false);
+    bool ParallelExecutors = false, bool FailOnInputOverflow = false);
 
 // Вход места каталога: только текст или текст плюс картинки (разметка фото персонажа)
 public enum ActionInput { Text, Images }
@@ -245,7 +251,8 @@ public static class LocalActionCatalog
         // места Large — с профилем.
         new(WikiIngest, "Разбор источника в вики", "Заметки", CheapProfile.Large,
             DefaultLocal: true, Tier: ModelTier.Medium,
-            NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000),
+            NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000,
+            FailOnInputOverflow: true),
         // Факт по заявке агента (wiki_add_fact): одно утверждение с дословной цитатой.
         // Text, а не Small: на Small num_ctx обрезал бы выдержку источника, и цитата
         // не сверялась бы QuoteMatcher-ом в отсечённой части. Слот weak — явный (ADR-035 §7).
@@ -262,7 +269,7 @@ public static class LocalActionCatalog
         new(WikiNightly, "Ночной разбор вики", "Заметки", CheapProfile.Large,
             DefaultLocal: true, Tier: ModelTier.Medium,
             NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000,
-            ParallelExecutors: true),
+            ParallelExecutors: true, FailOnInputOverflow: true),
         // Ступень 2 отбора чатов для вики (Ф2, ADR-035 решение 12а): вердикт «есть ли в чате
         // что-то стоящее» — вход готовит вызывающий (обрезанный отрезок чата), ответ —
         // маленький JSON. Слот weak — явный.
@@ -276,7 +283,7 @@ public static class LocalActionCatalog
         // исполнителя для этого места выбирает админ в «Поставщиках моделей». Ночной синтез
         // (wiki-nightly) этой записи не касается: он остаётся только локальным.
         new(WikiJudge, "Судья спорных правок вики", "Заметки", CheapProfile.Large,
-            DefaultLocal: false, Tier: ModelTier.Strong),
+            DefaultLocal: false, Tier: ModelTier.Strong, FailOnInputOverflow: true),
         new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),

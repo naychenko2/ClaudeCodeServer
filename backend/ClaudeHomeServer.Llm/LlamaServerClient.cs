@@ -90,7 +90,9 @@ public sealed class LlamaServerClient : ILocalLlmClient
 
     // Бюджет символов под вход: (numCtx - numPredict) токенов под промпт, минус запас
     // на шаблон. numCtx<=0 — обрезка не заказана (вызывающий не знает контекст).
-    private static int InputBudgetChars(int numCtx, int numPredict) =>
+    // internal — единственная точка формулы: fail-closed места вики (Q1-S10) отказывают по
+    // этому же бюджету в CheapTextRunner, а не по своей копии формулы.
+    internal static int InputBudgetChars(int numCtx, int numPredict) =>
         numCtx > numPredict
             ? Math.Max(0, (numCtx - numPredict) * CharsPerToken - TemplateReserveChars)
             : 0;

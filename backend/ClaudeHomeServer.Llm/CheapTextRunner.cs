@@ -439,10 +439,25 @@ public sealed class CheapTextRunner(
     // awaitSlot — режим слота (см. AwaitsSlot): обычный вызов или вызов, ждущий свободный слот
     // в общем счётчике. Выбор транспорта (свободная генерация / ChatJson со схемой) от этого
     // не зависит: у движка своей очереди нет, ждёт обёртка.
+    // Единственная точка и для fail-closed мест вики (Q1-S10): проверка переполнения здесь —
+    // до вызова клиента и до ожидания слота, поэтому модель не звалась, слот не занят, а
+    // журнал закрывается finally вызывающей цепочки как Missed. spec — уже склеенный профиль
+    // места (для именованного движка NumCtx урезан до окна движка в RunEngineAsync), поэтому
+    // отказывает по тому же бюджету, по которому клиент резал бы промпт.
     private static async Task<(string? Text, OneShotUsage? Usage)> RunOnClientAsync(
         ILocalLlmClient client, string actionKey, string prompt, object? jsonFormat, string? ownerId,
         CheapProfileSpec spec, CancellationToken ct, bool awaitSlot = false)
     {
+        // Место с флагом (wiki-ingest / wiki-nightly / wiki-judge): вход больше бюджета —
+        // отказ окна, а не обрезка хвоста. Остальные места режутся клиентом, как раньше
+        // (num_ctx Ollama, TrimToBudget LlamaServerClient); формулу бюджета не дублируем.
+        if (LocalActionCatalog.Find(actionKey)?.FailOnInputOverflow == true)
+        {
+            var budget = LlamaServerClient.InputBudgetChars(spec.NumCtx, spec.NumPredict);
+            if (prompt.Length > budget)
+                throw new LocalInputOverflowException(prompt.Length, budget, spec.NumCtx, spec.NumPredict);
+        }
+
         var (text, usage) = jsonFormat is null
             ? await (awaitSlot
                 ? client.GenerateTextAwaitingSlotAsync(
@@ -768,6 +783,14 @@ public sealed class CheapTextRunner(
             // Отказ допуска — не сбой движка: модель не звалась ни разу, и вызывающий обязан
             // назвать причину сам (WikiIngestService ловит этот тип вокруг цепочки сегодня;
             // новый путь ловит его тем же catch).
+            throw;
+        }
+        catch (LocalInputOverflowException)
+        {
+            // Переполнение входа fail-closed места (Q1-S10) — тот же класс отказа окна, а не
+            // сбой движка: модель не звалась ни разу, подмены другим движком нет, причину
+            // называет вызывающий. Без этой ветки её проглотил бы catch-all ниже, и ночь
+            // прочитала бы отказ как «движок дал сбой».
             throw;
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)

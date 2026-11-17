@@ -135,11 +135,16 @@ public class CheapTextRunnerLocalEngineTests
         { Calls.Add(model); return Task.FromResult(new OneShotResult($"CLAUDE[{model}]", null, 0)); }
     }
 
+    // Окно фикстуры — 32768, а не произвольные 8192: места вики несут свой NumPredict 16384,
+    // и на окне 8192 бюджет их входа (numCtx − numPredict)·3 − запас нулевой — fail-closed
+    // места отказывает такой вызов до обращения к движку (Q1-S10). Здесь же проверяются слот,
+    // транспорт и usage прогона на названном движке, а не вместимость окна: окно фикстуры
+    // обязано быть тем, которое эту работу действительно принимает.
     private static NamedLocalEngines Engines(ILocalLlmClient client, bool ready = true, string? fallback = null,
         Func<CancellationToken, Task<bool>>? probe = null) =>
         new([new LocalEngine(
             new LocalEngineSpec(Engine, ReadyUrl: "http://arbiter/ready", StateUrl: null,
-                FallbackRoute: fallback, NumCtx: 8192,
+                FallbackRoute: fallback, NumCtx: 32_768,
                 Actions: new HashSet<string>(StringComparer.OrdinalIgnoreCase)),
             client, probe ?? (_ => Task.FromResult(ready)))]);
 

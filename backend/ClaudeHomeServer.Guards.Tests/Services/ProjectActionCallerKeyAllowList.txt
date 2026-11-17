@@ -350,3 +350,9 @@ backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|1
 # класс мест, что вердикт S2c-6 выше. Ключом хранилищ он не служит: заметка и задача адресуются
 # context.OwnerId из токена арендатора (PromoteAsync вызывается им, как и раньше).
 backend/ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs|1
+# Т1e доработа (PersonaScopeGuard → ResolvePersona): ChildSubjectsController 0→3 — файл входит в
+# область вместе с внедрением IProjectAccess: «access.ResolvePersona(UserId, …)» — аргумент И-1
+# (тот же класс мест, что «access.ResolvePersona(UserId, …)» в PersonaNameOf B01); «policy.For(UserId)» —
+# чтение собственного детского профиля вызывающего (ребёнка); третья — владелец в записи лога.
+# Ключом хранилищ ничто из этого не служит: проекция только читает, ничего не пишется.
+backend/ClaudeHomeServer/Controllers/ChildSubjectsController.cs|3

@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ChildMode;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -17,6 +18,11 @@ namespace ClaudeHomeServer.Controllers;
 /// Порядок отказов — как у ChildChatsController: 403 not_child → 503 policy_unavailable
 /// (нечитаемый профиль, DenyAll). Висящий ключ репетитора (персона удалена) — tutor: null:
 /// имени и аватара у несуществующей персоны нет, выдумывать их проекция не вправе.
+///
+/// Резолв ключа — через единую точку «персона → область» IProjectAccess.ResolvePersona
+/// (W3-B1b, разрез §5 п.2), а не инлайновым personas.Get с ключом вызывающего: тьютор ребёнка —
+/// его собственная глобальная персона (ChildTutorProvisioner.cs:74-83), ResolvePersona резолвит
+/// её по владению (ProjectAccessService.cs:70-72); чужая или удалённая — null, как раньше.
 /// </summary>
 [ApiController]
 [Authorize]
@@ -24,6 +30,7 @@ namespace ClaudeHomeServer.Controllers;
 public class ChildSubjectsController(
     IChildModePolicy policy,
     PersonaManager personas,
+    IProjectAccess access,
     ILogger<ChildSubjectsController> logger) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -49,8 +56,11 @@ public class ChildSubjectsController(
                     label = s.Label,
                     glyph = s.Glyph,
                     color = s.Color,
-                    // Ключ резолвится в живую персону ребёнка: чужая или удалённая — null.
-                    tutor = personas.Get(s.TutorPersonaId, UserId) is { } tutor
+                    // Ключ — через единую точку резолва (ResolvePersona с правом Read, W3-B1b §5 п.2):
+                    // своя глобальная персона ребёнка резолвится по владению (тот же образец, что
+                    // TasksController.PersonaNameOf); чужая или удалённая — null, поведение то же.
+                    tutor = access.ResolvePersona(UserId, s.TutorPersonaId, ProjectRight.Read) is { } scope
+                            && personas.Get(s.TutorPersonaId, scope.TenantOwnerId) is { } tutor
                         ? new { personaId = tutor.Id, name = tutor.Name, hasAvatar = HasAvatar(tutor) }
                         : null,
                 })

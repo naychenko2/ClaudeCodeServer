@@ -598,6 +598,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.ChatUserStateService>();
 builder.Services.AddSingleton(sp => new ChildUsageStore(
     ChildUsageStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
     sp.GetRequiredService<ILogger<ChildUsageStore>>()));
+// Провижн персоны-тьютора ребёнка (KM-B1d, ADR-041): «Помощник» с ключом в
+// ChildProfile.TutorPersonaId. Вызывается только точками записи детского профиля (KM-B1e).
+builder.Services.AddSingleton<ChildTutorProvisioner>();
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),

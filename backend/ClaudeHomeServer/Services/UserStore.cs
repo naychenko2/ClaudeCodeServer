@@ -609,6 +609,23 @@ public class UserStore : IForgejoAccountStore, IUserStore
     }
 
     /// <summary>
+    /// Id закреплённой персоны-тьютора ребёнка (ChildProfile.TutorPersonaId, KM-B1d).
+    /// Пишет только в существующий профиль ребёнка; возвращает false, если пользователя
+    /// или профиля нет.
+    /// </summary>
+    public bool SetChildTutorPersona(string id, string personaId)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user?.ChildMode is null) return false;
+            user.ChildMode.TutorPersonaId = personaId;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Сессия незавершённого онбординга пользователя (null — онбординг завершён/сброшен).
     /// Возвращает false если пользователь не найден.
     /// </summary>

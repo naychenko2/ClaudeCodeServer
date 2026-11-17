@@ -5,6 +5,7 @@ import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
 import { WorkspacePage } from './pages/WorkspacePage'
+import { ChildWorkspace } from './features/childMode/ChildWorkspace'
 import type { HubTabValue } from './components/HubTabs'
 import { moduleIdOf, subsystemKeyOf, subsystemTabValue } from './components/HubTabs'
 import { ModuleScreen } from './components/modules/ModuleScreen'
@@ -1454,6 +1455,17 @@ export default function App() {
         <TeamPlanSimPage />
       </Suspense>
     );
+  }
+
+  // Детский режим: только детская оболочка. Взрослые экраны, уведомления, поиск и
+  // плавающие слои не монтируются вовсе (KM-F10)
+  if (auth && !authChecking && me.isChild) {
+    return (
+      <>
+        <UpdatePrompt />
+        <ChildWorkspace auth={auth} onLogout={logout} />
+      </>
+    )
   }
 
   return (

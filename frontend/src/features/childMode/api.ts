@@ -49,7 +49,7 @@ export const childApi = {
   // GET /api/child/spaces/{space}/chats — детские чаты пространства, новые сверху.
   // live и signal — по тем же причинам, что у status.
   spaceChats: (space: string, opts?: { signal?: AbortSignal }) =>
-    request<{ chats: { sessionId: string; name: string; updatedAt: string }[] }>(
+    request<{ chats: { sessionId: string; name: string; updatedAt: string; voiceMode?: boolean }[] }>(
       `/child/spaces/${encodeURIComponent(space)}/chats`,
       { live: true, signal: opts?.signal },
     ),

@@ -64,6 +64,8 @@ export interface Me {
   // нему бейдж среды и предупреждение для stdio-записей у local-владельцев. Бэк
   // отдаёт поле в AuthController.MeResponse наравне с role
   executionEnvironment?: 'local' | 'container';
+  // Детский режим: пользователь — ребёнок, приложение рисует только детскую оболочку
+  isChild?: boolean;
 }
 
 export interface AuthState {

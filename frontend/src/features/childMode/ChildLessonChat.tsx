@@ -17,6 +17,8 @@
 // Загрузка и озвучка привязаны к sessionId: ответ после смены чата отбрасывается.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { speak, stopSpeaking } from '../../lib/tts';
+import { turnText } from '../../lib/turnSpeechStream';
 import { Bot, Lightbulb, X } from 'lucide-react';
 import { C, CHAT_GUTTER_MOBILE, CHAT_MAX_W, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -87,6 +89,19 @@ export function ChildLessonChat({ sessionId, subjectId, title, status, onHintSte
   // Актуальный чат — для отбрасывания ответов, ушедших с прежнего
   const curSid = useRef(sessionId);
   useEffect(() => { curSid.current = sessionId; }, [sessionId]);
+
+  // Озвучка ответов (голосового ввода нет): ход закончился — читаем его текст целиком.
+  // Смена урока и размонтирование обрывают звук; выключение переключателя — тоже.
+  const wasWaiting = useRef(false);
+  useEffect(() => {
+    const finished = wasWaiting.current && !isWaiting;
+    wasWaiting.current = isWaiting;
+    if (!finished || !voiceOn) return;
+    const text = turnText(items);
+    if (text) void speak(text, undefined, sessionId);
+  }, [isWaiting, voiceOn, items, sessionId]);
+  useEffect(() => { if (!voiceOn) stopSpeaking(); }, [voiceOn]);
+  useEffect(() => () => stopSpeaking(), [sessionId]);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -243,6 +258,9 @@ export function ChildLessonChat({ sessionId, subjectId, title, status, onHintSte
             voiceMode={voiceOn}
             onToggleVoiceMode={toggleVoice}
           />
+          <p data-child-disclosure="" style={{ margin: 0, textAlign: 'center', fontSize: FS.xs, color: C.textMuted }}>
+            Помощник — компьютерная программа
+          </p>
         </div>
       </section>
     </ChatSessionContext.Provider>

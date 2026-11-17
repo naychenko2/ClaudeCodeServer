@@ -87,6 +87,9 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
             .ToList();
         denied.Should().NotBeEmpty();
 
+        // Счётчик в отчёт: сколько эндпоинтов обойдено и сколько из них без метки
+        Console.WriteLine($"[child-gate] проверено эндпоинтов: {Endpoints().Count()}, без [ChildAllowed]: {denied.Count}");
+
         var leaks = new List<string>();
         foreach (var e in denied)
         {

@@ -157,6 +157,22 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
         (await r.Content.ReadAsByteArrayAsync()).Should().Equal(Png);
     }
 
+    // <img> не умеет слать заголовок: JWT приезжает в ?access_token= (обработчик OnMessageReceived)
+    [Fact]
+    public async Task ТокенТолькоВQuery_AccessToken_200()
+    {
+        var (chat, root, _) = await AdultChat();
+        var rel = Seed(chat, root, $".cc-attachments/{Guid.NewGuid():N}/x.png", Png);
+        var token = _admin.DefaultRequestHeaders.Authorization!.Parameter!;
+
+        var anon = _hosts.CreateClient();
+        (await anon.GetAsync(Url(chat, rel))).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        var r = await anon.GetAsync(Url(chat, rel) + "&access_token=" + Uri.EscapeDataString(token));
+
+        r.StatusCode.Should().Be(HttpStatusCode.OK);
+        r.Content.Headers.ContentType!.MediaType.Should().Be("image/png");
+    }
+
     [Theory]
     [InlineData("a.png", "image/jpeg")] // JPEG-байты под .png: тип по сигнатуре, не по расширению
     [InlineData("b.dat", "image/gif")]

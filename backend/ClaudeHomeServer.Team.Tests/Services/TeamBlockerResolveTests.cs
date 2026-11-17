@@ -232,6 +232,41 @@ public class TeamBlockerResolveTests : IDisposable
         stab.TeamImplement!.Stage.Should().NotBe(TeamImplementStage.AwaitingDecision);
     }
 
+    // Ф-2.48: карточка блокера и плашка «ждёт вас» — один факт с двумя читателями. Гашение
+    // карточки по факту оставляло ожидание задачи стоять: человек видел «ждёт вас» на странице
+    // фичи при уже снятом блокере (тот же живой случай, что вне штаба).
+    // Мутации: убрать ClearAwaitingHumanByFactAsync в цикле гашения — краснеет этот тест
+    // (ожидание стоит); убрать в нём вещание ToTaskBoard — краснеет проверка события.
+    [Fact]
+    public async Task TryResolveBlockerByFact_ГаситКарточкуИОжиданиеЗадачи()
+    {
+        var (stab, _) = await MakeStabAsync("resolve-awaiting");
+        var task = _tasks.Create(stab.ProjectId, UserId, new CreateTaskRequest(
+            Title: "Тест", Description: "", Assignee: TaskItemAssignee.Claude), null);
+        _tasks.Update(task.Id, new UpdateTaskRequest());
+        await PublishBlockerAsync(stab, task.Id);
+
+        // Ожидание стоит — тот же продюсер, что в бою: доклад-блокер (SetAwaitingHuman)
+        _tasks.SetAwaitingHuman(task.Id, "Нужен доступ к репозиторию");
+        _tasks.GetById(task.Id)!.AwaitingHumanSince.Should().NotBeNull("сценарий без ожидания проверку не проверяет");
+
+        var before = _broadcaster.Owner.Count;
+        var ok = await _sessions.TryResolveBlockerByFactAsync(stab.Id, task.Id, "штаб ответил исполнителю");
+        ok.Should().BeTrue("открытая блокер-карточка должна быть погашена");
+
+        var stored = _tasks.GetById(task.Id)!;
+        stored.AwaitingHumanSince.Should().BeNull("снятие карточки по факту снимает и ожидание той же задачи");
+        stored.AwaitingHumanReason.Should().BeNull("пара Since/Reason снимается целиком");
+
+        // (predicate в expression tree — «is» с объявлением переменной в нём недопустим (CS8122),
+        // поэтому приведение до Where)
+        _broadcaster.Owner.Skip(before)
+            .Select(m => m.Message as TaskChangedMessage)
+            .Where(t => t != null && t.Action == "updated" && t.Task.Id == task.Id)
+            .Should().HaveCount(1,
+                "доска и страница фичи живут только по task_changed: молчаливое снятие оставило бы «ждёт вас»");
+    }
+
     [Fact]
     public async Task TryResolveBlockerByFact_ДвеОткрытыеКарточки_СтадияДержитсяДоСнятияВторой()
     {

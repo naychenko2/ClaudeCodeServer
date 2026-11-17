@@ -375,8 +375,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // SessionManager — здесь тот же приём, что у _teamCoordinator/_teamState/_teamPlan).
         // В DI переедет на шаге 2г-4, owning-обёртки StartTeamWorkAsync/CloseTeamTalkAsync/
         // RespondTeamPlanAsync в SessionManager будут сняты.
+        // Ф-2.48: гашение карточки блокера по факту снимает и ожидание человека той же задачи
+        // (плашка «ждёт вас» и карточка — один факт). Стор задач и вещатель доски приходят
+        // теми же штатными направлениями, что уже читают здесь TeamTurnCompletionService (tasks)
+        // и TeamCoordinator (broadcaster); без них — та же деградация, что у них.
         _teamDecision = new TeamDecisionService(this, this, _teamHistory, _teamRunState, _teamIntake,
-            _personas, _teamState, _teamPlan, loggerFactory.CreateLogger<TeamDecisionService>());
+            _personas, _teamState, _teamPlan, loggerFactory.CreateLogger<TeamDecisionService>(),
+            tasks, broadcaster);
         // Квоты и бюджет практики (волна Е). Owning-паттерн (создаётся в конструкторе,
         // в DI переедет на шаге 2г-4) разрывает цикл «SessionManager хочет TeamBudgetService,
         // TeamBudgetService хочет SessionManager» — вертикаль видит ядро по прямой ссылке,

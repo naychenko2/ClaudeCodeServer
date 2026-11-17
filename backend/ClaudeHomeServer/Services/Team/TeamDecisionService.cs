@@ -1,5 +1,7 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Team;
 
@@ -74,11 +76,16 @@ internal sealed class TeamDecisionService
     // ядра вызовы идут на TeamStateService/TeamPlanService напрямую.
     private readonly TeamStateService _state;
     private readonly TeamPlanService _plan;
+    // Ф-2.48: гашение карточки блокера снимает и ожидание человека той же задачи. Стор задач
+    // и вещатель доски приходят теми же штатными направлениями, что у ядра (Main → Tasks,
+    // шов Ф4); null — их нет в контейнере (подсистема задач выключена), ожидание не трогается.
+    private readonly TaskManager? _tasks;
+    private readonly ISessionBroadcaster? _broadcaster;
 
     internal TeamDecisionService(SessionManager sessions, ITeamSessionDirectory dir,
         ITeamHistoryStore history, ITeamRunState run, ITeamTurnIntake intake,
         PersonaManager personas, TeamStateService state, TeamPlanService plan,
-        ILogger<TeamDecisionService> log)
+        ILogger<TeamDecisionService> log, TaskManager? tasks = null, ISessionBroadcaster? broadcaster = null)
     {
         _sessions = sessions;
         _dir = dir;
@@ -89,6 +96,8 @@ internal sealed class TeamDecisionService
         _state = state;
         _plan = plan;
         _log = log;
+        _tasks = tasks;
+        _broadcaster = broadcaster;
     }
 
     // Новая вводная разложена планировщиком и уходит в волну (Э5). Гард по стадии: работу
@@ -835,6 +844,12 @@ internal sealed class TeamDecisionService
                 card.TaskId, card.Wave, Resolved: true, ChosenActionId: "resolvedByStaff",
                 card.PersonaId, ResolutionNote: reason,
                 TaskTitle: card.TaskTitle));
+            // Ф-2.48: карточка блокера и плашка «ждёт вас» — один факт с двумя читателями.
+            // Гашение карточки по факту оставляло ожидание задачи стоять: человек видел
+            // «ждёт вас» на странице фичи при снятом блокере (тот же живой случай, что вне
+            // штаба). Карточки без TaskId (общий карточный блокер) — ожидания нет у чего.
+            if (card.TaskId is { Length: > 0 } cardTaskId)
+                await ClearAwaitingHumanByFactAsync(cardTaskId);
         }
 
         // Возврат стадии ТОЛЬКО если решающих открытых карточек больше нет.
@@ -874,5 +889,28 @@ internal sealed class TeamDecisionService
         _log.LogInformation("Карточка блокера по задаче {TaskId} в чате-штабе {SessionId} погашена штабом: {Reason}",
             taskId, stabSessionId, reason);
         return true;
+    }
+
+    // Ф-2.48: снять ожидание человека задачи, чью карточку блокера мы погасили по факту.
+    // Тот же клир, что у всех остальных точек снятия (TaskManager.ClearAwaitingHuman): он же
+    // пишет waiting_cleared в журнал фичи. Сторож «Since <= at» — в сторе: ожидание,
+    // поставленное после этого момента (одновременно с гашением поднял его новый доклад),
+    // этим действием не снимается. task_changed — после успешного снятия и только при нём:
+    // «updated» без изменения не шлём (тот же порядок, что у AwaitingHumanAnswerSubscriber).
+    // Сбой не роняет гашение карточки: карточка уже погашена, это главный эффект вызова.
+    private async Task ClearAwaitingHumanByFactAsync(string taskId)
+    {
+        if (_tasks is null) return;
+        try
+        {
+            var cleared = _tasks.ClearAwaitingHuman(taskId, DateTime.UtcNow);
+            if (cleared is null || _broadcaster is null) return;
+            await _broadcaster.ToTaskBoard(cleared.OwnerId ?? "", cleared.ProjectId,
+                new TaskChangedMessage("updated", cleared));
+        }
+        catch (Exception e)
+        {
+            _log.LogWarning(e, "Ожидание человека: не удалось снять гашением блокера по задаче {TaskId}", taskId);
+        }
     }
 }

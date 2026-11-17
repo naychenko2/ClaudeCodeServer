@@ -138,6 +138,10 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
         }
         catch (InvalidOperationException) { return new SendOutcome.NotFound(); }
 
+        // Момент, когда ядро приняло сообщение — «at» для сторожа ожидания (Ф-2.48):
+        // ожидание, поставленное позже этого момента, действием адресата не снимается.
+        var acceptedAt = DateTime.UtcNow;
+
         // Квота списана авансом, а сообщение не дошло (дубль, переполнение очереди, занято
         // ожиданием человека) — возвращаем единицу: иначе наивные ретраи агента выжигали
         // бы MaxWakeups без единого реального хода. Принятое в очередь (не дубль) не
@@ -146,7 +150,10 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
             or SendAndWaitResult.QueueFull or SendAndWaitResult.Busy)
             sessions.RefundTeamWakeup(sessionId);
 
-        return result switch
+        // Явный тип: у switch-выражения без целевого типа общего типа веток нет (CS8506,
+        // та же находка, что у ReportUpAsync ниже). Тип нужен и по делу: дальше по исходу
+        // решаем, было ли сообщение ПРИНЯТО — только принятое есть действие адресата.
+        SendOutcome outcome = result switch
         {
             SendAndWaitResult.Busy b => new SendOutcome.Busy(b.CurrentStatus),
             SendAndWaitResult.Queued q => new SendOutcome.Queued(q.Position, q.Duplicate),
@@ -155,6 +162,62 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
                 c.Result.Reply, c.Result.DurationMs, c.Result.CostUsd),
             _ => new SendOutcome.Running(),
         };
+
+        // Ф-2.48: принятое сообщение (busy/queue_full — не принято, ожидания не трогаем).
+        // Момент принятия — здесь, до разбора исхода: он и есть «at» для сторожа стора.
+        if (callerSessionId is { Length: > 0 } caller
+            && outcome is SendOutcome.Queued or SendOutcome.Completed or SendOutcome.Running)
+            await TryClearAwaitingForAddresseeAsync(session, caller, acceptedAt);
+
+        return outcome;
+    }
+
+    // Ф-2.48 (разбор Ф-2.47): ожидание человека (AwaitingHumanSince/Reason) — единственная
+    // точка правды «жду тебя», и блокер адресован тому, кому ушёл доклад:
+    // SessionTaskLinks.ParentSessionId(чата-исполнителя). Снятие блокера по факту было только
+    // в режиме штаба (TeamDecisionService.TryResolveBlockerByFactAsync); в конвейере фич, где
+    // координатор работает в обычном чате, действие адресата — сообщение в чат исполнителя —
+    // ожидания не снимало вовсе (живой случай: плашка «ждёт вас» висела 1 ч 54 мин после
+    // ответа координатора).
+    //
+    // Правила:
+    // - Адресат — только родитель чата-получателя по SessionTaskLinks: та же связь, по которой
+    //   ReportUpAsync носит доклад постановщику. Совпал с доверенным callerSessionId — это
+    //   действие адресата. Заголовок X-Sender-Session-Id (senderSessionId) присылает клиент,
+    //   он не доказательство: им можно выдать за адресата любой чат.
+    // - Авто-сообщения сервера (довылка после рестарта, будильник сторожа) приходят без
+    //   вызывателя — их отрезает первое правило, особого списка не нужно.
+    // - Ожидание — у задачи, привязанной к чату-получателю (тот же резолв GetBySession, что у
+    //   постановки FS-E2). Чат без задачи или задача без ожидания — ничего не делать.
+    // - Сторож «Since <= acceptedAt» держит стор (ClearAwaitingHuman(id, at)): ожидание,
+    //   поставленное ПОЗЖЕ принятия сообщения, этим действием не снимается — оно создано не
+    //   им (та же гонка «ответ / новый блокер», что у AwaitingHumanAnswerSubscriber).
+    // - task_changed — после успешного снятия, payload — обновлённая задача: тот же путь, что
+    //   FS-E2 и AwaitingHumanAnswerSubscriber (доска и страница фичи живут только по нему).
+    //
+    // internal — ровно для теста сторожа: в бою at = момент принятия сообщения, в тесте он
+    // задаётся явно (настоящей гонки в тесте нет, и флейки тут быть не должно).
+    internal async Task TryClearAwaitingForAddresseeAsync(Session target, string callerSessionId,
+        DateTime acceptedAt)
+    {
+        if (SessionTaskLinks.ParentSessionId(target, new TaskLookupAdapter(tasks)) != callerSessionId)
+            return;
+
+        var task = tasks.GetBySession(target.Id);
+        if (task is null || task.AwaitingHumanSince is null) return;
+
+        try
+        {
+            var cleared = tasks.ClearAwaitingHuman(task.Id, acceptedAt);
+            if (cleared is not null && _broadcaster is not null)
+                await _broadcaster.ToTaskBoard(cleared.OwnerId ?? "", cleared.ProjectId,
+                    new TaskChangedMessage("updated", cleared));
+        }
+        catch (InvalidOperationException e)
+        {
+            // Снятие не роняет саму отправку: сообщение адресат уже написал.
+            _log?.LogWarning(e, "chats_send: ожидание человека задаче {TaskId} не снято", task.Id);
+        }
     }
 
     // Откуда прилетело сообщение — чип-источник у карточки получателя. null, когда

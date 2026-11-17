@@ -122,4 +122,69 @@ public class PersonaMentionsHintOrderTests : IClassFixture<PersonaMentionsHintOr
         Assert.True(handles.SequenceEqual(handles.OrderBy(h => h, StringComparer.Ordinal)),
             "AgentHandles должны идти по возрастанию handle");
     }
+
+    // Тест E: порядок ВНУТРИ сферной группы — по handle (Ordinal), сама группа идёт после
+    // не-сферных строк и с ними не перемешивается (AppendPersonaLines — именованное место
+    // сортировки; в живом потоке SplitConsultants отнесёт сферную персону в viaAsk по
+    // достижимости её файла, но порядок строк внутри любой группы решает этот код).
+    [Fact]
+    public void СфернаяГруппа_ПослеНеСферной_ВнутриПоHandle()
+    {
+        var builder = Svc<PersonaLayerBuilder>();
+        var zeta = Svc<PersonaManager>().Create(OwnerId, "Зета-сфера", null, null, null, null, null,
+            PersonaScope.Sphere, null, null, null, false, handle: "zeta-s-e", sphereId: "sphere-e");
+        var mike = Svc<PersonaManager>().Create(OwnerId, "Майк", null, null, null, null, null,
+            PersonaScope.Global, null, null, null, false, handle: "mike-e");
+        var alpha = Svc<PersonaManager>().Create(OwnerId, "Альфа-сфера", null, null, null, null, null,
+            PersonaScope.Sphere, null, null, null, false, handle: "alpha-s-e", sphereId: "sphere-e");
+
+        // Вход: сфера → не-сфера → сфера и обратный — текст обязан совпасть
+        var first = Render(builder, [zeta, mike, alpha]);
+        var second = Render(builder, [alpha, mike, zeta]);
+        first.Should().Be(second, "порядок входного списка не влияет на текст");
+
+        var am = first.IndexOf("@mike-e", StringComparison.Ordinal);
+        var header = first.IndexOf("Команда сферы", StringComparison.Ordinal);
+        var aa = first.IndexOf("@alpha-s-e", StringComparison.Ordinal);
+        var az = first.IndexOf("@zeta-s-e", StringComparison.Ordinal);
+        am.Should().BeGreaterThan(0);
+        header.Should().BeGreaterThan(am, "группа сфер идёт после не-сферных строк, а не вперемешку");
+        aa.Should().BeGreaterThan(header, "сферные строки идут за своим заголовком");
+        az.Should().BeGreaterThan(aa, "внутри сферной группы — по handle (Ordinal), не по порядку входа");
+    }
+
+    // Тест F: определения per-run --agents (ClaudeAgentsJson → отпечаток запуска) идут по
+    // handle (Ordinal), а не в порядке GetForContext (UpdatedAt по убыванию): касание UpdatedAt
+    // не должно менять отпечаток при неизменном составе.
+    [Fact]
+    public async Task ОпределенияАгентов_ПоHandleAНеПоUpdatedAt()
+    {
+        var projectId = await CreateProjectAsync();
+        var (zeta, alpha, mike) = CreateTrio("f");
+
+        // GetForContext отдал бы этих по убыванию UpdatedAt: zeta → mike → alpha — обратный
+        // Ordinal порядок.
+        zeta.UpdatedAt = DateTime.UtcNow.AddDays(2);
+        mike.UpdatedAt = DateTime.UtcNow.AddDays(1);
+
+        var session = new Session { ProjectId = projectId, Participants = [alpha.Id, mike.Id] };
+        var provider = Svc<PersonaLayerBuilder>().BuildPersonaAgentsProvider(OwnerId, session, null);
+        provider.Should().NotBeNull();
+
+        var ctx = provider!();
+        ctx.Should().NotBeNull();
+        var names = ctx!.Agents.Select(a => a.Name).ToList();
+        names.Should().Contain(new[] { "alpha-f", "mike-f", "zeta-f" });
+        names.Should().Equal(names.OrderBy(n => n, StringComparer.Ordinal),
+            "определения --agents — по handle: отпечаток запуска не зависит от выборки GetForContext");
+        ctx.AgentHandles.Should().Equal(names,
+            "список «Доступные agentType» и определения — один и тот же порядок");
+    }
+
+    private static string Render(PersonaLayerBuilder builder, List<Persona> personas)
+    {
+        var sb = new System.Text.StringBuilder();
+        builder.AppendPersonaLines(sb, personas, currentProjectId: null);
+        return sb.ToString();
+    }
 }

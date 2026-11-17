@@ -133,7 +133,7 @@ function rulesLines(r: ChildRulesBrief): string[] {
     .join('; ');
   const head = r.dailyMinutes != null && r.dailyMinutes > 0
     ? `Я занимаюсь ${r.dailyMinutes} ${minutesWord(r.dailyMinutes)} в день`
-    : 'Я занимаюсь, когда открыто время уроков';
+    : 'Я занимаюсь в своё время для уроков';
   const time = `${head}${when ? `: ${when}` : ''}.`;
   return [
     'Я знаю, что помощник — программа, а не человек и не друг.',
@@ -153,11 +153,13 @@ function summaryOf(r: ChildRulesBrief): string {
 }
 
 // Дата согласия для просмотра правил: «16 ноября», без года (макет: «Договорились 16 ноября»).
+// Читается прямо из строки профиля (таймзона ребёнка, ADR-041 «Общие правила»): пересчёт в
+// таймзону браузера сдвинул бы день (тот же приём, что hh()).
 function agreedLabel(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? ''
-    : new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(d);
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return '';
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' }).format(d);
 }
 
 // Строка объяснения: квадрат 40 с иконкой (макет .rrow .tile) и текст рядом.
@@ -302,9 +304,12 @@ function RulesFlow({ mode, rules, onAgreed, onClose }: Omit<Props, 'open'>) {
   const tiles = limitTiles(rules);
   const lines = rulesLines(rules);
   const agreedDate = review && rules.agreedAt ? agreedLabel(rules.agreedAt) : '';
-  // Порог предупреждения — из warnMinutes профиля. Строка собирается целиком: React рвёт
+  // Порог предупреждения — из warnMinutes профиля. При пороге ≤ 0 предупреждения нет: строка
+  // о нём показывается только при положительном пороге. Строка собирается целиком: React рвёт
   // соседние текстовые узлы комментарием, и по частям её не прочитать ни тесту, ни экранирующему.
-  const warnLine = `За ${rules.warnMinutes} ${minutesWord(rules.warnMinutes)} до конца я предупрежу.`;
+  const warnLine = rules.warnMinutes > 0
+    ? `За ${rules.warnMinutes} ${minutesWord(rules.warnMinutes)} до конца я предупрежу.`
+    : '';
   const agreedBadge = agreedDate ? `Договорились ${agreedDate}: ${rules.childName} и папа` : '';
 
   const body = (() => {
@@ -334,7 +339,7 @@ function RulesFlow({ mode, rules, onAgreed, onClose }: Omit<Props, 'open'>) {
               ))}
             </div>
           )}
-          <Row icon={Bell}>{warnLine}</Row>
+          {warnLine && <Row icon={Bell}>{warnLine}</Row>}
           <Row icon={Bell}>Остаток называю крупно, а не по секундам.</Row>
           <Notice tone="info" icon={Users}>Обсудите вместе. Если время не подходит, папа поменяет его в настройках.</Notice>
         </>

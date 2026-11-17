@@ -101,6 +101,12 @@ const panel = (host: HTMLElement) => host.querySelector('[data-testid="child-pro
 const saveBtn = (host: HTMLElement) => panel(host).querySelector('[data-testid="save-profile"]') as HTMLButtonElement;
 const inputByPlaceholder = (host: HTMLElement, ph: string) =>
   panel(host).querySelector(`input[placeholder="${ph}"]`) as HTMLInputElement;
+// Поле, значение которого всегда заполнено (placeholder не виден), ищется по подписи Field:
+// обёртка Field — родитель label и содержит свой input.
+const inputByLabel = (host: HTMLElement, label: string) => {
+  const lbl = Array.from(panel(host).querySelectorAll('label')).find((l) => (l.textContent ?? '').includes(label));
+  return (lbl?.parentElement?.querySelector('input') ?? null) as HTMLInputElement | null;
+};
 const windowInputs = (host: HTMLElement) =>
   Array.from(panel(host).querySelectorAll('[data-testid="time-window"] input')) as HTMLInputElement[];
 const textOf = (host: HTMLElement, testid: string) =>
@@ -236,7 +242,7 @@ describe('ChildProfileEditor: «Минут в день»', () => {
       const el = minutesInput(host);
       expect(el.style.border, 'рамка поля C.dangerBorder').toContain('var(--c-danger-border)');
       // текст ошибки поля — в обороте Field (input → обёртка TextField → div Field)
-      expect(el.parentElement?.parentElement?.textContent ?? '').toContain('Введите число минут, например 30');
+      expect(el.parentElement?.parentElement?.textContent ?? '').toContain('Введи число минут, например 30');
       await click(saveBtn(host));
       expect(calls.length, 'некорректные минуты — без запроса').toBe(0);
     });
@@ -291,7 +297,7 @@ describe('ChildProfileEditor: отказы ручки №10', () => {
     await settle(() => pending.get(0)!.reject(httpErr(404, 'user_not_found', 'Пользователь не найден.')));
     const n = notice(host);
     expect(n).toBeTruthy();
-    expect(n!.textContent).toContain('Пользователь не найден — обновите список');
+    expect(n!.textContent).toContain('Пользователь не найден — обнови список');
     expect(n!.textContent).not.toContain('user_not_found');
   });
 

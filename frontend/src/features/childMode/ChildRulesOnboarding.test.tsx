@@ -205,6 +205,14 @@ describe('ChildRulesOnboarding: пять шагов в порядке макет
     expect(html).toContain('пн–пт');
   });
 
+  it('при пороге предупреждения 0 строки о предупреждении нет: остальной текст шага на месте', async () => {
+    await mount('agree', brief({ warnMinutes: 0 }));
+    await click(buttonByText('Дальше')!);
+    const html = doc.body.innerHTML;
+    expect(html).not.toContain('до конца я предупрежу');
+    expect(html).toContain('Остаток называю крупно');
+  });
+
   it('review: последний шаг — «Закрыть», без отметок и без запроса', async () => {
     const { setOpen } = await mount('review', brief({ agreedAt: '2026-11-16T12:00:00+03:00' }));
     await toLastStep('review');
@@ -218,6 +226,22 @@ describe('ChildRulesOnboarding: пять шагов в порядке макет
     expect(closedCalls).toBe(1);
     expect(calls.length).toBe(0);
     await setOpen(false);
+  });
+
+  it('дата согласия — по строке профиля: таймзона браузера не сдвигает день', async () => {
+    // Зона машины не важна: тест сам ставит зону браузера. Дата лежит в зоне ребёнка:
+    // 00:30 по +03:00 — предыдущий день в UTC. Реализация с переводом в зону браузера
+    // дала бы «15 ноября».
+    const prevTZ = process.env.TZ;
+    process.env.TZ = 'UTC';
+    try {
+      await mount('review', brief({ agreedAt: '2026-11-16T00:30:00+03:00' }));
+      await toLastStep('review');
+      expect(doc.body.innerHTML).toContain('Договорились 16 ноября: Лиза и папа');
+    } finally {
+      if (prevTZ === undefined) delete process.env.TZ;
+      else process.env.TZ = prevTZ;
+    }
   });
 });
 
@@ -268,6 +292,17 @@ describe('ChildRulesOnboarding: согласие', () => {
     // Отсечка стоит на границе строки, а не посреди слова.
     expect(summary.endsWith('\n')).toBe(false);
     expect(summary).not.toContain('Л'.repeat(3000));
+  });
+
+  it('без дневного лимита строка договорённости — «Я занимаюсь в своё время для уроков»', async () => {
+    await mount('agree', brief({ dailyMinutes: null }));
+    await toLastStep();
+    // Та же строка — на шаге 5 и в summary: один источник для отмеченного и записанного.
+    expect(doc.body.innerHTML).toContain('Я занимаюсь в своё время для уроков');
+    await markBoth();
+    await click(buttonByText('Договорились')!);
+    await settle(() => pending.get(0)?.resolve({ rulesAgreedAt: '2026-11-17T12:00:00+03:00' }));
+    expect(calls[0].summary).toContain('Я занимаюсь в своё время для уроков: по будням с 15:00 до 19:00.');
   });
 
   it('double click sends one agree: после первого клика кнопка в загрузке до ответа', async () => {

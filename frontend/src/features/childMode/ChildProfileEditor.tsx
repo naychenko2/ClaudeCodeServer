@@ -6,9 +6,11 @@
 // Черновик привязан к user.id: сменили пользователя — черновик и только-чтение сброшены (сброс в рендере,
 // по образцу «derived state» из React: старый вывод не коммитится). Ответ сохранения проверяется тем же
 // id: ответ для прежнего пользователя отбрасывается, он не пишет чужие только-чтение и не зовёт onSaved.
-// Время — строго «HH:mm» (контракт ADR), «Минут в день» — пусто (лимита нет) или целое 1..1440:
-// некорректное — подсветка поля и ни одного запроса; остальное решает сервер, его 400-код и отказы
-// 403/404 переводятся в человеческий текст (REJECT_TEXT), message ответа показываем как есть.
+// Время — строго «HH:mm» (контракт ADR), «Минут в день» — пусто (лимита нет) или целое 1..1440,
+// «Предупредить за» — пусто (по умолчанию 5) или целое 1..60: некорректное — подсветка поля и ни
+// одного запроса (при выключенном режиме эти поля не в деле — не подсвечиваем); остальное решает
+// сервер, его 400-код и отказы 403/404 переводятся в человеческий текст (REJECT_TEXT), message
+// ответа показываем как есть.
 
 import { useRef, useState } from 'react';
 import { AlertTriangle, Plus, Trash2 } from 'lucide-react';
@@ -48,13 +50,25 @@ const DAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 // ошибка поля и ни одного запроса: молчаливое «лимита нет» из нечисловых значений опасно для
 // детской границы (R-KM-F11).
 const MINUTES_RE = /^\d+$/;
-const MINUTES_ERROR = 'Введите число минут, например 30';
+const MINUTES_ERROR = 'Введи число минут, например 30';
 const badMinutes = (s: string): boolean => {
   const t = s.trim();
   if (!t) return false;
   if (!MINUTES_RE.test(t)) return true;
   const n = Number(t);
   return n < 1 || n > 1440;
+};
+// «Предупредить за»: пусто — значение по умолчанию (DEFAULT_WARN_MINUTES); иначе — целое 1..60.
+// Проверка та же, что у «Минут в день»: молчаливое «5» из «abc» так же опасно, как «лимита нет»
+// из нечисловых минут (R-KM-F11).
+const WARN_MAX = 60;
+const WARN_ERROR = 'Введи число от 1 до 60, например 5';
+const badWarn = (s: string): boolean => {
+  const t = s.trim();
+  if (!t) return false;
+  if (!MINUTES_RE.test(t)) return true;
+  const n = Number(t);
+  return n < 1 || n > WARN_MAX;
 };
 
 // Человеческий текст отказов 400 ручки №10 (ADR-041): код — причина для интерфейса, человеку —
@@ -65,7 +79,7 @@ const REJECT_TEXT: Record<string, string> = {
   invalid_window: 'Окно времени задано неверно: формат ЧЧ:ММ, конец позже начала или через полночь.',
   invalid_space: 'Пространство задано неверно. Сейчас доступно только «Уроки».',
   guardian_not_found: 'Среди опекунов есть id, которого нет среди пользователей. Проверь список через запятую.',
-  user_not_found: 'Пользователь не найден — обновите список',
+  user_not_found: 'Пользователь не найден — обнови список',
 };
 const REJECT_FALLBACK = 'Сохранить не удалось. Попробуй ещё раз.';
 // 403 гейта авторизации ручки №10 (политика админа): тело отказа пустое, кода нет — текст по status.
@@ -176,10 +190,15 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
 
   const badTime = (v: string) => !TIME_RE.test(v);
   const showBadTime = (v: string) => badTime(v) && (attempted || v !== '');
+  // «Минут в день» и «Предупредить за» краснеют только при включённом режиме: при выключенном
+  // эти значения никуда не уходят (тело — { enabled: false }), и красное поле за значение,
+  // которое никто не отправит, пугает человека зря (R-KM-F11).
+  const showBadDaily = d.enabled && badMinutes(d.dailyMinutes);
+  const showBadWarn = d.enabled && badWarn(d.warnMinutes);
 
   const save = async () => {
     if (saving) return; // два нажатия — один запрос
-    if (d.enabled && (d.windows.some((w) => badTime(w.from) || badTime(w.to)) || badMinutes(d.dailyMinutes))) {
+    if (d.enabled && (d.windows.some((w) => badTime(w.from) || badTime(w.to)) || badMinutes(d.dailyMinutes) || badWarn(d.warnMinutes))) {
       setAttempted(true); // подсветка полей, запроса нет
       return;
     }
@@ -316,11 +335,11 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
           onClick={() => patch((prev) => ({ ...prev, windows: [...prev.windows, { from: '', to: '', days: [] }] }))}>
           Добавить окно
         </Button>
-        <Field label="Минут в день" hint="Пусто — дневного лимита нет" error={badMinutes(d.dailyMinutes) ? MINUTES_ERROR : undefined}>
-          <TextField value={d.dailyMinutes} inputMode="numeric" invalid={badMinutes(d.dailyMinutes)} onChange={(v) => patch((prev) => ({ ...prev, dailyMinutes: v }))} placeholder="30" />
+        <Field label="Минут в день" hint="Пусто — дневного лимита нет" error={showBadDaily ? MINUTES_ERROR : undefined}>
+          <TextField value={d.dailyMinutes} inputMode="numeric" invalid={showBadDaily} onChange={(v) => patch((prev) => ({ ...prev, dailyMinutes: v }))} placeholder="30" />
         </Field>
-        <Field label="Предупредить за, мин" hint="Сколько остаётся, когда ребёнок видит предупреждение">
-          <TextField value={d.warnMinutes} inputMode="numeric" onChange={(v) => patch((prev) => ({ ...prev, warnMinutes: v }))} />
+        <Field label="Предупредить за, мин" hint="Сколько остаётся, когда ребёнок видит предупреждение" error={showBadWarn ? WARN_ERROR : undefined}>
+          <TextField value={d.warnMinutes} inputMode="numeric" invalid={showBadWarn} onChange={(v) => patch((prev) => ({ ...prev, warnMinutes: v }))} />
         </Field>
       </div>
 

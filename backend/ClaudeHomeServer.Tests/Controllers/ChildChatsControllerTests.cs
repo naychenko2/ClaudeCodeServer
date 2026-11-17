@@ -50,7 +50,8 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
         _users = _hosts.Services.GetRequiredService<UserStore>();
     }
 
-    private async Task<string> NewChild(string name, bool withLessons = true, bool inWindow = true)
+    private async Task<string> NewChild(string name, bool withLessons = true, bool inWindow = true,
+        int dailyMinutes = 40, decimal dailyBudgetUsd = 2)
     {
         var resp = await _admin.PostAsJsonAsync("/api/users", new
         {
@@ -68,9 +69,9 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
         {
             enabled = true, providerKey = KidsKey, model = "sonnet",
             spaces = withLessons
-                ? new Dictionary<string, object> { ["lessons"] = new { windows = new[] { new { from, to } }, dailyMinutes = 40 } }
+                ? new Dictionary<string, object> { ["lessons"] = new { windows = new[] { new { from, to } }, dailyMinutes } }
                 : new Dictionary<string, object>(),
-            dailyBudgetUsd = 2, monthlyBudgetUsd = 40,
+            dailyBudgetUsd, monthlyBudgetUsd = 40,
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
         return id;
@@ -169,6 +170,30 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
         var (s, b) = await ReadAsync(await ChildClient("kid-chat-win").PostAsync("/api/child/spaces/lessons/chat", null));
         s.Should().Be(HttpStatusCode.Conflict);
         CodeOf(b).Should().Be("out_of_window");
+    }
+
+    [Fact]
+    public async Task Create_БюджетИсчерпан_409_budget_exhausted()
+    {
+        // Стаб расхода отдаёт 0.1 USD за день — дневной бюджет 0.05 уже превышен
+        var id = await NewChild("kid-chat-budget", dailyBudgetUsd: 0.05m);
+        AgreeRules(id);
+        var (s, b) = await ReadAsync(await ChildClient("kid-chat-budget").PostAsync("/api/child/spaces/lessons/chat", null));
+        s.Should().Be(HttpStatusCode.Conflict);
+        CodeOf(b).Should().Be("budget_exhausted");
+    }
+
+    [Fact]
+    public async Task Create_ВремяВышло_409_time_up()
+    {
+        var id = await NewChild("kid-chat-timeup", dailyMinutes: 1);
+        AgreeRules(id);
+        var client = ChildClient("kid-chat-timeup");
+        // Минута присутствия исчерпывает дневной лимит в 1 минуту
+        (await client.PostAsJsonAsync("/api/child/heartbeat", new { space = "lessons" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        var (s, b) = await ReadAsync(await client.PostAsync("/api/child/spaces/lessons/chat", null));
+        s.Should().Be(HttpStatusCode.Conflict);
+        CodeOf(b).Should().Be("time_up");
     }
 
     [Fact]

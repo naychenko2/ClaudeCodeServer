@@ -20,8 +20,16 @@ namespace ClaudeHomeServer.Tests.Guards;
 /// в Compose» должна краснить их все.
 /// </summary>
 [Trait("Category", "Host")]
-public class ChildLaunchPinTests
+public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
 {
+    // Хост на КЛАСС (храповик «хост на класс»): тесты хост не мутируют, детская политика и гейт строятся
+    // локально поверх его DI, поэтому порядок тестов не важен
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly Hosts _host;
+
+    public ChildLaunchPinTests(Hosts host) => _host = host;
+
     private const string Kid = "kid-1";
 
     private sealed class FakePolicy(ChildPolicySnapshot? snapshot) : IChildModePolicy
@@ -57,11 +65,10 @@ public class ChildLaunchPinTests
         ProjectId = null, Mode = ChildModeLaunch.RequiredMode, ChildSpace = "lessons",
     };
 
-    private static (TurnLaunchContextFactory Factory, TestWebApplicationFactory Host) Build(ChildPolicySnapshot? snapshot)
+    private TurnLaunchContextFactory Build(ChildPolicySnapshot? snapshot)
     {
-        var host = new TestWebApplicationFactory();
-        _ = host.CreateClient();
-        var sp = host.Services;
+        _ = _host.CreateClient();
+        var sp = _host.Services;
         var tempDir = Path.Combine(Path.GetTempPath(), "ccs-pin-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
         var users = new UserStore(new ConfigurationBuilder().AddInMemoryCollection(
@@ -89,7 +96,7 @@ public class ChildLaunchPinTests
             sp.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>(),
             sp.GetRequiredService<SessionStore>(),
             sp.GetRequiredService<Lazy<ITurnMessageSink>>(), sp.GetRequiredService<Lazy<ITurnStarter>>());
-        return (factory, host);
+        return factory;
     }
 
     private static ClaudeHomeServer.Services.Llm.LlmSessionContext Launch(TurnLaunchContextFactory f, Session s) =>
@@ -102,8 +109,7 @@ public class ChildLaunchPinTests
     [Fact]
     public void ВсёСошлось_КонтекстСобираетсяБезВнешнихСерверов()
     {
-        var (factory, host) = Build(ValidChild());
-        using var _ = host;
+        var factory = Build(ValidChild());
         var ctx = Launch(factory, ValidSession());
         ctx.ExternalMcpProvider.Should().BeNull("внешние серверы владельца ребёнку не объявляются");
         ctx.ModulesMcp.Should().BeNull();
@@ -121,8 +127,7 @@ public class ChildLaunchPinTests
     [MemberData(nameof(Fields))]
     public void РасхождениеОдногоПоля_ХодНеСтартует(string field)
     {
-        var (factory, host) = Build(ValidChild());
-        using var _ = host;
+        var factory = Build(ValidChild());
         var s = ValidSession();
         switch (field)
         {
@@ -139,8 +144,7 @@ public class ChildLaunchPinTests
     [Fact]
     public void ПрофильDenyAll_ХодНеСтартует()
     {
-        var (factory, host) = Build(new ChildPolicySnapshot(Kid, null, DenyAll: true));
-        using var _ = host;
+        var factory = Build(new ChildPolicySnapshot(Kid, null, DenyAll: true));
         var act = () => Launch(factory, ValidSession());
         act.Should().Throw<InvalidOperationException>();
     }
@@ -148,8 +152,7 @@ public class ChildLaunchPinTests
     [Fact]
     public void ОбычныйВладелец_ПоляЧатаНеСверяются()
     {
-        var (factory, host) = Build(null);
-        using var _ = host;
+        var factory = Build(null);
         var s = ValidSession();
         s.PersonaId = null; s.Provider = "claude"; s.Model = null; s.Mode = ClaudeMode.Bypass;
         var act = () => Launch(factory, s);

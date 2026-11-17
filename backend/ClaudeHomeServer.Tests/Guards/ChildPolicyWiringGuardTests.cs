@@ -16,8 +16,16 @@ namespace ClaudeHomeServer.Tests.Guards;
 /// Проверка смотрит на сами поля резолвленных экземпляров: непустое и именно то, что в контейнере.
 /// </summary>
 [Trait("Category", "Host")]
-public class ChildPolicyWiringGuardTests
+public class ChildPolicyWiringGuardTests : IClassFixture<ChildPolicyWiringGuardTests.Hosts>
 {
+    // Хост на КЛАСС (храповик «хост на класс»): тесты хост не мутируют, детская политика и гейт строятся
+    // локально поверх его DI, поэтому порядок тестов не важен
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly Hosts _host;
+
+    public ChildPolicyWiringGuardTests(Hosts host) => _host = host;
+
     // Потребитель → тип детской зависимости, которую он обязан держать
     private static readonly (string Name, Type Instance, Type Dependency)[] Consumers =
     [
@@ -45,9 +53,8 @@ public class ChildPolicyWiringGuardTests
     [Fact]
     public void ПятьПотребителей_НаРеальномХосте_ДержатНепустуюДетскуюЗависимость()
     {
-        using var factory = new TestWebApplicationFactory();
-        _ = factory.CreateClient();
-        var sp = factory.Services;
+        _ = _host.CreateClient();
+        var sp = _host.Services;
         var policy = sp.GetRequiredService<IChildModePolicy>();
         var gate = sp.GetRequiredService<IChildModeGate>();
 
@@ -72,9 +79,8 @@ public class ChildPolicyWiringGuardTests
     [Fact]
     public void ГейтНаРеальномХосте_ДержитНепустойКалькуляторЛимитов()
     {
-        using var factory = new TestWebApplicationFactory();
-        _ = factory.CreateClient();
-        var sp = factory.Services;
+        _ = _host.CreateClient();
+        var sp = _host.Services;
         var gate = sp.GetRequiredService<IChildModeGate>();
         var calc = sp.GetService<ChildLimitsCalculator>();
 
@@ -91,9 +97,8 @@ public class ChildPolicyWiringGuardTests
     [Fact]
     public void ГейтНаРеальномХосте_ДержитЛоггер()
     {
-        using var factory = new TestWebApplicationFactory();
-        _ = factory.CreateClient();
-        var sp = factory.Services;
+        _ = _host.CreateClient();
+        var sp = _host.Services;
         var gate = sp.GetRequiredService<IChildModeGate>();
 
         var held = HeldDependencies(gate, typeof(ILogger<ChildModeGate>));

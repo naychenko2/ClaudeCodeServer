@@ -32,8 +32,14 @@ namespace ClaudeHomeServer.Tests.Services.ChildMode;
 /// Тексты отказа в тестах — дословные: это обещание ребёнку, его правка — видимая правка теста.
 /// </summary>
 [Trait("Category", "Host")]
-public sealed class ChildLaunchLimitsTests : IDisposable
+public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTests.Hosts>, IDisposable
 {
+    // Хост на КЛАСС (храповик «хост на класс»): каждый тест заводит своего ребёнка (уникальный id) и строит гейт
+    // локально поверх DI хоста, поэтому порядок тестов не важен
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly Hosts _host;
+
     private const string TimeUpText = "На сегодня уроки закончились. Отдохни и возвращайся завтра.";
     private const string OutOfWindowText = "Сейчас уроки отдыхают. Вернись, когда они снова начнутся.";
     private const string BudgetText = "Сегодня помощник больше не может заниматься. Позови взрослого — он поможет.";
@@ -46,8 +52,9 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     private readonly ChildUsageStore _usage;
     private readonly ChildModePolicy _policy;
 
-    public ChildLaunchLimitsTests()
+    public ChildLaunchLimitsTests(Hosts host)
     {
+        _host = host;
         _tempDir = Path.Combine(Path.GetTempPath(), "ccs-child-launch-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
         var userConfig = new ConfigurationBuilder()
@@ -134,14 +141,13 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     /// пустой, шва Spend — несущая нулевой расход: отсутствующая шва сама дала бы budget_exhausted).
     /// Возвращает и ownerId ребёнка, которого добавила.
     /// </summary>
-    private (TurnLaunchContextFactory Factory, TestWebApplicationFactory Host, string OwnerId) Build(
+    private (TurnLaunchContextFactory Factory, string OwnerId) Build(
         ChildProfile profile, IOwnerSpendReader? spend = null, bool withoutCalculator = false,
         IChildModePolicy? calcPolicy = null, ILogger<ChildModeGate>? gateLog = null)
     {
         var ownerId = AddChild(profile);
-        var host = new TestWebApplicationFactory();
-        _ = host.CreateClient();
-        var sp = host.Services;
+        _ = _host.CreateClient();
+        var sp = _host.Services;
         var calc = new ChildLimitsCalculator(calcPolicy ?? _policy, _usage, spend ?? new FixedSpend(0m, 0m), _users,
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -163,7 +169,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
             sp.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>(),
             sp.GetRequiredService<SessionStore>(),
             sp.GetRequiredService<Lazy<ITurnMessageSink>>(), sp.GetRequiredService<Lazy<ITurnStarter>>());
-        return (factory, host, ownerId);
+        return (factory, ownerId);
     }
 
     private static void LaunchNew(TurnLaunchContextFactory f, Session s) =>
@@ -224,8 +230,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
             "budget_exhausted" => (Profile(dailyBudgetUsd: 1m), new FixedSpend(2m, 2m)),
             _ => (Profile(rulesAgreed: false), null),
         };
-        var (factory, host, ownerId) = Build(profile, spend);
-        using var _ = host;
+        var (factory, ownerId) = Build(profile, spend);
 
         var act = () => LaunchNew(factory, ChildChat(ownerId));
         act.Should().Throw<InvalidOperationException>().WithMessage(text, $"отказ {state} — детским текстом");
@@ -237,8 +242,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
         // 60 минут остатка — ok; 5 минут при пороге 5 — warn: предупреждение, не отказ.
         foreach (var (daily, expected) in new[] { (60, "ok"), (5, "warn") })
         {
-            var (factory, host, ownerId) = Build(Profile(dailyMinutes: daily));
-            using var _ = host;
+            var (factory, ownerId) = Build(Profile(dailyMinutes: daily));
             var act = () => LaunchNew(factory, ChildChat(ownerId));
             act.Should().NotThrow($"{expected}: остаток {daily} мин при пороге 5 не останавливает ход");
         }
@@ -249,8 +253,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     [Fact]
     public void ПравилаНеСогласованы_ЧатОнбордингаПравил_ХодИдёт()
     {
-        var (factory, host, ownerId) = Build(Profile(rulesAgreed: false));
-        using var _ = host;
+        var (factory, ownerId) = Build(Profile(rulesAgreed: false));
         var act = () => LaunchNew(factory, ChildChat(ownerId, onboardingKind: OnboardingKinds.ChildRules));
         act.Should().NotThrow("rules_pending не блокирует чат, который эти правила и согласовывает");
     }
@@ -264,8 +267,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
         var profile = state == "time_up"
             ? Profile(dailyMinutes: 0, rulesAgreed: false)
             : Profile(window: Window(120, 180), rulesAgreed: false);
-        var (factory, host, ownerId) = Build(profile);
-        using var _ = host;
+        var (factory, ownerId) = Build(profile);
         var act = () => LaunchNew(factory, ChildChat(ownerId, onboardingKind: OnboardingKinds.ChildRules));
         act.Should().Throw<InvalidOperationException>()
             .WithMessage(state == "time_up" ? TimeUpText : OutOfWindowText,
@@ -277,8 +279,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     [Fact]
     public void АвтопродолжениеПослеРестарта_ПриTimeUp_ХодНеСтартует()
     {
-        var (factory, host, ownerId) = Build(Profile(dailyMinutes: 0));
-        using var _ = host;
+        var (factory, ownerId) = Build(Profile(dailyMinutes: 0));
         var act = () => LaunchReconnect(factory, ChildChat(ownerId));
         act.Should().Throw<InvalidOperationException>().WithMessage(TimeUpText);
     }
@@ -288,8 +289,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     {
         // «Входить некуда» — правило самого калькулятора (пустой ключ пространства = вне окна):
         // детский чат без ChildSpace — fail-closed, а не ход без лимитов.
-        var (factory, host, ownerId) = Build(Profile());
-        using var _ = host;
+        var (factory, ownerId) = Build(Profile());
         var act = () => LaunchNew(factory, ChildChat(ownerId, childSpace: null));
         act.Should().Throw<InvalidOperationException>().WithMessage(OutOfWindowText);
     }
@@ -297,8 +297,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     [Fact]
     public void СверхДневногоБюджета_ВОткрытомОкне_ХодНеСтартует()
     {
-        var (factory, host, ownerId) = Build(Profile(dailyBudgetUsd: 1m), new FixedSpend(2m, 2m));
-        using var _ = host;
+        var (factory, ownerId) = Build(Profile(dailyBudgetUsd: 1m), new FixedSpend(2m, 2m));
         var act = () => LaunchNew(factory, ChildChat(ownerId));
         act.Should().Throw<InvalidOperationException>().WithMessage(BudgetText);
     }
@@ -308,8 +307,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     [Fact]
     public void КалькулятораНет_ХодНеСтартует_ТекстомUncheckable()
     {
-        var (factory, host, ownerId) = Build(Profile(), withoutCalculator: true);
-        using var _ = host;
+        var (factory, ownerId) = Build(Profile(), withoutCalculator: true);
         var act = () => LaunchNew(factory, ChildChat(ownerId));
         act.Should().Throw<InvalidOperationException>().WithMessage(ChildLimitTexts.Uncheckable);
     }
@@ -317,8 +315,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
     [Fact]
     public void КалькуляторБросаетИсключение_ХодНеСтартует_ТекстомUncheckable()
     {
-        var (factory, host, ownerId) = Build(Profile(), calcPolicy: new ThrowingPolicy());
-        using var _ = host;
+        var (factory, ownerId) = Build(Profile(), calcPolicy: new ThrowingPolicy());
         var act = () => LaunchNew(factory, ChildChat(ownerId));
         act.Should().Throw<InvalidOperationException>().WithMessage(ChildLimitTexts.Uncheckable,
             "технический текст исключения ребёнку не уходит");
@@ -332,8 +329,7 @@ public sealed class ChildLaunchLimitsTests : IDisposable
         // Тот же сбой расчёта, что выше, но с фейковым логгером на гейте: отказ ребёнку
         // не меняется, причина становится видимой на сервере (LogWarning в catch гейта).
         var log = new RecordingLogger();
-        var (factory, host, ownerId) = Build(Profile(), calcPolicy: new ThrowingPolicy(), gateLog: log);
-        using var _ = host;
+        var (factory, ownerId) = Build(Profile(), calcPolicy: new ThrowingPolicy(), gateLog: log);
 
         var act = () => LaunchNew(factory, ChildChat(ownerId));
         act.Should().Throw<InvalidOperationException>().WithMessage(ChildLimitTexts.Uncheckable);

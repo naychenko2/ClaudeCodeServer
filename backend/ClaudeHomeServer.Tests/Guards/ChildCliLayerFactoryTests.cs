@@ -5,10 +5,12 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Sessions;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using FluentAssertions.Execution;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -20,8 +22,16 @@ namespace ClaudeHomeServer.Tests.Guards;
 /// автоматике персон детского владельца (п.18). Идут через настоящие фабрики, как ChildLaunchPinTests.
 /// </summary>
 [Trait("Category", "Host")]
-public class ChildCliLayerFactoryTests
+public class ChildCliLayerFactoryTests : IClassFixture<ChildCliLayerFactoryTests.Hosts>
 {
+    // Хост на КЛАСС (храповик «хост на класс»): тесты хост не мутируют, детская политика и гейт строятся
+    // локально поверх его DI, поэтому порядок тестов не важен
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly Hosts _host;
+
+    public ChildCliLayerFactoryTests(Hosts host) => _host = host;
+
     private const string Kid = "kid-1";
 
     private sealed class FakePolicy(ChildPolicySnapshot? snapshot) : IChildModePolicy
@@ -34,22 +44,53 @@ public class ChildCliLayerFactoryTests
         public IReadOnlyList<string> GetPluginDirs(string ownerId, string? personaId, Project? project) => ["/plugins/x"];
     }
 
+    // Сутки целиком и согласованные правила: И3 (KM-B5d) этим тестом не проверяется, ему нужно лишь
+    // пропустить ход, чтобы дойти до сборки слоя CLI (как в ChildLaunchPinTests)
     private static ChildPolicySnapshot ValidChild() => new(Kid,
-        new ChildProfile { Enabled = true, TutorPersonaId = "tutor-1", ProviderKey = "pool-key", Model = "sonnet" }, false);
+        new ChildProfile
+        {
+            Enabled = true, TutorPersonaId = "tutor-1", ProviderKey = "pool-key", Model = "sonnet",
+            RulesAgreedAt = new DateTime(2026, 11, 16, 10, 0, 0, DateTimeKind.Utc),
+            Spaces =
+            {
+                ["lessons"] = new SpaceLimits
+                {
+                    Windows = [new TimeWindow { From = "00:00", To = "23:59" }],
+                    DailyMinutes = 1000,
+                },
+            },
+        }, false);
+
+    private sealed class ZeroSpend : IOwnerSpendReader
+    {
+        public decimal TodayUsd(string ownerId, TimeZoneInfo timeZone) => 0m;
+        public decimal MonthUsd(string ownerId, TimeZoneInfo timeZone) => 0m;
+    }
 
     private static Session KidSession() => new()
     {
         Id = "s-1", OwnerId = Kid, PersonaId = "tutor-1", Provider = "pool-key", Model = "sonnet",
-        ProjectId = null, Mode = ChildModeLaunch.RequiredMode,
+        ProjectId = null, Mode = ChildModeLaunch.RequiredMode, ChildSpace = "lessons",
     };
 
-    private static (PersonaLayerBuilder Layer, TurnLaunchContextFactory Factory, IServiceProvider Sp, TestWebApplicationFactory Host)
+    private (PersonaLayerBuilder Layer, TurnLaunchContextFactory Factory, IServiceProvider Sp)
         Build(ChildPolicySnapshot? snapshot, string owner)
     {
-        var host = new TestWebApplicationFactory();
-        _ = host.CreateClient();
-        var sp = host.Services;
-        var gate = new ChildModeGate(new FakePolicy(snapshot));
+        _ = _host.CreateClient();
+        var sp = _host.Services;
+        var tempDir = Path.Combine(Path.GetTempPath(), "ccs-cli-layer-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var users = new UserStore(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["DataPath"] = Path.Combine(tempDir, "projects.json") }).Build(),
+            new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var policy = new FakePolicy(snapshot);
+        var calc = new ChildLimitsCalculator(policy, new ChildUsageStore(Path.Combine(tempDir, ChildUsageStore.DirName)),
+            new ZeroSpend(), users,
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [ChildLimitsCalculator.ConfigTimeZoneKey] = "Europe/Moscow",
+            }).Build(), NullLogger<ChildLimitsCalculator>.Instance);
+        var gate = new ChildModeGate(policy, calc);
         var layer = new PersonaLayerBuilder(sp.GetRequiredService<SessionStore>(), sp.GetRequiredService<McpEndpoint>(),
             sp.GetRequiredService<PersonaManager>(), sp.GetRequiredService<PersonaBindingsService>(),
             sp.GetService<PersonaAgentFileSync>(), sp.GetRequiredService<ProjectManager>(),
@@ -68,7 +109,7 @@ public class ChildCliLayerFactoryTests
             sp.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>(),
             sp.GetRequiredService<SessionStore>(),
             sp.GetRequiredService<Lazy<ITurnMessageSink>>(), sp.GetRequiredService<Lazy<ITurnStarter>>());
-        return (layer, factory, sp, host);
+        return (layer, factory, sp);
     }
 
     private static ClaudeHomeServer.Services.Llm.LlmSessionContext Launch(TurnLaunchContextFactory f, Session s) =>
@@ -79,8 +120,7 @@ public class ChildCliLayerFactoryTests
     [Fact]
     public void ХодРебёнка_ВстроенныеЗакрытыЗапретами_ИИсточникПлагиновПуст()
     {
-        var (_, factory, _, host) = Build(ValidChild(), Kid);
-        using var _h = host;
+        var (_, factory, _) = Build(ValidChild(), Kid);
 
         var ctx = Launch(factory, KidSession());
 
@@ -92,8 +132,7 @@ public class ChildCliLayerFactoryTests
     [Fact]
     public void Запреты_ДетскийСлойСкладываетсяСЗапретамиПерсоны_БезПотерь()
     {
-        var (layer, _, _, host) = Build(ValidChild(), Kid);
-        using var _h = host;
+        var (layer, _, _) = Build(ValidChild(), Kid);
         var session = KidSession();
         session.StageDisallowedTools = ["ExitPlanMode"];
 
@@ -107,8 +146,7 @@ public class ChildCliLayerFactoryTests
     [Fact]
     public void ВзрослыйВладелец_ДетскихЗапретовНет_ПлагиныНаМесте()
     {
-        var (layer, factory, _, host) = Build(null, "adult");
-        using var _h = host;
+        var (layer, factory, _) = Build(null, "adult");
         var session = KidSession();
         session.OwnerId = "adult";
         session.PersonaId = null;
@@ -120,8 +158,7 @@ public class ChildCliLayerFactoryTests
     [Fact]
     public async Task АвтоматикаПерсоны_ДетскийВладелец_Отказ403_ВзрослыйНеЗатронут()
     {
-        var (_, _, sp, host) = Build(ValidChild(), Kid);
-        using var _h = host;
+        var (_, _, sp) = Build(ValidChild(), Kid);
         var gate = new ChildModeGate(new FakePolicy(ValidChild()));
         var crud = ActivatorUtilities.CreateInstance<PersonasCrudService>(sp, gate);
         var req = new AutomationRuleRequest(true, "правило", AutomationTriggerType.Timer, null, null, null, null,

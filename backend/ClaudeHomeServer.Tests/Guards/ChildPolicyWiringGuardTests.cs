@@ -64,4 +64,22 @@ public class ChildPolicyWiringGuardTests
         }
         problems.Should().BeEmpty("каждый из пяти потребителей обязан получить детскую политику из контейнера");
     }
+
+    // И3 (KM-B5d): калькулятор в гейт приходит через GetService, поэтому потеря регистрации в
+    // Program.cs не ломает ни сборку, ни старт, а молча делает гейт fail-closed для каждого ребёнка
+    // (текст Uncheckable на каждый ход). Сторож смотрит на поле гейта из контейнера.
+    [Fact]
+    public void ГейтНаРеальномХосте_ДержитНепустойКалькуляторЛимитов()
+    {
+        using var factory = new TestWebApplicationFactory();
+        _ = factory.CreateClient();
+        var sp = factory.Services;
+        var gate = sp.GetRequiredService<IChildModeGate>();
+        var calc = sp.GetService<ChildLimitsCalculator>();
+
+        calc.Should().NotBeNull("калькулятор лимитов зарегистрирован в Program.cs");
+        var held = HeldDependencies(gate, typeof(ChildLimitsCalculator));
+        held.Should().ContainSingle("гейт держит ровно одно поле калькулятора")
+            .Which.Should().BeSameAs(calc, "и это тот же экземпляр, что в контейнере (не null — иначе И3 глухо отказывает всем детям)");
+    }
 }

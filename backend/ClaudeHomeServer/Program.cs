@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
@@ -592,6 +593,11 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore(
     ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore.RootFromConfig(sp.GetRequiredService<IConfiguration>())));
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ChatUserStateService>();
+// Журнал присутствия ребёнка по пространствам (KM-B5b, разрез §3): минуты по дням в
+// data/child-usage/. Пишет его ручка heartbeat (KM-B5e), читает — статус «остаток минут» (KM-B5c).
+builder.Services.AddSingleton(sp => new ChildUsageStore(
+    ChildUsageStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
+    sp.GetRequiredService<ILogger<ChildUsageStore>>()));
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),

@@ -60,10 +60,11 @@ public sealed class ChildHubFilter : IHubFilter
         {
             if (ctx.HubMethodArguments.Count <= SessionIdArg
                 || ctx.HubMethodArguments[SessionIdArg] is not string sessionId) return false;
-            var session = ctx.ServiceProvider.GetService<SessionManager>()?.GetById(sessionId);
-            return session is { ChildSpace: not null }
-                && ownerId.Length > 0
-                && string.Equals(session.OwnerId, ownerId, StringComparison.Ordinal);
+            // «Свой чат» — каноническим GetOwned (арендатор по ResolveOwnerId), без инлайн-сравнения владельца
+            var session = ownerId.Length > 0
+                ? ctx.ServiceProvider.GetService<SessionManager>()?.GetOwned(sessionId, ownerId)
+                : null;
+            return session is { ChildSpace: not null };
         }
         catch (Exception)
         {

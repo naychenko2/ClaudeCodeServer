@@ -1,11 +1,13 @@
 // KM-F5: главная экрана ребёнка («Уроки») — только разметка, без запросов:
 // состояние и данные приезжают пропсами (KM-F8 приносит ChildStatus из childApi).
-// Образец: docs/mockups/kids-shell-v2.html (ветка docs/kids-shell-mockup), секция «Главная».
+// Образец: docs/mockups/kids-tutors.html (Д1), раздел «Ребёнок · Главная» — плитки
+// с глифом, именем предмета и строкой репетитора.
 //
-// CHILD_SUBJECTS — единственный источник плиток предметов и их порядка:
-// KM-F8/F10 импортируют её отсюда, порядок плиток = порядок константы.
+// Плитки: когда родитель принёс `subjects` (Т3b, GET /api/child/subjects) — они из него,
+// порядок = порядок серверного списка (И5). Без него — CHILD_SUBJECTS (единственный
+// источник волны 1: KM-F8/F10 импортируют её отсюда; удаляется в Т3e вместе с фолбэком).
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Brush, Users } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_PROPS, ICON_SIZE } from '../../components/ui/icons';
@@ -14,7 +16,12 @@ import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { Island } from '../../components/ui/Island';
-import type { ChildStatus } from './types';
+import { userAvatarColor } from '../../components/ui/UserAvatar';
+import { cachedToken } from '../../lib/offline';
+import { personaInitials } from '../../lib/personas';
+import { subjectColors } from './subjectPalette';
+import { tutorAvatarUrl } from './api';
+import type { ChildStatus, ChildSubjectTutor, ChildSubjectView } from './types';
 
 // Предметы волны 1. Цвета не новые: макет красит глифы существующими парами токенов
 // (math → info, russian → rose, english → success); подложка rose смешана из токена —
@@ -27,10 +34,11 @@ export const CHILD_SUBJECTS = [
 
 export type ChildSubjectId = (typeof CHILD_SUBJECTS)[number]['id'];
 
-// «Вчера остановились тут»: subjectId резолвится по CHILD_SUBJECTS —
-// подпись и цвет карточки приходят из константы, не с сервера.
+// «Вчера остановились тут»: subjectId резолвится по списку плиток — с сервера это ключ
+// предмета из профиля (slug ^[a-z0-9-]{1,32}$), поэтому тип — строка, не ChildSubjectId:
+// подпись и цвет карточки приходят из найденной плитки (subjects или CHILD_SUBJECTS).
 export interface ChildLastLesson {
-  subjectId: ChildSubjectId;
+  subjectId: string;
   title: string;
   // «Шаг 2 из 3» — как принёс сервер; нет — строка шага не рисуется
   progress?: string | null;
@@ -40,11 +48,35 @@ interface Props {
   childName: string;
   // Старшая причина состояния (И3): rules_pending меняет экран на договорённость
   status: ChildStatus;
+  // Плитки с сервера (Т3c приносит их из GET /api/child/subjects); нет — CHILD_SUBJECTS
+  // волны 1, до её удаления в Т3e. Пустой список — пустой список: выдумывать нечего.
+  subjects?: ChildSubjectView[];
   lastLesson?: ChildLastLesson | null;
-  onOpenSubject: (id: ChildSubjectId) => void;
+  // Тот же колбэк, что раньше; с Т3b id — и серверный ключ предмета, не ChildSubjectId.
+  onOpenSubject: (id: string) => void;
   onResume: () => void;
   onStartRules: () => void;
 }
+
+// Плитка в нормализованном виде: серверный предмет (цвет — из палитры ключа) и константа
+// волны 1 (цвет уже в константе) рисуются одним кодом: плитка остаётся одной плиткой.
+interface Tile {
+  id: string;
+  label: string;
+  // Пустой глиф — «?» (тот же фолбэк, что у .glyph в макете): плитка без знака не читается
+  glyph: string;
+  bg: string;
+  fg: string;
+  // null — висящий ключ персоны: имени и аватара нет, строки репетитора на плитке тоже нет
+  tutor: ChildSubjectTutor | null;
+}
+
+const legacyTiles = (): Tile[] => CHILD_SUBJECTS.map((s) => ({ ...s, tutor: null }));
+
+const serverTiles = (subjects: ChildSubjectView[]): Tile[] => subjects.map((s) => {
+  const { bg, fg } = subjectColors(s.color);
+  return { id: s.id, label: s.label, glyph: s.glyph || '?', bg, fg, tutor: s.tutor };
+});
 
 // windowEndsAt — ISO 8601 со смещением таймзоны ребёнка (ADR-041, «Общие правила»),
 // поэтому часы читаются прямо из строки: пересчёт в таймзону браузера сдвинул бы их.
@@ -66,7 +98,40 @@ function SubjectGlyph({ bg, fg, children }: { bg: string; fg: string; children: 
   );
 }
 
-export function ChildHome({ childName, status, lastLesson, onOpenSubject, onResume, onStartRules }: Props) {
+// Знак репетитора (макет .pav): круг R.full. Есть аватар — картинка /api/personas/{id}/avatar
+// (hasAvatar=true ⟺ ручка отдаёт картинку; пропала с диска — 404, и знак возвращается к
+// инициалам: onError, тот же приём, что у PersonaAvatar). Нет аватара — инициалы имени на
+// стабильном цвете по id персоны (тот же ключ цвета, что у ui/UserAvatar: тёзки не сливаются).
+// Репетитор null (висящий ключ персоны) — этот компонент не зовут вовсе.
+function TutorMark({ tutor, size }: { tutor: ChildSubjectTutor; size: number }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const round = { width: size, height: size, borderRadius: R.full, flexShrink: 0 } as const;
+  if (tutor.hasAvatar && !imgFailed) {
+    return (
+      <img
+        src={tutorAvatarUrl(tutor.personaId, cachedToken() ?? undefined)}
+        alt=""
+        aria-hidden
+        onError={() => setImgFailed(true)}
+        style={{ ...round, objectFit: 'cover', display: 'block' }}
+      />
+    );
+  }
+  return (
+    <span
+      aria-hidden
+      style={{
+        ...round, background: userAvatarColor(tutor.personaId), color: C.onDark,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        fontFamily: FONT.sans, fontWeight: 700, fontSize: Math.round(size * 0.4), lineHeight: 1,
+      }}
+    >
+      {personaInitials(tutor.name)}
+    </span>
+  );
+}
+
+export function ChildHome({ childName, status, subjects, lastLesson, onOpenSubject, onResume, onStartRules }: Props) {
   const isMobile = useIsMobile();
 
   // Первый день (правила не согласованы): вместо всего экрана — договорённость с родителем
@@ -93,7 +158,8 @@ export function ChildHome({ childName, status, lastLesson, onOpenSubject, onResu
   }
 
   const endsClock = status.windowEndsAt ? windowEndsClock(status.windowEndsAt) : null;
-  const lastSubject = lastLesson ? CHILD_SUBJECTS.find((s) => s.id === lastLesson.subjectId) : undefined;
+  const tiles = subjects ? serverTiles(subjects) : legacyTiles();
+  const lastSubject = lastLesson ? tiles.find((t) => t.id === lastLesson.subjectId) : undefined;
 
   return (
     <div style={{
@@ -124,8 +190,15 @@ export function ChildHome({ childName, status, lastLesson, onOpenSubject, onResu
               <div style={{ fontSize: FS.lg, fontWeight: 600, color: C.textHeading, marginTop: 2 }}>
                 {lastSubject.label} · {lastLesson.title}
               </div>
-              {lastLesson.progress && (
-                <div style={{ fontSize: FS.sm, color: C.textMuted, marginTop: 2 }}>{lastLesson.progress}</div>
+              {/* Строка репетитора и шага (макет .card): аватар 20 + «Имя · Шаг 2 из 3»;
+                  репетитора нет — остаётся одна строка шага, как была */}
+              {(lastSubject.tutor || lastLesson.progress) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: SP.xs, fontSize: FS.sm, color: C.textMuted, minWidth: 0 }}>
+                  {lastSubject.tutor && <TutorMark tutor={lastSubject.tutor} size={20} />}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {lastSubject.tutor?.name ?? ''}{lastSubject.tutor && lastLesson.progress ? ' · ' : ''}{lastLesson.progress ?? ''}
+                  </span>
+                </div>
               )}
             </div>
             <Button size="md" variant="primary" fullWidth={isMobile} onClick={onResume}>
@@ -135,11 +208,13 @@ export function ChildHome({ childName, status, lastLesson, onOpenSubject, onResu
         </Island>
       )}
 
-      <div style={{ fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted }}>
+      {/* Подписи без содержимого нет: с сервера может прийти пустой список — тогда
+          секции предметов на экране просто не будет (пустую решётку показывать нечем) */}
+      {tiles.length > 0 && <div style={{ fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted }}>
         Предметы
-      </div>
+      </div>}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: SP.md }}>
-        {CHILD_SUBJECTS.map((s) => (
+        {tiles.map((s) => (
           <button
             key={s.id}
             type="button"
@@ -151,7 +226,15 @@ export function ChildHome({ childName, status, lastLesson, onOpenSubject, onResu
             }}
           >
             <SubjectGlyph bg={s.bg} fg={s.fg}>{s.glyph}</SubjectGlyph>
-            <span style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading }}>{s.label}</span>
+            <span style={{ minWidth: 0 }}>
+              <span style={{ display: 'block', fontSize: FS.md, fontWeight: 600, color: C.textHeading }}>{s.label}</span>
+              {s.tutor && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: SP.xs, fontSize: FS.sm, color: C.textMuted, minWidth: 0 }}>
+                  <TutorMark tutor={s.tutor} size={20} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.tutor.name}</span>
+                </span>
+              )}
+            </span>
           </button>
         ))}
       </div>

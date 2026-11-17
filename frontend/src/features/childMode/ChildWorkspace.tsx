@@ -295,7 +295,9 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
         childName={childName}
         status={eff}
         lastLesson={chats[0] ? { subjectId: subjectOf(chats[0].sessionId), title: chats[0].name || 'Новый урок' } : null}
-        onOpenSubject={id => { setSubjectId(id); setSessionId(null); }}
+        // Мост до Т3c: id в колбэке — строка (с Т3b это и серверный ключ предмета),
+        // состояние родителя пока держит литералы CHILD_SUBJECTS.
+        onOpenSubject={id => { setSubjectId(id as ChildSubjectId); setSessionId(null); }}
         onResume={() => { if (chats[0]) openLesson(chats[0].sessionId); }}
         onStartRules={() => void startRules()}
       />

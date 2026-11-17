@@ -233,8 +233,8 @@ public sealed class PersonaLayerBuilder
                     _personas.GetForContext(ownerId, projectId).ToList());
                 // Порядок ВСЕГО плана — по handle (Ordinal). GetForContext отдаёт персон по UpdatedAt
                 // по убыванию: без этой сортировки определения per-run --agents (ClaudeAgentsJson →
-                // turnAgentsFingerprint, ClaudeSession.cs:3861-3870) и порядок pmem-серверов
-                // менялись бы от чата к чату при неизменном составе агентов: порядок
+                // turnAgentsFingerprint → BuildLaunchSignature, ClaudeSession.cs) и порядок
+                // pmem-серверов менялись бы от чата к чату при неизменном составе агентов: порядок
                 // определений влияет на отпечаток запуска (та же причина, что у
                 // AppendPersonaLines).
                 subagents.Sort((a, b) => string.CompareOrdinal(a.Handle, b.Handle));

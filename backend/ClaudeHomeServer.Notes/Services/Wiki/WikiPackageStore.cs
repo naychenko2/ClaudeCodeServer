@@ -249,8 +249,9 @@ public static class WikiPackageStore
     /// и только операция с решением `inbox`: неспорное решает политика, а не человек (409).
     /// Отклонить можно только с причиной. Решение по уже решённой операции — отказ
     /// (CodeAlreadyDecided): решение не меняется молча, HumanReason не стирается. Статус
-    /// пакета меняется, когда решены ВСЕ спорные операции: все приняты → accepted, все
-    /// отклонены → rejected, смешано → partially_accepted; пока хоть одна не решена — пакет
+    /// пакета меняется, когда решены ВСЕ спорные операции: все приняты → accepted, ни одна
+    /// не принята и авто-операций нет → rejected, иначе → partially_accepted (отказ по
+    /// спорным не выбрасывает авто-операции, D0); пока хоть одна не решена — пакет
     /// остаётся proposed.</summary>
     public static WikiPackageOpResult DecideOperation(string root, string id, int index, bool accept, string? reason = null)
     {
@@ -386,8 +387,11 @@ public static class WikiPackageStore
     }
 
     // Вердикт по всем спорным операциям: пока хоть одна не решена — proposed (решение
-    // по спорной операции не считается до конца). Решённые все → по их исходам. Неспорные
-    // операции в вердикт не входят: их не человек решает.
+    // по спорной операции не считается до конца). Решённые все → по их исходам: все
+    // приняты → accepted; ни одна не принята И авто-операций нет → rejected; иначе →
+    // partially_accepted. Неспорные операции в вердикт исхода не входят: их не человек
+    // решает — но отказ по спорным не выбрасывает их из применения (D0): при авто-операциях
+    // пакет становится partially_accepted и их применяет обычный путь, а не rejected.
     // Спорная операция решена, если решил человек ИЛИ судья (J-J2a): вердикт модели ведёт
     // статус ровно так же, как решение человека. Оба решения по одной операции невозможны
     // в бою (и то и другое ставится только в нерешённую операцию); если всё же лежат рядом,
@@ -401,7 +405,8 @@ public static class WikiPackageStore
             ? o.HumanDecision == WikiPackage.HumanAccepted
             : o.JudgeDecision == WikiPackage.HumanAccepted);
         if (accepted == contested.Length) return WikiPackage.StatusAccepted;
-        if (accepted == 0) return WikiPackage.StatusRejected;
+        if (accepted == 0 && !operations.Any(o => o.Decision == WikiPackage.DecisionAuto))
+            return WikiPackage.StatusRejected;
         return WikiPackage.StatusPartiallyAccepted;
     }
 

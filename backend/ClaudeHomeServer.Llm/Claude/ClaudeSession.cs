@@ -1232,10 +1232,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Ключи, вычищаемые из унаследованного env хода. У ребёнка (И2) к ним добавляется токен
     // подписки: он живёт в окружении бэкенда (Program.cs) и без чистки доехал бы до ключевого хода.
     // Чистим и при _inheritSystemEnv (там EnvKeysToClear пуст): для ребёнка это не опция.
-    private IReadOnlyList<string> TurnClearEnv()
+    private IReadOnlyList<string> TurnClearEnv(ChildPolicySnapshot? childSnapshot)
     {
         var keys = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys;
-        if (_childPolicy?.Invoke() is null) return keys;
+        if (childSnapshot is null) return keys;
         return LlmProviderRegistry.ProviderEnvKeys.Concat(keys)
             .Append("CLAUDE_CODE_OAUTH_TOKEN").Distinct().ToList();
     }
@@ -3543,6 +3543,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // ход, сброс в finally ниже. Фолбэк-адаптер ставит то же значение ДО чтения цепочки,
         // поэтому EffectiveModel/EffectiveTurnChain видят его и на старте оркестрации.
         _turnModelOverride = turnModelOverride;
+        // Один снимок детской политики на запуск хода (И1/И2): аргументы, env, ключ и чистка env
+        // решаются по одному и тому же снимку, а не по трём независимым чтениям, между которыми
+        // профиль могли выключить. Запросы разрешений читают политику сами — им нужна свежесть.
+        var childSnapshot = _childPolicy?.Invoke();
 
         // P31: подстраховка от залипания pending control-состояния. К началу нового хода
         // (предыдущий завершился result'ом) _pendingQuestions/_pendingPlans/_permissionWaiters
@@ -3769,7 +3773,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
 
         // Ход ребёнка (И1, п.11): ни одного встроенного инструмента CLI.
-        var childTurn = _childPolicy?.Invoke() is not null;
+        var childTurn = childSnapshot is not null;
         if (childTurn) ForceNoBuiltinTools(args);
 
         // Подсказка следующего сообщения: CLI после result испускает prompt_suggestion
@@ -4693,20 +4697,20 @@ public class ClaudeSession : ILlmSessionAdapter
         // И2 (ADR-041): ход ребёнка идёт только по API-ключу записи пула из его профиля. Подписку
         // не выбираем ни основную, ни пула; нет ключа у записи — отказ запуска, а не откат.
         // Токен подписки из унаследованного env вычищает ChildTurnClearEnv (CLAUDE_CODE_OAUTH_TOKEN).
-        if (_childPolicy?.Invoke() is { } childSnapshot)
+        if (childSnapshot is not null)
         {
             var childSub = ChildApiKeyRoute.Resolve(childSnapshot, _subscriptionPool);
             envOverrides[ChildTurnMarker.EnvKey] = "1";
             // Блок пула выше мог положить токен подписки (Info.Provider указывает на setup-token запись)
             envOverrides.Remove("CLAUDE_CODE_OAUTH_TOKEN");
-            // Сторонний провайдер модели (cliEnv выше) ключ пула не получает — ключ Anthropic чужому эндпоинту не нужен
-            if (_providers?.ResolveByModel(EffectiveModel) is null)
-            {
-                var childEnv = _providers?.BuildOAuthCliEnv(childSub.Key, "", childSub.ApiKey, EffectiveModel)
-                    ?? throw new ChildRouteRefusedException(ChildApiKeyRoute.RefusedText);
-                foreach (var (k, v) in childEnv)
-                    envOverrides[k] = v;
-            }
+            // Модель стороннего провайдера (не Claude) ребёнку не положена: ключ пула ей не годится,
+            // а провайдерский ключ сервера — вне детского маршрута. Fail-closed, а не пропуск блока.
+            if (_providers?.ResolveByModel(EffectiveModel) is not null)
+                throw new ChildRouteRefusedException(ChildApiKeyRoute.RefusedText);
+            var childEnv = _providers?.BuildOAuthCliEnv(childSub.Key, "", childSub.ApiKey, EffectiveModel)
+                ?? throw new ChildRouteRefusedException(ChildApiKeyRoute.RefusedText);
+            foreach (var (k, v) in childEnv)
+                envOverrides[k] = v;
         }
 
         // BareMode (замена --bare, задача 2026-09-15): переменная окружения отключает
@@ -4716,7 +4720,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // найдена), иначе у облачного провайдера переменная была бы лишним шумом.
         // Ход ребёнка (И1, п.13): CLAUDE.md проекта не грузится в любом случае — BareMode тут
         // не зависит от провайдера модели.
-        if (_lastBareModeApplied || _childPolicy?.Invoke() is not null)
+        if (_lastBareModeApplied || childSnapshot is not null)
             envOverrides["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1";
 
         // Приватный чат общего проекта (S2d-5c): авто-память CLI пишет факты в общую папку
@@ -4835,7 +4839,7 @@ public class ClaudeSession : ILlmSessionAdapter
             Args = args,
             WorkingDirectory = _rootPath,
             Env = envOverrides,
-            ClearEnv = TurnClearEnv(),
+            ClearEnv = TurnClearEnv(childSnapshot),
             RedirectStdin = true,
             TurnId = _currentTurnId,
         };
@@ -5056,7 +5060,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     Env = envOverrides,
                     // Маршрут хода определяем только мы: системные ANTHROPIC_*/CLAUDE_CONFIG_DIR
                     // машины в ход не пускаем, иначе чат «на Claude» молча уедет на чужой эндпоинт
-                    ClearEnv = TurnClearEnv(),
+                    ClearEnv = TurnClearEnv(childSnapshot),
                     StdioEncoding = utf8NoBom,
                     TurnId = _currentTurnId,
                     // Раннер устройства привязывает к чату токен шлюза (ADR-016 §2); local/docker поле не читают

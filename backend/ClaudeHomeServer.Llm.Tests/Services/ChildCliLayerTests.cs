@@ -161,6 +161,15 @@ public class ChildCliLayerTests : IDisposable
 
     private async Task<ProcessSpec> CaptureSpecAsync(Func<ChildPolicySnapshot?>? childPolicy)
     {
+        var (spec, _) = await LaunchAsync(childPolicy, "sonnet", null);
+        spec.Should().NotBeNull("процесс CLI должен был стартовать");
+        return spec!;
+    }
+
+    private async Task<(ProcessSpec? Spec, List<string> Errors)> LaunchAsync(
+        Func<ChildPolicySnapshot?>? childPolicy, string model, LlmProviderRegistry? providersOverride)
+    {
+        var errors = new List<string>();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var root = Path.Combine(Path.GetTempPath(), "ccs-child-cli-" + Guid.NewGuid().ToString("N"));
@@ -169,21 +178,47 @@ public class ChildCliLayerTests : IDisposable
         var launcher = new SpecCapturingLauncher(_processes, started);
         var context = new LlmSessionContext(
             RootPath: root,
-            OnMessage: m => { if (m is ErrorMessage) failed.TrySetResult(); return Task.CompletedTask; },
+            OnMessage: m => { if (m is ErrorMessage e) { lock (errors) errors.Add(e.Text); failed.TrySetResult(); } return Task.CompletedTask; },
             RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null, TasksMcp: null,
             Launcher: launcher, ContentRootPath: root, OwnerId: "kid",
             PluginDirSource: new FixedPlugins(), ChildPolicyProvider: childPolicy);
-        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection().Build());
+        var providers = providersOverride ?? new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection().Build());
         var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?> { [$"{ClaudeSubscriptionPool.Section}:kids-api:ApiKey"] = "sk-ant-kids" }).Build());
-        var session = new ClaudeSession(new Session { Model = "sonnet", Provider = "claude" }, context,
+        var session = new ClaudeSession(new Session { Model = model, Provider = "claude" }, context,
             providers: providers, subscriptionPool: pool);
 
         await session.SendMessageAsync("тестовый ход");
         await Task.WhenAny(started.Task, failed.Task).WaitAsync(TimeSpan.FromSeconds(30));
-        launcher.Captured.Should().NotBeNull("процесс CLI должен был стартовать");
-        return launcher.Captured!;
+        return (launcher.Captured, errors);
+    }
+
+    [Fact]
+    public async Task ХодРебёнка_ВнешняяМодель_ОтказЗапуска_ПроцессНеСтартует()
+    {
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
+                ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+                ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+            }).Build());
+
+        var (spec, errors) = await LaunchAsync(() => Child(), "deepseek-chat", providers);
+
+        spec.Should().BeNull("ключ сервера внешнего провайдера ребёнку не уходит");
+        errors.Should().ContainSingle().Which.Should().Be(ChildApiKeyRoute.RefusedText);
+    }
+
+    [Fact]
+    public async Task ЗапускХода_ДетскаяПолитикаЧитаетсяОдинРаз()
+    {
+        var calls = 0;
+        var (spec, _) = await LaunchAsync(() => { Interlocked.Increment(ref calls); return Child(); }, "sonnet", null);
+
+        spec.Should().NotBeNull();
+        calls.Should().Be(1, "аргументы, env, ключ и чистка env решаются по одному снимку");
     }
 
     [Fact]

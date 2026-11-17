@@ -666,6 +666,25 @@ public class UserStore : IForgejoAccountStore, IUserStore
     }
 
     /// <summary>
+    /// Согласие ребёнка с правилами (KM-B6b, ADR-041 ручка №7): под тем же локом, что и
+    /// SetChildProfile, пишет ТОЛЬКО RulesAgreedAt/RulesSummary в живой профиль — лимиты и
+    /// тьютора не трогает никогда. Уже согласован, пользователя или профиля нет — false
+    /// (вызывающий отвечает 409: в гонке двух agree выигрывает первый).
+    /// </summary>
+    public bool AgreeChildRules(string id, DateTime at, string summary)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user?.ChildMode is null || user.ChildMode.RulesAgreedAt is not null) return false;
+            user.ChildMode.RulesAgreedAt = at;
+            user.ChildMode.RulesSummary = summary;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Откат детского профиля целиком (KM-B1e): прежний снимок возвращается как есть, без
     /// переноса правил и тьютора из живого — иначе откат при resetRules=true терял бы
     /// previous.RulesAgreedAt. null — профиля не было.

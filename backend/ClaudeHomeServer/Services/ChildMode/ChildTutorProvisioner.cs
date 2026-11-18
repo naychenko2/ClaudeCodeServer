@@ -284,6 +284,11 @@ public class ChildTutorProvisioner
                 // семафора — не аргумент. Профиль исчез — оставшиеся кандидаты не трогаем.
                 if (_users.GetById(childId)?.ChildMode is not { } child) return;
                 if (ReferencesTutor(child, candidate)) continue;
+                // Контракт на каждого кандидата (минор R-T2d 66780808): любой сбой операции —
+                // удаления персоны или вещания — лог, а не исключение вызывающему: тот уже
+                // сохранил профиль и отвечает 200 (UsersController.cs:323-324), и остальные
+                // кандидаты обязаны быть обработаны. Отмена вещания — не сбой: внутренний
+                // catch, тот же приём, что в Ensure*.
                 try
                 {
                     // false — персоны уже нет (или она не этого ребёнка): не наш случай, лог.
@@ -293,6 +298,17 @@ public class ChildTutorProvisioner
                             candidate, childId);
                         continue;
                     }
+
+                    // Вещание по факту удаления — то же, что «created» у Ensure*: стор персон
+                    // узнаёт об удалённой персоне. Ключ к этому моменту уже стёрт из профиля
+                    // (предмет удалён контроллером до вызова), порядок «ключ→вещание»
+                    // соблюдён; сбой вещания не отменяет удаление (тот же приём, что в Ensure*).
+                    try
+                    {
+                        await _broadcaster.ToOwner(childId,
+                            new PersonasChangedMessage("deleted", candidate));
+                    }
+                    catch (OperationCanceledException) { /* клиент ушёл — персона всё равно удалена */ }
                 }
                 catch (Exception e)
                 {
@@ -300,17 +316,6 @@ public class ChildTutorProvisioner
                         childId, candidate);
                     continue;
                 }
-
-                // Вещание по факту удаления — то же, что «created» у Ensure*: стор персон
-                // узнаёт об удалённой персоне. Ключ к этому моменту уже стёрт из профиля
-                // (предмет удалён контроллером до вызова), порядок «ключ→вещание»
-                // соблюдён; сбой вещания не отменяет удаление (тот же приём, что в Ensure*).
-                try
-                {
-                    await _broadcaster.ToOwner(childId,
-                        new PersonasChangedMessage("deleted", candidate));
-                }
-                catch (OperationCanceledException) { /* клиент ушёл — персона всё равно удалена */ }
             }
         }
         catch (OperationCanceledException) { /* отмена между кандидатами: уже удалённые остаются удалёнными */ }

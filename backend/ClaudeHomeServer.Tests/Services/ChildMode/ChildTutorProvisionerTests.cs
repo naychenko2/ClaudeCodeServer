@@ -251,9 +251,7 @@ public class ChildTutorProvisionerTests : IDisposable
     {
         // Гонка на разных потоках: без per-ребёночного семафора оба вызова входят в критическую
         // секцию одновременно (check → Create) и плодят двух репетитора (тот же разбор, что у
-        // EnsureAsync_Parallel: однопоточный прогон гонку не ловит в принципе). Тот же замок,
-        // что у EnsureAsync: параллельные тьютор и репетитор не должны видеть пустые ключи
-        // одновременно.
+        // EnsureAsync_Parallel: однопоточный прогон гонку не ловит в принципе).
         var first = Task.Run(() => _sut.EnsureSubjectTutorAsync(_childId, "math"));
         var second = Task.Run(() => _sut.EnsureSubjectTutorAsync(_childId, "math"));
         var results = await Task.WhenAll(first, second);
@@ -412,6 +410,40 @@ public class ChildTutorProvisionerTests : IDisposable
             .Should().NotThrowAsync("сбой — лог, ответ вызывающего (200) не меняется");
 
         _personas.Get(tutorId!, _childId).Should().BeNull("сбой одного кандидата не глушит остальных");
+    }
+
+    [Fact]
+    public async Task RemoveOrphanTutors_DeleteThrows_LogsAndContinues()
+    {
+        // Настоящий сбой удаления первого кандидата (минор R-T2d 66780808): не «персоны нет»,
+        // как в тесте с фантомом, а исключение внутри Delete: OnPersonaDeleted поднимается
+        // синхронно внутри Delete после Save (PersonaManager.cs:1481-1482) и бросает
+        // IOException для первого кандидата — тип точен, на обеих платформах. Контракт:
+        // исключение кандидата не выходит к вызывающему (его PUT уже сохранил профиль,
+        // ответ 200), цикл продолжается с остальными.
+        SeedSubject("physics", "Физика");
+        var firstTutor = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+        var secondTutor = await _sut.EnsureSubjectTutorAsync(_childId, "physics");
+        firstTutor.Should().NotBeNull();
+        secondTutor.Should().NotBeNull();
+        _personas.OnPersonaDeleted += p =>
+        {
+            if (p.Id == firstTutor) throw new IOException("имитация сбоя удаления персоны");
+        };
+        _users.GetById(_childId)!.ChildMode!.Subjects.Clear(); // эффект PUT: оба предмета убраны
+
+        await _sut.Invoking(s => s.RemoveOrphanTutorsAsync(_childId, [firstTutor!, secondTutor!]))
+            .Should().NotThrowAsync("сбой кандидата — лог внутри провижера, ответ вызывающего (200) не меняется");
+
+        // Сбой первого не глушит цикл: второй удалён и о нём вещается.
+        _personas.Get(secondTutor!, _childId).Should().BeNull("сбой одного кандидата не глушит остальных");
+        _broadcaster.Owner.Select(t => t.Message)
+            .OfType<PersonasChangedMessage>().Count(m => m.Action == "deleted" && m.PersonaId == secondTutor)
+            .Should().Be(1, "цикл дошёл до второго кандидата");
+        // Исключение первого — до его вещания: неудачная операция не вещается.
+        _broadcaster.Owner.Select(t => t.Message)
+            .OfType<PersonasChangedMessage>().Count(m => m.Action == "deleted" && m.PersonaId == firstTutor)
+            .Should().Be(0, "исключение удаления раньше вещания");
     }
 
     [Fact]

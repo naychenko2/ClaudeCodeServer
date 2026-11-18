@@ -1,18 +1,34 @@
-// Отрисовка верха вкладки «Встречи» (Ф3): порядок блоков, баннер по уровню, пустое
+// Отрисовка вкладки «Встречи» (Ф3 + Ф4): порядок блоков, баннер по уровню, пустое
 // состояние «Сейчас», скелеты без снимка — статическим рендером (паттерн EngineCard/
 // hardware.test). Цвета гашения/тревоги и раскрытие очереди — mount на fakeDom по
 // текстовым узлам (мутации, которые обязаны покрасить):
 // - баннер рисовать при любом level (краснеет «в норме баннера нет»);
 // - гашение не привязывать к stale (краснеют цвета «Завис?»);
 // - скелеты заменить нулями (краснеет тест загрузки);
-// - порядок блоков переставить (краснеет тест порядка).
+// - порядок блоков переставить (краснеет тест порядка);
+// - карточку сбоев рисовать при пустом fails (краснеет тест «сбоев нет»);
+// - фильтр строк сверки брать «любые числа» (краснеет тест inDify=null: появилась бы
+//   плашка «не хватает» из неизвестного);
+// - «Показать ещё» не раскрывать список (краснеет тест шестой строки);
+// - делать ссылкой строку без mdPath (краснеет тест openMeetingNote: вызов на
+//   неоткрываемой строке или лишний вызов).
 
 import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installFakeDom, mount, reactProps, uninstallFakeDom } from '../../components/chat/__tests__/fakeDom';
 import { TranscriptionTab } from './TranscriptionTab';
+import { openMeetingNote } from './openMeetingNote';
 import type { TranscriptionSnapshot } from './types';
+
+// Точку входа открытия сводки подменяем шпионом: тест проверяет сам вызов и его аргумент,
+// а не тост заглушки (openMeetingNote.ts). meetingId и остальное — настоящие.
+vi.mock('./openMeetingNote', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./openMeetingNote')>();
+  return { ...real, openMeetingNote: vi.fn() };
+});
+const openMeetingNoteMock = vi.mocked(openMeetingNote);
+beforeEach(() => { openMeetingNoteMock.mockClear(); });
 
 const NOW = 1_763_460_000_000;
 
@@ -154,12 +170,155 @@ describe('TranscriptionTab: пустое состояние, остановка,
     expect(h).toContain('Остановлен');
   });
 
-  it('снимка ещё нет — три скелета (aria-busy), без нулей и без выдуманных статусов', () => {
+  it('снимка ещё нет — четыре скелета (aria-busy), без нулей и без выдуманных статусов', () => {
+    // макет loadingBody: Конвейер, Сейчас, Очередь, Последние встречи
     const h = staticHtml(null);
-    expect((h.match(/aria-busy="true"/g) ?? []).length).toBe(3);
+    expect((h.match(/aria-busy="true"/g) ?? []).length).toBe(4);
     expect(h).not.toMatch(/>([^<]*\b0\b[^<]*)</);
     expect(h).not.toContain('Идёт пачка');
     expect(h).not.toContain('Ожидание');
     expect(h).not.toContain('Завис?');
+  });
+});
+
+// Нажимаемая область по её тексту: role="button", чей текст ровно text («Показать ещё»)
+function buttonByText(root: unknown, text: string): unknown | null {
+  let hit: unknown | null = null;
+  const walk = (x: { nodeType?: number; childNodes?: unknown[]; getAttribute?: (a: string) => string | null; textContent?: string }) => {
+    if (hit) return;
+    if (x.nodeType === 1 && x.getAttribute?.('role') === 'button' && x.textContent === text) { hit = x; return; }
+    for (const c of x.childNodes ?? []) walk(c as Parameters<typeof walk>[0]);
+  };
+  walk(root as Parameters<typeof walk>[0]);
+  return hit;
+}
+
+const click = (node: unknown) => { act(() => { (reactProps(node as Parameters<typeof reactProps>[0])!.onClick as () => void)(); }); };
+
+// Нижняя часть (Ф4): данные как в состоянии fail макета
+const FAILS = [
+  { at: NOW - 4_000_000, folder: 'Video-RR', file: '2026-11-18 Интервью кандидата.mp4', minutes: 41, comment: 'fail: ComfyUI не ответил за 600 с (узел CcsAudioWorker)' },
+  { at: NOW - 6_000_000, folder: 'Video-GPB', file: '2026-11-18 Короткий синк.mp4', minutes: 3, comment: 'fail: пустая дорожка — нечего распознавать' },
+];
+const MEET = (i: number) => ({
+  at: NOW - (i + 1) * 3_600_000, folder: 'Video-GPB', file: `2026-11-18 встреча ${i}.md`,
+  minutes: 30 + i, speakers: 3, comment: 'asr 2.1м + саммари 0.9м (локально)', mdPath: `/srv/meetings/v${i}.md`,
+});
+const MEET6 = [0, 1, 2, 3, 4, 5].map(MEET);
+
+describe('TranscriptionTab: «Сбои за сутки» (Ф4)', () => {
+  it('сбоев нет — карточки нет вовсе', () => {
+    expect(staticHtml(snap({ fails: [] }))).not.toContain('Сбои за сутки');
+  });
+
+  it('сбои есть — карточка с числом; заголовок и комментарий — C.dangerText, строка не открывается', () => {
+    const h = staticHtml(snap({ fails: FAILS }));
+    expect(h).toContain('Сбои за сутки · 2');
+    expect(h).toContain('2026-11-18 Интервью кандидата');
+    expect(h).toContain('41 мин');
+    const m = mountTab(snap({ fails: FAILS }));
+    expect(styleOfText(m.container, 'Сбои за сутки · 2')?.color).toBe('var(--c-danger-text)');
+    // комментарий журнала — целиком, красным (не обрезан многоточием)
+    expect(styleOfText(m.container, FAILS[0].comment!)?.color).toBe('var(--c-danger-text)');
+    // строка сбоя — не ссылка: перехода нет ни у одной
+    expect(m.container.querySelector('[aria-label="Открыть сводку: 2026-11-18 Интервью кандидата"]')).toBeNull();
+    expect(openMeetingNoteMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('TranscriptionTab: «Последние встречи» (Ф4)', () => {
+  it('пять строк; шестая — только после «Показать ещё»', () => {
+    const m = mountTab(snap({ recent: MEET6 }));
+    expect(styleOfText(m.container, '2026-11-18 встреча 4')).not.toBeNull();
+    expect(styleOfText(m.container, '2026-11-18 встреча 5')).toBeNull();
+    const more = buttonByText(m.container, 'Показать ещё');
+    expect(more).not.toBeNull();
+    click(more);
+    expect(styleOfText(m.container, '2026-11-18 встреча 5')).not.toBeNull();
+    expect(buttonByText(m.container, 'Показать ещё')).toBeNull(); // кнопка больше не нужна
+  });
+
+  it('касание строки — ровно один вызов openMeetingNote с id этой строки (folder/file)', () => {
+    const m = mountTab(snap({ recent: [MEET(0)] }));
+    const row = m.container.querySelector('[aria-label="Открыть сводку: 2026-11-18 встреча 0"]');
+    expect(row).not.toBeNull();
+    click(row);
+    expect(openMeetingNoteMock).toHaveBeenCalledTimes(1);
+    expect(openMeetingNoteMock).toHaveBeenCalledWith('Video-GPB/2026-11-18 встреча 0.md');
+  });
+
+  it('mdPath нет — строка не ссылка и не зовёт openMeetingNote', () => {
+    const m = mountTab(snap({ recent: [{ at: NOW - 3_600_000, folder: 'Video-GPB', file: '2026-11-18 планёрка.md' }] }));
+    expect(m.container.querySelector('[aria-label="Открыть сводку: 2026-11-18 планёрка"]')).toBeNull();
+    expect(openMeetingNoteMock).not.toHaveBeenCalled();
+  });
+
+  it('метка «.md» есть у открываемой строки; длина и спикеры — на месте', () => {
+    const h = staticHtml(snap({ recent: [MEET(0)] }));
+    expect(h).toContain('.md');
+    expect(h).toContain('30 мин');
+    expect(h).toContain('3 спикера');
+  });
+});
+
+describe('TranscriptionTab: «Сверка с Dify» (Ф4)', () => {
+  const DIFY = [
+    { folder: 'Video-GPB', local: 128, inDify: 128 },
+    { folder: 'Video-SIAM', local: 41, inDify: 37 },
+    { folder: 'Video-RR', local: 77, inDify: 77 },
+  ];
+
+  it('три папки без «Video-», «Локально / В Dify», «сходится» и «не хватает 4», свежесть «12 минут назад · раз в 30 мин»', () => {
+    const h = staticHtml(snap({ dify: DIFY, checkedAt: NOW - 12 * 60_000 }));
+    expect(h).toContain('Сверка с Dify');
+    expect(h).toContain('Локально');
+    expect(h).toContain('В Dify');
+    expect(h).toContain('12 минут назад · раз в 30 мин');
+    expect(h).toContain('>SIAM<'); // общий префикс «Video-» из таблицы убран
+    expect(h).not.toContain('Video-SIAM');
+    expect(h).toContain('сходится');
+    expect(h).toContain('не хватает 4');
+  });
+
+  it('inDify=null — дефицита нет: ни «не хватает», ни пустой плашки, ни строки папки', () => {
+    const h = staticHtml(snap({ dify: [{ folder: 'Video-SIAM', local: 41, inDify: null }], checkedAt: NOW }));
+    expect(h).not.toContain('не хватает');
+    expect(h).not.toContain('сходится');
+    expect(h).not.toContain('Сверка с Dify'); // строк нет — блока нет
+  });
+
+  it('checkedAt нет — строки свежести нет (блок остаётся)', () => {
+    const h = staticHtml(snap({ dify: [DIFY[1]] }));
+    expect(h).toContain('Сверка с Dify');
+    expect(h).not.toContain('раз в 30 мин');
+  });
+});
+
+describe('TranscriptionTab: «Зависимости» (Ф4)', () => {
+  const DEPS = [
+    { key: 'asr', state: 'ok' as const, checkedAt: NOW },
+    { key: 'summary', state: 'slow' as const, checkedAt: NOW },
+    { key: 'dify', state: 'down' as const, checkedAt: NOW },
+    { key: 'share', state: 'unknown' as const, checkedAt: null },
+  ];
+
+  it('четыре пункта с точкой и словом; цвета слова — по состоянию', () => {
+    const m = mountTab(snap({ deps: DEPS }));
+    expect(styleOfText(m.container, 'Сводки')?.color).toBe('var(--c-text-heading)');
+    expect(styleOfText(m.container, 'Сетевая папка')?.color).toBe('var(--c-text-heading)');
+    expect(styleOfText(m.container, 'в норме')?.color).toBe('var(--c-text-secondary)');
+    expect(styleOfText(m.container, 'медленно')?.color).toBe('var(--c-warning-text)');
+    expect(styleOfText(m.container, 'не отвечает')?.color).toBe('var(--c-danger-text)');
+    expect(styleOfText(m.container, 'не проверялось')?.color).toBe('var(--c-text-muted)');
+  });
+
+  it('неизвестный ключ — показан как есть, без выдуманного имени', () => {
+    const h = staticHtml(snap({ deps: [{ key: 'future', state: 'unknown', checkedAt: null }] }));
+    expect(h).toContain('>future<');
+    expect(h).not.toContain('Сетевая папка');
+  });
+
+  it('зависимостей нет — карточки нет', () => {
+    expect(staticHtml(snap({ deps: [] }))).not.toContain('Зависимости');
   });
 });

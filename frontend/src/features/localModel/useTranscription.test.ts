@@ -86,6 +86,24 @@ describe('createTranscriptionPoller: 5-с опрос вкладки «Встре
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('refetch в середине интервала не переставляет расписание: точки таймера остаются своими', async () => {
+    // Инвариант: расписание таймера не зависит от ручного опроса. Предыдущий тест
+    // зовёт refetch ровно в точке старта таймера (T=0) и перестановку не ловит:
+    // здесь опрос в середине — T=2.5 с. Без перестановки третий снимок приходит на
+    // T=5 с (по таймеру); реализация, переставляющая таймер на каждый refetch,
+    // дала бы следующий только на T=7.5 с — счётчик 2 вместо 3, тест краснеет.
+    const { fetch, p } = make();
+    p.setActive(true, true); // T=0: первый снимок + таймер
+    await vi.advanceTimersByTimeAsync(2_500); // середина интервала
+    p.refetch(); // «Проверить сейчас»
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2_500); // T=5 с — точка таймера
+    expect(fetch).toHaveBeenCalledTimes(3);
+    p.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('refetch(): закрытая вкладка или скрытая вкладка браузера — no-op, таймера нет', async () => {
     const { fetch, p } = make();
     p.setActive(false, true); // закрыли вкладку «Встречи»

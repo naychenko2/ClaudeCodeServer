@@ -123,11 +123,59 @@ export interface TransQueueView {
   files: TransQueueFileView[];
 }
 
+// === Низ вкладки (Ф4): строка сбоя/встречи, строка сверки, строка зависимости ===
+
+// Строка «Сбоев за сутки» и «Последних встреч» одна по составу (макет .mt): имя, папка,
+// время, длина, спикеры, комментарий. Сбой не открывается (openable=false, красная
+// строка); встреча открывается, только когда mdPath в снимке есть.
+export interface TransMeetingRowView {
+  id: string; // ключ строки (folder+file); его передают openMeetingNote (openMeetingNote.ts)
+  name: string; // имя без расширения; полное имя — в title
+  file: string;
+  folder: string | null;
+  timeText: string; // «11:42» сегодня, «вчера 18:05» вчера (окно бэка — 24 ч, старше нет)
+  lengthText: string | null; // «47 мин»; минут нет — строки нет
+  speakersText: string | null; // «4 спикера»; нет/0 — строки нет
+  comment: string | null;
+  openable: boolean;
+}
+
+// Строка сверки с Dify. inDify не число (бэк не смог прочитать список документов) —
+// строки нет вовсе: дефицит из неизвестного не считается (тот же фильтр, что у
+// баннера расхождения выше). deficit — local − inDify > 0; «сходится» — равны.
+export interface TransDifyRowView {
+  folder: string; // без общего префикса «Video-» (узкая лента, proposal.md)
+  local: number;
+  inDify: number;
+  deficit: number | null; // null — плашки дефицита нет (равны или в Dify больше)
+}
+
+// Строка зависимости: точка и слово. Подписи известных ключей — по макету;
+// незнакомый ключ (бэк добавит) показывается как есть, без выдуманного имени.
+export const DEP_NAMES: Record<string, string> = {
+  asr: 'Распознавание', summary: 'Сводки', dify: 'Dify', share: 'Сетевая папка',
+};
+export const DEP_WORDS: Record<'ok' | 'slow' | 'down' | 'unknown', string> = {
+  ok: 'в норме', slow: 'медленно', down: 'не отвечает', unknown: 'не проверялось',
+};
+
+export interface TransDepRowView {
+  key: string;
+  name: string;
+  word: string;
+  state: 'ok' | 'slow' | 'down' | 'unknown';
+}
+
 export interface TransTabView {
   banner: TransBannerView | null;
   pipeline: TransPipelineView;
   now: TransNowView;
   queue: TransQueueView;
+  failures: TransMeetingRowView[];
+  meetings: TransMeetingRowView[];
+  difyRows: TransDifyRowView[];
+  difyAgeText: string | null; // «N мин назад» по checkedAt; нет — строки нет
+  deps: TransDepRowView[];
   // «Завис?»/«Остановлен»: значения «Сейчас» и «Очереди» гаснут до C.textMuted,
   // «идёт» краснеет. При danger по севшей зависимости — НЕ гаснет (макет «Сбои»:
   // конвейер жив, значения настоящие).
@@ -255,5 +303,75 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
     })),
   };
 
-  return { banner, pipeline: { badge, updatedText, updatedAlarm: stale, whereText, pidText, writesText, writesWarn }, now, queue, stale };
+  // === Сбои и встречи (одна форма строки, разные флаги; порядок — как в снимке) ===
+  const rowOf = (r: { at: number; folder?: string | null; file: string; minutes?: number | null }, openable: boolean): TransMeetingRowView => ({
+    id: `${r.folder ?? ''}/${r.file}`, // ключ строки журнала: своего id снимок не несёт
+    name: meetingName(r.file),
+    file: r.file,
+    folder: r.folder ?? null,
+    timeText: meetingTimeText(r.at, nowMs),
+    lengthText: typeof r.minutes === 'number' ? meetingLengthText(r.minutes) : null,
+    speakersText: null,
+    comment: null,
+    openable,
+  });
+  const failures: TransMeetingRowView[] = (s.fails ?? []).map(f => ({
+    ...rowOf(f, false),
+    comment: typeof f.comment === 'string' && f.comment.length > 0 ? f.comment : null,
+  }));
+  const meetings: TransMeetingRowView[] = (s.recent ?? []).map(m => ({
+    ...rowOf(m, typeof m.mdPath === 'string' && m.mdPath.length > 0),
+    speakersText: typeof m.speakers === 'number' && m.speakers > 0
+      ? `${m.speakers} ${plural(m.speakers, 'спикер', 'спикера', 'спикеров')}`
+      : null,
+    comment: typeof m.comment === 'string' && m.comment.length > 0 ? m.comment : null,
+  }));
+
+  // === Сверка с Dify ===: строки без inDify нет (см. TransDifyRowView); папки без общего
+  // префикса «Video-» — в узкой ленте имена папок остаются читаемыми (proposal.md)
+  const difyRows: TransDifyRowView[] = (s.dify ?? [])
+    .filter(r => typeof r.local === 'number' && typeof r.inDify === 'number')
+    .map(r => ({
+      folder: r.folder.startsWith('Video-') ? r.folder.slice('Video-'.length) : r.folder,
+      local: r.local, inDify: r.inDify,
+      deficit: r.local > r.inDify ? r.local - r.inDify : null,
+    }));
+  const difyAgeText = typeof s.checkedAt === 'number' ? agoText(s.checkedAt, nowMs) : null;
+
+  // === Зависимости ===: порядок — как в снимке; значение вне множества — «не проверялось»
+  const KNOWN_DEP = ['ok', 'slow', 'down', 'unknown'] as const;
+  const deps: TransDepRowView[] = (s.deps ?? []).map(d => {
+    const state: 'ok' | 'slow' | 'down' | 'unknown' = (KNOWN_DEP as readonly string[]).includes(d.state) ? d.state : 'unknown';
+    return { key: d.key, name: DEP_NAMES[d.key] ?? d.key, word: DEP_WORDS[state], state };
+  });
+
+  return {
+    banner, pipeline: { badge, updatedText, updatedAlarm: stale, whereText, pidText, writesText, writesWarn },
+    now, queue, failures, meetings, difyRows, difyAgeText, deps, stale,
+  };
+}
+
+// «2026-11-18 планёрка.md» → «2026-11-18 планёрка»: расширение в имени строки не нужно,
+// полное имя (с расширением) — в title строки
+function meetingName(file: string): string {
+  const i = file.lastIndexOf('.');
+  return i > 0 ? file.slice(0, i) : file;
+}
+
+// «47 мин», «1 ч 5 мин» — длина записи короткой формой (макет .mt .sub; не разговорные
+// «47 минут», как у предупреждений баннера)
+export function meetingLengthText(min: number): string {
+  const m = Math.max(0, Math.round(min));
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h} ч ${r} мин` : `${h} ч`;
+}
+
+// «11:42» сегодня, «вчера 18:05» вчера: окно бэка — 24 часа, старше этих двух дней
+// строк нет; дни считаем по календарным суткам (перекос часов — в пределах окна)
+function meetingTimeText(at: number, nowMs: number): string {
+  const day = (ms: number) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const diff = Math.round((day(nowMs) - day(at)) / 86_400_000);
+  return diff >= 1 ? `вчера ${clockText(at)}` : clockText(at);
 }

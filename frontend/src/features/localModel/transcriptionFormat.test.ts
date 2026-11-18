@@ -1,5 +1,6 @@
-// View-модель верха вкладки «Встречи» (Ф3): тексты и флаги четырёх блоков из снимка.
-// Чистые функции — без DOM; времена фиксированные (nowMs параметром).
+// View-модель вкладки «Встречи» (Ф3 + Ф4): тексты и флаги верхних блоков и нижних
+// (сбои, встречи, сверка, зависимости) из снимка. Чистые функции — без DOM; времена
+// фиксированные (nowMs параметром).
 //
 // Мутации, которые обязаны покрасить:
 // - баннер рисовать при любом level (не только при тревоге) — краснеет «в норме баннера нет»;
@@ -11,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  agoText, durationText, durationWords, sinceWords, transTabView,
+  agoText, durationText, durationWords, meetingLengthText, sinceWords, transTabView,
 } from './transcriptionFormat';
 import type { TranscriptionSnapshot } from './types';
 
@@ -250,5 +251,87 @@ describe('форматтеры времени', () => {
     expect(durationWords(65)).toBe('1 час 5 минут');
     expect(sinceWords(NOW - 360_000, NOW)).toBe('6 минут');
     expect(sinceWords(NOW - 45_000, NOW)).toBe('45 с');
+  });
+
+  it('meetingLengthText: короткая форма длины «47 мин», «1 ч 5 мин», «2 ч»', () => {
+    expect(meetingLengthText(47)).toBe('47 мин');
+    expect(meetingLengthText(65)).toBe('1 ч 5 мин');
+    expect(meetingLengthText(120)).toBe('2 ч');
+    expect(meetingLengthText(0)).toBe('0 мин');
+  });
+});
+
+describe('transTabView: низ вкладки (Ф4): сбои, встречи, сверка, зависимости', () => {
+  const FAIL = { at: NOW - 4_000_000, folder: 'Video-RR', file: '2026-11-18 Интервью кандидата.mp4', minutes: 41, comment: 'fail: ComfyUI не ответил за 600 с (узел CcsAudioWorker)' };
+  const MEET = { at: NOW - 3_600_000, folder: 'Video-GPB', file: '2026-11-18 планёрка.md', minutes: 47, speakers: 4, comment: 'asr 2.7м + саммари 1.2м (локально)', mdPath: '/srv/meetings/planerka.md' };
+
+  it('сбой: id = folder/file, имя без расширения, строка не открывается, комментарий и длина — как в журнале', () => {
+    const v = transTabView(snap({ fails: [FAIL] }), NOW);
+    expect(v.failures).toHaveLength(1);
+    const f = v.failures[0];
+    expect(f.id).toBe('Video-RR/2026-11-18 Интервью кандидата.mp4');
+    expect(f.name).toBe('2026-11-18 Интервью кандидата');
+    expect(f.openable).toBe(false);
+    expect(f.comment).toBe('fail: ComfyUI не ответил за 600 с (узел CcsAudioWorker)');
+    expect(f.lengthText).toBe('41 мин');
+  });
+
+  it('встреча с mdPath — открывается; «47 мин», «4 спикера», сегодня — только время', () => {
+    const m = transTabView(snap({ recent: [MEET] }), NOW).meetings[0];
+    expect(m.openable).toBe(true);
+    expect(m.lengthText).toBe('47 мин');
+    expect(m.speakersText).toBe('4 спикера');
+    expect(m.comment).toBe('asr 2.7м + саммари 1.2м (локально)');
+    expect(m.timeText).toMatch(/^\d{2}:\d{2}$/); // сегодня: без слова «вчера» (пояс тестовой машины)
+  });
+
+  it('mdPath/спикеров/минут нет — openable=false и пустых строк нет', () => {
+    const m = transTabView(snap({ recent: [{ at: NOW - 60_000, folder: 'Video-GPB', file: 'x.md' }] }), NOW).meetings[0];
+    expect(m.openable).toBe(false);
+    expect(m.lengthText).toBeNull();
+    expect(m.speakersText).toBeNull();
+    expect(m.comment).toBeNull();
+  });
+
+  it('«вчера»: прошлые календарные сутки подписаны (окно бэка — 24 ч)', () => {
+    const m = transTabView(snap({ recent: [{ at: NOW - 26 * 3_600_000, folder: 'Video-RR', file: 'y.md', mdPath: '/m/y.md' }] }), NOW).meetings[0];
+    expect(m.timeText).toMatch(/^вчера \d{2}:\d{2}$/);
+  });
+
+  it('сверка: папки без «Video-»; дефицит только при local > inDify; в Dify больше — плашки нет', () => {
+    const v = transTabView(snap({
+      dify: [{ folder: 'Video-GPB', local: 128, inDify: 128 }, { folder: 'Video-SIAM', local: 41, inDify: 37 }, { folder: 'RR', local: 7, inDify: 9 }],
+    }), NOW);
+    expect(v.difyRows.map(r => r.folder)).toEqual(['GPB', 'SIAM', 'RR']);
+    expect(v.difyRows[0].deficit).toBeNull(); // равны — «сходится» рисует компонент
+    expect(v.difyRows[1].deficit).toBe(4);
+    expect(v.difyRows[2].deficit).toBeNull();
+  });
+
+  it('inDify=null — строки сверки нет вовсе: дефицит из неизвестного не считается', () => {
+    expect(transTabView(snap({ dify: [{ folder: 'Video-SIAM', local: 41, inDify: null }] }), NOW).difyRows).toEqual([]);
+  });
+
+  it('checkedAt — «12 минут назад»; поля нет — строки свежести нет', () => {
+    expect(transTabView(snap({ checkedAt: NOW - 12 * 60_000 }), NOW).difyAgeText).toBe('12 минут назад');
+    expect(transTabView(snap({ checkedAt: null }), NOW).difyAgeText).toBeNull();
+  });
+
+  it('зависимости: имена по ключам макета, слова по состоянию; чужой ключ — как есть, чужое значение — «не проверялось»', () => {
+    const v = transTabView(snap({ deps: [
+      { key: 'asr', state: 'ok', checkedAt: NOW },
+      { key: 'summary', state: 'slow', checkedAt: NOW },
+      { key: 'dify', state: 'down', checkedAt: NOW },
+      { key: 'share', state: 'unknown', checkedAt: null },
+      { key: 'future', state: 'weird' as 'ok', checkedAt: NOW },
+    ] }), NOW);
+    expect(v.deps.map(d => d.name)).toEqual(['Распознавание', 'Сводки', 'Dify', 'Сетевая папка', 'future']);
+    expect(v.deps.map(d => d.word)).toEqual(['в норме', 'медленно', 'не отвечает', 'не проверялось', 'не проверялось']);
+  });
+
+  it('блоков нет при пустых полях: fails/recent/dify/deps отсутствуют — пустые списки, не падение', () => {
+    const v = transTabView({ phase: 'idle', updatedAt: NOW - 14_000 } as TranscriptionSnapshot, NOW);
+    expect([v.failures, v.meetings, v.difyRows, v.deps]).toEqual([[], [], [], []]);
+    expect(v.difyAgeText).toBeNull();
   });
 });

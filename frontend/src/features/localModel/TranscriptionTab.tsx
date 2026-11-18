@@ -1,11 +1,12 @@
-// Вкладка «Встречи»: верхняя часть (Ф3) — баннер, конвейер, «Сейчас», очередь.
+// Вкладка «Встречи»: верхняя часть (Ф3) — баннер, конвейер, «Сейчас», очередь;
+// нижняя (Ф4) — сбои за сутки, последние встречи, сверка с Dify, зависимости.
 // Макет: docs/mockups/local-model-transcription-v1.html (состояние «Идёт пачка»),
 // тексты и смысл — docs/mockups/local-model-transcription-proposal.md.
 // Тексты и флаги считает transcriptionFormat (чистые функции, тесты без DOM); здесь —
-// только отрисовка вида-модели токенами дизайн-системы. Нижняя часть (сбои, встречи,
-// сверка, зависимости) — шаг Ф4.
+// только отрисовка вида-модели токенами дизайн-системы.
 //
-// Порядок блоков — по убыванию срочности: тревога → состояние → сейчас → очередь.
+// Порядок блоков — по убыванию срочности: тревога → состояние → сейчас → очередь →
+// сбои → встречи → сверка → зависимости (макет tab()).
 // В норме баннера нет. При «Завис?»/«Остановлен» значения «Сейчас» и «Очереди» гаснут
 // до C.textMuted, «идёт» краснеет (макет .stale).
 //
@@ -13,24 +14,39 @@
 // значений, без нулей и без выдуманных статусов (макет «Загрузка»).
 
 import { useState } from 'react';
-import type { ReactNode } from 'react';
-import { AudioLines, Clock, TriangleAlert } from 'lucide-react';
+import type { CSSProperties, ReactNode } from 'react';
+import { AudioLines, Clock, FileText, TriangleAlert } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Badge } from '../../components/ui/Badge';
+import { Dot } from '../../components/ui/Dot';
 import { Notice } from '../../components/ui/Notice';
 import { PressableArea } from '../../components/ui/PressableArea';
-import { transTabView, type TransTabView } from './transcriptionFormat';
+import { DEP_WORDS, transTabView, type TransDepRowView, type TransDifyRowView, type TransMeetingRowView, type TransTabView } from './transcriptionFormat';
+import { openMeetingNote } from './openMeetingNote';
 import type { TranscriptionSnapshot } from './types';
 
+// «Последние встречи»: изначально пять строк, «Показать ещё» раскрывает остальные
+// (полный список — не больше 20, лимит приходит с бэкенда, на фронте не режем)
+const MEETINGS_INITIAL = 5;
+
 // === Оболочка секции: та же карточка, что у соседних вкладок панели (MediaTab/TextTab):
-// C.bgWhite, рамка C.borderLight, R.xl, SP.md; заголовок 11/700/uppercase ===
-function Card({ title, right, children }: { title: string; right?: ReactNode; children?: ReactNode }) {
+// C.bgWhite, рамка C.borderLight, R.xl, SP.md; заголовок 11/700/uppercase.
+// tone="danger" — карточка сбоев макета (.card.danger): C.dangerBg / C.dangerBorder,
+// заголовок C.dangerText ===
+function Card({ title, right, tone, children }: {
+  title: string; right?: ReactNode; tone?: 'danger'; children?: ReactNode;
+}) {
+  const danger = tone === 'danger';
   return (
-    <section style={{ background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md }}>
+    <section style={{
+      background: danger ? C.dangerBg : C.bgWhite,
+      border: `1px solid ${danger ? C.dangerBorder : C.borderLight}`,
+      borderRadius: R.xl, padding: SP.md,
+    }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
         <h3 style={{
           margin: 0, fontSize: FS.xs, fontWeight: 700, textTransform: 'uppercase',
-          letterSpacing: '0.06em', color: C.textSecondary, flex: 1, minWidth: 0,
+          letterSpacing: '0.06em', color: danger ? C.dangerText : C.textSecondary, flex: 1, minWidth: 0,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{title}</h3>
         {right}
@@ -187,6 +203,160 @@ function QueueCard({ view }: { view: TransTabView }) {
   );
 }
 
+// === Строка встречи/сбоя (макет .mt): точка → имя → время; ниже — папка, длина,
+// спикеры, «.md»; комментарий — своей строкой. Касание открывает сводку только у
+// строки с mdPath (openMeetingNote — единственная точка входа, см. openMeetingNote.ts);
+// строка сбоя не открывается вовсе (макет .nolink), комментарий её — целиком и красный ===
+function MeetingRow({ row, alarm, top }: { row: TransMeetingRowView; alarm?: boolean; top?: boolean }) {
+  const grid: CSSProperties = {
+    display: 'grid', gridTemplateColumns: 'auto minmax(0,1fr) auto', gap: `${SP.xxs}px ${SP.sm}px`,
+    alignItems: 'center', padding: SP.sm, margin: `0 -${SP.sm}px`, borderRadius: R.md,
+    minHeight: 44, minWidth: 0,
+    ...(top ? { borderTop: `1px solid ${C.borderLight}`, borderRadius: `0 0 ${R.md}px ${R.md}px` } : {}),
+  };
+  const body = (
+    <>
+      <Dot color={alarm ? C.danger : C.success} size={8} />
+      {/* Полное имя (с расширением) — в title: на узкой ленте имя режется многоточием */}
+      <span title={row.file} style={{
+        fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+      }}>{row.name}</span>
+      <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>{row.timeText}</span>
+      <span style={{ gridColumn: '2 / span 2', display: 'flex', flexWrap: 'wrap', gap: `${SP.xxs}px ${SP.sm}px`, alignItems: 'center', fontSize: FS.xs, color: C.textSecondary, minWidth: 0 }}>
+        {row.folder && <FolderBadge folder={row.folder} />}
+        {row.lengthText != null && <span>{row.lengthText}</span>}
+        {row.speakersText != null && <span>{row.speakersText}</span>}
+        {row.openable && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, color: C.accent, fontWeight: 600 }}>
+            <FileText size={12} strokeWidth={2} aria-hidden />.md
+          </span>
+        )}
+      </span>
+      {row.comment != null && (
+        <span style={{
+          gridColumn: '2 / span 2', fontSize: FS.xs, minWidth: 0,
+          ...(alarm
+            ? { color: C.dangerText, whiteSpace: 'normal', overflowWrap: 'anywhere' } // комментарий журнала — целиком
+            : { color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+        }}>{row.comment}</span>
+      )}
+    </>
+  );
+  if (!row.openable) return <div style={grid}>{body}</div>;
+  return (
+    <PressableArea
+      onPress={() => openMeetingNote(row.id)}
+      aria-label={`Открыть сводку: ${row.name}`}
+      feedback
+      style={grid}
+    >{body}</PressableArea>
+  );
+}
+
+// === Сбои за сутки: красная карточка, видна только когда сбои есть (их не больше 20 —
+// лимит держит бэк); заголовок и рамка — danger-токены (макет .card.danger) ===
+function FailuresCard({ view }: { view: TransTabView }) {
+  if (view.failures.length === 0) return null;
+  return (
+    <Card title={`Сбои за сутки · ${view.failures.length}`} tone="danger">
+      {view.failures.map((r, i) => <MeetingRow key={r.id} row={r} alarm top={i > 0} />)}
+    </Card>
+  );
+}
+
+// === Последние встречи: пять строк и «Показать ещё» (раскрывает остальные ≤20);
+// пустого состояния нет: встреч за сутки не было — блока нет (тот же порядок, что у
+// «Сбоев»: список существует, только когда есть что показать) ===
+function RecentCard({ view }: { view: TransTabView }) {
+  const [showAll, setShowAll] = useState(false);
+  const rows = view.meetings;
+  if (rows.length === 0) return null;
+  const shown = showAll ? rows : rows.slice(0, MEETINGS_INITIAL);
+  return (
+    <Card title="Последние встречи" right={<span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>касание — открыть сводку</span>}>
+      {shown.map((r, i) => <MeetingRow key={r.id} row={r} top={i > 0} />)}
+      {!showAll && rows.length > MEETINGS_INITIAL && (
+        <PressableArea
+          onPress={() => setShowAll(true)}
+          feedback
+          style={{ display: 'flex', alignItems: 'center', minHeight: 32, fontSize: FS.sm, color: C.accent, fontWeight: 600, marginTop: SP.xs }}
+        >
+          Показать ещё
+        </PressableArea>
+      )}
+    </Card>
+  );
+}
+
+// === Сверка с Dify: папка / «Локально» / «В Dify» / плашка «сходится» или «не хватает N».
+// Строки без inDify нет вовсе (дефицит из неизвестного не считается), и карточки нет,
+// если строк нет: до первой проверки блока на экране нет (свежесть — «N назад · раз в
+// 30 мин» по checkedAt). Числа заходят в колонки 56/56 px, плашка — 96 (макет .tbl) ===
+function DifyCard({ view }: { view: TransTabView }) {
+  if (view.difyRows.length === 0) return null;
+  const pill = (r: TransDifyRowView) => r.deficit == null
+    // «сходится» — та же пара, что «Ожидание» у конвейера: neutral-подложка + цвет success
+    ? (r.local === r.inDify ? <Badge tone="neutral" size="xs" style={{ color: C.success }}>сходится</Badge> : null)
+    : <Badge tone="warning" size="xs" title={`В Dify не хватает ${r.deficit}`}>не хватает {r.deficit}</Badge>;
+  return (
+    <Card title="Сверка с Dify" right={view.difyAgeText ? <span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>{view.difyAgeText} · раз в 30 мин</span> : undefined}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: FS.sm, tableLayout: 'fixed' }}>
+        <colgroup>
+          <col /><col style={{ width: 56 }} /><col style={{ width: 56 }} /><col style={{ width: 96 }} />
+        </colgroup>
+        <thead>
+          <tr>
+            {['Папка', 'Локально', 'В Dify', ''].map((h, i) => (
+              <th key={i} style={{
+                fontSize: FS.xxs, fontWeight: 600, color: C.textMuted, padding: `0 0 ${SP.xs}px`,
+                textAlign: i === 0 ? 'left' : 'right',
+              }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {view.difyRows.map((r) => (
+            <tr key={r.folder}>
+              <td title={r.folder} style={{ padding: `${SP.xs}px 0`, borderTop: `1px solid ${C.borderLight}`, textAlign: 'left', fontSize: FS.xs, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.folder}</td>
+              <td style={{ padding: `${SP.xs}px 0`, borderTop: `1px solid ${C.borderLight}`, textAlign: 'right', fontFamily: FONT.mono, color: C.textPrimary }}>{r.local}</td>
+              <td style={{ padding: `${SP.xs}px 0`, borderTop: `1px solid ${C.borderLight}`, textAlign: 'right', fontFamily: FONT.mono, color: C.textPrimary }}>{r.inDify}</td>
+              <td style={{ padding: `${SP.xs}px 0`, borderTop: `1px solid ${C.borderLight}`, textAlign: 'right' }}>{pill(r)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+// === Зависимости: точка и слово по каждому пункту. Цвета — по состоянию (макет .dep):
+// «в норме» — точка C.success, слово C.textSecondary; «медленно» — C.warning/C.warningText;
+// «не отвечает» — C.danger/C.dangerText; «не проверялось» — C.track/C.textMuted ===
+const DEP_TONE: Record<TransDepRowView['state'], { dot: string; word: string }> = {
+  ok: { dot: C.success, word: C.textSecondary },
+  slow: { dot: C.warning, word: C.warningText },
+  down: { dot: C.danger, word: C.dangerText },
+  unknown: { dot: C.track, word: C.textMuted },
+};
+function DepsCard({ view }: { view: TransTabView }) {
+  if (view.deps.length === 0) return null;
+  return (
+    <Card title="Зависимости">
+      {view.deps.map((d, i) => {
+        const t = DEP_TONE[d.state];
+        return (
+          <div key={d.key} style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0,1fr) auto', gap: `0 ${SP.sm}px`, alignItems: 'center', padding: `${SP.xs}px 0`, borderTop: i > 0 ? `1px solid ${C.borderLight}` : undefined, minWidth: 0 }}>
+            <Dot color={t.dot} size={8} />
+            <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{d.name}</span>
+            <span style={{ fontSize: FS.xs, color: t.word, whiteSpace: 'nowrap' }}>{DEP_WORDS[d.state]}</span>
+          </div>
+        );
+      })}
+    </Card>
+  );
+}
+
 // === Скелеты: ждём первый снимок (C.bgInset, без нулей и выдуманных статусов) ===
 function SkeletonCard({ title }: { title: string }) {
   const bar = (w: string) => <div style={{ background: C.bgInset, borderRadius: R.sm, height: 12, margin: `${SP.sm}px 0`, width: w }} />;
@@ -212,6 +382,7 @@ export function TranscriptionTab({ data, now = Date.now() }: { data: Transcripti
         <SkeletonCard title="Конвейер" />
         <SkeletonCard title="Сейчас" />
         <SkeletonCard title="Очередь" />
+        <SkeletonCard title="Последние встречи" />
       </>
     );
   }
@@ -226,6 +397,10 @@ export function TranscriptionTab({ data, now = Date.now() }: { data: Transcripti
       <PipelineCard view={view} />
       <NowCard view={view} />
       <QueueCard view={view} />
+      <FailuresCard view={view} />
+      <RecentCard view={view} />
+      <DifyCard view={view} />
+      <DepsCard view={view} />
     </>
   );
 }

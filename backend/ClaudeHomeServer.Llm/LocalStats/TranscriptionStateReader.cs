@@ -25,9 +25,9 @@ namespace ClaudeHomeServer.Services.Llm;
 //                           итог = ok|asr|fail|batch|start|stop. Читается ХВОСТ: файл только растёт.
 //   config.yaml             — folders[].name/watch/output — папки конвейера и каталоги их вывода.
 //   <каталог вывода>/output_host.tsv — маркер «последнего писавшего» (М5): строка на узел
-//                           «узел\tunix\tвремя\tseq», seq — сквозной счётчик по файлу (максимум + 1).
-//                           Читатель берёт строку с наибольшим seq: часы узлов расходятся (~80 с),
-//                           по времени «последний» указал бы не на того.
+//                           «узел\tunix\tвремя\tseq», seq — сквозной счётчик ЭТОГО файла (максимум + 1).
+//                           Читатель берёт наибольший seq внутри каждого файла: порядок задаёт seq, а не
+//                           время (часы узлов расходятся ~80 с); между файлами seq не сравним — счётчики независимы.
 //
 // Устойчивость (требование задачи): файла нет / не читается / битый JSON — не исключение и не 500:
 // пустые блоки, фаза «stopped», уровня нет (null — «не проверялось», не «unknown»: значения
@@ -35,8 +35,11 @@ namespace ClaudeHomeServer.Services.Llm;
 // (конвейер пишет time.strftime без смещения), сравниваются с TimeProvider.GetUtcNow().
 //
 // «Пишет в» не туда (доработка Б1, маркер в Б2): вывод ведётся не на этом узле. Маркер самого
-// конвейера output_host.tsv — источник однозначный: узел из строки с наибольшим seq писал в
-// каталог вывода последним (порядок задаёт seq, а не время: часы узлов расходятся). Маркера нет
+// конвейера output_host.tsv — источник однозначный ВНУТРИ СВОЕГО ФАЙЛА: узел строки с наибольшим
+// seq писал в этот каталог последним. «Последний писавший» считается ОТДЕЛЬНО по каждой папке:
+// seq упорядочивает строки только одного файла, между файлами он не сравним (счётчики независимы),
+// а время не сравним — часы узлов расходятся. Тревога — только если во всех читаемых папках
+// последним писал чужой узел; хотя бы в одной писал наш — вывод идёт здесь. Маркера нет
 // (записан до М5), он пуст или битый — фолбэк на журнал Б1: .md в каталогах вывода свежее, чем
 // последний локальный «ok», — их написал не этот конвейер. Факт существования каталога ничего
 // не значит: на worker его наполнила синхронизация с другого узла (18.11: писал «ai», читали с
@@ -113,23 +116,28 @@ public sealed class TranscriptionStateReader(
             "ok";
 
         // «Пишет в»: общий каталог выходов папок против узла CCS. Каталога на узле нет — вывод
-        // здесь не ведут (как было). Маркер конвейера output_host.tsv — источник однозначный:
-        // узел из строки с наибольшим seq писал в вывод последним; он не этот узел —
-        // «не та машина» (warn). Маркера нет / пуст / битый — фолбэк по журналу (Б1): .md свежее
-        // последнего локального «ok» — ровно случай 18.11. Ни маркера, ни локального журнала —
-        // provenance не известна: ложной тревоги не даём. Конфига нет — тоже «не проверялось».
+        // здесь не ведут (как было). Маркер конвейера output_host.tsv однозначен внутри своего
+        // файла: «последний писавший» — по каждой папке отдельно, тревога — только если во всех
+        // читаемых папках последним писал чужой узел (ср. комментарий правила выше). Маркера нет /
+        // пуст / битый — фолбэк по журналу (Б1): .md свежее последнего локального «ok» — ровно
+        // случай 18.11. Ни маркера, ни локального журнала — provenance не известна: ложной тревоги
+        // не даём. Конфига нет — тоже «не проверялось».
         var outputDir = CommonOutputDir(folders);
         string? outputHost = null;
         var outputLevel = "unknown";
-        if (outputDir is not null)
+        if (outputDir is not null && localNode is not null)
         {
-            var markerHost = LastOutputHost(folders);
+            var markerHosts = LastOutputHosts(folders);
             // Пока этот конвейер сам ведёт файл, вывод идёт здесь: его .md появится с минуты на
             // минуту и строка «ok» будет позже него — свежий файл не чужой.
             var writingHereNow = state?.Current is { Length: > 0 };
             var lastLocal = LastLocalOutputAt(journal);
             if (!Directory.Exists(outputDir)) outputLevel = "warn"; // каталога здесь нет
-            else if (markerHost is { } host) outputLevel = string.Equals(host, localNode, StringComparison.Ordinal) ? "ok" : "warn"; // маркер однозначен
+            else if (markerHosts.Count > 0)
+                // Имя в маркере пишет конвейер: TRANSCRIPTION_NODE или hostname — он может быть в
+                // другом регистре («Worker»), ключ реестра — строчный («worker»): сравнение
+                // регистронезависимое, иначе свой узел дал бы вечное «не та машина».
+                outputLevel = markerHosts.Any(h => string.Equals(h, localNode, StringComparison.OrdinalIgnoreCase)) ? "ok" : "warn";
             else if (writingHereNow) outputLevel = "ok"; // конвейер сам ведёт файл — вывод здесь
             else if (lastLocal is { } own) outputLevel = NewestForeignWriteAt(folders, own) is not null ? "warn" : "ok";
             else outputLevel = "unknown"; // ни маркера, ни локального журнала — не с чем сравнивать
@@ -137,6 +145,14 @@ public sealed class TranscriptionStateReader(
             // известном outputDir (фронт красит строку по этому признаку, transcriptionFormat.ts).
             // «Не проверялось» — тоже свой узел: OutputHost=null фронт прочитал бы как тревогу.
             if (outputLevel != "warn") outputHost = localNode;
+        }
+        else if (outputDir is not null)
+        {
+            // Локальный узел неизвестен (в реестре нет local-узла): сравнивать маркер не с кем.
+            // Пара (OutputHost=null + известный OutputDir) — ровно фронтовый признак «не та
+            // машина», а назвать «свой» узел нечем: пару не отдаём — строка «Пишет в»
+            // не проверялась (OutputDir=null, фронт показывает «—», не тревогу).
+            outputDir = null;
         }
 
         TranscriptionFailDto[] fails =
@@ -444,40 +460,45 @@ public sealed class TranscriptionStateReader(
         return best;
     }
 
-    // «Последний писавший» в каталогах вывода — по маркеру самого конвейера (М5,
+    // «Последний писавший» ПО КАЖДОМУ каталогу вывода — по маркеру самого конвейера (М5,
     // lib_journal.mark_output_host): output_host.tsv в каталоге вывода каждой папки, строка на
     // узел «узел\tunix\tвремя\tseq»; пишущий узел трогает только свою строку, чужие приходят
-    // вместе с выводом (rsync берёт нескрытые файлы). Берётся строка с наибольшим seq: часы
-    // узлов расходятся (замер конвейера: ~80 с между двумя), «последний по времени» указал бы
-    // не на тот узел — порядок гарантирует сквозной счётчик по файлу. Счётчики по файлам
-    // независимы (на папку), поэтому при равном seq в разных файлах новее — строка с большим
-    // unix. Нет файла / не читается / ни одной целой строки (пустой или битый маркер) — null:
-    // фолбэк на сверку по журналу — до первой записи после перезапуска конвейера маркера ещё
-    // нет, и пустой файл не доказательство «чужого узла».
-    private static string? LastOutputHost(List<ConfigFolder> folders)
+    // вместе с выводом (rsync берёт нескрытые файлы). Внутри файла порядок задаёт его сквозной
+    // счётчик: наибольший seq — узел, писавший в этот каталог последним (часы узлов расходятся
+    // ~80 с, «последний по времени» указал бы не на того). Между файлами seq не сравним:
+    // счётчики независимы (на папку), и общий максимум по всем папкам дал бы ложную тревогу —
+    // папка, где узел дошёл до seq=5, перечёркивала бы папку, где свой узел пишет прямо сейчас
+    // с seq=3, и она бы не пропадала, пока в ту папку снова не пишут. При равном seq в ОДНОМ
+    // файле (случай слитого/битого файла) — тей-брейкер по unix. Нет файла / не читается / ни
+    // одной целой строки (пустой или битый маркер) — этой папки нет в ответе: фолбэк на сверку
+    // по журналу — до первой записи после перезапуска конвейера маркера ещё нет, и пустой файл
+    // не доказательство «чужого узла».
+    private static List<string> LastOutputHosts(List<ConfigFolder> folders)
     {
-        string? host = null;
-        long topSeq = -1, topUnix = -1;
+        var hosts = new List<string>();
         foreach (var dir in folders.Select(f => f.Output).OfType<string>().Distinct(StringComparer.Ordinal))
         {
             string[] lines;
             try { lines = File.ReadAllLines(Path.Combine(dir, OutputHostName)); }
             catch (Exception) { continue; } // маркера нет / не читается — этой папки нет в оценке
+            string? host = null;
+            long topSeq = -1, topUnix = -1;
             foreach (var line in lines)
             {
-                if (line.Length == 0 || line[0] == '#') continue; // заголовок и комментарии
+                if (line.Length == 0 || line[0] == '#') continue; // заголовок, комментарии, пустые строки
                 var parts = line.Split('\t');
-                if (parts.Length < 4) continue; // битая строка: нет имени или нет seq
+                if (parts.Length < 4) continue; // битая строка: нет имени или нет seq — не «чужой узел»
                 var name = parts[0].Trim();
                 if (name.Length == 0) continue;
                 if (!long.TryParse(parts[3].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var seq)) continue;
-                // unix — только тей-брейкер равных seq; не читается — 0, строка остаёт целой
+                // unix — только тей-брейкер равных seq; не читается — 0, строка остаётся целой
                 long.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var unix);
                 if (seq < topSeq || (seq == topSeq && unix <= topUnix)) continue;
                 topSeq = seq; topUnix = unix; host = name;
             }
+            if (host is not null) hosts.Add(host);
         }
-        return host;
+        return hosts;
     }
 
     // ─── dify_state.json (результат сверки конвейера с Dify, М2) ─────────────────────────

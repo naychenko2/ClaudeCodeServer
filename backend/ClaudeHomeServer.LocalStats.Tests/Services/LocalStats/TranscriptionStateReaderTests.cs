@@ -737,9 +737,11 @@ public class TranscriptionStateReaderTests : IDisposable
         s.Level.Should().Be("ok");
     }
 
-    // ─── «Пишет в» по маркеру конвейера output_host.tsv (Б2) ─────────────────────────────
-    // Маркер — запись самого конвейера о том, кто писал в каталог вывода последним (М5): строка
-    // с наибольшим seq. Он читаем — признак берётся из него, а не из времён файлов; маркера нет
+    // ─── «Пишет в» по маркеру конвейера output_host.tsv (Б2, круг 2: по каждой папке отдельно) ──
+    // Маркер — запись самого конвейера о том, кто писал в ЭТОТ каталог вывода последним (М5):
+    // строка с наибольшим seq внутри своего файла. Счётчики по файлам независимы, поэтому
+    // «последний писавший» судится по каждой папке отдельно и seq между папками не сравним;
+    // тревога — только если во всех читаемых папках последним писал чужой узел. Маркера нет
     // или он битый — прежняя сверка по журналу (фолбэк Б1 не ломается).
 
     [Fact]
@@ -850,30 +852,195 @@ public class TranscriptionStateReaderTests : IDisposable
         s.Level.Should().Be("ok");
     }
 
-    // Равные seq в маркерах разных папок: счётчик сквозной по ФАЙЛУ (на папку), поэтому равные
-    // значения — не «тот же писавший»: newer — строка с большим unix. Мутация «первая найденная
-    // строка с равным seq побеждает» краснит этот тест.
+    // Инвариант круга 2 (вердикт Р-Б2, major): seq упорядочивает строки только ВНУТРИ своего
+    // файла; между папками он не сравним — счётчики независимы. «Последний писавший» судится
+    // по каждой папке отдельно, тревога — только если во всех читаемых папках он чужой.
+
+    // Проба ревьюера (A): высокий seq чужого узла в его папке не перечёркивает нашу. A давно
+    // не получает встреч («ai» дошёл до seq=5), в B наш узел пишет прямо сейчас с seq=3 —
+    // в B последний писавший наш, вывод ведётся отсюда, тревоги нет (и не «висело» бы,
+    // пока в A снова не начнут писать). Мутация «общий максимум seq по всем папкам» —
+    // реализация Б2 на 32637d0 — краснит этот тест.
     [Fact]
-    public void РавныйSeqВМаркерахРазныхПапок_НовееСтрокаСБольшимUnix()
+    public void ВысокийSeqВЧужойПапкеНеПеречёркиваетСвою_ТревогиНет()
     {
         var now = NowTrunc();
         var root = NewRoot();
         var watch = Path.Combine(root, "watch");
-        var outGpb = Path.Combine(root, "out", "ГПБ");
-        var outRr = Path.Combine(root, "out", "RR");
+        var outA = Path.Combine(root, "out", "A");
+        var outB = Path.Combine(root, "out", "B");
         Directory.CreateDirectory(watch);
         Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
         Write(root, "config.yaml", ConfigYaml(
-            ("Video-GPB", watch, outGpb),
-            ("Video-RR", watch, outRr)));
-        // в ГПБ последним писал «worker» (час назад), в RR — «ai» (минуту назад), seq в файлах равны
-        WriteOutputHostMarker(outGpb, ("worker", now.Subtract(TimeSpan.FromHours(1)).ToUnixTimeSeconds(), 4));
-        WriteOutputHostMarker(outRr, ("ai", now.Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeSeconds(), 4));
+            ("Video-A", watch, outA),
+            ("Video-B", watch, outB)));
+        WriteOutputHostMarker(outA, ("ai", now.Subtract(TimeSpan.FromDays(2)).ToUnixTimeSeconds(), 5));
+        WriteOutputHostMarker(outB, ("worker", now.Subtract(TimeSpan.FromMinutes(3)).ToUnixTimeSeconds(), 3));
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.OutputHost.Should().BeNull(); // последним писал «ai»
+        s.OutputHost.Should().Be("worker"); // в B последним писал наш — вывод идёт здесь
+        s.Level.Should().Be("ok");
+    }
+
+    // Проба ревьюера (B), обратный случай: во всех читаемых папках последний писавший чужой —
+    // тревога настоящая, даже когда счётчики папок далеко не равны.
+    [Fact]
+    public void ВоВсехПапкахПоследнийПисавшийЧужой_ПризнакНеТаМашина()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outA = Path.Combine(root, "out", "A");
+        var outB = Path.Combine(root, "out", "B");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(
+            ("Video-A", watch, outA),
+            ("Video-B", watch, outB)));
+        WriteOutputHostMarker(outA, ("ai", now.Subtract(TimeSpan.FromDays(2)).ToUnixTimeSeconds(), 5));
+        WriteOutputHostMarker(outB, ("ai", now.Subtract(TimeSpan.FromMinutes(5)).ToUnixTimeSeconds(), 7));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().BeNull(); // «не та машина»: в каждой папке последним писал «ai»
         s.Level.Should().Be("warn");
+    }
+
+    // Строки разных папок не влияют друг на друга: в A порядок задаёт её собственный счётчик
+    // (наша строка seq=2 старше чужой seq=1, хоть чужая и «новее по часам»), и высокий seq=9
+    // из B его не перечёркивает; в B последним писал чужой — одной папки с нашим писавшим
+    // достаточно, чтобы тревоги нет.
+    [Fact]
+    public void СтрокиРазныхПапокНеВлияютДругНаДруга_СудимПоКаждомуФайлу()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outA = Path.Combine(root, "out", "A");
+        var outB = Path.Combine(root, "out", "B");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(
+            ("Video-A", watch, outA),
+            ("Video-B", watch, outB)));
+        WriteOutputHostMarker(outA,
+            ("ai", now.Subtract(TimeSpan.FromMinutes(10)).ToUnixTimeSeconds(), 1),
+            ("worker", now.Subtract(TimeSpan.FromHours(3)).ToUnixTimeSeconds(), 2));
+        WriteOutputHostMarker(outB, ("ai", now.Subtract(TimeSpan.FromMinutes(5)).ToUnixTimeSeconds(), 9));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().Be("worker");
+        s.Level.Should().Be("ok");
+    }
+
+    // Если маркер есть только в одной папке — судим по ней: чужой узел в единственном
+    // читаемом маркере — настоящая тревога, «не читаемых» папок в оценке нет.
+    [Fact]
+    public void МаркерТолькоВОднойПапке_СудимПоНей()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outA = Path.Combine(root, "out", "A"); // маркера нет — этой папки нет в оценке
+        var outB = Path.Combine(root, "out", "B");
+        Directory.CreateDirectory(watch);
+        Directory.CreateDirectory(outA);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(
+            ("Video-A", watch, outA),
+            ("Video-B", watch, outB)));
+        WriteOutputHostMarker(outB, ("ai", now.Subtract(TimeSpan.FromMinutes(5)).ToUnixTimeSeconds(), 2));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().BeNull();
+        s.Level.Should().Be("warn");
+    }
+
+    // Имя в маркере пишет конвейер: TRANSCRIPTION_NODE или hostname (lib_journal.node_name) —
+    // он может быть в другом регистре («Worker»), ключ реестра — строчный («worker»).
+    // Сравнение регистронезависимое: иначе настоящий свой узел дал бы вечное «не та машина»
+    // без диагностики. Мутация «Ordinal вместо OrdinalIgnoreCase» краснит этот тест.
+    [Fact]
+    public void ИмяУзлаВМаркереВДругомРегистре_ЭтоСвойУзелТревогиНет()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outDir = Path.Combine(root, "out");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
+        WriteOutputHostMarker(outDir,
+            ("Worker", now.Subtract(TimeSpan.FromMinutes(5)).ToUnixTimeSeconds(), 4),
+            ("ai", now.Subtract(TimeSpan.FromHours(1)).ToUnixTimeSeconds(), 3));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().Be("worker");
+        s.Level.Should().Be("ok");
+    }
+
+    // Разбор строки сверен с живым lib_journal.mark_output_host (2026.11): файл = заголовок +
+    // строки «узел\tunix\tвремя\tseq» на узел; конвейер хранит и строки без seq (len≥2, это
+    // история чужих узлов, не вердикт). Ни битая строка, ни строка без seq, ни пустое имя, ни
+    // лишним табом отмеченная — не «чужой узел»: их вердикта нет, остаётся сверка по журналу.
+    // Фикстура без журнала → «не проверялось» (OutputHost=свой, уровня нет) во всех вариантах.
+    [Theory]
+    [InlineData("worker\t1794997217\t2026-11-18 12:00:17")] // строка без seq: конвейер её хранит, вердикта нет
+    [InlineData("1794997217\t2026-11-18 12:00:17")] // нет имени и seq
+    [InlineData("\t1794997217\t2026-11-18 12:00:17\t9")] // пустое имя — не узел
+    [InlineData("worker\t1794997217\t2026-11-18 12:00:17\tabc")] // seq не число
+    [InlineData("worker\t1794997217\t2026-11-18 12:00:17\t4\t")] // хвостовой таб: для конвейера строка целая (её seq считается) — и для читателя
+    public void БитыеСтрокиМаркераНеСудятсяКакЧужойУзел(string markerBody)
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outDir = Path.Combine(root, "out");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
+        Write(root, Path.Combine("out", TranscriptionStateReader.OutputHostName), markerBody);
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().Be("worker"); // ни одна битая строка не «чужой узел»
+        s.Level.Should().Be("ok");
+    }
+
+    // Локальный узел неизвестен (в реестре только agent-узлы, local-ного нет): сравнивать
+    // маркер не с кем. Пара (OutputHost=null + известный OutputDir) — ровно фронтовый признак
+    // «не та машина», а назвать «свой» узел нечем: пару не отдаём — строка «Пишет в»
+    // не проверялась. Мутация «убрать ветку localNode=null» краснит этот тест.
+    [Fact]
+    public void ЛокальныйУзелНеИзвестен_МаркерНеСудитсяЛожнойТревогиНет()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outDir = Path.Combine(root, "out");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
+        WriteOutputHostMarker(outDir, ("ai", now.Subtract(TimeSpan.FromMinutes(5)).ToUnixTimeSeconds(), 4));
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["HardwareNodes:0:Key"] = "remote",
+            ["HardwareNodes:0:Source"] = "http://192.0.2.10:8080",
+        }).Build();
+        var reader = new TranscriptionStateReader(
+            new Opts(new TranscriptionOptions { PipelineRoot = root }), config, new FixedTime(now), _ => true);
+
+        var s = reader.Read();
+
+        s.Host.Should().BeNull(); // local-узла в реестре нет — имени «своего» узла нет
+        s.OutputHost.Should().BeNull();
+        s.OutputDir.Should().BeNull(); // пару «не та машина» не отдаём: строка не проверялась
+        s.Level.Should().NotBe("warn"); // и ложной тревоги нет
     }
 
     // dify[] и checkedAt — из файла самого конвейера (dify_state.json, М2): времена unix-СЕКУНД →

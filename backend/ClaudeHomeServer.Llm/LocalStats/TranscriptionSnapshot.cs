@@ -28,7 +28,9 @@ public sealed record TranscriptionSnapshot
     public bool Alive { get; init; }
     // «Пишет в»: ключ узла каталога вывода; null — не этот узел или не проверялось.
     public string? OutputHost { get; init; }
-    // Общий каталог выходов папок (config.yaml folders[].output).
+    // Общий каталог выходов папок (config.yaml folders[].output). null — и когда локальный узел
+    // неизвестен: пара (OutputHost=null + известный OutputDir) — фронтовый признак «не та
+    // машина», а «не проверялось» в этой паре выразить нечем — строка не отдаётся вовсе.
     public string? OutputDir { get; init; }
 
     // Точка вкладки: "ok" | "warn" | "danger". Красная: «Завис?», «Остановлен» или сбой

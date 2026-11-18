@@ -31,6 +31,7 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { Menu, MenuItem } from '../../components/ui/Menu';
 import { Modal } from '../../components/ui/Modal';
 import { Notice } from '../../components/ui/Notice';
+import { SidebarSection } from '../../components/ui/SidebarSection';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { PillSwitch } from '../../components/Toolbar';
 import { setPersonasChildMode } from '../../lib/personas';
@@ -143,11 +144,12 @@ function LessonRow({ chat, subjectLabel, active, onOpen }: { chat: ChildChatList
     >
       {chat.name || 'Новый урок'}
       {/* строка предмета (макет .lrow .p): рисуется только label, репетитор в строке списка
-          не показывается; closed — метка «закрыт». Метки предмета нет (закрытый/до-предметный
-          чат) — строки нет вовсе: выдумывать нечем */}
+          не показывается. Метки «закрыт» здесь больше нет: закрытые чаты живут в группе
+          «Старые уроки» (Д2) и её заголовок говорит то же самое. Метки предмета нет
+          (закрытый/до-предметный чат) — строки нет вовсе: выдумывать нечем */}
       {subjectLabel && (
         <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted }}>
-          {subjectLabel}{chat.subjectClosed ? ' · закрыт' : ''}
+          {subjectLabel}
         </span>
       )}
     </button>
@@ -219,6 +221,13 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
   const activeChat = sessionId ? chats.find(c => c.sessionId === sessionId) : undefined;
   const activeSubject = subjectViewOf(activeChat ? activeChat.subject : subjectId);
   const subjectClosed = !!activeChat && activeChat.subjectClosed;
+
+  // Д2 (решение Андрея по дефекту QA-1): чаты закрытого предмета — не в общем списке уроков,
+  // а в группе «Старые уроки» ниже обычных, свёрнутой по умолчанию. Порядок внутри групп —
+  // порядок сервера (filter его не меняет); сам список, его открытие и режим «только
+  // чтение» не меняются: меняется только то, где строка лежит и чем группа подписана.
+  const openChats = chats.filter(c => !c.subjectClosed);
+  const closedChats = chats.filter(c => c.subjectClosed);
 
   async function startLesson(subject: string) {
     if (starting) return; // двойной клик: второй игнорируется, пока первый в полёте
@@ -402,7 +411,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
             <IslandHeader title={activeSubject?.label ?? 'Уроки'} />
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: SP.sm }}>
               {chats.length === 0 && <div style={{ padding: SP.md, color: C.textMuted, fontSize: FS.sm }}>Уроков пока нет.</div>}
-              {chats.map(c => (
+              {openChats.map(c => (
                 <LessonRow
                   key={c.sessionId}
                   chat={c}
@@ -411,6 +420,22 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
                   onOpen={() => openLesson(c.sessionId)}
                 />
               ))}
+              {/* «Старые уроки · N» — та же сворачиваемая секция сайдбара, что в других
+                  панелях (SidebarSection): строка-кнопка с заголовком и счётчиком,
+                  свёрнута по умолчанию. Нет закрытых чатов — нет раздела. */}
+              {closedChats.length > 0 && (
+                <SidebarSection title="Старые уроки" count={closedChats.length} defaultOpen={false}>
+                  {closedChats.map(c => (
+                    <LessonRow
+                      key={c.sessionId}
+                      chat={c}
+                      subjectLabel={subjectViewOf(c.subject)?.label ?? null}
+                      active={c.sessionId === sessionId}
+                      onOpen={() => openLesson(c.sessionId)}
+                    />
+                  ))}
+                </SidebarSection>
+              )}
             </div>
             {activeSubject && (
               <div style={{ padding: SP.sm }}>

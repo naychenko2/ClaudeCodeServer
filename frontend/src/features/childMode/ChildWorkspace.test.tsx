@@ -86,6 +86,8 @@ async function mount() {
   return root;
 }
 const click = async (el: Element) => { await act(async () => { el.dispatchEvent(new win.Event('click', { bubbles: true })); }); await act(async () => {}); };
+// Строка-заголовок группы «Старые уроки» (Д2): кнопка SidebarSection с aria-expanded и счётчиком
+const oldLessonsToggle = () => Array.from(doc.querySelectorAll('button')).find(b => /Старые уроки/.test(b.textContent ?? ''));
 
 // Ответы сервера — в форме ручек: список чатов с subject/subjectClosed/voiceMode (Т3c),
 // предметы — только включённые, в порядке профиля (И5)
@@ -199,9 +201,11 @@ describe('ChildWorkspace', () => {
     ] });
     h.api.getSubjects.mockResolvedValue([{ id: 'math', label: 'Математика', glyph: '×÷', color: 'info', tutor: null }]);
     await mount();
-    // closed-чат достижим через сайдбар предмета: он открывается с выбранным предметом
+    // closed-чат — в группе «Старые уроки» (Д2): сайдбар открывается с выбранным предметом,
+    // группа раскрывается по своей строке — только тогда её строки доступны для клика
     const tile = Array.from(doc.querySelectorAll('button')).find(b => b.textContent?.includes('Математика'))!;
     await click(tile);
+    await click(oldLessonsToggle()!);
     const row = Array.from(doc.querySelectorAll('button')).find(b => /Пирамиды/.test(b.textContent ?? ''))!;
     await click(row);
     expect(h.mounts).toEqual(['s1:false:-:true']);
@@ -209,6 +213,46 @@ describe('ChildWorkspace', () => {
     expect(doc.querySelector('[data-canvas]')!.getAttribute('data-canvas')).toBe('neutral');
     // «Новый урок» в сайдбаре — только для живого предмета
     expect(Array.from(doc.querySelectorAll('button')).some(b => b.textContent === 'Новый урок')).toBe(false);
+  });
+
+  it('закрытые чаты — в свёрнутой группе «Старые уроки» ниже обычных; пометки «закрыт» в строках нет', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: [
+      { sessionId: 's1', name: 'Дроби', updatedAt: '2026-11-17T10:00:00Z', subject: 'russian', subjectClosed: false, voiceMode: false },
+      { sessionId: 's2', name: 'Старый урок', updatedAt: '2026-11-16T10:00:00Z', subject: 'history', subjectClosed: true, voiceMode: false },
+      { sessionId: 's3', name: 'Таблицы', updatedAt: '2026-11-15T10:00:00Z', subject: null, subjectClosed: true, voiceMode: false },
+    ] });
+    await mount();
+    const tile = Array.from(doc.querySelectorAll('button')).find(b => b.textContent?.includes('Математика'))!;
+    await click(tile);
+
+    const toggle = oldLessonsToggle();
+    expect(toggle, 'группа «Старые уроки» есть').toBeTruthy();
+    expect(toggle!.getAttribute('aria-expanded'), 'свёрнута по умолчанию').toBe('false');
+    // заголовок группы — с числом закрытых чатов
+    expect(toggle!.textContent).toContain('Старые уроки');
+    expect(toggle!.textContent).toContain('2');
+
+    // группа идёт ниже обычных строк; в самих строках пометки «закрыт» нет — её говорит заголовок
+    const btns = Array.from(doc.querySelectorAll('button'));
+    const live = btns.findIndex(b => b.textContent?.startsWith('Дроби'));
+    expect(live, 'обычный урок остался в общем списке').toBeGreaterThanOrEqual(0);
+    expect(btns.indexOf(toggle!), 'группа ниже обычных строк').toBeGreaterThan(live);
+    expect(doc.body.textContent).not.toContain('закрыт');
+
+    // раскрытие по клику; чат группы открывается как раньше — без предмета, subjectClosed=true
+    await click(toggle!);
+    expect(toggle!.getAttribute('aria-expanded')).toBe('true');
+    const row = Array.from(doc.querySelectorAll('button')).find(b => b.textContent === 'Старый урок')!;
+    await click(row);
+    expect(h.mounts).toEqual(['s2:false:-:true']);
+  });
+
+  it('нет закрытых чатов — группы «Старые уроки» нет', async () => {
+    await mount();
+    const tile = Array.from(doc.querySelectorAll('button')).find(b => b.textContent?.includes('Математика'))!;
+    await click(tile);
+    expect(oldLessonsToggle(), 'раздела нет').toBeUndefined();
+    expect(doc.body.textContent).not.toContain('Старые уроки');
   });
 
   it('новый урок шлёт {subject} на сервер', async () => {

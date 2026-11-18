@@ -25,7 +25,7 @@ public sealed class LocalOcrService(
     ILocalEndpointProbe probe,
     IHttpClientFactory httpFactory,
     IOptionsMonitor<LlmGatewayOptions> options,
-    ILogger<LocalOcrService> log)
+    ILogger<LocalOcrService> log) : ILocalPageOcr
 {
     // Единственный источник адреса и id модели: локальная vision-модель.
     public const string ProviderKey = "local-qwen";

@@ -486,6 +486,9 @@ public sealed class LlmSubsystem : IAppSubsystem
         // Именованный HttpClient без таймаута: таймаут страницы держит сам сервис (CTS под PageTimeoutSec).
         services.AddHttpClient(Gateway.LocalOcrService.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);
         services.AddSingleton<Gateway.LocalOcrService>();
+        // Шов для стора материалов (КИ1a): интерфейс указывает на ТОТ ЖЕ экземпляр —
+        // форвардер, не второй синглтон (семафор сервиса = один слот GPU на экземпляр).
+        services.AddSingleton<Gateway.ILocalPageOcr>(sp => sp.GetRequiredService<Gateway.LocalOcrService>());
 
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические
         // парсеры транскриптов; DI не нужны (логгеры и разрешённые корни ставит

@@ -123,9 +123,12 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
           ? { ...prev, [userId]: { status: 'loaded', profile: res.profile ?? null, tutorPersonaId: res.tutorPersonaId ?? '' } }
           : prev
       )))
-      .catch(() => setProfileStates(prev => (
+      // Текст отказа — серверный (body.message, тот же путь, что у loadErrorText в
+      // ChildProfileEditor.tsx:139): Notice уже говорит «Профиль ребёнка не загрузился»,
+      // выдуманное тело эту строку дублировала бы (хвост 69c3ee96). Серверного текста нет — пустое.
+      .catch((e) => setProfileStates(prev => (
         prev[userId]?.status === 'loading'
-          ? { ...prev, [userId]: { status: 'error', text: 'Не удалось загрузить профиль ребёнка.' } }
+          ? { ...prev, [userId]: { status: 'error', text: (e as { body?: { message?: string } } | null)?.body?.message ?? '' } }
           : prev
       )));
   };
@@ -138,9 +141,14 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
     if (user.executionEnvironment !== 'container') return null;
     const open = childOpen[user.id] === true;
     const st = profileStates[user.id];
-    // Строка статуса — по загруженному профилю: «включён» утверждается только снимком;
-    // до него и при отказе — «выключен» (профиля мы не знаем, утверждать обратное нечем).
+    // Строка статуса — три состояния (решение Софьи, хвост 69c3ee96): «включён»/«выключен»
+    // утверждает только снимок; без снимка (ещё не запрашивался или в пути) — нейтральное
+    // «…»: для реального ребёнка «выключен» до ответа GET было бы ложью; при отказе —
+    // «не загрузилось» (причина и «Повторить» — в Notice после раскрытия).
     const enabled = st?.status === 'loaded' && st.profile?.enabled === true;
+    const statusLine = st?.status === 'loaded' ? `Детский режим: ${enabled ? 'включён' : 'выключен'}`
+      : st?.status === 'error' ? 'Детский режим: не загрузилось'
+      : 'Детский режим…';
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, ...(isMobile ? {} : { padding: '0 16px 12px' }) }}>
         <Button
@@ -158,7 +166,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
             if (willOpen && st?.status !== 'loading') loadProfile(user.id);
           }}
         >
-          Детский режим: {enabled ? 'включён' : 'выключен'}
+          {statusLine}
         </Button>
         {open && st?.status === 'loading' && (
           <div data-testid="child-profile-loading" style={{ padding: SP.md, color: C.textMuted, fontSize: FS.sm }}>
@@ -166,13 +174,13 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
           </div>
         )}
         {open && st?.status === 'error' && st && (
-          <Notice tone="danger" icon={AlertTriangle} title="Профиль ребёнка не загрузился" data-testid="child-profile-error">
-            {st.text}
-            <div style={{ marginTop: SP.sm }}>
-              <Button variant="secondary" size="md" dataTestId="child-profile-retry" onClick={() => loadProfile(user.id)}>
-                Повторить
-              </Button>
-            </div>
+          <Notice
+            tone="danger" icon={AlertTriangle} title="Профиль ребёнка не загрузился" data-testid="child-profile-error"
+            action={<Button variant="secondary" size="md" dataTestId="child-profile-retry" onClick={() => loadProfile(user.id)}>Повторить</Button>}
+          >
+            {/* тело — только серверный текст (после catch выше он server message или пусто):
+                заголовок Notice уже называет причину, повторять её нечем */}
+            {st.text || null}
           </Notice>
         )}
         {open && st?.status === 'loaded' && st && (

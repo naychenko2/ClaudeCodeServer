@@ -7,7 +7,8 @@
 // Мутации этого прогона (вывод — в отчёте задачи):
 // (1) снять флаг отмены в эффекте → KnowledgePicker_ListAfterUnmount_NoUpdate краснеет;
 // (2) не фильтровать список (показывать всё, что вернул сервер) → «ровно две attachable…» краснеет;
-// (3) значение вне списка рендерить обычным (не-disabled) пунктом → «База недоступна…» краснеет.
+// (3) значение вне списка рендерить обычным (не-disabled) пунктом → «База недоступна…» краснеет;
+// (4) не ставить id-пункт при отказе загрузки (К5d, ревью К5c) → «отказ загрузки + привязанная база…» краснеет.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, createElement, StrictMode } from 'react';
@@ -239,6 +240,22 @@ describe('ChildSubjectKnowledgePicker', () => {
     expect(n!.getAttribute('role')).toBe('status');
     // поле не погасло: «Без базы» можно выбрать и при отказе
     expect((select(m.host) as unknown as { disabled?: boolean }).disabled === true || select(m.host).getAttribute('disabled') !== null).toBe(false);
+    await changeSelect(select(m.host), '');
+    expect(changes).toEqual([null]);
+    await m.applyValue(null);
+    expect(selectedOption(select(m.host))?.value).toBe('');
+  });
+
+  it('отказ загрузки + привязанная база — поле показывает её id disabled-пунктом и может отвязать (ревью К5c)', async () => {
+    listAnswers.push(new Error('Dify недоступен'));
+    const m = await mount('ds-math');
+    const opts = options(select(m.host));
+    const cur = opts.find((o) => o.value === 'ds-math');
+    expect(cur, 'привязанная база видна в поле').not.toBeUndefined();
+    expect(cur!.text).toContain('ds-math'); // id: другого имени при отказе нет
+    expect(cur!.selected, 'поле показывает привязанное, а не «Без базы»').toBe(true);
+    expect(cur!.disabled, 'выбрать её повторно нельзя: списка нет').toBe(true);
+    // отвязать можно и без списка: «Без базы» остаётся selectable
     await changeSelect(select(m.host), '');
     expect(changes).toEqual([null]);
     await m.applyValue(null);

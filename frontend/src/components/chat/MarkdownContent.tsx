@@ -148,8 +148,11 @@ export function ChatImage({ src, alt }: { src?: string; alt?: string }) {
 
   const finalSrc = isRemote ? src : cached ?? (resolved?.key === cacheKey ? resolved.url : null);
 
-  // ref — на КАЖДУЮ ветку: пока картинки нет, в DOM только плейсхолдер, и без ref на нём
-  // IntersectionObserver ничего не наблюдает → inView вечно false → fetch не стартует никогда
+  // ref — на ветках, которые рисуют плейсхолдер или картинку (failed/загрузка/<a>): пока картинки
+  // нет, в DOM только плейсхолдер, и без ref на нём IntersectionObserver ничего не наблюдает →
+  // inView вечно false → fetch не стартует никогда. У blocked ref нет: та ветка рисует только
+  // alt-текст, а fetch внешних картинок в детской ленте всё равно не происходит (isRemote) —
+  // наблюдать там не за чем.
   // Blocked — первой веткой: при смене локальной картинки на внешнюю в детской ленте
   // старое состояние (failed/resolved) не должно показаться вместо alt-подписи.
   if (blocked) return alt ? <span>{alt}</span> : null;

@@ -114,6 +114,7 @@ describe('перерендер одного ChatImage (исправление Ru
   });
 
   it('смена провайдера false→true без ремоунта — без ошибки, картинка становится alt', () => {
+    installFakeDom(); // сам, а не побочным эффектом предыдущего теста: прогон по filter — один
     const adult = (feed: boolean) =>
       createElement(ChildFeedContext.Provider, { value: feed }, createElement(ChatImage, { src: 'https://e.com/a.png', alt: 'котик' }));
     const { root, container } = mount(adult(false));

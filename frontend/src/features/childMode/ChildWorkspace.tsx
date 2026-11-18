@@ -142,8 +142,9 @@ function LessonRow({ chat, subjectLabel, active, onOpen }: { chat: ChildChatList
       }}
     >
       {chat.name || 'Новый урок'}
-      {/* строка предмета (макет .lrow .p): label · репетитор; closed — метка «закрыт».
-          Метки предмета нет (закрытый/до-предметный чат) — строки нет вовсе: выдумывать нечем */}
+      {/* строка предмета (макет .lrow .p): рисуется только label, репетитор в строке списка
+          не показывается; closed — метка «закрыт». Метки предмета нет (закрытый/до-предметный
+          чат) — строки нет вовсе: выдумывать нечем */}
       {subjectLabel && (
         <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted }}>
           {subjectLabel}{chat.subjectClosed ? ' · закрыт' : ''}

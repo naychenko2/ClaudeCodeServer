@@ -66,8 +66,9 @@ const kb = (over: Partial<KnowledgeBaseSummary>): KnowledgeBaseSummary => ({
 
 // Состав по именам из постановки, в форме, которую отдаёт GET /api/knowledge (Classify):
 // «учебники» — общая; «admin:kb:мат» — своя самостоятельная; «admin:notes» — своя база заметок
-// (deletable=false); «persona:x» — внутренняя память (дефолт mock: не deletable); «bob:kb:y» —
-// чужая (бэк её в список не отдаёт вовсе; если бы просочилась — не deletable для текущего админа).
+// (deletable=false); «bob:kb:y» — чужая (бэк её в список не отдаёт вовсе; если бы просочилась —
+// не deletable для текущего админа). «persona:x» — бэк такую строку тоже не отдаёт (Classify →
+// null); мок проверяет, что пикер её не показывает.
 const listResponse = (): ListResp => ({
   configured: true,
   items: [

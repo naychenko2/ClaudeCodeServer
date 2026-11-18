@@ -187,11 +187,13 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
           <ChildProfileEditor
             user={{ id: user.id, username: user.username, childProfile: st.profile, tutorPersonaId: st.tutorPersonaId }}
             // Ответ сохранения — живой профиль сервера: им и обновляем состояние (строка статуса
-            // после сохранения обязана показать то, что сохранилось).
-            onSaved={(p) => setProfileStates(prev => {
+            // после сохранения обязана показать то, что сохранилось). Тьютора берём из второго
+            // аргумента onSaved — он из ответа PUT: провиж создаёт новый id, своя копия его
+            // не содержит (хвост 69c3ee96).
+            onSaved={(p, tutorPersonaId) => setProfileStates(prev => {
               const cur = prev[user.id];
               return cur?.status === 'loaded'
-                ? { ...prev, [user.id]: { status: 'loaded', profile: p, tutorPersonaId: cur.tutorPersonaId } }
+                ? { ...prev, [user.id]: { status: 'loaded', profile: p, tutorPersonaId } }
                 : prev;
             })}
           />

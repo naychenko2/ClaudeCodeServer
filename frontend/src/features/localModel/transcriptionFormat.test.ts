@@ -15,11 +15,14 @@
 //   краснеет тест «—»;
 // - «идёт» показывать числом меньше минуты («0 мин»/«0 с») — краснеет тест «меньше минуты»;
 // - падать на строке сбоя без имени файла (meetingName на null) — краснеет тест «сбой без
-//   имени файла»: строка обязана остаться, выдуманное имя вместо неё — вранье.
+//   имени файла»: строка обязана остаться, выдуманное имя вместо неё — вранье;
+// - длительности баннера и встреч не округлять до минут («23 мин 17 с», «47 мин 18 с») —
+//   краснеют тесты «23 мин» и «47.3 → 47 мин»; «Обновлено» разговорной формой («23 минуты
+//   назад») — краснеет тест «23 мин назад».
 
 import { describe, expect, it } from 'vitest';
 import {
-  agoText, durationWords, shortDuration, sinceWords, transTabView,
+  agoText, durationWords, minuteDuration, shortDuration, sinceWords, transTabView,
 } from './transcriptionFormat';
 import type { TranscriptionSnapshot } from './types';
 
@@ -152,7 +155,9 @@ describe('transTabView: «Ожидание» и пустое «Сейчас» (�
 });
 
 describe('transTabView: «Завис?» (макет stale)', () => {
-  const hung = snap({ level: 'danger', updatedAt: NOW - 23 * 60_000 });
+  // НЕкруглый возраст снимка (23 мин 17 с): форма баннера — целые минуты (proposal.md:28),
+  // секунды в ней — выдуманная точность
+  const hung = snap({ level: 'danger', updatedAt: NOW - 23 * 60_000 - 17_000 });
 
   it('баннер danger с текстом по proposal; плашка «Завис?»', () => {
     const v = transTabView(hung, NOW);
@@ -163,9 +168,9 @@ describe('transTabView: «Завис?» (макет stale)', () => {
     expect(v.pipeline.badge).toEqual({ tone: 'danger', label: 'Завис?' });
   });
 
-  it('гашение включено: «Обновлено 23 минут назад» краснеет', () => {
+  it('гашение включено: «Обновлено 23 мин назад» краснеет', () => {
     const p = transTabView(hung, NOW).pipeline;
-    expect(p.updatedText).toBe('23 минуты назад');
+    expect(p.updatedText).toBe('23 мин назад');
     expect(p.updatedAlarm).toBe(true);
     expect(transTabView(hung, NOW).stale).toBe(true);
   });
@@ -235,7 +240,7 @@ describe('transTabView: расхождения (макет fail)', () => {
     expect(v.banner).not.toBeNull();
     expect(v.banner!.title).toBe('4 встречи не попали в Dify');
     expect(v.banner!.body).toContain('Video-SIAM: локально 41, в Dify 37');
-    expect(v.banner!.body).toContain('Конвейер пишет не на этом узле, а «Встречи» читают с worker.');
+    expect(v.banner!.body).toContain('Конвейер пишет не на узле «worker» («Встречи» читают с него).');
     expect(v.pipeline.writesWarn).toBe(true);
     expect(v.pipeline.writesText).toBe('/srv/meetings/Встречи — не та машина');
   });
@@ -272,14 +277,21 @@ describe('transTabView: расхождения (макет fail)', () => {
 });
 
 describe('форматтеры времени', () => {
-  it('agoText: «только что» / «N с» / «N минут назад» / «4 ч 31 мин назад»', () => {
+  it('agoText: «только что» / «N с» / «N мин назад» (макет age) / «4 ч 31 мин назад»', () => {
     expect(agoText(NOW - 1_000, NOW)).toBe('только что');
     expect(agoText(NOW - 8_000, NOW)).toBe('8 с назад');
-    expect(agoText(NOW - 61_000, NOW)).toBe('1 минуту назад');
-    expect(agoText(NOW - 23 * 60_000, NOW)).toBe('23 минуты назад');
+    expect(agoText(NOW - 61_000, NOW)).toBe('1 мин назад');
+    expect(agoText(NOW - 23 * 60_000 - 17_000, NOW)).toBe('23 мин назад');
     expect(agoText(NOW - 2 * 3_600_000, NOW)).toBe('2 часа назад');
     expect(agoText(NOW - (4 * 60 + 31) * 60_000, NOW)).toBe('4 ч 31 мин назад');
     expect(agoText(NOW + 5_000, NOW)).toBe('только что'); // часы вразнобой — не «-5 с назад»
+  });
+
+  it('minuteDuration: целыми минутами — «23 мин» из 23 мин 17 с, «47 мин» из 47.3, «1 ч 5 мин», «2 ч»', () => {
+    expect(minuteDuration(23 + 17 / 60)).toBe('23 мин');
+    expect(minuteDuration(47.3)).toBe('47 мин');
+    expect(minuteDuration(65)).toBe('1 ч 5 мин');
+    expect(minuteDuration(120)).toBe('2 ч');
   });
 
   it('shortDuration: «меньше минуты» / «1 мин» / «3 мин 12 с» / «26 мин» / «1 ч 5 мин» / «2 ч»', () => {
@@ -306,7 +318,8 @@ describe('форматтеры времени', () => {
 
 describe('transTabView: низ вкладки (Ф4): сбои, встречи, сверка, зависимости', () => {
   const FAIL = { at: NOW - 4_000_000, folder: 'Video-RR', file: '2026-11-18 Интервью кандидата.mp4', minutes: 41, comment: 'fail: ComfyUI не ответил за 600 с (узел CcsAudioWorker)' };
-  const MEET = { at: NOW - 3_600_000, folder: 'Video-GPB', file: '2026-11-18 планёрка.md', minutes: 47, speakers: 4, comment: 'asr 2.7м + саммари 1.2м (локально)', mdPath: '/srv/meetings/planerka.md' };
+  // дробные минуты (47.3), как их несёт журнал: длина строки — целые минуты («47 мин»)
+  const MEET = { at: NOW - 3_600_000, folder: 'Video-GPB', file: '2026-11-18 планёрка.md', minutes: 47.3, speakers: 4, comment: 'asr 2.7м + саммари 1.2м (локально)', mdPath: '/srv/meetings/planerka.md' };
 
   it('сбой: id = folder/file, имя без расширения, строка не открывается, комментарий и длина — как в журнале', () => {
     const v = transTabView(snap({ fails: [FAIL] }), NOW);
@@ -379,8 +392,8 @@ describe('transTabView: низ вкладки (Ф4): сбои, встречи, �
     expect(transTabView(snap({ dify: [{ folder: 'Video-SIAM', local: 41, inDify: null }] }), NOW).difyRows).toEqual([]);
   });
 
-  it('checkedAt — «12 минут назад»; поля нет — строки свежести нет', () => {
-    expect(transTabView(snap({ checkedAt: NOW - 12 * 60_000 }), NOW).difyAgeText).toBe('12 минут назад');
+  it('checkedAt — «12 мин назад»; поля нет — строки свежести нет', () => {
+    expect(transTabView(snap({ checkedAt: NOW - 12 * 60_000 }), NOW).difyAgeText).toBe('12 мин назад');
     expect(transTabView(snap({ checkedAt: null }), NOW).difyAgeText).toBeNull();
   });
 

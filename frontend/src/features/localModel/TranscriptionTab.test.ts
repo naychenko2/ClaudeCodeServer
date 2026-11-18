@@ -180,7 +180,7 @@ describe('TranscriptionTab: «Завис?» (level danger при живом пр
 
   it('карточка конвейера НЕ гасится: «Обновлено» краснеет, «Где работает» остаётся обычным', () => {
     const m = mountTab(hung());
-    expect(styleOfText(m.container, '23 минуты назад')?.color).toBe('var(--c-danger-text)');
+    expect(styleOfText(m.container, '23 мин назад')?.color).toBe('var(--c-danger-text)');
     expect(styleOfText(m.container, 'worker')?.color).toBe('var(--c-text-primary)');
   });
 });
@@ -196,7 +196,7 @@ describe('TranscriptionTab: «Пишет в» не туда (18.11: чужой �
   it('дефицит Dify и чужой узел — баннер И жёлтая строка «Пишет в», а не вместо неё', () => {
     const h = staticHtml(foreign());
     expect(h).toContain('4 встречи не попали в Dify');
-    expect(h).toContain('Конвейер пишет не на этом узле, а «Встречи» читают с worker.');
+    expect(h).toContain('Конвейер пишет не на узле «worker» («Встречи» читают с него).');
     expect(h).toContain('/srv/meetings/Встречи — не та машина');
     const m = mountTab(foreign());
     expect(styleOfText(m.container, '/srv/meetings/Встречи — не та машина')?.color).toBe('var(--c-warning-text)');
@@ -348,12 +348,12 @@ describe('TranscriptionTab: «Сверка с Dify» (Ф4)', () => {
     { folder: 'Video-RR', local: 77, inDify: 77 },
   ];
 
-  it('три папки без «Video-», «Локально / В Dify», «сходится» и «не хватает 4», свежесть «12 минут назад · раз в 30 мин»', () => {
+  it('три папки без «Video-», «Локально / В Dify», «сходится» и «не хватает 4», свежесть «12 мин назад · раз в 30 мин»', () => {
     const h = staticHtml(snap({ dify: DIFY, checkedAt: NOW - 12 * 60_000 }));
     expect(h).toContain('Сверка с Dify');
     expect(h).toContain('Локально');
     expect(h).toContain('В Dify');
-    expect(h).toContain('12 минут назад · раз в 30 мин');
+    expect(h).toContain('12 мин назад · раз в 30 мин');
     expect(h).toContain('>SIAM<'); // общий префикс «Video-» из таблицы убран
     expect(h).not.toContain('Video-SIAM');
     expect(h).toContain('сходится');

@@ -32,15 +32,16 @@ export function durationWords(mins: number): string {
   return m ? `${hs} ${m} ${plural(m, 'минуту', 'минуты', 'минут')}` : hs;
 }
 
-// «8 с назад», «23 мин назад», «4 ч 31 мин назад» (макет: age). Отрицательная разница
-// (часовые пояса) — «только что», без «-3 с назад».
+// «8 с назад», «23 мин назад», «4 ч 31 мин назад» (макет: age): минуты — короткой формой
+// «мин», как в макете, а не разговорной «23 минуты». Отрицательная разница (часовые пояса)
+// — «только что», без «-3 с назад».
 export function agoText(fromMs: number, nowMs: number): string {
   const d = nowMs - fromMs;
   if (d < 5_000) return 'только что';
   const s = Math.floor(d / 1000);
   if (s < 60) return `${s} с назад`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} ${plural(m, 'минуту', 'минуты', 'минут')} назад`;
+  if (m < 60) return `${m} мин назад`;
   const h = Math.floor(m / 60);
   const rm = m % 60;
   const hs = `${h} ${plural(h, 'час', 'часа', 'часов')} назад`;
@@ -59,17 +60,28 @@ export function sinceWords(fromMs: number, nowMs: number): string {
   return rm ? `${h} ч ${rm} мин` : durationWords(h * 60);
 }
 
-// «меньше минуты», «3 мин 12 с», «26 мин», «1 ч 5 мин» — короткая форма длительности для
-// «идёт», «не отчитывался …» и длины встречи: по макету и proposal.md («Конвейер не
-// отчитывался 23 мин»), а не разговорная «23 минуты» (она — у «N минут назад» в agoText).
-// Меньше минуты — отдельная форма: «0 мин» читается как «только что началось», «0 с» — как
-// выдуманная точность
+// «меньше минуты», «3 мин 12 с», «26 мин», «1 ч 5 мин» — короткая форма длительности с
+// секундами: только для «идёт» (там есть точная отметка начала этапа). Для баннера и длины
+// встречи — целые минуты (minuteDuration): секундов нет в форме макета. Меньше минуты —
+// отдельная форма: «0 мин» читается как «только что началось», «0 с» — как выдуманная точность
 export function shortDuration(dMs: number): string {
   if (dMs < MINUTE) return 'меньше минуты';
   const total = Math.round(dMs / 1000);
   const m = Math.floor(total / 60);
   const s = total % 60;
   if (m < 60) return s ? `${m} мин ${s} с` : `${m} мин`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h} ч ${r} мин` : `${h} ч`;
+}
+
+// «23 мин», «1 ч 5 мин» — длительность целыми минутами (баннер «не отчитывался …», длина
+// встречи): величина округляется до минут — форма макета и proposal.md:28 («23 мин», «47 мин»
+// в .mt .sub), «23 мин 17 с» там не было и выдуманная точность не нужна. Секунды — только
+// в «идёт» (shortDuration): там известна точная отметка начала этапа
+export function minuteDuration(mins: number): string {
+  const m = Math.max(0, Math.round(mins));
+  if (m < 60) return `${m} мин`;
   const h = Math.floor(m / 60);
   const r = m % 60;
   return r ? `${h} ч ${r} мин` : `${h} ч`;
@@ -236,8 +248,9 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
     } else if (hung && typeof s.updatedAt === 'number') {
       banner = {
         tone: 'danger',
-        // форма макета и proposal.md:28 — «23 мин», а не разговорная «23 минуты»
-        title: `Конвейер не отчитывался ${shortDuration(nowMs - s.updatedAt)}`,
+        // форма макета и proposal.md:28 — «23 мин»: целыми минутами (minuteDuration),
+        // а не «23 мин 17 с» из сырого возраста снимка и не разговорная «23 минуты»
+        title: `Конвейер не отчитывался ${minuteDuration((nowMs - s.updatedAt) / MINUTE)}`,
         body: 'state.json обновляется каждые ~10 с. Похоже, процесс завис на файле ниже — загляните в журнал сервиса.',
       };
     }
@@ -247,10 +260,11 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
       const total = rows.reduce((a, r) => a + r.local - r.inDify, 0);
       // Пояснение случая 18.11 (макет v1.html:234): «Конвейер пишет на ai, а „Встречи“
       // читают с worker». Имени чужого узла в плоском контракте нет — OutputHost=null
-      // значит лишь «не этот узел» (TranscriptionStateReader.cs:91-97), поэтому узел в
-      // строке — тот, что читает («Где работает»), а чужой не назван
+      // значит лишь «не этот узел» (TranscriptionStateReader.cs:91-97). Известный факт
+      // формулируется на названном узле (host): «пишет не на „worker“» — «не на этом
+      // узле» неоднозначно (браузер может быть на другой машине), чужой узел не назван
       const why = writesWarn && typeof s.host === 'string' && s.host.length > 0
-        ? ` Конвейер пишет не на этом узле, а «Встречи» читают с ${s.host}.`
+        ? ` Конвейер пишет не на узле «${s.host}» («Встречи» читают с него).`
         : '';
       banner = {
         tone: 'warning',
@@ -300,11 +314,11 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
       label,
       state: i < idx ? ('done' as const) : i === idx ? ('cur' as const) : ('todo' as const),
     }));
-    // «идёт» — с отметки этапа в state.json. Бэк ставит её как запись снимка, открывшего
-    // этап (TranscriptionStateReader.cs:249-251), а конвейер перечисляет снимок каждые
-    // ~10 с, поэтому elapsed меньше минуты — честная форма «меньше минуты», а не «0 мин»
-    // и не выдуманная длительность. durationMin (тот же отрезок, в минутах) в строке не
-    // участвует. Точное начало этапа — вопрос к бэку, он в хвосте фичи.
+    // «идёт» — с отметки начала этапа: бэкенд берёт её из своего поля конвейера
+    // stage_started_at (unix-сек → мс, TranscriptionStateReader.cs:179,253-254 — доработка
+    // Б1 3453297a3), а не из записи снимка. Только начавшийся этап действительно младше
+    // минуты — честная форма «меньше минуты», а не «0 мин» и не выдуманная длительность.
+    // durationMin — другое время (возраст последней правки снимка), в строке не участвует.
     const runningText = typeof s.stageStartedAt === 'number' ? shortDuration(nowMs - s.stageStartedAt) : null;
     // «запись» — длина самой записи (макет v1.html:272 «запись 52 мин»). Реальной длины в
     // плоском контракте нет: durationMin = (now − updatedAt state.json) — время последней
@@ -345,7 +359,9 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
     file: r.file,
     folder: r.folder ?? null,
     timeText: meetingTimeText(r.at, nowMs),
-    lengthText: typeof r.minutes === 'number' ? shortDuration(r.minutes * MINUTE) : null,
+    // длина — целыми минутами (47.3 → «47 мин», форма макета .mt .sub): журнал несёт
+    // дробные минуты, секунд в них нет
+    lengthText: typeof r.minutes === 'number' ? minuteDuration(r.minutes) : null,
     speakersText: null,
     comment: null,
     openable,

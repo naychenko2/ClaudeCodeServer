@@ -499,13 +499,17 @@ export interface TranscriptionSnapshot {
   phase: TranscriptionPhase;
   // unix-мс последней записи state.json («Обновлено N назад», порог «Завис?»)
   updatedAt: number;
-  // узел, где работает конвейер, и pid процесса; null — сервис остановлен
+  // «Где работает»: узел, где читается снимок — узел CCS (файлы конвейера читаются
+  // локально, TranscriptionStateReader.cs:78,520-522); null — локальный узел не настроен.
+  // pid процесса из снимка; null — снимок его не несёт
   host?: string | null;
   pid?: number | null;
   // жив ли процесс (systemctl is-active)
   alive?: boolean;
   // «Пишет в»: узел и каталог вывода — прямой ответ на 18.11 (конвейер писал на ai,
-  // «Встречи» читали с worker). Расхождение «не туда» считает бэкенд (level).
+  // «Встречи» читали с worker). Жёлтую строку «не туда» фронт считает по прямым полям:
+  // outputHost=null при известном outputDir (transcriptionFormat.ts, writesWarn); бэкенд
+  // своим outputLevel складывает это в level — для точки вкладки (TranscriptionStateReader.cs:90-103,127)
   outputHost?: string | null;
   outputDir?: string | null;
   // уровень тревоги — только показываем, сами не выводим (см. TranscriptionLevel)

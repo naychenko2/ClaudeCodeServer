@@ -391,3 +391,77 @@ describe('childApi.tutorAvatar.* — /api/users/{id}/child-tutors/{personaId}/av
     expect(e.body?.code).toBe('image_generation_off');
   });
 });
+
+describe('childApi.materials — /api/users/{id}/child-subjects/{subjectId}/materials (К5a)', () => {
+  const base = '/users/u%201/child-subjects/l%20it/materials';
+  const file = () => new File(['данные файла'], 'уравнения.pdf', { type: 'application/pdf' });
+
+  // Таблица ручек (разрез §2): метод и URL каждого вызова, id экранированы.
+  const table = [
+    { name: 'list', method: 'GET', url: base, call: () => childApi.materials.list('u 1', 'l it') },
+    { name: 'upload', method: 'POST', url: base, call: () => childApi.materials.upload('u 1', 'l it', file()) },
+    { name: 'remove', method: 'DELETE', url: `${base}/m_1`, call: () => childApi.materials.remove('u 1', 'l it', 'm_1') },
+  ];
+  it.each(table)('$name: $method в свой URL', async (t) => {
+    await t.call();
+    const { url, opts } = await lastCall();
+    expect(url).toBe(t.url);
+    expect((opts.method ?? 'GET').toUpperCase()).toBe(t.method);
+  });
+
+  it('list: массив строк проходит как пришёл (обёртки нет), содержимого и preview в строке нет', async () => {
+    const rows = [
+      { id: 'm_1', name: 'уравнения.pdf', kind: 'pdf', bytes: 20480, uploadedAt: '2026-11-18T10:00:00Z' },
+      { id: 'm_2', name: 'страница.png', kind: 'image', bytes: 1024, uploadedAt: '2026-11-18T10:05:00Z' },
+    ];
+    const r = await req();
+    r.mockResolvedValueOnce(rows);
+    const got = await childApi.materials.list('u1', 'lit');
+    expect(got).toEqual(rows);
+  });
+
+  it('upload: multipart поле file (имя файла сохраняется), ответ — строка + preview', async () => {
+    const uploaded = {
+      id: 'm_1', name: 'уравнения.pdf', kind: 'pdf', bytes: 1024, uploadedAt: '2026-11-18T10:00:00Z',
+      preview: 'Распознанный текст первых 600 символов…',
+    };
+    const r = await req();
+    r.mockResolvedValueOnce(uploaded);
+    const got = await childApi.materials.upload('u1', 'lit', file());
+    const { opts } = await lastCall();
+    const form = opts.body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect((form.get('file') as File).name).toBe('уравнения.pdf');
+    expect(got).toEqual(uploaded);
+    expect(got.preview).toBe('Распознанный текст первых 600 символов…');
+  });
+
+  it('upload не резается таймаутом короче серверного распознавания (до 3 мин)', async () => {
+    await childApi.materials.upload('u1', 'lit', file());
+    const { opts } = await lastCall();
+    // Дефолт request — 30 с (offline.ts:396): без явного перекрытия загрузка падала бы на середине.
+    expect((opts.timeoutMs as number | undefined) ?? 30_000).toBeGreaterThanOrEqual(180_000);
+  });
+
+  it('415 unsupported_type и 503 ocr_unavailable — как у putProfile: status + body.code, без обёртки', async () => {
+    const r = await req();
+    r.mockRejectedValueOnce(httpErr(415, 'unsupported_type', 'Такой файл нельзя добавить: подходит текстовый PDF, DOCX или TXT.'));
+    const e415 = await rejection(childApi.materials.upload('u1', 'lit', file()));
+    expect(e415).not.toBeInstanceOf(ChildAttachmentRejectedError);
+    expect((e415 as { status?: number }).status).toBe(415);
+    expect((e415 as { body?: { code?: string } }).body?.code).toBe('unsupported_type');
+
+    r.mockRejectedValueOnce(httpErr(503, 'ocr_unavailable', 'Страницу не удалось распознать.'));
+    const e503 = await rejection(childApi.materials.upload('u1', 'lit', file()));
+    expect((e503 as { status?: number }).status).toBe(503);
+    expect((e503 as { body?: { code?: string } }).body?.code).toBe('ocr_unavailable');
+  });
+
+  it('remove: 404 material_not_found — status + body.code (204 — обычный успех без тела)', async () => {
+    const r = await req();
+    r.mockRejectedValueOnce(httpErr(404, 'material_not_found', 'Материал не найден.'));
+    const e = (await rejection(childApi.materials.remove('u1', 'lit', 'm_x'))) as { status?: number; body?: { code?: string } };
+    expect(e.status).toBe(404);
+    expect(e.body?.code).toBe('material_not_found');
+  });
+});

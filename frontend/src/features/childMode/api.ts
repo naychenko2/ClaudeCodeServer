@@ -14,6 +14,8 @@ import type {
   ChildProfile,
   ChildRoute,
   ChildStatus,
+  ChildSubjectMaterial,
+  ChildSubjectMaterialUploaded,
   ChildSubjectView,
   ChildTutorPatch,
 } from './types';
@@ -206,6 +208,45 @@ export const childApi = {
       request<Persona>(
         `/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar/select`,
         { method: 'POST', body: JSON.stringify({ file }) },
+      ),
+  },
+
+  // Материалы предмета (К5a, разрез §2 + решение 24): ручки только админские — ребёнок
+  // отбивается классовой ролью контроллера раньше детского гейта (класс без [ChildAllowed],
+  // ChildSubjectMaterialsController.cs:39-42). Отказы — { code, message }, как у putProfile:
+  // 404 child_not_found/subject_not_found, 413 too_large/subject_full, 415 unsupported_type,
+  // 422 pdf_no_text/docx_no_text/image_no_text, 503 ocr_unavailable, 500 storage_error —
+  // на error.body.code (обёртки нет: текст отказа — серверный, его показывают как есть).
+  materials: {
+    // GET /api/users/{id}/child-subjects/{subjectId}/materials — опись строк в порядке
+    // загрузки, массив без обёртки, содержимого файлов в нём нет никогда. Без live: ключ кэша
+    // содержит {id} — коллизии между владельцами нет (в отличие от детских ручек без id в пути),
+    // офлайн-копия списка — легальный фолбэк (тот же признак, что у knowledgeBases.list).
+    list: (userId: string, subjectId: string) =>
+      request<ChildSubjectMaterial[]>(
+        `/users/${encodeURIComponent(userId)}/child-subjects/${encodeURIComponent(subjectId)}/materials`,
+      ),
+
+    // POST …/materials — multipart, поле `file` (та же форма, что у uploadAttachment; имя File
+    // доходит до сервера — по нему опись несёт подпись). Ответ 201: строка описи + preview.
+    // Запрос долгий: распознавание страницы — до 3 мин (потолок сервера BusyWaitSec 120 +
+    // PageTimeoutSec 60, LlmGatewayOptions.cs:69-72), а дефолтный таймаут request — 30 с
+    // (offline.ts:396): он резал бы загрузку на середине. Дефолт перекрывается потолком
+    // сервера с запасом (тот же приём, что у генерации аватара).
+    upload: (userId: string, subjectId: string, file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return request<ChildSubjectMaterialUploaded>(
+        `/users/${encodeURIComponent(userId)}/child-subjects/${encodeURIComponent(subjectId)}/materials`,
+        { method: 'POST', body: form, timeoutMs: 200_000 },
+      );
+    },
+
+    // DELETE …/materials/{materialId} — 204 без тела; 404 material_not_found — на error.body.code.
+    remove: (userId: string, subjectId: string, materialId: string) =>
+      request<void>(
+        `/users/${encodeURIComponent(userId)}/child-subjects/${encodeURIComponent(subjectId)}/materials/${encodeURIComponent(materialId)}`,
+        { method: 'DELETE' },
       ),
   },
 };

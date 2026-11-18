@@ -105,6 +105,25 @@ export interface ChildSubjectAdmin {
   routeAcknowledgedAt?: string | null; // только в ответе: момент согласия, поле сервера
 }
 
+// Строка описи материалов предмета — GET .../child-subjects/{subjectId}/materials (К5a, разрез §2):
+// ровно эти поля, содержимого файла в ответе нет никогда; внутренние имена стора
+// (storedName/textName) и автор загрузки наружу не выходят (ChildSubjectMaterialsController.cs:163-168).
+// Значения kind — wire-константы стора KindPdf/KindText/KindDocx/KindImage
+// (ChildSubjectMaterialsStore.cs:96-99): txt и md дают общий 'text' (сигнатура их не различает),
+// 'image' — распознанная страница (решение 24).
+export interface ChildSubjectMaterial {
+  id: string; // «m_» + 12 hex, серверный id (по нему и только нему обращается тулсет репетитора)
+  name: string; // подпись от имени админа: путь из него не строится никогда
+  kind: 'pdf' | 'text' | 'docx' | 'image';
+  bytes: number; // байты оригинала: метр предмета считается по ним, не по производному тексту
+  uploadedAt: string; // ISO, момент загрузки на сервере
+}
+
+// Ответ успешной загрузки (решение 24, §9 «preview в ответе загрузки»): та же строка + preview —
+// первые 600 символов распознанного текста («так репетитор прочтёт эту страницу»,
+// ChildSubjectMaterialsStore.cs:106-108). В описи preview нет никогда: только в ответе загрузки.
+export type ChildSubjectMaterialUploaded = ChildSubjectMaterial & { preview: string };
+
 // Элемент GET /api/admin/child-routes (Т2f): сервер отдаёт готовые допустимые пары «поставщик →
 // модель» — отбор одной функцией ChildRoute.Evaluate, её же зовут валидатор и сверка запуска,
 // поэтому пикер не предлагает то, что не пройдёт при сохранении (ChildRoutesController.cs:10-14).

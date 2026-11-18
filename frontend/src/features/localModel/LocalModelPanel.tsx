@@ -72,11 +72,14 @@ const TABS_NARROW_PX = 340;
 
 // Чистая логика активной вкладки (тестируема без React):
 //   админ — сохранённая вкладка (text/media/hardware/transcription);
-//   не-админ — всегда «Медиа», кроме случая, когда в localStorage 'hardware' или
-//   'transcription' (оставлено админом) — тогда «LLM», чтобы не показать недоступную вкладку.
+//   не-админ — всегда «Медиа», при любом сохранённом значении. «LLM», «Стенды» и
+//   «Встречи» — админские: их эндпоинты /stats, /hardware, /transcription под
+//   [Authorize(Roles="admin")], и раньше не-админ с сохранённой админом вкладкой
+//   попадал в 'text' → 403 → «Не удалось получить данные» без выхода из состояния
+//   (дефект №3 приёмки Ф2/Ф6).
 export function resolveTab(isAdmin: boolean, stored: Tab): Tab {
   if (isAdmin) return stored;
-  return stored === 'hardware' || stored === 'transcription' ? 'text' : 'media';
+  return 'media';
 }
 
 // Иконка вкладки с точкой-состоянием (6 px, C.danger/C.warning) — та же геометрия, что у «Стендов».
@@ -140,9 +143,8 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // карточка). Ререндер при смене — подписка сторожа на странице.
   const visible = isLocalModelPanelVisible(isLocalModelConfiguredAny());
 
-  // Не-админ: вкладка всегда «Медиа» — переключателя нет, /stats (LLM) не опрашивается.
-  // Если в localStorage 'hardware' (оставлено админом) и пользователь не админ —
-  // открываем 'text', чтобы не показать недоступную вкладку (спецификация).
+  // Не-админ: вкладка всегда «Медиа» при любом сохранённом значении — переключателя
+  // нет, админские эндпоинты (/stats, /hardware, /transcription) не опрашиваются.
   const [storedTab, setStoredTab] = useState<Tab>(loadTab);
   const tab: Tab = resolveTab(isAdmin, storedTab);
   const changeTab = useCallback((t: Tab) => {
@@ -168,9 +170,12 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // «LLM» — stats, «Медиа» — media, «Стенды» — hardware; переключение — немедленный снимок.
   const { data: textData, loading: textLoading, error: textError, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window, engine);
   const { data: mediaData, loading: mediaLoading, refetch: mediaRefetch } = useLocalModelMedia(visible && tab === 'media');
-  // Опрос снимка конвейера (5 с) — только активной вкладки «Встречи» (тот же порядок, что у
-  // прочих вкладок; не-админ до него не доходит: resolveTab не отдаёт ему 'transcription').
-  const { data: transcriptionData } = useTranscription(visible && tab === 'transcription');
+  // Опрос снимка конвейера (5 с) — пока панель смонтирована и пользователь админ
+  // (эндпоинт админский): точка тревоги на «Встречах» обязана быть видна с любой
+  // вкладки, опрос прекращается при закрытии ПАНЕЛИ, а не при уходе с вкладки
+  // (дефект №1 приёмки Ф2/Ф6; решение по продукту: точка важнее экономии одного
+  // запроса в 5 с). Не-админ не опрашивает: вкладка ему не предлагается вовсе.
+  const { data: transcriptionData } = useTranscription(visible && isAdmin);
   // Выбор узла на вкладке «Стенды»: ключ, который коснулся человек (null — не выбирал);
   // показываемый узел — farmPickNode (выбор, если он ещё в ферме, иначе худший уровень, при
   // равенстве первый). Быстрые касания A → B → A: в состоянии последний выбор.

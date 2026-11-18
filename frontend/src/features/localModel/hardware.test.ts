@@ -90,12 +90,14 @@ describe('resolveTab — видимость вкладки «Стенды»', ()
     expect(resolveTab(true, 'text')).toBe('text');
     expect(resolveTab(true, 'media')).toBe('media');
   });
-  it('не-админ: всегда media (кроме hardware → text)', () => {
+  it('не-админ: всегда media, при любом сохранённом значении', () => {
+    // Доработка Ф2/Ф6 (дефект №3): 'text' — тоже админский (/stats под
+    // [Authorize(Roles="admin")] → 403 → «Не удалось получить данные»), поэтому
+    // не-админа в него не ставим ни при 'hardware', ни при 'transcription'.
     expect(resolveTab(false, 'text')).toBe('media');
     expect(resolveTab(false, 'media')).toBe('media');
-  });
-  it('не-админ + сохранённая hardware → text (недоступную не показываем)', () => {
-    expect(resolveTab(false, 'hardware')).toBe('text');
+    expect(resolveTab(false, 'hardware')).toBe('media');
+    expect(resolveTab(false, 'transcription')).toBe('media');
   });
 });
 

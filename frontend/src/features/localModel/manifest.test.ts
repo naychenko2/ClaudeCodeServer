@@ -3,9 +3,12 @@
 // живёт в самом манифесте. Тест: чанк ещё не загрузился (компонент suspend-ит) →
 // рендер не падает и не оставляет пустой корень (показывается заглушка-каркас).
 // Мутация: убрать <Suspense> из манифеста → тест красный (suspended, no fallback).
+// Плюс Ф6: имя панели «Ферма» зафиксировано тестом — по Ф5 его не проверял ни один
+// тест, и возврат старого слова прошёл бы незамеченным.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { PANEL_META } from '../../pages/workspace/panelCatalog';
 import { setLocalModelAdmin, setLocalModelConfigured } from './useLocalModelStats';
 import { getLocalModelEngineStats, setLocalModelEngineStats, startEngineStatePolling } from './useLocalModelWatcher';
 import { mockEngineStats } from './localModel.fixtures';
@@ -30,7 +33,7 @@ const suspender = vi.hoisted(() => {
 
 vi.mock('./LocalModelPanel', () => ({ LocalModelPanel: suspender }));
 
-const { manifest } = await import('./manifest');
+const { LOCAL_MODEL_PANEL, manifest } = await import('./manifest');
 
 const ctx: WorkspacePanelDefCtx = {
   projectId: 'p1', sessionId: 's1', isMobile: false, onClose: () => {},
@@ -65,6 +68,21 @@ describe('localModel/manifest: значок при «второй движок �
     expect(panelAction().isAvailable?.('p1')).toBe(false);
   });
 
+});
+
+// === Ф6: имя панели «Ферма» (решение Андрея 18.11) ===
+// Имя живёт в двух реестрах и расходиться не должно: манифест (заголовок вклада
+// панели → кнопка рельсы) и каталог панелей (мету которой читает PanelZone —
+// заголовок шапки панели, PanelZone.tsx:892). Ни один тест Ф5 имя не проверял.
+describe('localModel/manifest: имя панели «Ферма»', () => {
+  it('манифест и его вклад панели называются «Ферма»', () => {
+    expect(manifest.title).toBe('Ферма');
+    expect(panelAction().title).toBe('Ферма');
+  });
+  it('имя манифеста совпадает с метой каталога панелей (шапка рисует её)', () => {
+    expect(PANEL_META[LOCAL_MODEL_PANEL].title).toBe('Ферма');
+    expect(panelAction().title).toBe(PANEL_META[LOCAL_MODEL_PANEL].title);
+  });
 });
 
 describe('localModel/manifest: точка индикатора на значке (Ф6)', () => {

@@ -62,7 +62,9 @@ export function loadTab(): Tab {
 
 // «Узкая лента» (предложение v1): на листе <340 px четыре подписи не помещаются —
 // неактивные вкладки остаются иконкой (aria-label + подсказка), активная — с подписью.
-// Меряем ширину панели (она же ширина шапки, где переключатель на десктопе).
+// Меряем ширину панели: она равна полной ширине шапки, но переключатель в шапке
+// делит её с названием панели (сжимается с ellipsis, Island.tsx:74), иконкой и
+// группой действий — под свои подписи у него меньше, чем измерено.
 const TABS_NARROW_PX = 340;
 
 // Чистая логика активной вкладки (тестируема без React):
@@ -237,7 +239,8 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
           <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} dotLevel={dotLevel} transDotLevel={transDotLevel} narrow={tabsNarrow} />
         </PanelHeaderSlot>
       )}
-      <div ref={panelRef} role="complementary" aria-label="Локальные модели"
+      // Доступное имя панели — то же, что видимый заголовок (манифест/каталог панелей)
+      <div ref={panelRef} role="complementary" aria-label="Ферма"
         style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', fontFamily: FONT.sans }}>
         {mobileSwitcher}
         {body}

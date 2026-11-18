@@ -2,11 +2,14 @@
 // запоминание выбора (cc_local_model_tab), точка на вкладке по level из снимка,
 // «узкая лента» (<340 px — неактивные вкладки только иконкой).
 //
+// Плюс Ф6: точка на «Стендах» и доступное имя панели «Ферма».
+//
 // Окружение node (без jsdom): чистые функции — прямыми вызовами, переключатель —
-// renderToStaticMarkup (паттерн hardware.test.ts).
+// renderToStaticMarkup (паттерн hardware.test.ts), имя панели — сторожем по исходнику.
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TranscriptionLevel, TranscriptionSnapshot } from './types';
 import { loadTab, resolveTab, transcriptionDot, TabSwitch } from './LocalModelPanel';
@@ -59,6 +62,7 @@ describe('transcriptionDot — точка по level снимка', () => {
 
 function switcherHtml(over: {
   value?: 'text' | 'media' | 'hardware' | 'transcription';
+  dotLevel?: 'warn' | 'danger';
   transDotLevel?: TranscriptionLevel;
   narrow?: boolean;
 } = {}): string {
@@ -66,6 +70,7 @@ function switcherHtml(over: {
     value: over.value ?? 'text',
     onChange: () => {},
     isMobile: false,
+    ...(over.dotLevel ? { dotLevel: over.dotLevel } : {}),
     ...(over.transDotLevel ? { transDotLevel: over.transDotLevel } : {}),
     ...(over.narrow ? { narrow: true } : {}),
   }));
@@ -80,6 +85,10 @@ describe('TabSwitch — вкладка «Встречи»', () => {
   it('danger — красная точка (C.danger); warn — жёлтая (C.warning); без уровня — точки нет', () => {
     expect(switcherHtml({ transDotLevel: 'danger' })).toContain('var(--c-danger)');
     expect(switcherHtml({ transDotLevel: 'warn' })).toContain('var(--c-warning)');
+    // «Стенды» (dotLevel через tabIcon) — тот же контроль, что у «Встреч»: без него
+    // точка этой вкладки вообще ничем не была покрыта (хвост ревью R-Ф2).
+    expect(switcherHtml({ dotLevel: 'danger' })).toContain('var(--c-danger)');
+    expect(switcherHtml({ dotLevel: 'warn' })).toContain('var(--c-warning)');
     expect(switcherHtml()).not.toContain('var(--c-danger)');
     expect(switcherHtml()).not.toContain('var(--c-warning)');
   });
@@ -93,5 +102,16 @@ describe('TabSwitch — вкладка «Встречи»', () => {
     expect(h).toContain('title="Встречи"');
     // Активная («LLM») остаётся с подписью.
     expect(h).toContain('>LLM<');
+  });
+});
+
+// === 5. Доступное имя панели — то же, что видимый заголовок (Ф6, хвост Ф5) ===
+// Сторожем по исходнику (паттерн §6 HardwareTab.test.ts): рендер самой панели
+// потребовал бы всех её хуков и опросов, а проверяемое — одна строка атрибута.
+describe('имя панели для читателей с экрана — «Ферма»', () => {
+  it('aria-label панели «Ферма»; прежнего имени в исходнике нет', () => {
+    const src = readFileSync(new URL('./LocalModelPanel.tsx', import.meta.url), 'utf8');
+    expect(src).toContain('aria-label="Ферма"');
+    expect(src).not.toContain('aria-label="Локальные модели"');
   });
 });

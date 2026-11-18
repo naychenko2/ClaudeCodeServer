@@ -6,9 +6,12 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
+using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using SkiaSharp;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -31,16 +34,45 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Мутация (критерий c3): поставить [ChildAllowed] на GET materials — краснеет
 /// ChildModeEndpointGuardTests.ChildAllowedList_IsFrozen (список размеченных заморожен);
 /// тесты этой ручки от метки не краснеют: роль отказывает ребёнка одинаково с ней и без неё.
+///
+/// КИ1c (разрез §9, таблица исходов загрузки): картинка на этой ручке идёт веткой
+/// распознавания боевого стора — растр в хосте настоящий (вертикаль Images включена
+/// гейтом по умолчанию), распознавание — фейк ILocalPageOcr с журналом вызовов
+/// (подмена форвардера LlmSubsystem.cs:491: RemoveAll + своя регистрация после
+/// встроенных — побеждает; стор резолвит шов лениво, при первом запросе видит фейк).
+/// Фейк переключается тестом перед запросом (тесты класса последовательны), счётчик
+/// — доказательство «до OCR дело не дошло» (отказ ребёнка, предпроверка стора).
 /// </summary>
 [Trait("Category", "Host")]
 public class ChildSubjectMaterialsControllerTests : IClassFixture<ChildSubjectMaterialsControllerTests.Hosts>
 {
     public sealed class Hosts : TestWebApplicationFactory
     {
+        public FakeOcr Ocr { get; } = new();
+
         public Hosts()
         {
             ExtraConfig["ChildMode:Materials:MaxFileBytes"] = "1024";
             ExtraConfig["ChildMode:Materials:MaxSubjectBytes"] = "1500";
+            ExtraServices = services =>
+            {
+                services.RemoveAll<ILocalPageOcr>();
+                services.AddSingleton<ILocalPageOcr>(Ocr);
+            };
+        }
+
+        // Фейк OCR с счётчиком и переключаемым исходом (тот же приём, что RecordingOcr
+        // в сторовых тестах КИ1b, но общий на хост: тесты класса последовательны).
+        public sealed class FakeOcr : ILocalPageOcr
+        {
+            public int Calls { get; private set; }
+            public OcrResult Next { get; set; } = OcrResult.Fail(OcrFailureReason.Disabled, "нет результата (фейк)");
+
+            public Task<OcrResult> RecognizeAsync(ReadOnlyMemory<byte> png, OcrRequestInfo info, CancellationToken ct)
+            {
+                Calls++;
+                return Task.FromResult(Next);
+            }
         }
     }
 
@@ -199,6 +231,121 @@ public class ChildSubjectMaterialsControllerTests : IClassFixture<ChildSubjectMa
         second.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
         (await CodeAsync(second)).Should().Be(ChildSubjectMaterialsStore.CodeSubjectFull);
         (await Store.ListAsync(childId, "geo")).Should().HaveCount(1);
+    }
+
+    // ── КИ1c: картинка через фейк-OCR — 201 с preview, 503 ocr_unavailable, 422 image_no_text ──
+
+    // Настоящий декодируемый PNG (тот же приём, что PngOf в сторовых тестах КИ1b): его
+    // прочитает боевой SkiaImageRaster хоста; маленький — в опущенный MaxFileBytes (1024).
+    private static byte[] PngOf(int w, int h)
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using (var canvas = new SKCanvas(bitmap))
+        {
+            canvas.Clear(new SKColor(240, 240, 240));
+            using var paint = new SKPaint { Color = new SKColor(30, 30, 30) };
+            canvas.DrawRect(2, 2, w - 4, h - 4, paint);
+            canvas.Flush();
+        }
+        using var pixmap = bitmap.PeekPixels();
+        using var data = pixmap.Encode(new SKPngEncoderOptions(SKPngEncoderFilterFlags.AllFilters, 6));
+        return data!.ToArray();
+    }
+
+    [Fact]
+    public async Task UploadImage_FakeOcrSuccess_Created201WithPreview_GetHasNoPreview()
+    {
+        var childId = SetupChild("ocr-ok");
+        var text = "распознанный текст страницы: дроби и сложение";
+        _hosts.Ocr.Next = OcrResult.Success(text, "qwen3.8-27b", 120, 10, 20);
+        var callsBefore = _hosts.Ocr.Calls;
+
+        var post = await _admin.PostAsync(Url(childId, "ocr-ok"), Multipart("страница.png", PngOf(30, 20)));
+        post.StatusCode.Should().Be(HttpStatusCode.Created);
+        var created = await JsonAsync(post);
+        created.GetProperty("id").GetString()!.Should().MatchRegex("^m_[0-9a-f]{12}$");
+        created.GetProperty("kind").GetString().Should().Be(ChildSubjectMaterialsStore.KindImage);
+        // preview ответа загрузки (КИ1c): ровно то, что вернул фейк (короче 600 — целиком).
+        created.GetProperty("preview").GetString().Should().Be(text);
+        _hosts.Ocr.Calls.Should().Be(callsBefore + 1);
+
+        // Опись (GET) — без содержимого: строка есть, ключа preview в ней нет (И6).
+        var get = await _admin.GetAsync(Url(childId, "ocr-ok"));
+        get.StatusCode.Should().Be(HttpStatusCode.OK);
+        var rows = (await JsonAsync(get)).EnumerateArray().ToList();
+        rows.Should().HaveCount(1);
+        rows[0].GetProperty("id").GetString().Should().Be(created.GetProperty("id").GetString());
+        rows[0].EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo("id", "name", "kind", "bytes", "uploadedAt");
+    }
+
+    [Fact]
+    public async Task UploadImage_OcrRefused_Is503OcrUnavailable_NoTrace()
+    {
+        var childId = SetupChild("ocr-off");
+        _hosts.Ocr.Next = OcrResult.Fail(OcrFailureReason.Disabled, "OCR выключен (фейк)");
+
+        var post = await _admin.PostAsync(Url(childId, "ocr-off"), Multipart("page.png", PngOf(30, 20)));
+        post.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await CodeAsync(post)).Should().Be(ChildSubjectMaterialsStore.CodeOcrUnavailable);
+
+        // Отказ — ни файла, ни строки описи: опись пустая.
+        var get = await _admin.GetAsync(Url(childId, "ocr-off"));
+        (await JsonAsync(get)).EnumerateArray().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UploadImage_OcrReturnedOnlyMarkers_Is422ImageNoText_NoTrace()
+    {
+        var childId = SetupChild("ocr-empty");
+        // «Одни [?] с пробелами» — страница прочитана и пуста: парный pdf_no_text, не 503.
+        _hosts.Ocr.Next = OcrResult.Success("[?] [?]  [?]", "qwen3.8-27b", 30, 5, 5);
+
+        var post = await _admin.PostAsync(Url(childId, "ocr-empty"), Multipart("page.png", PngOf(30, 20)));
+        post.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await CodeAsync(post)).Should().Be(ChildSubjectMaterialsStore.CodeImageNoText);
+
+        var get = await _admin.GetAsync(Url(childId, "ocr-empty"));
+        (await JsonAsync(get)).EnumerateArray().Should().BeEmpty();
+    }
+
+    // preview текстового вида (КИ1c): тот же предел 600, что у картинки (PreviewMaxChars
+    // стора); текст 700 символов → превью ровно 600. Опись — по-прежнему без содержимого.
+    [Fact]
+    public async Task UploadText700Chars_CreatedPreviewIsFirst600_GetRowsHaveNoPreview()
+    {
+        var childId = SetupChild("prev");
+        // Латиница: 1 байт/символ — 700 символов это ровно 700 байта, в опущенный
+        // MaxFileBytes (1024) входит, а предельный размер тут не предмет теста.
+        var body = new string('a', 700);
+
+        var post = await _admin.PostAsync(Url(childId, "prev"), Multipart("урок.txt", Encoding.UTF8.GetBytes(body)));
+        post.StatusCode.Should().Be(HttpStatusCode.Created);
+        var created = await JsonAsync(post);
+        var preview = created.GetProperty("preview").GetString()!;
+        preview.Length.Should().Be(600);
+        body.StartsWith(preview).Should().BeTrue();
+
+        var get = await _admin.GetAsync(Url(childId, "prev"));
+        var rows = (await JsonAsync(get)).EnumerateArray().ToList();
+        rows.Should().HaveCount(1);
+        foreach (var row in rows) row.TryGetProperty("preview", out _).Should().BeFalse();
+    }
+
+    // И6 (путь к инварианту КИ1c): ребёнок с JWT — отбит классовой ролью на POST картинки,
+    // и до распознавания дело не дошло: счётчик фейка не сдвинулся (предупреждение: чужой
+    // тест класса уже звал фейк — проверяем дельту, не абсолют).
+    [Fact]
+    public async Task ChildToken_PostImage_Is403_OcrNeverCalled()
+    {
+        var childId = SetupChild("kid-img");
+        var child = ChildClient();
+        var callsBefore = _hosts.Ocr.Calls;
+
+        (await child.PostAsync(Url(childId, "kid-img"), Multipart("page.png", PngOf(30, 20))))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        _hosts.Ocr.Calls.Should().Be(callsBefore);
+        (await Store.ListAsync(childId, "kid-img")).Should().BeEmpty();
     }
 
     [Fact]

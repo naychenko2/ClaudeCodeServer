@@ -12,8 +12,16 @@
 // (при выключенном режиме эти поля не в деле — не подсвечиваем); остальное решает
 // сервер, его 400-код и отказы 403/404 переводятся в человеческий текст (REJECT_TEXT), message
 // ответа показываем как есть.
+//
+// Т4f: вкладка «Предметы». «Помощник (правила)» — пикер ChildRoutePicker вместо текстовых полей
+// (значения те же: providerKey/model профиля), под ним список предметов ChildSubjectsEditor,
+// под списком — карточка репетитора открытого предмета. Список маршрутов — один GET на
+// пользователя при открытии; пикеры знают только записи пула (макет Д1, пачка 1): cloud/local
+// до Т6 админ не может выбрать без согласия. «Сохранить» несёт subjects в порядке редактора;
+// тьюторов предметов берём из ответа (у нового предмета его создаёт сервер); отказ, называющий
+// id предмета, красит его строку (макет «рамка C.danger») и приводит на вкладку «Предметы».
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Plus, Trash2 } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { Notice } from '../../components/ui/Notice';
@@ -24,7 +32,10 @@ import { Tabs } from '../../components/ui/Tabs';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { childApi } from './api';
-import type { ChildProfile, TimeWindow } from './types';
+import { ChildRoutePicker, type ChildRouteValue } from './ChildRoutePicker';
+import { ChildSubjectsEditor } from './ChildSubjectsEditor';
+import { ChildTutorCard } from './ChildTutorCard';
+import type { ChildProfile, ChildRoute, ChildSubjectAdmin, TimeWindow } from './types';
 
 // Пользователь для редактора: id и имя — из списка «Пользователей»; профиль, тьютор и дата согласия —
 // то, что знает вызывающий (из данных списка, когда бэк их добавит, или из последнего сохранения здесь).
@@ -90,6 +101,16 @@ const REJECT_TEXT: Record<string, string> = {
   invalid_space: 'Пространство задано неверно. Сейчас доступно только «Уроки».',
   guardian_not_found: 'Среди опекунов есть id, которого нет среди пользователей. Проверь список через запятую.',
   user_not_found: 'Пользователь не найден — обнови список',
+  // Предметы (Т2a): id и что именно не так — в message ответа (ChildProfileValidator.cs:109-120),
+  // он показывается строкой ниже; здесь — общая причина, по которой краснеет строка списка.
+  subject_id_invalid: 'Ключ предмета задан неверно: строчные буквы, цифры и «-», до 32 знаков, без повторов.',
+  subject_label_invalid: 'Название предмета — от 1 до 40 символов.',
+  subject_glyph_invalid: 'Глиф — от 1 до 3 символов.',
+  subject_color_invalid: 'Такого цвета нет в палитре. Выбери один из пяти.',
+  subject_id_duplicate: 'Два предмета с одним ключом. Обнови страницу и попробуй ещё раз.',
+  model_not_concrete: 'У предмета не задана конкретная модель. Выбери её из списка.',
+  model_unpriced: 'У модели нет цены — бюджет не смог бы ограничить расход. Выбери другую.',
+  route_risk_unacknowledged: 'Этот маршрут требует согласия: отметь «Понимаю риск и разрешаю этот маршрут».',
 };
 const REJECT_FALLBACK = 'Сохранить не удалось. Попробуй ещё раз.';
 // 403 гейта авторизации ручки №10 (политика админа): тело отказа пустое, кода нет — текст по status.
@@ -108,12 +129,28 @@ interface Draft {
   monthlyBudget: string;
   guardians: string;
   resetRules: boolean;
+  // Предметы: отсутствие — их не знаем (в теле нет поля, бэк его не трогает); список — правим
+  // как есть, пустой список — явная очистка. Порядок списка = порядок плиток у ребёнка (И5).
+  subjects?: ChildSubjectAdmin[];
   // Прочие пространства профиля (волна 2) форма не правит — они проходят в тело как есть.
   otherSpaces: Record<string, { windows: TimeWindow[]; dailyMinutes?: number | null }>;
 }
 
-// Снимок редактора: черновик + только-чтение, всё под одним id. Смена id — новый снимок.
-interface Snapshot { id: string; draft: Draft; tutorPersonaId: string | null; rulesAgreedAt: string | null }
+// Снимок редактора: черновик + только-чтение + список маршрутов, всё под одним id. Смена id —
+// новый снимок: черновик, маршруты и открытые состояния прежнего пользователя не переносятся.
+interface Snapshot {
+  id: string; draft: Draft; tutorPersonaId: string | null; rulesAgreedAt: string | null;
+  // Маршруты для пикеров: null — ещё не пришли (или не удалось), список — получены, как с сервера.
+  routes: ChildRoute[] | null;
+  routesError: string | null;
+}
+
+function snapshotOf(user: ChildProfileEditorUser): Snapshot {
+  return {
+    id: user.id, draft: draftOf(user), tutorPersonaId: user.tutorPersonaId ?? null,
+    rulesAgreedAt: user.rulesAgreedAt ?? null, routes: null, routesError: null,
+  };
+}
 
 function emptyDraft(): Draft {
   return {
@@ -134,6 +171,9 @@ function draftOf(user: ChildProfileEditorUser): Draft {
   d.dailyBudget = p.dailyBudgetUsd == null ? '' : String(p.dailyBudgetUsd);
   d.monthlyBudget = p.monthlyBudgetUsd == null ? '' : String(p.monthlyBudgetUsd);
   d.warnMinutes = String(p.warnMinutes ?? DEFAULT_WARN_MINUTES);
+  // Предметы читаются из профиля как есть: порядок списка, привязка знаний и маршрут
+  // существующего предмета не теряются от того, что здесь их никто не правил.
+  d.subjects = p.subjects ? [...p.subjects] : undefined;
   const { [LESSONS]: lessons, ...other } = p.spaces ?? {};
   d.otherSpaces = other;
   d.windows = (lessons?.windows ?? []).map((w) => ({ from: w.from, to: w.to, days: w.weekdays ?? [] }));
@@ -150,8 +190,51 @@ const numOrNull = (s: string): number | null => {
 
 const splitIds = (s: string): string[] => s.split(',').map((x) => x.trim()).filter(Boolean);
 
+// Предмет в теле (Т2a): только поля тела. tutorPersonaId и routeAcknowledgedAt — поля ответа
+// (ChildProfileValidator.cs:224-226), acknowledgeRouteRisk обратно как есть не отправляем
+// (ревью Т4a): прежнее согласие держится на бэке сверкой живого ProviderKey с присланным
+// (ChildProfileValidator.cs:117-118), а при другой модели оно обязано быть новым явным — это Т6.
+function subjectBody(s: ChildSubjectAdmin): ChildSubjectAdmin {
+  return {
+    id: s.id, label: s.label, glyph: s.glyph, color: s.color,
+    providerKey: s.providerKey, model: s.model, enabled: s.enabled,
+    // Привязку знаний возвращаем как есть: отсутствие в теле её снимает (UsersController.cs:456-458).
+    ...(s.knowledge ? { knowledge: s.knowledge } : {}),
+  };
+}
+
+// Тьюторов предметов берём из ответа: провижн сохранения создаёт его новому предмету
+// (UsersController.cs:279-305). Слияние — по id; своего id, которого в ответе нет, тьютора не теряем.
+function subjectTutor(d: Draft, res?: ChildProfile): Draft {
+  const subjects = d.subjects;
+  if (!subjects) return d;
+  const byId = new Map((res?.subjects ?? []).map((s) => [s.id, s.tutorPersonaId ?? null]));
+  return { ...d, subjects: subjects.map((s) => (byId.has(s.id) ? { ...s, tutorPersonaId: byId.get(s.id) } : s)) };
+}
+
+// Отказ по предмету: бэк называет id в кавычках («Ключ предмета «math» …»,
+// ChildProfileValidator.cs:109-115) — на нём краснеет строка списка. Чужой id (его нет в списке)
+// не красит ничего: подсветки без строки нет.
+const SUBJECT_ID_RE = /«([a-z0-9-]{1,32})»/;
+function subjectIdOf(message: string | undefined, subjects?: ChildSubjectAdmin[]): string | undefined {
+  const m = message ? SUBJECT_ID_RE.exec(message) : null;
+  if (!m) return undefined;
+  return subjects?.some((s) => s.id === m[1]) ? m[1] : undefined;
+}
+// subject_id_duplicate: id в тексте не назван (двух одинаковых не видно) — повтор ищем в списке.
+function duplicateSubjectId(subjects?: ChildSubjectAdmin[]): string | undefined {
+  const seen = new Set<string>();
+  for (const s of subjects ?? []) {
+    if (!s.id) continue;
+    if (seen.has(s.id)) return s.id;
+    seen.add(s.id);
+  }
+  return undefined;
+}
+
 // Тело PUT: выключенный режим — `{ enabled: false }` (ADR-041, ручка №10); включённый — ChildProfileDto.
 // resetRules отправляем только отмеченным: JSON.stringify выбрасывает undefined, как в соседних ручках.
+// subjects: нет в черновике — нет и в теле («предметы не трогать»), пустой список — явная очистка.
 function bodyOf(d: Draft): ChildProfile | { enabled: false } {
   if (!d.enabled) return { enabled: false };
   return {
@@ -166,6 +249,7 @@ function bodyOf(d: Draft): ChildProfile | { enabled: false } {
         dailyMinutes: numOrNull(d.dailyMinutes),
       },
     },
+    ...(d.subjects ? { subjects: d.subjects.map(subjectBody) } : {}),
     dailyBudgetUsd: numOrNull(d.dailyBudget),
     monthlyBudgetUsd: numOrNull(d.monthlyBudget),
     warnMinutes: numOrNull(d.warnMinutes) ?? DEFAULT_WARN_MINUTES,
@@ -178,25 +262,44 @@ const fmtDate = (iso: string): string =>
 
 export function ChildProfileEditor({ user, onSaved }: Props) {
   const isMobile = useIsMobile();
-  const [snap, setSnap] = useState<Snapshot>(() => ({
-    id: user.id, draft: draftOf(user), tutorPersonaId: user.tutorPersonaId ?? null, rulesAgreedAt: user.rulesAgreedAt ?? null,
-  }));
-  // Смена пользователя — новый снимок по новому id (черновик сброшен).
+  const [snap, setSnap] = useState<Snapshot>(() => snapshotOf(user));
+  // Смена пользователя — новый снимок по новому id (черновик, только-чтение и маршруты сброшены).
   if (snap.id !== user.id) {
-    setSnap({ id: user.id, draft: draftOf(user), tutorPersonaId: user.tutorPersonaId ?? null, rulesAgreedAt: user.rulesAgreedAt ?? null });
+    setSnap(snapshotOf(user));
   }
   const d = snap.id === user.id ? snap.draft : draftOf(user);
+  const routes = snap.id === user.id ? snap.routes : null;
+  const routesError = snap.id === user.id ? snap.routesError : null;
   const [saving, setSaving] = useState(false);
   // Пустое поле окна подсвечивается только после попытки сохранить; некорректное — сразу, пока правят.
   const [attempted, setAttempted] = useState(false);
-  const [reject, setReject] = useState<{ text: string; server?: string } | null>(null);
+  // subjectId — предмет, названный отказом: его строка в списке краснеет (макет Д1).
+  const [reject, setReject] = useState<{ text: string; server?: string; subjectId?: string } | null>(null);
   // Текущая вкладка — только выбор экрана; черновик (snap.draft) от неё не зависит.
   const [tab, setTab] = useState<EditorTab>('mode');
+  // Открытый предмет: под списком — карточка его репетитора. Сменой пользователя гасится (см. эффект).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   // Текущий пользователь на момент прихода ответа: по нему отбрасываем устаревший ответ.
   const activeIdRef = useRef(user.id);
   activeIdRef.current = user.id;
 
+  // Список маршрутов — один запрос на пользователя: при смене id или уходе с экрана прежний
+  // запрос отменяется (signal), а его ответ не применяется — по id снимка, тем же механизмом,
+  // что и отбрасывание ответа сохранения. Открытый предмет чужого пользователя быть не должен.
+  useEffect(() => {
+    setSelectedId(null);
+    const ac = new AbortController();
+    childApi.getRoutes({ signal: ac.signal })
+      .then((list) => setSnap((s) => (s.id === user.id ? { ...s, routes: list, routesError: null } : s)))
+      .catch((e) => setSnap((s) => (s.id === user.id ? { ...s, routesError: loadErrorText(e) } : s)));
+    return () => ac.abort();
+  }, [user.id]);
+
   const patch = (fn: (prev: Draft) => Draft) => setSnap((s) => (s.id === user.id ? { ...s, draft: fn(s.draft) } : s));
+  // Список предметов — контролируемый: редактор отдаёт весь новый массив, порядок его и есть
+  // порядок плиток у ребёнка (И5), здесь он не переставляется.
+  const patchSubjects = (next: ChildSubjectAdmin[]) =>
+    setSnap((s) => (s.id === user.id ? { ...s, draft: { ...s.draft, subjects: next } } : s));
   const patchWindow = (i: number, fn: (w: DraftWindow) => DraftWindow) =>
     patch((prev) => ({ ...prev, windows: prev.windows.map((w, j) => (j === i ? fn(w) : w)) }));
 

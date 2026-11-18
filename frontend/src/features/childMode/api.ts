@@ -148,8 +148,10 @@ export const childApi = {
   // список отбирает сервер той же ChildRoute.Evaluate, что валидатор и сверка запуска, — порядок
   // уходит как пришёл (записи пула в порядке конфига, затем провайдеры). Кэшируемый GET: список
   // конфигурации, не per-owner состояние (тот же признак, что у взрослого GET /models).
-  getRoutes: async (): Promise<ChildRoute[]> => {
-    const r = await request<{ routes: ChildRoute[] }>('/admin/child-routes');
+  // signal — отмена вызывающего (ревью Т4a): редактор профиля отменяет загрузку при смене
+  // пользователя или уходе с экрана, чужой список не доходит до состояния (тот же приём, что у status).
+  getRoutes: async (opts?: { signal?: AbortSignal }): Promise<ChildRoute[]> => {
+    const r = await request<{ routes: ChildRoute[] }>('/admin/child-routes', { signal: opts?.signal });
     return r.routes;
   },
 

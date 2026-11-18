@@ -54,7 +54,12 @@ namespace ClaudeHomeServer.Services.ChildMode;
 /// описи удаляется. Картинка — исключение по длительности: растр и OCR (до минут) идут
 /// ВНЕ семафора предмета, под семафором после распознавания — только проверка subject_full
 /// и атомарная запись (разрез §9): пока страница распознаётся, другая загрузка в тот же
-/// предмет её не ждёт.
+/// предмет её не ждёт. Ревью КИ1b: перед дорогой работой — дешёвая предпроверка
+/// subject_full по описи без семафора (заведомо полный предмет не ждёт трёх минут);
+/// повторная проверка под семафором остаётся (предмет мог заполниться за эти минуты).
+/// Ревью КИ1b, отмена: AddAsync принимает CancellationToken вызывающего (RequestAborted
+/// ручки) и пробрасывает его в OCR — отменённый запрос админа прерывает распознавание,
+/// а не ждёт его; исход отмены — ocr_unavailable (сбой шва), ответу клиент уже не рад.
 ///
 /// Живой владелец (ревью КИ1b): первая проверка под семафором, перед любой записью —
 /// childExists(childId), есть ли ещё этот id в стору пользователей. Ребёнка могли удалить,
@@ -155,9 +160,12 @@ public sealed class ChildSubjectMaterialsStore(
     /// проверка живого владельца, subject_full и запись. Отказ — результат с кодом,
     /// исключения наружу нет. Аргументы (id ребёнка/предмета, байты, кто загрузил) —
     /// исключение: их обязан выдержать вызывающий, до ручки они не доходят.
+    /// ct — токен вызывающего (у ручки — RequestAborted): доходит до OCR картинки
+    /// (ревью КИ1b); default — существующие вызовы без токена не меняются.
     /// </summary>
     public async Task<AddMaterialResult> AddAsync(
-        string childId, string subjectId, string fileName, byte[] bytes, string uploadedBy)
+        string childId, string subjectId, string fileName, byte[] bytes, string uploadedBy,
+        CancellationToken ct = default)
     {
         var dir = SubjectDir(childId, subjectId);
         ArgumentNullException.ThrowIfNull(bytes);
@@ -169,7 +177,7 @@ public sealed class ChildSubjectMaterialsStore(
         // Картинка — отдельным путём: распознавание длится минуты и не должно держать
         // семафор предмета (загрузка другого вида в тот же предмет её не ждёт).
         if (kind == KindImage)
-            return await AddImageAsync(dir, childId, subjectId, fileName, bytes, uploadedBy);
+            return await AddImageAsync(dir, childId, subjectId, fileName, bytes, uploadedBy, ct);
 
         var sem = LockFor(dir);
         await sem.WaitAsync();
@@ -263,15 +271,28 @@ public sealed class ChildSubjectMaterialsStore(
     /// предмет. Любой отказ или сбой растра/OCR — ocr_unavailable, пустой или «одни [?]»
     /// текст — image_no_text; на любом отказе ни файла, ни строки описи, исключение наружу
     /// не выходит. Метр проверяется после OCR: пока страница распознавалась, предмет мог
-    /// заполниться другой загрузкой. Живой владелец — тоже после OCR, под семафором перед
+    /// заполниться другой загрузкой; перед дорогой работой — дешёвая предпроверка по
+    /// описи (ревью КИ1b), заведомо полный предмет не ждёт минут распознавания. Живой
+    /// владелец — тоже после OCR, под семафором перед
     /// записью: пока шло распознавание (до минут), ребёнка могли удалить, и его снос не ждал
     /// бы каталог, которого ещё нет (ревью КИ1b) → child_gone.
     /// </summary>
     private async Task<AddMaterialResult> AddImageAsync(
-        string dir, string childId, string subjectId, string fileName, byte[] bytes, string uploadedBy)
+        string dir, string childId, string subjectId, string fileName, byte[] bytes, string uploadedBy,
+        CancellationToken ct)
     {
         if (bytes.LongLength > MaxFileBytes())
             return AddMaterialResult.Refused(CodeTooLarge);
+
+        // Дешёвая предпроверка метра до дорогой работы (ревью КИ1b): заведомо полный
+        // предмет не должен ждать трёх минут растра и OCR ради заведомого отказа.
+        // Читается без семафора — опись атомарна (tmp+Move), полустёртой читателю не
+        // встречается; под семафором проверка повторится (ниже) — за минуты OCR предмет
+        // мог заполниться другой загрузкой.
+        var preflightUsed = 0L;
+        foreach (var m in ReadManifest(dir) ?? []) preflightUsed += m.Bytes;
+        if (preflightUsed + bytes.LongLength > MaxSubjectBytes())
+            return AddMaterialResult.Refused(CodeSubjectFull);
 
         // Вертикаль Images отключаемая: без растра страницу не нормализовать (ориентация и
         // размер для потолка OCR не гарантированы) — отказ без следа на диске.
@@ -333,7 +354,9 @@ public sealed class ChildSubjectMaterialsStore(
         {
             // Метка — серверный id, не имя файла от админа: имя может нести данные, лог
             // хранит только агрегаты (тот же приём, что у самого LocalOcrService).
-            ocrRes = await ocr.RecognizeAsync(png, new OcrRequestInfo(id), CancellationToken.None);
+            // Токен — вызывающего (ревью КИ1b): отменённый запрос админа прерывает
+            // распознавание; отмена доезжает как исключение шва → тот же ocr_unavailable.
+            ocrRes = await ocr.RecognizeAsync(png, new OcrRequestInfo(id), ct);
         }
         catch (Exception e)
         {

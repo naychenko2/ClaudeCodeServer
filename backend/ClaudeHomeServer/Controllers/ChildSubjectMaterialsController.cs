@@ -30,13 +30,21 @@ namespace ClaudeHomeServer.Controllers;
 /// Порядок отказов: 404 child_not_found (пользователь {id} не ребёнок — проверка ДО
 /// стора; отсутствующий пользователь и не-ребёнок дают одно тело, существование не
 /// раскрываем) → 404 subject_not_found (предмета нет в профиле ребёнка) → коды стора:
-/// 413 too_large, 413 subject_full, 415 unsupported_type, 422 pdf_no_text, 422 docx_no_text.
-/// Ревью КИ1b: код стора child_gone (ребёнка удалили, пока шла загрузка) наружу — то же
-/// 404 child_not_found, что и у проверки до стора: нового кода клиенту не нужно.
-/// Пустой файл отдельного кода не имеет: пустые байты — не поддерживаемый тип, стор
-/// отвечает unsupported_type (ChildAttachmentPolicy.Detect, ChildAttachmentPolicy.cs:33).
-/// Исключение стора наружу не выходит: 500 {code:"storage_error"}.
+/// 413 too_large, 413 subject_full, 415 unsupported_type, 422 pdf_no_text, 422 docx_no_text,
+/// 422 image_no_text, 503 ocr_unavailable (КИ1c: распознавание страниц недоступно —
+/// отказ или сбой растра/OCR, для админа один нейтральный текст, причины видно в логе
+/// OCR по метке). Ревью КИ1b: код стора child_gone (ребёнка удалили, пока шла загрузка)
+/// наружу — то же 404 child_not_found, что и у проверки до стора: нового кода клиенту
+/// не нужно. Пустой файл отдельного кода не имеет: пустые байты — не поддерживаемый
+/// тип, стор отвечает unsupported_type (ChildAttachmentPolicy.Detect,
+/// ChildAttachmentPolicy.cs:33). Исключение стора наружу не выходит: 500 {code:"storage_error"}.
 /// uploadedBy — id вызывающего админа из sub токена: его пишет стор, в ответе поля нет.
+///
+/// Ответ 201 загрузки (КИ1c, разрез §9): строка описи + поле preview — первые 600 символов
+/// распознанного/извлечённого текста (AddMaterialResult.Preview стора). Это превью отдаёт
+/// ТОЛЬКО эта админская ручка (И6): GET-опись его не содержит никогда — опись без
+/// содержимого, как в К2b. Таймаута запросу на ручке не ставится: распознавание картинки
+/// идёт до минут и должно доходить до конца (RequestSizeLimit — потолок тела, не времени).
 /// </summary>
 [ApiController]
 [Authorize(Roles = "admin")]
@@ -87,9 +95,14 @@ public class ChildSubjectMaterialsController(
 
         try
         {
-            var res = await materials.AddAsync(id, subjectId, file?.FileName ?? "", bytes, callerId);
+            // ct — RequestAborted вызывающего (ревью КИ1b): отмена запроса админа прерывает
+            // минуты OCR стора, а не ждёт их.
+            var res = await materials.AddAsync(id, subjectId, file?.FileName ?? "", bytes, callerId, ct);
             if (res.Accepted)
-                return CreatedAtAction(nameof(ListMaterials), new { id, subjectId }, ToDto(res.Material!));
+                // 201 = строка описи + preview (КИ1c): первые 600 символов текста, только
+                // здесь; в описи (GET) его нет никогда.
+                return CreatedAtAction(nameof(ListMaterials), new { id, subjectId },
+                    ToCreatedDto(res.Material!, res.Preview ?? ""));
 
             var (status, code, message) = Refusal(res.Code!);
             return new JsonResult(new { code, message }) { StatusCode = status };
@@ -151,6 +164,15 @@ public class ChildSubjectMaterialsController(
             (StatusCodes.Status422UnprocessableEntity, code, "В этом PDF нет текста — попробуйте текстовый файл."),
         ChildSubjectMaterialsStore.CodeDocxNoText =>
             (StatusCodes.Status422UnprocessableEntity, code, "В этом DOCX нет текста."),
+        // Картинка без читаемого текста (КИ1c): парный pdf_no_text — OCR вернул пустое или
+        // одни маркеры [?]; это не отказ распознавания, страница прочитана и пуста.
+        ChildSubjectMaterialsStore.CodeImageNoText =>
+            (StatusCodes.Status422UnprocessableEntity, code, "На этой картинке нет читаемого текста."),
+        // Распознавание недоступно (КИ1c): любой отказ или сбой растра/OCR, включая
+        // выключенную вертикаль Images. Для админа — один нейтральный текст с советом
+        // повторить; различие причин видно в логе OCR по метке (id материала).
+        ChildSubjectMaterialsStore.CodeOcrUnavailable =>
+            (StatusCodes.Status503ServiceUnavailable, code, "Распознавание страниц сейчас недоступно, повторите позже."),
         // Ребёнка удалили посреди загрузки (ревью КИ1b): наружу — то же тело, что у своей
         // проверки до стора; код стора в ответ не выходит.
         ChildSubjectMaterialsStore.CodeChildGone =>
@@ -172,4 +194,12 @@ public class ChildSubjectMaterialsController(
         new(m.Id, m.Name, m.Kind, m.Bytes, m.UploadedAt);
 
     private sealed record MaterialDto(string Id, string Name, string Kind, long Bytes, DateTimeOffset UploadedAt);
+
+    // Ответ 201 загрузки (КИ1c, разрез §9): строка описи + preview — первые 600 символов
+    // текста из результата стора. Единственный ответ с превью: опись (ToDto) его не несёт.
+    private static CreatedMaterialDto ToCreatedDto(ChildSubjectMaterial m, string preview) =>
+        new(m.Id, m.Name, m.Kind, m.Bytes, m.UploadedAt, preview);
+
+    private sealed record CreatedMaterialDto(
+        string Id, string Name, string Kind, long Bytes, DateTimeOffset UploadedAt, string Preview);
 }

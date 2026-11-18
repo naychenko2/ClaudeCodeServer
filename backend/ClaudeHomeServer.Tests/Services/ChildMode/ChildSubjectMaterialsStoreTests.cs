@@ -142,6 +142,27 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
             throw new InvalidOperationException("сбой OCR (фейк)");
     }
 
+    // OCR, который «распознаёт» до отмены: ждёт токен вызывающего с охраной в 5 с. Без
+    // проброса токена (стор передаёт None) срабатывает охрана и фейк отдаёт успех —
+    // тест краснеет на утверждении, а не виснет.
+    private sealed class CancelAwareOcr : ILocalPageOcr
+    {
+        public bool SawCancellation { get; private set; }
+
+        public async Task<OcrResult> RecognizeAsync(ReadOnlyMemory<byte> png, OcrRequestInfo info, CancellationToken ct)
+        {
+            var canceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (ct.Register(() => canceled.TrySetResult(true)))
+            {
+                var winner = await Task.WhenAny(canceled.Task, Task.Delay(5000));
+                if (winner != canceled.Task)
+                    return OcrResult.Success("распознавание дошло до конца: токен не дошёл", "m", 1, 1, 1);
+            }
+            SawCancellation = true;
+            throw new OperationCanceledException(ct); // как это делает боевой шлюз при отмене
+        }
+    }
+
     // Растр, который бросает: контракт IImageRaster — отказ ответом, но исключение шва
     // не должно становиться 500 у вызывающего.
     private sealed class ThrowingRaster : IImageRaster
@@ -592,14 +613,16 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
         Directory.Exists(SubjectDir("kid-a", "math")).Should().BeFalse();
     }
 
-    // Метр проверяется после OCR: пока страница распознавалась, предмет мог заполниться
-    // другой загрузкой — картинка при этом не пишется вовсе.
+    // Дешёвая предпроверка метра (ревью КИ1b): предмет уже полон — отказ subject_full
+    // до растра и OCR: дорогая работа не делается для заведомо отказанного файла.
+    // Мутация: убрать предпроверку в AddImageAsync — краснеет SeenPng (OCR дошёл).
     [Fact]
-    public async Task КартинкаПредметЗаполненПокаИдётOcr_ImageНеЗаписан()
+    public async Task КартинкаПредметУжеПолен_ОтказДоРастраИОcr_ImageНеЗаписан()
     {
+        var ocr = new RecordingOcr(OcrResult.Success("текст страницы", "qwen3.8-27b", 5, 1, 1));
         var store = Store(
             Config(new Dictionary<string, string?> { ["ChildMode:Materials:MaxSubjectBytes"] = "920" }),
-            ocr: new RecordingOcr(OcrResult.Success("текст страницы", "qwen3.8-27b", 5, 1, 1)),
+            ocr: ocr,
             raster: new SkiaImageRaster());
 
         var txt = await store.AddAsync("kid-a", "math", "урок.txt", Encoding.UTF8.GetBytes(new string('x', 900)), "admin-1");
@@ -607,10 +630,75 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
 
         var res = await store.AddAsync("kid-a", "math", "page.png", PngOf(40, 30), "admin-1");
         res.Code.Should().Be(ChildSubjectMaterialsStore.CodeSubjectFull);
+        ocr.SeenPng.Should().BeEmpty(); // до распознавания дело не дошло
 
         (await store.ListAsync("kid-a", "math")).Should().HaveCount(1);
         Directory.GetFiles(Path.Combine(SubjectDir("kid-a", "math"), "files")).Should().HaveCount(1); // только txt-оригинал
         Directory.GetFiles(Path.Combine(SubjectDir("kid-a", "math"), "text")).Should().HaveCount(1);
+    }
+
+    // Повторная проверка под семафором (ревью КИ1b): предпроверка прошла (предмет не был
+    // полон), но пока шла «минутная» OCR-работа, другая загрузка заполнила метр — запись
+    // отказана под семафором, и картинка не пишется вовсе. Числа выводятся из размера
+    // фикстуры: предпроверка (1000+png ≤ 1050+png) проходит всегда, повторная
+    // (1100+png > 1050+png) краснеет всегда; вторая txt-загрузка проходит свой порог
+    // (1100 ≤ 1050+png) при png ≥ 50 байт — это гарантирует сам формат PNG.
+    [Fact]
+    public async Task КартинкаПредметЗаполнилсяПокаИдётOcr_ПовторнаяПроверкаПодСемафоромОтказывает()
+    {
+        var png = PngOf(40, 30);
+        var block = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ocr = new RecordingOcr(OcrResult.Success("текст страницы", "qwen3.8-27b", 5, 1, 1)) { Block = block };
+        var store = Store(
+            Config(new Dictionary<string, string?> { ["ChildMode:Materials:MaxSubjectBytes"] = (1050 + png.Length).ToString() }),
+            ocr: ocr,
+            raster: new SkiaImageRaster());
+
+        var first = await store.AddAsync("kid-a", "math", "урок.txt", Encoding.UTF8.GetBytes(new string('x', 1000)), "admin-1");
+        first.Accepted.Should().BeTrue(first.Code);
+
+        var imageTask = Task.Run(() => store.AddAsync("kid-a", "math", "page.png", png, "admin-1"));
+
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (ocr.SeenPng.Count == 0)
+        {
+            if (DateTime.UtcNow > deadline) Assert.Fail("фейк-OCR не вызван: предпроверка отказала там, где должна была пропустить");
+            await Task.Delay(25);
+        }
+
+        // Пока страница «распознаётся», та же загрузка доводит метр до отказа:
+        var second = await store.AddAsync("kid-a", "math", "дополнение.txt", Encoding.UTF8.GetBytes(new string('y', 100)), "admin-1");
+        second.Accepted.Should().BeTrue(second.Code);
+
+        block.SetResult(true);
+        var res = await imageTask;
+        res.Code.Should().Be(ChildSubjectMaterialsStore.CodeSubjectFull);
+
+        // Конечное состояние: только две txt-записи, картинки нет ни в описи, ни на диске.
+        (await store.ListAsync("kid-a", "math")).Should().HaveCount(2);
+        Directory.GetFiles(Path.Combine(SubjectDir("kid-a", "math"), "files")).Should().HaveCount(2);
+        Directory.GetFiles(Path.Combine(SubjectDir("kid-a", "math"), "text")).Should().HaveCount(2);
+    }
+
+    // Отмена запроса админа прерывает распознавание (ревью КИ1b): стор пробрасывает
+    // CancellationToken вызывающего в OCR. Мутация: вернуть CancellationToken.None в
+    // RecognizeAsync — фейк не видит отмены, через охрану в 5 с отдаёт успех, и тест
+    // краснеет на коде (принят вместо ocr_unavailable), а не виснет.
+    [Fact]
+    public async Task КартинкаОтменаЗапросаПрерываетOcr_OcrUnavailable_НаДискеНичего()
+    {
+        var ocr = new CancelAwareOcr();
+        var store = Store(ocr: ocr, raster: new SkiaImageRaster());
+        using var cts = new CancellationTokenSource();
+
+        var addTask = Task.Run(() => store.AddAsync("kid-a", "math", "page.png", PngOf(40, 30), "admin-1", cts.Token));
+        await Task.Delay(100); // растр успел, распознавание идёт
+        cts.Cancel();
+
+        var res = await addTask;
+        res.Code.Should().Be(ChildSubjectMaterialsStore.CodeOcrUnavailable);
+        ocr.SawCancellation.Should().BeTrue();
+        Directory.Exists(SubjectDir("kid-a", "math")).Should().BeFalse();
     }
 
     // Конкурентность (критерий c3): OCR (до минут) идёт ВНЕ семафора предмета — пока

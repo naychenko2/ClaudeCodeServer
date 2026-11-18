@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -13,10 +14,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Т2c (И5, разрез «Репетиторы» §5 / «Знания» §5): админские ручки репетитора —
 /// POST /api/users/{id}/child-subjects/{subjectId}/tutor (провижн, идемпотентно) и
 /// PUT /api/users/{id}/child-tutors/{personaId} (name/character/greeting/voice/gender +
-/// mustDo/mustNot). Пути допуска: ребёнок → 403, чужая персона → 404 tutor_not_found,
-/// admin-claim без роли в сторе → 403 (AdminByStore). Путь №11: автоматика персон
-/// персоне-репетитору ребёнка не создаётся ни админской ручкой (404 — чужая глобальная
-/// персона), ни самим ребёнком (403 — closed-периметр).
+/// mustDo/mustNot). Т2c3 (блокер Т4e): GET /api/users/{id}/child-tutors/{personaId}/avatar
+/// и /avatar/candidate/{file} — чтение аватара и кандидатов админом (персона ребёнка
+/// в /api/personas/{id}/avatar* админу не видна). Пути допуска: ребёнок → 403, чужая
+/// персона и своя-не-репетитор → 404 tutor_not_found, admin-claim без роли в сторе →
+/// 403 (AdminByStore). Путь №11: автоматика персон персоне-репетитору ребёнка не
+/// создаётся ни админской ручкой (404 — чужая глобальная персона), ни самим ребёнком
+/// (403 — closed-периметр).
 ///
 /// Ребёнок — второй пользователь фабрики, профиль пишется прямо в сторе (тот же приём,
 /// что у ChildSubjectsEndpointsTests.SetupChild): ручки работают с записью профиля,
@@ -396,5 +400,142 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
         asChild.StatusCode.Should().Be(HttpStatusCode.Forbidden);
 
         StoredTutor(setup).AutomationRules.Should().BeNullOrEmpty();
+    }
+
+    // ── GET child-tutors/{personaId}/avatar и /avatar/candidate/{file} (Т2c3) ──
+
+    // Сигнатурные байты PNG: читающая ручка проверяет только существование файла
+    // (PhysicalFileByExt содержимое не декодирует; для size растр эту «картинку» не
+    // распознаёт — ручка отдаёт оригинал с no-cache, 200 в любом случае).
+    private static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+    // Аватар-картинка на записи персоны + файлы на диске (тот же ключ, что у реальной
+    // загрузки: {AssetsDir}/{personaId}/avatar-….png + original-….png).
+    private void SeedAvatar(Persona persona, string childId)
+    {
+        var dir = Path.Combine(_personas.AssetsDir, persona.Id);
+        Directory.CreateDirectory(dir);
+        var imageName = $"avatar-{Guid.NewGuid():N}.png";
+        var originalName = $"original-{Guid.NewGuid():N}.png";
+        File.WriteAllBytes(Path.Combine(dir, imageName), PngSignature);
+        File.WriteAllBytes(Path.Combine(dir, originalName), PngSignature);
+        _personas.SetAvatarUploaded(persona.Id, childId, imageName, originalName, null);
+    }
+
+    // Файл кандидата в {personaId}/candidates/ (candidate-ручка читает файл, а не запись).
+    private string SeedCandidate(Persona persona)
+    {
+        var dir = Path.Combine(_personas.AssetsDir, persona.Id, "candidates");
+        Directory.CreateDirectory(dir);
+        var name = $"cand-{Guid.NewGuid():N}.png";
+        File.WriteAllBytes(Path.Combine(dir, name), PngSignature);
+        return name;
+    }
+
+    [Fact]
+    public async Task GetTutorAvatar_АдминРепетитор_200ОригиналИФолбэкМиниатюры()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        var tutorId = setup.TutorOf["math"];
+        SeedAvatar(_personas.Get(tutorId, setup.ChildId)!, setup.ChildId);
+
+        var original = await _admin.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{tutorId}/avatar");
+        original.StatusCode.Should().Be(HttpStatusCode.OK);
+        original.Content.Headers.ContentType?.MediaType.Should().Be("image/png");
+
+        // size на файл, который растр не декодирует: миниатюра не генерируется —
+        // фолбэк на оригинал (тот же, что у персоны): 200.
+        var thumb = await _admin.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{tutorId}/avatar?size=64");
+        thumb.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // Репетитор без аватара — тот же пустой 404, что у персоны без файла.
+    [Fact]
+    public async Task GetTutorAvatar_НетФайла_404()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        var resp = await _admin.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{setup.TutorOf["math"]}/avatar");
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Путь И5: ребёнок своего репетитора через админскую ручку не читает — 403.
+    [Fact]
+    public async Task GetTutorAvatar_Ребёнок_403()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        SeedAvatar(_personas.Get(setup.TutorOf["math"], setup.ChildId)!, setup.ChildId);
+        var resp = await setup.Child.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{setup.TutorOf["math"]}/avatar");
+        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // Чужая (взрослая) персона и своя-но-не-репетитор — один 404 tutor_not_found.
+    // Своей-не-репетитору аватар засеян: без проверки «репетитор этого ребёнка»
+    // ручка отдала бы файл (мутация краснит именно эту проверку).
+    [Fact]
+    public async Task GetTutorAvatar_ЧужаяИСвояНеРепетитор_404()
+    {
+        var setup = SetupChild(("math", "Математика"));
+
+        var foreign = await _admin.PostAsJsonAsync("/api/personas", new { name = "Взрослая персона" });
+        var foreignId = (await JsonAsync(foreign)).GetProperty("id").GetString()!;
+        var asForeign = await _admin.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{foreignId}/avatar");
+        asForeign.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        CodeOf(await JsonAsync(asForeign)).Should().Be("tutor_not_found");
+
+        var own = MakeTutor(setup.ChildId, "Не репетитор");
+        SeedAvatar(own, setup.ChildId);
+        var asOwn = await _admin.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{own.Id}/avatar");
+        asOwn.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        CodeOf(await JsonAsync(asOwn)).Should().Be("tutor_not_found");
+    }
+
+    [Fact]
+    public async Task GetTutorAvatarCandidate_АдминРепетитор_200()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        var tutor = _personas.Get(setup.TutorOf["math"], setup.ChildId)!;
+        var file = SeedCandidate(tutor);
+
+        var resp = await _admin.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{tutor.Id}/avatar/candidate/{file}");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        resp.Content.Headers.ContentType?.MediaType.Should().Be("image/png");
+    }
+
+    [Fact]
+    public async Task GetTutorAvatarCandidate_Ребёнок_403()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        var tutor = _personas.Get(setup.TutorOf["math"], setup.ChildId)!;
+        var file = SeedCandidate(tutor);
+        var resp = await setup.Child.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{tutor.Id}/avatar/candidate/{file}");
+        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // Своя-не-репетитор с живым файлом кандидата — 404 (та же точка мутации, что у avatar).
+    [Fact]
+    public async Task GetTutorAvatarCandidate_СвояНеРепетитор_404()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        var own = MakeTutor(setup.ChildId, "Не репетитор");
+        var file = SeedCandidate(own);
+        var resp = await _admin.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{own.Id}/avatar/candidate/{file}");
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        CodeOf(await JsonAsync(resp)).Should().Be("tutor_not_found");
+    }
+
+    // Path-traversal: ..%2Fx — файл на уровень выше candidates/ не отдаётся: 404.
+    [Fact]
+    public async Task GetTutorAvatarCandidate_Трейверсал_404()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        var tutor = _personas.Get(setup.TutorOf["math"], setup.ChildId)!;
+        // Файл лежит в папке персоны (на уровень выше candidates/): просочился бы traversal —
+        // ручка отдала бы его.
+        var dir = Path.Combine(_personas.AssetsDir, tutor.Id);
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, "x.png"), PngSignature);
+
+        var resp = await _admin.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{tutor.Id}/avatar/candidate/..%2Fx");
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 }

@@ -14,14 +14,18 @@ namespace ClaudeHomeServer.Controllers;
 /// <summary>
 /// Админские ручки репетитора профиля ребёнка (Т2c, ADR-041 редакция 2 §12 и редакция 3 §22,
 /// разрез «Репетиторы» §5 / «Знания» §5): повторный провижн репетитора предмета и правка
-/// характера репетитора со списками «Обязательно / Никогда», и аватар репетитора —
-/// generate/upload/select (Т2c2, путь И5 №12). Все ручки только для админа:
+/// характера репетитора со списками «Обязательно / Никогда», аватар репетитора —
+/// generate/upload/select (Т2c2, путь И5 №12) и его чтение — аватар и кандидат
+/// (Т2c3, блокер Т4e: GET /api/personas/{id}/avatar* ищут персону по арендатору,
+/// персона ребёнка админу там не видна — 404). Все ручки только для админа:
 /// [Authorize(Roles="admin")] по claim + AdminByStore по стору (тот же образец, что у
 /// PUT child-profile в UsersController.cs:173: сервисный токен хода и снятое админство сюда
 /// не проходят), без [ChildAllowed]: ребёнок своего репетитора не правит (И5).
 /// Аватарные ручки делегируют PersonasCrudService (тот же код, что у аватаров персон), но
 /// владелец расхода — вызывающий админ, не владелец персоны (ребёнок): бюджет ребёнка
-/// аватар репетитора не съедает никогда (инвариант И5).
+/// аватар репетитора не съедает никогда (инвариант И5). Читающие ручки повторяют чтение
+/// PersonasController (тот же PersonaAvatarThumbService для миниатюр, та же сетка
+/// кэшей), ключ персоны — ребёнок: новой генерации они не делают никогда.
 ///
 /// Модель и маршрут здесь нет: они живут только в записи ChildSubject (редакция 2 §12),
 /// Persona.Model репетитора пуст — поле model в теле игнорируется. Прочие слоты контракта
@@ -39,6 +43,7 @@ public class ChildTutorsController(
     ChildTutorProvisioner childTutorProvisioner,
     PersonasCrudService crud,
     ISessionBroadcaster broadcaster,
+    PersonaAvatarThumbService avatarThumbs,
     ILogger<ChildTutorsController> logger) : ControllerBase
 {
     // Пределы списков «Обязательно / Никогда» (ADR-041 редакция 3 §22): до 12 пунктов по 300 символов.
@@ -281,6 +286,81 @@ public class ChildTutorsController(
         // Результат без значения — конвертированный ActionResult сервиса (Value null,
         // Result — исходный ответ), та же конверсия, что у PutTutor.
         return result.Result ?? new StatusCodeResult(500);
+    }
+
+    /// <summary>
+    /// Отдать аватар репетитора (Т2c3, блокер Т4e): персона ребёнка админу в
+    /// GET /api/personas/{id}/avatar не видна (та ищет по арендатору) — админка читает
+    /// его этой ручкой. Тот же код чтения, что у PersonasController.Avatar (:651):
+    /// миниатюра ближайшей ступени по size, оригинал без него; JWT принимается и в
+    /// query access_token (браузерный &lt;img&gt;). Миниатюры — тот же PersonaAvatarThumbService,
+    /// новой генерации нет. Персона ищется с владельцем = ребёнок; чужая, не репетитор
+    /// этого ребёнка или без файла — один 404 (существование персоны не раскрываем).
+    /// </summary>
+    [HttpGet("child-tutors/{personaId}/avatar")]
+    [Authorize(Policy = AdminByStoreRequirement.PolicyName)]
+    public async Task<IActionResult> GetTutorAvatar(string id, string personaId, [FromQuery] int? size = null)
+    {
+        if (users.GetById(id) is not { } child)
+            return NotFound(new { code = "user_not_found", message = "Пользователь не найден." });
+        if (child.ChildMode is not { } profile
+            || !IsChildTutor(profile, personaId)
+            || personas.Get(personaId, id) is not { } persona)
+            return NotFound(new { code = "tutor_not_found", message = "Эта персона — не репетитор этого ребёнка." });
+
+        // Нет аватара-картинки — тот же пустой 404, что у персоны (PersonasController.cs:672):
+        // «нет файла» здесь не отличается от «нет персоны».
+        if (persona.Avatar.Kind != PersonaAvatarKind.Image || string.IsNullOrEmpty(persona.Avatar.ImageFile))
+            return NotFound();
+
+        var full = SafePath.Join(personas.AssetsDir, Path.Combine(personaId, persona.Avatar.ImageFile));
+        if (!System.IO.File.Exists(full)) return NotFound();
+
+        var step = ImageAssetHelper.AvatarThumbStep(size);
+        if (step is null)
+        {
+            // Оригинал: имя файла в URL меняется при смене аватара — кэш долгий и immutable
+            // (тот же приём, что у персоны)
+            Response.Headers.CacheControl = "private, max-age=604800, immutable";
+            return ImageAssetHelper.PhysicalFileByExt(full);
+        }
+
+        var thumb = await avatarThumbs.GetOrGenerateAsync(persona, full, step.Value);
+        if (thumb is null)
+        {
+            // Фолбэк на оригинал БЕЗ долгого кэша (та же причина, что у персоны: миниатюра
+            // не получилась — следующий запрос должен её попробовать, а не неделю держать
+            // оригинал на URL с size)
+            Response.Headers.CacheControl = "no-cache";
+            return ImageAssetHelper.PhysicalFileByExt(full);
+        }
+
+        // Миниатюра: имя стабильно до смены аватара — кэш долгий и immutable
+        Response.Headers.CacheControl = "private, max-age=604800, immutable";
+        return ImageAssetHelper.PhysicalFileByExt(thumb);
+    }
+
+    /// <summary>
+    /// Отдать превью кандидата аватара репетитора (Т2c3): галерея выбора на админке
+    /// репетитора. Тот же код, что у PersonasController.AvatarCandidate (:625): имя файла
+    /// — Path.GetFileName + SafePath.Join (защита от path-traversal), файлы живут в
+    /// {personaId}/candidates/. Чужая/не репетитор/нет файла — тот же 404.
+    /// </summary>
+    [HttpGet("child-tutors/{personaId}/avatar/candidate/{file}")]
+    [Authorize(Policy = AdminByStoreRequirement.PolicyName)]
+    public IActionResult GetTutorAvatarCandidate(string id, string personaId, string file)
+    {
+        if (users.GetById(id) is not { } child)
+            return NotFound(new { code = "user_not_found", message = "Пользователь не найден." });
+        if (child.ChildMode is not { } profile
+            || !IsChildTutor(profile, personaId)
+            || personas.Get(personaId, id) is null)
+            return NotFound(new { code = "tutor_not_found", message = "Эта персона — не репетитор этого ребёнка." });
+
+        var safe = Path.GetFileName(file);   // защита от path-traversal
+        var full = SafePath.Join(personas.AssetsDir, Path.Combine(personaId, "candidates", safe));
+        if (!System.IO.File.Exists(full)) return NotFound();
+        return ImageAssetHelper.PhysicalFileByExt(full);
     }
 
     // Тот же признак «репетитор ребёнка», что у аватар-ручки (PersonasController.cs:709):

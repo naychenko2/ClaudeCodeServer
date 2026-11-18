@@ -80,9 +80,13 @@ interface Props {
   defaultRoute?: ChildRouteValue;
   // Гасит контролы на время сохранения (макет Д1 «Сохранение») — состояние родителя.
   disabled?: boolean;
+  // Предмет, по которому сервер отказал (Т4f): строка с этим id — рамка C.danger (макет
+  // «Ошибка сохранения по этому предмету: рамка C.danger»). Имя берёт родитель: здесь нет
+  // ни текста отказа, ни его кода.
+  errorId?: string | null;
 }
 
-export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, onSelect, defaultRoute, disabled }: Props) {
+export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, onSelect, defaultRoute, disabled, errorId }: Props) {
   const isMobile = useIsMobile();
 
   const takenIds = new Set(subjects.map((s) => s.id).filter(Boolean));
@@ -114,8 +118,9 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
 
   const rowGap = isMobile ? SP.sm : SP.md;
   const rootStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: rowGap };
-  const rowStyle = (selected: boolean): CSSProperties => ({
-    border: `1px solid ${selected ? C.accent : C.borderLight}`,
+  const rowStyle = (selected: boolean, failed: boolean): CSSProperties => ({
+    // Рамка отказа сильнее рамки выбора: красная строка важнее отмеченной.
+    border: `1px solid ${failed ? C.danger : selected ? C.accent : C.borderLight}`,
     borderRadius: R.xl, background: C.bgWhite, overflow: 'hidden',
   });
   const headStyle: CSSProperties = {
@@ -188,12 +193,13 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
 
   const subjectRow = (s: ChildSubjectAdmin, i: number) => {
     const selected = !!s.id && s.id === selectedId;
+    const failed = !!s.id && s.id === errorId;
     // Пустое название у новой строки — не ошибка (её заполняют); у строки с id — очищено, сервер
     // такой не примет (subject_label_invalid).
     const badLabel = !!s.id && !s.label.trim();
     const badGlyph = !!s.id && !s.glyph.trim();
     return (
-      <div key={s.id || `draft-${i}`} data-testid="subject-row" style={rowStyle(selected)}>
+      <div key={s.id || `draft-${i}`} data-testid="subject-row" data-error={failed ? 'true' : undefined} style={rowStyle(selected, failed)}>
         <div style={headStyle}>
           <span style={glyphTile(s.color, !s.enabled)} aria-hidden="true">{s.glyph || '?'}</span>
           <button

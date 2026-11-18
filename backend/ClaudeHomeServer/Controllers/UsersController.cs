@@ -299,6 +299,23 @@ public class UsersController(UserStore users, SessionManager sessions,
         var saved = users.GetById(id);
         if (saved?.ChildMode is not { } finalProfile)
             return StatusCode(500, new { code = "tutor_provision_failed", message = "Профиль ребёнка не сохранился; повторите." });
+
+        // Репетиторы-сироты удалённых предметов (Т2d, разрез §1): ключ каждого предмета,
+        // исчезнувшего из списка (его Id нет в итоговом профиле), — кандидат на удаление.
+        // Снимок previous — объект до записи: при живом слиянии «тела без subjects» его
+        // список — копия [.. live.Subjects] (UserStore.cs:671), предметы общие с живым
+        // профилем, но в этой ветке живой список сохраняется как есть — ни один Id не
+        // исчезает и список кандидатов пуст. При «теле с subjects» новые объекты строит
+        // ToChildProfile, а ключи исчезнувших предметов доживают только в previous —
+        // сравнение по Id, не по объекту: общий объект дал бы пустой список там, где
+        // предмет реально убран. Провижер решает «сирота ли» по ЖИВОМУ профилю под своим
+        // замком — устаревшая запись (предмет вернулся параллельной правкой) не удаляется.
+        // Чаты предмета не трогаются (только чтение — Т1c/Т1d). Сбой удаления — лог внутри
+        // провижера, ответ остаётся 200: профиль уже сохранён и корректен.
+        var orphanTutors = RemovedSubjectTutors(previous, finalProfile);
+        if (orphanTutors.Count > 0)
+            await childTutorProvisioner.RemoveOrphanTutorsAsync(id, orphanTutors);
+
         return Ok(new ChildProfileResponse(ToChildProfileDto(finalProfile), tutorId));
     }
 
@@ -335,6 +352,28 @@ public class UsersController(UserStore users, SessionManager sessions,
                 logger.LogWarning(ex, "Детский режим: откат персоны-репетитора предмета не прошёл (ребёнок {User}, персона {Persona})", id, key);
             }
         }
+    }
+
+    // Ключи репетиторов исчезнувших предметов (Т2d): непустой TutorPersonaId каждого
+    // предмета previous, чьего Id нет в итоговом профиле. Сравнение по Id — снимок и итог
+    // при «теле без subjects» делят одни и те же объекты предметов (UserStore.cs:671),
+    // по объекту разница не читалась бы. «Оставшийся» — любой предмет итогового профиля,
+    // выключенный (Enabled=false) тоже: его репетитора нет в списке удаления.
+    private static List<string> RemovedSubjectTutors(ChildProfile? previous, ChildProfile finalProfile)
+    {
+        var kept = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var subject in finalProfile.Subjects)
+            if (subject is not null)
+                kept.Add(subject.Id);
+
+        var removed = new List<string>();
+        foreach (var subject in previous?.Subjects ?? [])
+        {
+            if (subject is null || string.IsNullOrWhiteSpace(subject.TutorPersonaId)) continue;
+            if (kept.Contains(subject.Id)) continue;
+            removed.Add(subject.TutorPersonaId);
+        }
+        return removed;
     }
 
     private static UserDto ToDto(User u) =>

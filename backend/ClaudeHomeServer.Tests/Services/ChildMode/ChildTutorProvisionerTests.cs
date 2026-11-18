@@ -307,4 +307,162 @@ public class ChildTutorProvisionerTests : IDisposable
         _personas.GetByOwner(_childId).Should().BeEmpty(
             "полуперсоны не бывает: отказ закрепления ключа не оставляет сироту");
     }
+
+    // ======== репетитор-сирота удалённого предмета (Т2d, разрез §1) ========
+
+    // Предмет в профиль пишет тот же формат записи, что контроллер Т2a (через стор):
+    // ключ — как его оставил бы слияние (пустой или живой).
+    private void SeedSubject(string id, string label, string tutorPersonaId = "") =>
+        _users.GetById(_childId)!.ChildMode!.Subjects.Add(new ChildSubject
+        {
+            Id = id, Label = label, Glyph = "×", Color = "info",
+            ProviderKey = "kids", Model = "sonnet", TutorPersonaId = tutorPersonaId,
+        });
+
+    [Fact]
+    public async Task RemoveOrphan_СиротаУдалена_ЧатыПредметаНаМесте()
+    {
+        var tutorId = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+        tutorId.Should().NotBeNull();
+        // Предмет удалён из профиля (эффект PUT с телом без него): ключ доживает только
+        // в снимке previous — контроллер принёс его кандидатом.
+        _users.GetById(_childId)!.ChildMode!.Subjects.Clear();
+
+        // Чат удалённого предмета (Т1c/Т1d — «только чтение», не трогать): отдельный файл
+        // состояния, провижер к нему не обращается вовсе.
+        var chatFile = Path.Combine(_tempDir, "chats", "child-math-chat.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(chatFile)!);
+        File.WriteAllText(chatFile, "{\"id\":\"child-math-chat\"}");
+
+        await _sut.RemoveOrphanTutorsAsync(_childId, [tutorId!]);
+
+        _personas.Get(tutorId!, _childId).Should().BeNull("сирота без ссылок удаляется");
+        _personas.GetByOwner(_childId).Should().BeEmpty();
+        File.Exists(chatFile).Should().BeTrue("чаты предмета — вне контракта удаления");
+
+        // Вещание «deleted» — как у стора персон; «created» провижера ему не помеха
+        _broadcaster.Owner.Select(t => t.Message)
+            .OfType<PersonasChangedMessage>().Count(m => m.Action == "deleted" && m.PersonaId == tutorId)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RemoveOrphan_ПерсонаОбщаДвумПредметам_Остаётся()
+    {
+        // Одна персона ведёт два предмета (засев/миграция дают предмету тьютора профиля —
+        // та же допустимость): удаление одного предмета не сиротит её — второй живой.
+        var tutorId = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+        tutorId.Should().NotBeNull();
+        SeedSubject("physics", "Физика", tutorId!);
+        _users.GetById(_childId)!.ChildMode!.Subjects
+            .RemoveAll(s => s.Id == "math"); // эффект PUT: math убран, physics остался
+
+        await _sut.RemoveOrphanTutorsAsync(_childId, [tutorId!]);
+
+        _personas.Get(tutorId!, _childId).Should().NotBeNull(
+            "на кандидата ссылается оставшийся предмет — не сирота");
+        _personas.GetByOwner(_childId).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task RemoveOrphan_ПерсонаРавнаTutorPersonaIdПрофиля_Остаётся()
+    {
+        // Тьютор профиля (засев даёт предмету его): удалённый предмет ссылался той же
+        // персоной — ссылка профиля сильнее удаления предмета.
+        var profileTutor = await _sut.EnsureAsync(_childId);
+        profileTutor.Should().NotBeNull();
+        _users.SetChildSubjectTutor(_childId, "math", profileTutor!);
+        _users.GetById(_childId)!.ChildMode!.Subjects.Clear();
+
+        await _sut.RemoveOrphanTutorsAsync(_childId, [profileTutor!]);
+
+        _personas.Get(profileTutor!, _childId).Should().NotBeNull(
+            "TutorPersonaId профиля ссылается на персону — она не сирота");
+        _personas.GetByOwner(_childId).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task RemoveOrphan_НечегоУдалять_НичегоНеДелает()
+    {
+        var tutorId = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+        tutorId.Should().NotBeNull();
+
+        // Пустой список и пустые ключи — не повод ни удалять, ни вещать; живая персона цела.
+        await _sut.RemoveOrphanTutorsAsync(_childId, []);
+        await _sut.RemoveOrphanTutorsAsync(_childId, ["", "  "]);
+
+        _personas.Get(tutorId!, _childId).Should().NotBeNull();
+        _broadcaster.Owner.Select(t => t.Message)
+            .OfType<PersonasChangedMessage>().Count(m => m.Action == "deleted")
+            .Should().Be(0, "нечего удалять — нечего и вещать");
+    }
+
+    [Fact]
+    public async Task RemoveOrphan_УдалениеОдногоНеГлушитОстальные_ИОтказаНаружу()
+    {
+        var tutorId = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+        tutorId.Should().NotBeNull();
+        _users.GetById(_childId)!.ChildMode!.Subjects.Clear(); // эффект PUT: предмета нет
+        // Второй кандидат — фантом: персоны с таким id нет (висящий ключ удалённого
+        // предмета). Отказ удаления одного — лог внутри провижера: наружу не выходит,
+        // настоящий сирота удалён.
+        var ghost = Guid.NewGuid().ToString();
+
+        await _sut.Invoking(s => s.RemoveOrphanTutorsAsync(_childId, [ghost, tutorId!]))
+            .Should().NotThrowAsync("сбой — лог, ответ вызывающего (200) не меняется");
+
+        _personas.Get(tutorId!, _childId).Should().BeNull("сбой одного кандидата не глушит остальных");
+    }
+
+    [Fact]
+    public async Task RemoveOrphan_ParallelWithReassign_PersonaKept()
+    {
+        // Конкурентность Т2d: пока удаление идёт, параллельный PUT перестраивает профиль и
+        // закрепляет кандидата за оставшимся предметом. Ставится в середину критической
+        // секции детерминированно — через OnPersonaDeleted (поднимается синхронно внутри
+        // Delete первого кандидата, PersonaManager.cs:1482): два Task.Run лишь перемешивали
+        // бы потоки, и мутация ловилась бы случаем (первый вариант теста прошёл зелёным
+        // именно так).
+        // Важно: параллельный PUT — это замена объекта профиля (SetChildProfile пишет новый,
+        // UserStore.cs:721), а не правка текущего: GetById отдаёт живую ссылку, и простая
+        // мутация «прочитать до семафора» на мутируемом объекте не краснеет никогда.
+        // Краснеет только настоящая устаревшая запись — снимок, отсоединённый заменой.
+        // Первый кандидат — настоящий сирота: предмет «old» удалён, его репетитор больше
+        // никем не referenced. При его удалении PUT оставляет только «physics» и закрепляет
+        // за ним P. Удаление обязано увидеть новую ссылку: P остаётся, сирота удалена.
+        SeedSubject("old", "Химия"); // предмет, который будет удалён (ключ провится ниже)
+        var oldTutor = await _sut.EnsureSubjectTutorAsync(_childId, "old");
+        var tutorId = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+        oldTutor.Should().NotBeNull();
+        tutorId.Should().NotBeNull();
+        SeedSubject("physics", "Физика"); // ключ пустой: на старте удаления ссылок нет
+
+        _users.GetById(_childId)!.ChildMode!.Subjects
+            .RemoveAll(s => s.Id == "old" || s.Id == "math"); // эффект PUT: оба предмета убраны
+
+        // Тело того самого параллельного PUT: один «physics», ключ пустой — его write-форма.
+        var putBody = new ChildProfile
+        {
+            Enabled = true, ProviderKey = "kids", Model = "sonnet",
+            Subjects = [new ChildSubject
+            {
+                Id = "physics", Label = "Физика", Glyph = "×", Color = "info",
+                ProviderKey = "kids", Model = "sonnet",
+            }],
+        };
+        _personas.OnPersonaDeleted += p =>
+        {
+            if (p.Id != oldTutor) return;
+            _users.SetChildProfile(_childId, putBody, resetRules: false); // новый объект профиля
+            _users.SetChildSubjectTutor(_childId, "physics", tutorId!);   // закрепление в нём
+        };
+
+        await _sut.RemoveOrphanTutorsAsync(_childId, [oldTutor!, tutorId!]);
+
+        _personas.Get(tutorId!, _childId).Should().NotBeNull(
+            "закрепление пришло в середину удаления новым объектом профиля — живая ссылка: персона остаётся");
+        _personas.Get(oldTutor!, _childId).Should().BeNull("настоящий сирота удалён");
+        _users.GetById(_childId)!.ChildMode!.Subjects
+            .First(s => s.Id == "physics").TutorPersonaId.Should().Be(tutorId);
+    }
 }

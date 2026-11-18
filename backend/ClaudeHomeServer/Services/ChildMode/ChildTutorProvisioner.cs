@@ -239,6 +239,93 @@ public class ChildTutorProvisioner
         return createdId;
     }
 
+    /// <summary>
+    /// Удаление репетиторов-сирот удалённых предметов (Т2d, разрез §1): принимает кандидатов —
+    /// ключи предметов, которых больше нет в профиле (контроллер вычисляет их сравнением
+    /// прежнего снимка с итогом), — и удаляет ровно тех, на которых НЕ ссылается ни один
+    /// живой предмет и не ссылается TutorPersonaId профиля. Ссылки — по ЖИВОМУ профилю,
+    /// перечитаемому под семафором childId на каждого кандидата: параллельный провижн
+    /// того же замка мог закрепить кандидата на оставшемся предмете, а параллельный откат
+    /// контроллера (RestoreChildProfile) — вернуть удалённый предмет с его ключом, заменив
+    /// объект профиля; снимок до семафора или одно чтение на весь цикл был бы устаревшей
+    /// записью для последующих кандидатов (тот же приём, что у перечитывания в Ensure*).
+    /// Чаты удалённого предмета не
+    /// трогаются вовсе (только чтение — Т1c/Т1d). Отказ удаления одного кандидата — лог,
+    /// остальные удаляются; наружу исключение не выходит.
+    /// </summary>
+    public async Task RemoveOrphanTutorsAsync(string childId, IReadOnlyCollection<string> candidatePersonaIds,
+        CancellationToken ct = default)
+    {
+        // Кандидат без ключа — не сирота, а пустой ключ удалённого предмета без репетитора.
+        var candidates = candidatePersonaIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (candidates.Count == 0) return;
+
+        var gate = LockFor(childId);
+        try
+        {
+            await gate.WaitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var candidate in candidates)
+            {
+                // Живой профиль перечитывается на каждого кандидата: параллельный провижн
+                // (тот же замок) или откат контрольника (RestoreChildProfile меняет объект
+                // профиля) мог изменить ссылки между решениями; одно чтение на весь цикл
+                // был бы устаревшей записью для последующих кандидатов. Что было до
+                // семафора — не аргумент. Профиль исчез — оставшиеся кандидаты не трогаем.
+                if (_users.GetById(childId)?.ChildMode is not { } child) return;
+                if (ReferencesTutor(child, candidate)) continue;
+                try
+                {
+                    // false — персоны уже нет (или она не этого ребёнка): не наш случай, лог.
+                    if (!_personas.Delete(candidate, childId))
+                    {
+                        _log.LogWarning("Детский режим: персона-репетитор {Persona} не найдена при удалении сироты (ребёнок {Owner})",
+                            candidate, childId);
+                        continue;
+                    }
+                }
+                catch (Exception e)
+                {
+                    _log.LogWarning(e, "Детский режим: удаление репетитора-сироты не прошло (ребёнок {Owner}, персона {Persona})",
+                        childId, candidate);
+                    continue;
+                }
+
+                // Вещание по факту удаления — то же, что «created» у Ensure*: стор персон
+                // узнаёт об удалённой персоне. Ключ к этому моменту уже стёрт из профиля
+                // (предмет удалён контроллером до вызова), порядок «ключ→вещание»
+                // соблюдён; сбой вещания не отменяет удаление (тот же приём, что в Ensure*).
+                try
+                {
+                    await _broadcaster.ToOwner(childId,
+                        new PersonasChangedMessage("deleted", candidate));
+                }
+                catch (OperationCanceledException) { /* клиент ушёл — персона всё равно удалена */ }
+            }
+        }
+        catch (OperationCanceledException) { /* отмена между кандидатами: уже удалённые остаются удалёнными */ }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    // Ссылка на персону в живом профиле: ключ профиля или ключ любого предмета. Тот же
+    // охват, что у контракта удаления: «ни один оставшийся предмет и TutorPersonaId профиля».
+    private static bool ReferencesTutor(ChildProfile child, string personaId) =>
+        child.TutorPersonaId == personaId
+        || child.Subjects.Any(s => s.TutorPersonaId == personaId);
+
     // Предмет по ключу — то же сравнение, что у записи стора SetChildSubjectTutor
     // (UserStore.cs:726): провижер и стор должны находить одну и ту же запись.
     private static ChildSubject? FindSubject(ChildProfile child, string subjectId) =>

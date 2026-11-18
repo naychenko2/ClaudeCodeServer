@@ -47,7 +47,9 @@ public class ClaudeSession : ILlmSessionAdapter
         ?? (_turnModelOverride ?? Info.Model);
 
     // Детская политика «сейчас»: снимок идущего хода, а вне хода (старт оркестрации фолбэка идёт
-    // ДО RunTurnAsync) — живое чтение. Единая точка для модели, цепочки и признака ребёнка.
+    // ДО RunTurnAsync) — живое чтение. Охват: модель (EffectiveModel), цепочка (EffectiveTurnChain)
+    // и флаг фолбэка (IsChildTurn). IsChild для сборки промпта — не отсюда: она зовёт
+    // _childPolicy напрямую, мимо этого кэша (см. PromptSessionContext в RunTurnAsync).
     private ChildPolicySnapshot? ChildSnapshotNow => _turnChildSnapshot ?? _childPolicy?.Invoke();
 
     // Детский ли ход (по снимку политики): фолбэк-адаптер по нему запрещает ротацию подписок.
@@ -4117,9 +4119,11 @@ public class ClaudeSession : ILlmSessionAdapter
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth),
                     ConsumersHookActive: ConsumersHookDelivered,
                     Frame: turnFrame,
-                    // Детский ход — по тому же снимку политики, по которому живёт весь детский
-                    // слой (ChildPolicyProvider, KM-B3b): контрибьюторы recall-секций
-                    // проверяют признак в IsEnabled (KM-B6c), второго чтения стора нет.
+                    // Детский ход для сборки промпта — отдельное живое чтение провайдера
+                    // политики (тот же источник, что у всего детского слоя, ChildPolicyProvider,
+                    // KM-B3b), а не снимок идущего хода _turnChildSnapshot: провайдер сам не
+                    // кэширует (LlmSessionContext.ChildPolicyProvider). Контрибьюторы
+                    // recall-секций проверяют признак в IsEnabled (KM-B6c).
                     IsChild: _childPolicy?.Invoke() is not null);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);

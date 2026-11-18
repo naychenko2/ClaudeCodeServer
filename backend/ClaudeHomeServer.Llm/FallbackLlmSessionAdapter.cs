@@ -1431,9 +1431,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Уровень 1: другая подписка того же пула (та же модель). Далее — следующий шаг цепочки
     // (ADR-007 §4). null — кандидатов не осталось (цепочки нет либо она исчерпана). Без цепочки
     // (одноэлементная/пустая) после пула автоподбора нет — финальный сбой.
+    // childTurn без умолчания: единственный вызывающий передаёт его явно. Дефолт false для
+    // нового вызывающего молча разрешил бы ребёнку ротацию подписок (запрет И2′).
     private FallbackTarget? ResolveNextTarget(FallbackErrorClass cls, AttemptEnd end,
         HashSet<(string Model, string Key)> attempted, string model, string currentKey,
-        IReadOnlyList<string> chain, ref int chainIndex, int contextEstimate, bool childTurn = false)
+        IReadOnlyList<string> chain, ref int chainIndex, int contextEstimate, bool childTurn)
     {
         var modelForPool = string.IsNullOrWhiteSpace(model) ? null : model;
         var isNativeClaude = _providers?.ResolveByModel(modelForPool) is null;

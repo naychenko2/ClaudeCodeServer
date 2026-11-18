@@ -97,7 +97,7 @@ public abstract class ClaudeSessionPromptSectionsTestBase : IDisposable
     protected async Task<(string SystemPrompt, IReadOnlyList<PromptSectionDto> Sections)> RunTailTurnAsync(
         bool recallInTurnText, string stateText, Action<TurnEventBus>? extra = null, Session? info = null,
         Func<LlmSessionContext, LlmSessionContext>? tweak = null, Dictionary<string, string?>? providerConfig = null,
-        int agentDepth = 0)
+        int agentDepth = 0, string userText = "привет")
     {
         var clis = new ConcurrentDictionary<int, Process>();
         var argsCaptured = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -144,7 +144,7 @@ public abstract class ClaudeSessionPromptSectionsTestBase : IDisposable
             var session = new ClaudeSession(info ?? new Session { Model = "qwen-test-27b" }, context,
                 providers: new LlmProviderRegistry(config));
             await using var _ = session;
-            await session.SendMessageAsync("привет", agentDepth: agentDepth);
+            await session.SendMessageAsync(userText, agentDepth: agentDepth);
 
             // Потолок — лишь страховка от зависания: старт задерживал синк настоящего ~/.claude,
             // с изолированным профилем (IsolatedProfiles) он укладывается в доли секунды

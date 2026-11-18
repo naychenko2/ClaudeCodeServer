@@ -315,7 +315,8 @@ public sealed class LlmSubsystem : IAppSubsystem
         // FallbackLlmSessionAdapter). Используется реестром ниже для подстановки живого
         // max_model_len в CLAUDE_CODE_MAX_CONTEXT_TOKENS.
         services.AddSingleton<ILocalEndpointProbe>(sp =>
-            new LocalEndpointProbe(sp.GetRequiredService<IHttpClientFactory>()));
+            new LocalEndpointProbe(sp.GetRequiredService<IHttpClientFactory>(),
+                logger: sp.GetService<ILoggerFactory>()?.CreateLogger<LocalEndpointProbe>()));
 
         // Реестр провайдеров: цены, профили CLI, projects-каталоги.
         // Зависит от ILocalEndpointProbe: подставляет живое max_model_len в

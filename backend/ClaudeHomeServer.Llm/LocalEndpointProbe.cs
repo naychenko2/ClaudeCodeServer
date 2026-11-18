@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -79,6 +80,11 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
     private readonly IHttpClientFactory _httpFactory;
     private readonly TimeSpan _timeout;
     private readonly TimeSpan _cacheFor;
+    private readonly ILogger? _logger;
+
+    // Провайдеры, у которых окно уже сверяли с /metrics (раз за жизнь процесса): сторож не
+    // долбит стенд на каждой пробе, а Warning не повторяется. Ключ — Key провайдера.
+    private readonly ConcurrentDictionary<string, byte> _windowChecked = new();
 
     // Кеш по ключу провайдера: (когда проверяли, итог). Конкурентный доступ из разных
     // ходов — без блокировок на горячем пути.
@@ -93,8 +99,10 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
 
     public LocalEndpointProbe(IHttpClientFactory httpFactory,
         TimeSpan? timeout = null,
-        TimeSpan? cacheFor = null)
+        TimeSpan? cacheFor = null,
+        ILogger? logger = null)
     {
+        _logger = logger;
         _httpFactory = httpFactory;
         _timeout = timeout ?? DefaultTimeout;
         _cacheFor = cacheFor ?? DefaultCacheFor;
@@ -130,7 +138,77 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
         // 0 — поле отсутствовало, тогда запись не делаем (старая могла быть от прошлой пробы).
         if (maxLen > 0)
             _maxLenCache[key] = (until, maxLen);
+        if (_logger is not null && outcome == LocalProbeOutcome.Alive && _windowChecked.TryAdd(key, 0))
+            await WarnIfWindowBelowConfigAsync(provider, ct);
         return outcome;
+    }
+
+    // Сторож окна: у Strata GET {корень}/metrics → engine.max_context. Меньше ContextWindow
+    // модели из конфига — Warning с обоими числами (раз на пару провайдер×модель, ключ
+    // провайдера отмечен в _windowChecked). Окно НЕ правим: хранится желание, а не подмена.
+    // Ответ стенда недоверенный: любое исключение разбора гасим здесь, наружу оно не выходит;
+    // нет поля (vLLM отдаёт текст Prometheus, не JSON) — молча ничего.
+    private async Task WarnIfWindowBelowConfigAsync(LlmProviderConfig provider, CancellationToken ct)
+    {
+        try
+        {
+            var configured = provider.Models
+                .Where(m => !string.IsNullOrWhiteSpace(m.Id) && m.ContextWindow > 0).ToList();
+            if (configured.Count == 0) return;
+
+            var live = await ReadEngineMaxContextAsync(provider.AnthropicBaseUrl!, ct);
+            if (live is not { } actual) return;
+
+            foreach (var m in configured)
+            {
+                if (m.ContextWindow <= actual) continue;
+                _logger?.LogWarning(
+                    "Окно локального стенда меньше окна модели из конфига: провайдер {Provider}, модель {Model}, " +
+                    "engine.max_context={Live}, ContextWindow={Configured}. Окно не правим — поправьте конфиг или стенд.",
+                    provider.Key, m.Id, actual, m.ContextWindow);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            // Сторож вторичен: сбой чтения /metrics не должен задеть пробу и ход.
+        }
+    }
+
+    private async Task<int?> ReadEngineMaxContextAsync(string baseUrl, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(_timeout);
+        try
+        {
+            var http = _httpFactory.CreateClient(HttpClientName);
+            using var resp = await http.GetAsync(BuildMetricsUrl(baseUrl), cts.Token);
+            if (!resp.IsSuccessStatusCode) return null;
+            await using var stream = await resp.Content.ReadAsStreamAsync(cts.Token);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cts.Token);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("engine", out var engine)
+                || engine.ValueKind != JsonValueKind.Object
+                || !engine.TryGetProperty("max_context", out var mc)
+                || mc.ValueKind != JsonValueKind.Number
+                || !mc.TryGetInt32(out var v) || v <= 0)
+                return null;
+            return v;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    // /metrics лежит в корне стенда: хвост /v1 базы (если конфиг дал ApiBaseUrl) отрезаем.
+    internal static string BuildMetricsUrl(string baseUrl)
+    {
+        var trimmed = baseUrl.TrimEnd('/');
+        if (trimmed.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed[..^3];
+        return trimmed + "/metrics";
     }
 
     public bool TryGetKnownContextWindow(string providerKey, out int window)

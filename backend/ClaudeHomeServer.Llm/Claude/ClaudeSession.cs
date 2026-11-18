@@ -3530,8 +3530,13 @@ public class ClaudeSession : ILlmSessionAdapter
     public static bool ShouldMarkHumanText(string rawText, bool auto, bool systemDirective, string? senderPersonaId)
     {
         if (auto || systemDirective || senderPersonaId is not null) return false;
-        return !rawText.TrimStart().StartsWith('/');
+        return !IsSlashCommand(rawText);
     }
+
+    // Слэш-команда/скилл: сырой текст после TrimStart() начинается с '/'. Единый предикат для
+    // маркера реплики (ShouldMarkHumanText) и хвоста хода: всё, что приклеено перед командой,
+    // ломает её распознавание в CLI (/compact превращается в обычную реплику).
+    internal static bool IsSlashCommand(string rawText) => rawText.TrimStart().StartsWith('/');
 
     // Склейка хвоста хода: recall + text. Маркер реплики (WithHumanTextMarker) уже стоит
     // в text (вставлен в SessionManager до обвязки). Без recall (joinedRecall null/пусто)
@@ -4559,7 +4564,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // процессу не обновляется, а текст хода доезжает всегда — значит и recall тоже.
         var turnTextForCli = text;
         turnRecallSections.AddRange(alwaysTailSections);
-        if (turnRecallSections.Count > 0)
+        // Слэш-команду (/compact, /скилл) хвост не трогает: приклеенный перед ней, он ломает
+        // её распознавание в CLI. Хэш не обновляем, секции в снимок не кладём — хвост уедет
+        // со следующей прозой.
+        if (turnRecallSections.Count > 0 && !IsSlashCommand(text))
         {
             var joinedRecall = string.Join("\n\n", turnRecallSections.Select(x => x.Text));
             var recallHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(

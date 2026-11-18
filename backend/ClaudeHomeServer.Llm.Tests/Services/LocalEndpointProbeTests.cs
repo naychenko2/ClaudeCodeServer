@@ -57,6 +57,67 @@ public class LocalEndpointProbeTests
     private static HttpResponseMessage Json(string body, HttpStatusCode code = HttpStatusCode.OK) =>
         new(code) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
 
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public List<string> Warnings { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning) Warnings.Add(formatter(state, exception));
+        }
+    }
+
+    private static HttpResponseMessage ModelsOrMetrics(HttpRequestMessage req, string metrics) =>
+        req.RequestUri!.AbsolutePath == "/metrics"
+            ? Json(metrics)
+            : Json("""{"data":[{"id":"qwen38-27b","status":{"value":"loaded","failed":false}}]}""");
+
+    // Сторож окна: engine.max_context стенда меньше ContextWindow конфига — один Warning с обоими числами
+    [Fact]
+    public async Task CheckAsync_МаксКонтекстСтендаМеньшеКонфига_ОдинWarningСЧислами()
+    {
+        var handler = new StubHandler { Responder = r => ModelsOrMetrics(r, """{"engine":{"max_context":32768}}""") };
+        var log = new CapturingLogger();
+        var probe = new LocalEndpointProbe(new StubFactory(handler), cacheFor: TimeSpan.Zero, logger: log);
+
+        await probe.CheckAsync(LocalProvider());
+        await probe.CheckAsync(LocalProvider());
+
+        log.Warnings.Should().ContainSingle().Which.Should().Contain("32768").And.Contain("57344");
+    }
+
+    [Fact]
+    public async Task CheckAsync_МаксКонтекстСтендаНеМеньшеКонфига_ТишинаБезWarning()
+    {
+        var handler = new StubHandler { Responder = r => ModelsOrMetrics(r, """{"engine":{"max_context":57344}}""") };
+        var log = new CapturingLogger();
+        var probe = new LocalEndpointProbe(new StubFactory(handler), logger: log);
+
+        await probe.CheckAsync(LocalProvider());
+
+        log.Warnings.Should().BeEmpty();
+    }
+
+    // Ответ стенда недоверенный: мусор, не-JSON и не тот тип поля исход пробы не меняют и исключений не бросают
+    [Theory]
+    [InlineData("# HELP vllm:num_requests_running gauge")]
+    [InlineData("{\"engine\":{\"max_context\":\"много\"}}")]
+    [InlineData("{\"engine\":[1,2]}")]
+    [InlineData("[1,2,3]")]
+    public async Task CheckAsync_МусорВМетриках_ИсключениеНеВыходитНаружу(string metrics)
+    {
+        var handler = new StubHandler { Responder = r => ModelsOrMetrics(r, metrics) };
+        var log = new CapturingLogger();
+        var probe = new LocalEndpointProbe(new StubFactory(handler), logger: log);
+
+        var outcome = await probe.CheckAsync(LocalProvider());
+
+        outcome.Should().Be(LocalProbeOutcome.Alive);
+        log.Warnings.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task CheckAsync_LoadedОтвет_Alive()
     {

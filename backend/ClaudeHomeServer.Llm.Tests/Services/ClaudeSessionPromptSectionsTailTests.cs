@@ -36,6 +36,29 @@ public class ClaudeSessionPromptSectionsTailTests : ClaudeSessionPromptSectionsT
         tail.Text.Should().Contain("«лампа»");
     }
 
+    // /compact и пользовательские слэш-команды: хвост перед ними ломает распознавание в CLI.
+    // Хвост не клеится и в снимок «что ушло модели» не попадает; проза рядом — по-прежнему с хвостом.
+    [Theory]
+    [InlineData("/compact")]
+    [InlineData("  /compact фокус на тестах")]
+    public async Task СлэшКоманда_ХвостНеКлеится(string userText)
+    {
+        var slash = await RunTailTurnAsync(true, "МАРКЕР_СОСТОЯНИЯ", userText: userText);
+        slash.Sections.Should().NotContain(s => s.Key == "image-editor-state",
+            "хвост перед слэш-командой превращает её в обычную реплику");
+
+        var prose = await RunTailTurnAsync(true, "МАРКЕР_СОСТОЯНИЯ", userText: "привет");
+        prose.Sections.Should().Contain(s => s.Key == "image-editor-state");
+    }
+
+    [Theory]
+    [InlineData("/compact", true)]
+    [InlineData("  \n/compact", true)]
+    [InlineData("привет /compact", false)]
+    [InlineData("", false)]
+    public void IsSlashCommand_ВедущийСлэшПослеTrimStart(string text, bool expected) =>
+        ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.IsSlashCommand(text).Should().Be(expected);
+
     // Секция tool-descriptions (живая русская подпись к инструменту): стабильная, в системном
     // блоке, до voice-mode и слоя персоны; системный блок от хода к ходу не меняется.
     [Fact]

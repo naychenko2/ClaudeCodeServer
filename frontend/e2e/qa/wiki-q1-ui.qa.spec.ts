@@ -1,5 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
-import { api, login, type Api } from './helpers';
+import { login } from './helpers';
 
 // QA · очередь 1 вики: интерфейс на стенде из worktree (:5562, копия data/).
 // Дерево вики в «Заметках», страница вики с блоком «Связанные», плоские ссылки [[…]],
@@ -11,7 +11,6 @@ const T = { timeout: 15000 };
 
 let request: APIRequestContext;
 let token: string;
-let client: Api;
 
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(240_000);
@@ -19,14 +18,13 @@ test.setTimeout(240_000);
 test.beforeAll(async ({ playwright, baseURL }) => {
   request = await playwright.request.newContext({ baseURL });
   token = await login(request);
-  client = api(request, token);
 });
 
 test.afterAll(async () => { await request?.dispose(); });
 
 async function openNotes(page: Page, context: any) {
   page.setDefaultTimeout(20000);
-  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await context.addInitScript((tk: string) => localStorage.setItem('cc_token', tk), token);
   await page.goto('/#/notes');
   await page.waitForTimeout(5000);
   await expect(page.locator('[data-testid="wiki-unified-tree"]')).toBeVisible({ timeout: 30000 });

@@ -1,5 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
-import { api, login, type Api } from './helpers';
+import { login } from './helpers';
 
 // QA · очередь 1 вики: страница вики (блок «Связанные»), ссылки [[…]] плоским текстом,
 // мобильная раскладка 360 и тёмная тема. Стенд из worktree (:5562).
@@ -9,7 +9,6 @@ const T = { timeout: 20000 };
 
 let request: APIRequestContext;
 let token: string;
-let client: Api;
 
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(420_000);
@@ -17,14 +16,13 @@ test.setTimeout(420_000);
 test.beforeAll(async ({ playwright, baseURL }) => {
   request = await playwright.request.newContext({ baseURL });
   token = await login(request);
-  client = api(request, token);
 });
 
 test.afterAll(async () => { await request?.dispose(); });
 
 async function openNotes(page: Page, context: any) {
   page.setDefaultTimeout(20000);
-  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await context.addInitScript((tk: string) => localStorage.setItem('cc_token', tk), token);
   await page.goto('/#/notes');
   await page.waitForTimeout(5000);
   const tree = page.locator('[data-testid="wiki-unified-tree"]');
@@ -51,7 +49,7 @@ test('страница вики: блок «Связанные», пустые �
     if (has) {
       withBlock++;
       const g = await page.locator('[data-testid="wiki-related-group"]').evaluateAll(
-        els => els.map(e => e.getAttribute('data-kind')));
+        els => els.map(e => e.getAttribute('data-kind') ?? ''));
       const l = await page.locator('[data-testid="wiki-related-group"] > div').allInnerTexts();
       kinds = [...new Set([...kinds, ...g])];
       labels = [...new Set([...labels, ...l.map(t => t.trim())])];
@@ -131,7 +129,7 @@ test('ссылки [[…]] в тексте страницы — плоский �
 test('мобильная раскладка 360 и тёмная тема: подгруппы, тач-цель, консоль', async ({ page, context }) => {
   await page.setViewportSize({ width: 360, height: 780 });
   await page.emulateMedia({ colorScheme: 'dark' });
-  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await context.addInitScript((tk: string) => localStorage.setItem('cc_token', tk), token);
   await page.goto('/#/notes');
   await page.waitForTimeout(6000);
   // на 360 панель «Заметки» имеет переключатель режимов «Заметки | Вики | Граф»

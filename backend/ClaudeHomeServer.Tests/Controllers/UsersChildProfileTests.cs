@@ -326,7 +326,8 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         // Ключ, который не резолвится ни в одну запись (нет в пуле, нет в реестре провайдеров):
         // ChildRoute.Evaluate → NoRoute → ветка forPool:true RouteReject: тот же код, что у
         // «не запись с ключом», а текст называет пул подписок. Сторож именно этой ветки:
-        // предыдущий тест проверяет код, текст forPool здесь — единственный в классе.
+        // Put_ПровайдерНеЗаписьСApiKey_400_provider_not_api_key проверяет код, текст forPool
+        // здесь — единственный в классе.
         // Мутация «поменять местами тексты веток NoRoute» — красный на Contain, не на коде.
         var id = await NewContainerUser("kid-provider-unresolved");
         var body = new { enabled = true, providerKey = "no-such-provider", model = "sonnet", spaces = new Dictionary<string, object>() };
@@ -345,7 +346,8 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         // Сторож «чат правил + облачный провайдер = отказ» (минор ревью Т5a): deepseek —
         // законный маршрут ПРЕДМЕТА с согласия админа (тесты Т5a дают ему 200), но маршрут
         // чата правил — только запись пула с API-ключом: Evaluate профиля всегда идёт с
-        // acknowledged: false (ChildProfileValidator.cs:40), а flag согласия в теле — не поле
+        // acknowledged: false (проверка маршрута профиля в начале ChildProfileValidator.Validate),
+        // а flag согласия в теле — не поле
         // контракта профиля и не читается никогда. Отказ здесь — ChildRouteRefusal.RiskUnacknowledged
         // → код route_risk_unacknowledged в ChildProfileValidator.RouteReject: deepseek резолвится
         // в реестре хоста, но не-Anthropic без согласия. Флаг forPool меняет только текст ветки
@@ -1791,7 +1793,8 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     public async Task GetProfile_NoProfile_200_ProfileNull_НичегоНеСоздаёт()
     {
         // Профиля нет → 200 с profile: null: это документированная форма ChildProfileResponse
-        // (ChildProfileValidator.cs:262-264, тот же ответ, что отдаёт ветка выключения PUT),
+        // (record ChildProfileResponse в конце ChildProfileValidator.cs, тот же ответ, что отдаёт
+        // ветка выключения PUT),
         // а не 404 и не «пустой включённый».
         var id = await NewContainerUser("kid-get-none");
         var (status, body) = await GetAsync(id);
@@ -1855,8 +1858,9 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     [Fact]
     public async Task Get_ЛокальныйПользователь_200_ProfileNull_БезNotContainer()
     {
-        // not_container — проверка ВКЛЮЧЕНИЯ (ChildProfileValidator.cs:34 достижим только когда
-        // ветка `!req.Enabled` метода `UsersController.SetChildProfile` не взята). Та же локальная
+        // not_container — проверка ВКЛЮЧЕНИЯ (ветка ExecutionEnvironment != Container в начале
+        // ChildProfileValidator.Validate, её зовёт Put_ЛокальнаяСреда_400_not_container; достижима
+        // только когда ветка `!req.Enabled` метода `UsersController.SetChildProfile` не взята). Та же локальная
         // учётка через { enabled: false } даёт 200, поэтому и чтению нечего отказывать: профиля нет → null.
         var resp = await _admin.PostAsJsonAsync("/api/users", new
         {

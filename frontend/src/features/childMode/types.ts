@@ -175,6 +175,8 @@ export interface ChildChatListItem {
   updatedAt: string;
   subject: string | null;
   subjectClosed: boolean;
+  // Название предмета из профиля, даже когда предмет выключен (ХВ2-Б1); null — предмета нет или он удалён
+  subjectLabel?: string | null;
   // Озвучка ответов чата: оболочка восстанавливает её при открытии (субзадача Т3c)
   voiceMode: boolean;
 }

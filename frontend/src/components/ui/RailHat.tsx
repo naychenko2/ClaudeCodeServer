@@ -114,8 +114,14 @@ export function RailHat({ side, label, labelSize = 7, title, collapse, railHover
           высота шляпки входит в расчёты вместимости (RAIL_HAT_H — слоты дока
           проектов, резерв схлопнутой рельсы), и визуальный сдвиг не должен
           менять общую высоту рельсы. Снизу подпись уходит в зазор до столбца. */}
+      {/* Длинная подпись обрезается многоточием внутри капсулы: внутри неё 39px,
+          а капс длинного имени (имя ребёнка в детской оболочке) шире — без обрезки
+          строка уходила за край окна. Полное название — в плашке (title). */}
       <div style={{
         height: 7, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        // Предел — ширина капсулы; сама div overflow:hidden не режет: иконка
+        // сворачивания намеренно вылезает за строку на пиксель сверху и снизу
+        maxWidth: '100%',
         transform: 'translateY(2px)',
         fontFamily: FONT.sans, fontSize: labelSize, fontWeight: 700, lineHeight: '7px',
         letterSpacing: '0.03em', textTransform: 'uppercase',
@@ -127,7 +133,7 @@ export function RailHat({ side, label, labelSize = 7, title, collapse, railHover
       }}>
         {showIcon
           ? <CollapseIcon size={9} strokeWidth={ICON_STROKE} style={{ display: 'block' }} />
-          : label}
+          : <span style={{ display: 'block', minWidth: 0, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>}
       </div>
     </div>
   );

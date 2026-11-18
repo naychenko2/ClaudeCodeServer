@@ -244,6 +244,27 @@ describe('ChildHome: плитки с сервера', () => {
   });
 });
 
+describe('ChildHome: планшет (768), три и более предмета — дефект c28b42bf', () => {
+  it('десктопная сетка сжимает колонки в ширину контейнера: minmax(0,1fr), а не 1fr', async () => {
+    // Linkedom не меряет вёрстку: проверяем свойство стиля — минимум трека 0, а не auto.
+    // Именно auto-минимум 1fr (min-content содержимого плитки) не давал колонкам сжиматься
+    // на 768: scrollWidth 715 при clientWidth 704.
+    const three = SERVER_SUBJECTS.slice(0, 3);
+    const { host } = await render({}, handlers(), lastLesson, three);
+    const tiles = serverTileButtons(host);
+    expect(tiles).toHaveLength(3);
+    const grid = tiles[0].parentElement!;
+    expect(grid.style.display).toBe('grid');
+    expect(grid.style.gridTemplateColumns).toBe('repeat(3, minmax(0, 1fr))');
+    // содержимое плитки готово сжиматься в колонке: у метки minWidth 0, текст с многоточием
+    const label = tiles[0].querySelector('span:nth-of-type(2)') as HTMLElement;
+    // linkedom сериализует числовой 0 как '0' (браузер — '0px'): допускаем обе формы
+    expect(['0', '0px']).toContain(label.style.minWidth);
+    const tutorName = label.querySelector('span[style*="nowrap"]') as HTMLElement;
+    expect(tutorName.style.textOverflow).toBe('ellipsis');
+  });
+});
+
 describe('ChildHome: rules_pending', () => {
   it('плиток предметов нет; «Начать вместе с папой» зовёт onStartRules ровно 1 раз', async () => {
     const { host, h } = await render({ state: 'rules_pending', windowEndsAt: null, rulesAgreedAt: null });

@@ -160,16 +160,20 @@ public class ChildSubjectMaterialsControllerTests : IClassFixture<ChildSubjectMa
     // «много нулей» — не текст, а unsupported_type; размеры меряются текстовыми фикстурами.
     private static byte[] Text(int length) => Encoding.UTF8.GetBytes(new string('a', length));
 
+    // Картинка (PNG/JPEG/WEBP) с КИ1b — не unsupported_type: она идёт веткой распознавания
+    // (её отказ — ocr_unavailable/image_no_text — контракт КИ1c). 415 здесь проверяется на
+    // HEIC: сигнатура вне allow-list стора (ChildAttachmentPolicy.Detect), как и было.
     [Fact]
-    public async Task Upload_Png_IsRefusedUnsupportedType()
+    public async Task Upload_Heic_IsRefusedUnsupportedType()
     {
-        var childId = SetupChild("png");
-        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01 };
+        var childId = SetupChild("heic");
+        // «ftypheic…» — box-заголовок HEIC: не PNG/JPEG/WEBP/PDF и не текст (нулевые байты).
+        var heic = new byte[] { 0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0x00, 0x00, 0x00, 0x00, 0x68, 0x65, 0x69, 0x63, 0x6D, 0x69, 0x66, 0x31 };
 
-        var post = await _admin.PostAsync(Url(childId, "png"), Multipart("page.png", png));
+        var post = await _admin.PostAsync(Url(childId, "heic"), Multipart("page.heic", heic));
         post.StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
         (await CodeAsync(post)).Should().Be(ChildSubjectMaterialsStore.CodeUnsupportedType);
-        (await Store.ListAsync(childId, "png")).Should().BeEmpty();
+        (await Store.ListAsync(childId, "heic")).Should().BeEmpty();
     }
 
     [Fact]

@@ -15,7 +15,9 @@ using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
@@ -627,6 +629,11 @@ builder.Services.AddSingleton(sp => new ChildSubjectMaterialsStore(
     ChildSubjectMaterialsStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
     sp.GetRequiredService<MarkitdownService>(),
     sp.GetRequiredService<IConfiguration>(),
+    // Шов OCR (КИ1a): форвардер LlmSubsystem на единственный LocalOcrService.
+    sp.GetRequiredService<ILocalPageOcr>(),
+    // Растр — необязательно: вертикаль Images отключаемая, без неё картинка отказана
+    // как ocr_unavailable (GetService, не GetRequiredService).
+    sp.GetService<IImageRaster>(),
     sp.GetRequiredService<ILogger<ChildSubjectMaterialsStore>>()));
 // Стоп-сигнал ребёнка → уведомление взрослым без текста переписки (KM-B6d, ADR-041 решение 1).
 builder.Services.AddSingleton<ChildStopSignalService>();

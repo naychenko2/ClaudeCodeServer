@@ -4,6 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
+using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -184,8 +185,17 @@ public class UsersDeleteChildMaterialsBrokenStoreTests : IClassFixture<UsersDele
                 null!,
                 new ClaudeHomeServer.Services.Docs.MarkitdownService(cfg, NullLogger<ClaudeHomeServer.Services.Docs.MarkitdownService>.Instance),
                 cfg,
+                // Картинок в этом тесте не грузится — OCR не вызывается вовсе.
+                new UnusedOcr(),
+                raster: null,
                 NullLogger<ChildSubjectMaterialsStore>.Instance));
         };
+    }
+
+    private sealed class UnusedOcr : ILocalPageOcr
+    {
+        public Task<OcrResult> RecognizeAsync(ReadOnlyMemory<byte> png, OcrRequestInfo info, CancellationToken ct) =>
+            throw new InvalidOperationException("OCR в этом тесте не вызывается");
     }
 
     private readonly BrokenHosts _hosts;

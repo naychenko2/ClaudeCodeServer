@@ -3,6 +3,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Services.Docs;
+using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.Llm.Gateway;
 
 namespace ClaudeHomeServer.Services.ChildMode;
 
@@ -24,10 +27,20 @@ namespace ClaudeHomeServer.Services.ChildMode;
 /// содержимое чужого файла ребёнку не отдаётся (fail-closed, как у PrivateAttachments).
 ///
 /// Тип — по сигнатуре байтов, как у детских вложений (ChildAttachmentPolicy.Detect), плюс
-/// docx: zip с записью word/document.xml. Картинки в этой пачке нет — до КИ1a/КИ1b они
-/// unsupported_type (КИ1b заменит тест на картинку). PDF и docx превращаются в текст при
-/// загрузке тем же MarkitdownService, что ручка №8: без текстового слоя — pdf_no_text /
-/// docx_no_text, и оригинал при этом не остаётся: файла без строки описи нет.
+/// docx: zip с записью word/document.xml. PDF и docx превращаются в текст при загрузке
+/// тем же MarkitdownService, что ручка №8: без текстового слоя — pdf_no_text / docx_no_text,
+/// и оригинал при этом не остаётся: файла без строки описи нет.
+///
+/// Картинка страницы (КИ1b, разрез §9 «Как идёт загрузка картинки», ADR-041 решение 24):
+/// PNG/JPEG/WEBP по сигнатуре; HEIC и прочее — unsupported_type (браузер на iOS отдаёт JPEG
+/// сам). Оригинал прогоняется через IImageRaster (AutoOrient, ресайз длинной стороны до
+/// OcrMaxSide, кодирование PNG) и распознаётся ILocalPageOcr с меткой = серверный id
+/// материала (не имя файла от админа). Успех: оригинал — в files/ со своим расширением
+/// формата, текст — в text/, опись kind: "image". Любой отказ или сбой растра/OCR —
+/// ocr_unavailable; текст пустой или из одних [?] с пробелами — image_no_text. На любом
+/// отказе ни файла, ни строки описи. Нет IImageRaster (вертикаль Images отключаемая) —
+/// картинка отказана как ocr_unavailable: без неё не нормализовать страницу (ориентация и
+/// размер для потолка OCR не гарантированы), а второй ветки загрузки картинки нет.
 ///
 /// Пределы — ChildMode:Materials:MaxFileBytes (20 МБ) и MaxSubjectBytes (200 МБ), чтение
 /// как у ChildLimitsCalculator: неразборное или неположительное значение — дефолт инстанса,
@@ -38,7 +51,10 @@ namespace ClaudeHomeServer.Services.ChildMode;
 /// subjectId) (словарь семафоров, не один на стор: разные предметы не ждут друг друга);
 /// запись описи атомарна (.tmp + File.Move, JsonFileStore.Save). Сбой диска — результат с
 /// кодом, исключения наружу нет и полусостояния тоже: положенный на диск файл без строки
-/// описи удаляется.
+/// описи удаляется. Картинка — исключение по длительности: растр и OCR (до минут) идут
+/// ВНЕ семафора предмета, под семафором после распознавания — только проверка subject_full
+/// и атомарная запись (разрез §9): пока страница распознаётся, другая загрузка в тот же
+/// предмет её не ждёт.
 ///
 /// Каталог лежит в data/ и едет в архив сам (служебный .tmp — нет; тот же тест, что у
 /// child-usage). Новое хранилище, существующий формат не меняет: BackupSchema.Version не
@@ -48,6 +64,8 @@ public sealed class ChildSubjectMaterialsStore(
     string root,
     MarkitdownService markitdown,
     IConfiguration config,
+    ILocalPageOcr ocr,
+    IImageRaster? raster = null,
     ILogger<ChildSubjectMaterialsStore>? log = null)
 {
     public const string DirName = "child-subjects";
@@ -67,6 +85,8 @@ public sealed class ChildSubjectMaterialsStore(
     public const string CodeUnsupportedType = "unsupported_type";
     public const string CodePdfNoText = "pdf_no_text";
     public const string CodeDocxNoText = "docx_no_text";
+    public const string CodeOcrUnavailable = "ocr_unavailable";
+    public const string CodeImageNoText = "image_no_text";
     // Сбой диска — не код ручки (наружу ему место в 503): стор не бросает наружу ничего,
     // и полусостояния не оставляет.
     public const string CodeStorageError = "storage_error";
@@ -76,6 +96,16 @@ public sealed class ChildSubjectMaterialsStore(
     public const string KindPdf = "pdf";
     public const string KindText = "text";
     public const string KindDocx = "docx";
+    public const string KindImage = "image";
+
+    // Картинка страницы (разрез §9): длинная сторона, до которой она дожимается перед OCR.
+    // Арифметика §9: 1800×1350 — даже без сжатия укладывается в 8 МБ потолка LocalOcrService,
+    // второй ступени ресайза не нужно.
+    public const int OcrMaxSide = 1800;
+
+    // preview результата загрузки (КИ1c отдаёт его только админу): первые 600 символов
+    // текста — «как репетитор прочтёт страницу», не новый путь чтения.
+    public const int PreviewMaxChars = 600;
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -105,9 +135,11 @@ public sealed class ChildSubjectMaterialsStore(
 
     /// <summary>
     /// Добавить материал: пределы → тип по сигнатуре → оригинал в files/ → текст в text/ →
-    /// строка описи в конец списка, всё под семафором предмета. Отказ — результат с кодом;
-    /// исключения наружу нет. Аргументы (id ребёнка/предмета, байты, кто загрузил) —
-    /// исключение: их обязан выдержать вызывающий, до ручки они не доходят.
+    /// строка описи в конец списка, всё под семафором предмета. Картинка — исключение по
+    /// длительности: растр и OCR вне семафора (AddImageAsync), под семафором — проверка
+    /// subject_full и запись. Отказ — результат с кодом; исключения наружу нет. Аргументы
+    /// (id ребёнка/предмета, байты, кто загрузил) — исключение: их обязан выдержать
+    /// вызывающий, до ручки они не доходят.
     /// </summary>
     public async Task<AddMaterialResult> AddAsync(
         string childId, string subjectId, string fileName, byte[] bytes, string uploadedBy)
@@ -117,6 +149,13 @@ public sealed class ChildSubjectMaterialsStore(
         if (string.IsNullOrWhiteSpace(uploadedBy))
             throw new ArgumentException("Загрузивший — id пользователя", nameof(uploadedBy));
 
+        var kind = DetectKind(bytes);
+
+        // Картинка — отдельным путём: распознавание длится минуты и не должно держать
+        // семафор предмета (загрузка другого вида в тот же предмет её не ждёт).
+        if (kind == KindImage)
+            return await AddImageAsync(dir, childId, subjectId, fileName, bytes, uploadedBy);
+
         var sem = LockFor(dir);
         await sem.WaitAsync();
         try
@@ -124,7 +163,6 @@ public sealed class ChildSubjectMaterialsStore(
             if (bytes.LongLength > MaxFileBytes())
                 return AddMaterialResult.Refused(CodeTooLarge);
 
-            var kind = DetectKind(bytes);
             if (kind is null)
                 return AddMaterialResult.Refused(CodeUnsupportedType);
 
@@ -151,11 +189,13 @@ public sealed class ChildSubjectMaterialsStore(
                 wroteStored = true;
 
                 Directory.CreateDirectory(Path.GetDirectoryName(textPath)!);
+                string text;
                 if (kind == KindText)
                 {
                     // Оригинальный текст — он и есть текст: в text/ кладются те же байты,
                     // ReadTextAsync возвращает их дословно.
                     File.WriteAllBytes(textPath, bytes);
+                    text = Encoding.UTF8.GetString(bytes);
                 }
                 else
                 {
@@ -168,6 +208,7 @@ public sealed class ChildSubjectMaterialsStore(
                         return AddMaterialResult.Refused(kind == KindPdf ? CodePdfNoText : CodeDocxNoText);
                     }
                     File.WriteAllBytes(textPath, Encoding.UTF8.GetBytes(md));
+                    text = md;
                 }
                 wroteText = true;
 
@@ -176,13 +217,169 @@ public sealed class ChildSubjectMaterialsStore(
                     uploadedBy, storedName, textName);
                 manifest.Add(material);
                 JsonFileStore.Save(ManifestPath(dir), manifest, Json);
-                return AddMaterialResult.Added(material);
+                return AddMaterialResult.Added(material, PreviewOf(text));
             }
             catch (Exception e)
             {
                 // Отказ диска — результат с кодом; что уже легло на диск без строки описи —
                 // удаляется (полусостояния нет).
                 _log?.LogWarning(e, "Детский режим: материал предмета не сохранён (child {Child}, subject {Subject})", childId, subjectId);
+                if (wroteStored) TryDelete(storedPath);
+                if (wroteText) TryDelete(textPath);
+                return AddMaterialResult.Refused(CodeStorageError);
+            }
+        }
+        finally
+        {
+            sem.Release();
+        }
+    }
+
+    /// <summary>
+    /// Картинка страницы (разрез §9, ADR-041 решение 24): размер → растр (AutoOrient +
+    /// ресайз длинной стороны до OcrMaxSide + PNG) → OCR с меткой = серверный id → под
+    /// семафором subject_full и атомарная запись (оригинал в files/ со своим расширением
+    /// формата, текст в text/). Растр и OCR — вне семафора: минуты распознавания не держат
+    /// предмет. Любой отказ или сбой растра/OCR — ocr_unavailable, пустой или «одни [?]»
+    /// текст — image_no_text; на любом отказе ни файла, ни строки описи, исключение наружу
+    /// не выходит. Метр проверяется после OCR: пока страница распознавалась, предмет мог
+    /// заполниться другой загрузкой.
+    /// </summary>
+    private async Task<AddMaterialResult> AddImageAsync(
+        string dir, string childId, string subjectId, string fileName, byte[] bytes, string uploadedBy)
+    {
+        if (bytes.LongLength > MaxFileBytes())
+            return AddMaterialResult.Refused(CodeTooLarge);
+
+        // Вертикаль Images отключаемая: без растра страницу не нормализовать (ориентация и
+        // размер для потолка OCR не гарантированы) — отказ без следа на диске.
+        if (raster is null)
+            return AddMaterialResult.Refused(CodeOcrUnavailable);
+
+        var id = NewMaterialId();
+
+        byte[] png;
+        string storedExt;
+        try
+        {
+            var probe = raster.Probe(bytes);
+            if (probe?.Format is null)
+            {
+                // Сигнатура — картинка, а растр её не прочитал (битый файл): это сбой
+                // растра, тот же исход, что отказ OCR.
+                _log?.LogWarning("Детский режим: картинку не прочитал растр (child {Child}, subject {Subject}, material {Material})",
+                    childId, subjectId, id);
+                return AddMaterialResult.Refused(CodeOcrUnavailable);
+            }
+
+            // AutoOrient растр делает всегда на входе (AutoOrientOp — явная, но пустая
+            // операция); ресайз — по ориентированным сторонам (Display*): повернутое по EXIF
+            // фото мерить хранимыми сторонами — значит ресайзить не ту сторону.
+            var ops = new List<ImageTransformOp> { new AutoOrientOp() };
+            var longSide = Math.Max(probe.DisplayWidth, probe.DisplayHeight);
+            if (longSide > OcrMaxSide)
+                ops.Add(probe.DisplayWidth >= probe.DisplayHeight
+                    ? new ResizeOp(Width: OcrMaxSide)
+                    : new ResizeOp(Height: OcrMaxSide));
+
+            var outcome = raster.Apply(bytes, ops, new ImageEncodeSpec(ImageEncodeFormat.Png));
+            if (!outcome.Ok)
+            {
+                _log?.LogWarning("Детский режим: растр отказал картинку (child {Child}, subject {Subject}, material {Material}): {Error}",
+                    childId, subjectId, id, outcome.Error);
+                return AddMaterialResult.Refused(CodeOcrUnavailable);
+            }
+
+            png = outcome.Image!.Bytes;
+            // Расширение оригинала — по его формату: kind «image» и расширение не расходятся.
+            storedExt = probe.Format.Value switch
+            {
+                ImageEncodeFormat.Jpeg => ".jpg",
+                ImageEncodeFormat.Webp => ".webp",
+                _ => ".png",
+            };
+        }
+        catch (Exception e)
+        {
+            // Контракт растра — отказ ответом, но исключение шва не должно становиться 500.
+            _log?.LogWarning(e, "Детский режим: сбой растра картинки (child {Child}, subject {Subject}, material {Material})", childId, subjectId, id);
+            return AddMaterialResult.Refused(CodeOcrUnavailable);
+        }
+
+        OcrResult ocrRes;
+        try
+        {
+            // Метка — серверный id, не имя файла от админа: имя может нести данные, лог
+            // хранит только агрегаты (тот же приём, что у самого LocalOcrService).
+            ocrRes = await ocr.RecognizeAsync(png, new OcrRequestInfo(id), CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            _log?.LogWarning(e, "Детский режим: сбой OCR картинки (child {Child}, subject {Subject}, material {Material})", childId, subjectId, id);
+            return AddMaterialResult.Refused(CodeOcrUnavailable);
+        }
+
+        if (!ocrRes.Ok)
+        {
+            // Все причины отказа OCR (Disabled, LocalUnavailable, BusyTimeout, PageTimeout,
+            // TooLarge, BadResponse) — для админа один отказ: «распознавание недоступно,
+            // повторите»; различие видно в логе OCR по метке.
+            _log?.LogWarning("Детский режим: OCR отказал картинку (child {Child}, subject {Subject}, material {Material}): {Reason}",
+                childId, subjectId, id, ocrRes.Reason);
+            return AddMaterialResult.Refused(CodeOcrUnavailable);
+        }
+
+        var text = ocrRes.Text ?? "";
+        if (HasNoUsefulText(text))
+        {
+            // Пустой текст или «одни [?] с пробелами» — на странице нечего читать: парный
+            // pdf_no_text (промпт OCR заменяет нечитаемое [?]).
+            _log?.LogWarning("Детский режим: на картинке нет читаемого текста (child {Child}, subject {Subject}, material {Material})",
+                childId, subjectId, id);
+            return AddMaterialResult.Refused(CodeImageNoText);
+        }
+
+        var sem = LockFor(dir);
+        await sem.WaitAsync();
+        try
+        {
+            var manifest = ReadManifest(dir) ?? [];
+            var used = 0L;
+            foreach (var m in manifest) used += m.Bytes;
+            if (used + bytes.LongLength > MaxSubjectBytes())
+                return AddMaterialResult.Refused(CodeSubjectFull);
+
+            var storedName = id + storedExt;
+            var textName = id + ".txt";
+            var storedPath = SafePath.Join(dir, "files/" + storedName);
+            var textPath = SafePath.Join(dir, "text/" + textName);
+
+            var wroteStored = false;
+            var wroteText = false;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(storedPath)!);
+                // Оригинал — как прислан (не дожатый PNG): текст уже получен, уменьшенная
+                // копия нужна была только OCR и на диске не остаётся.
+                File.WriteAllBytes(storedPath, bytes);
+                wroteStored = true;
+
+                Directory.CreateDirectory(Path.GetDirectoryName(textPath)!);
+                File.WriteAllBytes(textPath, Encoding.UTF8.GetBytes(text));
+                wroteText = true;
+
+                var material = new ChildSubjectMaterial(
+                    id, LabelOf(fileName), KindImage, bytes.LongLength, DateTimeOffset.UtcNow,
+                    uploadedBy, storedName, textName);
+                manifest.Add(material);
+                JsonFileStore.Save(ManifestPath(dir), manifest, Json);
+                _log?.LogInformation("Детский режим: страница сохранена (child {Child}, subject {Subject}, material {Material}, {Chars} символов текста)",
+                    childId, subjectId, id, text.Length);
+                return AddMaterialResult.Added(material, PreviewOf(text));
+            }
+            catch (Exception e)
+            {
+                _log?.LogWarning(e, "Детский режим: картинка не сохранена (child {Child}, subject {Subject}, material {Material})", childId, subjectId, id);
                 if (wroteStored) TryDelete(storedPath);
                 if (wroteText) TryDelete(textPath);
                 return AddMaterialResult.Refused(CodeStorageError);
@@ -309,15 +506,16 @@ public sealed class ChildSubjectMaterialsStore(
     // ── тип по сигнатуре ──────────────────────────────────────────────────────────────
 
     // Вид материала по сигнатуре байтов или null (unsupported_type). Primary — тот же
-    // ChildAttachmentPolicy.Detect, что у детских вложений; картинка здесь отказана (до
-    // КИ1a/КИ1b), к нему добавлен только docx: zip с записью word/document.xml.
+    // ChildAttachmentPolicy.Detect, что у детских вложений (PNG/JPEG/WEBP — image, КИ1b;
+    // HEIC в allow-list не входит), к нему добавлен только docx: zip с записью
+    // word/document.xml.
     private static string? DetectKind(byte[] bytes)
     {
         switch (ChildAttachmentPolicy.Detect(bytes))
         {
             case ChildAttachmentPolicy.Kind.Pdf: return KindPdf;
             case ChildAttachmentPolicy.Kind.Text: return KindText;
-            case ChildAttachmentPolicy.Kind.Image: return null;
+            case ChildAttachmentPolicy.Kind.Image: return KindImage;
             default: return IsDocx(bytes) ? KindDocx : null;
         }
     }
@@ -347,6 +545,28 @@ public sealed class ChildSubjectMaterialsStore(
         KindDocx => ".docx",
         _ => ".txt",
     };
+
+    // ── текст и preview ──────────────────────────────────────────────────────────────
+
+    // «Текста нет» (разрез §9): пусто или только [?] с пробелами. Промпт OCR заменяет
+    // нечитаемое [?]; страница без текста доезжает пустой строкой (defect 1e017cf7).
+    // Всё остальное — читаемое содержимое.
+    private static bool HasNoUsefulText(string text)
+    {
+        var s = text.AsSpan();
+        for (var i = 0; i < s.Length;)
+        {
+            if (char.IsWhiteSpace(s[i])) { i++; continue; }
+            if (s[i] == '[' && i + 2 < s.Length && s[i + 1] == '?' && s[i + 2] == ']') { i += 3; continue; }
+            return false;
+        }
+        return true;
+    }
+
+    // preview — первые PreviewMaxChars символов текста: «как репетитор прочтёт страницу»,
+    // для админа (КИ1c). Полного текста в результате нет.
+    private static string PreviewOf(string text) =>
+        text.Length > PreviewMaxChars ? text[..PreviewMaxChars] : text;
 
     // ── имена и пути ─────────────────────────────────────────────────────────────────
 
@@ -434,8 +654,8 @@ public sealed class ChildSubjectMaterialsStore(
 
 /// <summary>
 /// Строка описи материалов предмета (разрез §2). name — подпись админа (на диск не идёт);
-/// storedName/textName — имена, которые дал сервер; kind — "pdf" | "text" | "docx";
-/// bytes — размер оригинала (он же — метр предмета).
+/// storedName/textName — имена, которые дал сервер; kind — "pdf" | "text" | "docx" |
+/// "image"; bytes — размер оригинала (он же — метр предмета).
 /// </summary>
 public sealed record ChildSubjectMaterial(
     string Id,
@@ -449,12 +669,14 @@ public sealed record ChildSubjectMaterial(
 
 /// <summary>
 /// Результат AddAsync: строка описи (Added) или отказ с кодом (CodeTooLarge, CodeSubjectFull,
-/// CodeUnsupportedType, CodePdfNoText, CodeDocxNoText, CodeStorageError).
+/// CodeUnsupportedType, CodePdfNoText, CodeDocxNoText, CodeOcrUnavailable, CodeImageNoText,
+/// CodeStorageError). Preview — первые 600 символов текста материала для всех видов
+/// (разрез §9: «preview» в ответе загрузки, только админу; КИ1c); в описи и на диске его нет.
 /// </summary>
-public sealed record AddMaterialResult(ChildSubjectMaterial? Material, string? Code)
+public sealed record AddMaterialResult(ChildSubjectMaterial? Material, string? Code, string? Preview = null)
 {
     public bool Accepted => Material is not null;
 
-    public static AddMaterialResult Added(ChildSubjectMaterial material) => new(material, null);
+    public static AddMaterialResult Added(ChildSubjectMaterial material, string? preview = null) => new(material, null, preview);
     public static AddMaterialResult Refused(string code) => new(null, code);
 }

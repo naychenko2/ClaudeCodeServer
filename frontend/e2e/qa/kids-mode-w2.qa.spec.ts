@@ -71,7 +71,6 @@ test.describe.configure({ mode: 'serial' });
 let adminReq: APIRequestContext;
 let childReq: APIRequestContext;
 let admin: Api;
-let child: Api;
 let adminToken: string;
 let childToken: string;
 let childId: string;
@@ -99,8 +98,8 @@ test.beforeAll(async ({ playwright, browser, baseURL }) => {
 
   // Ребёнок с профилем, но без предметов: предмет создаёт админ в интерфейсе (сценарий 1).
   await admin.put(`/api/users/${childId}/child-profile`, profileBody());
+  // Детский клиент не строим: все детские ручки идут через call(childReq, …, childToken)
   childToken = await tokenOf(childReq, CHILD_U, CHILD_PW);
-  child = api(childReq, childToken);
 
   adminPage = await browser.newPage();
   await adminPage.setViewportSize({ width: 1280, height: 900 });

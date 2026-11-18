@@ -29,6 +29,13 @@ namespace ClaudeHomeServer.Services.Llm;
 // пустые блоки, фаза «stopped», уровня нет (null — «не проверялось», не «unknown»: значения
 // «unknown» во фронтовом типе level нет). Времена файлов — местное время узла
 // (конвейер пишет time.strftime без смещения), сравниваются с TimeProvider.GetUtcNow().
+//
+// «Пишет в» не туда (доработка Б1): вывод ведётся не на этом узле — когда в каталогах вывода есть
+// .md свежее, чем последний локальный «ok» журнала, и при этом этот конвейер сам сейчас файл не
+// пишет. Факт существования каталога ничего не значит: на worker его наполнила синхронизация с
+// другого узла (18.11: писал «ai», читали с «worker» — четыре встречи не дошли, а каталог был).
+// Оценить provenance можно только по данным конвейера — по его журналу: строку «ok» конвейер
+// дописывает ПОСЛЕ того, как записал .md (supervisor.py: сначала out_path, затем log_meeting).
 public interface ITranscriptionStateReader
 {
     // Снимок состояния конвейера на момент вызова. Не бросает исключений.
@@ -55,6 +62,10 @@ public sealed class TranscriptionStateReader(
     internal const int RowLimit = 20;
     // Хвост journal.tsv: не больше этих байт с конца файла (день событий — единицы КБ).
     internal const int JournalTailBytes = 128 * 1024;
+    // Допуск «своего» файла над строкой «ok»: журнал метит время с точностью до минуты
+    // (time.strftime %H:%M), а .md пишется ДО строки — то есть его mtime может быть на минуту
+    // позже отмеренной метки. Без допуска собственный свежий файл дал бы «не та машина».
+    internal static readonly TimeSpan OutputOwnRowSlack = TimeSpan.FromMinutes(5);
 
     private static bool DefaultProcessAlive(int pid) => pid > 0 && Directory.Exists("/proc/" + pid);
 
@@ -67,7 +78,12 @@ public sealed class TranscriptionStateReader(
         var state = ReadState(Path.Combine(root, "logs", "state.json"));
         var summary = ReadState(Path.Combine(root, "logs", "summary_state.json"));
         var folders = ReadConfigFolders(Path.Combine(root, "config.yaml"));
-        var journal = ReadJournal(Path.Combine(root, "logs", "journal.tsv"), now);
+        // Журнал читается хвостом и БЕЗ окна: последний локальный «ok» может быть старше суток
+        // (на worker 18.11 свои записи — трёхдневной давности), а provenance вывода мерится по
+        // нему, а не по последним суткам. Окно [now−24ч, now) — только у блоков «Сбои», «Встречи»
+        // и у dify-маркера.
+        var journal = ReadJournal(Path.Combine(root, "logs", "journal.tsv"));
+        List<JournalRow> journalWindow = [.. journal.Where(r => r.At >= now - HistoryWindow)];
         var (difyRows, difyCheckedAt) = ReadDifyState(Path.Combine(root, "logs", "dify_state.json"));
 
         // Снимок сводок принадлежит живому потоку, только когда это тот же процесс
@@ -87,36 +103,45 @@ public sealed class TranscriptionStateReader(
             now - state.UpdatedAt > StaleAfter ? "stale" :
             "ok";
 
-        // «Пишет в»: общий каталог выходов папок против узла CCS. Каталога на узле нет —
-        // конвейер пишет не здесь («не та машина», warn). Конфига нет — «не проверялось».
+        // «Пишет в»: общий каталог выходов папок против узла CCS. Каталога на узле нет — вывод
+        // здесь не ведут (как было). Он есть, но в нём .md свежее последнего локального «ok»
+        // журнала — их написал не этот конвейер: «не та машина» (warn), ровно случай 18.11.
+        // Локального журнала нет — provenance не известна: ложной тревоги не даём. Конфига нет —
+        // тоже «не проверялось».
         var outputDir = CommonOutputDir(folders);
         string? outputHost = null;
         var outputLevel = "unknown";
         if (outputDir is not null)
         {
-            if (Directory.Exists(outputDir))
-            {
-                outputHost = localNode;
-                outputLevel = localNode is not null ? "ok" : "unknown";
-            }
-            else outputLevel = "warn";
+            // Пока этот конвейер сам ведёт файл, вывод идёт здесь: его .md появится с минуты на
+            // минуту и строка «ok» будет позже него — свежий файл не чужой.
+            var writingHereNow = state?.Current is { Length: > 0 };
+            var lastLocal = LastLocalOutputAt(journal);
+            if (!Directory.Exists(outputDir)) outputLevel = "warn"; // каталога здесь нет
+            else if (writingHereNow) outputLevel = "ok"; // конвейер сам ведёт файл — вывод здесь
+            else if (lastLocal is { } own) outputLevel = NewestForeignWriteAt(folders, own) is not null ? "warn" : "ok";
+            else outputLevel = "unknown"; // локального журнала нет — не с чем сравнивать
+            // «не та машина» — имени чужого узла в плоском контракте нет: OutputHost = null при
+            // известном outputDir (фронт красит строку по этому признаку, transcriptionFormat.ts).
+            // «Не проверялось» — тоже свой узел: OutputHost=null фронт прочитал бы как тревогу.
+            if (outputLevel != "warn") outputHost = localNode;
         }
 
         TranscriptionFailDto[] fails =
-            [.. journal.Where(r => r.Result == "fail").Take(RowLimit)
+            [.. journalWindow.Where(r => r.Result == "fail").Take(RowLimit)
                 .Select(r => new TranscriptionFailDto(
                     r.At.ToUnixTimeMilliseconds(), r.Folder, r.File, r.Minutes, r.Note))];
 
         var outputs = OutputByFolder(folders);
         TranscriptionMeetingDto[] recent =
-            [.. journal.Where(r => r.Result == "ok" && r.File is not null).Take(RowLimit)
+            [.. journalWindow.Where(r => r.Result == "ok" && r.File is not null).Take(RowLimit)
                 .Select(r => new TranscriptionMeetingDto(
                     r.At.ToUnixTimeMilliseconds(), r.Folder, r.File!, r.Minutes, r.Speakers, r.Note,
                     MdPath(r, outputs)))];
 
         // Свежесть сигналов конвейера та же, что у его плашки: stale/stopped/unknown — зависимости
         // не проверялись («не проверялось»).
-        var deps = BuildDeps(state, summary, summaryValid, pipelineLevel, journal, folders, at);
+        var deps = BuildDeps(state, summary, summaryValid, pipelineLevel, journalWindow, folders, at);
 
         // Точка вкладки (proposal.md): красная при «Завис?», «Остановлен» или сбое зависимости;
         // жёлтая при расхождении с Dify или «Пишет в» не туда. «Не проверялось» — уровня нет
@@ -367,6 +392,46 @@ public sealed class TranscriptionStateReader(
         return map;
     }
 
+    // Последний локальный «ok» — момент, когда этот конвейер сам записал .md в последний раз.
+    // Другие итоги вывода не дают: «asr» — только распознано (файла ещё нет), «fail», «batch»,
+    // «start» — файла нет. Пустой журнал (файла нет / ни одной строки) — null: не проверялось.
+    private static DateTimeOffset? LastLocalOutputAt(List<JournalRow> journal)
+    {
+        DateTimeOffset? best = null;
+        foreach (var r in journal)
+            if (r.Result == "ok" && (best is null || r.At > best)) best = r.At;
+        return best;
+    }
+
+    // Свежий .md в каталогах вывода папок, заведомо НЕ последнего локального «ok»: позже его на
+    // больший, чем допуск собственной строки (OutputOwnRowSlack). Ничего такого нет или каталоги
+    // не читаются — null: вывод здесь. Только верхний уровень каталога: конвейер пишет .md плоско
+    // (lib_paths.get_transcript_path), подкаталогов вывода у него нет.
+    private static DateTimeOffset? NewestForeignWriteAt(List<ConfigFolder> folders, DateTimeOffset lastLocal)
+    {
+        var after = lastLocal + OutputOwnRowSlack;
+        DateTimeOffset? best = null;
+        foreach (var dir in folders.Select(f => f.Output).OfType<string>().Distinct(StringComparer.Ordinal))
+        {
+            IEnumerable<FileInfo> files;
+            try { files = new DirectoryInfo(dir).EnumerateFiles(); }
+            catch (Exception) { continue; } // каталога нет / не читается — этой папки нет в оценке
+            foreach (var f in files)
+            {
+                if (!f.Extension.Equals(".md", StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    // mtime файла — wall-clock этого узла, как и метки журнала: тот же узел,
+                    // что и писавший (тот же приём, что у «Завис?»).
+                    var at = new DateTimeOffset(f.LastWriteTimeUtc, TimeSpan.Zero);
+                    if (at > after && (best is null || at > best)) best = at;
+                }
+                catch (Exception) { } // файл исчез при чтении
+            }
+        }
+        return best;
+    }
+
     // ─── dify_state.json (результат сверки конвейера с Dify, М2) ─────────────────────────
 
     // Строки сверки по папкам и метка проверки из файла самого конвейера: времена — unix-СЕКУНД →
@@ -412,9 +477,10 @@ public sealed class TranscriptionStateReader(
         DateTimeOffset At, string Result, string? Folder, string? File,
         double? Minutes, int? Speakers, string Note);
 
-    // Хвост журнала, свежие строки первыми, только окно [now−24ч, now). Строки вне окна и битые
-    // строки отбрасываются; за начало хвоста отвечает JournalTailBytes.
-    private static List<JournalRow> ReadJournal(string path, DateTimeOffset now)
+    // Хвост журнала, свежие строки первыми, БЕЗ окна: последний локальный «ok» нужен и старше
+    // суток (окно [now−24ч, now) налагается на месте использования — на блоки «Сбои»/«Встречи»
+    // и dify-маркер). Битые строки отбрасываются; за начало хвоста отвечает JournalTailBytes.
+    private static List<JournalRow> ReadJournal(string path)
     {
         var rows = new List<JournalRow>();
         string[] lines;
@@ -427,7 +493,6 @@ public sealed class TranscriptionStateReader(
             var parts = line.Split('\t');
             if (parts.Length < 7) continue;
             if (!TryParseStamp(parts[0], "yyyy-MM-dd HH:mm", out var at)) continue;
-            if (at < now - HistoryWindow) continue;
             rows.Add(new JournalRow(at, parts[1].Trim(),
                 DashOrNull(parts[2]), DashOrNull(parts[3]), AsDouble(parts[4]), AsIntOrNull(parts[5]),
                 parts[6].Trim()));

@@ -65,6 +65,17 @@ public class TranscriptionStateReaderTests : IDisposable
         File.WriteAllText(p, text, new UTF8Encoding(false));
     }
 
+    // Файл вывода с заданным mtime: provenance вывода мерится по времени файла, поэтому тест
+    // ставит его прямо — как у файла, принесённого синхронизацией (mtime — дата создания на
+    // чужом узле, не дата копирования).
+    private static void WriteOutputFile(string dir, string name, DateTimeOffset mtime)
+    {
+        Directory.CreateDirectory(dir);
+        var p = Path.Combine(dir, name);
+        File.WriteAllText(p, "сводка встречи\n");
+        File.SetLastWriteTimeUtc(p, mtime.UtcDateTime);
+    }
+
     private static TranscriptionStateReader Reader(string root, TimeProvider time, Func<int, bool>? alive = null) =>
         new(new Opts(new TranscriptionOptions { PipelineRoot = root }),
             new ConfigurationBuilder().Build(), time, alive ?? (_ => true));
@@ -602,6 +613,116 @@ public class TranscriptionStateReaderTests : IDisposable
         // сверка — из файла конвейера; файла нет — пустой блок, не «ноль файлов»
         s.Dify.Should().BeEmpty();
         s.CheckedAt.Should().BeNull();
+    }
+
+    // ─── «Пишет в» не туда по данным конвейера (доработка Б1, дефект №2 приёмки) ──────────
+    // Факт существования каталога вывода ничего не значит: на worker его наполнила синхронизация
+    // с другого узла (18.11: писал «ai», читали с «worker», четыре встречи не дошли — а каталог
+    // был, и признак молчал). Признак — .md в выводе свежее, чем последний локальный «ok»
+    // журнала: эти файлы этот конвейер не писал.
+
+    [Fact]
+    public void ВыводНаполненКопированиемСЧужогоУзла_ПризнакНеТаМашина()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        Directory.CreateDirectory(watch);
+        // конвейер жив и свеж, но свой последний «ok» — трёхдневной давности (порядок чисел
+        // worker 18.11: журнал обрывается 15.11, свежие .md — 16–17.11)
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(
+            ("Video-GPB", watch, Path.Combine(root, "out", "ГПБ")),
+            ("Video-RR", watch, Path.Combine(root, "out", "RR"))));
+        Write(root, "logs/journal.tsv", string.Join('\n',
+            "# время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание",
+            JournalRowStr(now, TimeSpan.FromDays(3), "ok", "Video-RR", "RR.Своё.mp4", "2.9", "3", "asr 2.6м + саммари 0.4м (локально)")) + "\n");
+        // то, что принесла синхронизация: mtime — вчера, позже последней своей записи журнала
+        WriteOutputFile(Path.Combine(root, "out", "ГПБ"), "ИИ.Радул.Архсовет.2026-11-17 16-28-07.mp4.md", now.Subtract(TimeSpan.FromDays(1)));
+        // свой файл того же «ok» остаётся своим: он не позже своей строки
+        WriteOutputFile(Path.Combine(root, "out", "RR"), "RR.Своё.mp4.md", now.Subtract(TimeSpan.FromDays(3)));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        // каталог есть на узле — сам по себе это больше не «норма»: вывод ведётся не здесь
+        s.OutputDir.Should().Be(Path.Combine(root, "out"));
+        s.OutputHost.Should().BeNull(); // «не та машина»: имени чужого узла в плоском контракте нет
+        s.Level.Should().Be("warn");
+        // последний локальный «ok» — за пределами окна суток: блок «Встречи» его не показывает,
+        // но provenance мерится по нему, а не по окну
+        s.Recent.Should().BeEmpty();
+    }
+
+    // Норма: конвейер писал эти файлы сам — «ok» есть в локальном журнале, и он позже своего .md
+    // (supervisor.py: сначала out_path, потом log_meeting). Метка строки отмерена с точностью до
+    // минуты, поэтому свой файл может выглядеть на минуту «новее» своей же записи: без допуска
+    // OutputOwnRowSlack этот тест краснеет — ложная тревога на каждом свежем файле.
+    [Fact]
+    public void ВыводВедётсяЛокальнымКонвейером_ПризнакНеСрабатывает()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outDir = Path.Combine(root, "out");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
+        Write(root, "logs/journal.tsv", string.Join('\n',
+            "# время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание",
+            JournalRowStr(now, TimeSpan.FromMinutes(10), "ok", "Video-RR", "RR.Свежее.mp4", "2.9", "3", "asr 2.6м + саммари 0.4м (локально)")) + "\n");
+        // .md записан ДО строки «ok»: его время на 35 с позже отмеренной минуты строки
+        WriteOutputFile(outDir, "RR.Свежее.mp4.md", now.Subtract(TimeSpan.FromMinutes(10)).Add(TimeSpan.FromSeconds(35)));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().Be("worker"); // вывод здесь
+        s.Level.Should().Be("ok");
+        s.Recent.Should().ContainSingle(r => r.File == "RR.Свежее.mp4"); // файл и в журнале, и в выводе — свой
+    }
+
+    // Конвейер сейчас сам ведёт файл: его .md появится с минуты на минуту, а строка «ok» будет
+    // после него. Свежий файл в выводе в этот момент — не чужой: пока он на файле, тревоги нет.
+    [Fact]
+    public void КонвейерСейчасВедётФайл_СвежийMdНеСчитаетсяЧужим()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outDir = Path.Combine(root, "out");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("саммари", now, 100, TimeSpan.FromSeconds(10),
+            current: "X.mp4", folder: "Video-RR"));
+        Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
+        Write(root, "logs/journal.tsv", string.Join('\n',
+            "# время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание",
+            JournalRowStr(now, TimeSpan.FromHours(2), "ok", "Video-RR", "RR.Прежнее.mp4", "1.0", "2", "dify=ok")) + "\n");
+        WriteOutputFile(outDir, "X.mp4.md", now.Subtract(TimeSpan.FromMinutes(1))); // записан минуту назад, строки ещё нет
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.Stage.Should().Be("summary");
+        s.OutputHost.Should().Be("worker");
+        s.Level.Should().Be("ok");
+    }
+
+    // Локального журнала нет (файла нет / ни одной строки) — сравнивать не с чем: provenance не
+    // известна. Безопасное поведение — не показывать ложную тревогу: узел остаётся своим.
+    [Fact]
+    public void НетЛокальногоЖурнала_ЛожнойТревогиНет()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outDir = Path.Combine(root, "out");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
+        WriteOutputFile(outDir, "ИИ.Радул.Архсовет.2026-11-17 16-28-07.mp4.md", now.Subtract(TimeSpan.FromDays(1)));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().Be("worker"); // «не проверялось» — не «не та машина»
+        s.Level.Should().Be("ok");
     }
 
     // dify[] и checkedAt — из файла самого конвейера (dify_state.json, М2): времена unix-СЕКУНД →

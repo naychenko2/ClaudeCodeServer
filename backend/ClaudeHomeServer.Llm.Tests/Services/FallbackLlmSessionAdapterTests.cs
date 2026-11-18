@@ -177,7 +177,8 @@ public class FallbackLlmSessionAdapterTests
         IEgressProbe? egress = null,
         TurnRunLog? turnRuns = null,
         ITurnEventBus? events = null,
-        Func<TurnStartTimings>? startTimings = null)
+        Func<TurnStartTimings>? startTimings = null,
+        Func<bool>? isChildTurn = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -212,6 +213,7 @@ public class FallbackLlmSessionAdapterTests
             egress: egress,
             events: events,
             startTimings: startTimings,
+            isChildTurn: isChildTurn,
             // Пауза повтора при лежащем канале — миллисекунды: ждать продовые 5 с в тесте нельзя
             egressRetryDelay: TimeSpan.FromMilliseconds(10));
         inner.Sink = sut.HandleMessageAsync;
@@ -302,6 +304,27 @@ public class FallbackLlmSessionAdapterTests
             .Which.Subtype.Should().Be("success");
         // Ход — одно сообщение пользователя, сколько бы попыток ни было
         inner.Info.MessageCount.Should().Be(1);
+    }
+
+    // Детский ход: ротации подписок нет — урок ребёнка никогда не идёт по подписке (И2′).
+    // Взрослый ход на тех же условиях (тест выше) ротируется на acc-b; ребёнок — получает ошибку,
+    // Info.Provider не меняется, вторая подписка не пробуется.
+    [Fact]
+    public async Task Ошибка429_ДетскийХод_РотацииПодпискиНет_ПровайдерНеМеняется()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool, isChildTurn: () => true);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("помоги с уроком");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts.Should().ContainSingle("у ребёнка нет ротации подписок");
+        inner.Attempts[0].Provider.Should().Be("acc-a");
+        inner.Info.Provider.Should().Be("acc-a", "провайдер хода ребёнка не уходит на подписку");
+        pool.IsExhausted("acc-b").Should().BeFalse();
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
     }
 
     // --- Окно 1M недоступно (блокер ревью волны 3) ---

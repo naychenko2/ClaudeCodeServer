@@ -225,6 +225,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             localProbe: _localProbe,
             transcriptOnServer: context.TranscriptOnServer,
             turnOwnerId: claudeSession.TurnOwnerId,
+            isChildTurn: () => claudeSession.IsChildTurn,
             localGate: context.LocalEngineBusy ?? LocalEngineBusyTracker.Instance);
         return fallback;
     }

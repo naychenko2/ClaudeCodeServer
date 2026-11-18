@@ -48,6 +48,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // остальные = план фолбэка). null/один элемент — цепочки нет (существующий автоподбор).
     // Вычисляется вызывающим (фабрикой через ClaudeSession.EffectiveTurnChain) на каждом ходу.
     private readonly Func<IReadOnlyList<string>>? _effectiveChain;
+    // Детский ли ход (по снимку политики, ClaudeSession.IsChildTurn): у ребёнка ротации подписок
+    // нет — урок никогда не идёт по подписке (решение владельца, И2′). null (тесты) — не детский.
+    private readonly Func<bool>? _isChildTurn;
     // Кулдаун недоступности провайдера (волна 2): провайдер, вернувший Unreachable/ProviderError,
     // помечается недоступным на TTL; фолбэк пропускает его шаги цепочки (fail-open). null (тесты).
     private readonly ProviderHealthRegistry? _health;
@@ -156,8 +159,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         bool transcriptOnServer = true,
         string? turnOwnerId = null,
         LocalEngineBusyTracker? localGate = null,
-        Func<TurnStartTimings>? startTimings = null)
+        Func<TurnStartTimings>? startTimings = null,
+        Func<bool>? isChildTurn = null)
     {
+        _isChildTurn = isChildTurn;
         _startTimings = startTimings;
         _localGate = localGate;
         _inner = inner;
@@ -559,6 +564,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // или пустая) — после пула честная ошибка, автоподбора больше нет. Вычисляем один раз за ход.
         var chain = _effectiveChain?.Invoke() ?? Array.Empty<string>();
         var chainIndex = 0;
+        // Детский ход определяем один раз за оркестрацию — тем же снимком, что и цепочку.
+        var childTurn = _isChildTurn?.Invoke() == true;
         // Отладка «почему выбралась эта модель»: построенная цепочка хода одной строкой.
         LogDebug($"Цепочка хода ({Info.Id}): [{string.Join(", ", chain)}]");
 
@@ -1118,7 +1125,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // не получит его повторно ни по rate-limit, ни по unreachable (инцидент 2026-08-10:
                 // kimi-k3). Запись наблюдения выше использует тот же реальный размер.
                 var ctx = ContextEstimate();
-                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, ref chainIndex, ctx);
+                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, ref chainIndex, ctx, childTurn);
                 if (next is null)
                 {
                     // Всё исчерпано (или запасных вариантов не было) — честная ошибка. P29: финал
@@ -1426,7 +1433,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // (одноэлементная/пустая) после пула автоподбора нет — финальный сбой.
     private FallbackTarget? ResolveNextTarget(FallbackErrorClass cls, AttemptEnd end,
         HashSet<(string Model, string Key)> attempted, string model, string currentKey,
-        IReadOnlyList<string> chain, ref int chainIndex, int contextEstimate)
+        IReadOnlyList<string> chain, ref int chainIndex, int contextEstimate, bool childTurn = false)
     {
         var modelForPool = string.IsNullOrWhiteSpace(model) ? null : model;
         var isNativeClaude = _providers?.ResolveByModel(modelForPool) is null;
@@ -1464,7 +1471,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // ContextOverflow обходим уровень 1: окно — свойство МОДЕЛИ, не подписки. Другая подписка
         // того же аккаунта-пула несёт ту же модель с тем же окном и упадёт так же — гонять её
         // бессмысленно. Сразу к шагу цепочки, где может быть модель с бóльшим окном.
-        if (isNativeClaude && _pool.HasExtra && cls != FallbackErrorClass.ContextOverflow)
+        // Ребёнок (childTurn): ротации подписок нет вовсе — Pick не знает о ребёнке и увёл бы
+        // Info.Provider на подписку.
+        if (!childTurn && isNativeClaude && _pool.HasExtra && cls != FallbackErrorClass.ContextOverflow)
         {
             // SessionManager.TryPoolFailover по rate_limit_event мог уже переключить чат
             // (транскрипт перенесён им) — тогда не мигрируем повторно и не шлём второй маркер

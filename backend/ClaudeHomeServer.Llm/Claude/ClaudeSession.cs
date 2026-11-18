@@ -42,9 +42,16 @@ public class ClaudeSession : ILlmSessionAdapter
     // И2′: у ребёнка модель — явная модель предмета (профиля), назначение места и модель хода её не
     // переопределяют: иначе ChatPersona на другую модель увела бы ход мимо маршрута предмета.
     private string? EffectiveModel =>
-        ((_turnChildSnapshot ?? _childPolicy?.Invoke()) is { } childSnap ? ChildRoute.ExplicitModelFor(childSnap, Info) : null)
+        (ChildSnapshotNow is { } childSnap ? ChildRoute.ExplicitModelFor(childSnap, Info) : null)
         ?? _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId)
         ?? (_turnModelOverride ?? Info.Model);
+
+    // Детская политика «сейчас»: снимок идущего хода, а вне хода (старт оркестрации фолбэка идёт
+    // ДО RunTurnAsync) — живое чтение. Единая точка для модели, цепочки и признака ребёнка.
+    private ChildPolicySnapshot? ChildSnapshotNow => _turnChildSnapshot ?? _childPolicy?.Invoke();
+
+    // Детский ли ход (по снимку политики): фолбэк-адаптер по нему запрещает ротацию подписок.
+    internal bool IsChildTurn => ChildSnapshotNow is not null;
 
     // Эффективная модель для слоя фолбэка (FallbackLlmSessionAdapter): пара «модель × подписка»
     // учитывается по модели, которой реально идёт ход. Сам резолв остаётся приватным.
@@ -97,7 +104,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // И2: у ребёнка фолбэка нет — цепочка из одной модели, отказ провайдера = ошибка хода.
         // Решает снимок политики, а не наличие делегата: фабрика выдаёт делегат любому владельцу,
         // у взрослого он возвращает null — и фолбэк ADR-007 обязан жить.
-        _childPolicy?.Invoke() is not null && EffectiveModel is { } childModel ? new[] { childModel } :
+        ChildSnapshotNow is not null && EffectiveModel is { } childModel ? new[] { childModel } :
         _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 

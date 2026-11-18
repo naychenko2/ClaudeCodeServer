@@ -1,9 +1,14 @@
-// KM-F11: редактор профиля ребёнка для админа — тело PUT child-profile (ADR-041, ручка №10),
-// отказы 400 человеческим текстом и гонка смены пользователя.
+// KM-F11 + Т4f: редактор профиля ребёнка для админа — тело PUT child-profile (ADR-041, ручка №10),
+// отказы 400 человеческим текстом и гонка смены пользователя. Т4f: вкладка «Предметы» — пикер
+// «Помощника (правила)» вместо текстовых полей, список предметов и карточка его репетитора,
+// subjects в теле, тьютор из ответа и красная строка названного отказом предмета.
 // Окружение — node + linkedom, как в соседних .test.tsx волны: тело запроса проверяется по mock childApi,
 // состояния — по атрибутам и inline-стилям. Черновик заполняется через user.childProfile (профиль даёт
 // вызывающий), поэтому набирать текст в полях в тесте не нужно; переключения — кликами по контролам.
 // «Необработанных rejection нет» не слушается отдельно: неохваченный rejection сам краснит прогон vitest.
+// Мутации этого прогона (вывод — в отчёте задачи): снять сверку id в ответе getRoutes →
+// «Subjects_RoutesResponseAfterUserSwitch_Ignored» краснеет; не резать tutorPersonaId из
+// предмета в теле → «без полей ответа» краснеет.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, createElement } from 'react';
@@ -29,14 +34,23 @@ vi.stubGlobal('Event', win.Event);
 
 // childApi.putProfile: ответ по индексу вызова. Нет записи — promise держится in-flight
 // (на этом проверяются гонка ответа и блокировка кнопки); Error — отказ с status/body, как его
-// выносит request() из lib/offline.
+// выносит request() из lib/offline. getRoutes — тот же приём по индексу вызова (одна загрузка
+// на пользователя): signal mock не читает, но фиксирует: сам вызов с сигналом — часть контракта.
 let calls: { userId: string; body: unknown }[] = [];
 let answers: (Error | object)[] = [];
 let pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 let callIdx = 0;
+let routeCalls: { signal?: AbortSignal }[] = [];
+let routeAnswers: (Error | ChildRoute[])[] = [];
+let routePending = new Map<number, { resolve: (v: ChildRoute[]) => void; reject: (e: unknown) => void }>();
 
-vi.mock('./api', () => ({
-  childApi: {
+// URL-хелперы — РЕАЛЬНЫЕ (тот же приём, что ChildTutorCard.test): карточка репетитора строит
+// src настоящим хелпером, и проверяется именно эта строка.
+vi.mock('./api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api')>();
+  return {
+    ...actual,
+    childApi: {
     putProfile: (userId: string, body: unknown) => {
       const i = callIdx++;
       calls.push({ userId, body });
@@ -45,12 +59,38 @@ vi.mock('./api', () => ({
       if (a) return Promise.resolve(a);
       return new Promise((res, rej) => { pending.set(i, { resolve: res, reject: rej }); });
     },
-  },
+      getRoutes: (opts?: { signal?: AbortSignal }) => {
+        const i = routeCalls.length;
+        routeCalls.push({ signal: opts?.signal });
+        const a = routeAnswers[i];
+        if (a instanceof Error) return Promise.reject(a);
+        if (a) return Promise.resolve(a);
+        return new Promise((res, rej) => { routePending.set(i, { resolve: res, reject: rej }); });
+      },
+    },
+  };
+});
+
+// Пикер голоса в карточке репетитора при монтировании зовёт api.tts.voices — мокаем:
+// свой каталог голосов тесту не нужен, а реальный вызов ушёл бы за пределы mock-слоя.
+vi.mock('../../lib/api', () => ({
+  api: { tts: { voices: () => Promise.resolve({ voices: [], configured: true }) } },
 }));
 
 const { ChildProfileEditor } = await import('./ChildProfileEditor');
 import type { ChildProfileEditorUser } from './ChildProfileEditor';
-import type { ChildProfile } from './types';
+import type { ChildProfile, ChildRoute, ChildSubjectAdmin } from './types';
+
+// Состав GET /api/admin/child-routes (тот же, что в тесте редактора предметов): пул и облачный —
+// на этом проверяется, что пачка 1 отдаёт пикерам только пул.
+const ROUTES: ChildRoute[] = [
+  {
+    providerKey: 'anthropic-api-kids', kind: 'pool', label: 'Anthropic · ключ «kids»',
+    priced: true, requiresAck: false,
+    models: [{ id: 'sonnet', label: 'Sonnet' }, { id: 'haiku', label: 'Haiku' }],
+  },
+  { providerKey: 'glm', kind: 'cloud', label: 'GLM (Zhipu)', priced: true, requiresAck: true, models: [{ id: 'glm-5', label: 'GLM-5' }] },
+];
 
 // Профиль с заполненными полями — то же, что даёт вызывающий: на нём проверяется тело PUT.
 const fullProfile = (): ChildProfile => ({
@@ -75,6 +115,14 @@ const liza = (over: Partial<ChildProfileEditorUser> = {}): ChildProfileEditorUse
 
 const httpErr = (status: number, code?: string, message?: string) =>
   Object.assign(new Error('отказ'), { status, body: { ...(code ? { code } : {}), ...(message ? { message } : {}) } });
+
+// Предмет профиля — тот же элемент, что поле subjects тела и его форма в ответе (Т2a).
+const subject = (id: string, over: Partial<ChildSubjectAdmin> = {}): ChildSubjectAdmin => ({
+  id, label: 'Математика', glyph: 'Мат', color: 'info',
+  providerKey: 'anthropic-api-kids', model: 'sonnet', enabled: true,
+  tutorPersonaId: 'p-tutor-math', ...over,
+});
+const withSubjects = (...subjects: ChildSubjectAdmin[]): ChildProfile => ({ ...fullProfile(), subjects });
 
 // Тело на проводе: то, что уйдёт в JSON запроса (undefined-поля выбрасываются).
 const wire = (i: number) => JSON.parse(JSON.stringify(calls[i].body)) as Record<string, unknown>;
@@ -148,8 +196,36 @@ async function settle(fn: () => void) {
   });
 }
 
+// Пикер «Помощника (правила)» — два Select: [поставщик, модель]. Пикер строки предмета — тот же
+// тест внутри строки списка, он проверяется в ChildSubjectsEditor.test.tsx.
+// Пикер помощника — единственный вне строк списка: ищем под его секцией, иначе тот же
+// data-testid пикера строки предмета попался бы первым.
+const assistantPicker = (host: HTMLElement) =>
+  panel(host).querySelector('[data-testid="assistant-route"] [data-testid="child-route-picker"]') as HTMLElement | null;
+const assistantSelects = (host: HTMLElement) =>
+  Array.from(assistantPicker(host)?.querySelectorAll('select') ?? []) as HTMLSelectElement[];
+const optionValues = (sel: HTMLSelectElement) => Array.from(sel.options).map((o) => o.value);
+const pickAssistant = async (host: HTMLElement, which: 0 | 1, value: string) => {
+  const sel = assistantSelects(host)[which];
+  expect(sel, `пикер помощника: список №${which}`).not.toBeNull();
+  await act(async () => { reactProps(sel)?.onChange?.({ target: { value } }); });
+};
+const subjectRows = (host: HTMLElement) => Array.from(panel(host).querySelectorAll('[data-testid="subject-row"]')) as HTMLElement[];
+const subjectBtn = (host: HTMLElement, aria: string) => panel(host).querySelector(`[aria-label="${aria}"]`) as HTMLElement | null;
+const subjectsEditor = (host: HTMLElement) => panel(host).querySelector('[data-testid="child-subjects-editor"]') as HTMLElement | null;
+const tutorCard = (host: HTMLElement) => panel(host).querySelector('[data-testid="child-tutor-card"]') as HTMLElement | null;
+// Поле строки списка — по подписи Field (тот же путь, что inputByLabel выше, только внутри строки).
+const rowInput = (row: HTMLElement, label: string) => {
+  const lbl = Array.from(row.querySelectorAll('label')).find((l) => (l.textContent ?? '').includes(label));
+  return (lbl?.parentElement?.querySelector('input') ?? null) as HTMLInputElement | null;
+};
+const sentSubjects = (i: number) => (wire(i).subjects ?? []) as Record<string, unknown>[];
+
 beforeEach(() => {
   calls = []; answers = []; pending = new Map(); callIdx = 0; saved = [];
+  // Маршруты по умолчанию приходят сразу: на этом проверяется обычный экран. Без записи в
+  // routeAnswers запрос висит — на этом проверяются загрузка и гонка.
+  routeCalls = []; routeAnswers = [ROUTES]; routePending = new Map();
   mobile = false;
 });
 
@@ -193,9 +269,10 @@ describe('ChildProfileEditor: тело PUT child-profile', () => {
 
   it('профиля нет — пустой черновик с warnMinutes 5; пустые лимиты и бюджеты уходят null', async () => {
     const { host } = await mount({ id: 'u-new', username: 'Новый' });
-    // providerKey на вкладке «Предметы»: переключаемся на неё, проверяем пустой черновик, возвращаемся.
+    // Маршрут помощника на вкладке «Предметы»: переключаемся на неё, проверяем пустой черновик
+    // (ничего не выбрано — placeholder), возвращаемся.
     await clickTab(host, 'Предметы');
-    expect(inputByPlaceholder(host, 'anthropic-api-kids')!.value).toBe('');
+    expect(assistantSelects(host)[0].value, 'маршрут не выбран').toBe('');
     await clickTab(host, 'Режим и время');
     const warn = Array.from(panel(host).querySelectorAll('input')).find((i) => i.value === '5');
     expect(warn, 'warnMinutes по умолчанию 5').toBeTruthy();
@@ -340,10 +417,10 @@ describe('ChildProfileEditor: отказы ручки №10', () => {
       expect(n!.textContent).toContain(r.text);
       expect(n!.textContent).toContain('Серверный текст отказа'); // message ответа — как есть
       expect(n!.textContent).not.toContain(r.code);
-      // черновик сохранён: окно на «Режиме и времени», providerKey на «Предметах»
+      // черновик сохранён: окно на «Режиме и времени», маршрут на «Предметах»
       expect(windowInputs(host).map((i) => i.value)).toEqual(['09:00', '20:00']);
       await clickTab(host, 'Предметы');
-      expect(inputByPlaceholder(host, 'anthropic-api-kids')!.value).toBe('anthropic-api-kids');
+      expect(assistantSelects(host).map((s) => s.value)).toEqual(['anthropic-api-kids', 'sonnet']);
       expect(saveBtn(host).disabled).toBe(false);
     });
   }
@@ -396,9 +473,12 @@ describe('ChildProfileEditor: гонка и только-чтение', () => {
     await click(saveBtn(host));
     expect(calls.map((c) => c.userId)).toEqual(['u-liza']);
     await rerender({ id: 'u-other', username: 'Другой' });
-    // черновик прежнего пользователя сброшен вместе с его id: providerKey пуст на «Предметах»
+    // черновик прежнего пользователя сброшен вместе с его id: на «Предметах» своего ответа ещё
+    // нет — экран загрузки, и чужой список не показан
     await clickTab(host, 'Предметы');
-    expect(inputByPlaceholder(host, 'anthropic-api-kids')!.value).toBe('');
+    expect(subjectsEditor(host)).toBeNull();
+    await settle(() => routePending.get(1)!.resolve(ROUTES));
+    expect(assistantSelects(host).map((s) => s.value), 'маршрут прежнего не перешёл').toEqual(['', '']);
     await clickTab(host, 'Режим и время');
     expect(textOf(host, 'tutor-state')).toContain('ещё нет');
     await settle(() => pending.get(0)!.resolve({ profile: fullProfile(), tutorPersonaId: 'p-tutor-late' }));
@@ -441,37 +521,42 @@ describe('ChildProfileEditor: гонка и только-чтение', () => {
 });
 
 describe('ChildProfileEditor: вкладки «Режим и время» / «Предметы»', () => {
-  it('две вкладки; по умолчанию «Режим и время»; поля маршрута только на «Предметах»', async () => {
+  it('две вкладки; по умолчанию «Режим и время»; пикер и предметы только на «Предметах»', async () => {
     const { host } = await mount(liza());
     expect(panel(host).querySelectorAll('[role="tab"]').length, 'две вкладки').toBe(2);
     expect(tabSelected(host, 'Режим и время'), 'вкладка по умолчанию').toBe(true);
     expect(tabSelected(host, 'Предметы')).toBe(false);
-    // на «Режиме и времени» — окно есть, полей маршрута нет
+    // на «Режиме и времени» — окно есть, пикера и списка предметов нет
     expect(windowInputs(host).map((i) => i.value)).toEqual(['09:00', '20:00']);
-    expect(inputByPlaceholder(host, 'anthropic-api-kids'), 'providerKey вне этой вкладки').toBeNull();
-    // на «Предметах» — поля маршрута есть, окна нет, слот под предметы есть
+    expect(assistantPicker(host), 'пикера вне этой вкладки нет').toBeNull();
+    expect(subjectsEditor(host), 'списка вне этой вкладки нет').toBeNull();
+    // на «Предметах» — пикер с значением черновика, окна нет, список предметов есть
     await clickTab(host, 'Предметы');
     expect(tabSelected(host, 'Предметы')).toBe(true);
-    expect(inputByPlaceholder(host, 'anthropic-api-kids')!.value).toBe('anthropic-api-kids');
-    expect(inputByPlaceholder(host, 'sonnet')!.value).toBe('sonnet');
+    expect(assistantSelects(host).map((s) => s.value)).toEqual(['anthropic-api-kids', 'sonnet']);
     expect(windowInputs(host).length, 'окно скрыто на другой вкладке').toBe(0);
-    expect(panel(host).querySelector('[data-testid="subjects-list"]'), 'пустой слот под предметы').toBeTruthy();
+    expect(subjectsEditor(host), 'список предметов').toBeTruthy();
+    // пачка 1 (макет Д1): пикер знает только записи пула — облачный в списке не появляется,
+    // и его подпись стоит у вкладки, а не у пикера
+    expect(optionValues(assistantSelects(host)[0])).toEqual(['anthropic-api-kids']);
+    expect(panel(host).textContent).toContain('Только записи пула с API-ключом');
+    expect(panel(host).textContent).not.toContain('GLM');
   });
 
-  it('переключение вкладки не теряет ввод; «Сохранить» одна на обе вкладки, тело прежнее', async () => {
+  it('переключение вкладки не теряет выбор; «Сохранить» одна на обе вкладки, тело — с новым маршрутом', async () => {
     const { host } = await mount(liza());
     await clickTab(host, 'Предметы');
-    await typeInto(inputByPlaceholder(host, 'anthropic-api-kids')!, 'new-key');
+    await pickAssistant(host, 1, 'haiku');
     await clickTab(host, 'Режим и время');
     await clickTab(host, 'Предметы');
-    expect(inputByPlaceholder(host, 'anthropic-api-kids')!.value, 'ввод живёт на обеих вкладках').toBe('new-key');
-    // сохранение с «Предметов»: тело строится из общего черновика — прежний набор + новый providerKey
+    expect(assistantSelects(host).map((s) => s.value), 'выбор живёт на обеих вкладках').toEqual(['anthropic-api-kids', 'haiku']);
+    // сохранение с «Предметов»: тело строится из общего черновика — прежний набор + новая модель
     await click(saveBtn(host));
     expect(wire(0)).toEqual({
       enabled: true,
       guardianUserIds: ['u-papa', 'u-mama'],
-      providerKey: 'new-key',
-      model: 'sonnet',
+      providerKey: 'anthropic-api-kids',
+      model: 'haiku',
       spaces: { lessons: { windows: [{ from: '09:00', to: '20:00', weekdays: [1, 3, 5] }], dailyMinutes: 40 } },
       dailyBudgetUsd: 2,
       monthlyBudgetUsd: 40,
@@ -492,6 +577,171 @@ describe('ChildProfileEditor: вкладки «Режим и время» / «П
     const inputs = windowInputs(host);
     expect(inputs[2].style.border, 'пустое «С» подсвечено').toContain('var(--c-danger-border)');
     expect(inputs[3].style.border, 'пустое «По» подсвечено').toContain('var(--c-danger-border)');
+  });
+});
+
+describe('ChildProfileEditor: «Предметы» — тело, тьютор и отказ по предмету', () => {
+  it('subjects уходят в теле в порядке редактора и без полей ответа; привязка знаний — как есть', async () => {
+    const b = subject('literatura', {
+      label: 'Литература', glyph: 'Лит', color: 'rose', tutorPersonaId: null,
+      knowledge: { datasetId: 'kb-1', attachedAt: '2026-11-01T00:00:00Z' },
+      acknowledgeRouteRisk: true, routeAcknowledgedAt: '2026-11-02T00:00:00Z',
+    });
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math'), b) }));
+    await click(saveBtn(host));
+    expect(sentSubjects(0)).toEqual([
+      { id: 'math', label: 'Математика', glyph: 'Мат', color: 'info', providerKey: 'anthropic-api-kids', model: 'sonnet', enabled: true },
+      { id: 'literatura', label: 'Литература', glyph: 'Лит', color: 'rose', providerKey: 'anthropic-api-kids', model: 'sonnet', enabled: true, knowledge: { datasetId: 'kb-1', attachedAt: '2026-11-01T00:00:00Z' } },
+    ]);
+    // ни одного поля ответа в теле: их нет ни у первой, ни у второй строки
+    for (const s of sentSubjects(0)) {
+      expect('tutorPersonaId' in s, 'тьютор — поле ответа').toBe(false);
+      expect('routeAcknowledgedAt' in s).toBe(false);
+      expect('acknowledgeRouteRisk' in s, 'согласие обратно как есть не отправляем').toBe(false);
+    }
+  });
+
+  it('порядок строк — порядок тела: «Ниже» меняет местами и в списке, и в запросе', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math'), subject('istoriya', { label: 'История', glyph: 'Ист', color: 'accent' })) }));
+    await clickTab(host, 'Предметы');
+    const move = subjectBtn(host, 'Ниже: Математика');
+    expect(move, 'стрелка порядка').toBeTruthy();
+    await click(move!);
+    await click(saveBtn(host));
+    expect(sentSubjects(0).map((s) => s.id)).toEqual(['istoriya', 'math']);
+  });
+
+  it('предметов не знаем — поля в теле нет: «Сохранить» не трогает чужие предметы', async () => {
+    const { host } = await mount(liza()); // fullProfile без subjects: вызывающий о них не знает
+    await clickTab(host, 'Предметы');
+    expect(subjectsEditor(host), 'пустой список показан честно').toBeTruthy();
+    await click(saveBtn(host));
+    expect('subjects' in wire(0), 'нет данных — нет и поля').toBe(false);
+  });
+
+  it('400 по предмету: Notice с текстом ответа, красная строка названного id, переход на «Предметы»', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math'), subject('istoriya', { label: 'История', glyph: 'Ист', color: 'accent' })) }));
+    await click(saveBtn(host));
+    await settle(() => pending.get(0)!.reject(httpErr(400, 'subject_color_invalid', 'Цвет предмета «istoriya» вне палитры: допустимы info, rose, success, warning, accent.')));
+    const n = notice(host);
+    expect(n).toBeTruthy();
+    expect(n!.textContent).toContain('Такого цвета нет в палитре');
+    expect(n!.textContent).toContain('Цвет предмета «istoriya» вне палитры'); // message — как есть
+    expect(n!.textContent).not.toContain('subject_color_invalid');
+    expect(tabSelected(host, 'Предметы'), 'человек видит красную строку, а не плашку над другой вкладкой').toBe(true);
+    const rows = subjectRows(host);
+    expect(rows[1].getAttribute('data-error'), 'строка названного предмета').toBe('true');
+    expect(rows[1].style.border).toContain('var(--c-danger)');
+    expect(rows[0].getAttribute('data-error'), 'остальные строки не тронуты').toBeNull();
+  });
+
+  it('subject_id_duplicate: id в тексте не назван — краснеет повтор в списке', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math'), subject('math', { label: 'Алгебра', glyph: 'Ал', color: 'rose' })) }));
+    await click(saveBtn(host));
+    await settle(() => pending.get(0)!.reject(httpErr(400, 'subject_id_duplicate', 'Два предмета с одним ключом. Обнови страницу и попробуй ещё раз.')));
+    expect(tabSelected(host, 'Предметы')).toBe(true);
+    expect(subjectRows(host)[1].getAttribute('data-error'), 'повтор — вторая строка').toBe('true');
+  });
+
+  it('отказ, не называющий предмета, красной строки не ставит', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await click(saveBtn(host));
+    await settle(() => pending.get(0)!.reject(httpErr(400, 'not_container', 'Пользователь не в песочнице.')));
+    expect(tabSelected(host, 'Режим и время'), 'вкладка не прыгает').toBe(true);
+    expect(subjectRows(host).some((r) => r.getAttribute('data-error') === 'true')).toBe(false);
+  });
+
+  it('нового предмета репетитор — из ответа сохранения: карточка открыта по его id', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    await click(panel(host).querySelector('[data-testid="add-subject"]') as HTMLElement);
+    const draft = subjectRows(host)[1];
+    const nameInput = rowInput(draft, 'Название');
+    expect(nameInput, 'поле «Название» новой строки').toBeTruthy();
+    await typeInto(nameInput!, 'Астрономия');
+    const open = subjectBtn(host, 'Открыть: Астрономия');
+    expect(open, 'клик по строке — карточка репетитора').toBeTruthy();
+    await click(open!);
+    expect(subjectRows(host)[1].style.border, 'строка открытого предмета отмечена').toContain('var(--c-accent)');
+    expect(tutorCard(host)?.textContent).toContain('Репетитор появится после сохранения');
+    await click(saveBtn(host));
+    expect(sentSubjects(0).map((s) => s.id)).toEqual(['math', 'astronomiya']);
+    await settle(() => pending.get(0)!.resolve({
+      profile: withSubjects(subject('math'), subject('astronomiya', { label: 'Астрономия', glyph: 'Аст', tutorPersonaId: 'p-tutor-new' })),
+      tutorPersonaId: 'p-tutor-old',
+    }));
+    const card = tutorCard(host);
+    expect(card, 'карточка открыта').toBeTruthy();
+    expect(card!.textContent).not.toContain('Репетитор появится после сохранения');
+    expect(card!.querySelector('img')?.getAttribute('src') ?? '', 'тьютор взят из ответа, не из профиля').toContain('/users/u-liza/child-tutors/p-tutor-new/avatar');
+  });
+
+  it('пока идёт сохранение, пикер и список гасятся; второе нажатие — того же запроса', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    await click(saveBtn(host));
+    expect((panel(host).querySelector('[data-testid="add-subject"]') as HTMLElement).getAttribute('disabled'), 'кнопка списка гасится').not.toBeNull();
+    expect(subjectBtn(host, 'Удалить предмет «Математика»')!.getAttribute('disabled')).not.toBeNull();
+    expect(assistantSelects(host)[0].getAttribute('disabled'), 'пикер гасится').not.toBeNull();
+    await click(saveBtn(host));
+    expect(calls.length).toBe(1);
+  });
+
+  it('id длинного названия — в потолке валидатора (32): тело принимает его, хвост срезан', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    await click(panel(host).querySelector('[data-testid="add-subject"]') as HTMLElement);
+    const nameInput = rowInput(subjectRows(host)[1], 'Название');
+    expect(nameInput).toBeTruthy();
+    await typeInto(nameInput!, 'Очень длинное название предмета для проверки потолка');
+    await click(saveBtn(host));
+    const id = String(sentSubjects(0)[1].id);
+    expect(id.length, 'id не длиннее потолка ^[a-z0-9-]{1,32}$').toBeLessThanOrEqual(32);
+    expect(id).toMatch(/^[a-z0-9-]{1,32}$/);
+  });
+});
+
+describe('ChildProfileEditor: «Предметы» — загрузка и гонка списка маршрутов', () => {
+  it('пока ответа нет — экран загрузки; свой ответ открыл пикеры и список', async () => {
+    routeAnswers = [];
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    expect(panel(host).querySelector('[data-testid="routes-loading"]'), 'экран загрузки').toBeTruthy();
+    expect(assistantPicker(host), 'пикера ещё нет').toBeNull();
+    expect(subjectsEditor(host), 'списка ещё нет').toBeNull();
+    await settle(() => routePending.get(0)!.resolve(ROUTES));
+    expect(panel(host).querySelector('[data-testid="routes-loading"]')).toBeNull();
+    expect(assistantSelects(host).map((s) => s.value)).toEqual(['anthropic-api-kids', 'sonnet']);
+    expect(subjectsEditor(host)).toBeTruthy();
+  });
+
+  it('Subjects_RoutesResponseAfterUserSwitch_Ignored: ответ маршрутов прежнего пользователя не применяется', async () => {
+    routeAnswers = [];
+    const { host, rerender } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    expect(panel(host).querySelector('[data-testid="routes-loading"]')).toBeTruthy();
+    await rerender({ id: 'u-other', username: 'Другой' });
+    expect(subjectsEditor(host), 'чужой список не показан').toBeNull();
+    await settle(() => routePending.get(0)!.resolve(ROUTES));
+    expect(subjectsEditor(host), 'поздний ответ прежнего id не открыл пикеры').toBeNull();
+    expect(assistantPicker(host)).toBeNull();
+    expect(routeCalls.length, 'нового пользователя ждёт его собственный запрос').toBe(2);
+    expect(routeCalls[0].signal, 'загрузка отменяема').toBeInstanceOf(AbortSignal);
+    await settle(() => routePending.get(1)!.resolve(ROUTES));
+    expect(subjectsEditor(host), 'свой ответ применён').toBeTruthy();
+  });
+
+  it('отказ списка: плашка вместо пикера, предметы править и сохранить можно', async () => {
+    routeAnswers = [httpErr(500)];
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    const n = panel(host).querySelector('[data-testid="routes-failed"]') as HTMLElement;
+    expect(n, 'плашка отказа загрузки').toBeTruthy();
+    expect(n.textContent).toContain('Список моделей не загрузился');
+    expect(assistantPicker(host), 'пикера нет').toBeNull();
+    expect(subjectsEditor(host), 'свои данные не заблокированы').toBeTruthy();
+    await click(saveBtn(host));
+    expect(sentSubjects(0).map((s) => s.id)).toEqual(['math']);
   });
 });
 
@@ -517,5 +767,19 @@ describe('ChildProfileEditor: мобила (360)', () => {
     expect(Number.parseFloat(chip.style.minHeight), 'тач-цель дня недели').toBeGreaterThanOrEqual(40);
     const box = toggle(host, 'Детский режим');
     expect(Number.parseFloat(box.style.width), 'тач-цель тумблера').toBeGreaterThanOrEqual(40);
+  });
+
+  it('«Предметы»: пикер столбиком, стрелки порядка — тач-цели ≥ 40px', async () => {
+    mobile = true;
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math'), subject('istoriya', { label: 'История', glyph: 'Ист', color: 'accent' })) }));
+    await clickTab(host, 'Предметы');
+    const pick = assistantPicker(host);
+    expect(pick).toBeTruthy();
+    expect((pick!.firstElementChild as HTMLElement).style.flexDirection, 'поставщик и модель — столбиком').toBe('column');
+    const up = subjectBtn(host, 'Выше: История');
+    expect(up, 'стрелка порядка в карточке строки').toBeTruthy();
+    expect(Number.parseFloat(up!.style.minHeight), 'тач-цель «Выше»').toBeGreaterThanOrEqual(40);
+    const open = subjectBtn(host, 'Открыть: Математика');
+    expect(Number.parseFloat(open!.style.minHeight), 'тач-цель строки предмета').toBeGreaterThanOrEqual(40);
   });
 });

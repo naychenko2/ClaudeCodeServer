@@ -32,7 +32,8 @@ vi.stubGlobal('Event', win.Event);
 vi.mock('react-dom', async (orig) => ({ ...(await orig<typeof import('react-dom')>()), createPortal: (n: unknown) => n }));
 
 // Фикстура списка: админ на сервере (раздела не видит) и двое в песочнице — своя и «соседняя»
-// для теста сохранения. Диалоговые ручки в этом тесте не вызываются.
+// для теста сохранения. Диалоговые ручки в этом тесте не вызываются; getRoutes mocked —
+// редактор профиля зовёт его при открытии (пикер маршрута, Т4f).
 const { usersFixture } = vi.hoisted(() => ({
   usersFixture: [
     { id: 'u-papa', username: 'Папа', role: 'admin', createdAt: '2026-01-01T00:00:00Z', executionEnvironment: 'local' },
@@ -60,6 +61,13 @@ vi.mock('../features/childMode/api', () => ({
       putCalls.push({ userId, body });
       return Promise.resolve({ profile: body, tutorPersonaId: 'p-tutor-new' });
     },
+    // Список маршрутов для пикера (Т4f): одна запись пула — на ней и выбирается провайдер.
+    getRoutes: () => Promise.resolve([
+      {
+        providerKey: 'anthropic-api-kids', kind: 'pool', label: 'Anthropic · ключ «kids»',
+        priced: true, requiresAck: false, models: [{ id: 'sonnet', label: 'Sonnet' }],
+      },
+    ]),
   },
 }));
 
@@ -84,8 +92,9 @@ const toggleIn = (r: HTMLElement) => r.querySelector('[data-testid="child-sectio
 const editorIn = (r: HTMLElement) => r.querySelector('[data-testid="child-profile-editor"]') as HTMLElement | null;
 const enableToggle = (ed: HTMLElement) => ed.querySelector('[role="checkbox"][aria-label="Детский режим"]') as HTMLButtonElement;
 const saveBtn = (ed: HTMLElement) => ed.querySelector('[data-testid="save-profile"]') as HTMLButtonElement;
-const providerInput = (ed: HTMLElement) => ed.querySelector('input[placeholder="anthropic-api-kids"]') as HTMLInputElement;
-// Поля маршрута (providerKey/model) — на вкладке «Предметы»: к ним переходят внутри редактора.
+// Маршрут помощника (providerKey/model) — пикер на вкладке «Предметы» (Т4f): первый Select
+// его секции. К нему переходят внутри редактора.
+const providerSelect = (ed: HTMLElement) => ed.querySelector('[data-testid="assistant-route"] select') as HTMLSelectElement;
 const clickTabIn = async (ed: HTMLElement, label: string) => {
   const b = Array.from(ed.querySelectorAll('[role="tab"]')).find((x) => (x.textContent ?? '').includes(label)) as HTMLElement | undefined;
   if (!b) throw new Error(`вкладка «${label}» не найдена`);
@@ -109,7 +118,7 @@ const reactProps = (el: HTMLElement): { onChange?: (e: { target: { value: string
   const key = Object.keys(el).find((k) => k.startsWith('__reactProps$'));
   return key ? (el as unknown as Record<string, unknown>)[key] as { onChange?: (e: { target: { value: string } }) => void } : undefined;
 };
-const typeInto = async (el: HTMLInputElement, v: string) => {
+const typeInto = async (el: HTMLInputElement | HTMLSelectElement, v: string) => {
   await act(async () => { reactProps(el)?.onChange?.({ target: { value: v } }); });
 };
 
@@ -192,7 +201,7 @@ describe('UserManagementModal: сохранение профиля (R-KM-F12, м
     const ed = editorIn(row('u-liza')!)!;
     await click(enableToggle(ed));
     await clickTabIn(ed, 'Предметы');
-    await typeInto(providerInput(ed), 'anthropic-api-kids');
+    await typeInto(providerSelect(ed), 'anthropic-api-kids');
     await clickSettle(saveBtn(ed));
     expect(putCalls.map((c) => c.userId), 'запрос только по своему id').toEqual(['u-liza']);
     // Строка статуса своего пользователя отразила сохранённый профиль.
@@ -204,7 +213,7 @@ describe('UserManagementModal: сохранение профиля (R-KM-F12, м
     const ed2 = editorIn(row('u-liza')!)!;
     expect(enableToggle(ed2).getAttribute('aria-checked'), 'режим включён из сохранённого профиля').toBe('true');
     await clickTabIn(ed2, 'Предметы');
-    expect(providerInput(ed2).value).toBe('anthropic-api-kids');
+    expect(providerSelect(ed2).value).toBe('anthropic-api-kids');
     await clickTabIn(ed2, 'Режим и время');
     expect(ed2.querySelectorAll('[data-testid="time-window"]').length, 'окон не было').toBe(0);
     // Соседняя песочница: ни запроса, ни изменения — статус и черновик пустые.
@@ -214,7 +223,7 @@ describe('UserManagementModal: сохранение профиля (R-KM-F12, м
     const edMira = editorIn(row('u-mira')!)!;
     expect(enableToggle(edMira).getAttribute('aria-checked')).toBe('false');
     await clickTabIn(edMira, 'Предметы');
-    expect(providerInput(edMira).value).toBe('');
+    expect(providerSelect(edMira).value).toBe('');
     expect(putCalls.length, 'чужого сохранения не было').toBe(1);
   });
 });

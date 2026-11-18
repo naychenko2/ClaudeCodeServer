@@ -115,6 +115,13 @@ const REJECT_TEXT: Record<string, string> = {
 const REJECT_FALLBACK = 'Сохранить не удалось. Попробуй ещё раз.';
 // 403 гейта авторизации ручки №10 (политика админа): тело отказа пустое, кода нет — текст по status.
 const FORBIDDEN_TEXT = 'Нужны права администратора';
+// Отказ загрузки списка маршрутов: message ответа как есть, иначе общий — своего списка
+// пикер не выдумывает (пустой список сказал бы «записей пула нет», чего мы не знаем).
+const ROUTES_LOAD_ERROR = 'Список моделей не загрузился. Попробуй позже.';
+const loadErrorText = (e: unknown): string => {
+  const m = (e as { body?: { message?: string } } | null)?.body?.message;
+  return typeof m === 'string' && m.trim() ? m.trim() : ROUTES_LOAD_ERROR;
+};
 
 // Черновик — строки полей ввода (пусто = поля нет в теле), окна списком, дни — множества ISO.
 interface DraftWindow { from: string; to: string; days: number[] }
@@ -291,7 +298,9 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
     const ac = new AbortController();
     childApi.getRoutes({ signal: ac.signal })
       .then((list) => setSnap((s) => (s.id === user.id ? { ...s, routes: list, routesError: null } : s)))
-      .catch((e) => setSnap((s) => (s.id === user.id ? { ...s, routesError: loadErrorText(e) } : s)));
+      // Пустой список вместе с текстом отказа: предметы править можно (их данные — данные
+      // админа), пикер при пустом списке сам говорит, что выбирать не из чего.
+      .catch((e) => setSnap((s) => (s.id === user.id ? { ...s, routes: [], routesError: loadErrorText(e) } : s)));
     return () => ac.abort();
   }, [user.id]);
 
@@ -310,6 +319,15 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
   // которое никто не отправит, пугает человека зря (R-KM-F11).
   const showBadDaily = d.enabled && badMinutes(d.dailyMinutes);
   const showBadWarn = d.enabled && badWarn(d.warnMinutes);
+
+  // Пачка 1 (макет Д1): пикеры знают только записи пула с API-ключом — cloud/local до Т6 админ
+  // не выбрал бы без согласия. Значение вне этого списка (прежнее из профиля) пикер держит
+  // «недоступным»: его видно, выбрать повторно нельзя, в тело оно уходит как есть — и живое
+  // согласие такого маршрута на бэке не трогается (ChildProfileValidator.cs:117-118).
+  const poolRoutes = (routes ?? []).filter((r) => r.kind === 'pool');
+  // Маршрут «Помощника (правила)» — он же маршрут нового предмета (проп defaultRoute Т4d).
+  const assistantRoute: ChildRouteValue = { providerKey: d.providerKey, model: d.model };
+  const selectedSubject = selectedId ? (d.subjects ?? []).find((s) => s.id === selectedId) ?? null : null;
 
   const save = async () => {
     if (saving) return; // два нажатия — один запрос
@@ -333,10 +351,11 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
       setAttempted(false);
       setSnap((s) => (s.id === forId ? {
         ...s,
-        // Тьютора берём из ответа: при первом включении его создаёт сервер. Согласие сбрасываем только
-        // когда сброс просили этим сохранением — дата не теряется сама.
+        // Тьютора (и тьюторов предметов) берём из ответа: при первом включении их создаёт сервер.
+        // Согласие сбрасываем только когда сброс просили этим сохранением — дата не теряется сама.
         tutorPersonaId: res.tutorPersonaId ?? s.tutorPersonaId,
         rulesAgreedAt: d.resetRules ? null : s.rulesAgreedAt,
+        draft: subjectTutor(s.draft, res.profile),
       } : s));
       onSaved(res.profile);
     } catch (e) {
@@ -345,7 +364,12 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
       const body = err?.body;
       const server = typeof body?.message === 'string' && body.message.trim() ? body.message.trim() : undefined;
       const code = typeof body?.code === 'string' ? body.code : undefined;
-      setReject({ text: err?.status === 403 ? FORBIDDEN_TEXT : (code && REJECT_TEXT[code]) || REJECT_FALLBACK, server });
+      // Отказ, называющий предмет, красит его строку и приводит человека туда, где эта строка
+      // видна, — на вкладке «Режим и времени» красная рамка была бы не видна (тот же смысл,
+      // что возврат на вкладку с невалидными полями времени).
+      const subjectId = subjectIdOf(server, d.subjects) ?? (code === 'subject_id_duplicate' ? duplicateSubjectId(d.subjects) : undefined);
+      setReject({ text: err?.status === 403 ? FORBIDDEN_TEXT : (code && REJECT_TEXT[code]) || REJECT_FALLBACK, server, subjectId });
+      if (subjectId) setTab('subjects');
       setSaving(false);
     }
   };
@@ -497,17 +521,50 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
       </>)}
 
       {tab === 'subjects' && (<>
-      <div style={fieldStyle}>
+      {/* Пока ответа нет, ни один пикер не может сказать правду о поставщиках: пустой список
+          звучал бы «записей пула нет», чего ещё не знаем. */}
+      {routes === null && (
+        <span data-testid="routes-loading" style={{ fontSize: FS.sm, color: C.textMuted }}>Загружаю список моделей…</span>
+      )}
+      {routesError && (
+        <Notice tone="danger" icon={AlertTriangle} title="Список моделей не загрузился" data-testid="routes-failed">
+          {routesError}
+          <div style={{ marginTop: SP.xxs, opacity: 0.85 }}>Предметы можно править и сохранить — выбрать модель сейчас нечем.</div>
+        </Notice>
+      )}
+      {routes !== null && !routesError && (
+      <div data-testid="assistant-route" style={fieldStyle}>
         {sectionTitle('Помощник (правила)')}
-        <Field label="Провайдер (ключ записи пула)" hint="Запись пула с API-ключом: ход ребёнка не идёт по подписке (И2)">
-          <TextField value={d.providerKey} mono onChange={(v) => patch((prev) => ({ ...prev, providerKey: v }))} placeholder="anthropic-api-kids" />
-        </Field>
-        <Field label="Модель" hint="Закреплённая модель «Уроков», например sonnet">
-          <TextField value={d.model} onChange={(v) => patch((prev) => ({ ...prev, model: v }))} placeholder="sonnet" />
-        </Field>
+        <span style={{ fontSize: FS.sm, color: C.textMuted, marginTop: -SP.sm }}>
+          Только записи пула с API-ключом: ход ребёнка не идёт по подписке. Другие поставщики подключатся позже.
+        </span>
+        <ChildRoutePicker
+          routes={poolRoutes}
+          value={assistantRoute}
+          onChange={(v) => patch((prev) => ({ ...prev, providerKey: v.providerKey, model: v.model }))}
+          disabled={saving}
+        />
       </div>
-      {/* Пустой слот под список предметов — наполняется в Т4f. */}
-      <div data-testid="subjects-list" />
+      )}
+
+      {routes !== null && (<>
+      <div data-testid="subjects-list">
+        <ChildSubjectsEditor
+          subjects={d.subjects ?? []}
+          routes={poolRoutes}
+          onChange={patchSubjects}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          defaultRoute={assistantRoute}
+          disabled={saving}
+          errorId={reject?.subjectId}
+        />
+      </div>
+
+      {/* Открытый предмет: карточка его репетитора. У несохранённого предмета персоны ещё нет —
+          карточка сама говорит «репетитор появится после сохранения». */}
+      {selectedSubject && <ChildTutorCard userId={user.id} personaId={selectedSubject.tutorPersonaId ?? ''} />}
+      </>)}
       </>)}
 
       <Button variant="primary" size="md" fullWidth loading={saving} dataTestId="save-profile" onClick={save}>

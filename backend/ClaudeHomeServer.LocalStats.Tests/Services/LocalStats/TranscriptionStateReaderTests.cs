@@ -76,7 +76,7 @@ public class TranscriptionStateReaderTests : IDisposable
 
     private static string StateJson(string phase, DateTimeOffset now, int pid, TimeSpan age,
         int? queue = null, int? pending = null, string? current = null, string? folder = null, int? batchTotal = null,
-        string? queueItems = null)
+        string? queueItems = null, long? stageStartedAt = null)
     {
         var f = new List<string> { $"\"phase\": \"{phase}\"", $"\"updated\": \"{Stamp(now, age)}\"", $"\"pid\": {pid}" };
         if (queue is not null) f.Add($"\"queue\": {queue}");
@@ -85,8 +85,13 @@ public class TranscriptionStateReaderTests : IDisposable
         if (current is not null) f.Add($"\"current\": \"{current}\"");
         if (folder is not null) f.Add($"\"folder\": \"{folder}\"");
         if (batchTotal is not null) f.Add($"\"batch_total\": {batchTotal}");
+        if (stageStartedAt is not null) f.Add($"\"stage_started_at\": {stageStartedAt}");
         return "{ " + string.Join(", ", f) + " }";
     }
+
+    // stage_started_at (М4) конвейер пишет в unix-СЕКУНДАХ (int(time.time())): тест строит их
+    // от тех же фиксированных часов — сравнение с unix-мс ответа тогда точное, без дрифта.
+    private static long StageSec(DateTimeOffset now, TimeSpan ago) => now.Subtract(ago).ToUnixTimeSeconds();
 
     private static string JournalRowStr(DateTimeOffset now, TimeSpan age, string result,
         string folder = "-", string file = "-", string minutes = "-", string speakers = "-", string note = "") =>
@@ -272,7 +277,7 @@ public class TranscriptionStateReaderTests : IDisposable
     // ─── «Сейчас» ───────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Транскрибация_ЭтапAsrВДлительностьОтНачалаЭтапа()
+    public void Транскрибация_ЭтапAsrДлительностьВозрастаСнимка()
     {
         var now = NowTrunc();
         var root = NewRoot();
@@ -284,13 +289,68 @@ public class TranscriptionStateReaderTests : IDisposable
         s.File.Should().Be("X.mp4");
         s.Folder.Should().Be("Video-RR");
         s.Stage.Should().Be("asr");
-        s.DurationMin.Should().Be(3.0);
-        s.StageStartedAt.Should().Be(now.Subtract(TimeSpan.FromMinutes(3)).ToUnixTimeMilliseconds());
+        s.DurationMin.Should().Be(3.0); // возраст последней правки снимка (updated) — как раньше
         // место в пачке и размер пачки state.json на файле не несёт
         s.BatchIndex.Should().BeNull();
         s.BatchSize.Should().BeNull();
         // распознавание идёт — зависимость asr «в норме»
         s.Deps.First(d => d.Key == "asr").State.Should().Be("ok");
+    }
+
+    // ─── «Сейчас»: начало текущей операции (stage_started_at, М4 → доработка Б1) ─────────
+    // stageStartedAt — метка начала операции из самого снимка конвейера, а НЕ updated: пульс
+    // обновляет только updated, и подстановка его вместо начала операции давала «10 секунд»
+    // вместо реальных минут. Метку начала и возраст снимка не смешивать: «Завис?» — по updated.
+
+    [Fact]
+    public void НачалоОперацииИзStageStartedAtСекундыСтановятсяМс()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        Write(root, "logs/state.json", StateJson("транскрибация", now, 100, TimeSpan.FromSeconds(10),
+            current: "X.mp4", folder: "Video-RR", stageStartedAt: StageSec(now, TimeSpan.FromMinutes(12))));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.Stage.Should().Be("asr"); // вид операции — по фазе, она здесь прежняя
+        s.StageStartedAt.Should().Be(now.Subtract(TimeSpan.FromMinutes(12)).ToUnixTimeMilliseconds());
+    }
+
+    // Метки нет — операции нет (ожидание, подъём vLLM) или снимок писался без поля (до М4):
+    // StageStartedAt null, подмены updated нет.
+    [Fact]
+    public void НетМеткиНачала_StageStartedAtNullНеМеткаПравкиСнимка()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        Write(root, "logs/state.json", StateJson("транскрибация", now, 100, TimeSpan.FromSeconds(10),
+            current: "X.mp4", folder: "Video-RR"));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.Stage.Should().Be("asr");
+        s.StageStartedAt.Should().BeNull();
+        s.UpdatedAt.Should().NotBeNull(); // возраст снимка остаётся своим полем, он никуда не делся
+    }
+
+    // Контрактный тест доработки: метка начала — не возраст снимка. Метка старше порога «Завис?»
+    // (12 мин), сам снимок свежий (10 с) → «Завис?» по-прежнему по updated и остаётся ok:
+    // длинная операция порогом не мерится. Мутация «подставить updated вместо stage_started_at»
+    // краснит этот тест по всем трём проверкам.
+    [Fact]
+    public void StageStartedAtНеРавноUpdatedAtЗависПоПрежнемуПоВозрастуСнимка()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        Write(root, "logs/state.json", StateJson("транскрибация", now, 100, TimeSpan.FromSeconds(10),
+            current: "X.mp4", folder: "Video-RR", stageStartedAt: StageSec(now, TimeSpan.FromMinutes(12))));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.StageStartedAt.Should().NotBe(s.UpdatedAt);
+        s.StageStartedAt.Should().Be(now.Subtract(TimeSpan.FromMinutes(12)).ToUnixTimeMilliseconds());
+        s.UpdatedAt.Should().Be(now.Subtract(TimeSpan.FromSeconds(10)).ToUnixTimeMilliseconds());
+        s.Level.Should().Be("ok");
     }
 
     [Fact]
@@ -300,12 +360,14 @@ public class TranscriptionStateReaderTests : IDisposable
         var root = NewRoot();
         Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(20), queue: 0));
         Write(root, "logs/summary_state.json", StateJson("саммари", now, 100, TimeSpan.FromMinutes(1),
-            current: "Y.mp4", folder: "Video-GPB"));
+            current: "Y.mp4", folder: "Video-GPB", stageStartedAt: StageSec(now, TimeSpan.FromMinutes(8))));
 
         var s = Reader(root, new FixedTime(now)).Read();
 
         s.Stage.Should().Be("summary");
         s.File.Should().Be("Y.mp4");
+        // метка начала — из summary_state.json того же процесса, не из его updated
+        s.StageStartedAt.Should().Be(now.Subtract(TimeSpan.FromMinutes(8)).ToUnixTimeMilliseconds());
         s.Deps.First(d => d.Key == "summary").State.Should().Be("ok");
     }
 

@@ -14,7 +14,9 @@ namespace ClaudeHomeServer.Services.Llm;
 // Файлы (формат задаёт конвейер, lib_journal.py / config.yaml):
 //   logs/state.json         — «чем занят конвейер сейчас»: phase (русскими), updated "yyyy-MM-dd HH:mm:ss"
 //                           (местное время узла), pid, queue (число), queue_items (файлы очереди
-//                           {file, folder, since}, since — unix-СЕКУНД → unix-мс); на этапе — current/folder,
+//                           {file, folder, since}, since — unix-СЕКУНД → unix-мс); на этапе — current/folder
+//                           и stage_started_at (unix-СЕКУНД → unix-мс: начало текущей долгой операции,
+//                           М4 — пишет тот, кто её начинает; пульс её не трогает; операции нет — поля нет),
 //                           на старте пачки — batch_total.
 //   logs/summary_state.json — снимок потока сводок: phase, pending, current, folder, updated, pid.
 //   logs/dify_state.json    — результат сверки с Dify (после М2): { checked: unix-сек, folders:
@@ -173,6 +175,8 @@ public sealed class TranscriptionStateReader(
             return new StateSnapshot(
                 node["phase"]?.GetValue<string>(),
                 TryParseStamp(node["updated"]?.GetValue<string>(), "yyyy-MM-dd HH:mm:ss", out var updated) ? updated : null,
+                // начало текущей операции — свои секунды конвейера, не возраст снимка
+                ToUnixMs(node["stage_started_at"]),
                 AsInt(node["pid"]), AsInt(node["pending"]),
                 node["current"]?.GetValue<string>(), node["folder"]?.GetValue<string>(),
                 AsInt(node["batch_total"]),
@@ -181,8 +185,11 @@ public sealed class TranscriptionStateReader(
         catch (Exception) { return null; }
     }
 
+    // UpdatedAt — метка последней правки снимка (её обновляет пульс; по её возрасту считается
+    // «Завис?»). StageStartedAt — начало текущей долгой операции (stage_started_at, unix-сек →
+    // unix-мс): метки нет, когда операции нет; при пульсе она не меняется. Это разные времена.
     private sealed record StateSnapshot(
-        string? Phase, DateTimeOffset? UpdatedAt, int? Pid, int? Pending,
+        string? Phase, DateTimeOffset? UpdatedAt, long? StageStartedAt, int? Pid, int? Pending,
         string? Current, string? Folder, int? BatchTotal,
         TranscriptionQueueFileDto[] QueueItems);
 
@@ -233,13 +240,18 @@ public sealed class TranscriptionStateReader(
     };
 
     // Внутренняя форма блока «Сейчас»: в ответе его поля — на верхнем уровне снимка, отдельного
-    // объекта «now» в контракте нет.
+    // объекта «now» в контракте нет. StageStartedAt — начало операции из stage_started_at снимка
+    // (null — метки нет: операция не идёт или снимок писался без неё); DurationMin — возраст
+    // последней правки снимка (updated): другой метки возраста конвейер не несёт, и фронт
+    // длительность по durationMin не рисует (transcriptionFormat.ts: «идёт» — по stageStartedAt).
     private sealed record NowInfo(
         string File, string? Folder, string Stage, long? StageStartedAt, double? DurationMin, int? BatchIndex, int? BatchSize);
 
     // Блок «Сейчас»: основной поток (распознавание; в последовательном режиме и сводка — тот же
     // state.json), при простое основного — параллельный поток сводок (тот же процесс).
     // Этап не опознан — null: в плоском контракте «Сейчас» просто не отдаётся.
+    // Начало операции и её вид — разные вещи: stage считается по фазе, stageStartedAt — по
+    // stage_started_at, подмены updated нет (доработка Б1).
     private static NowInfo? BuildNow(StateSnapshot? state, StateSnapshot? summary, bool summaryValid, DateTimeOffset now)
     {
         if (state?.Current is { Length: > 0 } mainFile)
@@ -247,14 +259,14 @@ public sealed class TranscriptionStateReader(
             var stage = state.Phase switch { "транскрибация" => "asr", "саммари" => "summary", _ => null };
             if (stage is not null)
                 return new NowInfo(mainFile, state.Folder, stage,
-                    state.UpdatedAt?.ToUnixTimeMilliseconds(),
+                    state.StageStartedAt,
                     state.UpdatedAt is { } st ? Math.Round((now - st).TotalMinutes, 1) : null,
                     null, state.BatchTotal);
         }
 
         if (summaryValid && summary!.Phase == "саммари" && summary.Current is { Length: > 0 } sumFile)
             return new NowInfo(sumFile, summary.Folder, "summary",
-                summary.UpdatedAt?.ToUnixTimeMilliseconds(),
+                summary.StageStartedAt,
                 summary.UpdatedAt is { } st ? Math.Round((now - st).TotalMinutes, 1) : null,
                 null, null);
 

@@ -43,8 +43,10 @@ public sealed record TranscriptionSnapshot
     // "asr" (распознавание) | "summary" (сводка). Этапа «В Dify» конвейер в state.json не помечает —
     // бэкенд его не выдумывает.
     public string? Stage { get; init; }
-    // unix-мс записи state, открывшей этап: конвейер перезаписывает снимок на переходе фаз,
-    // поэтому updatedAt текущего снимка = начало текущего этапа.
+    // unix-мс НАЧАЛА текущей операции — из поля stage_started_at снимка конвейера (unix-сек → мс,
+    // М4). Метки нет, когда операции нет: тогда null, а не updatedAt — пульс обновляет только
+    // updated, а подстановка метки последней правки вместо начала операции — ровно то,
+    // что чинит доработка Б1.
     public long? StageStartedAt { get; init; }
     public double? DurationMin { get; init; }
     // Место в пачке — state.json его не несёт (снимок на файле не содержит индекса), v1 всегда null.

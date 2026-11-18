@@ -125,3 +125,101 @@ public class TranscriptionEndpointTests : IClassFixture<TranscriptionEndpointTes
         }
     }
 }
+
+/// <summary>
+/// Живой ответ ручки с БОЕВЫМ читателем (не подменённым): метка начала текущей операции
+/// доходит до JSON как есть — stage_started_at снимка конвейера (unix-сек) становится
+/// stageStartedAt (unix-мс); при отсутствии операции поля в ответе нет (null). Фикстура
+/// конвейера — temp-каталог, путь к нему подменён Transcription:PipelineRoot; файлы
+/// переписываются между тестами: читатель читает их в момент запроса.
+/// Мутация «подставить вместо метки начала updated» краснит первый тест (пункт приёмки 3).
+/// </summary>
+[Trait("Category", "Host")]
+public class TranscriptionStageStartedAtTests : IClassFixture<TranscriptionStageStartedAtTests.Host>, IDisposable
+{
+    public sealed class Host : TestWebApplicationFactory
+    {
+        // Корень фикстуры конвейера: под ним logs/state.json, как у живой установки.
+        public string PipelineRoot { get; } =
+            Path.Combine(Path.GetTempPath(), "ccs-transc-endpoint-" + Guid.NewGuid().ToString("N"));
+
+        public Host()
+        {
+            Directory.CreateDirectory(Path.Combine(PipelineRoot, "logs"));
+            ExtraConfig["Transcription:PipelineRoot"] = PipelineRoot;
+        }
+
+        // Фикстура конвейера живёт вместе с хостом (на весь класс): xUnit создаёт экземпляр
+        // тестового класса на каждый тест и зовёт Dispose каждого — чистить её там нельзя.
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (!disposing) return;
+            try { Directory.Delete(PipelineRoot, true); } catch (IOException) { }
+        }
+    }
+
+    private readonly Host _host;
+    private readonly HttpClient _admin;
+
+    public TranscriptionStageStartedAtTests(Host host)
+    {
+        _host = host;
+        _admin = host.CreateAuthenticatedClient();
+    }
+
+    // Хост и фикстуру конвейера гасит фикстура после класса; здесь — только клиент теста
+    public void Dispose() => _admin.Dispose();
+
+    // Снимок конвейера фикстуры: updated — «сейчас» (снимок свежий), pid — сам тестовый
+    // процесс (на Linux /proc/<pid> есть; на Windows его нет — это меняет только phase/alive,
+    // а метку начала BuildNow считает по фазе и файлу, поэтому тест платформонезависим).
+    private void WriteState(string phase = "транскрибация", string? current = "X.mp4",
+        string? folder = "Video-RR", long? stageStartedAt = null)
+    {
+        var f = new List<string>
+        {
+            $"\"phase\": \"{phase}\"",
+            $"\"updated\": \"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}\"",
+            $"\"pid\": {Environment.ProcessId}",
+        };
+        if (current is not null) f.Add($"\"current\": \"{current}\"");
+        if (folder is not null) f.Add($"\"folder\": \"{folder}\"");
+        if (stageStartedAt is not null) f.Add($"\"stage_started_at\": {stageStartedAt}");
+        File.WriteAllText(
+            Path.Combine(_host.PipelineRoot, "logs", "state.json"), "{ " + string.Join(", ", f) + " }");
+    }
+
+    private async Task<JsonElement> ResponseRoot()
+    {
+        var r = await _admin.GetAsync("/api/local-model/transcription");
+        r.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
+        return doc.RootElement.Clone();
+    }
+
+    [Fact]
+    public async Task ЖивойОтветStageStartedAtИзМеткиНачалаОперации()
+    {
+        var stageSec = DateTimeOffset.Now.Subtract(TimeSpan.FromMinutes(12)).ToUnixTimeSeconds();
+        WriteState(stageStartedAt: stageSec);
+
+        var json = await ResponseRoot();
+
+        json.GetProperty("stage").GetString().Should().Be("asr");
+        json.GetProperty("stageStartedAt").GetInt64().Should().Be(stageSec * 1000); // unix-сек → unix-мс
+        // возраст снимка — своё поле, и он не равен началу операции (именно это чинила подмена)
+        json.GetProperty("updatedAt").GetInt64().Should().NotBe(stageSec * 1000);
+    }
+
+    [Fact]
+    public async Task ЖивойОтветБезОперацииStageStartedAtNull()
+    {
+        WriteState(phase: "ожидание", current: null, folder: null);
+
+        var json = await ResponseRoot();
+
+        json.GetProperty("stage").ValueKind.Should().Be(JsonValueKind.Null);
+        json.GetProperty("stageStartedAt").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+}

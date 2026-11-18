@@ -2,15 +2,17 @@
 // запоминание выбора (cc_local_model_tab), точка на вкладке по level из снимка,
 // «узкая лента» (<340 px — неактивные вкладки только иконкой).
 //
-// Плюс Ф6: точка на «Стендах» и то, что доступное имя панели берётся из реестра.
+// Плюс Ф6: точка на «Стендах» (и то, что она видна без открытия вкладки — находка
+// ревью Р-Ф2д: ферма опрашивается, пока смонтирована панель), и то, что доступное
+// имя панели берётся из реестра.
 //
-// Доработка Ф2/Ф6 (дефекты №1/№3 приёмки Веры): точка тревоги на «Встречах» видна,
-// не открывая вкладку (снимок опрашивается, пока панель смонтирована, и прекращается
-// при закрытии панели, а не при уходе с вкладки); не-админ с сохранённой 'transcription'
-// получает рабочую «Медиа», а не сломанную панель. Это поведение проверяется
-// МОНТИРОВАНИЕМ панели (node + linkedom, паттерн ChildHintsPanel.test): мокнуты
-// только опросы (их эндпоинты сетевые/админские), сама панель, переключатель и
-// связка «снимок → точка» — настоящие.
+// Доработка Ф2/Ф6 (дефекты №1/№3 приёмки Веры): точка тревоги на «Встречах» и на
+// «Стендах» видна, не открывая вкладку (снимок опрашивается, пока панель смонтирована,
+// и прекращается при закрытии панели, а не при уходе с вкладки); не-админ с сохранённой
+// 'transcription' получает рабочую «Медиа», а не сломанную панель. Это поведение
+// проверяется МОНТИРОВАНИЕМ панели (node + linkedom, паттерн ChildHintsPanel.test):
+// мокнуты только опросы (их эндпоинты сетевые/админские), сама панель, переключатель
+// и связка «снимок → точка» — настоящие.
 //
 // Остальное — окружение node: чистые функции прямыми вызовами, переключатель —
 // renderToStaticMarkup (паттерн hardware.test.ts), имя панели — сторожем по исходнику.
@@ -22,6 +24,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseHTML } from 'linkedom';
 import type { WorkspacePanelDefCtx } from '../../lib/subsystems/registryCore';
+import type { HardwareFarm } from './hardwareTypes';
 import type { TranscriptionLevel, TranscriptionSnapshot } from './types';
 import { loadTab, LocalModelPanel, resolveTab, transcriptionDot, TabSwitch } from './LocalModelPanel';
 
@@ -136,10 +139,11 @@ describe('доступное имя панели — из реестра', () =>
 });
 
 // === 6. Поведение панели (монтирование, node + linkedom — паттерн ChildHintsPanel.test) ===
-// Мокнуты только опросы: их эндпоинты сетевые, а админские (/stats, /hardware,
-// /transcription) к тому же проверяются моком «верно эндпоинту» (см. useLocalModelStats
-// ниже). Панель, переключатель, resolveTab, useTranscription и связка «снимок →
-// точка» — настоящие: на этом и ловятся дефекты №1/№3.
+// Мокнуты эндпоинты и те опросы, что не несут проверяемого смысла: /stats, /media,
+// /engines (админские к тому же проверяются моком «верно эндпоинту» — см.
+// useLocalModelStats ниже). Панель, переключатель, resolveTab, useTranscription,
+// useLocalModelFarm (настоящий хук, питается моком api) и связка «снимок → точка» —
+// настоящие: на этом и ловятся дефекты №1/№3 и точка «Стендов» (Р-Ф2д).
 
 const st = vi.hoisted(() => ({
   admin: true,
@@ -148,6 +152,9 @@ const st = vi.hoisted(() => ({
   transLevel: null as 'ok' | 'warn' | 'danger' | null,
   // Счётчик обращений к эндпоинту снимка: на нём проверяется жизнь опроса.
   transCalls: 0,
+  // То же для сводки фермы (точка на «Стендах»).
+  farmLevel: null as 'ok' | 'warn' | 'danger' | null,
+  farmCalls: 0,
 }));
 
 vi.mock('./useLocalModelStats', () => ({
@@ -174,11 +181,20 @@ vi.mock('./useLocalModelMedia', () => ({
 vi.mock('./useLocalModelEngines', () => ({
   useLocalModelEngines: () => ({ engines: [], engine: 'main', setEngine: () => {} }),
 }));
-vi.mock('./useLocalModelHardware', () => ({
-  useLocalModelHardware: () => ({ data: null, loading: false }),
-  useLocalModelFarm: () => ({ data: null, loading: false }),
-  DEFAULT_HARDWARE_WINDOW: '15m',
-}));
+// Снимок фермы для мока: только поля, значимые для точки и выбора узла (уровни и
+// пороги считает бэкенд — здесь только переносим).
+function farmSnapshot(level: 'ok' | 'warn' | 'danger'): HardwareFarm {
+  return {
+    at: 1_763_000_000_000,
+    level,
+    farmNodes: [{
+      key: 'worker', title: 'worker', roles: ['text'], engines: ['main'], media: false,
+      status: 'ok', since: null, level, hottest: null, gpus: [],
+      uptimeS: null, cpuLoadPerc: null, ramUsedPerc: null,
+    }],
+  };
+}
+
 vi.mock('../../lib/api', () => ({
   api: {
     localModel: {
@@ -188,6 +204,14 @@ vi.mock('../../lib/api', () => ({
           st.transLevel ? { phase: 'idle', updatedAt: 1_763_000_000_000, level: st.transLevel } : null,
         );
       },
+      // Сводка фермы: её опрашивает настоящий useLocalModelFarm; уровень подставляется
+      // по тесту, счётчик обращений — на нём проверяется жизнь опроса.
+      hardwareFarm: () => {
+        st.farmCalls++;
+        return Promise.resolve(st.farmLevel ? farmSnapshot(st.farmLevel) : null);
+      },
+      // Отчёт узла: опрашивается только на активной вкладке «Стенды» — тесты её не открывают.
+      hardware: () => Promise.resolve(null),
     },
   },
 }));
@@ -218,14 +242,30 @@ function storeTab(tab: string) {
   (globalThis as unknown as { localStorage: unknown }).localStorage = { getItem: () => tab, setItem: () => {} };
 }
 
+// Прогон микротасков до пустой очереди: цепочка «api → .then поллера → emit →
+// ререндер React» длиннее одного await, но её точная длина — не контракт (магическое
+// число краснело бы как «точки нет» при любом дополнительном .then). Поэтому —
+// прогон с запасом, а где важен результат — ожидание по признаку (waitForDot).
+async function drainMicrotasks() {
+  for (let i = 0; ; i++) {
+    await Promise.resolve();
+    // Очередь пуста, когда два наблюдения подряд дают один и тот же конец: свой
+    // continuation — последний в очереди, пока в неё никто не дописал.
+    let settled = false;
+    void Promise.resolve().then(() => { settled = true; });
+    await Promise.resolve();
+    if (settled) return;
+  }
+}
+
 async function mountPanel() {
   const host = doc.createElement('div');
   doc.body.appendChild(host as unknown as HTMLElement);
   const root = createRoot(host as unknown as HTMLElement);
   await act(async () => { root.render(createElement(LocalModelPanel, { ctx: panelCtx })); });
-  // Первый ответ поллера — цепочка микротасков (api → .then поллера → emit → ререндер):
-  // прогоняем её внутри act, иначе точка в DOM ещё не будет.
-  await act(async () => { for (let i = 0; i < 4; i++) await Promise.resolve(); });
+  // Первый ответ поллера должен дойти до DOM — прогоняем цепочку внутри act,
+  // иначе точка в DOM ещё не будет.
+  await act(async () => { await drainMicrotasks(); });
   return {
     host: host as unknown as HTMLElement,
     async unmount() { await act(async () => { root.unmount(); }); },
@@ -238,12 +278,23 @@ const buttonWithText = (host: HTMLElement, text: string) =>
 const hasDot = (btn: Element, token: string) =>
   Array.from(btn.querySelectorAll('span')).some(s => (s.getAttribute('style') ?? '').includes(token));
 
+// Ждать точку на вкладке по признаку, а не по счётчику микротасков: длина цепочки
+// до DOM — не контракт. Пустых прогонов — максимум три, и тест идёт к своей
+// проверке («точки нет») — ровно там, где это и должно проверяться.
+async function waitForDot(host: HTMLElement, tabText: string, token: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const btn = buttonWithText(host, tabText);
+    if (btn && hasDot(btn, token)) return;
+    await act(async () => { await drainMicrotasks(); });
+  }
+}
+
 describe('панель: точка тревоги на «Встречах» без открытия вкладки (дефект №1)', () => {
   let current: { unmount: () => Promise<void> } | null = null;
   afterEach(async () => {
     await current?.unmount();
     current = null;
-    st.admin = true; st.transLevel = null; st.transCalls = 0;
+    st.admin = true; st.transLevel = null; st.transCalls = 0; st.farmLevel = null; st.farmCalls = 0;
     delete (globalThis as { localStorage?: unknown }).localStorage;
     vi.useRealTimers();
   });
@@ -281,7 +332,7 @@ describe('панель: опрос снимка живёт с панелью, а
   afterEach(async () => {
     await current?.unmount();
     current = null;
-    st.admin = true; st.transLevel = null; st.transCalls = 0;
+    st.admin = true; st.transLevel = null; st.transCalls = 0; st.farmLevel = null; st.farmCalls = 0;
     delete (globalThis as { localStorage?: unknown }).localStorage;
     vi.useRealTimers();
   });
@@ -292,18 +343,93 @@ describe('панель: опрос снимка живёт с панелью, а
     const m = await mountPanel(); current = m;
     // Панель открыта на «LLM» («Встречи» не открывались) — опрос уже идёт.
     expect(st.transCalls).toBe(1);
-    await act(async () => { vi.advanceTimersByTime(10_000); for (let i = 0; i < 4; i++) await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(10_000); await drainMicrotasks(); });
     expect(st.transCalls).toBe(3); // 5-с интервал живёт, пока панель смонтирована
     // Уход на «Медиа» — опрос продолжается (дефект №1: раньше он жил только на активной вкладке).
     const mediaBtn = buttonWithText(m.host, 'Медиа');
     expect(mediaBtn).not.toBeNull();
     await act(async () => { mediaBtn!.click(); });
-    await act(async () => { vi.advanceTimersByTime(5_000); for (let i = 0; i < 4; i++) await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(5_000); await drainMicrotasks(); });
     expect(st.transCalls).toBe(4);
     // Закрытие панели — опрос прекращается (таймер погашен при размонтировании).
     await m.unmount(); current = null;
-    await act(async () => { vi.advanceTimersByTime(20_000); for (let i = 0; i < 4; i++) await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(20_000); await drainMicrotasks(); });
     expect(st.transCalls).toBe(4);
+  });
+});
+
+describe('панель: точка тревоги на «Стендах» без открытия вкладки (Р-Ф2д)', () => {
+  let current: { unmount: () => Promise<void> } | null = null;
+  afterEach(async () => {
+    await current?.unmount();
+    current = null;
+    st.admin = true; st.transLevel = null; st.transCalls = 0; st.farmLevel = null; st.farmCalls = 0;
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+    vi.useRealTimers();
+  });
+
+  it('снимок фермы level=danger — красная точка на «Стендах», панель открыта на «LLM»', async () => {
+    st.admin = true; st.farmLevel = 'danger';
+    const m = await mountPanel(); current = m;
+    // Активная вкладка — «LLM» (сохранённой нет → дефолт 'text'): точка не следствие
+    // открытой «Стендов» — ровно то обещание, которое нарушал дефект.
+    expect(buttonWithText(m.host, 'LLM')?.getAttribute('aria-pressed')).toBe('true');
+    await waitForDot(m.host, 'Стенды', 'var(--c-danger)');
+    const hwBtn = buttonWithText(m.host, 'Стенды');
+    expect(hwBtn).not.toBeNull();
+    expect(hasDot(hwBtn!, 'var(--c-danger)')).toBe(true);
+  });
+
+  it('снимок level=warn — жёлтая точка; level=ok — точки нет', async () => {
+    st.admin = true; st.farmLevel = 'warn';
+    const m = await mountPanel(); current = m;
+    await waitForDot(m.host, 'Стенды', 'var(--c-warning)');
+    const hwBtn = buttonWithText(m.host, 'Стенды');
+    expect(hwBtn).not.toBeNull();
+    expect(hasDot(hwBtn!, 'var(--c-warning)')).toBe(true);
+    await m.unmount(); current = null;
+    st.farmLevel = 'ok';
+    const m2 = await mountPanel(); current = m2;
+    await act(async () => { await drainMicrotasks(); });
+    const hwBtn2 = buttonWithText(m2.host, 'Стенды');
+    expect(hwBtn2).not.toBeNull();
+    expect(hasDot(hwBtn2!, 'var(--c-warning)')).toBe(false);
+    expect(hasDot(hwBtn2!, 'var(--c-danger)')).toBe(false);
+  });
+});
+
+describe('панель: опрос фермы живёт с панелью, а не с вкладкой (Р-Ф2д, c2)', () => {
+  let current: { unmount: () => Promise<void> } | null = null;
+  afterEach(async () => {
+    await current?.unmount();
+    current = null;
+    st.admin = true; st.transLevel = null; st.transCalls = 0; st.farmLevel = null; st.farmCalls = 0;
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+    vi.useRealTimers();
+  });
+
+  it('опрос идёт при закрытых «Стендах»; закрытие панели — останавливает', async () => {
+    vi.useFakeTimers();
+    st.admin = true; st.farmLevel = 'ok';
+    const m = await mountPanel(); current = m;
+    // Панель открыта на «LLM» («Стенды» не открывались) — первый снимок уже взят.
+    expect(st.farmCalls).toBe(1);
+    // 2-с интервал живёт, пока панель смонтирована.
+    await act(async () => { vi.advanceTimersByTime(2_000); await drainMicrotasks(); });
+    expect(st.farmCalls).toBe(2);
+    // Закрытие панели — опрос прекращается (таймер погашен при размонтировании).
+    await m.unmount(); current = null;
+    await act(async () => { vi.advanceTimersByTime(10_000); await drainMicrotasks(); });
+    expect(st.farmCalls).toBe(2);
+  });
+
+  it('не-админ не опрашивает админские эндпоинты (ни ферму, ни снимок встреч)', async () => {
+    vi.useFakeTimers();
+    st.admin = false;
+    const m = await mountPanel(); current = m;
+    await act(async () => { vi.advanceTimersByTime(10_000); await drainMicrotasks(); });
+    expect(st.farmCalls).toBe(0);
+    expect(st.transCalls).toBe(0);
   });
 });
 
@@ -312,7 +438,7 @@ describe('панель: не-админ с сохранённой «Встреч
   afterEach(async () => {
     await current?.unmount();
     current = null;
-    st.admin = true; st.transLevel = null; st.transCalls = 0;
+    st.admin = true; st.transLevel = null; st.transCalls = 0; st.farmLevel = null; st.farmCalls = 0;
     delete (globalThis as { localStorage?: unknown }).localStorage;
     vi.useRealTimers();
   });

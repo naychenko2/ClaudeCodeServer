@@ -166,8 +166,10 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // опрос, стенд и переключатель видят один и тот же выбор.
   const { engines, engine, setEngine } = useLocalModelEngines(visible && tab === 'text');
 
-  // Тяжёлый 2-с опрос — только АКТИВНОЙ вкладки (неактивная на паузе):
-  // «LLM» — stats, «Медиа» — media, «Стенды» — hardware; переключение — немедленный снимок.
+  // Тяжёлый 2-с опрос активной вкладки — только АКТИВНОЙ вкладки (неактивная на паузе):
+  // «LLM» — stats, «Медиа» — media, «Стенды» — отчёт узла; переключение — немедленный снимок.
+  // Сводка фермы — исключение: опрашивается, пока смонтирована панель (ниже), — она кормит
+  // точку тревоги на вкладке, а она обязана быть видна с любой вкладки.
   const { data: textData, loading: textLoading, error: textError, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window, engine);
   const { data: mediaData, loading: mediaLoading, refetch: mediaRefetch } = useLocalModelMedia(visible && tab === 'media');
   // Опрос снимка конвейера (5 с) — пока панель смонтирована и пользователь админ
@@ -181,7 +183,12 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // равенстве первый). Быстрые касания A → B → A: в состоянии последний выбор.
   const [chosenNode, setChosenNode] = useState<string | null>(null);
   const hwActive = visible && tab === 'hardware';
-  const { data: farm, loading: farmLoading } = useLocalModelFarm(hwActive);
+  // Опрос сводки фермы (2 с) — пока панель смонтирована и пользователь админ (эндпоинт
+  // админский): точка тревоги на «Стендах» обязана быть видна с любой вкладки, опрос
+  // прекращается при закрытии ПАНЕЛИ, а не при уходе с вкладки — тот же порядок, что у
+  // «Встреч» (находка ревью Р-Ф2д; по продукту: точка важнее экономии одного запроса
+  // в 2 с). Не-админ не опрашивает: вкладка ему не предлагается вовсе.
+  const { data: farm, loading: farmLoading } = useLocalModelFarm(visible && isAdmin);
   const nodeKey = farmPickNode(farm, chosenNode);
   const node = farm?.farmNodes.find(n => n.key === nodeKey) ?? null;
   const { data: hwData, loading: hwLoading } = useLocalModelHardware(hwActive, hwWindow, nodeKey ?? undefined);

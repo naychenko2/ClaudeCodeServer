@@ -17,7 +17,8 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { api } from '../../lib/api';
 import type { TranscriptionSnapshot } from './types';
 
-// Интервал опроса — 5 с (предложение v1: «опрос раз в 5 с только при открытой вкладке»).
+// Интервал опроса — 5 с (значение предложения v1; условие опроса с тех пор изменено:
+// пока смонтирована панель «Ферма», а не «пока открыта вкладка» — см. шапку файла).
 export const TRANSCRIPTION_POLL_MS = 5000;
 
 // === Чистый контроллер опроса: тест проверяет его без React ===

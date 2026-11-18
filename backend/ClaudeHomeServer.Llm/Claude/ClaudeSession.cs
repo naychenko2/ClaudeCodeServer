@@ -3536,7 +3536,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // Слэш-команда/скилл: сырой текст после TrimStart() начинается с '/'. Единый предикат для
     // маркера реплики (ShouldMarkHumanText) и хвоста хода: всё, что приклеено перед командой,
     // ломает её распознавание в CLI (/compact превращается в обычную реплику).
-    internal static bool IsSlashCommand(string rawText) => rawText.TrimStart().StartsWith('/');
+    public static bool IsSlashCommand(string rawText) => rawText.TrimStart().StartsWith('/');
 
     // Склейка хвоста хода: recall + text. Маркер реплики (WithHumanTextMarker) уже стоит
     // в text (вставлен в SessionManager до обвязки). Без recall (joinedRecall null/пусто)
@@ -4547,7 +4547,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // Манифест recall (F3): что персона подтянула из памяти в этот ход — клиенту,
             // для «опирается на…» / «использовано сейчас» во вкладке контекста персоны.
-            if (manifestItems is { Count: > 0 })
+            // Слэш-команда при хвосте хода: recall не отправляется (см. ниже), манифест
+            // отражает фактически ушедшее — не шлём.
+            if (manifestItems is { Count: > 0 } && !(recallInTurnText && IsSlashCommand(text)))
                 _ = _onMessage(new RecallManifestMessage(
                     manifestItems.Select(i => new RecallItemDto(i.Kind, i.Ref, i.Title, i.Snippet)).ToList()));
         }

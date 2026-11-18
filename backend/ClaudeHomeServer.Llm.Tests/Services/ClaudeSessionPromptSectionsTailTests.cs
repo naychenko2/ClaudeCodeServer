@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Prompts;
@@ -49,6 +50,82 @@ public class ClaudeSessionPromptSectionsTailTests : ClaudeSessionPromptSectionsT
 
         var prose = await RunTailTurnAsync(true, "МАРКЕР_СОСТОЯНИЯ", userText: "привет");
         prose.Sections.Should().Contain(s => s.Key == "image-editor-state");
+    }
+
+    // Хэш прошлого хвоста обновляется только когда хвост реально ушёл: слэш-команда его не трогает.
+    // В ОДНОЙ сессии: проза(A) → смена хвоста на B → /compact → проза(B) — B обязан уехать,
+    // иначе хэш, записанный на слэш-ходе, подавил бы его как «уже отправленный».
+    [Fact]
+    public async Task СлэшКоманда_ХэшХвостаНеОбновляет_СледующаяПрозаНесётНовыйХвост()
+    {
+        var state = "МАРКЕР_А";
+        var snapshots = new ConcurrentQueue<IReadOnlyList<PromptSectionDto>>();
+        var got = new SemaphoreSlim(0);
+        var bus = new TurnEventBus();
+        bus.OnFilter<PromptAssembling>(100, (e, next) =>
+        {
+            e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                "image-editor-state", state, "Состояние редактора", InTurnTail: true));
+            return next();
+        }, "Test.ImageEditorState");
+        bus.OnNotification<PromptAssembled>(e =>
+        {
+            if (e.Snapshot?.Draft is { } draft) { snapshots.Enqueue(draft.Sections); got.Release(); }
+            return Task.CompletedTask;
+        }, "Test.Snapshot");
+
+        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["LlmProviders:test-local:DisplayName"] = "Тестовый локальный",
+                ["LlmProviders:test-local:AnthropicBaseUrl"] = "http://127.0.0.1:65535",
+                ["LlmProviders:test-local:IsLocal"] = "true",
+                ["LlmProviders:test-local:RecallInTurnText"] = "true",
+                ["LlmProviders:test-local:Models:0:Id"] = "qwen-test-27b",
+                ["LlmProviders:test-local:Models:0:DisplayName"] = "Qwen Test",
+            }).AddInMemoryCollection(IsolatedProfiles()).Build();
+        var context = new LlmSessionContext(
+            RootPath: _root, OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null, TasksMcp: null,
+            Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            SystemPromptViaFile: false, Events: bus);
+
+        await using var session = new ClaudeHomeServer.Services.Llm.Claude.ClaudeSession(
+            new Session { Model = "qwen-test-27b" }, context, providers: new LlmProviderRegistry(config));
+
+        async Task<bool> TurnAsync(string text)
+        {
+            await session.SendMessageAsync(text);
+            (await got.WaitAsync(TimeSpan.FromSeconds(15))).Should().BeTrue("снимок промпта хода обязан быть опубликован");
+            snapshots.TryDequeue(out var s).Should().BeTrue();
+            return s!.Any(x => x.Key == "image-editor-state");
+        }
+
+        (await TurnAsync("привет")).Should().BeTrue("первая проза несёт хвост");
+        state = "МАРКЕР_Б";
+        (await TurnAsync("/compact")).Should().BeFalse("слэш-команду хвост не трогает");
+        (await TurnAsync("ещё привет")).Should().BeTrue("хвост Б ещё не уходил — обязан уехать со следующей прозой");
+    }
+
+    // Манифест recall отражает фактически ушедшее: слэш-команда при хвосте хода хвост не несёт —
+    // манифест не шлём; проза с тем же набором манифест получает
+    [Theory]
+    [InlineData("/compact", false)]
+    [InlineData("привет", true)]
+    public async Task МанифестRecall_СлэшКомандаПриХвосте_НеУходит(string userText, bool expectManifest)
+    {
+        var sent = new ConcurrentQueue<ServerMessage>();
+        static void Manifest(TurnEventBus bus) => bus.OnFilter<PromptAssembling>(200, (e, next) =>
+        {
+            e.ManifestItems.Add(new ClaudeHomeServer.Services.Llm.RecallItem("note", "n1", "Заметка", null));
+            return next();
+        }, "Test.Manifest");
+
+        await RunTailTurnAsync(true, "МАРКЕР_СОСТОЯНИЯ", Manifest, userText: userText,
+            tweak: c => c with { OnMessage = m => { sent.Enqueue(m); return Task.CompletedTask; } });
+
+        sent.OfType<RecallManifestMessage>().Any().Should().Be(expectManifest);
     }
 
     [Theory]

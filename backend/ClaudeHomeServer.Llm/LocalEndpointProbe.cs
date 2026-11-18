@@ -82,8 +82,9 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
     private readonly TimeSpan _cacheFor;
     private readonly ILogger? _logger;
 
-    // Провайдеры, у которых окно уже сверяли с /metrics (раз за жизнь процесса): сторож не
-    // долбит стенд на каждой пробе, а Warning не повторяется. Ключ — Key провайдера.
+    // Провайдеры, у которых окно УСПЕШНО сверено с /metrics (раз за жизнь процесса; провал
+    // чтения /metrics не отмечает — следующая проба попробует снова). Warning не повторяется.
+    // Ключ — Key провайдера: за одну сверку проверяются все модели каталога.
     private readonly ConcurrentDictionary<string, byte> _windowChecked = new();
 
     // Кеш по ключу провайдера: (когда проверяли, итог). Конкурентный доступ из разных
@@ -138,14 +139,15 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
         // 0 — поле отсутствовало, тогда запись не делаем (старая могла быть от прошлой пробы).
         if (maxLen > 0)
             _maxLenCache[key] = (until, maxLen);
-        if (_logger is not null && outcome == LocalProbeOutcome.Alive && _windowChecked.TryAdd(key, 0))
+        if (_logger is not null && outcome == LocalProbeOutcome.Alive && !_windowChecked.ContainsKey(key))
             await WarnIfWindowBelowConfigAsync(provider, ct);
         return outcome;
     }
 
     // Сторож окна: у Strata GET {корень}/metrics → engine.max_context. Меньше ContextWindow
-    // модели из конфига — Warning с обоими числами (раз на пару провайдер×модель, ключ
-    // провайдера отмечен в _windowChecked). Окно НЕ правим: хранится желание, а не подмена.
+    // модели из конфига — Warning с обоими числами (по каждой расходящейся модели каталога,
+    // один раз на провайдера: ключ отмечается в _windowChecked только после успешного чтения
+    // engine.max_context). Окно НЕ правим: хранится желание, а не подмена.
     // Ответ стенда недоверенный: любое исключение разбора гасим здесь, наружу оно не выходит;
     // нет поля (vLLM отдаёт текст Prometheus, не JSON) — молча ничего.
     private async Task WarnIfWindowBelowConfigAsync(LlmProviderConfig provider, CancellationToken ct)
@@ -158,6 +160,7 @@ public sealed class LocalEndpointProbe : ILocalEndpointProbe
 
             var live = await ReadEngineMaxContextAsync(provider.AnthropicBaseUrl!, ct);
             if (live is not { } actual) return;
+            if (!_windowChecked.TryAdd(provider.Key, 0)) return;
 
             foreach (var m in configured)
             {

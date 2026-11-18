@@ -211,6 +211,29 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         sent.Should().Be(ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.WithHumanTextMarker("ещё"));
     }
 
+    // Слэш-команда после «Стоп» уходит без пометки (иначе CLI не узнает /compact), а пометка
+    // не теряется — уезжает со следующей прозой
+    [Fact]
+    public async Task Стоп_ПотомСлэшКоманда_БезПометки_ПометкаУезжаетСоСледующейПрозой()
+    {
+        var (session, adapter) = await MkRunningTurnAsync("stop-slash");
+        var sent = new List<string>();
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<bool>()))
+            .Callback<string, IReadOnlyList<string>?, int, bool, string?>((t, _, _, _, _) => sent.Add(t))
+            .Returns(Task.CompletedTask);
+
+        _sut.Interrupt(session.Id);
+
+        session.Status = SessionStatus.Active;
+        await _sut.SendMessageAsync(session.Id, "/compact", []);
+        sent[0].Should().Be("/compact");
+
+        session.Status = SessionStatus.Active;
+        await _sut.SendMessageAsync(session.Id, "что дальше?", []);
+        sent[1].Should().StartWith(SessionManager.UserStopNoteText).And.EndWith("что дальше?");
+    }
+
     [Fact]
     public async Task PreemptForPending_ПишетОтметкуВИсторию()
     {

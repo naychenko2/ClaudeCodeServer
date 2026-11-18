@@ -576,17 +576,23 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
             ? ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.WithHumanTextMarker(text)
             : text;
 
+        // Слэш-команда (/compact, /скилл): всё, что приклеено ПЕРЕД ней, ломает её распознавание
+        // в CLI. Префиксные пометки (обрыв фонового агента, «Стоп», сводка голосовых ходов)
+        // для неё не ставим и флаги не снимаем: пометки одноразовые и по смыслу про «следующую
+        // работу», поэтому уедут со следующей прозой. Суффиксы ниже ведущий «/» не трогают.
+        var isSlash = ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.IsSlashCommand(text);
+
         // Обрыв фонового агента (см. NoteTruncatedBgAgent): CLI объявил его прогон
         // завершённым и отдал координатору последнюю реплику как результат. Пометка едет
         // префиксом ближайшего хода — своего хода на неё не тратим, а координатор обязан
         // знать, что итог по обрывку подводить нельзя. Одноразовая: уехала — снята.
-        if (entry.TruncatedBgNote is { } cutBgAgent)
+        if (!isSlash && entry.TruncatedBgNote is { } cutBgAgent)
         {
             entry.TruncatedBgNote = null;
             result = SubagentPrompts.TruncatedBgAgent(cutBgAgent) + "\n\n" + result;
         }
 
-        if (entry.UserStopNote)
+        if (!isSlash && entry.UserStopNote)
         {
             entry.UserStopNote = false;
             result = UserStopNoteText + "\n\n" + result;
@@ -630,7 +636,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         // Возврат на CLI после локальных голосовых ходов: транскрипт CLI реплик разговора
         // не знает, без сводки модель отвечала бы так, будто разговора не было. Берём
         // хвост истории (лента едина) тем же лимитом, что и разговорный контекст.
-        if (entry.LocalTurnsSinceCli > 0 && entry.Accumulator is { } voiceAcc)
+        if (!isSlash && entry.LocalTurnsSinceCli > 0 && entry.Accumulator is { } voiceAcc)
         {
             var summary = LocalVoiceTurn.BuildVoiceContextBlock(voiceAcc);
             if (!string.IsNullOrEmpty(summary))

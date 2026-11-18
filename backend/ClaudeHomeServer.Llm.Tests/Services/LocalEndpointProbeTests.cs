@@ -88,6 +88,46 @@ public class LocalEndpointProbeTests
         log.Warnings.Should().ContainSingle().Which.Should().Contain("32768").And.Contain("57344");
     }
 
+    // Провал чтения /metrics не отмечает провайдера проверенным: вторая проба сверяет заново
+    [Fact]
+    public async Task CheckAsync_ПервыйMetrics500_ВторойСОкномМеньшеКонфига_Warning()
+    {
+        var metricsCalls = 0;
+        var handler = new StubHandler
+        {
+            Responder = r => r.RequestUri!.AbsolutePath == "/metrics"
+                ? (++metricsCalls == 1
+                    ? Json("{}", HttpStatusCode.InternalServerError)
+                    : Json("""{"engine":{"max_context":32768}}"""))
+                : ModelsOrMetrics(r, "")
+        };
+        var log = new CapturingLogger();
+        var probe = new LocalEndpointProbe(new StubFactory(handler), cacheFor: TimeSpan.Zero, logger: log);
+
+        await probe.CheckAsync(LocalProvider());
+        log.Warnings.Should().BeEmpty();
+        await probe.CheckAsync(LocalProvider());
+
+        log.Warnings.Should().ContainSingle().Which.Should().Contain("32768").And.Contain("57344");
+    }
+
+    // Две модели в каталоге: расходится только вторая — Warning именно по ней
+    [Fact]
+    public async Task CheckAsync_ДвеМоделиРасходитсяТолькоВторая_WarningПоВторой()
+    {
+        var handler = new StubHandler { Responder = r => ModelsOrMetrics(r, """{"engine":{"max_context":40000}}""") };
+        var log = new CapturingLogger();
+        var probe = new LocalEndpointProbe(new StubFactory(handler), logger: log);
+        var provider = LocalProvider();
+        provider.Models[0].ContextWindow = 32768;
+        provider.Models.Add(new LlmModelConfig { Id = "qwen38-32b", DisplayName = "второй", ContextWindow = 65536 });
+
+        await probe.CheckAsync(provider);
+
+        log.Warnings.Should().ContainSingle().Which.Should().Contain("qwen38-32b").And.Contain("65536")
+            .And.NotContain("qwen38-27b");
+    }
+
     [Fact]
     public async Task CheckAsync_МаксКонтекстСтендаНеМеньшеКонфига_ТишинаБезWarning()
     {

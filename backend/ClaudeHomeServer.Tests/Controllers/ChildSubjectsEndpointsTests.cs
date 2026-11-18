@@ -160,7 +160,7 @@ public class ChildSubjectsEndpointsTests : IClassFixture<ChildSubjectsEndpointsT
             profileTutor.Id);
     }
 
-    // Мутация «убрать child.DenyAll ||» (PersonasController.cs:662) — этот тест краснеет:
+    // Мутация «убрать child.DenyAll ||» (PersonasController.cs:665) — этот тест краснеет:
     // тьютор есть в невалидном профиле (IsChildTutor true), аватар отдался бы 200.
     [Fact]
     public async Task Avatar_ТьюторПриDenyAll_404()
@@ -211,18 +211,36 @@ public class ChildSubjectsEndpointsTests : IClassFixture<ChildSubjectsEndpointsT
         subjects[1].GetProperty("tutor").GetProperty("hasAvatar").GetBoolean().Should().BeFalse();
     }
 
+    // Значение промпта репетитора, которого в ответе быть не должно (минор ревью R-T1e:
+    // раньше персона создавалась с пустым промптом — отсутствие промпта ничем не проверялось).
+    private const string PromptSentinel = "PROMPT-SENTINEL-7f3a";
+
+    // Имя предмета «model-тест» — намеренно: отсутствие маршрута проверяется по свойствам
+    // JSON-объекта плитки, а не по подстроке ответа (минор ревью R-T1e: NotContain("model")
+    // краснел бы на самом имени предмета).
     [Fact]
     public async Task Subjects_БезПромптаМаршрутаИГолоса()
     {
-        var setup = SetupChild(("math", "Математика", true, true));
-        var text = await (await setup.Child.GetAsync("/api/child/subjects")).Content.ReadAsStringAsync();
+        var setup = SetupChild(("math", "model-тест", true, true));
+        // Живому репетитору — промпт-сентинел: тот же приём, что с Avatar выше (Create/Get
+        // отдают экземпляр стора — он же читается ручкой).
+        _personas.Get(setup.TutorOf["math"], setup.ChildId)!.SystemPrompt = PromptSentinel;
 
-        // И5: ребёнку — проекция, а не настройка. Ни ключей маршрута/промпта/голоса, ни их значений
-        text.Should().NotContain("providerKey")
-            .And.NotContain("model")
-            .And.NotContain("character")
-            .And.NotContain("voice")
-            .And.NotContain("routeAcknowledged");
+        var resp = await setup.Child.GetAsync("/api/child/subjects");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var text = await resp.Content.ReadAsStringAsync();
+        var tile = JsonSerializer.Deserialize<JsonElement>(text).GetProperty("subjects")[0];
+
+        // И5: ребёнку — проекция, а не настройка: у плитки и её репетитора нет ни ключей
+        // маршрута, ни ключей настройки персоны — отсутствие СВОЙСТВ, а не отсутствие подстрок.
+        foreach (var key in new[] { "providerKey", "model", "character", "voice", "routeAcknowledged", "systemPrompt" })
+            tile.TryGetProperty(key, out _).Should().BeFalse($"плитка предмета не несёт свойства {key}");
+        var tutor = tile.GetProperty("tutor");
+        foreach (var key in new[] { "systemPrompt", "character", "voice" })
+            tutor.TryGetProperty(key, out _).Should().BeFalse($"проекция репетитора не несёт {key}");
+
+        // Значение промпта не протекло ни в одно поле ответа.
+        text.Should().NotContain(PromptSentinel);
     }
 
     [Fact]

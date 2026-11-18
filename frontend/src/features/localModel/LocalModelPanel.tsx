@@ -46,6 +46,7 @@ import { farmPickNode } from './hardwareFormat';
 import { TextTab } from './TextTab';
 import { MediaTab } from './MediaTab';
 import { HardwareTab } from './HardwareTab';
+import { TranscriptionTab } from './TranscriptionTab';
 import { DEFAULT_WINDOW, type Window as StatsWindow } from './ThroughputChart';
 
 // Вкладка запоминается на устройство (localStorage): «LLM · Медиа · Стенды · Встречи» —
@@ -218,8 +219,9 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
         : tab === 'hardware'
           ? <HardwareTab farm={farm} farmLoading={farmLoading} selected={nodeKey} onSelect={setChosenNode} report={hwData} loading={hwLoading} stats={nodeStats} media={nodeMedia} isMobile={ctx.isMobile} window={hwWindow} onWindowChange={setHwWindow} />
           : tab === 'transcription'
-            // Тело вкладки «Встречи» — следующий шаг фичи (Ф3/Ф4); здесь подключение и точка.
-            ? null
+            // Тело вкладки «Встречи»: верх (Ф3) — конвейер, «Сейчас», очередь; нижняя
+            // часть (сбои, встречи, сверка, зависимости) — шаг Ф4.
+            ? <TranscriptionTab data={transcriptionData} />
             : <MediaTab data={mediaData} loading={mediaLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={mediaRefetch} onOpenHardware={() => changeTab('hardware')} />}
     </div>
   );

@@ -85,7 +85,7 @@ export interface ChildSubjectKnowledge {
 }
 
 // Предмет в админском контракте (Т2a/Т4a): поле тела subjects и его же форма в ответе profile
-// (ChildSubjectDto в ChildProfileValidator.cs:227-244). Маршрут (providerKey/model) — у предмета,
+// (record ChildSubjectDto в ChildProfileValidator). Маршрут (providerKey/model) — у предмета,
 // не у персоны-репетитора (редакция 2 §12: Persona.Model репетитора пуст).
 export interface ChildSubjectAdmin {
   id: string;
@@ -95,16 +95,21 @@ export interface ChildSubjectAdmin {
   providerKey: string;
   model: string;
   enabled: boolean;
-  // Только в ответе: из тела не читается никогда — слияние берёт его по Id из живого профиля
-  // (UserStore.cs:703-704), новый Id — пусто. null — репетитора у предмета ещё нет (провижн — Т2c).
+  // Только в ответе: из тела не читается никогда — слияние предметов профиля (UserStore)
+  // берёт его по Id из живого профиля, новый Id — пустая строка. Сервер null не отдаёт
+  // никогда: в модели поле — строка с умолчанием "", ToChildProfileDto несёт его как есть.
+  // Пустая строка — репетитора у предмета ещё нет (провижн — Т2c).
   tutorPersonaId?: string | null;
   knowledge?: ChildSubjectKnowledge | null;
   // Согласие админа на не-Anthropic маршрут (Т5a/Т6, И2′). Только во ВХОДЕ, трёхзначно (Х1,
-  // ревью Т5a): true — «соглашаюсь сейчас» (стор ставит дату и автора); поля нет — живое
+  // ревью Т5a): true — «соглашаюсь сейчас»: дату и автора штампует контроллер при сборке
+  // профиля из тела (UsersController → RouteAcknowledgedAt/RouteAcknowledgedBy), а слияние
+  // предметов профиля (UserStore) сохраняет живую пару того же предмета при том же
+  // providerKey, иначе берёт этот кандидат или сбрасывает её; поля нет — живое
   // согласие того же предмета при том же providerKey (при смене providerKey оно не переживает);
   // false — отзыв: живое согласие не засчитывается даже при том же providerKey, отказа на
   // сохранении нет — 400 даст запуск хода. Решение — в сторе под замком по ЖИВОМУ предмету
-  // (UserStore.cs:711-729), проверка входа — ChildProfileValidator.cs:119-128.
+  // (UserStore, слияние предметов профиля), проверка входа — ChildProfileValidator.ValidateSubjects.
   acknowledgeRouteRisk?: boolean;
   routeAcknowledgedAt?: string | null; // только в ответе: момент согласия, поле сервера
 }

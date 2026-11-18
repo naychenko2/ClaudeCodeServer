@@ -438,3 +438,28 @@ describe('ChildWorkspace · список уроков под главной (360
     expect(doc.body.textContent).not.toContain('Мои уроки');
   });
 });
+
+// ХВ12 (дефект 4ef0f8c5): подпись EmptyState экрана предмета зависит от наличия боковой
+// панели (wide), а не от мобильного флага: на 601–899 панели нет (ХВ11), и прежняя подпись
+// звала «выбрать слева» там, где слева ничего нет.
+describe('ChildWorkspace · подпись EmptyState экрана предмета (ХВ12)', () => {
+  const openSubject = async () => {
+    const tile = Array.from(doc.querySelectorAll('button')).find(b => b.textContent?.includes('Математика'))!;
+    await click(tile);
+  };
+
+  it('на 700 (без боковой панели) — подсказка про список на главной, не «слева»', async () => {
+    win.innerWidth = 700; // не мобил, но и не wide: сайдбара нет
+    await mount();
+    await openSubject();
+    expect(doc.body.textContent).toContain('Начни новый урок. Прошлые уроки — на главной, в списке «Мои уроки».');
+    expect(doc.body.textContent).not.toContain('Выбери урок слева');
+  });
+
+  it('на 1280 (панель слева есть) — прежняя подпись «Выбери урок слева или начни новый.»', async () => {
+    await mount();
+    await openSubject();
+    expect(doc.body.textContent).toContain('Выбери урок слева или начни новый.');
+    expect(doc.body.textContent).not.toContain('Прошлые уроки — на главной');
+  });
+});

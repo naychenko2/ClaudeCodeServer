@@ -376,8 +376,10 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
       <EmptyState
         icon={<BookOpen size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
         title={activeSubject.label}
-        // ХВ7: на мобиле списка «слева» нет — прежние уроки стоят под главной (ХВ7-кадр)
-        subtitle={isMobile ? 'Начни новый урок. Прежние уроки — на главной.' : 'Выбери урок слева или начни новый.'}
+        // ХВ12 (дефект 4ef0f8c5): подпись зависит от наличия боковой панели (wide), а не
+        // от мобильного флага: на 601–899 панели нет (ХВ11), и прежняя подпись звала
+        // «выбрать слева» там, где слева ничего нет; прошлые уроки — в списке под главной.
+        subtitle={wide ? 'Выбери урок слева или начни новый.' : 'Начни новый урок. Прошлые уроки — на главной, в списке «Мои уроки».'}
         action={<Button size="lg" onClick={() => void startLesson(activeSubject.id)} disabled={starting}>Начать урок</Button>}
       />
     );

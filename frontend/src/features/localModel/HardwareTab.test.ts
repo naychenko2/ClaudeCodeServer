@@ -1,6 +1,6 @@
 // Тесты вкладки «Стенды» (Ф3): выбор узла по умолчанию (худший уровень, при равенстве —
 // первый), счётчик «N показателей без данных», плитка «Плата» (датчика нет / нет данных /
-// периферия), причина падения скорости, сборка вкладки: ферма сверху, движки узла, баннер
+// периферия), причина падения скорости, сборка вкладки: карточка «Узлы» сверху, движки узла, баннер
 // молчащего узла, пустое состояние «Нет связи с узлом», отсутствие строк «Железо» /
 // прежнего баннера и инвариант «ветвление по kind, а не по ключу плитки».
 //
@@ -158,10 +158,10 @@ function render(over: Partial<Parameters<typeof HardwareTab>[0]>): string {
 }
 
 describe('HardwareTab', () => {
-  it('ферма сверху, у узла с engines — карточка vLLM, без media — без ComfyUI', () => {
+  it('карточка «Узлы» сверху, у узла с engines — карточка vLLM, без media — без ComfyUI', () => {
     const html = render({});
-    expect(html.indexOf('Ферма')).toBeGreaterThanOrEqual(0);
-    expect(html.indexOf('Ферма')).toBeLessThan(html.indexOf('Стенд<'));
+    expect(html.indexOf('Узлы</h3>')).toBeGreaterThanOrEqual(0);
+    expect(html.indexOf('Узлы</h3>')).toBeLessThan(html.indexOf('Стенд</h3>'));
     expect(html).toContain('vLLM');
     expect(html).not.toContain('ComfyUI');
   });
@@ -220,10 +220,10 @@ describe('HardwareTab', () => {
     expect(bad).toContain('--c-danger-border');
     expect(ok).not.toContain('--c-danger-border');
   });
-  it('ферма не ответила — вкладка не падает, детали узла показаны', () => {
+  it('ферма не ответила — вкладка не падает, карточки «Узлы» нет, детали узла показаны', () => {
     const html = render({ farm: null, selected: null });
     expect(html).toContain('Стенд');
-    expect(html).not.toContain('Ферма');
+    expect(html).not.toContain('Узлы</h3>');
   });
   it('нет ни фермы, ни отчёта и идёт загрузка — скелетон, а не ошибка', () => {
     expect(() => render({ farm: null, selected: null, report: null, loading: true })).not.toThrow();

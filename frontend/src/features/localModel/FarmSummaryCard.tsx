@@ -1,4 +1,4 @@
-// Карточка «Ферма» вкладки «Стенды» (макет А): шапка с плашкой худшего уровня,
+// Карточка «Узлы» вкладки «Стенды» (макет А): шапка с плашкой худшего уровня,
 // строка «горячо» и карточки узлов; касание узла выбирает его (ниже его детали — Ф2/Ф3).
 // Чистый компонент на пропсах: данных не грузит, состояния не хранит — выбранный
 // узел входит пропом selected, касание выходит onSelect(key). Строку движка даёт
@@ -168,7 +168,7 @@ function NodeCard({ node, selected, onSelect, engineLine, isMobile }: {
   );
 }
 
-// === Карточка «Ферма» ===
+// === Карточка «Узлы» ===
 export function FarmSummaryCard({ farm, selected, onSelect, isMobile, engineLines }: {
   farm: HardwareFarm;
   // key выбранного узла; null — никто не выбран (выбор и его хранение — за вызывающим, Ф3)
@@ -185,7 +185,7 @@ export function FarmSummaryCard({ farm, selected, onSelect, isMobile, engineLine
     <section style={{ background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
         <h3 style={{ margin: 0, fontSize: FS.xs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textSecondary, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          Ферма
+          Узлы
         </h3>
         <FarmPill farm={farm} />
       </div>

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ферма (бывш. «Локальные модели») · вкладка «Встречи» · макет v1</title>
+<!--
+  Привязка: задача fbffcba2 (role=design), featureId 76117203-5303-4cc6-bd1b-05616823105f; stepRef шагов
+  реализации проставит Софья после согласования. Предложение: local-model-transcription-proposal.md.
+  Образец стиля и плотности — local-model-hardware-cluster-v3.html (вкладка «Стенды»). Новых цветов нет:
+  ниже — значения из frontend/src/lib/theme.css под именами C.* из design.ts. В разметке — только var(--c-*).
+  Контролы на проде: InlineSegmented (вкладки), Card, Badge (плашки), Dot, Notice (баннер), PressableArea
+  (строка встречи), HwTile (плитки очереди), Tooltip. Новых компонентов не нужно.
+-->
+<style>
+[data-theme="light"] {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-track:#453F37;
+  --c-success:#7CB86A; --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+}
+* { box-sizing:border-box; }
+body { margin:0; font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.5; }
+.mono { font-family:"JetBrains Mono",monospace; }
+
+/* ===== Обвязка макета (не продукт) ===== */
+.bar { position:sticky; top:0; z-index:50; display:flex; gap:8px 16px; flex-wrap:wrap; align-items:center;
+  padding:10px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); color:var(--c-text-heading); }
+.bar h1 { margin:0; font-size:15px; font-weight:600; flex:1 1 260px; }
+.bar label { font-size:11px; color:var(--c-text-secondary); margin-right:4px; }
+.tog { display:inline-flex; flex-wrap:wrap; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; vertical-align:middle; }
+.tog button { font:inherit; font-size:12px; padding:5px 11px; cursor:pointer; background:transparent; border:none; color:var(--c-text-secondary); }
+.tog button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.cols { display:flex; flex-wrap:wrap; }
+.col { flex:1 1 440px; background:var(--c-bg-main); color:var(--c-text-primary); padding:24px; }
+.col h2 { font-family:"PT Serif",Georgia,serif; font-size:20px; font-weight:600; color:var(--c-text-heading); margin:0 0 4px; }
+.col p.note { margin:0 0 16px; color:var(--c-text-secondary); max-width:80ch; font-size:12px; }
+
+/* ===== Остров панели: C.bgPanel, рамка C.borderLight, R.xxl (14), SHADOW.island; мобила — лист R.sheet (22) ===== */
+.isl { background:var(--c-bg-panel); border:1px solid var(--c-border-light); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; }
+.isl.sheet { border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); }
+.isl .hd { height:40px; display:flex; align-items:center; gap:8px; padding:0 12px; background:var(--c-bg-inset); font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.isl.sheet .hd { background:transparent; }
+.isl .hd .x { margin-left:auto; color:var(--c-text-muted); font-weight:400; }
+.isl .grab { width:36px; height:4px; border-radius:999px; background:var(--c-track); margin:8px auto 0; }
+.body { padding:12px; display:flex; flex-direction:column; gap:12px; }
+
+/* InlineSegmented sm: активная C.accentLight / C.accent. На узкой ленте неактивные — только иконка (aria-label) */
+.seg { display:inline-flex; background:var(--c-bg-inset); border-radius:10px; padding:2px; font-size:12px; max-width:100%; }
+.seg span { padding:3px 10px; border-radius:8px; color:var(--c-text-secondary); white-space:nowrap; display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
+.seg span.io { padding:3px 8px; }
+.seg .on { background:var(--c-accent-light); color:var(--c-accent); font-weight:600; }
+.tabdot { width:6px; height:6px; border-radius:50%; display:inline-block; }
+.ic { display:inline-block; vertical-align:-2px; flex:none; }
+
+/* Card: C.bgCard, рамка C.borderLight, R.xl (12), паддинг SP.md (12) */
+.card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; padding:12px; min-width:0; }
+.card.danger { background:var(--c-danger-bg); border-color:var(--c-danger-border); }
+.ch { display:flex; align-items:center; gap:8px; margin-bottom:8px; min-width:0; }
+.ch h3 { margin:0; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--c-text-muted); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.card.danger .ch h3 { color:var(--c-danger-text); }
+.ch .age { font-size:11px; color:var(--c-text-muted); white-space:nowrap; }
+.sum { font-size:12px; color:var(--c-text-secondary); margin:-2px 0 6px; overflow-wrap:anywhere; }
+.sum b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-heading); }
+
+.dot { width:8px; height:8px; border-radius:50%; display:inline-block; flex:none; }
+.d-ok { background:var(--c-success); } .d-warn { background:var(--c-warning); } .d-danger { background:var(--c-danger); }
+.d-none { background:var(--c-track); } .d-run { background:var(--c-accent); }
+.pill { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; border-radius:999px; padding:1px 8px; white-space:nowrap; }
+.p-ok { background:var(--c-bg-inset); color:var(--c-success); }
+.p-run { background:var(--c-accent-light); color:var(--c-accent); }
+.p-warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.p-danger { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.p-mute { background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.p-fold { background:var(--c-info-bg); color:var(--c-info); font-family:"JetBrains Mono",monospace; font-weight:500; font-size:10px; padding:0 6px; }
+.na { color:var(--c-text-muted); font-style:italic; font-weight:400; }
+
+/* Notice-баннер: C.warningBg / C.warningText или C.dangerBg / C.dangerText, R.lg (10) */
+.banner { display:flex; gap:8px; align-items:flex-start; border-radius:10px; padding:8px 10px; font-size:12px; line-height:1.4; }
+.banner.warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.banner.danger { background:var(--c-danger-bg); color:var(--c-danger-text); border:1px solid var(--c-danger-border); }
+.banner b { font-weight:700; }
+.banner .ic { margin-top:1px; }
+
+/* kv-строки */
+.kv { display:flex; justify-content:space-between; gap:8px; font-size:12px; padding:2px 0; min-width:0; }
+.kv > span:first-child { color:var(--c-text-secondary); white-space:nowrap; flex:none; }
+.kv > span:last-child { font-family:"JetBrains Mono",monospace; font-weight:500; color:var(--c-text-primary); text-align:right; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.kv > span.t-warn { color:var(--c-warning-text) !important; white-space:normal; } .kv > span.t-danger { color:var(--c-danger-text) !important; }
+
+/* «Сейчас в работе» */
+.file { display:flex; align-items:center; gap:6px; min-width:0; }
+.file .fn { font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:600; color:var(--c-text-heading); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1; }
+.steps { display:flex; gap:4px; margin:8px 0 6px; }
+.step { flex:1; min-width:0; font-size:11px; color:var(--c-text-muted); }
+.step i { display:block; height:4px; border-radius:999px; background:var(--c-track); margin-bottom:3px; }
+.step.done i { background:var(--c-success); } .step.done { color:var(--c-text-secondary); }
+.step.cur i { background:var(--c-accent); } .step.cur { color:var(--c-accent); font-weight:600; }
+.step span { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.facts { display:flex; flex-wrap:wrap; gap:2px 12px; font-size:11px; color:var(--c-text-secondary); }
+.facts b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-heading); }
+.empty { font-size:12px; color:var(--c-text-secondary); }
+.empty .t { color:var(--c-text-heading); font-weight:600; display:block; }
+
+/* Плитки очереди — HwTile */
+.tiles { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
+.tile { border:1px solid var(--c-border-light); background:var(--c-bg-white); border-radius:10px; padding:8px; min-width:0; }
+.tile.warn { background:var(--c-warning-bg); border-color:var(--c-warning); }
+.tile .tl { font-size:11px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tile .tv { font-family:"JetBrains Mono",monospace; font-size:20px; font-weight:600; line-height:1.2; color:var(--c-text-heading); }
+.tile .td { font-size:11px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+details.q { margin-top:8px; font-size:12px; }
+details.q summary { cursor:pointer; color:var(--c-text-secondary); min-height:32px; display:flex; align-items:center; }
+details.q summary:focus-visible { outline:2px solid var(--c-accent); outline-offset:1px; border-radius:6px; }
+.ql { display:flex; gap:6px; align-items:center; padding:3px 0; min-width:0; border-top:1px solid var(--c-border-light); }
+.ql .fn { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+.ql .w { font-size:11px; color:var(--c-text-muted); white-space:nowrap; }
+
+/* Строка встречи — PressableArea; касание открывает .md во «Встречах» */
+.mt { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:2px 8px; align-items:center; padding:8px; margin:0 -8px; border-radius:8px; cursor:pointer; min-height:44px; }
+.mt + .mt { border-top:1px solid var(--c-border-light); border-radius:0 0 8px 8px; }
+.mt:hover { background:var(--c-bg-selected); }
+.mt:focus-visible { outline:2px solid var(--c-accent); outline-offset:-2px; }
+.mt .nm { font-size:12px; font-weight:600; color:var(--c-text-heading); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mt .tm { font-size:11px; color:var(--c-text-muted); white-space:nowrap; font-family:"JetBrains Mono",monospace; }
+.mt .sub { grid-column:2 / span 2; display:flex; flex-wrap:wrap; gap:2px 8px; align-items:center; font-size:11px; color:var(--c-text-secondary); }
+.mt .cm { grid-column:2 / span 2; font-size:11px; color:var(--c-text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mt .cm.t-danger { color:var(--c-danger-text); white-space:normal; }
+.mt.nolink { cursor:default; } .mt.nolink:hover { background:transparent; }
+.more { font-size:12px; color:var(--c-accent); font-weight:600; margin-top:4px; cursor:pointer; display:inline-flex; min-height:32px; align-items:center; }
+
+/* Сверка с Dify — таблица из трёх строк */
+.tbl { width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; }
+.tbl th { font-size:10px; font-weight:600; color:var(--c-text-muted); text-align:right; padding:0 0 4px; }
+.tbl th:first-child, .tbl td:first-child { text-align:left; }
+.tbl td { padding:4px 0; border-top:1px solid var(--c-border-light); text-align:right; font-family:"JetBrains Mono",monospace; color:var(--c-text-primary); }
+.tbl .pill { font-family:"Hanken Grotesk",sans-serif; }
+.tbl td:first-child { font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tbl col.c1 { width:auto; } .tbl col.cn { width:56px; } .tbl col.cs { width:96px; }
+
+/* Зависимости */
+.dep { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:0 8px; align-items:center; padding:4px 0; }
+.dep + .dep { border-top:1px solid var(--c-border-light); }
+.dep .dn { font-size:12px; font-weight:600; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dep .dd { grid-column:2 / span 2; font-size:11px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dep .ds { font-size:11px; white-space:nowrap; }
+
+/* Устаревшие данные: значения гаснут до C.textMuted */
+.stale .tv, .stale .file .fn, .stale .facts b, .stale .step.cur { color:var(--c-text-muted) !important; }
+.stale .step.cur i { background:var(--c-track) !important; }
+
+/* Скелет загрузки: C.bgInset */
+.sk { background:var(--c-bg-inset); border-radius:6px; height:12px; margin:6px 0; }
+</style>
+</head>
+<body>
+<div class="bar" data-theme="light">
+  <h1>Вкладка «Встречи» (конвейер транскрибации) · макет v1 · принят 18.11</h1>
+  <span><label>Состояние</label><span class="tog" id="tSt"></span></span>
+  <span><label>Тема</label><span class="tog" id="tTh"></span></span>
+  <span><label>Ширина</label><span class="tog" id="tW"></span></span>
+</div>
+<div class="cols" id="root"></div>
+<script>
+// ===== Иконки lucide 1.24 (узлы из frontend/node_modules/lucide-react) =====
+const ICONS = {
+  MessageSquareText: '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="M7 11h10"/><path d="M7 15h6"/><path d="M7 7h8"/>',
+  Clapperboard: '<path d="m12.296 3.464 3.02 3.956"/><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m6.18 5.276 3.1 3.899"/>',
+  Cpu: '<path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
+  AudioLines: '<path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/>',
+  FileText: '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  TriangleAlert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  Clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+};
+const icon = (name, size, cls = 'ic') => `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+
+// ===== Данные-образцы (как в journal.tsv / state.json) =====
+const RECENT = [
+  { nm:'2026-11-18 Планёрка ГПБ', f:'Video-GPB', tm:'11:42', dur:47, sp:4, cm:'asr 2.7м + саммари 1.2м (локально)', ok:true },
+  { nm:'2026-11-18 Созвон по SIAM, интеграция', f:'Video-SIAM', tm:'10:18', dur:62, sp:3, cm:'asr 3.4м + саммари 1.6м (локально)', ok:true },
+  { nm:'2026-11-17 Ретро спринта', f:'Video-RR', tm:'вчера 18:05', dur:35, sp:6, cm:'asr 2.1м + саммари 0.9м (локально)', ok:true },
+  { nm:'2026-11-17 Демо заказчику', f:'Video-GPB', tm:'вчера 16:30', dur:58, sp:5, cm:'asr 3.1м + саммари 1.4м (локально)', ok:true },
+  { nm:'2026-11-17 Синк архитекторов', f:'Video-SIAM', tm:'вчера 12:11', dur:29, sp:3, cm:'asr 1.8м + саммари 0.8м (локально)', ok:true },
+];
+const FAILS = [
+  { nm:'2026-11-18 Интервью кандидата', f:'Video-RR', tm:'09:57', dur:41, sp:null, cm:'fail: ComfyUI не ответил за 600 с (узел CcsAudioWorker)', ok:false },
+  { nm:'2026-11-18 Короткий синк', f:'Video-GPB', tm:'09:31', dur:3, sp:null, cm:'fail: пустая дорожка — нечего распознавать', ok:false },
+];
+const DIFY_OK = [['Video-GPB', 128, 128], ['Video-SIAM', 41, 41], ['Video-RR', 77, 77]];
+const DIFY_BAD = [['Video-GPB', 128, 128], ['Video-SIAM', 41, 37], ['Video-RR', 77, 77]];
+const DEPS = (o = {}) => [
+  { n:'Распознавание', d:'ComfyUI на video · узел CcsAudioWorker', s:o.asr ?? 'ok' },
+  { n:'Сводки', d:'Strata · qwen3.8-27b', s:o.llm ?? 'ok' },
+  { n:'Dify', d:'база «Встречи»', s:o.dify ?? 'ok' },
+  { n:'Сетевая папка', d:'записи Video-GPB / SIAM / RR', s:o.share ?? 'ok' },
+];
+
+// ===== Состояния =====
+const STATES = {
+  work: { title:'Идёт пачка', cap:'Норма: конвейер распознаёт вторую запись из пачки, в очереди ещё три.',
+    svc:{ pill:['p-run','Идёт пачка'], age:'8 с назад', host:'worker', pid:41233, out:['worker · ~/meetings','ok'] },
+    now:{ fn:'2026-11-18 Обсуждение бюджета.mp4', f:'Video-GPB', stage:0, run:'3 мин 12 с', dur:52, batch:'2 из 5' },
+    q:{ asr:3, sum:1, asrNext:['2026-11-18 Стендап.mp4','2026-11-18 Встреча с юристами.mp4','2026-11-18 Разбор инцидента.mp4'] },
+    fails:[], recent:RECENT, dify:DIFY_OK, difyAge:'12 мин назад', deps:DEPS(), dot:null },
+  idle: { title:'Ожидание', cap:'Всё обработано, новых записей нет. Пустое состояние блока «Сейчас».',
+    svc:{ pill:['p-ok','Ожидание'], age:'14 с назад', host:'worker', pid:41233, out:['worker · ~/meetings','ok'] },
+    now:null, idleSince:'последняя пачка закончилась в 11:44',
+    q:{ asr:0, sum:0, asrNext:[] }, fails:[], recent:RECENT, dify:DIFY_OK, difyAge:'3 мин назад', deps:DEPS(), dot:null },
+  stale: { title:'Завис?', cap:'state.json не обновлялся 23 минуты при живом процессе. Значения блока «Сейчас» гаснут, на вкладке — красная точка.',
+    stale:true, banner:['danger','Конвейер не отчитывался 23 мин', 'state.json обновляется каждые ~10 с. Похоже, процесс завис на файле ниже — загляните в журнал сервиса.'],
+    svc:{ pill:['p-danger','Завис?'], age:'23 мин назад', ageLv:'t-danger', host:'worker', pid:41233, out:['worker · ~/meetings','ok'] },
+    now:{ fn:'2026-11-18 Обсуждение бюджета.mp4', f:'Video-GPB', stage:0, run:'26 мин', runLv:true, dur:52, batch:'2 из 5' },
+    q:{ asr:3, sum:1, asrNext:['2026-11-18 Стендап.mp4','2026-11-18 Встреча с юристами.mp4','2026-11-18 Разбор инцидента.mp4'] },
+    fails:[], recent:RECENT, dify:DIFY_OK, difyAge:'21 мин назад', deps:DEPS({ asr:'warn' }), dot:'danger' },
+  fail: { title:'Сбои + расхождение', cap:'Случай 18.11: конвейер работает, но пишет на ai, и четыре встречи SIAM не доехали до Dify. Плюс два сбоя за сутки и упавшее распознавание.',
+    banner:['warn','4 встречи не попали в Dify', 'Video-SIAM: локально 41, в Dify 37. Конвейер пишет на ai, а «Встречи» читают с worker.'],
+    svc:{ pill:['p-run','Идёт пачка'], age:'6 с назад', host:'ai', pid:9917, out:['ai · ~/meetings — не та машина','t-warn'] },
+    now:{ fn:'2026-11-18 Разбор инцидента.mp4', f:'Video-RR', stage:1, run:'48 с', dur:24, batch:'1 из 1' },
+    q:{ asr:0, sum:2, asrNext:[] }, fails:FAILS, recent:RECENT, dify:DIFY_BAD, difyAge:'4 мин назад',
+    deps:DEPS({ asr:'danger', dify:'ok' }), dot:'danger' },
+  down: { title:'Остановлен', cap:'systemd-сервис не активен (или узел не отвечает). Остальные блоки — последний известный снимок, приглушены.',
+    stale:true, banner:['danger','Сервис transcription-supervisor остановлен', 'Новые записи не обрабатываются с 07:12. Запустить можно на worker: systemctl --user start transcription-supervisor.'],
+    svc:{ pill:['p-danger','Остановлен'], age:'4 ч 31 мин назад', ageLv:'t-danger', host:'worker', pid:null, out:['worker · ~/meetings','ok'] },
+    now:null, idleSince:'процесса нет',
+    q:{ asr:2, sum:0, asrNext:['2026-11-18 Стендап.mp4','2026-11-18 Встреча с юристами.mp4'], asrStale:true }, fails:[], recent:RECENT, dify:DIFY_OK, difyAge:'4 ч 33 мин назад',
+    deps:DEPS({ asr:'none', llm:'none', dify:'none', share:'none' }), dot:'danger' },
+  loading: { title:'Загрузка', cap:'Первый снимок ещё не пришёл: скелеты вместо значений, без «нулей».', loading:true, dot:null },
+};
+
+// ===== Блоки вкладки =====
+const DEPWORD = { ok:['d-ok','в норме'], warn:['d-warn','медленно'], danger:['d-danger','не отвечает'], none:['d-none','не проверялось'] };
+const DEPCLR = { ok:'var(--c-text-secondary)', warn:'var(--c-warning-text)', danger:'var(--c-danger-text)', none:'var(--c-text-muted)' };
+
+function banner(st) {
+  if (!st.banner) return '';
+  const [lv, t, d] = st.banner;
+  return `<div class="banner ${lv}" role="status">${icon('TriangleAlert', 14)}<div><b>${t}.</b> ${d}</div></div>`;
+}
+function svcCard(st) {
+  const s = st.svc;
+  return `<div class="card"><div class="ch"><h3>Конвейер</h3><span class="pill ${s.pill[0]}">${s.pill[1]}</span></div>
+    <div class="kv"><span>Обновлено</span><span class="${s.ageLv ?? ''}">${s.age}</span></div>
+    <div class="kv"><span>Где работает</span><span>${s.host} · ${s.pid ? `pid ${s.pid}` : '<span class="na">нет процесса</span>'}</span></div>
+    <div class="kv"><span>Пишет в</span><span class="${s.out[1] === 'ok' ? '' : s.out[1]}">${s.out[0]}</span></div></div>`;
+}
+function nowCard(st) {
+  if (!st.now) return `<div class="card"><div class="ch"><h3>Сейчас</h3></div>
+    <div class="empty"><span class="t">Ничего не обрабатывается</span>${st.idleSince}. Новые записи из сетевой папки конвейер подхватит сам.</div></div>`;
+  const n = st.now, names = ['Распознавание', 'Сводка', 'В Dify'];
+  const steps = names.map((t, i) => `<div class="step ${i < n.stage ? 'done' : i === n.stage ? 'cur' : ''}"><i></i><span>${t}</span></div>`).join('');
+  return `<div class="card ${st.stale ? 'stale' : ''}"><div class="ch"><h3>Сейчас</h3><span class="age">пачка ${n.batch}</span></div>
+    <div class="file">${icon('AudioLines', 14)}<span class="fn" title="${n.fn}">${n.fn}</span><span class="pill p-fold">${n.f}</span></div>
+    <div class="steps" role="list" aria-label="Этап">${steps}</div>
+    <div class="facts"><span>идёт <b style="${n.runLv ? 'color:var(--c-danger-text)' : ''}">${n.run}</b></span><span>запись <b>${n.dur} мин</b></span></div></div>`;
+}
+function queueCard(st) {
+  const q = st.q;
+  const list = q.asrNext.length ? `<details class="q"><summary>Что в очереди · ${q.asrNext.length}</summary>
+    ${q.asrNext.map(f => `<div class="ql">${icon('Clock', 12)}<span class="fn" title="${f}">${f}</span><span class="w">ждёт ${q.asrStale ? '4 ч' : '6 мин'}</span></div>`).join('')}</details>` : '';
+  return `<div class="card ${q.asrStale ? 'stale' : ''}"><div class="ch"><h3>Очередь</h3></div>
+    <div class="tiles">
+      <div class="tile"><div class="tl">Ждут распознавания</div><div class="tv">${q.asr}</div><div class="td">${q.asr ? 'в сетевой папке' : 'всё разобрано'}</div></div>
+      <div class="tile"><div class="tl">Ждут сводку</div><div class="tv">${q.sum}</div><div class="td">${q.sum ? 'транскрипт готов' : 'всё разобрано'}</div></div>
+    </div>${list}</div>`;
+}
+function meetRow(m) {
+  return `<div class="mt ${m.ok ? '' : 'nolink'}" ${m.ok ? 'tabindex="0" role="link" aria-label="Открыть сводку: ' + m.nm + '"' : ''}>
+    <span class="dot ${m.ok ? 'd-ok' : 'd-danger'}" aria-hidden="true"></span>
+    <span class="nm" title="${m.nm}">${m.nm}</span>
+    <span class="tm">${m.tm}</span>
+    <span class="sub"><span class="pill p-fold">${m.f}</span><span>${m.dur} мин</span>${m.sp ? `<span>${m.sp} спикера</span>` : ''}${m.ok ? `<span style="display:inline-flex;align-items:center;gap:3px;color:var(--c-accent);font-weight:600">${icon('FileText', 12)}.md</span>` : ''}</span>
+    <span class="cm ${m.ok ? '' : 't-danger'}">${m.cm}</span></div>`;
+}
+function failsCard(st) {
+  if (!st.fails.length) return '';
+  return `<div class="card danger"><div class="ch"><h3>Сбои за сутки · ${st.fails.length}</h3></div>${st.fails.map(meetRow).join('')}</div>`;
+}
+function recentCard(st) {
+  return `<div class="card"><div class="ch"><h3>Последние встречи</h3><span class="age">касание — открыть сводку</span></div>
+    ${st.recent.map(meetRow).join('')}<span class="more" role="button" tabindex="0">Показать ещё</span></div>`;
+}
+function difyCard(st) {
+  const rows = st.dify.map(([f, loc, dify]) => {
+    const d = dify - loc;
+    const pill = d === 0 ? '<span class="pill p-ok">сходится</span>' : `<span class="pill p-warn" title="В Dify не хватает ${-d}">не хватает ${-d}</span>`;
+    return `<tr><td title="${f}">${f.replace('Video-', '')}</td><td>${loc}</td><td>${dify}</td><td>${pill}</td></tr>`;
+  }).join('');
+  return `<div class="card ${st.stale ? 'stale' : ''}"><div class="ch"><h3>Сверка с Dify</h3><span class="age">${st.difyAge} · раз в 30 мин</span></div>
+    <table class="tbl"><colgroup><col class="c1"><col class="cn"><col class="cn"><col class="cs"></colgroup>
+    <thead><tr><th>Папка</th><th>Локально</th><th>В Dify</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function depsCard(st) {
+  return `<div class="card"><div class="ch"><h3>Зависимости</h3></div>${st.deps.map(d => {
+    const [dc, w] = DEPWORD[d.s];
+    return `<div class="dep"><span class="dot ${dc}"></span><span class="dn">${d.n}</span><span class="ds" style="color:${DEPCLR[d.s]}">${w}</span><span class="dd">${d.d}</span></div>`;
+  }).join('')}</div>`;
+}
+function loadingBody() {
+  const sk = w => `<div class="sk" style="width:${w}%"></div>`;
+  return ['Конвейер', 'Сейчас', 'Очередь', 'Последние встречи'].map(t => `<div class="card" aria-busy="true"><div class="ch"><h3>${t}</h3></div>${sk(70)}${sk(45)}</div>`).join('');
+}
+// Порядок: тревога → состояние → сейчас → очередь → сбои → история → сверка → зависимости
+function tab(st) {
+  if (st.loading) return loadingBody();
+  return banner(st) + svcCard(st) + nowCard(st) + queueCard(st) + failsCard(st) + recentCard(st) + difyCard(st) + depsCard(st);
+}
+
+// ===== Обвязка панели =====
+const TABS = [['LLM','MessageSquareText'], ['Медиа','Clapperboard'], ['Стенды','Cpu'], ['Встречи','AudioLines']];
+function island(body, dot) {
+  const mob = S.w < 380, narrow = S.w < 340;
+  // На узкой ленте (лист <380) неактивные вкладки — только иконка с aria-label и Tooltip: четыре подписи не влезают в 296 px
+  const tabs = `<span class="seg" role="tablist">${TABS.map(([t, ic]) => {
+    const on = t === 'Встречи', io = narrow && !on;
+    const d = t === 'Встречи' && dot ? `<i class="tabdot d-${dot}"></i>` : '';
+    return `<span class="${on ? 'on' : ''} ${io ? 'io' : ''}" role="tab" aria-selected="${on}" ${io ? `aria-label="${t}" title="${t}"` : ''}>${icon(ic, 12)}${io ? '' : t}${d}</span>`;
+  }).join('')}</span>`;
+  return `<div class="isl ${mob ? 'sheet' : ''}" style="width:${S.w}px">${mob ? '<div class="grab"></div>' : ''}
+    <div class="hd">${mob ? 'Ферма' : tabs}<span class="x">✕</span></div>
+    <div class="body">${mob ? `<div>${tabs}</div>` : ''}${body}</div></div>`;
+}
+const S = { st:'work', th:'both', w:380 };
+function render() {
+  const st = STATES[S.st];
+  const ths = S.th === 'both' ? ['light', 'dark'] : [S.th];
+  document.getElementById('root').innerHTML = ths.map(th => `<div class="col" data-theme="${th}">
+    <h2>${st.title} — ${th === 'light' ? 'светлая' : 'тёмная'} тема</h2>
+    <p class="note">${st.cap}<br>${S.w < 380 ? `Мобильный лист ${S.w} CSS px: вкладки — строкой в теле${S.w < 340 ? ', неактивные только иконкой' : ''}.` : 'Остров рельса 380 px: вкладки в шапке.'}</p>
+    ${island(tab(st), st.dot)}</div>`).join('');
+  bar();
+}
+function tog(id, key, opts) {
+  document.getElementById(id).innerHTML = opts.map(([v, t]) => `<button class="${S[key] === v ? 'on' : ''}" data-v="${v}">${t}</button>`).join('');
+  document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => { S[key] = key === 'w' ? +b.dataset.v : b.dataset.v; render(); });
+}
+function bar() {
+  tog('tSt', 'st', Object.entries(STATES).map(([k, v]) => [k, v.title]));
+  tog('tTh', 'th', [['light','Светлая'], ['dark','Тёмная'], ['both','Обе']]);
+  tog('tW', 'w', [[380,'Рельс 380'], [360,'Телефон 360'], [320,'Узкий 320']]);
+}
+render();
+</script>
+</body>
+</html>

@@ -2,6 +2,10 @@
 // своя пометка «только ваши генерации». Рендер через renderToStaticMarkup (node,
 // без jsdom) — паттерн GpuCard.test.ts. Effects не бегут, поэтому fetchMediaHistory
 // (useMediaHistory) в статическом рендере не вызывается — мок не нужен.
+//
+// onOpenHardware передаётся во всех рендерах: наличие/отсутствие строки-ссылки
+// проверяется по роли ответа (scope), а не по наличию обработчика (хвост Р-Ф2д,
+// «мёртвый контрол»).
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -19,6 +23,8 @@ function renderMediaTab(data: Parameters<typeof MediaTab>[0]['data']): string {
       isMobile: false,
       onOpenChat: () => {},
       onRefetch: () => {},
+      // Живой обработчик в обоих случаях: тест не проходит за отсутствием handler'а.
+      onOpenHardware: () => {},
     }),
   );
 }
@@ -27,6 +33,8 @@ describe('MediaTab: scope=self скрывает видеокарту', () => {
   // GpuCard ушёл на «Стенды» (GpuDetailCard); на «Медиа» у админа — только
   // строка-ссылка HwLinkRow (title «Видеокарта»/«Видеокарты» + «Стенды →»).
   it('all — строка-ссылка «Видеокарта» есть, карточек карт нет', () => {
+    // Админ видит строку при живом обработчике: касание инициирует переход
+    // (клик-тест HwLinkRow — hardware.test.ts; в панели обработчик — changeTab('hardware')).
     const html = renderMediaTab(mockLocalModelMedia('run'));
     expect(html).toContain('Видеокарта');
     expect(html).toContain('Стенды →');
@@ -34,7 +42,9 @@ describe('MediaTab: scope=self скрывает видеокарту', () => {
   it('self — ни строки-ссылки, ни слова «Видеокарта»', () => {
     // Инвариант приватности (ADR-030): у не-админа видеокарт нет вовсе.
     // Фикстура hardware намеренно есть — guard `!self` в MediaTab её и скрывает;
-    // мутация (убрать guard) рендерит строку и тест краснеет.
+    // обработчик передан — скрытие проверено по роли, а не по отсутствию handler'а
+    // (хвост Р-Ф2д: «→ Стенды» ведёт в админскую вкладку, не-админу её быть не должно).
+    // Мутация (убрать guard) рендерит строку и тест краснеет.
     const html = renderMediaTab(mockLocalModelMediaSelf('run'));
     expect(html).not.toContain('Видеокарта');
     expect(html).not.toContain('Стенды →');

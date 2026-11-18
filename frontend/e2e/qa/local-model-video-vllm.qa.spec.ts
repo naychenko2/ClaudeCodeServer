@@ -129,13 +129,13 @@ test('сценарий 1 в UI: вкладка второго стенда — �
   await openAsAdmin(page);
   await page.goto(`/#/project/${projectId}`);
 
-  // Открыть панель «Локальные модели» в правом рельсе.
-  const railBtn = page.locator('button[aria-label^="Локальные модели"]');
+  // Открыть панель «Ферма» в правом рельсе.
+  const railBtn = page.locator('button[aria-label^="Ферма"]');
   // Значок появляется после лёгкого опроса configured (60 с) — ждём его.
   await expect(railBtn, 'значок панели в рельсе').toBeVisible({ timeout: 120_000 });
   await railBtn.click();
 
-  const panel = page.locator('[role="complementary"][aria-label="Локальные модели"]');
+  const panel = page.locator('[role="complementary"][aria-label="Ферма"]');
   await expect(panel, 'панель открылась').toBeVisible();
 
   if (PHASE === 'llama') {
@@ -195,18 +195,18 @@ test('сценарий 6: 360 и 1280 — без горизонтального 
     await page.goto(`/#/project/${projectId}`);
     // Открыть панель: на десктопе — кнопка рельса, на узкой ширине — меню «Ещё».
     // На 1280 панель — кнопка правого рельса, на 360 — пункт меню «Ещё».
-    const rail = page.locator('button[aria-label^="Локальные модели"]');
+    const rail = page.locator('button[aria-label^="Ферма"]');
     if (await rail.count() > 0 && await rail.first().isVisible()) {
       await rail.first().click();
     } else {
       const more = page.locator('button[aria-label="Ещё"]');
       await expect(more.first(), `меню «Ещё» на ${width}`).toBeVisible({ timeout: 120_000 });
       await more.first().click();
-      const item = page.getByText('Локальные модели', { exact: true }).first();
-      await expect(item, `пункт «Локальные модели» в меню на ${width}`).toBeVisible({ timeout: 15_000 });
+      const item = page.getByText('Ферма', { exact: true }).first();
+      await expect(item, `пункт «Ферма» в меню на ${width}`).toBeVisible({ timeout: 15_000 });
       await item.click();
     }
-    const panel = page.locator('[role="complementary"][aria-label="Локальные модели"]');
+    const panel = page.locator('[role="complementary"][aria-label="Ферма"]');
     await expect(panel, `панель открылась на ${width}`).toBeVisible();
 
     // Горизонтального переполнения быть не должно.
@@ -243,10 +243,10 @@ test('сценарий 3 в UI: «Кто сейчас на модели» — с
   page.on('response', r => { if (r.status() >= 400) bad.push(`${r.status()} ${r.url()}`); });
   await openAsAdmin(page);
   await page.goto(`/#/project/${projectId}`);
-  const railBtn = page.locator('button[aria-label^="Локальные модели"]');
+  const railBtn = page.locator('button[aria-label^="Ферма"]');
   await expect(railBtn, 'значок панели в рельсе').toBeVisible({ timeout: 120_000 });
   await railBtn.click();
-  const panel = page.locator('[role="complementary"][aria-label="Локальные модели"]');
+  const panel = page.locator('[role="complementary"][aria-label="Ферма"]');
   await expect(panel, 'панель открылась').toBeVisible();
   const seg = panel.getByRole('button', { name: /Qwen 27B \(Video\)/ });
   await seg.click();

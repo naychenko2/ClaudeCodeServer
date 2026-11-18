@@ -1,5 +1,6 @@
 // Панель «Локальные модели» — остров правого рельса. Админ — вкладки
-// «LLM · Медиа»; не-админ — только «Медиа» (без переключателя, без опроса /stats).
+// «LLM · Медиа · Стенды · Встречи»; не-админ — только «Медиа» (без переключателя,
+// без опроса /stats).
 //
 // Каркас (остров, шапку с иконкой+названием и крестик) рисует контейнер панели
 // рельса (PanelShell зоны, как у «Персонажей»/«Голосов»/«Команды»): панель
@@ -24,12 +25,14 @@
 // configured=true, опрос внутри неё замкнул бы круг. Панель читает значения
 // из модульного стора.
 
-import { useCallback, useState } from 'react';
-import { Clapperboard, Cpu, MessageSquareText } from 'lucide-react';
-import { C, FONT, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
+import { useCallback, useState, type ReactNode } from 'react';
+import { AudioLines, Clapperboard, Cpu, MessageSquareText } from 'lucide-react';
+import { C, FONT, SP, ICON_SIZE, ICON_STROKE, useContainerWidth } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../lib/subsystems/registryCore';
 import { InlineSegmented, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { openChatById } from '../../lib/openChat';
+import { panelMetaResolved } from '../../pages/workspace/panelCatalog';
+import { LOCAL_MODEL_PANEL } from './manifest';
 import {
   isLocalModelPanelVisible,
   useLocalModelAdmin,
@@ -39,58 +42,91 @@ import { isLocalModelConfiguredAny } from './useLocalModelWatcher';
 import { useLocalModelMedia } from './useLocalModelMedia';
 import { useLocalModelEngines } from './useLocalModelEngines';
 import { useLocalModelHardware, useLocalModelFarm, DEFAULT_HARDWARE_WINDOW, type HardwareWindow } from './useLocalModelHardware';
+import { useTranscription } from './useTranscription';
+import type { TranscriptionSnapshot } from './types';
 import { farmPickNode } from './hardwareFormat';
 import { TextTab } from './TextTab';
 import { MediaTab } from './MediaTab';
 import { HardwareTab } from './HardwareTab';
+import { TranscriptionTab } from './TranscriptionTab';
 import { DEFAULT_WINDOW, type Window as StatsWindow } from './ThroughputChart';
 
-// Вкладка запоминается на устройство (localStorage): «LLM · Медиа · Стенды» — выбор
-// человека, не состояние сессии.
+// Вкладка запоминается на устройство (localStorage): «LLM · Медиа · Стенды · Встречи» —
+// выбор человека, не состояние сессии.
 const TAB_KEY = 'cc_local_model_tab';
-type Tab = 'text' | 'media' | 'hardware';
-function loadTab(): Tab {
+type Tab = 'text' | 'media' | 'hardware' | 'transcription';
+export function loadTab(): Tab {
   try {
     const v = localStorage.getItem(TAB_KEY);
-    if (v === 'media' || v === 'hardware' || v === 'text') return v;
+    if (v === 'media' || v === 'hardware' || v === 'text' || v === 'transcription') return v;
   } catch { /* приватный режим */ }
   return 'text';
 }
 
+// «Узкая лента» (предложение v1): на листе <340 px четыре подписи не помещаются —
+// неактивные вкладки остаются иконкой (aria-label + подсказка), активная — с подписью.
+// Меряем ширину панели: она равна полной ширине шапки, но переключатель в шапке
+// делит её с названием панели (сжимается с ellipsis, Island.tsx:74), иконкой и
+// группой действий — под свои подписи у него меньше, чем измерено.
+const TABS_NARROW_PX = 340;
+
 // Чистая логика активной вкладки (тестируема без React):
-//   админ — сохранённая вкладка (text/media/hardware);
-//   не-админ — всегда «Медиа», кроме случая, когда в localStorage 'hardware'
-//   (оставлено админом) — тогда «LLM», чтобы не показать недоступную вкладку.
+//   админ — сохранённая вкладка (text/media/hardware/transcription);
+//   не-админ — всегда «Медиа», при любом сохранённом значении. «LLM», «Стенды» и
+//   «Встречи» — админские: их эндпоинты /stats, /hardware, /transcription под
+//   [Authorize(Roles="admin")], и раньше не-админ с сохранённой админом вкладкой
+//   попадал в 'text' → 403 → «Не удалось получить данные» без выхода из состояния
+//   (дефект №3 приёмки Ф2/Ф6).
 export function resolveTab(isAdmin: boolean, stored: Tab): Tab {
   if (isAdmin) return stored;
-  return stored === 'hardware' ? 'text' : 'media';
+  return 'media';
 }
 
-// Переключатель «LLM · Медиа · Стенды»: InlineSegmented, активный C.accentLight/C.accent.
-// Точка (tabdot) 6 px на «Стенды» при warn/danger — видна с любой вкладки; при stale нет.
-function TabSwitch({ value, onChange, isMobile, dotLevel }: {
-  value: Tab; onChange: (t: Tab) => void; isMobile: boolean; dotLevel?: 'warn' | 'danger' | null;
+// Иконка вкладки с точкой-состоянием (6 px, C.danger/C.warning) — та же геометрия, что у «Стендов».
+function tabIcon(node: ReactNode, dotLevel?: 'warn' | 'danger' | null) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+      {node}
+      {dotLevel && (
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotLevel === 'danger' ? C.danger : C.warning, display: 'inline-block' }} />
+      )}
+    </span>
+  );
+}
+
+// Точка на вкладке «Встречи»: уровень берётся из снимка (его считает бэкенд — пороги
+// «Завис?» и красное/жёлтое условие здесь не дублируем). Снимка нет или уровень 'ok' —
+// точки нет; точка видна с любой вкладки (снимок живёт, пока смонтирована панель).
+export function transcriptionDot(snapshot: TranscriptionSnapshot | null): 'warn' | 'danger' | null {
+  const level = snapshot?.level;
+  return level === 'warn' || level === 'danger' ? level : null;
+}
+
+// Переключатель «LLM · Медиа · Стенды · Встречи»: InlineSegmented, активный C.accentLight/C.accent.
+// Точки (tabdot) 6 px на «Стенды» и «Встречи» при warn/danger — видны с любой вкладки; при ok/stale нет.
+// narrow (лист <340 px): неактивные вкладки — только иконка (имя в aria-label/title),
+// активная — с подписью (предложение v1, «Узкая лента»).
+export function TabSwitch({ value, onChange, isMobile, dotLevel, transDotLevel, narrow }: {
+  value: Tab; onChange: (t: Tab) => void; isMobile: boolean;
+  dotLevel?: 'warn' | 'danger' | null; transDotLevel?: 'warn' | 'danger' | null; narrow?: boolean;
 }) {
+  const options: ({ value: Tab; label: string; icon: ReactNode } & { title?: string })[] = [
+    { value: 'text', label: 'LLM', icon: <MessageSquareText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+    { value: 'media', label: 'Медиа', icon: <Clapperboard size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+    { value: 'hardware', label: 'Стенды', icon: tabIcon(<Cpu size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, dotLevel) },
+    { value: 'transcription', label: 'Встречи', icon: tabIcon(<AudioLines size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, transDotLevel) },
+  ];
+  // Узкая лента: у неактивных подписей нет — InlineSegmented красит из них aria-label и title
+  // (подсказка при наведении); активная остаётся с подписью.
+  const items = narrow
+    ? options.map(o => (o.value === value ? o : { ...o, label: '', title: o.label }))
+    : options;
   return (
     <InlineSegmented<Tab>
       value={value}
       isMobile={isMobile}
       size="sm"
-      options={[
-        { value: 'text', label: 'LLM', icon: <MessageSquareText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
-        { value: 'media', label: 'Медиа', icon: <Clapperboard size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
-        {
-          value: 'hardware', label: 'Стенды',
-          icon: (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-              <Cpu size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              {dotLevel && (
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotLevel === 'danger' ? C.danger : C.warning, display: 'inline-block' }} />
-              )}
-            </span>
-          ),
-        },
-      ]}
+      options={items}
       onChange={onChange}
     />
   );
@@ -107,9 +143,8 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // карточка). Ререндер при смене — подписка сторожа на странице.
   const visible = isLocalModelPanelVisible(isLocalModelConfiguredAny());
 
-  // Не-админ: вкладка всегда «Медиа» — переключателя нет, /stats (LLM) не опрашивается.
-  // Если в localStorage 'hardware' (оставлено админом) и пользователь не админ —
-  // открываем 'text', чтобы не показать недоступную вкладку (спецификация).
+  // Не-админ: вкладка всегда «Медиа» при любом сохранённом значении — переключателя
+  // нет, админские эндпоинты (/stats, /hardware, /transcription) не опрашиваются.
   const [storedTab, setStoredTab] = useState<Tab>(loadTab);
   const tab: Tab = resolveTab(isAdmin, storedTab);
   const changeTab = useCallback((t: Tab) => {
@@ -131,16 +166,29 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // опрос, стенд и переключатель видят один и тот же выбор.
   const { engines, engine, setEngine } = useLocalModelEngines(visible && tab === 'text');
 
-  // Тяжёлый 2-с опрос — только АКТИВНОЙ вкладки (неактивная на паузе):
-  // «LLM» — stats, «Медиа» — media, «Стенды» — hardware; переключение — немедленный снимок.
+  // Тяжёлый 2-с опрос активной вкладки — только АКТИВНОЙ вкладки (неактивная на паузе):
+  // «LLM» — stats, «Медиа» — media, «Стенды» — отчёт узла; переключение — немедленный снимок.
+  // Сводка фермы — исключение: опрашивается, пока смонтирована панель (ниже), — она кормит
+  // точку тревоги на вкладке, а она обязана быть видна с любой вкладки.
   const { data: textData, loading: textLoading, error: textError, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window, engine);
   const { data: mediaData, loading: mediaLoading, refetch: mediaRefetch } = useLocalModelMedia(visible && tab === 'media');
+  // Опрос снимка конвейера (5 с) — пока панель смонтирована и пользователь админ
+  // (эндпоинт админский): точка тревоги на «Встречах» обязана быть видна с любой
+  // вкладки, опрос прекращается при закрытии ПАНЕЛИ, а не при уходе с вкладки
+  // (дефект №1 приёмки Ф2/Ф6; решение по продукту: точка важнее экономии одного
+  // запроса в 5 с). Не-админ не опрашивает: вкладка ему не предлагается вовсе.
+  const { data: transcriptionData } = useTranscription(visible && isAdmin);
   // Выбор узла на вкладке «Стенды»: ключ, который коснулся человек (null — не выбирал);
   // показываемый узел — farmPickNode (выбор, если он ещё в ферме, иначе худший уровень, при
   // равенстве первый). Быстрые касания A → B → A: в состоянии последний выбор.
   const [chosenNode, setChosenNode] = useState<string | null>(null);
   const hwActive = visible && tab === 'hardware';
-  const { data: farm, loading: farmLoading } = useLocalModelFarm(hwActive);
+  // Опрос сводки фермы (2 с) — пока панель смонтирована и пользователь админ (эндпоинт
+  // админский): точка тревоги на «Стендах» обязана быть видна с любой вкладки, опрос
+  // прекращается при закрытии ПАНЕЛИ, а не при уходе с вкладки — тот же порядок, что у
+  // «Встреч» (находка ревью Р-Ф2д; по продукту: точка важнее экономии одного запроса
+  // в 2 с). Не-админ не опрашивает: вкладка ему не предлагается вовсе.
+  const { data: farm, loading: farmLoading } = useLocalModelFarm(visible && isAdmin);
   const nodeKey = farmPickNode(farm, chosenNode);
   const node = farm?.farmNodes.find(n => n.key === nodeKey) ?? null;
   const { data: hwData, loading: hwLoading } = useLocalModelHardware(hwActive, hwWindow, nodeKey ?? undefined);
@@ -154,6 +202,14 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // вкладки; при warn/danger. Молчащий узел уровня не имеет (level 'ok'), точки не даёт.
   const dotLevel: 'warn' | 'danger' | null =
     farm && (farm.level === 'warn' || farm.level === 'danger') ? farm.level : null;
+  // Точка «Встреч» — по level последнего снимка (считает бэкенд): видна с любой вкладки,
+  // пока смонтирована панель (тот же порядок, что у «Стендов»).
+  const transDotLevel = transcriptionDot(transcriptionData);
+
+  // Ширина панели для «узкой ленты» (TABS_NARROW_PX): до первого замера — широкая
+  // раскладка (тот же договор, что в useContainerWidth).
+  const [panelRef, panelWidth] = useContainerWidth<HTMLDivElement>();
+  const tabsNarrow = panelWidth !== null && panelWidth < TABS_NARROW_PX;
 
   // Клик по строке «Кто на модели»: открыть чат; на мобиле после перехода лист
   // закрывается (макет: «клик открывает чат (на мобиле лист закрывается)»)
@@ -176,7 +232,11 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
         ? <TextTab data={textData} loading={textLoading} error={textError} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} onOpenHardware={() => changeTab('hardware')} onOpenMedia={() => changeTab('media')} window={window} onWindowChange={setWindow} engines={engines} engine={engine} onEngineChange={setEngine} />
         : tab === 'hardware'
           ? <HardwareTab farm={farm} farmLoading={farmLoading} selected={nodeKey} onSelect={setChosenNode} report={hwData} loading={hwLoading} stats={nodeStats} media={nodeMedia} isMobile={ctx.isMobile} window={hwWindow} onWindowChange={setHwWindow} />
-          : <MediaTab data={mediaData} loading={mediaLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={mediaRefetch} onOpenHardware={() => changeTab('hardware')} />}
+          : tab === 'transcription'
+            // Тело вкладки «Встречи»: верх (Ф3) — конвейер, «Сейчас», очередь; нижняя
+            // часть (сбои, встречи, сверка, зависимости) — шаг Ф4.
+            ? <TranscriptionTab data={transcriptionData} />
+            : <MediaTab data={mediaData} loading={mediaLoading} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={mediaRefetch} onOpenHardware={() => changeTab('hardware')} />}
     </div>
   );
 
@@ -184,18 +244,21 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // над прокручиваемым блоком: не скроллится вместе с ним.
   const mobileSwitcher = !inHeader && isAdmin && (
     <div style={{ flexShrink: 0, padding: `${SP.md}px ${SP.md}px 0` }}>
-      <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} dotLevel={dotLevel} />
+      <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} dotLevel={dotLevel} transDotLevel={transDotLevel} narrow={tabsNarrow} />
     </div>
   );
 
+  // Доступное имя панели берётся из того же реестра, что видимый заголовок шапки
+  // (тот же резолвер, что у PanelZone.tsx:128): переименование панели не требует
+  // правки строки здесь и не разъезжается с рельсой.
   return (
     <>
       {inHeader && isAdmin && (
         <PanelHeaderSlot side="left">
-          <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} dotLevel={dotLevel} />
+          <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} dotLevel={dotLevel} transDotLevel={transDotLevel} narrow={tabsNarrow} />
         </PanelHeaderSlot>
       )}
-      <div role="complementary" aria-label="Локальные модели"
+      <div ref={panelRef} role="complementary" aria-label={panelMetaResolved(LOCAL_MODEL_PANEL).title}
         style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', fontFamily: FONT.sans }}>
         {mobileSwitcher}
         {body}

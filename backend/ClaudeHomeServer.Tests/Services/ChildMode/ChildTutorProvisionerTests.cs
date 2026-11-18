@@ -2,6 +2,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -447,6 +448,45 @@ public class ChildTutorProvisionerTests : IDisposable
     }
 
     [Fact]
+    public async Task RemoveOrphanTutors_BroadcastThrows_PersonaDeleted_Continues()
+    {
+        // Реальный сбой вещания удаления (правка R-T2d, вердикт a18a26cf): ToOwner бросает
+        // InvalidOperationException ПОСЛЕ того, как персона уже удалена. Прежний тест бросал
+        // из OnPersonaDeleted внутри Delete — этот путь старый код ловил и без правки; здесь
+        // бросает сам вещатель, и тест краснеет ровно когда вещание возвращается за пределы
+        // per-кандидатного try: исключение выходит из метода к вызывающему.
+        SeedSubject("physics", "Физика");
+        var firstTutor = await _sut.EnsureSubjectTutorAsync(_childId, "math");
+        var secondTutor = await _sut.EnsureSubjectTutorAsync(_childId, "physics");
+        firstTutor.Should().NotBeNull();
+        secondTutor.Should().NotBeNull();
+        _users.GetById(_childId)!.ChildMode!.Subjects.Clear(); // эффект PUT: оба предмета убраны
+
+        // Отдельный экземпляр провижера с бросающим стабом: провижн двух репетиторов выше
+        // сделан через штатный _broadcaster (без отказа), бросает только вещание удаления.
+        var sut = new ChildTutorProvisioner(_users, _personas,
+            new ThrowingOnDeleted(_broadcaster, firstTutor!),
+            NullLogger<ChildTutorProvisioner>.Instance);
+
+        await sut.Invoking(s => s.RemoveOrphanTutorsAsync(_childId, [firstTutor!, secondTutor!]))
+            .Should().NotThrowAsync("сбой вещания — лог внутри провижера, ответ вызывающего (200) не меняется");
+
+        // Удаление предшествовало вещанию: отказ вещания его не отменяет и не откатывает.
+        _personas.Get(firstTutor!, _childId).Should().BeNull(
+            "персона удалена до вещания: сбой вещания не возвращает её");
+        // Упавшее вещание не записано: клиенту про первого кандидата не сообщено ничего.
+        _broadcaster.Owner.Select(t => t.Message)
+            .OfType<PersonasChangedMessage>().Count(m => m.Action == "deleted" && m.PersonaId == firstTutor)
+            .Should().Be(0, "исключение раньше записи стаба — неудачное вещание не доставлено");
+        // Цикл дошёл до второго кандидата: он удалён и о нём вещается.
+        _personas.Get(secondTutor!, _childId).Should().BeNull(
+            "сбой вещания первого кандидата не глушит остальных");
+        _broadcaster.Owner.Select(t => t.Message)
+            .OfType<PersonasChangedMessage>().Count(m => m.Action == "deleted" && m.PersonaId == secondTutor)
+            .Should().Be(1, "цикл дошёл до второго кандидата");
+    }
+
+    [Fact]
     public async Task RemoveOrphan_ParallelWithReassign_PersonaKept()
     {
         // Конкурентность Т2d: пока удаление идёт, параллельный PUT перестраивает профиль и
@@ -496,5 +536,35 @@ public class ChildTutorProvisionerTests : IDisposable
         _personas.Get(oldTutor!, _childId).Should().BeNull("настоящий сирота удалён");
         _users.GetById(_childId)!.ChildMode!.Subjects
             .First(s => s.Id == "physics").TutorPersonaId.Should().Be(tutorId);
+    }
+
+    // Бросающая обёртка над рекордером: всё, кроме «deleted» указанной персоны, проходит
+    // в него как обычно; на «deleted» этой персоны — InvalidOperationException, настоящий
+    // отказ доставки (не отмена): ровно то, что обязан покрывать per-кандидатный catch
+    // RemoveOrphanTutorsAsync.
+    private sealed class ThrowingOnDeleted : ISessionBroadcaster
+    {
+        private readonly TestSessionBroadcaster _inner;
+        private readonly string _personaId;
+
+        public ThrowingOnDeleted(TestSessionBroadcaster inner, string personaId)
+        {
+            _inner = inner;
+            _personaId = personaId;
+        }
+
+        public Task ToOwner(string ownerId, ServerMessage message)
+        {
+            if (message is PersonasChangedMessage m && m.Action == "deleted" && m.PersonaId == _personaId)
+                throw new InvalidOperationException("имитация сбоя вещания удаления");
+            return _inner.ToOwner(ownerId, message);
+        }
+
+        public Task ToSession(string sessionId, ServerMessage message) => _inner.ToSession(sessionId, message);
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message)
+            => _inner.ToSessionExcept(sessionId, exceptConnectionId, message);
+        public Task ToProject(string projectId, ServerMessage message) => _inner.ToProject(projectId, message);
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message)
+            => _inner.ToPreviewLog(projectId, serviceId, message);
     }
 }

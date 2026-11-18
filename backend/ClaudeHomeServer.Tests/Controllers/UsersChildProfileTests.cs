@@ -540,6 +540,65 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         }
     }
 
+    [Fact]
+    public async Task Put_УдалениеСироты_ВещаниеБросает_200_ПерсонаУдалена()
+    {
+        // Т2d + правка вердикта a18a26cf: сбой вещания удаления не должен превращать ответ
+        // вызывающего в 500 — профиль уже сохранён, исключение внутри RemoveOrphanTutorsAsync
+        // остаётся логом. Здесь ThrowingBroadcaster бросает ровно на вещании удаления: первый
+        // PUT провит обоих репетиторов без отказа (ThrowFor ещё null), а второй не содержит
+        // нового провижна — живой тьютор профиля и живой ключ «physics» возвращаются Early-return
+        // без вещания, единственный ToOwner на этом пути — «deleted» сироты.
+        var id = await EnableChild("kid-orphan-broadcast-fail");
+        var (firstStatus, firstResp) = await PutAsync(id, new
+        {
+            enabled = true,
+            providerKey = KidsKey,
+            model = "sonnet",
+            spaces = new Dictionary<string, object>(),
+            subjects = new[]
+            {
+                new { id = "math", label = "Математика", glyph = "×÷", color = "info", providerKey = KidsKey, model = "sonnet" },
+                new { id = "physics", label = "Физика", glyph = "×", color = "info", providerKey = KidsKey, model = "sonnet" },
+            },
+        });
+        firstStatus.Should().Be(HttpStatusCode.OK);
+        var subjects = firstResp.GetProperty("profile").GetProperty("subjects");
+        var mathTutor = subjects[0].GetProperty("tutorPersonaId").GetString()!;
+        var physicsTutor = subjects[1].GetProperty("tutorPersonaId").GetString()!;
+        mathTutor.Should().NotBeNullOrEmpty();
+        physicsTutor.Should().NotBeNullOrEmpty();
+
+        // Второй PUT: «math» в теле нет — его ключ (живой, сохранённый слиянием по Id,
+        // UserStore.cs:703) становится кандидатом сироты в RemovedSubjectTutors.
+        _hosts.BroadcasterStub.ThrowFor = id;
+        try
+        {
+            var (status, _) = await PutAsync(id, new
+            {
+                enabled = true,
+                providerKey = KidsKey,
+                model = "sonnet",
+                spaces = new Dictionary<string, object>(),
+                subjects = new[]
+                {
+                    new { id = "physics", label = "Физика", glyph = "×", color = "info", providerKey = KidsKey, model = "sonnet" },
+                },
+            });
+            status.Should().Be(HttpStatusCode.OK,
+                "сбой вещания — лог внутри провижера: профиль сохранён, ответ остаётся 200");
+
+            var personas = _hosts.Services.GetRequiredService<PersonaManager>();
+            personas.Get(mathTutor, id).Should().BeNull(
+                "удаление предшествовало вещанию: отказ вещания не отменяет состоявшееся удаление");
+            personas.Get(physicsTutor, id).Should().NotBeNull("репетитор оставшегося предмета не затронут");
+        }
+        finally
+        {
+            _hosts.BroadcasterStub.ThrowFor = null;
+        }
+    }
+
     // --- правила ребёнка: их не принимает тело, resetRules — единственный сброс ---
 
     [Fact]

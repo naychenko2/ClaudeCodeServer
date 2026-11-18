@@ -93,6 +93,14 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     {
         _hosts = hosts;
         _hosts.ExtraConfig[$"ClaudeSubscriptions:{KidsKey}:ApiKey"] = KidsApiKey;
+        // Не-Anthropic провайдер с ценой (тот же набор, что у ChildRouteKit): тестам согласия на
+        // риск маршрута (Т5a, Х1) нужен предмет на чужом поставщике, который резолвится в реестре
+        // хоста — иначе отказ придёт как provider_not_api_key, а не как проверка согласия.
+        _hosts.ExtraConfig["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.test/anthropic";
+        _hosts.ExtraConfig["LlmProviders:deepseek:ApiKey"] = "sk-ds";
+        _hosts.ExtraConfig["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro";
+        _hosts.ExtraConfig["LlmProviders:deepseek:Models:0:PriceInMissPer1M"] = "0.5";
+        _hosts.ExtraConfig["LlmProviders:deepseek:Models:0:PriceOutPer1M"] = "1.0";
         _admin = _hosts.CreateAuthenticatedClient();
         _users = _hosts.Services.GetRequiredService<UserStore>();
         _policy = _hosts.Services.GetRequiredService<IChildModePolicy>();
@@ -213,6 +221,36 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     /// <summary>Привязка сохранённого предмета — из стора, а не из ответа.</summary>
     private ChildSubjectKnowledge StoredKnowledge(string childId, string subjectId = "math") =>
         _users.GetById(childId)!.ChildMode!.Subjects.Single(s => s.Id == subjectId).Knowledge!;
+
+    /// <summary>Тело с предметом «math» на чужом поставщике (deepseek — в реестре хоста с ценой):
+    /// acknowledgeRouteRisk — true / null (поля нет) / false: трёхзначный флаг согласия (Х1).
+    /// Остальные поля предмета валидны: отказ не должен прийти из них. guardians — та же длина
+    /// пути запроса, что у тестов гонки.</summary>
+    private static Dictionary<string, object?> BodyWithRoutedSubject(object? acknowledge, string[]? guardians = null) => new()
+    {
+        ["enabled"] = true,
+        ["providerKey"] = KidsKey,
+        ["model"] = "sonnet",
+        ["spaces"] = new Dictionary<string, object>(),
+        ["guardianUserIds"] = guardians ?? Array.Empty<string>(),
+        ["subjects"] = new[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["id"] = "math",
+                ["label"] = "Математика",
+                ["glyph"] = "М",
+                ["color"] = "info",
+                ["providerKey"] = "deepseek",
+                ["model"] = "deepseek-v4-pro",
+                ["acknowledgeRouteRisk"] = acknowledge,
+            },
+        },
+    };
+
+    /// <summary>Предмет сохранённого профиля — из стора, а не из ответа.</summary>
+    private ChildSubject StoredSubject(string childId, string subjectId = "math") =>
+        _users.GetById(childId)!.ChildMode!.Subjects.Single(s => s.Id == subjectId);
 
     // --- отказы таблицы ADR: по одному кейсу на каждый, с точным кодом ---
 
@@ -632,6 +670,86 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         var whole = (stored.Model == "sonnet" && stored.Spaces["lessons"].DailyMinutes == 40)
             || (stored.Model == "haiku" && stored.Spaces["lessons"].DailyMinutes == 10);
         whole.Should().BeTrue("одновременные PUT не перемешивают поля");
+    }
+
+    // --- согласие на не-Anthropic маршрут (Т5a, И2′): трёхзначный acknowledgeRouteRisk (Х1) ---
+
+    [Fact]
+    public async Task PutProfile_AckFalse_SameProvider_RevokesAck()
+    {
+        var id = await EnableChild("kid-ack-revoke");
+
+        // Согласие стоит: PUT с true — пара (момент запроса, адмен) в сторе и в ответе.
+        var (first, firstBody) = await PutAsync(id, BodyWithRoutedSubject(true));
+        first.Should().Be(HttpStatusCode.OK);
+        var seeded = StoredSubject(id);
+        seeded.RouteAcknowledgedAt.Should().NotBeNull();
+        seeded.RouteAcknowledgedBy.Should().Be(AdminId);
+        firstBody.GetProperty("profile").GetProperty("subjects")[0]
+            .GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeTrue();
+
+        // Снятая галка при том же providerKey — ОТЗЫВ: 200, предмет сохранён «не согласованным».
+        // 400 route_risk_unacknowledged на false не отдаём: запуск хода откажет сам
+        // (ChildRoute.Resolve читает RouteAcknowledgedAt предмета).
+        var (status, body) = await PutAsync(id, BodyWithRoutedSubject(false));
+        status.Should().Be(HttpStatusCode.OK);
+        var subject = StoredSubject(id);
+        subject.Id.Should().Be("math", "предмет сохранён");
+        subject.ProviderKey.Should().Be("deepseek", "тот же providerKey");
+        subject.RouteAcknowledgedAt.Should().BeNull("снятая галка отзывает живое согласие того же providerKey");
+        subject.RouteAcknowledgedBy.Should().BeNull();
+        var json = body.GetProperty("profile").GetProperty("subjects")[0];
+        json.GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeFalse();
+        json.GetProperty("routeAcknowledgedAt").ValueKind.Should().Be(JsonValueKind.Null, "ответ — снимок после записи");
+    }
+
+    [Fact]
+    public async Task PutProfile_AckOmitted_SameProvider_KeepsAck()
+    {
+        var id = await EnableChild("kid-ack-keep");
+        (await PutAsync(id, BodyWithRoutedSubject(true))).Status.Should().Be(HttpStatusCode.OK);
+        var at0 = StoredSubject(id).RouteAcknowledgedAt!.Value;
+        StoredSubject(id).RouteAcknowledgedBy.Should().Be(AdminId);
+
+        // Поля нет — живое согласие того же providerKey остаётся (как было): пара не переставляется
+        // и не обнуляется, ответ отдаёт её как стоящую.
+        var (status, body) = await PutAsync(id, BodyWithRoutedSubject(null));
+        status.Should().Be(HttpStatusCode.OK);
+        var subject = StoredSubject(id);
+        subject.RouteAcknowledgedAt.Should().Be(at0, "повторный PUT без поля момента не меняет");
+        subject.RouteAcknowledgedBy.Should().Be(AdminId, "ни автора");
+        body.GetProperty("profile").GetProperty("subjects")[0]
+            .GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PutProfile_AckAndRevokeParallel_NoMixedPair()
+    {
+        var id = await EnableChild("kid-ack-race");
+        var manyGuardians = Enumerable.Repeat(AdminId, 60).ToArray();
+
+        // Живое согласие до гонки: с него начинается то, что обязан не вернуть отзыв, если
+        // параллельный «true» ещё держит прежнюю пару.
+        (await PutAsync(id, BodyWithRoutedSubject(true))).Status.Should().Be(HttpStatusCode.OK);
+        var at0 = StoredSubject(id).RouteAcknowledgedAt!.Value;
+
+        // Два PUT одного ребёнка одновременно: один просит согласие, второй его отзывает. Оба —
+        // длинный путь (60 опекунов — десятки обращений к стору): окно между первым чтением
+        // профиля запросом и его записью под локом — живое.
+        var putAck = PutAsync(id, BodyWithRoutedSubject(true, manyGuardians));
+        var putRevoke = PutAsync(id, BodyWithRoutedSubject(false, manyGuardians));
+        await Task.WhenAll(putAck, putRevoke);
+        (await putAck).Status.Should().Be(HttpStatusCode.OK);
+        (await putRevoke).Status.Should().Be(HttpStatusCode.OK);
+
+        // Итог — одно из двух состояний целиком: либо согласия нет (отзыв записан последним),
+        // либо свежее согласие PUT-«true» (он записан последним после отзыва). Прежней пары (at0)
+        // среди исходов нет: «false» снимает её безусловно, а «true» при живом согласии её не
+        // переставляет. Смешанной пары тоже нет: At и By приходят из одной записи под локом.
+        var stored = StoredSubject(id);
+        var outcome = (stored.RouteAcknowledgedAt is null && stored.RouteAcknowledgedBy is null)
+            || (stored.RouteAcknowledgedAt > at0 && stored.RouteAcknowledgedBy == AdminId);
+        outcome.Should().BeTrue("одновременные согласие и отзыв дают целый исход, не смесь пары At/By");
     }
 
     // только персоны-тьюторы (роль «Репетитор…»): дефолт-ассистент ребёнка не в счёт

@@ -240,8 +240,19 @@ public class UsersController(UserStore users, SessionManager sessions,
         // agree ребёнка), и два одновременных PUT дают один целый профиль, не смесь полей.
         // Привязка знания — тот же приём: в профиле только кандидат (id вызывающего админа и
         // момент запроса), живая пара остаётся, если id датасета не изменился (К1b).
+        // Отзыв согласия (Х1): acknowledgeRouteRisk=false — снять согласие даже при том же providerKey;
+        // здесь только список id, решение — под замком стора по живому предмету (UserStore.SetChildProfile).
+        HashSet<string>? revokedAcks = null;
+        if (req.Subjects is { } bodySubjects)
+        {
+            revokedAcks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var s in bodySubjects)
+                if (s?.AcknowledgeRouteRisk == false && !string.IsNullOrWhiteSpace(s.Id))
+                    revokedAcks.Add(s.Id!);
+        }
+
         users.SetChildProfile(id, ToChildProfile(req, callerId ?? "", DateTime.UtcNow),
-            resetRules: req.ResetRules == true);
+            resetRules: req.ResetRules == true, revokeAcknowledgedSubjectIds: revokedAcks);
 
         // Тьютор провится после записи: EnsureAsync закрепляет id в существующем профиле
         // (SetChildTutorPersona) и идемпотентен — повторное включение возвращает живого тьютора.
@@ -444,9 +455,10 @@ public class UsersController(UserStore users, SessionManager sessions,
                     Model = s?.Model ?? "",
                     Enabled = s?.Enabled ?? true,
                     // Согласие на не-Anthropic маршрут (Т5a): из тела — только флаг; в модель идёт КАНДИДАТ
-                    // (момент запроса и админ из claim). Решает слияние стора под замком по ЖИВОМУ предмету:
-                    // то же providerKey и уже стоящее согласие — остаётся прежнее; смена providerKey без
-                    // нового согласия в теле — сброс.
+                    // (момент запроса и админ из claim) ровно при true; при false или отсутствии поля — пусто.
+                    // Решает слияние стора под замком по ЖИВОМУ предмету: то же providerKey и уже стоящее
+                    // согласие — остаётся прежнее; смена providerKey без нового согласия в теле — сброс;
+                    // false — отзыв (id передан в revokeAcknowledgedSubjectIds), он снимает и живое согласие.
                     RouteAcknowledgedAt = s?.AcknowledgeRouteRisk == true ? attachedAt : null,
                     RouteAcknowledgedBy = s?.AcknowledgeRouteRisk == true ? callerId : null,
                     // Привязка знания (К1b): из тела — только id датасета; автор и момент —

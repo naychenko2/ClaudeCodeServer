@@ -646,8 +646,13 @@ public class UserStore : IForgejoAccountStore, IUserStore
     /// сигнал вызывающего «предметов в теле нет»: живой список сохраняется как есть
     /// (PUT вкладки «Режим и время» не стирает предметы); без живого профиля — [].
     /// В сохранённом профиле Subjects никогда не null (тот же сигнал нормализуется здесь).
+    /// revokeAcknowledgedSubjectIds (Х1): id предметов, чьё согласие на не-Anthropic маршрут админ
+    /// ОТОЗВАЛ (acknowledgeRouteRisk=false в теле): под этим же локом пара обнуляется даже при
+    /// том же providerKey — решение по живому предмету, а не по снимку: одновременные PUT с true и
+    /// false дают одно из двух состояний целиком.
     /// </summary>
-    public bool SetChildProfile(string id, ChildProfile? profile, bool resetRules)
+    public bool SetChildProfile(string id, ChildProfile? profile, bool resetRules,
+        IReadOnlySet<string>? revokeAcknowledgedSubjectIds = null)
     {
         lock (_lock)
         {
@@ -704,7 +709,17 @@ public class UserStore : IForgejoAccountStore, IUserStore
                             // согласие — берётся кандидат; иначе (смена providerKey без согласия, предмет новый,
                             // согласия не было) — сброс. Согласие от старого providerKey не переживает смену.
                             var hasLiveSubject = liveSubjects.TryGetValue(subject.Id, out var liveSubject);
-                            if (hasLiveSubject && liveSubject!.RouteAcknowledgedAt is not null
+                            // Отзыв согласия (Х1, ревью Т5a): id в наборе отзыва — пара обнуляется даже при
+                            // том же providerKey: предмет сохраняется «не согласованным», 400 даст запуск
+                            // хода. Под тем же замком и по тому же живому разбору, что и сохранение: два
+                            // одновременных PUT (true и false) дают одно из двух состояний целиком, не смесь пар.
+                            if (revokeAcknowledgedSubjectIds is not null
+                                && revokeAcknowledgedSubjectIds.Contains(subject.Id))
+                            {
+                                subject.RouteAcknowledgedAt = null;
+                                subject.RouteAcknowledgedBy = null;
+                            }
+                            else if (hasLiveSubject && liveSubject!.RouteAcknowledgedAt is not null
                                 && liveSubject.ProviderKey == subject.ProviderKey)
                             {
                                 subject.RouteAcknowledgedAt = liveSubject.RouteAcknowledgedAt;

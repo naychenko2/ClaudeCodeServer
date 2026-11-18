@@ -89,8 +89,10 @@ public static class ChildProfileValidator
     // DenyAll. label 1..40, глиф 1..3, цвет — ключ из ChildSubject.ColorKeys (палитра живёт
     // на фронте, здесь — только ключ). Маршрут предмета (Т5a, И2′) — ChildRoute.Evaluate: тот же
     // отбор, что у запуска хода и ручки списка маршрутов; коды 400 — RouteReject. Согласие админа на
-    // не-Anthropic маршрут — acknowledgeRouteRisk в теле либо живое согласие того же предмета при том же
-    // providerKey (при смене providerKey оно не переживает: сброс делает стор под замком).
+    // не-Anthropic маршрут — acknowledgeRouteRisk в теле трёхзначный (Х1): true — согласие сейчас; поля нет —
+    // живое согласие того же предмета при том же providerKey (при смене providerKey оно не переживает:
+    // сброс делает стор под замком); false — отзыв: живое согласие не засчитывается и отказа «нет согласия»
+    // нет — предмет сохраняется не согласованным, 400 даст запуск хода.
     private static Reject? ValidateSubjects(List<ChildSubjectDto>? subjects, User user,
         ClaudeSubscriptionPool pool, LlmProviderRegistry providers)
     {
@@ -114,10 +116,17 @@ public static class ChildProfileValidator
             if (!ChildSubject.ColorKeys.Contains(subject.Color ?? "", StringComparer.Ordinal))
                 return new("subject_color_invalid", $"Цвет предмета «{id}» вне палитры: допустимы {string.Join(", ", ChildSubject.ColorKeys)}.");
             var liveSubject = live is not null && live.TryGetValue(id, out var ls) ? ls : null;
-            var acknowledged = subject.AcknowledgeRouteRisk == true
-                || (liveSubject is { RouteAcknowledgedAt: not null } && liveSubject.ProviderKey == subject.ProviderKey);
-            if (RouteReject(ChildRoute.Evaluate(subject.ProviderKey, subject.Model, acknowledged, pool, providers),
-                    $"предмета «{id}»", subject.ProviderKey, forPool: false) is { } routeReject)
+            // acknowledgeRouteRisk трёхзначный (Х1, ревью Т5a): true — согласие сейчас; поля нет — живое
+            // согласие того же предмета при том же providerKey; false — ОТЗЫВ: живое согласие не
+            // засчитывается даже при том же providerKey. Отказа «нет согласия» на false нет: предмет
+            // сохраняется «не согласованным», а 400 даст запуск хода (ChildRoute.Resolve читает
+            // RouteAcknowledgedAt). Прочие отказы маршрута — как были.
+            var revoked = subject.AcknowledgeRouteRisk == false;
+            var acknowledged = !revoked && (subject.AcknowledgeRouteRisk == true
+                || (liveSubject is { RouteAcknowledgedAt: not null } && liveSubject.ProviderKey == subject.ProviderKey));
+            var decision = ChildRoute.Evaluate(subject.ProviderKey, subject.Model, acknowledged, pool, providers);
+            if (revoked && decision.Refusal == ChildRouteRefusal.RiskUnacknowledged) continue;
+            if (RouteReject(decision, $"предмета «{id}»", subject.ProviderKey, forPool: false) is { } routeReject)
                 return routeReject;
         }
         return null;
@@ -221,9 +230,12 @@ public record ChildProfileDto(
     decimal? MonthlyBudgetUsd,
     int? WarnMinutes,
     bool? ResetRules);
-// Предмет в wire-контракте (Т2a): персоны-тьютора во ВХОДЕ нет по смыслу — его пишет только
-// SetChildSubjectTutor (Т2b); поле существует только в ответе и живёт в сторе: PUT-слияние
-// берёт его по Id из живого профиля, значение из тела не читается никогда.
+// Предмет в wire-контракте (Т2a): ОДНА запись на вход и на ответ — осознанно: поля ответа
+// (tutorPersonaId, attachedAt, routeAcknowledgedAt) читаются в теле как отсутствие, вторая
+// запись добавила бы второй контракт без нового смысла; поля не убирать — они поля ответа.
+// Персоны-тьютора во ВХОДЕ нет по смыслу — его пишет только SetChildSubjectTutor (Т2b);
+// поле существует только в ответе и живёт в сторе: PUT-слияние берёт его по Id из живого
+// профиля (UserStore.SetChildProfile), значение из тела не читается никогда.
 public record ChildSubjectDto(
     string? Id,
     string? Label,

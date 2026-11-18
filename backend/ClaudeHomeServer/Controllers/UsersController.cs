@@ -24,7 +24,7 @@ public class UsersController(UserStore users, SessionManager sessions,
     UserKnowledgeCascade knowledgeCascade, DefaultAssistantProvisioner provisioner,
     ProjectMembershipService membership, IPersonalProjects personalProjects,
     ChildTutorProvisioner childTutorProvisioner, ClaudeSubscriptionPool subscriptionPool,
-    PersonaManager personas,
+    PersonaManager personas, ChildSubjectMaterialsStore childMaterials,
     ILogger<UsersController> logger,
     // `= null` — обязательность для DI (S2b-1, ADR-014): на выключенной вертикали «Знаний»
     // активация контроллера не должна падать; без неё новый datasetId — отказ ниже.
@@ -137,8 +137,17 @@ public class UsersController(UserStore users, SessionManager sessions,
         // Каскад знаний: датасеты «{username}:…», локальные сторы, персоны. Без него всё это
         // сиротеет, а новый пользователь с тем же именем увидел бы чужие базы как свои.
         if (user is not null)
+        {
             try { await knowledgeCascade.CleanupAsync(user.Id, user.Username); }
             catch (Exception ex) { logger.LogWarning(ex, "Каскад знаний при удалении пользователя {User}", id); }
+
+            // Каталог материалов предмета (разрез «Знания репетитора» §2, К2c): без этого
+            // звена data/child-subjects/{id} сиротеет навсегда — ребёнок — id из UserStore,
+            // повторного с таким id пользователя не будет. Сбой звена — только лог: ответ
+            // Delete не меняется (тот же best-effort, что у соседних звеньев).
+            try { await childMaterials.DeleteChildAsync(user.Id); }
+            catch (Exception ex) { logger.LogWarning(ex, "Каталог материалов ребёнка при удалении {User}", id); }
+        }
 
         // «Личное»: запись стора удаляется, папка на диске остаётся (ADR-040 §3)
         try { personalProjects.DeleteOf(id); }

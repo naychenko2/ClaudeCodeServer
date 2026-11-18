@@ -334,6 +334,71 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
         Directory.Exists(Path.Combine(_root, "kid-b", "math")).Should().BeTrue();
     }
 
+    // Ревью К2a: DeleteChildAsync без семафоров предмета проигрывал гонку с идущим
+    // AddAsync — снос приходил посреди записи, и AddAsync дописывал опись/файлы ПОСЛЕ
+    // Directory.Delete: каталог воскресал после сноса. Здесь AddAsync стоит в конвертере
+    // (он вызывается внутри семафора, после того как оригинал лег на диск): тест ждёт
+    // сигнала «конвертер запущен», поднимает снос, отпускает конвертер и проверяет
+    // конечное состояние — каталога нет.
+    //
+    // Мутация: убрать семафоры предметов из DeleteChildAsync — краснеет этот тест:
+    // снос проходит до окончания AddAsync, опись и файлы воссоздаются после него.
+    //
+    // Конвертер — тестовый скрипт, ждущий файл-отметку (тот же приём платформы, что
+    // EchoMarkerConfig выше): детерминирован на обеих ОС, в отличие от «sleep» с
+    // чужим аргументом пути.
+    [Fact]
+    public async Task УдалениеРебёнкаЖдётИдущийAddAsync_КаталогНеВоскресает()
+    {
+        var startedFlag = Path.Combine(_tempDir, "ccs-converter-started");
+        var releaseFlag = Path.Combine(_tempDir, "ccs-converter-release");
+        var script = Path.Combine(_tempDir, OperatingSystem.IsWindows() ? "ccs-wait-converter.bat" : "ccs-wait-converter.sh");
+        if (OperatingSystem.IsWindows())
+        {
+            File.WriteAllText(script,
+                $"@echo off\r\necho started> \"{startedFlag}\"\r\n:loop\r\n" +
+                $"if exist \"{releaseFlag}\" (echo DOCX-MARKER&exit /b 0)\r\ntimeout /t 1 /nobreak >nul\r\ngoto loop\r\n");
+        }
+        else
+        {
+            File.WriteAllText(script,
+                "#!/bin/sh\n" +
+                $"echo started > '{startedFlag}'\n" +
+                $"while [ ! -e '{releaseFlag}' ]; do sleep 0.05; done\n" +
+                "echo DOCX-MARKER\n");
+        }
+
+        var store = Store(Config(new Dictionary<string, string?>
+        {
+            ["Markitdown:Command"] = OperatingSystem.IsWindows() ? $"cmd /c {script}" : $"bash {script}",
+        }));
+
+        var addTask = Task.Run(() => store.AddAsync("kid-a", "math", "учебник.pdf", PdfBytes, "admin-1"));
+
+        // Сигнал: конвертер запущен — значит AddAsync внутри семафора предмета и оригинал
+        // уже на диске (порядок AddAsync: оригинал → ConvertAsync → опись).
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!File.Exists(startedFlag))
+        {
+            if (DateTime.UtcNow > deadline) Assert.Fail("Тестовый конвертер не запустился: фикстура неработает");
+            await Task.Delay(50);
+        }
+
+        var deleteTask = store.DeleteChildAsync("kid-a");
+
+        // Отпускаем конвертер: AddAsync дописывает опись и освобождает семафор; снос — за ним.
+        File.WriteAllText(releaseFlag, "go");
+
+        var add = await addTask;
+        await deleteTask;
+
+        add.Accepted.Should().BeTrue(add.Code);
+        // Конечное состояние полного цикла: снос был ПОСЛЕ записи — каталога нет.
+        // Без семафоров в DeleteChildAsync краснеет: снос шёл посреди AddAsync, опись и
+        // файлы воссоздались после него.
+        Directory.Exists(Path.Combine(_root, "kid-a")).Should().BeFalse();
+    }
+
     // ── аргументы ─────────────────────────────────────────────────────────────────────
 
     [Fact]

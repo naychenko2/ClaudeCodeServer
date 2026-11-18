@@ -266,20 +266,44 @@ public sealed class ChildSubjectMaterialsStore(
     /// <summary>
     /// Снести каталог материалов ребёнка (каскад удаления пользователя-ребёнка, разрез §2):
     /// best-effort, лог, исключения наружу нет — как соседние звенья каскада UsersController.
+    ///
+    /// Семафоры предметов (ревью К2a): идущий AddAsync держит семафор предмета и дописывает
+    /// опись/файлы ПОСЛЕ Directory.Delete — каталог воскресал бы после сноса. Снос ждёт
+    /// идущие записи: каждый уже созданный каталог предмета берётся под свой семафор
+    /// (порядок — Ordinal, два параллельных сноса одного ребёнка не держат друг друга
+    /// за разные наборы ключей), затем сносится весь каталог. Загрузка, пришедшая после
+    /// удаления пользователя, к стору не доходит: контроллер К2b проверяет ребёнка раньше
+    /// (ChildSubjectMaterialsController.ChildOf → child_not_found до AddAsync).
     /// </summary>
-    public Task DeleteChildAsync(string childId)
+    public async Task DeleteChildAsync(string childId)
     {
         RequireChild(childId);
         var dir = SafePath.Join(root, childId);
         try
         {
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+            var subjectDirs = Directory.Exists(dir)
+                ? Directory.GetDirectories(dir).OrderBy(d => d, StringComparer.Ordinal).ToArray()
+                : [];
+            var held = new List<SemaphoreSlim>(subjectDirs.Length);
+            try
+            {
+                foreach (var subjectDir in subjectDirs)
+                {
+                    var sem = LockFor(subjectDir);
+                    await sem.WaitAsync();
+                    held.Add(sem);
+                }
+                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+            }
+            finally
+            {
+                foreach (var sem in held) sem.Release();
+            }
         }
         catch (Exception e)
         {
             _log?.LogWarning(e, "Детский режим: каталог материалов ребёнка не снесён (child {Child})", childId);
         }
-        return Task.CompletedTask;
     }
 
     // ── тип по сигнатуре ──────────────────────────────────────────────────────────────

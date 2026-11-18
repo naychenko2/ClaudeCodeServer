@@ -7,7 +7,7 @@
 // серверного списка (И5). Пустой список — пустой список: выдумывать нечего.
 
 import { useState, type ReactNode } from 'react';
-import { Brush, Users } from 'lucide-react';
+import { BookOpen, Brush, Users } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_PROPS, ICON_SIZE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -24,6 +24,8 @@ import type { ChildStatus, ChildSubjectTutor, ChildSubjectView } from './types';
 
 // «Вчера остановились тут»: subjectId — ключ предмета из профиля (slug ^[a-z0-9-]{1,32}$),
 // поэтому тип — строка; подпись и цвет карточки приходят из найденной в subjects плитки.
+// Предмета нет в живом списке (закрыт/удалён или список ещё не пришёл) — карточка остаётся:
+// без метки и цвета предмета, в нейтральном цвете (Т3e).
 export interface ChildLastLesson {
   subjectId: string;
   title: string;
@@ -166,22 +168,34 @@ export function ChildHome({ childName, status, subjects, lastLesson, onOpenSubje
         )}
       </div>
 
-      {lastLesson && lastSubject && (
+      {/* Т3e (ревью d1b9dc6e, п.1): карточка — всегда, когда есть последний урок: на 360 сайдбара
+          нет и она единственный путь к прежнему уроку. Предмета нет в живом списке (закрыт/удалён
+          или список ещё не пришёл) — карточка без метки и цвета предмета: нейтральный квадрат
+          (та же пара, что у панели закрытого чата: C.bgInset/C.textSecondary). «Продолжить»
+          открывает чат как есть: для закрытого/удалённого предмета сервер отдаёт
+          subjectClosed=true (ChildChatsController.cs:102) — чат только для чтения. */}
+      {lastLesson && (
         <Island bg={C.bgCard} borderColor={C.borderLight} shadow={SHADOW.card} style={{ borderRadius: R.xl, padding: SP.lg }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.lg, flexWrap: 'wrap' }}>
-            <SubjectGlyph bg={lastSubject.bg} fg={lastSubject.fg}>{lastSubject.glyph}</SubjectGlyph>
+            {lastSubject ? (
+              <SubjectGlyph bg={lastSubject.bg} fg={lastSubject.fg}>{lastSubject.glyph}</SubjectGlyph>
+            ) : (
+              <SubjectGlyph bg={C.bgInset} fg={C.textSecondary}>
+                <BookOpen {...ICON_PROPS} size={ICON_SIZE.md} />
+              </SubjectGlyph>
+            )}
             <div style={{ flex: 1, minWidth: 200 }}>
               <div style={{ fontSize: FS.sm, color: C.textMuted }}>Вчера остановились тут</div>
               <div style={{ fontSize: FS.lg, fontWeight: 600, color: C.textHeading, marginTop: 2 }}>
-                {lastSubject.label} · {lastLesson.title}
+                {lastSubject ? `${lastSubject.label} · ${lastLesson.title}` : lastLesson.title}
               </div>
               {/* Строка репетитора и шага (макет .card): аватар 20 + «Имя · Шаг 2 из 3»;
                   репетитора нет — остаётся одна строка шага, как была */}
-              {(lastSubject.tutor || lastLesson.progress) && (
+              {(lastSubject?.tutor || lastLesson.progress) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: SP.xs, fontSize: FS.sm, color: C.textMuted, minWidth: 0 }}>
-                  {lastSubject.tutor && <TutorMark tutor={lastSubject.tutor} size={20} />}
+                  {lastSubject?.tutor && <TutorMark tutor={lastSubject.tutor} size={20} />}
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {lastSubject.tutor?.name ?? ''}{lastSubject.tutor && lastLesson.progress ? ' · ' : ''}{lastLesson.progress ?? ''}
+                    {lastSubject?.tutor?.name ?? ''}{lastSubject?.tutor && lastLesson.progress ? ' · ' : ''}{lastLesson.progress ?? ''}
                   </span>
                 </div>
               )}

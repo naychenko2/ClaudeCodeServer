@@ -361,4 +361,26 @@ describe('ChildLessonChat: шапка с репетитором и закрыт�
     root.unmount();
   });
 
+  // Т3e (п.2): ряд бейджей шапки при subject=null. Бейдж предмета — прямой ребёнок ряда
+  // после h1; при null его нет вовсе, пустой заглушки тоже нет: ряд — ровно те бейджи,
+  // что перечислены.
+  const badgeRowTexts = () => Array.from(doc.querySelector('h1')!.nextElementSibling!.children).map(el => el.textContent);
+
+  it('до-предметный чат (subject=null): шапка с названием чата, без метки предмета и без пустого бейджа', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: null });
+    const head = doc.querySelector('header')!;
+    expect(head.querySelector('h1')?.textContent).toBe('Дроби');
+    expect(head.querySelector('img')).toBeNull();
+    expect(badgeRowTexts()).toEqual(['Помощник · программа']);
+    root.unmount();
+  });
+
+  it('закрытый чат без живого предмета (subject=null): метка «закрыт» есть, метки предмета — нет', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: null, subjectClosed: true });
+    expect(badgeRowTexts()).toEqual(['закрыт', 'Помощник · программа']);
+    root.unmount();
+  });
+
 });

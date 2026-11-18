@@ -207,9 +207,26 @@ describe('ChildHome: плитки с сервера', () => {
     expect(text).toContain('Гроссмейстер Ёж · Шаг 2 из 3');
   });
 
-  it('чата по несуществующему предмету — карточки нет', async () => {
-    const { host } = await render({}, handlers(), { subjectId: 'nope', title: '—' }, SERVER_SUBJECTS);
-    expect(host.textContent ?? '').not.toContain('Вчера остановились тут');
+  it('чата по закрытому/удалённому предмету: карточка есть — без метки предмета, в нейтральном цвете (Т3e)', async () => {
+    const { host, h } = await render({}, handlers(), { subjectId: 'nope', title: 'Урок без предмета' }, SERVER_SUBJECTS);
+    const label = byText(host, 'Вчера остановились тут')!;
+    expect(label).toBeTruthy();
+    // подпись → блок текста → строка flex → карточка (Island)
+    const card = label.parentElement!.parentElement!.parentElement!;
+    const text = card.textContent ?? '';
+    expect(text).toContain('Урок без предмета');
+    // метки живых предметов в карточке нет
+    for (const s of SERVER_SUBJECTS) expect(text).not.toContain(s.label);
+    // квадрат нейтральный: C.bgInset/C.textSecondary, не палитра предмета
+    const glyph = card.querySelector('span') as HTMLElement;
+    expect(glyph.getAttribute('style') ?? '').toContain('var(--c-bg-inset)');
+    expect(glyph.getAttribute('style') ?? '').toContain('var(--c-text-secondary)');
+    // строки репетитора и аватара нет
+    expect(card.querySelector('img')).toBeNull();
+    // «Продолжить» зовёт onResume: для закрытого/удалённого предмета сервер даёт
+    // subjectClosed=true (ChildChatsController.cs:102) — чат откроется только для чтения
+    await click(byText(card, 'Продолжить')!);
+    expect(h.onResume).toHaveBeenCalledTimes(1);
   });
 
   it('пустой список предметов — ни плиток, ни подписи секции', async () => {

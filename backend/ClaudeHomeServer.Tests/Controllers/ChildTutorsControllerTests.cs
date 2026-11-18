@@ -2,10 +2,12 @@ using System.IO;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
@@ -529,7 +531,8 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
     // файлом candidates/..%2Fx ручка отдаёт 200, с одним файлом «x» в родителе — 404.
     // То есть запрос достает файлы только из candidates/, а мутация «без GetFileName»
     // не детектируема ни одним запросом к этой ручке (снят только факт «родителя не
-    // отдаёт» — он и-guard'ится здесь).
+    // отдаёт» — он и-guard'ится здесь). Защита имени — Path.GetFileName + SafePath.Join
+    // (вторая линия); через HTTP она не проверяма, её ловит прямой вызов метода ниже.
     [Fact]
     public async Task GetTutorAvatarCandidate_Трейверсал_404()
     {
@@ -543,5 +546,29 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
 
         var resp = await _admin.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{tutor.Id}/avatar/candidate/..%2Fx");
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Прямой вызов метода (мимо маршрутизатора) — единственная точка, где мутация
+    // «без Path.GetFileName» краснеет: file="../x.png" при живом «x.png» в папке персоны.
+    // Без GetFileName SafePath.Join разыменовывает «..» внутри AssetsDir (SafePath.cs:30
+    // GetFullPath, отказа нет — путь остаётся под корнем) и файл существует → ручка
+    // отдала бы PhysicalFileResult. С GetFileName имя — «x.png», в candidates/ его нет →
+    // 404. Контроллер собран из боевых сервисов хоста через ActivatorUtilities
+    // (тот же приём, что у ChildCliLayerFactoryTests.cs:172); допуск [Authorize]
+    // прямым вызовом не проверяется —
+    // он у HTTP-гардов выше, здесь проверяется только разрешение пути.
+    [Fact]
+    public void GetTutorAvatarCandidate_ПрямойВызов_ТрейверсалБезGetFileName_404()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        var tutor = _personas.Get(setup.TutorOf["math"], setup.ChildId)!;
+        // Файл — в папке персоны, на уровень выше candidates/ (не в candidates/).
+        var dir = Path.Combine(_personas.AssetsDir, tutor.Id);
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, "x.png"), PngSignature);
+
+        var controller = ActivatorUtilities.CreateInstance<ChildTutorsController>(_hosts.Services);
+        controller.GetTutorAvatarCandidate(setup.ChildId, tutor.Id, "../x.png")
+            .Should().BeOfType<NotFoundResult>();
     }
 }

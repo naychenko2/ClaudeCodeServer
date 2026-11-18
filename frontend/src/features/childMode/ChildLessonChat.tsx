@@ -39,7 +39,8 @@ import { Notice } from '../../components/ui/Notice';
 import { WaitingIndicator } from '../../components/ui/WaitingIndicator';
 import { Composer } from '../../components/Composer';
 import { ChatItemView } from '../../components/chat/ChatItemView';
-import { ChatSessionContext } from '../../components/chat/contexts';
+import { isWidgetShow } from '../../components/chat/WidgetView';
+import { ChatSessionContext, ChildFeedContext } from '../../components/chat/contexts';
 import { childApi, ChildAttachmentRejectedError } from './api';
 import { TutorMark } from './ChildHome';
 import { subjectColors } from './subjectPalette';
@@ -56,9 +57,12 @@ const MB = 1024 * 1024;
 export const CHILD_TURN_ERROR_TEXT = 'Помощник сейчас не может ответить. Попробуй чуть позже или позови взрослого.';
 
 // Детская лента — белый список видов: реплики ребёнка и тьютора и успешный итог хода идут
-// в ChatItemView как есть; любая ошибка или технический вид (в том числе result с ошибкой API,
-// rate_limit, tool_use с isError…) — плашка CHILD_TURN_ERROR_TEXT; всё остальное, включая
-// будущие виды, не показывается.
+// в ChatItemView как есть; сбой хода целиком (result с ошибкой API, error, rate_limit…) —
+// плашка CHILD_TURN_ERROR_TEXT. Ошибка отдельного инструмента (tool_use с isError) плашки
+// НЕ даёт: технический сбой одного инструмента ребёнку не показываем (К8b, §8 п.5).
+// Вызов виджета (widget_show) без ошибки идёт в ленту на своём месте — ChatItemView сам
+// отдаст его в WidgetView (К8b, «Детский режим»: репетитору доступны виджеты). Всё
+// остальное, включая будущие виды, не показывается.
 function childFeed(items: ChatItem[]): { item: ChatItem; i: number; plate: boolean }[] {
   const out: { item: ChatItem; i: number; plate: boolean }[] = [];
   items.forEach((item, i) => {
@@ -80,7 +84,9 @@ function childFeed(items: ChatItem[]): { item: ChatItem; i: number; plate: boole
         out.push({ item, i, plate: true });
         return;
       case 'tool_use':
-        if (item.isError) out.push({ item, i, plate: true });
+        // Виджет репетитора (схема/наглядный рисунок) — в ленту на месте своего вызова;
+        // сбой любого инструмента — мимо ленты и без плашки (К8b, §8 п.5).
+        if (isWidgetShow(item.name) && !item.isError) out.push({ item, i, plate: false });
         return;
       default:
     }
@@ -240,6 +246,9 @@ export function ChildLessonChat({ sessionId, subject, subjectClosed = false, tit
         </header>
         )}
 
+        {/* К8b (§8 п.5): детская лента провайдит ChildFeedContext=true — markdown реплик
+            не несёт ссылок наружу и внешних картинок (MarkdownContent читает его сам). */}
+        <ChildFeedContext.Provider value={true}>
         <div data-child-feed="" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <div style={{ ...col, display: 'flex', flexDirection: 'column', gap: SP.md, fontSize: FS.lg, paddingBottom: SP.lg }}>
             {feed.map(({ item, i, plate }, k) => plate ? (
@@ -271,6 +280,7 @@ export function ChildLessonChat({ sessionId, subject, subjectClosed = false, tit
             <div ref={endRef} />
           </div>
         </div>
+        </ChildFeedContext.Provider>
 
         <div style={{ ...col, paddingBottom: SP.md, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
           {error && (

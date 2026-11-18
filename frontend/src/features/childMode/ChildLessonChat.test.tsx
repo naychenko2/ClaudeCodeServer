@@ -63,14 +63,32 @@ let mockItems: unknown[] = [];
 vi.mock('../../hooks/useSession', () => ({
   useSession: () => ({ items: mockItems, isWaiting: false, isJoined: true, send: vi.fn(), interrupt: vi.fn() }),
 }));
-// Стенд ChatItemView печатает вид и «сырой» технический текст — утечка через него видна в ленте
-vi.mock('../../components/chat/ChatItemView', () => ({
-  ChatItemView: (p: { item: { kind: string; text?: string; subtype?: string; apiErrorStatus?: string } }) =>
-    createElement('div', { 'data-civ': p.item.kind },
-      p.item.kind === 'result' && p.item.subtype !== 'success'
-        ? `ошибка API: ${p.item.apiErrorStatus} проверьте API-ключ ${p.item.subtype}`
-        : (p.item.text ?? p.item.kind)),
+// Настоящий MarkdownContent в стенде ниже — тяжёлые зависимости заглушены, как в его
+// собственном тесте (MarkdownContent.childFeed.test.tsx); сам рендер — настоящий.
+vi.mock('react-syntax-highlighter', () => ({ Prism: () => null }));
+vi.mock('react-syntax-highlighter/dist/esm/styles/prism', () => ({ oneDark: {} }));
+vi.mock('../../components/MermaidDiagram', () => ({ MermaidDiagram: () => null }));
+vi.mock('../../components/chat/MermaidDiagram', () => ({ MermaidDiagram: () => null }));
+vi.mock('../../lib/api', () => ({
+  api: { files: { getContent: () => Promise.resolve({ content: null, isBinary: false, isImage: false }), locate: () => Promise.resolve([]) } },
 }));
+vi.mock('../../lib/useInView', () => ({ useInView: () => [() => {}, false] }));
+// Стенд ChatItemView печатает вид и «сырой» технический текст — утечка через него видна в ленте.
+// Реплики (text/user_message) рендерит НАСТОЯЩИМ MarkdownContent: так тест К8b видит, доходит
+// ли ChildFeedContext до markdown (ссылка → текст без <a>), а не подменяет его своей заглушкой.
+// Вид tool_use несётся атрибутом data-tool: фильтр ленты судит, какой вызов прошёл в ленту.
+vi.mock('../../components/chat/ChatItemView', async () => {
+  const { MarkdownContent } = await import('../../components/chat/MarkdownContent');
+  return {
+    ChatItemView: (p: { item: { kind: string; name?: string; text?: string; subtype?: string; apiErrorStatus?: string } }) =>
+      createElement('div', { 'data-civ': p.item.kind, 'data-tool': p.item.name },
+        p.item.kind === 'result' && p.item.subtype !== 'success'
+          ? `ошибка API: ${p.item.apiErrorStatus} проверьте API-ключ ${p.item.subtype}`
+          : p.item.kind === 'text' || p.item.kind === 'user_message'
+            ? createElement(MarkdownContent, { text: p.item.text ?? '' })
+            : (p.item.text ?? p.item.kind)),
+  };
+});
 vi.mock('../../components/ui/WaitingIndicator', () => ({ WaitingIndicator: () => null }));
 // Стенд композера: кнопка «прикрепить» отдаёт файл хостуChildLessonChat и печатает чипы
 vi.mock('../../components/Composer', () => ({
@@ -219,7 +237,7 @@ describe('ChildLessonChat: сбой хода в ленте', () => {
     { kind: 'model_switched', model: 'a', previousModel: 'b' },
     { kind: 'work_loop_stopped', reason: 'r', text: 'technical' },
     { kind: 'hands_notice', text: 'technical', tone: 'warning' },
-    { kind: 'tool_use', id: '1', name: 'Bash', input: {}, isError: true, result: 'technical' },
+    // tool_use с isError здесь больше нет: сбой отдельного инструмента — без плашки (К8b, см. ниже)
   ])('технический вид $kind — спокойная плашка, подряд идущие сворачиваются в одну', item => {
     mockItems = [item, { kind: 'error', text: 'raw' }];
     const root = createRoot(doc.getElementById('root')!);
@@ -227,6 +245,60 @@ describe('ChildLessonChat: сбой хода в ленте', () => {
     const feed = doc.querySelector('[data-child-feed]')!;
     expect(feed.querySelectorAll('[data-civ]').length).toBe(0);
     expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(1);
+    root.unmount();
+  });
+});
+
+// К8b («Знания репетитора», §8 п.4–5): виджет репетитора живёт в ленте на месте своего
+// вызова, сбой отдельного инструмента — без плашки (плашка остаётся только на сбой хода),
+// ChildFeedContext доходит до markdown реплик: ссылка наружу — текст без <a>.
+// routing tool_use → WidgetView делает сам ChatItemView (его строка 1531, его тесты);
+// здесь проверяется фильтр ленты: что в него проходит и что нет.
+describe('ChildLessonChat: виджет и ошибки инструментов (К8b)', () => {
+  beforeEach(() => { mockItems = []; });
+
+  const civ = (feed: Element) => Array.from(feed.querySelectorAll('[data-civ]'))
+    .map(e => `${e.getAttribute('data-civ')}:${e.getAttribute('data-tool') ?? ''}`);
+
+  it('widget_show без ошибки — в ленте на своём месте; другой tool_use — по-прежнему нет', () => {
+    mockItems = [
+      { kind: 'text', text: 'посмотри схему' },
+      { kind: 'tool_use', id: 'w1', name: 'mcp__widgets__widget_show', input: { html: '<b>схема</b>' } },
+      { kind: 'tool_use', id: 't1', name: 'mcp__tutor__read_material', input: { id: 'm' } },
+    ];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-w');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    // Виджет стоит после реплики, перед следующим местом — порядок вызова сохранён
+    expect(civ(feed)).toEqual(['text:', 'tool_use:mcp__widgets__widget_show']);
+    expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(0);
+    root.unmount();
+  });
+
+  it('сбой отдельного инструмента — без плашки; сбой хода целиком — плашка как раньше', () => {
+    mockItems = [
+      { kind: 'tool_use', id: 's1', name: 'mcp__tutor__search_materials', input: {}, isError: true, result: 'technical' },
+      { kind: 'error', text: 'Invalid API key · Fix external API key' },
+    ];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-toolerr');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    expect(civ(feed)).toEqual([]);
+    expect(feed.textContent).not.toMatch(/technical|API|ключ/i);
+    const blocks = feed.querySelectorAll('[data-child-turn-error]');
+    expect(blocks.length).toBe(1);
+    expect(blocks[0].textContent).toContain(CHILD_TURN_ERROR_TEXT);
+    root.unmount();
+  });
+
+  it('ссылка в ответе тьютора — текст без <a>', () => {
+    mockItems = [{ kind: 'text', text: 'прочитай [учебник](https://example.com)' }];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-link');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    // Мутация «убрать ChildFeedContext.Provider» (К8b): здесь появляется <a href=…> — строка краснеет.
+    expect(feed.querySelectorAll('a[href]').length).toBe(0);
+    expect(feed.textContent).toContain('учебник');
     root.unmount();
   });
 });

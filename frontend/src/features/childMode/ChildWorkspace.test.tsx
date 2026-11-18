@@ -260,6 +260,34 @@ describe('ChildWorkspace', () => {
     expect(h.mounts).toEqual(['s2:false:-:true']);
   });
 
+  // ХВ2-Ф2 (дефект 698bcb27): метка закрытого предмета приходит из subjectLabel чата (ХВ2-Б1),
+  // живого списка его нет — без этого поля строки «Старых уроков» оставались без подписи
+  it('закрытый чат с subjectLabel «История» — строка в «Старых уроках» содержит «История»', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: [
+      { sessionId: 's1', name: 'Пирамиды', updatedAt: '2026-11-17T10:00:00Z', subject: 'history', subjectClosed: true, voiceMode: false, subjectLabel: 'История' },
+    ] });
+    await mount();
+    const tile = Array.from(doc.querySelectorAll('button')).find(b => b.textContent?.includes('Математика'))!;
+    await click(tile);
+    const toggle = oldLessonsToggle()!;
+    await click(toggle);
+    const row = Array.from(doc.querySelectorAll('button')).find(b => /Пирамиды/.test(b.textContent ?? ''))!;
+    expect(row.textContent).toContain('История');
+  });
+
+  it('закрытый чат с subjectLabel null — строка без подписи предмета', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: [
+      { sessionId: 's1', name: 'Пирамиды', updatedAt: '2026-11-17T10:00:00Z', subject: 'history', subjectClosed: true, voiceMode: false, subjectLabel: null },
+    ] });
+    await mount();
+    const tile = Array.from(doc.querySelectorAll('button')).find(b => b.textContent?.includes('Математика'))!;
+    await click(tile);
+    const toggle = oldLessonsToggle()!;
+    await click(toggle);
+    const row = Array.from(doc.querySelectorAll('button')).find(b => b.textContent === 'Пирамиды')!;
+    expect(row.textContent).toBe('Пирамиды');
+  });
+
   it('нет закрытых чатов — группы «Старые уроки» нет', async () => {
     await mount();
     const tile = Array.from(doc.querySelectorAll('button')).find(b => b.textContent?.includes('Математика'))!;
@@ -461,5 +489,26 @@ describe('ChildWorkspace · подпись EmptyState экрана предме�
     await openSubject();
     expect(doc.body.textContent).toContain('Выбери урок слева или начни новый.');
     expect(doc.body.textContent).not.toContain('Прошлые уроки — на главной');
+  });
+
+  // ХВ2-Ф2 (дефект 698bcb27): уроков нет вовсе — указывать негде, «первый урок» на любой
+  // ширине (текст дословный, утвердила Софья); прежние тесты с уроками не тронуты
+  it('на 700 без уроков — подпись «Начни свой первый урок.», без «Мои уроки» и без «слева»', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: [] });
+    win.innerWidth = 700;
+    await mount();
+    await openSubject();
+    expect(doc.body.textContent).toContain('Начни свой первый урок.');
+    expect(doc.body.textContent).not.toContain('Мои уроки');
+    expect(doc.body.textContent).not.toContain('слева');
+  });
+
+  it('на 1280 без уроков — подпись «Начни свой первый урок.», без «Мои уроки» и без «слева»', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: [] });
+    await mount();
+    await openSubject();
+    expect(doc.body.textContent).toContain('Начни свой первый урок.');
+    expect(doc.body.textContent).not.toContain('Мои уроки');
+    expect(doc.body.textContent).not.toContain('слева');
   });
 });

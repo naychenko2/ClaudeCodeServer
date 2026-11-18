@@ -145,8 +145,8 @@ function LessonRow({ chat, subjectLabel, active, onOpen }: { chat: ChildChatList
       {chat.name || 'Новый урок'}
       {/* строка предмета (макет .lrow .p): рисуется только label, репетитор в строке списка
           не показывается. Метки «закрыт» здесь больше нет: закрытые чаты живут в группе
-          «Старые уроки» (Д2) и её заголовок говорит то же самое. Метки предмета нет
-          (закрытый/до-предметный чат) — строки нет вовсе: выдумывать нечем */}
+          «Старые уроки» (Д2) и её заголовок говорит то же самое. Метка закрытого предмета
+          приходит из subjectLabel чата (ХВ2-Б1); строки нет только когда он null */}
       {subjectLabel && (
         <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted }}>
           {subjectLabel}
@@ -328,7 +328,8 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
         <LessonRow
           key={c.sessionId}
           chat={c}
-          subjectLabel={subjectViewOf(c.subject)?.label ?? null}
+          // живой список предметов главнее; поле чата — запасной источник для закрытого предмета (ХВ2-Б1)
+          subjectLabel={subjectViewOf(c.subject)?.label ?? c.subjectLabel ?? null}
           active={c.sessionId === sessionId}
           onOpen={() => openLesson(c.sessionId)}
         />
@@ -342,7 +343,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
             <LessonRow
               key={c.sessionId}
               chat={c}
-              subjectLabel={subjectViewOf(c.subject)?.label ?? null}
+              subjectLabel={subjectViewOf(c.subject)?.label ?? c.subjectLabel ?? null}
               active={c.sessionId === sessionId}
               onOpen={() => openLesson(c.sessionId)}
             />
@@ -379,7 +380,9 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
         // ХВ12 (дефект 4ef0f8c5): подпись зависит от наличия боковой панели (wide), а не
         // от мобильного флага: на 601–899 панели нет (ХВ11), и прежняя подпись звала
         // «выбрать слева» там, где слева ничего нет; прошлые уроки — в списке под главной.
-        subtitle={wide ? 'Выбери урок слева или начни новый.' : 'Начни новый урок. Прошлые уроки — на главной, в списке «Мои уроки».'}
+        // ХВ2-Ф2 (дефект 698bcb27): уроков нет вовсе — указывать негде, текст один на любой
+        // ширине (дословно, утвердила Софья).
+        subtitle={chats.length === 0 ? 'Начни свой первый урок.' : wide ? 'Выбери урок слева или начни новый.' : 'Начни новый урок. Прошлые уроки — на главной, в списке «Мои уроки».'}
         action={<Button size="lg" onClick={() => void startLesson(activeSubject.id)} disabled={starting}>Начать урок</Button>}
       />
     );

@@ -31,6 +31,8 @@ namespace ClaudeHomeServer.Controllers;
 /// стора; отсутствующий пользователь и не-ребёнок дают одно тело, существование не
 /// раскрываем) → 404 subject_not_found (предмета нет в профиле ребёнка) → коды стора:
 /// 413 too_large, 413 subject_full, 415 unsupported_type, 422 pdf_no_text, 422 docx_no_text.
+/// Ревью КИ1b: код стора child_gone (ребёнка удалили, пока шла загрузка) наружу — то же
+/// 404 child_not_found, что и у проверки до стора: нового кода клиенту не нужно.
 /// Пустой файл отдельного кода не имеет: пустые байты — не поддерживаемый тип, стор
 /// отвечает unsupported_type (ChildAttachmentPolicy.Detect, ChildAttachmentPolicy.cs:33).
 /// Исключение стора наружу не выходит: 500 {code:"storage_error"}.
@@ -149,6 +151,10 @@ public class ChildSubjectMaterialsController(
             (StatusCodes.Status422UnprocessableEntity, code, "В этом PDF нет текста — попробуйте текстовый файл."),
         ChildSubjectMaterialsStore.CodeDocxNoText =>
             (StatusCodes.Status422UnprocessableEntity, code, "В этом DOCX нет текста."),
+        // Ребёнка удалили посреди загрузки (ревью КИ1b): наружу — то же тело, что у своей
+        // проверки до стора; код стора в ответ не выходит.
+        ChildSubjectMaterialsStore.CodeChildGone =>
+            (StatusCodes.Status404NotFound, "child_not_found", "Ребёнок не найден."),
         _ =>
             (StatusCodes.Status500InternalServerError, code, "Материал не сохранён."),
     };

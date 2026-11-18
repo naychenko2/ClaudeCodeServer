@@ -185,6 +185,8 @@ public class UsersDeleteChildMaterialsBrokenStoreTests : IClassFixture<UsersDele
                 null!,
                 new ClaudeHomeServer.Services.Docs.MarkitdownService(cfg, NullLogger<ClaudeHomeServer.Services.Docs.MarkitdownService>.Instance),
                 cfg,
+                // Ребёнок «жив»: тест про звено каскада и его catch, а не про проверку стора.
+                _ => true,
                 // Картинок в этом тесте не грузится — OCR не вызывается вовсе.
                 new UnusedOcr(),
                 raster: null,

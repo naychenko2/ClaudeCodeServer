@@ -56,6 +56,14 @@ namespace ClaudeHomeServer.Services.ChildMode;
 /// и атомарная запись (разрез §9): пока страница распознаётся, другая загрузка в тот же
 /// предмет её не ждёт.
 ///
+/// Живой владелец (ревью КИ1b): первая проверка под семафором, перед любой записью —
+/// childExists(childId), есть ли ещё этот id в стору пользователей. Ребёнка могли удалить,
+/// пока строился путь первой загрузки или пока шла картинка (минуты OCR вне семафора):
+/// DeleteChildAsync берёт семафоры только УЖЕ существующих каталогов предметов, поэтому
+/// без этой проверки запись воссоздала бы каталог после сноса. Инвариант: после
+/// DeleteChildAsync каталог ребёнка не появляется. Отказ — child_gone, ни файла, ни строки
+/// описи. Стор про пользователей ничего не знает сам: шов-делегат ему даёт вызывающий.
+///
 /// Каталог лежит в data/ и едет в архив сам (служебный .tmp — нет; тот же тест, что у
 /// child-usage). Новое хранилище, существующий формат не меняет: BackupSchema.Version не
 /// трогается; секретов нет — BackupPaths.SecretFileNames не меняется.
@@ -64,6 +72,10 @@ public sealed class ChildSubjectMaterialsStore(
     string root,
     MarkitdownService markitdown,
     IConfiguration config,
+    // Шов-делегат живого владельца (ревью КИ1b): есть ли ещё этот id в стору
+    // пользователей. Единственная точка, где стор узнает об удалении ребёнка: сам он про
+    // пользователей ничего не знает и сам себе этот вопрос не решает.
+    Func<string, bool> childExists,
     ILocalPageOcr ocr,
     IImageRaster? raster = null,
     ILogger<ChildSubjectMaterialsStore>? log = null)
@@ -87,6 +99,9 @@ public sealed class ChildSubjectMaterialsStore(
     public const string CodeDocxNoText = "docx_no_text";
     public const string CodeOcrUnavailable = "ocr_unavailable";
     public const string CodeImageNoText = "image_no_text";
+    // Ребёнка больше нет (ревью КИ1b): его удалили, пока шла загрузка. Ручка отвечает тем
+    // же 404 child_not_found, что и своя проверка до стора: нового кода клиенту не нужно.
+    public const string CodeChildGone = "child_gone";
     // Сбой диска — не код ручки (наружу ему место в 503): стор не бросает наружу ничего,
     // и полусостояния не оставляет.
     public const string CodeStorageError = "storage_error";
@@ -134,12 +149,12 @@ public sealed class ChildSubjectMaterialsStore(
     }
 
     /// <summary>
-    /// Добавить материал: пределы → тип по сигнатуре → оригинал в files/ → текст в text/ →
-    /// строка описи в конец списка, всё под семафором предмета. Картинка — исключение по
-    /// длительности: растр и OCR вне семафора (AddImageAsync), под семафором — проверка
-    /// subject_full и запись. Отказ — результат с кодом; исключения наружу нет. Аргументы
-    /// (id ребёнка/предмета, байты, кто загрузил) — исключение: их обязан выдержать
-    /// вызывающий, до ручки они не доходят.
+    /// Добавить материал: живой владелец → пределы → тип по сигнатуре → оригинал в files/ →
+    /// текст в text/ → строка описи в конец списка, всё под семафором предмета. Картинка —
+    /// исключение по длительности: растр и OCR вне семафора (AddImageAsync), под семафором —
+    /// проверка живого владельца, subject_full и запись. Отказ — результат с кодом,
+    /// исключения наружу нет. Аргументы (id ребёнка/предмета, байты, кто загрузил) —
+    /// исключение: их обязан выдержать вызывающий, до ручки они не доходят.
     /// </summary>
     public async Task<AddMaterialResult> AddAsync(
         string childId, string subjectId, string fileName, byte[] bytes, string uploadedBy)
@@ -160,6 +175,11 @@ public sealed class ChildSubjectMaterialsStore(
         await sem.WaitAsync();
         try
         {
+            // Первая проверка под семафором — тот же порядок, что у ручки (ребёнок раньше
+            // содержимого). Снесённый каталог первой загрузки не должен воскреснуть.
+            if (!ChildAlive(childId, subjectId))
+                return AddMaterialResult.Refused(CodeChildGone);
+
             if (bytes.LongLength > MaxFileBytes())
                 return AddMaterialResult.Refused(CodeTooLarge);
 
@@ -243,7 +263,9 @@ public sealed class ChildSubjectMaterialsStore(
     /// предмет. Любой отказ или сбой растра/OCR — ocr_unavailable, пустой или «одни [?]»
     /// текст — image_no_text; на любом отказе ни файла, ни строки описи, исключение наружу
     /// не выходит. Метр проверяется после OCR: пока страница распознавалась, предмет мог
-    /// заполниться другой загрузкой.
+    /// заполниться другой загрузкой. Живой владелец — тоже после OCR, под семафором перед
+    /// записью: пока шло распознавание (до минут), ребёнка могли удалить, и его снос не ждал
+    /// бы каталог, которого ещё нет (ревью КИ1b) → child_gone.
     /// </summary>
     private async Task<AddMaterialResult> AddImageAsync(
         string dir, string childId, string subjectId, string fileName, byte[] bytes, string uploadedBy)
@@ -343,6 +365,12 @@ public sealed class ChildSubjectMaterialsStore(
         await sem.WaitAsync();
         try
         {
+            // Ревью КИ1b: пока страница распознавалась, ребёнка могли удалить — снос взял
+            // бы семафор уже существующего каталога, а его может и не быть (первая
+            // загрузка). Без этой проверки файлы и опись создались бы после сноса.
+            if (!ChildAlive(childId, subjectId))
+                return AddMaterialResult.Refused(CodeChildGone);
+
             var manifest = ReadManifest(dir) ?? [];
             var used = 0L;
             foreach (var m in manifest) used += m.Bytes;
@@ -468,9 +496,14 @@ public sealed class ChildSubjectMaterialsStore(
     /// опись/файлы ПОСЛЕ Directory.Delete — каталог воскресал бы после сноса. Снос ждёт
     /// идущие записи: каждый уже созданный каталог предмета берётся под свой семафор
     /// (порядок — Ordinal, два параллельных сноса одного ребёнка не держат друг друга
-    /// за разные наборы ключей), затем сносится весь каталог. Загрузка, пришедшая после
-    /// удаления пользователя, к стору не доходит: контроллер К2b проверяет ребёнка раньше
-    /// (ChildSubjectMaterialsController.ChildOf → child_not_found до AddAsync).
+    /// за разные наборы ключей), затем сносится весь каталог.
+    ///
+    /// Загрузка, пришедшая после удаления пользователя, к стору ДОХОДИТ (ревью КИ1b):
+    /// проверка контроллера К2b (ChildOf → child_not_found) была до минуты распознавания
+    /// картинки, а окно между ней и записью — ровно эти минуты. Поэтому сама запись под
+    /// своим семафором повторно проверяет живого владельца (ChildAlive → child_gone) и
+    /// ничего не пишет. Порядок другой: если запись уже держит семафор предмета, снос ждёт
+    /// её и сносит написанное — каталог ребёнка не появляется ни в одном из порядков.
     /// </summary>
     public async Task DeleteChildAsync(string childId)
     {
@@ -584,6 +617,17 @@ public sealed class ChildSubjectMaterialsStore(
         return name.Length > 200 ? name[..200] : name;
     }
 
+    // Живой владелец — под семафором, перед любой записью (ревью КИ1b): снесённый каталог
+    // ребёнка не должен воскресать ни после какой загрузки. Отказ — только лог и child_gone:
+    // ни файла, ни строки описи, полусостояния нет.
+    private bool ChildAlive(string childId, string subjectId)
+    {
+        if (childExists(childId)) return true;
+        _log?.LogWarning("Детский режим: ребёнка больше нет — загрузка отменена (child {Child}, subject {Subject})",
+            childId, subjectId);
+        return false;
+    }
+
     private string SubjectDir(string childId, string subjectId)
     {
         RequireChild(childId);
@@ -670,7 +714,7 @@ public sealed record ChildSubjectMaterial(
 /// <summary>
 /// Результат AddAsync: строка описи (Added) или отказ с кодом (CodeTooLarge, CodeSubjectFull,
 /// CodeUnsupportedType, CodePdfNoText, CodeDocxNoText, CodeOcrUnavailable, CodeImageNoText,
-/// CodeStorageError). Preview — первые 600 символов текста материала для всех видов
+/// CodeChildGone, CodeStorageError). Preview — первые 600 символов текста материала для всех видов
 /// (разрез §9: «preview» в ответе загрузки, только админу; КИ1c); в описи и на диске его нет.
 /// </summary>
 public sealed record AddMaterialResult(ChildSubjectMaterial? Material, string? Code, string? Preview = null)

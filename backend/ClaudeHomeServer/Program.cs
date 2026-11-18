@@ -629,6 +629,11 @@ builder.Services.AddSingleton(sp => new ChildSubjectMaterialsStore(
     ChildSubjectMaterialsStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
     sp.GetRequiredService<MarkitdownService>(),
     sp.GetRequiredService<IConfiguration>(),
+    // Шов-делегат живого владельца (ревью КИ1b): запись под семафором проверяет, что id ещё
+    // в стору пользователей — снесённый каталог ребёнка не должен воскреснуть после минуты
+    // OCR. Именно пользователя, не «ребёнка с включённым режимом»: выключенный детский
+    // режим каталог не сносит, и отменять загрузку из-за него не за чем.
+    id => sp.GetRequiredService<IUserStore>().GetById(id) is not null,
     // Шов OCR (КИ1a): форвардер LlmSubsystem на единственный LocalOcrService.
     sp.GetRequiredService<ILocalPageOcr>(),
     // Растр — необязательно: вертикаль Images отключаемая, без неё картинка отказана

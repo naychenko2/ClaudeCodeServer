@@ -30,6 +30,8 @@ namespace ClaudeHomeServer.Tests.Services.ChildMode;
 /// 5. гонка: 20 параллельных AddAsync одного предмета — 20 строк описи и 20 файлов на диске;
 /// 6. симлинк text/ наружу — ReadTextAsync отказывает: содержимое чужого файла не отдаётся;
 /// 7. DeleteAsync сносит оригинал, текст и строку; DeleteChildAsync — каталог ребёнка;
+///    запись под семафором проверяет живого владельца (ревью КИ1b): после сноса каталога
+///    нет ни после какой загрузки — в том числе вернувшейся после минутного OCR;
 /// 8. картинка (КИ1b): фейковый ILocalPageOcr + настоящий SkiaImageRaster. Успех — оригинал
 ///    в files/, текст в text/, kind «image», preview = первые 600 символов; любой отказ или
 ///    сбой OCR/растра и отсутствие растра — ocr_unavailable без следа на диске; пустой или
@@ -87,17 +89,21 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
             ["Markitdown:Command"] = OperatingSystem.IsWindows() ? "cmd /c echo DOCX-MARKER" : "echo DOCX-MARKER",
         });
 
+    // Ребёнок по умолчанию жив: остальные тесты — про путь стора, а не про пользователей.
+    // Тесты гонки с удалением (ревью КИ1b) передают свой предикат.
     private ChildSubjectMaterialsStore Store(
         IConfiguration? config = null,
         ILocalPageOcr? ocr = null,
         IImageRaster? raster = null,
-        ILogger<ChildSubjectMaterialsStore>? log = null)
+        ILogger<ChildSubjectMaterialsStore>? log = null,
+        Func<string, bool>? childExists = null)
     {
         var cfg = config ?? Config();
         return new ChildSubjectMaterialsStore(
             _root,
             new MarkitdownService(cfg, NullLogger<MarkitdownService>.Instance),
             cfg,
+            childExists ?? (_ => true),
             ocr ?? new UnusedOcr(),
             raster,
             log ?? NullLogger<ChildSubjectMaterialsStore>.Instance);
@@ -842,6 +848,62 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
         // Конечное состояние полного цикла: снос был ПОСЛЕ записи — каталога нет.
         // Без семафоров в DeleteChildAsync краснеет: снос шёл посреди AddAsync, опись и
         // файлы воссоздались после него.
+        Directory.Exists(Path.Combine(_root, "kid-a")).Should().BeFalse();
+    }
+
+    // Ревью КИ1b (major): OCR идёт ВНЕ семафора до минут, а снос берёт семафоры только УЖЕ
+    // существующих каталогов предметов. Первая страница предмета: каталога нет, ждать
+    // нечего, снос — no-op; вернувшийся OCR писал бы файлы и опись после сноса, и фото
+    // страницы с текстом лежали бы на диске без владельца. Запись под семафором проверяет
+    // живого владельца → child_gone, на диске ничего.
+    //
+    // Мутация: убрать ChildAlive из AddImageAsync — краснеет этот тест: опись и файлы
+    // дописаны после сноса, каталог ребёнка воскресает.
+    [Fact]
+    public async Task УдалениеРебёнкаПокаИдётOcr_КаталогНеВоскресает_ChildGone()
+    {
+        var alive = new HashSet<string>(StringComparer.Ordinal) { "kid-a" };
+        var block = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ocr = new RecordingOcr(OcrResult.Success("текст страницы", "qwen3.8-27b", 5, 1, 1)) { Block = block };
+        var store = Store(ocr: ocr, raster: new SkiaImageRaster(), childExists: id => alive.Contains(id));
+
+        var imageTask = Task.Run(() => store.AddAsync("kid-a", "math", "page.png", PngOf(40, 30), "admin-1"));
+
+        // Сигнал: распознавание началось и держится на Block — до записи ещё далеко.
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (ocr.SeenPng.Count == 0)
+        {
+            if (DateTime.UtcNow > deadline) Assert.Fail("фейк-OCR не вызван: путь картинки не дошёл до распознавания");
+            await Task.Delay(25);
+        }
+        Directory.Exists(SubjectDir("kid-a", "math")).Should().BeFalse(
+            "каталога первой загрузки ещё нет — снос не возьмёт его семафор");
+
+        // Каскад удаления пользователя: его нет в стору → снос каталога (нет и его — no-op).
+        alive.Remove("kid-a");
+        await store.DeleteChildAsync("kid-a");
+
+        // OCR вернулся ПОСЛЕ сноса: писать уже некому.
+        block.SetResult(true);
+        var res = await imageTask;
+        res.Accepted.Should().BeFalse();
+        res.Code.Should().Be(ChildSubjectMaterialsStore.CodeChildGone);
+
+        // Конечное состояние полного цикла: каталог ребёнка не появился.
+        Directory.Exists(Path.Combine(_root, "kid-a")).Should().BeFalse();
+    }
+
+    // Тот же шов закрывает ту же гонку обычной загрузки: AddAsync проверяет живого владельца
+    // первой же проверкой под семафором — каталог первой загрузки не создаётся после
+    // удаления ребёнка. Мутация: убрать ChildAlive из AddAsync — краснеет этот тест.
+    [Fact]
+    public async Task УдалённыйРебёнок_ЗагрузкаНеСоздаётКаталог_ChildGone()
+    {
+        var store = Store(childExists: _ => false);
+
+        var txt = await store.AddAsync("kid-a", "math", "урок.txt", Encoding.UTF8.GetBytes("урок"), "admin-1");
+        txt.Code.Should().Be(ChildSubjectMaterialsStore.CodeChildGone);
+
         Directory.Exists(Path.Combine(_root, "kid-a")).Should().BeFalse();
     }
 

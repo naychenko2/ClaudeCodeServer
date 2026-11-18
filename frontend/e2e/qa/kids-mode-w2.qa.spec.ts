@@ -101,6 +101,26 @@ test.beforeAll(async ({ playwright, browser, baseURL }) => {
   // Детский клиент не строим: все детские ручки идут через call(childReq, …, childToken)
   childToken = await tokenOf(childReq, CHILD_U, CHILD_PW);
 
+  // Засев Д1/Д2 (повторная приёмка, задача 3fd213db): второй ребёнок с тремя живыми предметами.
+  // Правила согласуются ручками, чтобы Д2 мог создать чат без тяжёлого онбординга в UI.
+  qa2Req = await playwright.request.newContext({ baseURL });
+  const qa2Users = await admin.get<Array<{ id: string; username: string }>>('/api/users');
+  qa2Id = qa2Users.find((u) => u.username === QA2_U)?.id ?? (await admin.post<{ id: string }>('/api/users', {
+    username: QA2_U, password: QA2_PW, role: 'user', executionEnvironment: 'container',
+  })).id;
+  const qa2Put = await call(adminReq, 'put', `/api/users/${qa2Id}/child-profile`, adminToken, profileBody({ subjects: QA2_SUBJECTS }));
+  expect(qa2Put.status, 'засев: профиль с тремя предметами').toBe(200);
+  qa2Token = await tokenOf(qa2Req, QA2_U, QA2_PW);
+  // Идемпотентно: повторный start на согласованных правилах — 409 rules_already_agreed
+  const rules = await call(qa2Req, 'post', '/api/child/rules/start', qa2Token);
+  expect([200, 409].includes(rules.status), 'засев: чат правил').toBe(true);
+  if (rules.status === 200) {
+    const agreed = await call(qa2Req, 'post', '/api/child/rules/agree', qa2Token, {
+      sessionId: rules.body?.sessionId, summary: 'Слушаю репетитора, стараюсь, прошу помощи, когда непонятно.',
+    });
+    expect(agreed.status, 'засев: правила согласованы').toBeLessThan(300);
+  }
+
   adminPage = await browser.newPage();
   await adminPage.setViewportSize({ width: 1280, height: 900 });
   await enter(adminPage, adminToken, 'admin', ADMIN_U);
@@ -679,67 +699,196 @@ test('М360: вкладка «Предметы» и карточка репет�
   await page.screenshot({ path: resolve(SHOTS, 'm360-subjects.png'), fullPage: true });
 });
 
-// ── Дефект: редактор профиля не читает живой профиль ребёнка ────────────────────────────
-test('Д1: свежая модалка профиля не видит живые предметы — сохранение затирает их и выключает режим', async ({ page }) => {
-  // Живой профиль: два предмета
-  const two = profileBody({
-    subjects: [
-      { id: 'matematika', label: SUBJECT_LABEL, glyph: SUBJECT_GLYPH, color: 'rose', providerKey: PROVIDER, model: 'sonnet', enabled: true },
-      { id: 'russkij', label: 'Русский язык', glyph: 'Рус', color: 'info', providerKey: PROVIDER, model: 'sonnet', enabled: true },
-    ],
-  });
-  const put1 = await call(adminReq, 'put', `/api/users/${childId}/child-profile`, adminToken, two);
-  expect(put1.status, 'профиль с двумя предметами сохранён').toBe(200);
-  const live0 = await call(childReq, 'get', '/api/child/subjects', childToken);
-  expect((live0.body?.subjects ?? []).length, 'у ребёнка два предмета').toBe(2);
+// ── Д1 (повторная приёмка дефекта 06201244, задача 3fd213db) ────────────────────────────
+// Тест был написан под дефект (редактор стартовал с пустого черновика). После ac4ce760b +
+// a8d0901d2 он же проверяет исправление: живой профиль грузится GET-ом, пустой черновик
+// недостижим. Засев — отдельный ребёнок с тремя живыми предметами (PUT провит репетиторов,
+// UsersController.cs:334), чтобы не мешать состоянию сценариев С1–С9.
+const QA2_U = 'qa_kids_qa2';
+const QA2_PW = 'Kidsqa234567';
+const QA2_SUBJECTS = [
+  { id: 'matematika', label: 'Математика', glyph: 'Мат', color: 'rose', providerKey: PROVIDER, model: 'sonnet', enabled: true },
+  { id: 'russkij', label: 'Русский язык', glyph: 'Рус', color: 'info', providerKey: PROVIDER, model: 'sonnet', enabled: true },
+  { id: 'informatika', label: 'Информатика', glyph: 'Инф', color: 'success', providerKey: PROVIDER, model: 'sonnet', enabled: true },
+];
+let qa2Req: APIRequestContext;
+let qa2Token = '';
+let qa2Id = '';
 
-  // Свежая модалка: редактор стартует с пустого черновика — живых предметов не видит
+// Модалка «Пользователей» без раскрытия раздела — ряд ребёнка на месте, клик сам — предмет проверки.
+async function openModal(page: Page): Promise<void> {
+  for (const t of await page.locator('[data-testid="toast-layer"] button[title="Закрыть"]').all()) {
+    await t.click({ timeout: 2000 }).catch(() => {});
+  }
+  await page.locator('[role="button"][aria-label^="Меню пользователя"]').click({ force: true });
+  await page.getByRole('button', { name: 'Пользователи' }).click();
+  await expect(page.getByText('Пользователи').first()).toBeVisible();
+}
+const qa2Toggle = (page: Page) => page.locator(`[data-testid="user-row-${qa2Id}"]`).locator('[data-testid="child-section-toggle"]');
+const subjectsTabOnly = async (page: Page): Promise<void> => {
+  const editor = page.locator('[data-testid="child-profile-editor"]');
+  await editor.locator('[data-testid="profile-tabs"]').getByRole('tab', { name: 'Предметы' }).click();
+  await expect(page.locator('[data-testid="child-subjects-editor"]')).toBeVisible({ timeout: 20000 });
+};
+
+test('Д1: редактор профиля грузит живой профиль — «Загрузка…», живые предметы, пустой черновик недостижим', async ({ page }) => {
+  const errors = collectConsoleErrors(page);
+
+  // Живой профиль на сервере: три предмета с репетиторами
+  const live0 = await call(qa2Req, 'get', '/api/child/subjects', qa2Token);
+  expect(live0.status, 'список предметов ребёнка').toBe(200);
+  const liveSubjects = live0.body?.subjects ?? [];
+  expect(liveSubjects.map((s: any) => s.label).sort(), 'засев: три живых предмета').toEqual(
+    ['Математика', 'Русский язык', 'Информатика'].sort());
+  expect(liveSubjects.every((s: any) => !!s.tutor?.personaId), 'у живых предметов есть репетиторы').toBe(true);
+
+  // Открытие редактора с задержкой GET: до ответа — «Загрузка…», редактора и «Сохранить» нет
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await enter(page, adminToken, 'admin', ADMIN_U);
+  await page.route('**/child-profile', async (route) => {
+    if (route.request().method() === 'GET') await new Promise((r) => setTimeout(r, 1200));
+    await route.continue();
+  });
+  await page.goto('/');
+  await openModal(page);
+  await qa2Toggle(page).click();
+  await expect(page.locator('[data-testid="child-profile-loading"]')).toBeVisible();
+  await expect(page.getByText('Загрузка…')).toBeVisible();
+  await expect(page.locator('[data-testid="save-profile"]')).toHaveCount(0);
+  await page.screenshot({ path: resolve(SHOTS, 'd1-loading.png') });
+
+  // После ответа: редактор по живому снимку — все три предмета, режим отмечен
+  await expect(page.locator('[data-testid="child-profile-editor"]')).toBeVisible({ timeout: 20000 });
+  expect(await qa2Toggle(page).innerText(), 'строка раздела отмечает включённый режим').toContain('включён');
+  await subjectsTabOnly(page);
+  for (const s of QA2_SUBJECTS) await expect(subjectRow(page, s.label)).toBeVisible();
+  await expect(page.locator('[data-testid="child-profile-editor"]').getByRole('checkbox', { name: 'Детский режим' }).first()).toBeChecked();
+  // Репетитор живого предмета — карточка с сохранённой персоной
+  await subjectRow(page, 'Математика').locator('[data-testid="subject-open"]').click();
+  await expect(page.locator('[data-testid="child-tutor-card"]')).toBeVisible();
+  await page.screenshot({ path: resolve(SHOTS, 'd1-live-profile.png'), fullPage: true });
+
+  // Четвёртый предмет через интерфейс → сохранение → у ребёнка четыре предмета, режим включён
+  await page.locator('[data-testid="add-subject"]').click();
+  const nr = page.locator('[data-testid="subject-row"]').last();
+  await nr.locator('input[placeholder="Математика"]').fill('История');
+  await nr.locator('input[placeholder="Мат"]').fill('Ист');
+  await saveProfile(page);
+  const after = await call(qa2Req, 'get', '/api/child/subjects', qa2Token);
+  expect(after.status, 'GET /api/child/subjects после сохранения').toBe(200);
+  const labels = (after.body?.subjects ?? []).map((x: any) => x.label);
+  expect(labels.length, 'предметов стало четыре').toBe(4);
+  expect(labels, 'живые предметы не затёрты').toEqual(
+    expect.arrayContaining(['Математика', 'Русский язык', 'Информатика', 'История']));
+  expect(await qa2Toggle(page).innerText(), 'режим остался включён').toContain('включён');
+  await page.screenshot({ path: resolve(SHOTS, 'd1-after-save.png'), fullPage: true });
+
+  // Отказ GET: Notice с «Повторить», редактора нет — PUT уйти не мог
+  const page2 = await page.context().newPage();
+  let putSeen = 0;
+  page2.on('request', (r) => { if (r.method() === 'PUT' && r.url().includes('/child-profile')) putSeen++; });
+  await page2.setViewportSize({ width: 1280, height: 900 });
+  await enter(page2, adminToken, 'admin', ADMIN_U);
+  await page2.route('**/child-profile', (route) => {
+    if (route.request().method() === 'GET') void route.fulfill({ status: 500, contentType: 'application/json', body: '{}' });
+    else void route.continue();
+  });
+  await page2.goto('/');
+  await openModal(page2);
+  await qa2Toggle(page2).click();
+  await expect(page2.locator('[data-testid="child-profile-error"]')).toBeVisible({ timeout: 20000 });
+  await expect(page2.getByText('Профиль ребёнка не загрузился')).toBeVisible();
+  await expect(page2.locator('[data-testid="child-profile-retry"]')).toBeVisible();
+  await expect(page2.locator('[data-testid="child-profile-editor"]')).toHaveCount(0);
+  await page2.screenshot({ path: resolve(SHOTS, 'd1-get-failed.png'), fullPage: true });
+  expect(putSeen, 'при отказе GET сохранение не уходит').toBe(0);
+  // «Повторить» с живым GET — редактор грузится
+  await page2.unroute('**/child-profile');
+  await page2.locator('[data-testid="child-profile-retry"]').click();
+  await expect(page2.locator('[data-testid="child-profile-editor"]')).toBeVisible({ timeout: 20000 });
+  await page2.close();
+
+  expect(noise(errors)).toEqual([]);
+});
+
+// ── Д2 (повторная приёмка дефекта dc38837b): «Старые уроки» ─────────────────────────────
+test('Д2: чаты удалённого предмета — свёрнутая группа «Старые уроки», открытие только для чтения', async ({ page }) => {
+  // Чат по «Информатике» — через API, без хода тьютора
+  const inf = QA2_SUBJECTS.find((s) => s.label === 'Информатика')!;
+  const chat = await call(qa2Req, 'post', '/api/child/spaces/lessons/chat', qa2Token, { subject: inf.id });
+  expect(chat.status, 'чат по предмету создан').toBe(201);
+
+  // Админ удаляет предмет и сохраняет
   await page.setViewportSize({ width: 1280, height: 900 });
   await enter(page, adminToken, 'admin', ADMIN_U);
   await page.goto('/');
-  await openEditor(page);
-  await subjectsTab(page);
-  await expect(page.getByText('Предметов нет')).toBeVisible({ timeout: 20000 });
-  await page.screenshot({ path: resolve(SHOTS, 'd1-editor-empty.png'), fullPage: true });
+  await openModal(page);
+  await qa2Toggle(page).click();
+  await expect(page.locator('[data-testid="child-profile-editor"]')).toBeVisible({ timeout: 20000 });
+  await subjectsTabOnly(page);
+  await subjectRow(page, 'Информатика').getByRole('button', { name: /^Удалить предмет/ }).click();
+  await saveProfile(page);
+  await expect(subjectRow(page, 'Информатика')).toHaveCount(0, { timeout: 20000 });
+  await page.close();
 
-  // Админ добавляет третий предмет и сохраняет
-  await page.locator('[data-testid="add-subject"]').click();
-  const row = page.locator('[data-testid="subject-row"]').first();
-  await row.locator('input[placeholder="Математика"]').fill('История');
-  await row.locator('input[placeholder="Мат"]').fill('Ист');
-  await page.locator('[data-testid="save-profile"]').click();
-  await page.waitForTimeout(2500);
-  await page.screenshot({ path: resolve(SHOTS, 'd1-after-save.png'), fullPage: true });
+  // Имя закрытого чата — с сервера: им ищем строку в группе
+  const list = await call(qa2Req, 'get', '/api/child/spaces/lessons/chats', qa2Token);
+  expect(list.status, 'список чатов ребёнка').toBe(200);
+  const closed = (list.body?.chats ?? []).filter((c: any) => c.subject === inf.id);
+  expect(closed.length, 'чаты предмета остались').toBeGreaterThan(0);
+  expect(closed.every((c: any) => c.subjectClosed === true), 'чаты предмета только для чтения').toBe(true);
+  const closedName = closed[0].name || 'Новый урок';
 
-  // Что стало с профилем: предметы и режим
-  const after = await call(childReq, 'get', '/api/child/subjects', childToken);
-  console.log('QA-D1-SUBJECTS', after.status, JSON.stringify(after.body).slice(0, 400));
-  expect.soft(after.status, 'после сохранения предмета ребёнок должен остаться ребёнком').toBe(200);
-  // Интерфейс ошибку не показал — сохранение выглядело успешным
-  await expect(page.getByText('Сохранить не удалось')).toHaveCount(0);
-  await page.screenshot({ path: resolve(SHOTS, 'd1-after-save.png'), fullPage: true });
+  // Ребёнок на широком экране: живой предмет → список уроков с группой «Старые уроки»
+  const cp = await page.context().newPage();
+  const errors = collectConsoleErrors(cp);
+  await cp.setViewportSize({ width: 1280, height: 900 });
+  await enter(cp, qa2Token, 'user', QA2_U);
+  await cp.goto('/');
+  await expect(cp.getByRole('button', { name: /Математика/ }).first()).toBeVisible({ timeout: 30000 });
+  await cp.getByRole('button', { name: /Математика/ }).first().click();
 
-  // Вторая половина дефекта: админ в свежей модалке заново настраивает профиль
-  // (включает режим, повторяет маршрут и окна) и сохраняет предмет — живые предметы при этом затираются.
-  const page2 = await page.context().newPage();
-  await page2.setViewportSize({ width: 1280, height: 900 });
-  await enter(page2, adminToken, 'admin', ADMIN_U);
-  await page2.goto('/');
-  await openEditor(page2);
-  await fillMode(page2);
-  await subjectsTab(page2);
-  await page2.locator('[data-testid="add-subject"]').click();
-  const row2 = page2.locator('[data-testid="subject-row"]').first();
-  await row2.locator('input[placeholder="Математика"]').fill('История');
-  await row2.locator('input[placeholder="Мат"]').fill('Ист');
-  await page2.locator('[data-testid="save-profile"]').click();
-  await page2.waitForTimeout(2500);
-  const after2 = await call(childReq, 'get', '/api/child/subjects', childToken);
-  const labels = (after2.body?.subjects ?? []).map((x: any) => x.label);
-  console.log('QA-D1-LABELS', after2.status, JSON.stringify(labels));
-  expect.soft(labels, 'живые предметы не должны затираться добавлением нового').toContain('Математика');
-  expect.soft(labels, 'живые предметы не должны затираться добавлением нового').toContain('Русский язык');
-  await page2.screenshot({ path: resolve(SHOTS, 'd1-wipe.png'), fullPage: true });
-  await page2.close();
+  const group = cp.locator('button[aria-expanded]').filter({ hasText: 'Старые уроки' });
+  await expect(group, 'группа «Старые уроки» есть в списке уроков').toBeVisible({ timeout: 20000 });
+  await expect(group, 'группа свёрнута по умолчанию').toHaveAttribute('aria-expanded', 'false');
+  await expect(group, 'у группы есть счётчик').toContainText(String(closed.length));
+  await cp.screenshot({ path: resolve(SHOTS, 'd2-old-lessons-collapsed.png'), fullPage: true });
+
+  await group.click();
+  await expect(group).toHaveAttribute('aria-expanded', 'true');
+  const row = cp.locator('button').filter({ hasText: closedName }).first();
+  await expect(row, 'чат удалённого предмета виден в группе').toBeVisible();
+  await cp.screenshot({ path: resolve(SHOTS, 'd2-old-lessons-open.png'), fullPage: true });
+
+  await row.click();
+  await expect(cp.getByText('Этот предмет закрыт')).toBeVisible({ timeout: 30000 });
+  await expect(cp.getByText('Переписку можно перечитать, а новые сообщения сюда не уйдут.')).toBeVisible();
+  await cp.screenshot({ path: resolve(SHOTS, 'd2-closed-lesson.png'), fullPage: true });
+  await cp.close();
+
+  expect(noise(errors).filter((e) => !e.includes('401') && !e.includes('Invalid API key') && !e.includes('child_mode'))).toEqual([]);
+});
+
+// ── М360-П (наблюдение): путь ребёнка к старым урокам на 360 ────────────────────────────
+test('М360-П: ребёнок на 360 — старыми уроками заведён только последний чат', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await enter(page, qa2Token, 'user', QA2_U);
+  await page.goto('/');
+  await page.waitForTimeout(2000);
+  await page.screenshot({ path: resolve(SHOTS, 'm360-qa2-home.png'), fullPage: true });
+
+  // Плитки живых предметов есть; списка уроков и группы на мобиле нет (сайдбар — только !isMobile)
+  const tiles = await page.getByRole('button', { name: /Математика|Русский язык|История/ }).count();
+  const group = await page.locator('button[aria-expanded]').filter({ hasText: 'Старые уроки' }).count();
+  console.log('QA-M360 tiles=', tiles, 'old-lessons-group=', group);
+  expect(tiles, 'плитки живых предметов на 360 есть').toBeGreaterThan(0);
+  expect(group, 'группы «Старые уроки» на 360 нет').toBe(0);
+
+  // Единственный путь к закрытому чату — карточка «Вчера остановились тут» → «Продолжить»
+  const cont = page.getByRole('button', { name: 'Продолжить' });
+  expect(await cont.count(), 'карточка продолжения на 360 есть').toBe(1);
+  await cont.click();
+  await expect(page.getByText('Этот предмет закрыт')).toBeVisible({ timeout: 30000 });
+  await page.screenshot({ path: resolve(SHOTS, 'm360-qa2-closed-lesson.png'), fullPage: true });
 });
 

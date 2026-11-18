@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -63,6 +64,7 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     private const string KidsKey = "kids-api";
+    private const string KidsKey2 = "kids-api-2";
     private const string KidsApiKey = "sk-ant-test-kids";
     private const string KidsPassword = "kids-test-password";
 
@@ -98,6 +100,7 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     {
         _hosts = hosts;
         _hosts.ExtraConfig[$"ClaudeSubscriptions:{KidsKey}:ApiKey"] = KidsApiKey;
+        _hosts.ExtraConfig[$"ClaudeSubscriptions:{KidsKey2}:ApiKey"] = KidsApiKey + "-2";
         // Не-Anthropic провайдер с ценой (тот же набор, что у ChildRouteKit): тестам согласия на
         // риск маршрута (Т5a, Х1) нужен предмет на чужом поставщике, который резолвится в реестре
         // хоста — иначе отказ придёт как provider_not_api_key, а не как проверка согласия.
@@ -851,27 +854,141 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         sessions.GetById(otherChat.Id)!.UpdatedAt.Should().Be(before.Item3);
     }
 
-    [Fact]
-    public async Task PutProfile_SubjectProviderChanged_ChatsNotRepinned_UntilTranscriptMove()
+    /// <summary>Кладёт транскрипт чата в профиль CLI его текущего поставщика (корень и cwd — как у
+    /// хода и у ProviderMigration: песочный профиль и контейнерный путь) и возвращает путь файла
+    /// в профиле заданного поставщика.</summary>
+    private string SeedTranscript(string childId, Session chat, string fromKey, string csid, string toKey, out string srcFile)
     {
-        // Т2e (сторож границы, по решению Егора): сменился поставщик (пул → deepseek, с согласием) —
-        // чаты НЕ перезакрепляются: транскрипт CLI остаётся в профиле записи пула, следующий ход
-        // не нашёл бы его --resume в профиле deepseek — голая перезапись сломала бы чат вместо
-        // продолжения (llm-providers.md, «смена провайдера у начатого чата»). До Т2e2 (явный перенос
-        // транскрипта) ход такого чата отказывает сверкой И1-бис — это проверяем прямо на гейте.
+        var route = _hosts.Services.GetRequiredService<CliRoute>();
+        var cwd = route.CwdForOwner(childId, route.TryResolveCwd(chat)!);
+        var flat = ClaudeHomeServer.Services.Llm.TranscriptMigrator.FlattenCwd(cwd);
+        srcFile = Path.Combine(route.ConfigRootFor(childId, fromKey), "projects", flat, csid + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(srcFile)!);
+        File.WriteAllText(srcFile, "{\"type\":\"user\"}\n");
+        _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.ClaudeSessionId = csid;
+        return Path.Combine(route.ConfigRootFor(childId, toKey), "projects", flat, csid + ".jsonl");
+    }
+
+    [Fact]
+    public async Task PutProfile_SubjectProviderChanged_ChatsMovedWithTranscript()
+    {
+        // Т2e2: сменился поставщик (пул → deepseek, с согласием) — чат перезакрепляется И его
+        // транскрипт копируется в профиль нового поставщика: --resume находит его после рестарта.
+        // Сверка И1-бис проходит (поля чата равны записи предмета). Исходный файл остаётся.
         var kid = await EnableChildWithSubjects("kid-repin-provider", ("russian", KidsKey, "sonnet", null));
         var chat = await CreateChildChatAsync("kid-repin-provider", "russian");
+        var dst = SeedTranscript(kid, chat, KidsKey, "csid-repin-1", "deepseek", out var src);
 
         var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
         status.Should().Be(HttpStatusCode.OK);
-        StoredSubject(kid, "russian").Model.Should().Be("deepseek-v4-pro", "маршрут профиля изменён");
 
         var live = _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!;
-        live.Model.Should().Be("sonnet", "чаты предмета при смене поставщика не перезакрепляются");
+        live.Provider.Should().Be("deepseek");
+        live.Model.Should().Be("deepseek-v4-pro");
+        live.PersonaId.Should().Be(StoredSubject(kid, "russian").TutorPersonaId);
+        File.Exists(dst).Should().BeTrue("транскрипт скопирован в профиль нового поставщика");
+        File.Exists(src).Should().BeTrue("исходный файл не удаляется");
+        _hosts.Services.GetRequiredService<IChildModeGate>().LaunchMismatch(kid, live).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PutProfile_SubjectProviderChanged_NoConsent_ChatsUntouched()
+    {
+        // Без согласия админа маршрут ChildRoute не принимает: PUT отклоняется валидатором,
+        // чат и его транскрипт остаются как были.
+        var kid = await EnableChildWithSubjects("kid-repin-noack", ("russian", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-repin-noack", "russian");
+        var dst = SeedTranscript(kid, chat, KidsKey, "csid-repin-2", "deepseek", out _);
+
+        var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", null)));
+        status.Should().NotBe(HttpStatusCode.OK);
+
+        var live = _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!;
         live.Provider.Should().Be(KidsKey);
-        _hosts.Services.GetRequiredService<IChildModeGate>().LaunchMismatch(kid, live)
-            .Should().Be("поставщик чата не совпадает с поставщиком профиля",
-                "до Т2e2 такой чат не стартует — отказ сверки И1-бис, а не тихая работа на старом профиле");
+        File.Exists(dst).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PutProfile_SubjectPoolKeyChanged_ChatGetsExactlyThatKey_NotPick()
+    {
+        // Т2e2, сторож И2′: цель переноса — ровно ProviderKey предмета. Мутация «targetKey =
+        // _subscriptionPool.Pick(model)» выбирает аккаунт пула сама — чат уехал бы не на запись предмета.
+        var kid = await EnableChildWithSubjects("kid-repin-pool", ("russian", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-repin-pool", "russian");
+        var dst = SeedTranscript(kid, chat, KidsKey, "csid-repin-3", KidsKey2, out _);
+
+        var (status, _) = await PutAsync(kid, RepinBody(("russian", KidsKey2, "sonnet", null)));
+        status.Should().Be(HttpStatusCode.OK);
+
+        _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.Provider.Should().Be(KidsKey2);
+        File.Exists(dst).Should().BeTrue("транскрипт переехал в профиль выбранной записи пула");
+    }
+
+    [Fact]
+    public async Task RepinCrossProvider_TwoPuts_SingleFinalRoute()
+    {
+        // Т2e2 (конкурентность): первый PUT (russian→opus на пуле) встал на провиже нового предмета
+        // «art» — после записи профиля и до перезакрепления; второй PUT целиком сменил поставщика
+        // (→deepseek) и перенёс чат. Первый продолжается и берёт ЖИВОЙ маршрут (deepseek), а не
+        // свой: чат один раз на итоговом маршруте, повторный перенос — no-op, транскрипт на месте.
+        var kid = await EnableChildWithSubjects("kid-repin-2puts", ("russian", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-repin-2puts", "russian");
+        var dst = SeedTranscript(kid, chat, KidsKey, "csid-repin-4", "deepseek", out _);
+
+        _hosts.BroadcasterStub.ArmCreateHold(kid);
+        try
+        {
+            var putA = PutAsync(kid, RepinBody(("russian", KidsKey, "opus", null), ("art", KidsKey, "sonnet", null)));
+            var arrived = false;
+            try { arrived = await _hosts.BroadcasterStub.CreateHoldArrived!.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
+            catch (TimeoutException) { }
+            arrived.Should().BeTrue("первый запрос не встал на провиже — окна гонки не было");
+
+            var (statusB, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
+            statusB.Should().Be(HttpStatusCode.OK);
+
+            _hosts.BroadcasterStub.OpenCreateHold();
+            (await putA).Status.Should().Be(HttpStatusCode.OK);
+        }
+        finally { _hosts.BroadcasterStub.ClearCreateHold(); }
+
+        var live = _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!;
+        live.Provider.Should().Be("deepseek");
+        live.Model.Should().Be("deepseek-v4-pro");
+        File.Exists(dst).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Repin_StaleSnapshot_AfterOrphanRemoval_ChatsMatchLastWrite()
+    {
+        // Ревью Т2e: поля перезакрепления брались из снимка профиля до await RemoveOrphanTutorsAsync.
+        // Первый PUT (убирает «math», russian остаётся sonnet) встал на удалении репетитора-сироты —
+        // после записи профиля; второй PUT записал russian→opus и перезакрепил чат. Первый
+        // продолжается: со снимком он вернул бы чат на «sonnet». Мутация «finalProfile вместо
+        // живого чтения» — красный.
+        var kid = await EnableChildWithSubjects("kid-repin-orphan", ("russian", KidsKey, "sonnet", null), ("math", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-repin-orphan", "russian");
+
+        _hosts.BroadcasterStub.ArmDeleteHold(kid);
+        try
+        {
+            var putA = PutAsync(kid, RepinBody(("russian", KidsKey, "sonnet", null)));
+            var arrived = false;
+            try { arrived = await _hosts.BroadcasterStub.DeleteHoldArrived!.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
+            catch (TimeoutException) { }
+            arrived.Should().BeTrue("первый запрос не встал на удалении сироты — окна гонки не было");
+
+            var (statusB, _) = await PutAsync(kid, RepinBody(("russian", KidsKey, "opus", null)));
+            statusB.Should().Be(HttpStatusCode.OK);
+
+            _hosts.BroadcasterStub.OpenDeleteHold();
+            (await putA).Status.Should().Be(HttpStatusCode.OK);
+        }
+        finally { _hosts.BroadcasterStub.ClearDeleteHold(); }
+
+        StoredSubject(kid, "russian").Model.Should().Be("opus");
+        _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.Model.Should().Be("opus",
+            "чат равен последней записи, а не снимку первого запроса");
     }
 
     [Fact]
@@ -1535,6 +1652,27 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             _holdOpen = null;
         }
 
+        // Держатель первого «deleted» (удаление репетитора-сироты): запрос стоит внутри
+        // RemoveOrphanTutorsAsync — после записи профиля и до перезакрепления чатов.
+        public TaskCompletionSource<bool>? DeleteHoldArrived;
+        private TaskCompletionSource<bool>? _delOpen;
+        private string? _delFor;
+        private int _delCount;
+        public void ArmDeleteHold(string ownerId)
+        {
+            Volatile.Write(ref _delFor, ownerId);
+            Volatile.Write(ref _delCount, 0);
+            DeleteHoldArrived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _delOpen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        public void OpenDeleteHold() => Volatile.Read(ref _delOpen)?.TrySetResult(true);
+        public void ClearDeleteHold()
+        {
+            Volatile.Write(ref _delFor, null);
+            Volatile.Write(ref DeleteHoldArrived, null);
+            _delOpen = null;
+        }
+
         private void MaybeThrow(string ownerId)
         {
             if (ownerId == ThrowFor) throw new InvalidOperationException("вещание тьютора не удалось");
@@ -1553,6 +1691,11 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             {
                 Volatile.Read(ref CreateHoldArrived)?.TrySetResult(true);
                 Volatile.Read(ref _holdOpen)!.Task.GetAwaiter().GetResult();
+            }
+            if (ownerId == _delFor && message is PersonasChangedMessage { Action: "deleted" } && ++_delCount == 1)
+            {
+                Volatile.Read(ref DeleteHoldArrived)?.TrySetResult(true);
+                Volatile.Read(ref _delOpen)!.Task.GetAwaiter().GetResult();
             }
             MaybeThrow(ownerId);
             return Task.CompletedTask;

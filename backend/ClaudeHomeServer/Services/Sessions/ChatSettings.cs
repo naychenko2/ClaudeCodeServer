@@ -700,42 +700,6 @@ public sealed class ChatSettings
         }
     }
 
-    // Перезакрепление маршрута предмета (Т2e, решение Андрея 18.11): когда админ меняет предмету
-    // маршрут, его старые чаты продолжают с новой моделью — закреплённые при создании поля
-    // (PersonaId, Provider, Model) перезаписываются по новому маршруту. Отбор — тот же класс,
-    // что у досева: детский чат этого предмета (ChildSpace != null, ChildSubject == id), и только
-    // этого ребёнка: id предмета — slug и может повторяться у разных детей, «math» одного не трогает
-    // «math» другого (владелец — ResolveOwnerId, тот же резолв, что у ZoneRefusalForTurn).
-    // Сравнение и запись — под одним замком стора, как в BackfillChildSubject: два параллельных PUT
-    // перезакрепляют один и тот же набор чатов, и без замка их записи перемешались бы пополам
-    // (Repin_ParallelPuts_ChatsMatchFinalProfile). Значения приходят вызывающему из ЖИВОГО
-    // профиля на момент перезакрепления, не из снимка запроса — иначе старый запрос затёр бы
-    // значение нового.
-    // UpdatedAt не двигается: маршрут — настройка чата, а не активность (тот же инвариант, что у
-    // досева и SetExpiry; идущий ход доживает со старыми полями, следующий идёт с новыми — ADR-041
-    // решение 4). Ничего не изменилось — ни записи, ни диска: повторный PUT того же маршрута
-    // идемпотенен (тот же приём, что у RemapModels). Возвращает число изменённых чатов.
-    public int RepinChildSubject(string ownerId, string subjectId, string personaId, string providerKey, string model)
-    {
-        lock (_store.SaveLock)
-        {
-            var changed = 0;
-            foreach (var info in _store.Sessions.Values.Select(e => e.Info))
-            {
-                if (info.ChildSpace is null) continue;
-                if (!string.Equals(info.ChildSubject, subjectId, StringComparison.OrdinalIgnoreCase)) continue;
-                if (_store.ResolveOwnerId(info) != ownerId) continue;
-                if (info.PersonaId == personaId && info.Provider == providerKey && info.Model == model) continue;
-                info.PersonaId = personaId;
-                info.Provider = providerKey;
-                info.Model = model;
-                changed++;
-            }
-            if (changed > 0) _store.SaveSessions();
-            return changed;
-        }
-    }
-
     // Гейты режима по модели (подготовка к S3-7, вердикт архитектора 07.11): эти две проверки
     // уже делаются здесь — сравнение провайдеров через ProviderKey в SetPersona, гейт
     // план-фазы — в ProviderMigration. Приём хода не получает одиннадцатую зависимость

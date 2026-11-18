@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Sessions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -359,34 +360,31 @@ public class UsersController(UserStore users, SessionManager sessions,
         if (orphanTutors.Count > 0)
             await childTutorProvisioner.RemoveOrphanTutorsAsync(id, orphanTutors);
 
-        // Перезакрепление маршрута предмета (Т2e, решение Андрея 18.11): старые чаты предмета
-        // продолжают с новой моделью — их закреплённые при создании поля (PersonaId, Provider,
-        // Model) перезаписываются по живому маршруту. Условия вызова:
-        // • маршрут согласован — его принимает ChildRoute (не-пул только с согласием админа).
-        //   Без согласия чаты не трогаем: ход и так откажет им (ChildModeGate.LaunchMismatch →
-        //   ChildRoute), а чат с несогласованным маршрутом — намеренное состояние «ждёт согласия».
-        // • ProviderKey предмета не изменился (сравнение с прежним профилем): при смене поставщика
-        //   меняется и профиль CLI, а транскрипт чата остаётся в старом — следующий ход не найдёт
-        //   его --resume в новом (llm-providers.md, «смена провайдера у начатого чата»; тот же
-        //   текст — в ChatSettings.cs:1089-1093 про взрослые чаты). Перезакрепление без переноса
-        //   транскрипта сломало бы чат вместо продолжения; перенос — отдельный шаг.
-        // Поля читаются из ЖИВОГО профиля (finalProfile), прежний ProviderKey — из снимка до
-        // цикла: два параллельных PUT оставляют чаты при финальном профиле, а не при значении
-        // старого запроса (Repin_ParallelPuts_ChatsMatchFinalProfile).
-        var previousSubjects = new Dictionary<string, ChildSubject>(StringComparer.OrdinalIgnoreCase);
-        foreach (var subject in previous?.Subjects ?? [])
-            if (subject is not null && !string.IsNullOrWhiteSpace(subject.Id))
-                previousSubjects[subject.Id] = subject;
+        // Перезакрепление маршрута предмета (Т2e, Т2e2; решение Андрея 18.11): старые чаты предмета
+        // продолжают с новой моделью — их закреплённые при создании поля (PersonaId, Provider, Model)
+        // приводятся к маршруту предмета, а при смене поставщика транскрипт ещё и копируется в
+        // профиль нового (SessionManager.RepinChildSubjectAsync → ProviderMigration). Условие одно:
+        // маршрут принят ChildRoute (не-пул только с согласием админа). Без согласия чаты не
+        // трогаем: ход и так откажет им (ChildModeGate.LaunchMismatch), а чат с несогласованным
+        // маршрутом — намеренное состояние «ждёт согласия».
+        // Поля берёт делегат liveTarget: он читает ЖИВОЙ профиль на каждый чат внутри очереди
+        // перезакрепления, а не снимок finalProfile (прочитан до await RemoveOrphanTutorsAsync):
+        // параллельный PUT, дописавшийся за время ожидания, не будет затёрт значениями этого запроса.
+        // Сбой переноса отдельного чата — лог внутри, ответ остаётся 200.
         foreach (var subject in finalProfile.Subjects)
         {
             if (subject is null || string.IsNullOrWhiteSpace(subject.Id)) continue;
-            if (!previousSubjects.TryGetValue(subject.Id, out var previousSubject)
-                || !string.Equals(previousSubject.ProviderKey, subject.ProviderKey, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (!ChildRoute.Evaluate(subject.ProviderKey, subject.Model,
-                    subject.RouteAcknowledgedAt is not null, subscriptionPool, llmProviders).Accepted)
-                continue;
-            sessions.RepinChildSubject(id, subject.Id, subject.TutorPersonaId, subject.ProviderKey, subject.Model);
+            var subjectId = subject.Id;
+            await sessions.RepinChildSubjectAsync(id, subjectId, () =>
+            {
+                var live = users.GetById(id)?.ChildMode?.Subjects?
+                    .FirstOrDefault(x => x is not null && string.Equals(x.Id, subjectId, StringComparison.OrdinalIgnoreCase));
+                if (live is null) return null;
+                if (!ChildRoute.Evaluate(live.ProviderKey, live.Model,
+                        live.RouteAcknowledgedAt is not null, subscriptionPool, llmProviders).Accepted)
+                    return null;
+                return new ChildRepinTarget(live.TutorPersonaId, live.ProviderKey, live.Model);
+            });
         }
 
         return Ok(new ChildProfileResponse(ToChildProfileDto(finalProfile), tutorId));

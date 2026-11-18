@@ -791,11 +791,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // subjectId; чаты с предметом и не-детские не трогает. Возвращает число изменённых чатов.
     public int BackfillChildSubject(string subjectId) => _settings.BackfillChildSubject(subjectId);
 
-    // Перезакрепление маршрута предмета (Т2e): закреплённые поля (PersonaId, Provider, Model)
-    // детских чатов этого предмета этого ребёнка перезаписываются новым маршрутом; чаты другого
-    // предмета и другого ребёнка не трогает. Возвращает число изменённых чатов.
-    public int RepinChildSubject(string ownerId, string subjectId, string personaId, string providerKey, string model) =>
-        _settings.RepinChildSubject(ownerId, subjectId, personaId, providerKey, model);
+    // Перезакрепление маршрута предмета (Т2e, Т2e2): поля (PersonaId, Provider, Model) детских чатов
+    // этого предмета этого ребёнка приводятся к ЖИВОМУ маршруту; при смене поставщика транскрипт
+    // переезжает в профиль нового (ProviderMigration.RepinChildSubjectAsync). Чаты другого предмета
+    // и другого ребёнка не трогает. Возвращает число перезакреплённых чатов.
+    public Task<int> RepinChildSubjectAsync(string ownerId, string subjectId, Func<ChildRepinTarget?> liveTarget) =>
+        _providerMigration.RepinChildSubjectAsync(ownerId, subjectId, liveTarget);
 
     // Рабочая папка чата, принадлежащего пользователю (для загрузки вложений): у чата вне
     // проекта — {дом}/Chats, у проектного — рабочая папка сессии (worktree, иначе корень

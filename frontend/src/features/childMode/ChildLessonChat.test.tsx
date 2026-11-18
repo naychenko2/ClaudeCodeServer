@@ -252,7 +252,7 @@ describe('ChildLessonChat: сбой хода в ленте', () => {
 // К8b («Знания репетитора», §8 п.4–5): виджет репетитора живёт в ленте на месте своего
 // вызова, сбой отдельного инструмента — без плашки (плашка остаётся только на сбой хода),
 // ChildFeedContext доходит до markdown реплик: ссылка наружу — текст без <a>.
-// routing tool_use → WidgetView делает сам ChatItemView (его строка 1531, его тесты);
+// routing tool_use → WidgetView делает сам ChatItemView (его строка 1531);
 // здесь проверяется фильтр ленты: что в него проходит и что нет.
 describe('ChildLessonChat: виджет и ошибки инструментов (К8b)', () => {
   beforeEach(() => { mockItems = []; });
@@ -271,6 +271,20 @@ describe('ChildLessonChat: виджет и ошибки инструментов
     const feed = doc.querySelector('[data-child-feed]')!;
     // Виджет стоит после реплики, перед следующим местом — порядок вызова сохранён
     expect(civ(feed)).toEqual(['text:', 'tool_use:mcp__widgets__widget_show']);
+    expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(0);
+    root.unmount();
+  });
+
+  it('виджет с isError — ни карточки, ни плашки', () => {
+    mockItems = [
+      { kind: 'tool_use', id: 'w2', name: 'mcp__widgets__widget_show', input: { html: '<b>схема</b>' }, isError: true, result: 'technical' },
+    ];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-werr');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    // Мутация «убрать && !item.isError» (ChildLessonChat.tsx:89): виджет с ошибкой прошёл бы
+    // в фильтр ленты — первая строка краснеет; плашки при этом всё равно нет.
+    expect(civ(feed)).toEqual([]);
     expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(0);
     root.unmount();
   });

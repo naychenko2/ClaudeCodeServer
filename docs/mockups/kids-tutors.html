@@ -376,6 +376,33 @@ select.inp{appearance:auto;padding-right:8px}
 .closedbar .x{font-size:14px;color:var(--c-text-secondary);line-height:1.5}
 
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* ===== ХВ7 · Мобильный список уроков (data-frame="child-mobile-lessons") ===== */
+/* Только перекомпоновка живых кусков ChildWorkspace: классы повторяют их стили один в один. */
+.mframes{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
+.mcell{display:flex;flex-direction:column;gap:8px;width:360px}
+.mcap{font-size:13px;font-weight:600;color:var(--c-text-heading)}
+.mcap span{display:block;font-size:12px;font-weight:400;color:var(--c-text-muted);margin-top:2px}
+.frame.tall{height:auto}
+.fold{position:absolute;left:0;right:0;top:740px;border-top:1.5px dashed var(--c-dashed);pointer-events:none}
+.fold span{position:absolute;right:8px;top:-18px;font-size:10px;color:var(--c-text-muted);background:var(--c-bg-main);padding:0 4px;border-radius:4px}
+/* PillSwitch variant="hub" isMobile fill — вкладки «Уроки / Студия / Правила» под шапкой */
+.mtabs{padding:0 14px 8px}
+.mtabs .pill{flex-wrap:nowrap}
+.mtabs .pill button{flex:1;min-height:40px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:13px;padding:0 6px}
+/* Остров сайдбара (Island + IslandHeader) под главной */
+.mlist{max-width:760px;width:100%;margin:0 auto;padding:0 16px 24px}
+.mlist .island{overflow:visible}
+.mlist .ibody{padding:8px}
+/* LessonRow: FS.base, строка предмета FS.xs C.textMuted, minHeight 40, R.md */
+.krow{display:block;width:100%;text-align:left;cursor:pointer;padding:8px 12px;margin-bottom:2px;min-height:40px;border:none;border-radius:8px;background:transparent;font-size:13px;color:var(--c-text-heading);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.krow .p{display:block;font-size:11px;color:var(--c-text-muted)}
+/* SidebarSection: шапка-кнопка капсом, шеврон, счётчик */
+.ssec{display:flex;align-items:center;gap:4px;padding:4px 0;border:none;background:transparent;cursor:pointer;font-size:11.5px;font-weight:600;color:var(--c-text-secondary);text-transform:uppercase;letter-spacing:.03em}
+.ssec .i{color:var(--c-text-muted)}
+.ssec .n{color:var(--c-text-muted);font-weight:400}
+.ssec-body{padding-top:4px}
+.mnote{font-size:12px;color:var(--c-text-muted);line-height:1.5}
 </style>
 </head>
 <body>
@@ -879,6 +906,58 @@ function lessonScreen(closed){
     ${feed}${bottom}</div></div>`;
 }
 
+/* ===== ХВ7 · Мобильный список уроков на 360 (кадр child-mobile-lessons) ===== */
+// Точка входа — вкладка «Уроки» (главная): под ChildHome встаёт тот же остров, что на широком
+// экране рисуется сайдбаром, — строки LessonRow и секция «Старые уроки · N» (SidebarSection,
+// свёрнута по умолчанию). Новых компонентов и данных нет; уроков нет — острова нет.
+function mobileLessonsFrame(v){
+  const sub = (i) => S.subjects[i];
+  const open = [
+    { t:'Задача про яблоки', s:sub(0) }, { t:'Жи-ши пиши с И', s:sub(1) }, { t:'Почему идёт дождь', s:sub(4) },
+  ];
+  // Чаты закрытого предмета: предмета нет в живом списке → строки предмета нет (как в LessonRow)
+  const old = ['Кто построил пирамиды', 'Карта Древнего Египта'];
+  const empty = v === 'empty';
+  const row = (t, label) => `<button class="krow" type="button">${esc(t)}${label ? `<span class="p">${esc(label)}</span>` : ''}</button>`;
+  const tabs = `<div class="mtabs"><div class="pill" role="tablist" aria-label="Разделы">
+      <button aria-pressed="true">${ic('book',14)}Уроки</button>
+      <button>${ic('brush',14)}Студия · скоро</button>
+      <button>${ic('check',14)}Правила</button></div></div>`;
+  const list = homeSubjects();
+  const last = list[0];
+  const card = empty ? '' : `<div class="card">${glyph(last)}<div style="flex:1;min-width:200px"><div class="muted">Вчера остановились тут</div><div style="font-size:16px;font-weight:600;color:var(--c-text-heading);margin-top:2px">${esc(last.label)} · Задача про яблоки</div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:4px;font-size:12px;color:var(--c-text-muted)">${pav(last.tutor,20)}${esc(last.tutor.name)}</div></div>
+      <button class="btn md primary full">Продолжить</button></div>`;
+  const home = `<div class="home">
+      <div><div class="hello">Привет, Лиза</div><div style="font-size:16px;line-height:1.55;color:var(--c-text-secondary);margin-top:8px">Уроки открыты до 19:30.</div></div>
+      ${card}
+      <div class="secl">Предметы</div>
+      <div class="tiles">${list.map(s => `<button class="tile">${glyph(s)}<div style="min-width:0"><div class="tl">${esc(s.label)}</div><div class="tt">${pav(s.tutor,20)}<span>${esc(s.tutor.name)}</span></div></div></button>`).join('')}</div>
+      <div class="dash" aria-disabled="true"><span class="glyph" style="background:var(--c-plan-light);color:var(--c-plan-text)">${ic('brush',18)}</span><div><div style="font-size:14px;font-weight:600;color:var(--c-text-heading);display:flex;gap:8px;align-items:center">Студия <span class="badge plan">скоро</span></div><div class="muted" style="margin-top:2px">Здесь можно будет рисовать и сочинять вместе с помощником.</div></div></div>
+    </div>`;
+  const oldOpen = v === 'old-open';
+  const island = empty ? '' : `<div class="mlist" data-testid="child-mobile-lessons-list"><div class="island">
+      <div class="ihead">Мои уроки</div>
+      <div class="ibody">
+        ${open.map(l => row(l.t, l.s.label)).join('')}
+        <div>
+          <button class="ssec" aria-expanded="${oldOpen}">${ic(oldOpen ? 'chev' : 'right',12)}Старые уроки<span class="n">${old.length}</span></button>
+          ${oldOpen ? `<div class="ssec-body">${old.map(t => row(t, null)).join('')}</div>` : ''}
+        </div>
+      </div></div></div>`;
+  return `${hub()}${tabs}<div>${home}${island}</div><div class="fold"><span>край экрана 360×740</span></div>`;
+}
+function mobileLessonsScreen(){
+  const cells = [
+    ['old-closed', '1 · Есть уроки и старые уроки', '«Старые уроки · 2» свёрнута (по умолчанию). Остров — под главной, ниже «Студии».'],
+    ['old-open', '2 · «Старые уроки» раскрыта', 'Тап по шапке секции. Строки закрытого предмета — без строки предмета, открываются только для чтения.'],
+    ['empty', '3 · Уроков нет', 'Нет ни карточки «Продолжить», ни острова: путь к уроку — плитка предмета.'],
+  ];
+  return `<div class="mframes" data-frame="child-mobile-lessons">${cells.map(([v, t, x]) =>
+    `<div class="mcell" data-state="${v}"><div class="mcap">${t}<span>${x}</span></div>
+      <div class="frame m tall" style="width:360px" data-testid="frame-${v}">${mobileLessonsFrame(v)}</div></div>`).join('')}</div>`;
+}
+
 /* ===== Пульт ===== */
 function pill(name, key, opts){
   return `<div class="grp"><b>${name}</b><div class="pill">${opts.map(([v, l, d]) => `<button aria-pressed="${S[key] === v}" data-set="${key}:${v}" ${d ? 'disabled' : ''}>${l}</button>`).join('')}</div></div>`;
@@ -886,7 +965,7 @@ function pill(name, key, opts){
 function render(){
   const adm = S.screen === 'admin';
   document.getElementById('pult').innerHTML = [
-    pill('Экран', 'screen', [['admin','Админ: профиль'], ['home','Ребёнок: главная'], ['lesson','Урок'], ['closed','Закрытый предмет']]),
+    pill('Экран', 'screen', [['admin','Админ: профиль'], ['home','Ребёнок: главная'], ['lesson','Урок'], ['closed','Закрытый предмет'], ['mlessons','ХВ7 · Уроки на 360']]),
     pill('Тема', 'theme', [['light','Светлая'], ['dark','Тёмная']]),
     pill('Ширина', 'width', [[1280,'1280'], [360,'360']]),
     pill('Пикер', 'pack', [[1,'Пачка 1'], [2,'Пачка 2']].map(x => [...x, !adm])),
@@ -898,6 +977,7 @@ function render(){
     `<span class="note">Пульт — рычаги макета, не продукт. Пачка 1 — пикер Т4 (только пул с API-ключом); пачка 2 — Т6 (облачные и локальные, согласие). Выключенный предмет «История» показан в списке админа и как закрытый чат у ребёнка.</span>`
   ].join('');
   const root = document.getElementById('root');
+  if (S.screen === 'mlessons') { root.innerHTML = `<div data-theme="${S.theme}" style="color-scheme:${S.theme}">${mobileLessonsScreen()}</div>`; document.documentElement.setAttribute('data-theme', S.theme); return; }
   const body = S.screen === 'admin' ? adminScreen() : S.screen === 'home' ? homeScreen() : lessonScreen(S.screen === 'closed');
   root.innerHTML = `<div data-theme="${S.theme}" style="color-scheme:${S.theme}"><div class="frame ${isM() ? 'm' : ''}" style="width:${S.width}px" data-testid="frame">${body}</div></div>`;
   document.documentElement.setAttribute('data-theme', S.theme);
@@ -960,6 +1040,8 @@ function kSync(){
   if (h.get('voice')) S.voiceOpen = 'math';
   kSync();
   if (h.get('del')) S.fileDel = FILES[0].id;
+  // ХВ7: #screen=mlessons — кадр мобильного списка уроков (три состояния рядом)
+  if (h.get('screen')) S.screen = h.get('screen');
 })();
 render();
 // Кадр сразу на блоке знаний (для якорей и скриншотов)

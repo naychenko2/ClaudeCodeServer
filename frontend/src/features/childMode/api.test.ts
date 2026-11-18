@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { childApi, ChildAttachmentRejectedError, tutorAvatarUrl } from './api';
-import type { ChildProfile, ChildSubjectView } from './types';
+import type { ChildProfile, ChildSubjectView, ChildTutorPatch } from './types';
 
 // Клиент проверяем по его запросам: моким request (lib/offline) утверждаем URL, метод
 // и тело по таблице «Ручки» ADR-041 («Контракт /api/child/*»). Путь request() строит
@@ -269,5 +269,125 @@ describe('PUT /api/users/{id}/child-profile', () => {
     await childApi.putProfile('u1', { enabled: false });
     const { opts } = await lastCall();
     expect(JSON.parse(opts.body as string)).toEqual({ enabled: false });
+  });
+});
+
+describe('GET /api/admin/child-routes', () => {
+  const routes = [
+    { providerKey: 'pk-org', kind: 'pool' as const, label: 'Орг', priced: true, requiresAck: false, models: [{ id: 'claude-sonnet-4-5', label: 'Sonnet 4.5' }] },
+    { providerKey: 'local-qwen', kind: 'local' as const, label: 'Qwen локально', priced: false, requiresAck: true, models: [{ id: 'qwen3.8-27b', label: 'Qwen3.8' }] },
+  ];
+
+  it('GET без параметров; { routes } разворачивается, порядок — как пришёл с сервера', async () => {
+    const r = await req();
+    r.mockResolvedValueOnce({ routes });
+    const got = await childApi.getRoutes();
+    const { url, opts } = await lastCall();
+    expect(url).toBe('/admin/child-routes');
+    expect((opts.method ?? 'GET').toUpperCase()).toBe('GET');
+    expect(got).toEqual(routes);
+  });
+});
+
+describe('POST /api/users/{id}/child-subjects/{subjectId}/tutor', () => {
+  it('id и subject экранированы, тела нет; ответ — { personaId }', async () => {
+    const r = await req();
+    r.mockResolvedValueOnce({ personaId: 'p1' });
+    const got = await childApi.provisionSubjectTutor('u 1', 'lit');
+    const { url, opts } = await lastCall();
+    expect(url).toBe('/users/u%201/child-subjects/lit/tutor');
+    expect(opts.method).toBe('POST');
+    expect(opts.body).toBeUndefined();
+    expect(got.personaId).toBe('p1');
+  });
+
+  it('404 subject_not_found — как прочие отказы: status + body.code', async () => {
+    const r = await req();
+    r.mockRejectedValueOnce(httpErr(404, 'subject_not_found', 'Предмет не найден в профиле ребёнка.'));
+    const e = (await rejection(childApi.provisionSubjectTutor('u1', 'nope'))) as { status?: number; body?: { code?: string } };
+    expect(e.status).toBe(404);
+    expect(e.body?.code).toBe('subject_not_found');
+  });
+});
+
+describe('PUT /api/users/{id}/child-tutors/{personaId}', () => {
+  it('полный патч уходит как есть: null — «не трогать», [] — очистка', async () => {
+    const patch: ChildTutorPatch = {
+      name: 'Репетитор литературы',
+      character: 'Ты ведёшь уроки литературы.',
+      greeting: 'Привет! Давай читать.',
+      voice: { voice: 'alena', role: 'good' },
+      gender: 'female',
+      mustDo: ['Сразу давай ответ'],
+      mustNot: [],
+    };
+    await childApi.putTutor('u1', 'p 1', patch);
+    const { url, opts } = await lastCall();
+    expect(url).toBe('/users/u1/child-tutors/p%201');
+    expect(opts.method).toBe('PUT');
+    expect(JSON.parse(opts.body as string)).toEqual(patch);
+  });
+
+  it('незаданные поля в тело не попадают (частичный патч)', async () => {
+    await childApi.putTutor('u1', 'p1', { character: 'Новый характер', mustNot: null });
+    const { opts } = await lastCall();
+    expect(JSON.parse(opts.body as string)).toEqual({ character: 'Новый характер', mustNot: null });
+  });
+
+  it('400 rules_too_long — status + body.code (текст сообщения — с сервера)', async () => {
+    const r = await req();
+    r.mockRejectedValueOnce(httpErr(400, 'rules_too_long', 'Правил «Обязательно / Никогда» — не больше 12.'));
+    const e = (await rejection(childApi.putTutor('u1', 'p1', { mustDo: ['x'] }))) as { status?: number; body?: { code?: string } };
+    expect(e.status).toBe(400);
+    expect(e.body?.code).toBe('rules_too_long');
+  });
+});
+
+describe('childApi.tutorAvatar.* — /api/users/{id}/child-tutors/{personaId}/avatar/*', () => {
+  const avatarBase = '/users/u1/child-tutors/p%201/avatar';
+
+  it('generate: POST { } без опций, prompt trim-ится, count по заданному; таймаут — под бюджет генерации', async () => {
+    const r = await req();
+    r.mockResolvedValueOnce({ candidates: ['cand-1.png'] });
+    const got = await childApi.tutorAvatar.generate('u1', 'p 1');
+    const first = await lastCall();
+    expect(first.url).toBe(`${avatarBase}/generate`);
+    expect(first.opts.method).toBe('POST');
+    expect(JSON.parse(first.opts.body as string)).toEqual({});
+    expect(first.opts.timeoutMs).toBe(400_000);
+    expect(got.candidates).toEqual(['cand-1.png']);
+
+    await childApi.tutorAvatar.generate('u1', 'p 1', { prompt: '  портрет учительницы ', count: 2 });
+    const second = await lastCall();
+    expect(JSON.parse(second.opts.body as string)).toEqual({ prompt: 'портрет учительницы', count: 2 });
+  });
+
+  it('upload: multipart original+cropped+crop, таймаут как у загрузки аватара персоны', async () => {
+    const original = new File(['\x89PNG-данные'], 'photo.png', { type: 'image/png' });
+    const cropped = new Blob(['\x89PNG-crop'], { type: 'image/png' });
+    await childApi.tutorAvatar.upload('u1', 'p 1', original, cropped, { scale: 1, offsetX: 0, offsetY: 0 });
+    const { url, opts } = await lastCall();
+    expect(url).toBe(`${avatarBase}/upload`);
+    expect(opts.method).toBe('POST');
+    expect(opts.timeoutMs).toBe(60_000);
+    const form = opts.body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect((form.get('original') as Blob).size).toBe(original.size);
+    expect((form.get('cropped') as Blob).size).toBe(cropped.size);
+    expect(JSON.parse(form.get('crop') as string)).toEqual({ scale: 1, offsetX: 0, offsetY: 0 });
+  });
+
+  it('select: POST { file }; 503 image_generation_off — на error.body.code', async () => {
+    await childApi.tutorAvatar.select('u1', 'p 1', 'cand-1.png');
+    const { url, opts } = await lastCall();
+    expect(url).toBe(`${avatarBase}/select`);
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body as string)).toEqual({ file: 'cand-1.png' });
+
+    const r = await req();
+    r.mockRejectedValueOnce(httpErr(503, 'image_generation_off', 'Генерация изображений не настроена.'));
+    const e = (await rejection(childApi.tutorAvatar.generate('u1', 'p 1'))) as { status?: number; body?: { code?: string } };
+    expect(e.status).toBe(503);
+    expect(e.body?.code).toBe('image_generation_off');
   });
 });

@@ -1,4 +1,5 @@
-// Детский режим: тонкий клиент ручек /api/child/* и PUT /api/users/{id}/child-profile.
+// Детский режим: тонкий клиент ручек /api/child/* и админских ручек профиля, предметов и
+// репетиторов (PUT child-profile, child-subjects/{id}/tutor, child-tutors/*, child-routes).
 // Контракт — docs/adr/ADR-041-child-mode.md, раздел «Контракт /api/child/*» (бэк обязан
 // совпасть с тем же разделом). В lib/api.ts НЕ подключается (у файла бюджет строк,
 // apiFileBudget.test.ts): потребители импортируют childApi напрямую.
@@ -6,12 +7,15 @@
 // пробрасывается в request (lib/offline).
 
 import { request } from '../../lib/offline';
+import type { Persona } from '../../types';
 import type {
   ChildAttachmentRejectCode,
   ChildChatListItem,
   ChildProfile,
+  ChildRoute,
   ChildStatus,
   ChildSubjectView,
+  ChildTutorPatch,
 } from './types';
 
 // Отказ вложения (413/415/422 с code) — типизированная ошибка вызывающему:
@@ -137,6 +141,73 @@ export const childApi = {
       method: 'PUT',
       body: JSON.stringify(profile),
     }),
+
+  // GET /api/admin/child-routes — допустимые пары «поставщик → модель» для пикера профиля (Т2f):
+  // список отбирает сервер той же ChildRoute.Evaluate, что валидатор и сверка запуска, — порядок
+  // уходит как пришёл (записи пула в порядке конфига, затем провайдеры). Кэшируемый GET: список
+  // конфигурации, не per-owner состояние (тот же признак, что у взрослого GET /models).
+  getRoutes: async (): Promise<ChildRoute[]> => {
+    const r = await request<{ routes: ChildRoute[] }>('/admin/child-routes');
+    return r.routes;
+  },
+
+  // POST /api/users/{id}/child-subjects/{subjectId}/tutor — провижн персоны-репетитора предмета
+  // (Т2c): идемпотенен, живой ключ возвращает тот же personaId. Тела нет. Отказы 404
+  // subject_not_found (ни пользователя, ни предмета в его профиле) / 500 tutor_provision_failed —
+  // на error.body.code (ChildTutorsController.cs:58-81).
+  provisionSubjectTutor: (userId: string, subjectId: string) =>
+    request<{ personaId: string }>(
+      `/users/${encodeURIComponent(userId)}/child-subjects/${encodeURIComponent(subjectId)}/tutor`,
+      { method: 'POST' },
+    ),
+
+  // PUT /api/users/{id}/child-tutors/{personaId} — правка характера репетитора и списков
+  // «Обязательно / Никогда» (редакция 2 §12, редакция 3 §22): частичный патч, null-поле не трогает.
+  // Ответ — обновлённая персона. Отказы 404 tutor_not_found / 400 rules_too_long, voice_invalid /
+  // 500 tutor_update_failed — на error.body.code, как у putProfile (персона проверяется как
+  // репетитор ЭТОГО ребёнка, включая репетитора выключенного предмета).
+  putTutor: (userId: string, personaId: string, patch: ChildTutorPatch) =>
+    request<Persona>(`/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+
+  // Аватар репетитора (Т2c2, путь И5 №12): тот же PersonasCrudService, что у аватаров персон,
+  // но владелец расхода — вызывающий админ, не ребёнок (бюджет ребёнка аватар не съедает).
+  // Отказы 404 tutor_not_found / 400 avatar_files_missing, image_invalid / 502 avatar_generation_failed /
+  // 503 image_generation_off — на error.body.code (ChildTutorsController.cs:174-284).
+  tutorAvatar: {
+    // Генерация галереи кандидатов (аватар не меняется до явного select). timeoutMs — под
+    // серверный бюджет генерации, тот же, что у personasApi.generateAvatar (personas/api.ts:161-169).
+    generate: (userId: string, personaId: string, opts?: { prompt?: string; count?: number }) =>
+      request<{ candidates: string[] }>(
+        `/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar/generate`,
+        {
+          method: 'POST',
+          // JSON.stringify выбрасывает undefined — поля шлём только заданные (форма GenerateAvatarRequest)
+          body: JSON.stringify({ prompt: opts?.prompt?.trim() || undefined, count: opts?.count }),
+          timeoutMs: 400_000,
+        },
+      ),
+    // Загрузка своего аватара: original + кропнутый квадрат + параметры кропа (multipart, та же
+    // форма, что у personasApi.uploadAvatar: 400 avatar_files_missing/image_invalid — на error.body).
+    upload: (userId: string, personaId: string, original: File, cropped: Blob, crop: { scale: number; offsetX: number; offsetY: number }) => {
+      const form = new FormData();
+      form.append('original', original, original.name || 'original');
+      form.append('cropped', cropped, 'avatar.jpg');
+      form.append('crop', JSON.stringify(crop));
+      return request<Persona>(
+        `/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar/upload`,
+        { method: 'POST', body: form, timeoutMs: 60_000 },
+      );
+    },
+    // Выбор сохранённого кандидата — он становится аватаром (ответ — обновлённая персона).
+    select: (userId: string, personaId: string, file: string) =>
+      request<Persona>(
+        `/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar/select`,
+        { method: 'POST', body: JSON.stringify({ file }) },
+      ),
+  },
 };
 
 // URL аватара репетитора — одна точка построения (И5: GET /api/personas/{id}/avatar, [ChildAllowed],

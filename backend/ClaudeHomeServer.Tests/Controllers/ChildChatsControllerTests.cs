@@ -27,7 +27,9 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
             services.AddSingleton<IOwnerSpendReader>(new FixedSpend());
             // Обёртка над боевым гейтом: по флагу отказывает на старте хода (И1-бис), иначе прозрачна
             services.AddSingleton(sp => new RefusingGate(new ChildModeGate(
-                sp.GetRequiredService<IChildModePolicy>(), sp.GetService<ChildLimitsCalculator>())));
+                sp.GetRequiredService<IChildModePolicy>(), sp.GetService<ChildLimitsCalculator>(), null,
+                sp.GetService<ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(),
+                sp.GetService<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>())));
             services.AddSingleton<IChildModeGate>(sp => sp.GetRequiredService<RefusingGate>());
         };
     }
@@ -64,6 +66,7 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
     {
         _hosts = hosts;
         _hosts.ExtraConfig[$"ClaudeSubscriptions:{KidsKey}:ApiKey"] = "sk-ant-test-kids";
+        _hosts.ExtraConfig["ClaudeSubscriptions:math-pool:ApiKey"] = "sk-ant-test-math";
         // Ребёнок — container-владелец: корень его чатов лежит в песочнице (CliRoute.ResolveChatRoot)
         _hosts.ExtraConfig["Sandbox:ProjectsRoot"] = Path.Combine(Path.GetTempPath(), "ccs-child-chats-" + Guid.NewGuid().ToString("N"));
         _admin = _hosts.CreateAuthenticatedClient();

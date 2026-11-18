@@ -504,5 +504,5 @@ public sealed record LlmSessionContext(
     string? DataDir = null,
     // Политика ребёнка владельца хода (И2, ADR-041): вычисляется на КАЖДЫЙ ход, без кэша.
     // null — не ребёнок или политика не подана (тесты). Не-null — ход идёт только по API-ключу
-    // записи пула из профиля, без подписки и без фолбэка (ChildApiKeyRoute).
+    // записи пула из профиля, без подписки и без фолбэка (ChildRoute).
     Func<Services.ChildMode.ChildPolicySnapshot?>? ChildPolicyProvider = null);

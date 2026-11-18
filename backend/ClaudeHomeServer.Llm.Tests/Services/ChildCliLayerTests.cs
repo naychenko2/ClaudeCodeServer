@@ -251,7 +251,7 @@ public class ChildCliLayerTests : IDisposable
         var (spec, errors) = await LaunchAsync(() => Child(), "deepseek-chat", providers);
 
         spec.Should().BeNull("ключ сервера внешнего провайдера ребёнку не уходит");
-        errors.Should().ContainSingle().Which.Should().Be(ChildApiKeyRoute.RefusedText);
+        errors.Should().ContainSingle().Which.Should().Be(ChildRoute.RefusedText);
     }
 
     [Fact]

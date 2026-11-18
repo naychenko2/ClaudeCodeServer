@@ -189,7 +189,9 @@ public static class SessionCoreRegistration
             new ClaudeHomeServer.Services.ChildMode.ChildModeGate(
                 sp.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>(),
                 sp.GetService<ClaudeHomeServer.Services.ChildMode.ChildLimitsCalculator>(),
-                sp.GetService<ILogger<ClaudeHomeServer.Services.ChildMode.ChildModeGate>>()));
+                sp.GetService<ILogger<ClaudeHomeServer.Services.ChildMode.ChildModeGate>>(),
+                sp.GetService<ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(),
+                sp.GetService<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>()));
         services.AddSingleton(sp => new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(),
             sp.GetRequiredService<FeatureFlagService>(),

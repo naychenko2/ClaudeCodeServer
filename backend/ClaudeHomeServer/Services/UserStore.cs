@@ -682,11 +682,13 @@ public class UserStore : IForgejoAccountStore, IUserStore
                         // профиля до записи) вернуло бы пару, какой она была на первом чтении
                         // запроса, — параллельная привязка затёрлась бы.
                         var knowledge = new Dictionary<string, ChildSubjectKnowledge?>(StringComparer.OrdinalIgnoreCase);
+                        var liveSubjects = new Dictionary<string, ChildSubject>(StringComparer.OrdinalIgnoreCase);
                         foreach (var subject in live.Subjects)
                         {
                             if (subject is null) continue;
                             tutors[subject.Id] = subject.TutorPersonaId;
                             knowledge[subject.Id] = subject.Knowledge;
+                            liveSubjects[subject.Id] = subject;
                         }
                         foreach (var subject in profile.Subjects)
                         {
@@ -695,6 +697,21 @@ public class UserStore : IForgejoAccountStore, IUserStore
                             // (админ список правит, персону не подменяет), новый Id — пусто.
                             subject.TutorPersonaId =
                                 tutors.TryGetValue(subject.Id, out var tutor) ? tutor : "";
+                            // Согласие админа на не-Anthropic маршрут (Т5a, И2′) — решение ЗДЕСЬ, под замком,
+                            // по ЖИВОМУ предмету (вне замка слияние по снимку вернуло бы согласие от старого
+                            // providerKey параллельному PUT со сменой). В теле — кандидат (момент и админ запроса)
+                            // либо пусто. Тот же providerKey и живое согласие — прежняя пара остаётся; тело просит
+                            // согласие — берётся кандидат; иначе (смена providerKey без согласия, предмет новый,
+                            // согласия не было) — сброс. Согласие от старого providerKey не переживает смену.
+                            var hasLiveSubject = liveSubjects.TryGetValue(subject.Id, out var liveSubject);
+                            if (hasLiveSubject && liveSubject!.RouteAcknowledgedAt is not null
+                                && liveSubject.ProviderKey == subject.ProviderKey)
+                            {
+                                subject.RouteAcknowledgedAt = liveSubject.RouteAcknowledgedAt;
+                                subject.RouteAcknowledgedBy = liveSubject.RouteAcknowledgedBy;
+                            }
+                            else if (subject.RouteAcknowledgedAt is null)
+                                subject.RouteAcknowledgedBy = null;
                             if (subject.Knowledge is { } requested
                                 && knowledge.TryGetValue(subject.Id, out var stored)
                                 && stored?.DatasetId == requested.DatasetId)

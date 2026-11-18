@@ -26,24 +26,26 @@ public static class ChildProfileValidator
         ChildSpaces.Studio,
     };
 
-    public static Reject? Validate(ChildProfileDto req, User user, IUserStore users, ClaudeSubscriptionPool pool)
+    public static Reject? Validate(ChildProfileDto req, User user, IUserStore users, ClaudeSubscriptionPool pool,
+        LlmProviderRegistry providers)
     {
         // Ход ребёнка идёт в песочнице (И2/И4): среда после появления чатов не меняется
         // (guard в UsersController.Update), поэтому локальному пользователю режим не включается.
         if (user.ExecutionEnvironment != ExecutionEnvironments.Container)
             return new("not_container", "Детский режим включается только пользователям со средой исполнения container.");
 
-        // Ход ребёнка никогда не идёт по подписке (ADR-041 §4): ключ обязан резолвиться
-        // в запись пула с непустым ApiKey. Пустой providerKey — тот же отказ: он ни в какую
-        // запись не резолвится.
-        if (pool.All.FirstOrDefault(s => s.Key == req.ProviderKey && !string.IsNullOrWhiteSpace(s.ApiKey)) is null)
-            return new("provider_not_api_key", "Провайдер должен быть записью пула подписок с API-ключом.");
+        // Ход ребёнка никогда не идёт по подписке (ADR-041 §4): маршрут профиля (чат правил) — только
+        // запись пула с API-ключом и Anthropic-моделью, без согласий: тот же ChildRoute.Evaluate, что на
+        // запуске. Пустой providerKey — тот же отказ: он ни в какую запись не резолвится.
+        if (RouteReject(ChildRoute.Evaluate(req.ProviderKey, req.Model, acknowledged: false, pool, providers),
+                "профиля", req.ProviderKey, forPool: true) is { } profileRoute)
+            return profileRoute;
 
         if (ValidateSpaces(req.Spaces) is { } spaceError) return spaceError;
 
         // Предметы (Т2a, разрез §2): проверяется только то, что есть в теле — PUT без subjects
         // (null) не перечёркивает список: живые предметы сохраняет стор (SetChildProfile).
-        if (ValidateSubjects(req.Subjects, pool) is { } subjectError) return subjectError;
+        if (ValidateSubjects(req.Subjects, user, pool, providers) is { } subjectError) return subjectError;
 
         // Опекун — реальный пользователь: уведомление стоп-сигнала и кабинет волны 2
         // должны указывать на живую учётку, а не в пустоту.
@@ -85,11 +87,16 @@ public static class ChildProfileValidator
     // Предметы (Т2a, разрез §2): id — тот же slug и уникальность, что у политики SubjectsValid
     // (ChildModePolicy.cs:46): валидатор пишет те же ключи в стор, и дубль сделал бы ребёнка
     // DenyAll. label 1..40, глиф 1..3, цвет — ключ из ChildSubject.ColorKeys (палитра живёт
-    // на фронте, здесь — только ключ). Провайдер предмета — тот же критерий профиля сейчас:
-    // запись пула с ApiKey (Т5a откроет провайдерам остальное). Модель, маркеры tier:*/preset:*
-    // и согласие на маршрут — Т5a, не здесь.
-    private static Reject? ValidateSubjects(List<ChildSubjectDto>? subjects, ClaudeSubscriptionPool pool)
+    // на фронте, здесь — только ключ). Маршрут предмета (Т5a, И2′) — ChildRoute.Evaluate: тот же
+    // отбор, что у запуска хода и ручки списка маршрутов; коды 400 — RouteReject. Согласие админа на
+    // не-Anthropic маршрут — acknowledgeRouteRisk в теле либо живое согласие того же предмета при том же
+    // providerKey (при смене providerKey оно не переживает: сброс делает стор под замком).
+    private static Reject? ValidateSubjects(List<ChildSubjectDto>? subjects, User user,
+        ClaudeSubscriptionPool pool, LlmProviderRegistry providers)
     {
+        var live = user.ChildMode?.Subjects?.Where(x => x is not null)
+            .GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var subject in subjects ?? [])
         {
@@ -106,11 +113,35 @@ public static class ChildProfileValidator
                 return new("subject_glyph_invalid", $"Глиф предмета «{id}» — от 1 до 3 символов.");
             if (!ChildSubject.ColorKeys.Contains(subject.Color ?? "", StringComparer.Ordinal))
                 return new("subject_color_invalid", $"Цвет предмета «{id}» вне палитры: допустимы {string.Join(", ", ChildSubject.ColorKeys)}.");
-            if (pool.All.FirstOrDefault(s => s.Key == subject.ProviderKey && !string.IsNullOrWhiteSpace(s.ApiKey)) is null)
-                return new("provider_not_api_key", $"Провайдер предмета «{id}» должен быть записью пула подписок с API-ключом.");
+            var liveSubject = live is not null && live.TryGetValue(id, out var ls) ? ls : null;
+            var acknowledged = subject.AcknowledgeRouteRisk == true
+                || (liveSubject is { RouteAcknowledgedAt: not null } && liveSubject.ProviderKey == subject.ProviderKey);
+            if (RouteReject(ChildRoute.Evaluate(subject.ProviderKey, subject.Model, acknowledged, pool, providers),
+                    $"предмета «{id}»", subject.ProviderKey, forPool: false) is { } routeReject)
+                return routeReject;
         }
         return null;
     }
+
+    // Отказ ChildRoute → код 400 ADR-041 ред. 2. NoRoute: у профиля — «не запись пула с ключом»,
+    // у предмета — не пул и не включённый провайдер.
+    private static Reject? RouteReject(ChildRouteDecision decision, string what, string? providerKey, bool forPool) =>
+        decision.Refusal switch
+        {
+            null => null,
+            ChildRouteRefusal.NoRoute => new("provider_not_api_key", forPool
+                ? $"Провайдер {what} должен быть записью пула подписок с API-ключом."
+                : $"Провайдер {what} должен быть записью пула с API-ключом или включённым провайдером моделей."),
+            ChildRouteRefusal.ModelNotConcrete => new("model_not_concrete",
+                $"Модель {what} должна быть конкретной: без tier:*, preset:*, default и claude."),
+            ChildRouteRefusal.ModelUnpriced => new("model_unpriced",
+                $"У облачной модели {what} не задана цена: без неё бюджет ребёнка не ограничивает расход."),
+            ChildRouteRefusal.RiskUnacknowledged => new("route_risk_unacknowledged",
+                $"Маршрут {what} не Anthropic: нужно явное согласие администратора (acknowledgeRouteRisk)."),
+            ChildRouteRefusal.ModelNotOfProvider => new("model_not_of_provider",
+                $"Модель {what} не принадлежит поставщику «{providerKey}»."),
+            _ => new("provider_not_api_key", $"Маршрут {what} не принят."),
+        };
 
     /// <summary>
     /// Привязка базы знаний к предмету (К1b, разрез §1/§3). Зовётся после Validate: id предметов
@@ -205,7 +236,12 @@ public record ChildSubjectDto(
     // Привязка базы знаний (К1b): из ВХОДА принимается только datasetId. Автор и момент —
     // поля сервера (их ставит живое слияние стора по живому значению), attachedAt в теле
     // не читается никогда: тот же приём, что с tutorPersonaId выше. null — привязка снимается.
-    ChildSubjectKnowledgeDto? Knowledge);
+    ChildSubjectKnowledgeDto? Knowledge,
+    // Согласие админа на не-Anthropic маршрут (Т5a, И2′): из ВХОДА читается только флаг; момент и автор
+    // — поля сервера (RouteAcknowledgedAt/By пишет живое слияние стора, из тела не читаются никогда).
+    // В ответе acknowledgeRouteRisk = «согласие стоит», routeAcknowledgedAt — момент.
+    bool? AcknowledgeRouteRisk = null,
+    DateTime? RouteAcknowledgedAt = null);
 // Wire-форма привязки (К1b): id датасета Dify + момент, поставленный сервером.
 // AttachedByUserId живёт только в сторе (ChildSubjectKnowledge) и наружу не отдаётся.
 public record ChildSubjectKnowledgeDto(string? DatasetId, DateTime? AttachedAt);

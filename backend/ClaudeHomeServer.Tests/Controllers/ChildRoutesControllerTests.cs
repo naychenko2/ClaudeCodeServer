@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Т2f: GET /api/admin/child-routes — список допустимых маршрутов пикера модели (разрез §5).
 /// В тестовом пуле — три вида записей: чистый API-ключ (законна), только OAuth-токен (подписка),
 /// смешанная (ключ + токен). В списке должна быть только первая — тот же критерий, что у
-/// боевого запуска (ChildApiKeyRoute.Resolve). Каталог тестового хоста — Fallback без опроса
+/// боевого запуска (ChildRoute.Resolve). Каталог тестового хоста — Fallback без опроса
 /// CLI ("default" + алиасы семейств): "default" в models не попадает, отсутствие маркеров
 /// "tier:"/"preset:" проверяется прямо по ответу (инвариант).
 /// </summary>
@@ -31,6 +31,21 @@ public class ChildRoutesControllerTests : IClassFixture<ChildRoutesControllerTes
             ExtraConfig["ClaudeSubscriptions:oauth-sub:OAuthToken"] = "oauth-token";
             ExtraConfig["ClaudeSubscriptions:both-keys:ApiKey"] = "sk-ant-both";
             ExtraConfig["ClaudeSubscriptions:both-keys:OAuthToken"] = "oauth-both";
+            // Провайдеры моделей (Т5a): облако с ценой, облако без цены (в список не входит), локальный
+            ExtraConfig["LlmProviders:cl-priced:AnthropicBaseUrl"] = "https://api.priced.test/anthropic";
+            ExtraConfig["LlmProviders:cl-priced:ApiKey"] = "sk-priced";
+            ExtraConfig["LlmProviders:cl-priced:DisplayName"] = "Облако";
+            ExtraConfig["LlmProviders:cl-priced:Models:0:Id"] = "cl-pro";
+            ExtraConfig["LlmProviders:cl-priced:Models:0:DisplayName"] = "Cl Pro";
+            ExtraConfig["LlmProviders:cl-priced:Models:0:PriceInMissPer1M"] = "0.5";
+            ExtraConfig["LlmProviders:cl-priced:Models:0:PriceOutPer1M"] = "1.0";
+            ExtraConfig["LlmProviders:cl-priced:Models:1:Id"] = "cl-free-price";
+            ExtraConfig["LlmProviders:cl-free:AnthropicBaseUrl"] = "https://api.free.test/anthropic";
+            ExtraConfig["LlmProviders:cl-free:ApiKey"] = "sk-free";
+            ExtraConfig["LlmProviders:cl-free:Models:0:Id"] = "cl-nopriced";
+            ExtraConfig["LlmProviders:loc-test:AnthropicBaseUrl"] = "http://127.0.0.1:18999";
+            ExtraConfig["LlmProviders:loc-test:IsLocal"] = "true";
+            ExtraConfig["LlmProviders:loc-test:Models:0:Id"] = "loc-test-27b";
         }
     }
 
@@ -66,23 +81,51 @@ public class ChildRoutesControllerTests : IClassFixture<ChildRoutesControllerTes
 
         // Инвариант: в списке нет ни одной записи с OAuthToken. Запись без ключа в пул не входит
         // вообще (Enabled=false) — здесь она и не нужна. Порядок — порядок пула, не сортировка.
-        keys.Should().Equal(_pool.All
+        var poolKeys = RoutesOf(root).Where(r => r.GetProperty("kind").GetString() == "pool")
+            .Select(r => r.GetProperty("providerKey").GetString()!).ToList();
+        poolKeys.Should().Equal(_pool.All
             .Where(s => !string.IsNullOrWhiteSpace(s.ApiKey) && string.IsNullOrWhiteSpace(s.OAuthToken))
             .Select(s => s.Key));
         keys.Should().Contain("kids-api");
         keys.Should().NotContain("oauth-sub");
         keys.Should().NotContain("both-keys");
 
-        // kind закладывается сейчас: Т5a добавит "cloud"/"local" — форма ответа не меняется
-        foreach (var r in RoutesOf(root))
-            r.GetProperty("kind").GetString().Should().Be("pool");
+        foreach (var r in RoutesOf(root).Where(r => r.GetProperty("kind").GetString() == "pool"))
+        {
+            r.GetProperty("priced").GetBoolean().Should().BeTrue();
+            r.GetProperty("requiresAck").GetBoolean().Should().BeFalse("пул — Anthropic, согласие не нужно");
+        }
+    }
+
+    // Т5a: провайдеры отдаются по тем же правилам ChildRoute: облако — только модели с ценой, нужно согласие;
+    // локальный — priced=false, нужно согласие; провайдер без цены ни одной модели не даёт — в списке его нет.
+    [Fact]
+    public async Task Get_Провайдеры_cloudСЦеной_local_БезОблакаБезЦены()
+    {
+        var routes = RoutesOf(await GetAsync(_admin))
+            .ToDictionary(r => r.GetProperty("providerKey").GetString()!);
+
+        var cloud = routes["cl-priced"];
+        cloud.GetProperty("kind").GetString().Should().Be("cloud");
+        cloud.GetProperty("label").GetString().Should().Be("Облако");
+        cloud.GetProperty("priced").GetBoolean().Should().BeTrue();
+        cloud.GetProperty("requiresAck").GetBoolean().Should().BeTrue();
+        IdsOf(cloud).Should().Equal("cl-pro");
+
+        var local = routes["loc-test"];
+        local.GetProperty("kind").GetString().Should().Be("local");
+        local.GetProperty("priced").GetBoolean().Should().BeFalse("бюджет у локальной не тратится");
+        local.GetProperty("requiresAck").GetBoolean().Should().BeTrue();
+        IdsOf(local).Should().Equal("loc-test-27b");
+
+        routes.Should().NotContainKey("cl-free", "облачная модель без цены не пройдёт валидатор — и пикер её не отдаёт");
     }
 
     [Fact]
     public async Task Get_Модели_алиасыСемейств_безЗаглушекИМаркеров()
     {
         var root = await GetAsync(_admin);
-        var routes = RoutesOf(root);
+        var routes = RoutesOf(root).Where(r => r.GetProperty("kind").GetString() == "pool").ToList();
         routes.Should().NotBeEmpty("в тестовом пуле есть запись с ключом");
 
         foreach (var r in routes)

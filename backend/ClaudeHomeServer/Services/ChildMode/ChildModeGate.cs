@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Llm;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.ChildMode;
@@ -12,8 +13,11 @@ namespace ClaudeHomeServer.Services.ChildMode;
 // «разрешить всё»: для ребёнка отказ текстом Uncheckable (fail-closed), тот же смысл, что у
 // «бюджет не проверить» в калькуляторе. В боевом составе он есть всегда — сторож
 // ChildPolicyWiringGuardTests проверяет, что гейт из контейнера держит непустой калькулятор.
+// Пул подписок и реестр провайдеров (Т5a, И2′) нужны сверке маршрута в LaunchMismatch; их отсутствие — не
+// «разрешить»: без них маршрут не доказать, детский запуск отказывает (fail-closed, как у калькулятора).
 public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator? limits = null,
-    ILogger<ChildModeGate>? log = null) : IChildModeGate
+    ILogger<ChildModeGate>? log = null, ClaudeSubscriptionPool? pool = null,
+    LlmProviderRegistry? providers = null) : IChildModeGate
 {
     private const string DeniedText = "Этот инструмент недоступен в детском режиме";
 
@@ -98,6 +102,7 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
         var provider = profile.ProviderKey;
         var model = profile.Model;
         var lessonsChat = session.ChildSpace is not null && session.OnboardingKind != OnboardingKinds.ChildRules;
+        var acknowledged = false;
         if (lessonsChat)
         {
             var subject = session.ChildSubject is { } id
@@ -105,6 +110,7 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
                 : null;
             if (subject is not { Enabled: true }) return "Этот предмет закрыт";
             (persona, provider, model) = (subject.TutorPersonaId, subject.ProviderKey, subject.Model);
+            acknowledged = subject.RouteAcknowledgedAt is not null;
         }
         if (session.PersonaId != persona)
             return "персона чата не совпадает с закреплённым тьютором";
@@ -112,6 +118,11 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
             return "поставщик чата не совпадает с поставщиком профиля";
         if (session.Model != model)
             return "модель чата не совпадает с моделью профиля";
+        // Маршрут (И2′): маркер tier:*/preset:* в модели или пара, которую ChildRoute не принимает (подписка,
+        // выключенный/чужой провайдер, нет цены или согласия админа) — отказ запуска. Поля чата уже равны
+        // полям записи, поэтому отдельно чат не проверяется: он «закреплён» на этот же маршрут.
+        if (!ChildRoute.Evaluate(provider, model, acknowledged, pool, providers).Accepted)
+            return "маршрут модели не допускается в детском режиме";
         if (session.ProjectId is not null)
             return "детский чат не может принадлежать проекту";
         if (session.Mode != ChildModeLaunch.RequiredMode)

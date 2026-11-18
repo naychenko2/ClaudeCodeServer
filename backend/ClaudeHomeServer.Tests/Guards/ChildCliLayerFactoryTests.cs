@@ -98,7 +98,8 @@ public class ChildCliLayerFactoryTests : IClassFixture<ChildCliLayerFactoryTests
             {
                 [ChildLimitsCalculator.ConfigTimeZoneKey] = "Europe/Moscow",
             }).Build(), NullLogger<ChildLimitsCalculator>.Instance);
-        var gate = new ChildModeGate(policy, calc);
+        var (pool, llm) = ChildRouteKit.For("pool-key");
+        var gate = new ChildModeGate(policy, calc, null, pool, llm);
         var layer = new PersonaLayerBuilder(sp.GetRequiredService<SessionStore>(), sp.GetRequiredService<McpEndpoint>(),
             sp.GetRequiredService<PersonaManager>(), sp.GetRequiredService<PersonaBindingsService>(),
             sp.GetService<PersonaAgentFileSync>(), sp.GetRequiredService<ProjectManager>(),

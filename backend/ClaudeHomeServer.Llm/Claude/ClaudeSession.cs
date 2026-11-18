@@ -4768,16 +4768,21 @@ public class ClaudeSession : ILlmSessionAdapter
         // Токен подписки из унаследованного env вычищает ChildTurnClearEnv (CLAUDE_CODE_OAUTH_TOKEN).
         if (childSnapshot is not null)
         {
-            var childSub = ChildApiKeyRoute.Resolve(childSnapshot, _subscriptionPool);
+            var childRoute = ChildRoute.Resolve(childSnapshot, ChildRoute.SubjectFor(childSnapshot, Info),
+                _subscriptionPool, _providers);
+            // Маршрут «провайдер» (облако/локальная) ChildRoute уже принимает, но запуск по нему — Т5b:
+            // до тех пор ход по такому маршруту — отказ, а не пул-ветка с чужой моделью.
+            var childSub = childRoute.Pool
+                ?? throw new ChildRouteRefusedException(ChildRoute.RefusedText);
             envOverrides[ChildTurnMarker.EnvKey] = "1";
             // Блок пула выше мог положить токен подписки (Info.Provider указывает на setup-token запись)
             envOverrides.Remove("CLAUDE_CODE_OAUTH_TOKEN");
             // Модель стороннего провайдера (не Claude) ребёнку не положена: ключ пула ей не годится,
             // а провайдерский ключ сервера — вне детского маршрута. Fail-closed, а не пропуск блока.
             if (_providers?.ResolveByModel(EffectiveModel) is not null)
-                throw new ChildRouteRefusedException(ChildApiKeyRoute.RefusedText);
+                throw new ChildRouteRefusedException(ChildRoute.RefusedText);
             var childEnv = _providers?.BuildOAuthCliEnv(childSub.Key, "", childSub.ApiKey, EffectiveModel)
-                ?? throw new ChildRouteRefusedException(ChildApiKeyRoute.RefusedText);
+                ?? throw new ChildRouteRefusedException(ChildRoute.RefusedText);
             foreach (var (k, v) in childEnv)
                 envOverrides[k] = v;
         }

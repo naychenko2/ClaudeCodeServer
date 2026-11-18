@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // И2 (ADR-041): ход ребёнка идёт только по API-ключу записи пула, без подписки и без фолбэка.
 // Процесс CLI подменён сном — проверяем собранный ProcessSpec (env и ClearEnv) и отказ запуска.
 [Collection(TestCollections.ProcessGlobalState)]
-public class ChildApiKeyRouteTests : IDisposable
+public class ChildRouteTests : IDisposable
 {
     private readonly List<Process> _processes = [];
     private readonly List<string> _tempDirs = [];
@@ -135,7 +135,7 @@ public class ChildApiKeyRouteTests : IDisposable
         var (spec, errors) = await RunAsync(() => Child(case_), pool);
 
         spec.Should().BeNull("процесс CLI не стартует");
-        errors.Should().ContainSingle().Which.Should().Be(ChildApiKeyRoute.RefusedText);
+        errors.Should().ContainSingle().Which.Should().Be(ChildRoute.RefusedText);
     }
 
     [Fact]
@@ -145,7 +145,7 @@ public class ChildApiKeyRouteTests : IDisposable
             Pool(("kids-api", null, "sk-ant-kids")));
 
         spec.Should().BeNull();
-        errors.Should().ContainSingle().Which.Should().Be(ChildApiKeyRoute.RefusedText);
+        errors.Should().ContainSingle().Which.Should().Be(ChildRoute.RefusedText);
     }
 
     [Fact]

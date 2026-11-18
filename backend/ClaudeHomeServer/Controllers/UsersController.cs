@@ -24,6 +24,7 @@ public class UsersController(UserStore users, SessionManager sessions,
     UserKnowledgeCascade knowledgeCascade, DefaultAssistantProvisioner provisioner,
     ProjectMembershipService membership, IPersonalProjects personalProjects,
     ChildTutorProvisioner childTutorProvisioner, ClaudeSubscriptionPool subscriptionPool,
+    LlmProviderRegistry llmProviders,
     PersonaManager personas, ChildSubjectMaterialsStore childMaterials,
     ILogger<UsersController> logger,
     // `= null` — обязательность для DI (S2b-1, ADR-014): на выключенной вертикали «Знаний»
@@ -200,7 +201,7 @@ public class UsersController(UserStore users, SessionManager sessions,
             return Ok(new ChildProfileResponse(ToChildProfileDto(off.ChildMode), off.ChildMode?.TutorPersonaId ?? ""));
         }
 
-        if (ChildProfileValidator.Validate(req, user, users, subscriptionPool) is { } reject)
+        if (ChildProfileValidator.Validate(req, user, users, subscriptionPool, llmProviders) is { } reject)
             return BadRequest(new { code = reject.Code, message = reject.Message });
 
         // Привязка базы знаний (К1b, разрез §1/§3) — после того, как тело само читаемо: id
@@ -442,6 +443,12 @@ public class UsersController(UserStore users, SessionManager sessions,
                     ProviderKey = s?.ProviderKey ?? "",
                     Model = s?.Model ?? "",
                     Enabled = s?.Enabled ?? true,
+                    // Согласие на не-Anthropic маршрут (Т5a): из тела — только флаг; в модель идёт КАНДИДАТ
+                    // (момент запроса и админ из claim). Решает слияние стора под замком по ЖИВОМУ предмету:
+                    // то же providerKey и уже стоящее согласие — остаётся прежнее; смена providerKey без
+                    // нового согласия в теле — сброс.
+                    RouteAcknowledgedAt = s?.AcknowledgeRouteRisk == true ? attachedAt : null,
+                    RouteAcknowledgedBy = s?.AcknowledgeRouteRisk == true ? callerId : null,
                     // Привязка знания (К1b): из тела — только id датасета; автор и момент —
                     // вызывающий админ и момент запроса. Это КАНДИДАТ: живое слияние стора
                     // сохранит прежнюю пару, если id не изменился, и возьмёт этот — если
@@ -470,7 +477,8 @@ public class UsersController(UserStore users, SessionManager sessions,
             // автор привязки в ответ не идёт, он остаётся в сторе.
             [.. p.Subjects.Select(s => new ChildSubjectDto(
                 s.Id, s.Label, s.Glyph, s.Color, s.ProviderKey, s.Model, s.Enabled, s.TutorPersonaId,
-                s.Knowledge is { } k ? new ChildSubjectKnowledgeDto(k.DatasetId, k.AttachedAt) : null))],
+                s.Knowledge is { } k ? new ChildSubjectKnowledgeDto(k.DatasetId, k.AttachedAt) : null,
+                s.RouteAcknowledgedAt is not null, s.RouteAcknowledgedAt))],
             p.DailyBudgetUsd, p.MonthlyBudgetUsd, p.WarnMinutes, null);
 
     private static string? ValidateUsername(string? username)

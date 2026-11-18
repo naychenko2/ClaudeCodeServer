@@ -89,7 +89,8 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
             {
                 [ChildLimitsCalculator.ConfigTimeZoneKey] = "Europe/Moscow",
             }).Build(), NullLogger<ChildLimitsCalculator>.Instance);
-        var gate = new ChildModeGate(policy, calc);
+        var (pool, llm) = ChildRouteKit.For("pool-key", "pool-math");
+        var gate = new ChildModeGate(policy, calc, null, pool, llm);
         // BuiltinMcpContexts строим заново — с подменённым гейтом; остальное берём из DI как есть
         var builtin = new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(), sp.GetRequiredService<FeatureFlagService>(),
@@ -176,6 +177,50 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
         }
         var act = () => Launch(factory, s);
         act.Should().Throw<InvalidOperationException>().WithMessage("Детский режим*");
+    }
+
+    // И2′ (Т5a): маршрут предмета, который ChildRoute не принимает, останавливает запуск, даже когда поля
+    // чата совпадают с полями предмета (чат «закреплён» на тот же маркер/провайдера).
+    [Theory]
+    [InlineData("tier:strong")]
+    [InlineData("preset:chain-1")]
+    [InlineData("default")]
+    [InlineData("claude")]
+    public void МаркерВМоделиПредмета_ХодНеСтартует(string marker)
+    {
+        var snapshot = ValidChild();
+        snapshot.Profile!.Subjects[0].Model = marker;
+        var s = ValidSession();
+        s.Model = marker;
+        var act = () => Launch(Build(snapshot), s);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*маршрут модели не допускается*");
+    }
+
+    [Fact]
+    public void ОблачныйМаршрутПредмета_БезСогласияАдмина_ХодНеСтартует_СоСогласием_Стартует()
+    {
+        var snapshot = ValidChild();
+        var subject = snapshot.Profile!.Subjects[0];
+        subject.ProviderKey = "deepseek"; subject.Model = "deepseek-v4-pro";
+        var s = ValidSession();
+        s.Provider = "deepseek"; s.Model = "deepseek-v4-pro";
+        var act = () => Launch(Build(snapshot), s);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*маршрут модели не допускается*");
+
+        subject.RouteAcknowledgedAt = DateTime.UtcNow;
+        Launch(Build(snapshot), s).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void ПредметЧужаяМодельПровайдера_ХодНеСтартует()
+    {
+        var snapshot = ValidChild();
+        var subject = snapshot.Profile!.Subjects[0];
+        (subject.ProviderKey, subject.Model, subject.RouteAcknowledgedAt) = ("deepseek", "glm-5.2", DateTime.UtcNow);
+        var s = ValidSession();
+        s.Provider = "deepseek"; s.Model = "glm-5.2";
+        var act = () => Launch(Build(snapshot), s);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*маршрут модели не допускается*");
     }
 
     [Theory]

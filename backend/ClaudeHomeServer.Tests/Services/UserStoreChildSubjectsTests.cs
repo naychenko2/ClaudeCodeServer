@@ -66,7 +66,21 @@ public class UserStoreChildSubjectsTests : IDisposable
         new(true, [], KidsKey, "sonnet", null, null, null, null, null, null);
 
     private static ChildProfileValidator.Reject? Validate(ChildProfileDto req, UserStore users, ClaudeSubscriptionPool? pool = null) =>
-        ChildProfileValidator.Validate(req, ContainerUser(), users, pool ?? KidsPool());
+        ChildProfileValidator.Validate(req, ContainerUser(), users, pool ?? KidsPool(), RouteProviders());
+
+    // Реестр провайдеров для проверок маршрута (Т5a): deepseek — с ценой, glm — без цены, оба с ключом.
+    private static LlmProviderRegistry RouteProviders() => new(new ConfigurationBuilder().AddInMemoryCollection(
+        new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.test/anthropic",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro",
+            ["LlmProviders:deepseek:Models:0:PriceInMissPer1M"] = "0.5",
+            ["LlmProviders:deepseek:Models:0:PriceOutPer1M"] = "1.0",
+            ["LlmProviders:glm:AnthropicBaseUrl"] = "https://api.glm.test/anthropic",
+            ["LlmProviders:glm:ApiKey"] = "sk-glm",
+            ["LlmProviders:glm:Models:0:Id"] = "glm-5.2",
+        }).Build());
 
     // Ребёнок с профилем и указанными предметами — прямая запись стора, как сделает её
     // первый PUT или миграция. Тьютора предмета — только SetChildSubjectTutor: первый PUT
@@ -334,6 +348,148 @@ public class UserStoreChildSubjectsTests : IDisposable
 
             store.GetById(id)!.ChildMode!.Subjects.Should().ContainSingle()
                 .Which.TutorPersonaId.Should().Be("live-tutor", "репетитор не теряется ни в одном порядке двух вызовов");
+        }
+    }
+
+    // ======== Т5a (И2′): маршрут предмета — по сторожу на каждый путь ========
+
+    private static ChildSubjectDto RouteSubject(string providerKey, string model, bool? ack = null) =>
+        new("math", "Математика", "Аа", "info", providerKey, model, true, null, null, ack);
+
+    [Theory]
+    [InlineData("tier:strong")]
+    [InlineData("preset:chain-1")]
+    [InlineData("default")]
+    [InlineData("claude")]
+    public void Валидатор_МаркерВМодели_model_not_concrete(string model)
+    {
+        var reject = Validate(Body(RouteSubject(KidsKey, model)), NewStore());
+        reject.Should().NotBeNull();
+        reject!.Code.Should().Be("model_not_concrete");
+    }
+
+    [Fact]
+    public void Валидатор_ОблачнаяМодельБезЦены_model_unpriced()
+    {
+        var reject = Validate(Body(RouteSubject("glm", "glm-5.2", ack: true)), NewStore());
+        reject.Should().NotBeNull();
+        reject!.Code.Should().Be("model_unpriced");
+    }
+
+    [Fact]
+    public void Валидатор_НеПулБезСогласия_route_risk_unacknowledged_СоСогласием_Проходит()
+    {
+        var users = NewStore();
+        var reject = Validate(Body(RouteSubject("deepseek", "deepseek-v4-pro")), users);
+        reject.Should().NotBeNull();
+        reject!.Code.Should().Be("route_risk_unacknowledged");
+        Validate(Body(RouteSubject("deepseek", "deepseek-v4-pro", ack: true)), users).Should().BeNull();
+    }
+
+    [Fact]
+    public void Валидатор_ЖивоеСогласиеТогоЖеПровайдера_ЗаменяетФлагВТеле()
+    {
+        var users = NewStore();
+        var user = ContainerUser();
+        user.ChildMode = new ChildProfile
+        {
+            Enabled = true,
+            Subjects = [new ChildSubject { Id = "math", ProviderKey = "deepseek", RouteAcknowledgedAt = DateTime.UtcNow }],
+        };
+        var req = Body(RouteSubject("deepseek", "deepseek-v4-pro"));
+        ChildProfileValidator.Validate(req, user, users, KidsPool(), RouteProviders()).Should().BeNull();
+        // Живое согласие относится к другому провайдеру — не считается (смена providerKey его не переживает).
+        user.ChildMode.Subjects[0].ProviderKey = "glm";
+        ChildProfileValidator.Validate(req, user, users, KidsPool(), RouteProviders())!.Code
+            .Should().Be("route_risk_unacknowledged");
+    }
+
+    [Fact]
+    public void Валидатор_МодельЧужогоПровайдера_model_not_of_provider()
+    {
+        var reject = Validate(Body(RouteSubject("deepseek", "glm-5.2", ack: true)), NewStore());
+        reject.Should().NotBeNull();
+        reject!.Code.Should().Be("model_not_of_provider");
+    }
+
+    [Fact]
+    public void Валидатор_ЗаписьПулаСТокеномПодписки_provider_not_api_key()
+    {
+        var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ClaudeSubscriptions:mixed:ApiKey"] = "sk-ant-mixed",
+            ["ClaudeSubscriptions:mixed:OAuthToken"] = "oauth-mixed",
+        }).Build());
+        var reject = Validate(Body(RouteSubject("mixed", "sonnet")), NewStore(), pool);
+        reject.Should().NotBeNull();
+        reject!.Code.Should().Be("provider_not_api_key");
+    }
+
+    private static ChildProfile ProfileWith(ChildSubject subject) => new()
+    {
+        Enabled = true, ProviderKey = KidsKey, Model = "sonnet", Subjects = [subject],
+    };
+
+    private static ChildSubject Routed(string provider, DateTime? ack = null, string? by = null) => new()
+    {
+        Id = "math", Label = "Математика", Glyph = "Аа", Color = "info",
+        ProviderKey = provider, Model = "m", RouteAcknowledgedAt = ack, RouteAcknowledgedBy = by,
+    };
+
+    [Fact]
+    public void Согласие_ТотЖеПровайдер_ПрежняяПараСохраняется()
+    {
+        var store = NewStore();
+        var at = new DateTime(2026, 11, 1, 10, 0, 0, DateTimeKind.Utc);
+        var id = SeedChild(store, Routed("deepseek", at, "admin-1"));
+        // Повторный PUT без нового согласия и с новым кандидатом — живая пара не переставляется.
+        store.SetChildProfile(id, ProfileWith(Routed("deepseek")), false).Should().BeTrue();
+        var kept = store.GetById(id)!.ChildMode!.Subjects.Single();
+        (kept.RouteAcknowledgedAt, kept.RouteAcknowledgedBy).Should().Be((at, "admin-1"));
+        store.SetChildProfile(id, ProfileWith(Routed("deepseek", DateTime.UtcNow, "admin-2")), false);
+        store.GetById(id)!.ChildMode!.Subjects.Single().RouteAcknowledgedBy.Should().Be("admin-1");
+    }
+
+    [Fact]
+    public void Согласие_СменаProviderKey_Сбрасывается()
+    {
+        var store = NewStore();
+        var id = SeedChild(store, Routed("deepseek", DateTime.UtcNow, "admin-1"));
+        store.SetChildProfile(id, ProfileWith(Routed("glm")), false).Should().BeTrue();
+        var s = store.GetById(id)!.ChildMode!.Subjects.Single();
+        s.RouteAcknowledgedAt.Should().BeNull("согласие от старого ProviderKey не переживает смену");
+        s.RouteAcknowledgedBy.Should().BeNull();
+    }
+
+    [Fact]
+    public void Согласие_СменаProviderKey_СНовымСогласием_БерётсяКандидат()
+    {
+        var store = NewStore();
+        var id = SeedChild(store, Routed("deepseek", new DateTime(2026, 11, 1, 0, 0, 0, DateTimeKind.Utc), "admin-1"));
+        var at = new DateTime(2026, 11, 2, 0, 0, 0, DateTimeKind.Utc);
+        store.SetChildProfile(id, ProfileWith(Routed("glm", at, "admin-2")), false);
+        var s = store.GetById(id)!.ChildMode!.Subjects.Single();
+        (s.RouteAcknowledgedAt, s.RouteAcknowledgedBy).Should().Be((at, "admin-2"));
+    }
+
+    [Fact]
+    public async Task Ack_ParallelWithProviderChange_AckReset()
+    {
+        // Два PUT одновременно: A меняет ProviderKey (без согласия), B пересохраняет прежний ProviderKey,
+        // опираясь на живое согласие. При любом порядке слияние под замком по ЖИВОМУ предмету даёт без
+        // согласия: A→B — B сверяется с уже сменённым ключом, B→A — A сбрасывает. Мутация «не сбрасывать
+        // согласие» оставляет его в обоих порядках.
+        var store = NewStore();
+        for (var iter = 0; iter < 20; iter++)
+        {
+            var id = SeedChild(store, Routed("deepseek", DateTime.UtcNow, "admin-1"));
+            var change = Task.Run(() => store.SetChildProfile(id, ProfileWith(Routed("glm")), false));
+            var resave = Task.Run(() => store.SetChildProfile(id, ProfileWith(Routed("deepseek")), false));
+            var all = Task.WhenAll(change, resave);
+            (await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(30)))).Should().Be(all, "гонка не завершилась");
+
+            var s = store.GetById(id)!.ChildMode!.Subjects.Single();
+            s.RouteAcknowledgedAt.Should().BeNull($"итерация {iter}: согласие от старого ProviderKey не переживает смену");
         }
     }
 }

@@ -259,3 +259,24 @@ export function tutorAvatarUrl(personaId: string, accessToken?: string): string 
   const base = `/api/personas/${encodeURIComponent(personaId)}/avatar`;
   return accessToken ? `${base}?access_token=${encodeURIComponent(accessToken)}` : base;
 }
+
+// URL аватара и кандидатов репетитора для АДМИНСКОЙ карточки (Т4e, Т2c3): общие /api/personas/*
+// админу персону ребёнка не отдают — ProjectScope ищет персону по арендатору, админ чужой
+// арендатор, ответ 404. Репетитора читает админская ручка той же пары (id + personaId), что
+// правит его: GET /api/users/{id}/child-tutors/{personaId}/avatar[?size=] и …/avatar/candidate/{file}.
+// size — ступень миниатюры (тот же путь, что у persona avatarUrl); токен — в ?access_token=
+// (заголовок <img> не шлёт). Эти два — единственные пути картинок в карточке репетитора.
+export function childTutorAvatarUrl(userId: string, personaId: string, size?: number, accessToken?: string): string {
+  const base = `/api/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar`;
+  return withQuery(base, { ...(size && size > 0 ? { size: String(size) } : {}), ...(accessToken ? { access_token: accessToken } : {}) });
+}
+
+export function childTutorCandidateUrl(userId: string, personaId: string, file: string, accessToken?: string): string {
+  const base = `/api/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar/candidate/${encodeURIComponent(file)}`;
+  return withQuery(base, accessToken ? { access_token: accessToken } : {});
+}
+
+function withQuery(base: string, params: Record<string, string>): string {
+  const q = new URLSearchParams(params).toString();
+  return q ? `${base}?${q}` : base;
+}

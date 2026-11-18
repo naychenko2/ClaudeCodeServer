@@ -54,6 +54,9 @@ describe('RailHat: обрезание длинной подписи', () => {
     expect(st.overflow, 'overflow span').toBe('hidden');
     expect(st.textOverflow, 'text-overflow span').toBe('ellipsis');
     expect(st.whiteSpace, 'nowrap внутри span').toBe('nowrap');
+    // minWidth:0 — span в flex-родителе может сжиматься ниже содержимого: без него
+    // flex-item не ужмётся и многоточие никогда бы не включилось (React отдаёт 0 как '0')
+    expect(st.minWidth, 'span может сжиматься').toBe('0');
     // Родитель строки — с пределом по ширине капсулы, но сам не режет:
     // иконка сворачивания вылезает за строку и её бы срезало
     const line = span!.parentElement as HTMLElement;

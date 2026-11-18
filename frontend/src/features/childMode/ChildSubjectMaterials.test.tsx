@@ -75,13 +75,15 @@ vi.mock('./api', () => ({
 const { ChildSubjectMaterials } = await import('./ChildSubjectMaterials');
 
 const material = (over: Partial<ChildSubjectMaterial> = {}): ChildSubjectMaterial => ({
-  id: 'm_1', name: 'Учебник.pdf', kind: 'pdf', bytes: 1_572_864, uploadedAt: '2026-03-12T12:00:00Z', ...over,
+  id: 'm_1', name: 'Учебник.pdf', kind: 'pdf', bytes: 1_572_864, uploadedAt: '2026-03-12T12:00:00', ...over,
 });
 const uploaded = (over: Partial<ChildSubjectMaterialUploaded> = {}): ChildSubjectMaterialUploaded => ({
   ...material(over), preview: 'Правила сложения: слагаемые…, текст страницы',
 });
 
-// 12:00 UTC — дата одна и та же в любом поясе от −12 до +14: formatDate берёт локальные части.
+// Даты фикстур — локальные (ISO без оффсета): new Date трактует их в поясе процесса, formatDate
+// берёт те же локальные части — ожидаемая дата не зависит от TZ. С «Z» фикстура ломалась в поясах
+// +13/+14: 12:00 UTC там уже следующий день.
 const httpErr = (status: number, code: string, message: string) =>
   Object.assign(new Error('отказ'), { status, body: { code, message } });
 
@@ -141,7 +143,7 @@ describe('ChildSubjectMaterials', () => {
   it('опись из двух материалов — две строки с типом, размером и датой; предупреждение видно', async () => {
     listAnswers[0] = [
       material(),
-      material({ id: 'm_2', name: 'Задания по дробям', kind: 'text', bytes: 204_800, uploadedAt: '2026-03-13T12:00:00Z' }),
+      material({ id: 'm_2', name: 'Задания по дробям', kind: 'text', bytes: 204_800, uploadedAt: '2026-03-13T12:00:00' }),
     ];
     const { host } = await mount();
     expect(listCalls).toEqual([{ userId: 'u-liza', subjectId: 's-math' }]);
@@ -264,5 +266,38 @@ describe('ChildSubjectMaterials', () => {
     expect(noticeByTestId(host, 'material-preview')).toBeNull();
     expect(rows(host)).toHaveLength(0);
     expect(listCalls.map((c) => c.subjectId)).toEqual(['s-math', 's-phys']);
+  });
+
+  it('Materials_ABA_StaleFirstResponseIgnored: A→B→A — применяется только ответ последнего запуска', async () => {
+    const { host, setSubject } = await mount('u-liza', 's-math'); // list #0 (A) — in-flight
+    await setSubject('s-phys'); // list #1 (B) — in-flight
+    await setSubject('s-math'); // list #2 (тот же A) — in-flight
+    await settle(() => { listPending.get(0)!.resolve([material({ name: 'Учебник по математике.pdf' })]); });
+    expect(rows(host)).toHaveLength(0); // поздний ответ первого A — тот же subjectId, но прежнее поколение
+    await settle(() => { listPending.get(1)!.resolve([material({ id: 'm_p', name: 'Физика. Оптика.txt', kind: 'text', bytes: 2048 })]); });
+    expect(rows(host)).toHaveLength(0); // ответ B к A тоже не применяется
+    await settle(() => { listPending.get(2)!.resolve([material()]); });
+    expect(rowText(host, 0)).toContain('Учебник.pdf'); // ответ последнего запуска — принят
+    expect(panel(host).textContent).not.toContain('Учебник по математике.pdf');
+  });
+
+  it('Materials_ABA_StaleListErrorIgnored: отказ прежнего запуска list не показывает Notice', async () => {
+    const { host, setSubject } = await mount('u-liza', 's-math'); // list #0 (A) — in-flight
+    await setSubject('s-phys'); // list #1 (B) — in-flight
+    await setSubject('s-math'); // list #2 (тот же A) — in-flight
+    await settle(() => { listPending.get(0)!.reject(httpErr(500, 'storage_error', 'Хранилище недоступно.')); });
+    expect(noticeByTestId(host, 'materials-list-failed')).toBeNull(); // ошибка старого запроса не на экране
+    await settle(() => { listPending.get(2)!.resolve([material()]); });
+    expect(rows(host)).toHaveLength(1);
+    expect(noticeByTestId(host, 'materials-list-failed')).toBeNull();
+  });
+
+  it('фото без расширения в имени: isImage по типу файла, «Распознаём страницу…»', async () => {
+    listAnswers[0] = [];
+    const { host } = await mount();
+    await pickFile(host, fakeFile('страница', 'image/png')); // имени «.png» нет — решение по type
+    const uploading = noticeByTestId(host, 'material-uploading');
+    expect(uploading?.textContent).toContain('Распознаём страницу…');
+    expect(uploading?.textContent).not.toContain('достаю текст');
   });
 });

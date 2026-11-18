@@ -2,8 +2,9 @@
 // подсказка про решебники (разрез §2 и §9 «preview в ответе загрузки», макет D2).
 // Трасса данных: GET …/materials → опись в состояние, ключованное subjectId → строки списка;
 // upload → 201 (строка + preview) → перечитать list + превью под строкой; remove → подтверждение
-// в строке → локальное исключение. Ответ прежнего subjectId ни в list, ни в upload, ни в remove
-// не применяется (тот же ключ, что у ChildLessonChat: curSid перед каждым set).
+// в строке → локальное исключение. Ответ прежнего предмета ни в list, ни в upload, ни в remove
+// не применяется: list — по поколению запроса (listGen ниже: при A→B→A subjectId повторяется),
+// upload/remove — по curSid (тот же ключ, что у ChildLessonChat).
 // Ручки — админские (ребёнок отбивается классовой ролью контроллера, ChildSubjectMaterialsController.cs:39-42):
 // ребёнок материалы не видит, их читает репетитор предмета.
 // Отказы — { code, message } на error.body (api.ts:214-251): текст сервера показывается как есть.
@@ -70,16 +71,18 @@ const isImageFile = (file: File) => file.type.startsWith('image/');
 export function ChildSubjectMaterials({ userId, subjectId }: Props) {
   const isMobile = useIsMobile();
   const fileRef = useRef<HTMLInputElement>(null);
-  // Текущий предмет: ответ любого запроса применяется, только если он про него (Контракт
-  // «устаревший ответ» — тот же приём, что curSid в ChildLessonChat).
+  // Текущий предмет: по нему отбиваются ответы upload/remove (Контракт «устаревший ответ» —
+  // тот же приём, что curSid в ChildLessonChat). Для list его недостаточно: при A→B→A ключ
+  // первого A совпадает с ключом второго A — там свой счётчик поколения, ниже.
   const curSid = useRef(subjectId);
   // Одна флаговая блокировка на upload/remove: второй вызов во время запроса игнорируется.
   const busyRef = useRef(false);
 
   // Смена предмета сбрасывает список, превью и ошибки (сброс — в эффекте смены, ниже).
-  // Устаревший ответ прежнего subjectId отбивается единственной сверкой curSid в обработчике
-  // каждого ответа (тот же приём, что curSid в ChildLessonChat) — состояние не ключуется,
-  // чтобы эта сверка была последней линией обороны, а не одной из двух.
+  // Устаревший ответ list отбивается по поколению запроса (listGen): сверка subjectId не
+  // работает при A→B→A — поздний ответ первого A имеет тот же ключ, что второй A, и был бы
+  // применён к нему. Ответы upload/remove — сверкой curSid (там ключ не повторяется:
+  // запрос живёт на одном предмете).
   const [items, setItems] = useState<ChildSubjectMaterial[] | null>(null);
   const [listFailed, setListFailed] = useState<string | null>(null);
   // isImage фиксируется по выбранному файлу (его type), а не угадывается по имени: подпись
@@ -91,11 +94,16 @@ export function ChildSubjectMaterials({ userId, subjectId }: Props) {
   const [previewOpen, setPreviewOpen] = useState(true);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
 
+  // Поколение запросов list: инкремент на каждый запуск. Ответ (успех и отказ) применяется,
+  // только если его поколение текущее: новая загрузка (смена предмета, перечитывание после
+  // upload) делает ответ прежнего запуска устаревшим — даже когда subjectId тот же (A→B→A).
+  const listGen = useRef(0);
+
   const load = useCallback(() => {
-    const sid = subjectId;
-    childApi.materials.list(userId, sid).then(
-      (list) => { if (curSid.current === sid) setItems(list); },
-      (e) => { if (curSid.current === sid) setListFailed(rejectText(e)); },
+    const gen = ++listGen.current;
+    childApi.materials.list(userId, subjectId).then(
+      (list) => { if (listGen.current === gen) setItems(list); },
+      (e) => { if (listGen.current === gen) setListFailed(rejectText(e)); },
     );
   }, [userId, subjectId]);
 

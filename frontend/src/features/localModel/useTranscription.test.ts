@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTranscriptionPoller, TRANSCRIPTION_POLL_MS } from './useTranscription';
 import type { TranscriptionSnapshot } from './types';
 
-// Снимок по контракту предложения v1 (таблица «Контракт данных»): все блоки.
+// Снимок по таблице раздела «Черновик данных с бэкенда» предложения v1: все блоки.
 const snapshot: TranscriptionSnapshot = {
   phase: 'batch',
   updatedAt: 1_763_000_000_000,
@@ -42,6 +42,12 @@ describe('createTranscriptionPoller: 5-с опрос вкладки «Встре
     return { fetch, p };
   };
 
+  it('интервал — ровно 5 с (предложение v1): значение констаны зафиксировано', () => {
+    // Прочие тесты двигают время самой констаной и её значение не проверяют:
+    // мутация TRANSCRIPTION_POLL_MS = 5000 → 2000 краснеет только здесь.
+    expect(TRANSCRIPTION_POLL_MS).toBe(5000);
+  });
+
   it('вкладка не открыта (и не-админ: панель не отдаёт вкладку) — таймера нет, опроса нет', async () => {
     const { fetch, p } = make();
     p.setActive(false, true);
@@ -62,6 +68,37 @@ describe('createTranscriptionPoller: 5-с опрос вкладки «Встре
     expect(fetch).toHaveBeenCalledTimes(4);
     p.dispose();
     expect(vi.getTimerCount()).toBe(0); // dispose — без утечки таймера
+  });
+
+  it('refetch(): активная вкладка — немедленный опрос, не дожидаясь интервала', async () => {
+    const { fetch, p } = make();
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    p.refetch(); // кнопка «Проверить сейчас»
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(2); // внеочередной снимок
+    expect(p.getSnapshot().data).toEqual(snapshot);
+    // внеочередной опрос не переставляет расписание: таймер остаётся своим
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_POLL_MS);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    p.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('refetch(): закрытая вкладка или скрытая вкладка браузера — no-op, таймера нет', async () => {
+    const { fetch, p } = make();
+    p.setActive(false, true); // закрыли вкладку «Встречи»
+    p.refetch();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+
+    p.setActive(true, false); // вкладка открыта, браузер скрыт — опрос стоит
+    p.refetch();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('закрыли вкладку во время опроса — опрос встаёт, таймера не остаётся', async () => {

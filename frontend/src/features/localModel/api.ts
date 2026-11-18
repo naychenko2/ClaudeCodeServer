@@ -133,8 +133,9 @@ export type {
 export type { LocalModelMedia, MediaGpu, MediaSteps, MediaRunning, MediaQueue, MediaDone };
 
 // Типы ответа /api/local-model/transcription (вкладка «Встречи»). Источник истины —
-// таблица «Контракт данных» предложения v1 (docs/mockups/local-model-transcription-proposal.md);
-// бэкенда ещё нет, форма полей сверяется при его постановке.
+// таблица раздела «Черновик данных с бэкенда» предложения v1
+// (docs/mockups/local-model-transcription-proposal.md); бэкенда ещё нет, форма полей
+// сверяется при его постановке.
 export type {
   TranscriptionSnapshot,
   TranscriptionPhase,

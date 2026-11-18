@@ -19,7 +19,11 @@
 // - красить «Пишет в» только без баннера дефицита (краснеет тест combined: при чужом
 //   узле вывода и дефиците Dify нужны оба);
 // - не гасить «запись» при «Завис?» (макет .stale .facts b гасит все значения строки
-//   фактов, красный только «идёт») — краснеет тест «Завис?».
+//   фактов, красный только «идёт») — краснеет тест «Завис?»;
+// - рисовать красную «Остановлен» и при level=null (нет state.json — бэк ничего не
+//   проверял) — краснеет тест «не проверялось»;
+// - оставить подпись «касание — открыть сводку» в шапке «Последних встреч» — краснеет
+//   тест «обещания в шапке нет» (просмотрщика сводки ещё нет, обещать нечем).
 
 import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -225,14 +229,31 @@ describe('TranscriptionTab: пустое состояние, остановка,
     expect(h).not.toContain('Завис?');
   });
 
-  it('остановлен — баннер с командой запуска, «Процесса нет.», «нет процесса» курсивом', () => {
+  it('остановлен — баннер с командой запуска (sudo, системный юнит), «Процесса нет.», «нет процесса» курсивом', () => {
     const h = staticHtml(snap({ phase: 'stopped', level: 'danger', pid: null, file: null }));
     expect(h).toContain('Сервис transcription-supervisor остановлен');
-    expect(h).toContain('systemctl --user start transcription-supervisor');
+    // сервис на worker — системный юнит (User=an): «systemctl --user start» на нём
+    // «Unit not found» (дефект №5 приёмки); копипаст обязан работать
+    expect(h).toContain('sudo systemctl start transcription-supervisor');
+    expect(h).not.toContain('systemctl --user');
     expect(h).toContain('Процесса нет.');
     expect(h).toContain('font-style:italic');
     expect(h).toContain('нет процесса');
     expect(h).toContain('Остановлен');
+    expect(h).not.toContain('не проверялось'); // настоящая остановка — не «не проверялось»
+  });
+
+  it('нет снимка состояния (level=null, phase «stopped»): «не проверялось», а не «Остановлен» и не «Процесса нет.»', () => {
+    // так бэк отдаёт отсутствие state.json: level=null, а "stopped" — из MapPhase по
+    // отсутствию pid (TranscriptionStateReader.cs:85,130,234-240); утверждать об этом
+    // «Остановлен» — второй взгляд об одном на одном экране (дефект приёмки)
+    const h = staticHtml(snap({ level: null, phase: 'stopped', updatedAt: null, pid: null, file: null, stage: null }));
+    expect(h).toContain('не проверялось'); // плашка
+    expect(h).toContain('Состояние не проверялось'); // «Сейчас»
+    expect(h).not.toContain('Остановлен');
+    expect(h).not.toContain('Процесса нет.');
+    expect(h).not.toContain('Ничего не обрабатывается');
+    expect(h).not.toContain('role="status"'); // баннера нет: тревоги бэк не утверждал
   });
 
   it('снимка ещё нет — четыре скелета (aria-busy), без нулей и без выдуманных статусов', () => {
@@ -338,6 +359,14 @@ describe('TranscriptionTab: «Последние встречи» (Ф4)', () => 
     expect(h).toContain('.md');
     expect(h).toContain('30 мин');
     expect(h).toContain('3 спикера');
+  });
+
+  it('обещания в шапке нет: подписи «касание — открыть сводку» не рисуем (дефект №4)', () => {
+    // просмотрщика сводки ещё нет (Ф4.б), и подпись обещала то, чего сделать нечем;
+    // метка «.md» остаётся — файл на узле есть, а касание даёт честный тост openMeetingNote
+    const h = staticHtml(snap({ recent: [MEET(0)] }));
+    expect(h).not.toContain('касание');
+    expect(h).toContain('.md');
   });
 });
 

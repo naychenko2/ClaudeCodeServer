@@ -18,7 +18,11 @@
 //   имени файла»: строка обязана остаться, выдуманное имя вместо неё — вранье;
 // - длительности баннера и встреч не округлять до минут («23 мин 17 с», «47 мин 18 с») —
 //   краснеют тесты «23 мин» и «47.3 → 47 мин»; «Обновлено» разговорной формой («23 минуты
-//   назад») — краснеет тест «23 мин назад».
+//   назад») — краснеет тест «23 мин назад»;
+// - рисовать «Остановлен» и при level=null (нет state.json: MapPhase даёт "stopped" из-за
+//   отсутствия pid, а не по факту остановки) — краснеет тест «не проверялось»;
+// - возвращать «только что» для возраста 0–4 с — краснеет тест «N с назад»: снимок
+//   пишется каждые ~10 с, попадание в это окно регулярно.
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -192,7 +196,10 @@ describe('transTabView: «Остановлен» (макет down)', () => {
     const v = transTabView(stopped, NOW);
     expect(v.banner!.tone).toBe('danger');
     expect(v.banner!.title).toBe('Сервис transcription-supervisor остановлен');
-    expect(v.banner!.body).toContain('systemctl --user start transcription-supervisor');
+    // сервис на worker — системный юнит (User=an): «systemctl --user start» на нём
+    // «Unit not found» (дефект №5); копипаст обязан работать
+    expect(v.banner!.body).toContain('sudo systemctl start transcription-supervisor');
+    expect(v.banner!.body).not.toContain('systemctl --user');
     expect(v.banner!.body).toMatch(/не обрабатываются с \d{2}:\d{2}\./);
     expect(v.pipeline.badge).toEqual({ tone: 'danger', label: 'Остановлен' });
     expect(v.stale).toBe(true);
@@ -203,6 +210,39 @@ describe('transTabView: «Остановлен» (макет down)', () => {
     expect(v.pipeline.pidText).toBeNull();
     expect(v.now.kind).toBe('empty');
     if (v.now.kind !== 'empty') return;
+    expect(v.now.note).toBe('Процесса нет.');
+  });
+});
+
+describe('transTabView: «не проверялось» (нет state.json)', () => {
+  // Что даёт бэк, когда снимок не читается: level=null (TranscriptionStateReader.cs:85,130),
+  // а phase «stopped» — следствие отсутствия живого pid (MapPhase, :234-240), а не утверждение
+  // о состоянии. «Остановлен» + «Процесса нет.» при этом — два разных утверждения об одном
+  // на одном экране (дефект приёмки); честное — «не проверялось»
+  const unchecked = () => snap({ level: null, phase: 'stopped', updatedAt: null, pid: null, alive: false, file: null, stage: null });
+
+  it('плашка нейтральная «не проверялось», не красная «Остановлен»; баннера и гашения нет', () => {
+    const v = transTabView(unchecked(), NOW);
+    expect(v.pipeline.badge).toEqual({ tone: 'neutral', label: 'не проверялось' });
+    expect(v.banner).toBeNull();
+    expect(v.stale).toBe(false);
+    expect(v.pipeline.updatedText).toBe('—');
+  });
+
+  it('«Сейчас» — «Состояние не проверялось», а не «Ничего не обрабатывается» и не «Процесса нет.»', () => {
+    const n = transTabView(unchecked(), NOW).now;
+    expect(n.kind).toBe('empty');
+    if (n.kind !== 'empty') throw new Error('expected empty');
+    expect(n.heading).toBe('Состояние не проверялось');
+    expect(n.note).toContain('не проверялось');
+  });
+
+  it('настоящая остановка (бэк прочитал снимок: level=danger) — «Остановлен» и «Процесса нет.» на месте', () => {
+    const v = transTabView(snap({ phase: 'stopped', level: 'danger', updatedAt: NOW - 40_000, pid: null, alive: false, file: null, stage: null }), NOW);
+    expect(v.pipeline.badge).toEqual({ tone: 'danger', label: 'Остановлен' });
+    expect(v.now.kind).toBe('empty');
+    if (v.now.kind !== 'empty') throw new Error('expected empty');
+    expect(v.now.heading).toBe('Ничего не обрабатывается');
     expect(v.now.note).toBe('Процесса нет.');
   });
 });
@@ -277,8 +317,12 @@ describe('transTabView: расхождения (макет fail)', () => {
 });
 
 describe('форматтеры времени', () => {
-  it('agoText: «только что» / «N с» / «N мин назад» (макет age) / «4 ч 31 мин назад»', () => {
-    expect(agoText(NOW - 1_000, NOW)).toBe('только что');
+  it('agoText: «N с назад» (макет age, включая 0–4 с) / «N мин назад» / «4 ч 31 мин назад»', () => {
+    // возраст 0–4 с — формой макета («6 с назад», «14 с назад»): «только что» прятало
+    // настоящий возраст снимка, который пишется каждые ~10 с (замечание приёмки)
+    expect(agoText(NOW, NOW)).toBe('0 с назад');
+    expect(agoText(NOW - 1_000, NOW)).toBe('1 с назад');
+    expect(agoText(NOW - 4_000, NOW)).toBe('4 с назад');
     expect(agoText(NOW - 8_000, NOW)).toBe('8 с назад');
     expect(agoText(NOW - 61_000, NOW)).toBe('1 мин назад');
     expect(agoText(NOW - 23 * 60_000 - 17_000, NOW)).toBe('23 мин назад');

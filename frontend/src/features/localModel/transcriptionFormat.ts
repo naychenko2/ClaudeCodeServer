@@ -33,11 +33,13 @@ export function durationWords(mins: number): string {
 }
 
 // «8 с назад», «23 мин назад», «4 ч 31 мин назад» (макет: age): минуты — короткой формой
-// «мин», как в макете, а не разговорной «23 минуты». Отрицательная разница (часовые пояса)
-// — «только что», без «-3 с назад».
+// «мин», как в макете, а не разговорной «23 минуты». Возраст 0–4 с — тоже «N с назад»:
+// снимок пишется каждые ~10 с, попадание в это окно регулярно, а «только что» прятало бы
+// настоящий возраст (замечание приёмки; форма макета v1.html — «6 с назад», «14 с назад»).
+// Отрицательная разница (часовые пояса) — «только что», без «-3 с назад».
 export function agoText(fromMs: number, nowMs: number): string {
   const d = nowMs - fromMs;
-  if (d < 5_000) return 'только что';
+  if (d < 0) return 'только что';
   const s = Math.floor(d / 1000);
   if (s < 60) return `${s} с назад`;
   const m = Math.floor(s / 60);
@@ -121,7 +123,10 @@ export interface TransPipelineView {
 export interface TransStageStepView { label: string; state: 'done' | 'cur' | 'todo' }
 
 export type TransNowView =
-  | { kind: 'empty'; note: string }
+  // heading — заголовок пустого состояния: «Ничего не обрабатывается» — утверждение о
+  // состоянии, поэтому при «не проверялось» его нет: экран не должен утверждать одно и то же
+  // по-разному (дефект приёмки)
+  | { kind: 'empty'; heading: string; note: string }
   | {
     kind: 'active';
     file: string;
@@ -220,7 +225,15 @@ function depsDown(s: TranscriptionSnapshot): boolean {
 
 export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabView {
   const level = alarmOf(s);
-  const stopped = s.phase === 'stopped';
+  // «не проверялось» (дефект приёмки): бэк не прочитал state.json — level=null, а phase
+  // «stopped» — следствие отсутствия живого pid (MapPhase: !alive → "stopped",
+  // TranscriptionStateReader.cs:234-240), а не утверждение о состоянии. «Остановлен» и
+  // «Процесса нет.» при этом — два разных утверждения об одном на одном экране; честное —
+  // «не проверялось» (то же слово, что у несчитанных зависимостей, DEP_WORDS.unknown).
+  // level=null при живом процессе (phase «batch»/«idle») — не этот случай: там фаза
+  // настоящая, плашка остаётся по фазе.
+  const unchecked = s.level == null && s.phase === 'stopped';
+  const stopped = s.phase === 'stopped' && !unchecked;
   // «Завис?» = danger при не-остановленном конвейере без севших зависимостей: по логике
   // бэка (TranscriptionStateReader) именно так и получается «stale»
   const hung = level === 'danger' && !stopped && !depsDown(s);
@@ -243,7 +256,10 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
       banner = {
         tone: 'danger',
         title: 'Сервис transcription-supervisor остановлен',
-        body: `Новые записи не обрабатываются${since}. Запустить можно на worker: systemctl --user start transcription-supervisor.`,
+        // сервис на worker — системный юнит (/etc/systemd/system/transcription-supervisor.service,
+        // User=an): «systemctl --user start» на нём даёт «Unit not found» (дефект приёмки).
+        // Имя юнита — то же, что в заголовке баннера: transcription-supervisor
+        body: `Новые записи не обрабатываются${since}. Запустить можно на worker: sudo systemctl start transcription-supervisor.`,
       };
     } else if (hung && typeof s.updatedAt === 'number') {
       banner = {
@@ -275,15 +291,17 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
   }
 
   // === Конвейер ===
-  const badge = stopped
-    ? { tone: 'danger' as const, label: 'Остановлен' }
-    : hung
-      ? { tone: 'danger' as const, label: 'Завис?' }
-      : s.phase === 'batch'
-        ? { tone: 'accent' as const, label: 'Идёт пачка' }
-        : s.phase === 'idle'
-          ? { tone: 'success' as const, label: 'Ожидание' }
-          : { tone: 'neutral' as const, label: 'нет данных' };
+  const badge = unchecked
+    ? { tone: 'neutral' as const, label: 'не проверялось' }
+    : stopped
+      ? { tone: 'danger' as const, label: 'Остановлен' }
+      : hung
+        ? { tone: 'danger' as const, label: 'Завис?' }
+        : s.phase === 'batch'
+          ? { tone: 'accent' as const, label: 'Идёт пачка' }
+          : s.phase === 'idle'
+            ? { tone: 'success' as const, label: 'Ожидание' }
+            : { tone: 'neutral' as const, label: 'нет данных' };
 
   const updatedText = typeof s.updatedAt === 'number' ? agoText(s.updatedAt, nowMs) : '—';
 
@@ -302,12 +320,16 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
     // встрече (своего поля «конец пачки» контракт не несёт); форма строки — по макету
     // (v1.html:225): «последняя пачка закончилась в HH:MM»
     const last = (s.recent ?? [])[0];
-    const note = stopped
-      ? 'Процесса нет.'
-      : last
-        ? `последняя пачка закончилась в ${clockText(last.at)}. Новые записи из сетевой папки конвейер подхватит сам.`
-        : 'Новые записи из сетевой папки конвейер подхватит сам.';
-    now = { kind: 'empty', note };
+    // «не проверялось» — заголовок и строка о состоянии, а не «Ничего не обрабатывается /
+    // Процесса нет.»: бэк не читал state.json и про состояние ничего не сказал (см. unchecked)
+    const note = unchecked
+      ? 'Снимок состояния (state.json) не читается — чем занят конвейер, не проверялось.'
+      : stopped
+        ? 'Процесса нет.'
+        : last
+          ? `последняя пачка закончилась в ${clockText(last.at)}. Новые записи из сетевой папки конвейер подхватит сам.`
+          : 'Новые записи из сетевой папки конвейер подхватит сам.';
+    now = { kind: 'empty', heading: unchecked ? 'Состояние не проверялось' : 'Ничего не обрабатывается', note };
   } else {
     const idx = s.stage === 'asr' ? 0 : s.stage === 'summary' ? 1 : s.stage === 'dify' ? 2 : -1;
     const steps = STAGE_LABELS.map((label, i) => ({

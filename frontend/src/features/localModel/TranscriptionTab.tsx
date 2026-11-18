@@ -113,7 +113,9 @@ function NowCard({ view }: { view: TransTabView }) {
     return (
       <Card title="Сейчас">
         <div style={{ fontSize: FS.sm, color: C.textSecondary }}>
-          <span style={{ color: C.textHeading, fontWeight: 600, display: 'block' }}>Ничего не обрабатывается</span>
+          {/* заголовок — из view-модели: при «не проверялось» он свой, экран не должен
+              утверждать «Ничего не обрабатывается» о состоянии, которого бэк не проверял */}
+          <span style={{ color: C.textHeading, fontWeight: 600, display: 'block' }}>{n.heading}</span>
           {n.note}
         </div>
       </Card>
@@ -273,14 +275,17 @@ function FailuresCard({ view }: { view: TransTabView }) {
 
 // === Последние встречи: пять строк и «Показать ещё» (раскрывает остальные ≤20);
 // пустого состояния нет: встреч за сутки не было — блока нет (тот же порядок, что у
-// «Сбоев»: список существует, только когда есть что показать) ===
+// «Сбоев»: список существует, только когда есть что показать).
+// Подписи в шапке нет: просмотрщика сводки ещё нет (Ф4.б), и «касание — открыть сводку»
+// обещало то, чего сделать нечем (дефект №4 приёмки). Метка «.md» у строки остаётся —
+// файл на узле есть; касание даёт честный тост openMeetingNote. ===
 function RecentCard({ view }: { view: TransTabView }) {
   const [showAll, setShowAll] = useState(false);
   const rows = view.meetings;
   if (rows.length === 0) return null;
   const shown = showAll ? rows : rows.slice(0, MEETINGS_INITIAL);
   return (
-    <Card title="Последние встречи" right={<span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>касание — открыть сводку</span>}>
+    <Card title="Последние встречи">
       {shown.map((r, i) => <MeetingRow key={r.id} row={r} top={i > 0} />)}
       {!showAll && rows.length > MEETINGS_INITIAL && (
         <PressableArea

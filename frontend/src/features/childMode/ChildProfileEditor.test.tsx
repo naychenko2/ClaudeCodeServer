@@ -16,7 +16,10 @@
 // предмета в теле → «без полей ответа» краснеет; не сличать serverSubjects в блоке файлов →
 // «новый несохранённый предмет» краснеет; не брать knowledge из ответа сохранения →
 // «ответ обновления обновляет привязку» краснеет; не отдавать false при снятой галке
-// (subjectBody `!== undefined` → `=== true`) → «живое согласие → снять галку» краснеет (Т6-доработка).
+// (subjectBody `!== undefined` → `=== true`) → «живое согласие → снять галку» краснеет (Т6-доработка);
+// обход раннего guard-а ответа сохранения (:432) ПЛЮС снятие внутреннего `s.id === forId` (:435) →
+// «поздний ответ прежнего… не меняет предметы и knowledge нового» краснеет; снятие только :432 —
+// черновик нового цел (его держит :435), краснеет лишь onSaved (К5d, ревью 1e9fc1a9).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, createElement } from 'react';
@@ -555,6 +558,47 @@ describe('ChildProfileEditor: гонка и только-чтение', () => {
     expect(saveBtn(host).disabled, 'не завис в загрузке').toBe(false);
     await click(saveBtn(host));
     expect(calls.map((c) => c.userId)).toEqual(['u-liza', 'u-other']);
+  });
+
+  // К5d (ревью 1e9fc1a9): поздний ответ прежнего пользователя — с предметами и живой привязкой
+  // знания. Ранний guard (ChildProfileEditor.tsx:432) снимает его до setSnap; внутренний
+  // `s.id === forId` (:435) — второй рубеж, и единственный, если ранний снять: без него
+  // subjectApplied и serverSubjectsOf перелили бы черновик нового по общему id ('math').
+  // Поэтому мутация, бьющая именно во внутренний: обход :432 + снятие :435 (одной :435 тест
+  // не краснеет — :432 выходит раньше). Вывод прогонов — в отчёте задачи.
+  it('поздний ответ прежнего пользователя не меняет предметы и knowledge нового', async () => {
+    // Маршруты и список баз — по своему ответу на каждого пользователя: экран нового должен
+    // собраться так же, как экран прежнего.
+    routeAnswers.push(ROUTES);
+    kbAnswers.push(kbList());
+    const { host, rerender } = await mount(liza({ childProfile: withSubjects(subject('math', { knowledge: { datasetId: 'ds-math', attachedAt: '2026-11-01T00:00:00Z' } })) }));
+    await click(saveBtn(host));
+    expect(calls.map((c) => c.userId)).toEqual(['u-liza']);
+    // Новый пользователь — со своим предметом и своей привязкой, того же id 'math': слияние
+    // ответа идёт по id, на общем id и видно, что чужое в черновик не вошло.
+    await rerender(liza({
+      id: 'u-other', username: 'Другой',
+      childProfile: withSubjects(subject('math', { knowledge: { datasetId: 'ds-textbook', attachedAt: '2026-11-10T00:00:00Z' } })),
+    }));
+    // Поздний ответ прежнего: тот же предмет с другой живой привязкой. Открывать предмет
+    // после его снятия: пока запрос в полёте, элементы нового пользователя отключены
+    // (disabled={saving}, :654) — это поведение экрана, не предмет теста.
+    await settle(() => pending.get(0)!.resolve({
+      profile: withSubjects(subject('math', { knowledge: { datasetId: 'ds-math', attachedAt: '2026-11-18T09:00:00Z' } })),
+      tutorPersonaId: 'p-tutor-late',
+    }));
+    await clickTab(host, 'Предметы');
+    await openSubject(host, 'Математика');
+    // Черновик нового не тронут: пикер держит свою привязку, чужая не выбрана.
+    expect(kbSelected(knowledgeSelect(host)!, 'ds-textbook'), 'своя привязка цела').toBe(true);
+    expect(kbSelected(knowledgeSelect(host)!, 'ds-math'), 'чужая привязка ответа не вошла').toBe(false);
+    // Черновик — он же следующее тело нового пользователя: его предмет и его привязка.
+    await click(saveBtn(host));
+    expect(calls.map((c) => c.userId)).toEqual(['u-liza', 'u-other']);
+    expect(sentSubjects(1)[0].knowledge, 'тело нового — его собственная привязка').toEqual({ datasetId: 'ds-textbook', attachedAt: '2026-11-10T00:00:00Z' });
+    // До вызывающего ответ тоже не доходит: тот записывает профиль по ТЕКУЩЕМУ id — чужой лёг бы
+    // на нового пользователя (UserManagementModal.tsx:126).
+    expect(saved.length, 'onSaved для прежнего не зовётся').toBe(0);
   });
 
   it('два нажатия «Сохранить»: один запрос, кнопка в загрузке', async () => {

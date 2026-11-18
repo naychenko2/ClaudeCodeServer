@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -84,6 +85,10 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     private static readonly DateTime RulesT0 = new(2026, 11, 10, 10, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime RulesT1 = new(2026, 11, 17, 12, 0, 0, DateTimeKind.Utc);
 
+    // Фолбэк-таймзона калькулятора лимитов (ChildLimitsCalculator.cs:42): окно теста «предмет
+    // удалён — чат цел» строится относительно «сейчас» в ней.
+    private static readonly TimeZoneInfo Moscow = TimeZoneInfo.FindSystemTimeZoneById("Europe/Moscow");
+
     private readonly Hosts _hosts;
     private readonly HttpClient _admin;
     private readonly UserStore _users;
@@ -101,6 +106,9 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         _hosts.ExtraConfig["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro";
         _hosts.ExtraConfig["LlmProviders:deepseek:Models:0:PriceInMissPer1M"] = "0.5";
         _hosts.ExtraConfig["LlmProviders:deepseek:Models:0:PriceOutPer1M"] = "1.0";
+        // Тест «предмет удалён — чат цел» создаёт детский чат: корень чатов container-владельца
+        // в песочнице (CliRoute.ResolveChatRoot) — та же настройка, что у ChildChatsControllerTests.
+        _hosts.ExtraConfig["Sandbox:ProjectsRoot"] = Path.Combine(Path.GetTempPath(), "ccs-kids-profile-" + Guid.NewGuid().ToString("N"));
         _admin = _hosts.CreateAuthenticatedClient();
         _users = _hosts.Services.GetRequiredService<UserStore>();
         _policy = _hosts.Services.GetRequiredService<IChildModePolicy>();
@@ -599,6 +607,133 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         }
     }
 
+    [Fact]
+    public async Task PutProfile_SubjectRemoved_TutorDeleted_ChatKept()
+    {
+        // Минор R-Т2d 66780808: RemovedSubjectTutors покрыта настоящим PUT: предмет убран
+        // списком тела, его репетитор — сирота (кандидат по Id), репетитор оставшегося предмета
+        // не тронут, а чат предмета остаётся — только для чтения.
+        var id = await NewContainerUser("kid-subject-removed");
+        var local = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Moscow).DateTime;
+        // Окно, действительное «сейчас» (переход через полночь — законное окно): детский чат
+        // тест создаёт, и калькулятор лимитов обязан его пустить.
+        var spaces = new Dictionary<string, object>
+        {
+            ["lessons"] = new
+            {
+                windows = new[] { new { from = local.AddHours(-2).ToString("HH:mm", CultureInfo.InvariantCulture), to = local.AddHours(2).ToString("HH:mm", CultureInfo.InvariantCulture) } },
+                dailyMinutes = 40,
+            },
+        };
+        var (firstStatus, firstResp) = await PutAsync(id, new
+        {
+            enabled = true,
+            providerKey = KidsKey,
+            model = "sonnet",
+            spaces,
+            dailyBudgetUsd = 2,
+            monthlyBudgetUsd = 40,
+            subjects = new[]
+            {
+                new { id = "math", label = "Математика", glyph = "×÷", color = "info", providerKey = KidsKey, model = "sonnet" },
+                new { id = "physics", label = "Физика", glyph = "×", color = "info", providerKey = KidsKey, model = "sonnet" },
+            },
+        });
+        firstStatus.Should().Be(HttpStatusCode.OK);
+        var subjectsJson = firstResp.GetProperty("profile").GetProperty("subjects");
+        var mathTutor = subjectsJson[0].GetProperty("tutorPersonaId").GetString()!;
+        var physicsTutor = subjectsJson[1].GetProperty("tutorPersonaId").GetString()!;
+        mathTutor.Should().NotBeNullOrEmpty();
+        physicsTutor.Should().NotBeNullOrEmpty();
+        SeedRules(id, RulesT1, "правила согласованы"); // без согласия правил чат не создаётся (RulesPending)
+
+        // Чат «Уроков» предмета «math» — своим клиентом ребёнка (детский чат админ не создаёт).
+        var childClient = _hosts.CreateAuthenticatedClient("kid-subject-removed", KidsPassword);
+        (await ChildTestSubjects.CreateChat(childClient, "math")).EnsureSuccessStatusCode();
+
+        // Тот же body без «math»: список тела авторитетен — предмет убран.
+        var (status, _) = await PutAsync(id, new
+        {
+            enabled = true,
+            providerKey = KidsKey,
+            model = "sonnet",
+            spaces,
+            dailyBudgetUsd = 2,
+            monthlyBudgetUsd = 40,
+            subjects = new[]
+            {
+                new { id = "physics", label = "Физика", glyph = "×", color = "info", providerKey = KidsKey, model = "sonnet" },
+            },
+        });
+        status.Should().Be(HttpStatusCode.OK);
+        _users.GetById(id)!.ChildMode!.Subjects.Should().ContainSingle().Which.Id.Should().Be("physics");
+
+        var personas = _hosts.Services.GetRequiredService<PersonaManager>();
+        personas.Get(mathTutor, id).Should().BeNull("сирота удалённого предмета удалена");
+        personas.Get(physicsTutor, id).Should().NotBeNull("репетитор оставшегося предмета не тронут");
+
+        // Чат предмета цел (только чтение — Т1c/Т1d): тот же чат предмета, с флагом закрытого
+        // предмета.
+        var resp = await childClient.GetAsync("/api/child/spaces/lessons/chats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var chats = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync())
+            .GetProperty("chats").EnumerateArray()
+            .Where(c => c.GetProperty("subject").GetString() == "math").ToList();
+        chats.Should().ContainSingle("чат удалённого предмета остаётся — только для чтения").Which
+            .GetProperty("subjectClosed").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PutProfile_ParallelRollback_KeepsForeignTutor()
+    {
+        // Минор R-Т2b 3a7f4e3c: откат удаляет только репетиторов, созданных ЭТИМ запросом.
+        // Чужой репетитор — живая персона ребёнка, чей ключ «сосед» записал в живой профиль
+        // ПОСЛЕ снимка до цикла и ДО отката: откат по снимку удалил бы её как «новую», оставив
+        // висящий ключ. Запись соседа вставляет тест в точке вещания первой creation запроса
+        // (детерминированное вклинивание, тот же приём, что у теста гонки Т2d; настоящая
+        // параллельность не моделируется).
+        var id = await EnableChild("kid-rollback-race");
+        _users.SeedChildSubjectsIfEmpty(id,
+        [
+            new ChildSubject { Id = "physics", Label = "Физика", Glyph = "×", Color = "info", ProviderKey = KidsKey, Model = "sonnet" },
+            new ChildSubject { Id = "math", Label = "Математика", Glyph = "×÷", Color = "info", ProviderKey = KidsKey, Model = "sonnet" },
+        ]).Should().BeTrue("профиль ребёнка пуст — засев проходит");
+
+        var foreign = _hosts.Services.GetRequiredService<PersonaManager>().Create(
+            id, "Репетитор: Математика", null, null, null, null, null, PersonaScope.Global, null, null, null, false);
+
+        // Первая creation запроса (physics): хук вызывается после закрепления ключа — тест
+        // читает свой ключ запроса и записывает соседский в «math»; затем отказ вещания —
+        // запрос идёт в откат.
+        string? ownTutor = null;
+        _hosts.BroadcasterStub.ArmFirstCreated(() =>
+        {
+            ownTutor = StoredSubject(id, "physics").TutorPersonaId;
+            ownTutor.Should().NotBeNullOrEmpty("запрос закрепил своего репетитора до вещания");
+            StoredSubject(id, "math").TutorPersonaId = foreign.Id;
+        });
+        _hosts.BroadcasterStub.ThrowFor = id;
+        try
+        {
+            // Тело без subjects: живой список сохраняется, провиж пустых ключей — своя
+            // работа запроса.
+            var (status, body) = await PutAsync(id, ValidBody());
+            status.Should().Be(HttpStatusCode.InternalServerError);
+            CodeOf(body).Should().Be("tutor_provision_failed");
+
+            ownTutor.Should().NotBeNullOrEmpty("хук первой creation не вызвался — гонка не случилась");
+            var personas = _hosts.Services.GetRequiredService<PersonaManager>();
+            personas.Get(foreign.Id, id).Should().NotBeNull(
+                "чужой репетитор появился в профиле после снимка: откат своих его не трогает");
+            personas.Get(ownTutor!, id).Should().BeNull("персону, созданную этим запросом, откат удалил");
+        }
+        finally
+        {
+            _hosts.BroadcasterStub.OnFirstCreated = null;
+            _hosts.BroadcasterStub.ThrowFor = null;
+        }
+    }
+
     // --- правила ребёнка: их не принимает тело, resetRules — единственный сброс ---
 
     [Fact]
@@ -994,6 +1129,50 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     [Fact]
+    public async Task PutProfile_CallerMissing_Returns403CallerNotFound()
+    {
+        // Минор R-К1b 24b98007: «вызывающий админ не найден в сторе» — отдельный отказ, а не
+        // knowledge_unavailable с текстом про Dify. Состояние достижимо только внутри запроса:
+        // политика ручки (AdminByStore) читает тот же стор до действия, и на момент авторизации
+        // вызывающий в нём есть. Тест держит запрос на списке датасетов — точке после политики
+        // и проверки тела, перед поиском вызывающего — и удаляет его там.
+        var id = await NewContainerUser("kid-caller-gone");
+        var goneAdminName = "admin-gone";
+        var goneAdmin = await NewAdminUser(goneAdminName);
+        var client = _hosts.CreateAuthenticatedClient(goneAdminName, KidsPassword);
+
+        var arrived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var open = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _hosts.DifyStub.HoldArrived = arrived;
+        _hosts.DifyStub.HoldOpen = open;
+        try
+        {
+            var send = client.SendAsync(new HttpRequestMessage(HttpMethod.Put, $"/api/users/{id}/child-profile")
+            { Content = JsonContent.Create(BodyWithSubjectKnowledge("d-kb")) });
+            // Порог — страховка от зависания, не проверка: не дошёл — красный с текстом.
+            var arrivedInTime = false;
+            try { arrivedInTime = await arrived.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
+            catch (TimeoutException) { }
+            arrivedInTime.Should().BeTrue("запрос не дошёл до списка датасетов");
+
+            _users.Delete(goneAdmin); // автора привязки в сторе больше нет
+            open.SetResult(true);
+
+            var resp = await send;
+            var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+            resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+            CodeOf(body).Should().Be("caller_not_found", "отсутствие вызывающего — не отказ Dify");
+            body.TryGetProperty("message", out _).Should().BeTrue("отказ формы {code,message}");
+            _users.GetById(id)!.ChildMode.Should().BeNull("отказ до записи профиля");
+        }
+        finally
+        {
+            _hosts.DifyStub.HoldArrived = null;
+            _hosts.DifyStub.HoldOpen = null;
+        }
+    }
+
+    [Fact]
     public async Task Put_Знание_ТотЖеIdОтДругогоАдмена_ПараНеМеняется_NullСнимает()
     {
         var id = await NewContainerUser("kid-kb-keep");
@@ -1027,73 +1206,107 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     [Fact]
     public async Task PutProfile_ParallelKnowledge_NoMixedPair()
     {
+        // Минор R-К1b 24b98007 (п.3): гонка двух PUT без записи в живой объект мимо замка и
+        // без порога времени. Два PUT одного ребёнка привязывают РАЗНЫЕ датасеты (основной
+        // адмен — свою «самостоятельную», другой адмен — глобальную); барьер на списке
+        // датасетов: оба запроса встречаются на нём и идут дальше вместе — окно между
+        // первым чтением профиля и записью под локом стора живо для обоих.
         var id = await EnableChild("kid-kb-race");
-        var otherAdmin = await NewAdminUser("kbadmin-c");
+        var otherAdminName = "kbadmin-c";
+        var otherAdmin = await NewAdminUser(otherAdminName);
 
-        // Первая привязка — обычным PUT: с неё начинается то, что обязан не вернуть второй
-        // запрос, если живое значение к моменту его записи уже другое.
-        (await PutAsync(id, BodyWithSubjectKnowledge("d-kb"))).Status.Should().Be(HttpStatusCode.OK);
-        var initial = _users.GetById(id)!.ChildMode!;
-        var subject = initial.Subjects.Single(s => s.Id == "math");
-
-        const long minute = TimeSpan.TicksPerMinute;
-        var stop = false;
-        var lastTicks = RulesT0.Ticks;
-        var rebind = Task.Run(() =>
+        _hosts.DifyStub.ArmBarrier(2);
+        try
         {
-            // Плотная серия перепривязок ТОГО ЖЕ датасета другим адменом: прямые записи в
-            // живой профиль, пока он не заменён (тот же приём, что у серии согласия правил).
-            // Пара (id, автор, момент) монотонна и различима: чужая пара узнаётся по автору.
-            while (!Volatile.Read(ref stop) && ReferenceEquals(_users.GetById(id)!.ChildMode, initial))
-            {
-                lastTicks += minute;
-                subject.Knowledge = new ChildSubjectKnowledge("d-kb", otherAdmin,
-                    new DateTime(Volatile.Read(ref lastTicks), DateTimeKind.Utc));
-            }
-        });
+            var putA = PutAsync(id, BodyWithSubjectKnowledge("d-kb"));
+            var clientB = _hosts.CreateAuthenticatedClient(otherAdminName, KidsPassword);
+            var sendB = clientB.SendAsync(new HttpRequestMessage(HttpMethod.Put, $"/api/users/{id}/child-profile")
+            { Content = JsonContent.Create(BodyWithSubjectKnowledge("d-global")) });
 
-        // Барьер на локе стора и длинный путь запроса (60 опекунов — десятки обращений к стору):
-        // окно между первым чтением профиля запросом и его записью под локом — живое.
-        _users.SetModelTiers(AdminId, "sonnet", null, null);
-        _users.RemapModels(_ => null);
+            // Барьер открылся только когда оба запроса дошли до списка — гонка состоялась.
+            // Порог здесь — страховка от зависания, не проверка: не сошлись — красный с текстом.
+            var raced = false;
+            try { raced = await _hosts.DifyStub.BarrierArrived.WaitAsync(TimeSpan.FromSeconds(30)); }
+            catch (TimeoutException) { }
+            raced.Should().BeTrue("оба запроса не сошлись на списке датасетов — гонки не было");
 
-        var (status, _) = await PutAsync(id, BodyWithSubjectKnowledge("d-kb", Enumerable.Repeat(AdminId, 60).ToArray()));
-        Volatile.Write(ref stop, true);
-        await rebind;
+            var (statusA, _) = await putA;
+            var respB = await sendB;
+            statusA.Should().Be(HttpStatusCode.OK);
+            respB.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        status.Should().Be(HttpStatusCode.OK);
-        var kept = StoredKnowledge(id);
-        // Пара целиком из живой привязки стора на момент записи: автор — серии, а не
-        // вызывающего адмена; момент — её последнее значение (±1–2 итерации), а не UtcNow
-        // запроса и не значение первого PUT. Слияние по снимку профиля вне замка отстаёт на
-        // весь путь запроса — на замере десятки минут.
-        kept.DatasetId.Should().Be("d-kb");
-        kept.AttachedByUserId.Should().Be(otherAdmin, "живая пара стора, а не кандидат этого запроса");
-        var duringEdit = new DateTime(Volatile.Read(ref lastTicks), DateTimeKind.Utc);
-        var lagMinutes = (duringEdit.Ticks - kept.AttachedAt.Ticks) / minute;
-        lagMinutes.Should().BeLessThan(60,
-            "привязка, сделанная во время правки, сохранена: слияние под локом стора по живому значению, не по снимку первого чтения");
+            // Итог — пара одного запроса целиком: либо основного адмена (он записал последним),
+            // либо другого адмена (он записал последним). Смешанной пары (datasetId одного
+            // запроса с автором другого) быть не может: слияние под локом стора либо сохраняет
+            // живую пару целиком (тот же id), либо берёт кандидат одного запроса — его id,
+            // его автор, его момент (UserStore.SetChildProfile).
+            var kept = StoredKnowledge(id);
+            var whole = (kept.DatasetId == "d-kb" && kept.AttachedByUserId == AdminId)
+                || (kept.DatasetId == "d-global" && kept.AttachedByUserId == otherAdmin);
+            whole.Should().BeTrue("пара привязки — из одного запроса, не смесь двух");
+        }
+        finally
+        {
+            _hosts.DifyStub.ClearBarrier();
+        }
     }
 
     /// <summary>Подменённый Dify: список датасетов — по слову теста, отказ — по флагу.
     /// Путь листинга — /v1/datasets (BaseAddress + «datasets?page=…» из ListDatasetsAsync);
     /// всё остальное — пустой лист, чтобы ни один фоновый потребитель хоста не увидел здесь
-    /// ничего неожиданного.</summary>
+    /// ничего неожиданного.
+    /// Держатель и барьер — для тестов гонки ВНУТРИ запроса: список датасетов — точка после
+    /// политики и проверки тела, где тест может стоять своим шлюзом (поиск вызывающего и
+    /// слияние под локом стора — после неё). Тест ставит их сам и снимает в finally; чужие
+    /// тесты к ним не обращаются.</summary>
     internal sealed class FakeDify : HttpMessageHandler
     {
         public bool Throw;
         public string DatasetsJson = "[]";
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        // Держатель: первый /datasets сигналит приход и стоит, пока тест не откроет шлюз
+        // (тест «вызывающий удалён во время запроса»).
+        public TaskCompletionSource<bool>? HoldArrived;
+        public TaskCompletionSource<bool>? HoldOpen;
+
+        // Барьер N сторон: каждый /datasets приходит к барьеру; последний из ожидаемых
+        // открывает шлюз, и все идут дальше одновременно (гонка двух PUT).
+        private TaskCompletionSource<bool>? _barrier;
+        private int _barrierRemaining;
+        public void ArmBarrier(int parties)
         {
+            _barrier = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _barrierRemaining = parties;
+        }
+        public void ClearBarrier() => Volatile.Write(ref _barrier, null);
+        public Task<bool> BarrierArrived => _barrier!.Task;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var isDatasets = request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/datasets");
+            if (isDatasets)
+            {
+                var open = Volatile.Read(ref HoldOpen);
+                if (open is not null)
+                {
+                    Volatile.Read(ref HoldArrived)?.TrySetResult(true);
+                    await open.Task.ConfigureAwait(false);
+                }
+                var barrier = Volatile.Read(ref _barrier);
+                if (barrier is not null)
+                {
+                    if (Interlocked.Decrement(ref _barrierRemaining) <= 0) barrier.TrySetResult(true);
+                    await barrier.Task.ConfigureAwait(false);
+                }
+            }
             if (Throw) throw new HttpRequestException("Dify не ответил");
-            var json = request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/datasets")
+            var json = isDatasets
                 ? $"{{\"data\":{DatasetsJson},\"has_more\":false}}"
                 : """{"data":[],"has_more":false}""";
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
-            });
+            };
         }
     }
 
@@ -1104,6 +1317,19 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     {
         public string? ThrowFor { get; set; }
 
+        // Хук первой «created» для владельца (тест гонки отката): вызывается ПОСЛЕ закрепления
+        // ключа в сторе и ПЕРЕД отказом вещания — точка, где тест вклинивает свою запись в
+        // живой профиль запроса. Счётчик обнуляется армингом: чужие тесты с ThrowFor уже
+        // нарастили его на своих creation, и «первая» этого теста не стала бы первой.
+        // Чужие тесты хука не ставят — поведение стаба прежнее.
+        public Action? OnFirstCreated;
+        private int _createdCount;
+        public void ArmFirstCreated(Action hook)
+        {
+            Volatile.Write(ref _createdCount, 0);
+            Volatile.Write(ref OnFirstCreated, hook);
+        }
+
         private void MaybeThrow(string ownerId)
         {
             if (ownerId == ThrowFor) throw new InvalidOperationException("вещание тьютора не удалось");
@@ -1113,6 +1339,11 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
         public Task ToOwner(string ownerId, ServerMessage message)
         {
+            if (ownerId == ThrowFor && message is PersonasChangedMessage { Action: "created" } && ++_createdCount == 1)
+            {
+                OnFirstCreated?.Invoke();
+                throw new InvalidOperationException("вещание создания отклонено тестом (вклинивание сделано)");
+            }
             MaybeThrow(ownerId);
             return Task.CompletedTask;
         }

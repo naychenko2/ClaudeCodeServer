@@ -211,9 +211,7 @@ public class UsersController(UserStore users, SessionManager sessions,
         // профиля: не исключение и не тихий пропуск проверки.
         if (RequestsKnowledgeBinding(req))
         {
-            // Привязывает адмен ручки: «своя» база бывает у него, а не у ребёнка.
-            var caller = string.IsNullOrEmpty(callerId) ? null : users.GetById(callerId);
-            if (knowledge is null || !knowledge.IsConfigured || caller is null)
+            if (knowledge is null || !knowledge.IsConfigured)
                 return BadRequest(new { code = "knowledge_unavailable", message = "База знаний недоступна: вертикаль «Знаний» выключена или Dify не настроен." });
 
             IReadOnlyDictionary<string, string> datasets;
@@ -228,6 +226,17 @@ public class UsersController(UserStore users, SessionManager sessions,
                 logger.LogWarning(ex, "Детский режим: список датасетов Dify не получен для {User}", id);
                 return BadRequest(new { code = "knowledge_unavailable", message = "Не удалось проверить базу знаний: Dify не ответил." });
             }
+
+            // Привязывает адмен ручки: «своя» база бывает у него, а не у ребёнка. Вызывающий
+            // проверяется после списка датасетов — непосредственно перед валидатором, который
+            // его читает: состояние «адмена нет в сторе» достижимо только внутри запроса —
+            // политика ручки (AdminByStore) читает тот же стор до действия, и на момент
+            // авторизации вызывающий в нём есть. Знание о вызывающем до списка описывало бы
+            // более ранний момент и сливалось бы с отказом вертикали; knowledge_unavailable
+            // остаётся текстом только про вертикаль/Dify (минор R-К1b 24b98007).
+            var caller = string.IsNullOrEmpty(callerId) ? null : users.GetById(callerId);
+            if (caller is null)
+                return StatusCode(403, new { code = "caller_not_found", message = "Администратор, вызвавший изменение, не найден." });
 
             if (ChildProfileValidator.ValidateSubjectKnowledge(req, caller, users, LiveKnowledge(user), datasets) is { } kReject)
                 return BadRequest(new { code = kReject.Code, message = kReject.Message });
@@ -279,40 +288,53 @@ public class UsersController(UserStore users, SessionManager sessions,
         // сохранённого профиля. Провижер идемпотентен: живой ключ возвращает тот же id без
         // создания (один репетитор может вести несколько предметов, засев миграции даёт
         // предмету тьютора профиля), пустой или висящий — провится заново.
-        // Снимок ключей берётся ДО провижна: SetChildSubjectTutor пишет в те же объекты,
-        // что живой профиль (а при слиянии «тела без subjects» — и в откатываемый снимок),
-        // поэтому «создана ЭТИМ вызовом» на момент отказа различается только сравнением с
-        // тем, что было до цикла. При отказе любого предмета (исключение или null) все новые
-        // ключи удаляются до RestoreChildProfile: после отката их не найти в профиле.
-        var subjectKeysBefore = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (users.GetById(id)?.ChildMode is { } prepared)
-        {
-            foreach (var subject in prepared.Subjects)
-                subjectKeysBefore[subject.Id] = subject.TutorPersonaId;
-        }
+        // «Создана ЭТИМ запросом» собирается в цикле: ключ результата, отличный от ключа
+        // предмета на момент вызова (живое чтение прямо перед ним). Сравнение с снимком до
+        // цикла — неверный критерий при параллельном PUT: соседний запрос закрепил своего
+        // репетитора после снимка, а этот провиж вернул его как живой — откат по снимку удалил
+        // бы чужую персону, оставив висящий ключ (минор R-Т2b 3a7f4e3c). Точность здесь —
+        // окно одного вызова: чужая запись между живым чтением и провижем того же предмета
+        // всё ещё возможна; точное «создана мной» знает только провижер под своим замком.
+        var ownCreatedTutors = new List<string>();
         try
         {
             if (users.GetById(id)?.ChildMode is { } stored)
             {
                 foreach (var subject in stored.Subjects)
                 {
-                    var subjectTutorId = await childTutorProvisioner.EnsureSubjectTutorAsync(id, subject.Id);
+                    var beforeKey = subject.TutorPersonaId;
+                    string? subjectTutorId;
+                    try
+                    {
+                        subjectTutorId = await childTutorProvisioner.EnsureSubjectTutorAsync(id, subject.Id);
+                    }
+                    catch
+                    {
+                        // Исключение изнутри провижна: ключ уже закреплён (отказ вещания после
+                        // закрепления) — созданная персона наша, добавляем её живым ключом;
+                        // закрепления не было — провижер удалил свою сам, и живой ключ равен
+                        // прежнему, добавлять нечего.
+                        if (!string.IsNullOrWhiteSpace(subject.TutorPersonaId) && subject.TutorPersonaId != beforeKey)
+                            ownCreatedTutors.Add(subject.TutorPersonaId);
+                        throw;
+                    }
                     // null — провижн невозможен (ребёнок или предмет исчезли на параллельной
                     // правке, запрос отменён): ребёнок с предметом без репетитора не остаётся.
                     if (subjectTutorId is null)
                     {
                         logger.LogWarning("Детский режим: провижн репетитора предмета {Subject} не удался для {User}", subject.Id, id);
-                        RollbackSubjectTutors(id, subjectKeysBefore);
+                        RollbackSubjectTutors(id, ownCreatedTutors);
                         RollbackChildProfile(id, previous);
                         return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось закрепить персону-репетитора предмета; профиль не изменён." });
                     }
+                    if (subjectTutorId != beforeKey) ownCreatedTutors.Add(subjectTutorId);
                 }
             }
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Детский режим: провижн репетитора предмета не удался для {User}", id);
-            RollbackSubjectTutors(id, subjectKeysBefore);
+            RollbackSubjectTutors(id, ownCreatedTutors);
             RollbackChildProfile(id, previous);
             return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось создать персону-репетитора предмета; профиль не изменён." });
         }
@@ -353,20 +375,17 @@ public class UsersController(UserStore users, SessionManager sessions,
         users.RestoreChildProfile(id, previous);
     }
 
-    // Откат репетиторов предметов, созданных ЭТИМ вызовом: ключ живого профиля, отличный от
-    // снимка до провижна. Вызывается ДО RestoreChildProfile: после отката ключей новых персон
-    // в профиле нет, и их не найти. Свой откат провижера (отказ закрепления) в этот разбор не
-    // попадает: там ключ живого профиля равен снимку, персона уже удалена им самим. Сбой
-    // самого удаления — только лог: причина 500 уже известна, сирота видна в логе (тот же
-    // приём, что у RollbackDelete в провижере).
-    private void RollbackSubjectTutors(string id, Dictionary<string, string> subjectKeysBefore)
+    // Откат репетиторов предметов, созданных ЭТИМ запросом: ключи, собранные в цикле провижна
+    // (результат вызова, отличный от живого ключа предмета на момент вызова). Чужие ключи —
+    // те, что закрепил параллельный запрос после живого чтения этого, — не трогаются: они
+    // живут в профиле или будут убраны своим запросом (минор R-Т2b 3a7f4e3c). Свой откат
+    // провижера (отказ закрепления) в этот разбор не попадает: там персона уже удалена им
+    // самим. Сбой самого удаления — только лог: причина 500 уже известна, сирота видна в
+    // логе (тот же приём, что у RollbackDelete в провижере).
+    private void RollbackSubjectTutors(string id, List<string> ownCreatedTutors)
     {
-        if (users.GetById(id)?.ChildMode is not { } live) return;
-        foreach (var subject in live.Subjects)
+        foreach (var key in ownCreatedTutors)
         {
-            var key = subject.TutorPersonaId;
-            if (string.IsNullOrWhiteSpace(key)) continue;
-            if (subjectKeysBefore.TryGetValue(subject.Id, out var before) && before == key) continue;
             try { personas.Delete(key, id); }
             catch (Exception ex)
             {

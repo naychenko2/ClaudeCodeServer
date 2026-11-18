@@ -891,6 +891,11 @@ public sealed class ChatSettings
     // хода (Working/Waiting) состав не трогаем — переключение подействует со следующего.
     // S3-7: опущено из приёма хода к владельцу смены спикера (SwitchSpeaker здесь же);
     // точка вызова — приём хода (фасадная обёртка и приватные форвардеры в SessionManager сняты).
+    // Догон перезакрепления детского чата на старте хода — тонкий делегат к ProviderMigration
+    // (TurnIntake держит _settings, своих зависимостей на миграцию у него нет).
+    internal Task<bool> CatchUpChildChatAsync(string sessionId, string ownerId)
+        => _providerMigration.CatchUpChildChatAsync(sessionId, ownerId);
+
     internal async Task RouteGroupSpeakerAsync(string sessionId, SessionEntry entry, string text)
     {
         if (entry.Info.Participants is not { Count: > 1 } participantIds) return;

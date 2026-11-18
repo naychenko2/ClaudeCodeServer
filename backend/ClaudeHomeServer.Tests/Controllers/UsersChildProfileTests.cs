@@ -981,6 +981,94 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     [Fact]
+    public async Task CatchUp_ProviderChangedDuringTurn_NextStartMovesChatWithTranscript()
+    {
+        // Т2e2 (ревью be3ab479, п.2): PUT со сменой поставщика на идущем ходе пропустил чат; ход
+        // кончился — на старте следующего (TurnIntake → ChatSettings → ProviderMigration.CatchUp…)
+        // чат переносится на маршрут предмета вместе с транскриптом, и сверка И1-бис проходит.
+        var kid = await EnableChildWithSubjects("kid-catchup", ("russian", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-catchup", "russian");
+        var dst = SeedTranscript(kid, chat, KidsKey, "csid-catchup-1", "deepseek", out _);
+        MarkTurnInFlight(chat.Id);
+
+        var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
+        status.Should().Be(HttpStatusCode.OK);
+        var sessions = _hosts.Services.GetRequiredService<SessionManager>();
+        sessions.GetById(chat.Id)!.Provider.Should().Be(KidsKey, "под идущим ходом PUT чат пропустил");
+        _hosts.Services.GetRequiredService<IChildModeGate>().LaunchMismatch(kid, sessions.GetById(chat.Id)!)
+            .Should().NotBeNull("до догона ход отказал бы по расхождению маршрута");
+
+        _hosts.Services.GetRequiredService<SessionStore>().Sessions[chat.Id].TurnWaiter = null;
+        var moved = await _hosts.Services.GetRequiredService<ProviderMigration>().CatchUpChildChatAsync(chat.Id, kid);
+
+        moved.Should().BeTrue();
+        var live = sessions.GetById(chat.Id)!;
+        live.Provider.Should().Be("deepseek");
+        live.Model.Should().Be("deepseek-v4-pro");
+        File.Exists(dst).Should().BeTrue("транскрипт скопирован в профиль нового поставщика");
+        _hosts.Services.GetRequiredService<IChildModeGate>().LaunchMismatch(kid, live).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CatchUp_PoolKey_ChatGetsExactlyThatKey_NotPick()
+    {
+        // И2′ для пути догона: цель — ровно ProviderKey предмета. Мутация «targetKey = Pick(model)»
+        // отправила бы чат на аккаунт, выбранный пулом, а не на запись предмета.
+        var kid = await EnableChildWithSubjects("kid-catchup-pool", ("russian", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-catchup-pool", "russian");
+        var dst = SeedTranscript(kid, chat, KidsKey, "csid-catchup-2", KidsKey2, out _);
+        MarkTurnInFlight(chat.Id);
+        (await PutAsync(kid, RepinBody(("russian", KidsKey2, "sonnet", null)))).Status.Should().Be(HttpStatusCode.OK);
+        _hosts.Services.GetRequiredService<SessionStore>().Sessions[chat.Id].TurnWaiter = null;
+
+        await _hosts.Services.GetRequiredService<ProviderMigration>().CatchUpChildChatAsync(chat.Id, kid);
+
+        _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.Provider.Should().Be(KidsKey2);
+        File.Exists(dst).Should().BeTrue("транскрипт переехал в профиль записи предмета");
+    }
+
+    [Fact]
+    public async Task CatchUp_TurnStillInFlight_ChatSkipped()
+    {
+        // Догон под идущим ходом — тот же пропуск, что у PUT: поля и транскрипт не тронуты.
+        var kid = await EnableChildWithSubjects("kid-catchup-busy", ("russian", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-catchup-busy", "russian");
+        var dst = SeedTranscript(kid, chat, KidsKey, "csid-catchup-3", "deepseek", out _);
+        (await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)))).Status.Should().Be(HttpStatusCode.OK);
+        _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.Provider.Should().Be("deepseek");
+        // Чат уже перенесён PUT'ом; вернём его на старые поля и займём ходом
+        var live = _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!;
+        live.Provider = KidsKey; live.Model = "sonnet";
+        File.Delete(dst);
+        MarkTurnInFlight(chat.Id);
+
+        var moved = await _hosts.Services.GetRequiredService<ProviderMigration>().CatchUpChildChatAsync(chat.Id, kid);
+
+        moved.Should().BeFalse();
+        live.Provider.Should().Be(KidsKey);
+        File.Exists(dst).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CatchUp_AdultChat_Untouched()
+    {
+        // Чат без детского пространства (и владелец не ребёнок) догоном не затрагивается.
+        var store = _hosts.Services.GetRequiredService<SessionStore>();
+        var id = "adult-catchup-" + Guid.NewGuid().ToString("N");
+        store.Sessions[id] = new SessionEntry
+        {
+            Info = new Session { Id = id, OwnerId = "adult-owner", Provider = KidsKey, Model = "sonnet" },
+        };
+
+        var moved = await _hosts.Services.GetRequiredService<ProviderMigration>().CatchUpChildChatAsync(id, "adult-owner");
+
+        moved.Should().BeFalse();
+        store.Sessions[id].Info.Provider.Should().Be(KidsKey);
+        store.Sessions[id].Info.Model.Should().Be("sonnet");
+        store.Sessions.TryRemove(id, out _);
+    }
+
+    [Fact]
     public async Task PutProfile_SubjectPoolKeyChanged_ChatGetsExactlyThatKey_NotPick()
     {
         // Т2e2, сторож И2′: цель переноса — ровно ProviderKey предмета. Мутация «targetKey =

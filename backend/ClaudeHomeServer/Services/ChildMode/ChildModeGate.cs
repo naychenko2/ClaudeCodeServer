@@ -98,20 +98,8 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
         if (snapshot.DenyAll || snapshot.Profile is not { } profile)
             return "профиль детского режима не проходит проверку";
         // Чат правил сверяется с полями профиля, чат «Уроков» — с записью включённого предмета.
-        var persona = profile.TutorPersonaId;
-        var provider = profile.ProviderKey;
-        var model = profile.Model;
-        var lessonsChat = session.ChildSpace is not null && session.OnboardingKind != OnboardingKinds.ChildRules;
-        var acknowledged = false;
-        if (lessonsChat)
-        {
-            var subject = session.ChildSubject is { } id
-                ? profile.Subjects?.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase))
-                : null;
-            if (subject is not { Enabled: true }) return "Этот предмет закрыт";
-            (persona, provider, model) = (subject.TutorPersonaId, subject.ProviderKey, subject.Model);
-            acknowledged = subject.RouteAcknowledgedAt is not null;
-        }
+        if (RouteFields(profile, session) is not { } route) return "Этот предмет закрыт";
+        var (persona, provider, model, acknowledged) = route;
         if (session.PersonaId != persona)
             return "персона чата не совпадает с закреплённым тьютором";
         if (session.Provider != provider)
@@ -121,7 +109,7 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
         // Маршрут (И2′): маркер tier:*/preset:* в модели или пара, которую ChildRoute не принимает (подписка,
         // выключенный/чужой провайдер, нет цены или согласия админа) — отказ запуска. Поля чата уже равны
         // полям записи, поэтому отдельно чат не проверяется: он «закреплён» на этот же маршрут.
-        if (!ChildRoute.Evaluate(provider, model, acknowledged, pool, providers).Accepted)
+        if (!RouteAccepted(route))
             return "маршрут модели не допускается в детском режиме";
         if (session.ProjectId is not null)
             return "детский чат не может принадлежать проекту";
@@ -129,4 +117,34 @@ public sealed class ChildModeGate(IChildModePolicy policy, ChildLimitsCalculator
             return "режим чата не совпадает с режимом детского профиля";
         return null;
     }
+
+    // Живой маршрут для догона перезакрепления (на старте хода): тот же источник полей и тот же
+    // вердикт ChildRoute, что у LaunchMismatch — через общие RouteFields и RouteAccepted.
+    public ChildRepinTarget? LiveRouteFor(string? ownerId, Session session)
+    {
+        if (string.IsNullOrWhiteSpace(ownerId)) return null;
+        if (policy.For(ownerId) is not { DenyAll: false, Profile: { } profile }) return null;
+        if (session.ChildSpace is null || session.OnboardingKind == OnboardingKinds.ChildRules) return null;
+        if (RouteFields(profile, session) is not { } route || !RouteAccepted(route)) return null;
+        return new ChildRepinTarget(route.Persona, route.Provider, route.Model);
+    }
+
+    private readonly record struct RouteFieldsOf(string Persona, string Provider, string Model, bool Acknowledged);
+
+    // Поля, с которыми обязан совпасть чат: чат правил — поля профиля, чат «Уроков» — запись
+    // включённого предмета. null — предмет чата «Уроков» закрыт или не найден.
+    private static RouteFieldsOf? RouteFields(ChildProfile profile, Session session)
+    {
+        var lessonsChat = session.ChildSpace is not null && session.OnboardingKind != OnboardingKinds.ChildRules;
+        if (!lessonsChat) return new(profile.TutorPersonaId, profile.ProviderKey, profile.Model, false);
+        var subject = session.ChildSubject is { } id
+            ? profile.Subjects?.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase))
+            : null;
+        if (subject is not { Enabled: true }) return null;
+        return new(subject.TutorPersonaId, subject.ProviderKey, subject.Model, subject.RouteAcknowledgedAt is not null);
+    }
+
+    // Маршрут (И2′): маркер tier:*/preset:* в модели или пара, которую ChildRoute не принимает.
+    private bool RouteAccepted(RouteFieldsOf r) =>
+        ChildRoute.Evaluate(r.Provider, r.Model, r.Acknowledged, pool, providers).Accepted;
 }

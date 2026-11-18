@@ -117,6 +117,7 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<LlmProviderRegistry>(),
             sp.GetRequiredService<ClaudeSubscriptionPool>(),
             sp.GetRequiredService<Lazy<ITeamNotifier>>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModeGate>(),
             sp.GetRequiredService<ILogger<ProviderMigration>>()));
         services.AddSingleton(sp => new ChatNaming(
             sp.GetRequiredService<SessionStore>(),

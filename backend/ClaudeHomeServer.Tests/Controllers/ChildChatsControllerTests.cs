@@ -45,6 +45,8 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
         public string? LaunchLimitRefusal(string? ownerId, Session session, DateTimeOffset now)
             => inner.LaunchLimitRefusal(ownerId, session, now);
         public ChildPolicySnapshot? PolicyFor(string ownerId) => inner.PolicyFor(ownerId);
+        public ChildRepinTarget? LiveRouteFor(string? ownerId, Session session)
+            => inner.LiveRouteFor(ownerId, session);
     }
 
     private sealed class FixedSpend : IOwnerSpendReader

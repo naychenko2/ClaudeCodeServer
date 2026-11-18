@@ -1,13 +1,11 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Team;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.Sessions;
-
-/// <summary>Живой маршрут предмета для перезакрепления его чатов: репетитор, поставщик (ключ записи пула или провайдера) и модель.</summary>
-public sealed record ChildRepinTarget(string PersonaId, string ProviderKey, string Model);
 
 // Смена провайдера у чата (S3-3, docs/research/session-manager-split-2026-11.md §1):
 // единственная точка — и карточка «Продолжить на …» при исчерпанном лимите, и обычная смена
@@ -31,6 +29,7 @@ public sealed class ProviderMigration
     // штаб возвращает чат из стадии. Рекурсия через фасад (ITeamNotifier реализует
     // SessionManager) — названа ленивым швом (S3-0 §3, S3-6 переклюет на владельца).
     private readonly Lazy<ITeamNotifier> _teamNotifier;
+    private readonly IChildModeGate _childGate;
     private readonly ILogger<ProviderMigration> _log;
 
     internal ProviderMigration(
@@ -39,6 +38,7 @@ public sealed class ProviderMigration
         LlmProviderRegistry llmProviders,
         ClaudeSubscriptionPool subscriptionPool,
         Lazy<ITeamNotifier> teamNotifier,
+        IChildModeGate childGate,
         ILogger<ProviderMigration> log)
     {
         _store = store;
@@ -46,6 +46,7 @@ public sealed class ProviderMigration
         _llmProviders = llmProviders;
         _subscriptionPool = subscriptionPool;
         _teamNotifier = teamNotifier;
+        _childGate = childGate;
         _log = log;
     }
 
@@ -260,6 +261,30 @@ public sealed class ProviderMigration
             finally { ChildRepinGate.Release(); }
         }
         return changed;
+    }
+
+    // Догон отложенного перезакрепления на старте хода: PUT со сменой поставщика пропустил чат с
+    // идущим ходом, а ход кончился — чат расходится с живым маршрутом предмета и отказал бы по
+    // LaunchMismatch. Цель — гейт (LiveRouteFor: то же решение, что у сверки), ровно ProviderKey
+    // предмета, Pick не зовётся (И2′). Зовётся ДО EnsureProcessAsync и снаружи его EnsureLock.
+    // Идущий ход (сам старт) — пропуск как у PUT; сбой переноса — лог, ход пойдёт и откажет сверкой.
+    // Строгий порядок общий с PUT: тот же ChildRepinGate.
+    public async Task<bool> CatchUpChildChatAsync(string sessionId, string ownerId)
+    {
+        if (!_store.Sessions.TryGetValue(sessionId, out var entry)) return false;
+        var info = entry.Info;
+        if (info.ChildSpace is null || _childGate.LiveRouteFor(ownerId, info) is null) return false;
+        await ChildRepinGate.WaitAsync();
+        try
+        {
+            return await RepinOneChildChatAsync(sessionId, ownerId, () => _childGate.LiveRouteFor(ownerId, info));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Детский режим: догон чата {Session} на маршрут предмета не удался (ребёнок {Owner})", sessionId, ownerId);
+            return false;
+        }
+        finally { ChildRepinGate.Release(); }
     }
 
     private async Task<bool> RepinOneChildChatAsync(string sessionId, string ownerId, Func<ChildRepinTarget?> liveTarget)

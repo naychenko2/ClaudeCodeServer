@@ -8,6 +8,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ChatSubjects;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;

@@ -1709,6 +1709,149 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         }
     }
 
+    // --- GET живого профиля (Д1, дефект 06201244): редактор читает ровно то, что сохранил PUT ---
+
+    private async Task<(HttpStatusCode Status, JsonElement Body)> GetAsync(string id)
+    {
+        var resp = await _admin.GetAsync($"/api/users/{id}/child-profile");
+        var text = await resp.Content.ReadAsStringAsync();
+        return (resp.StatusCode, text.Length > 0 ? JsonSerializer.Deserialize<JsonElement>(text) : default);
+    }
+
+    [Fact]
+    public async Task GetProfile_AfterPut_ReturnsExactlyThePutProfile()
+    {
+        // c1: PUT с двумя предметами → GET отдаёт тот же профиль, форма равна ответу PUT:
+        // предметы в порядке профиля с их репетиторами, согласие и момент маршрута, окна и
+        // лимиты, tutorPersonaId. До ручки №10-чтения редактор в свежей сессии видел пустой
+        // черновик и сохранением затирал живые предметы (дефект 06201244).
+        var id = await NewContainerUser("kid-get-roundtrip");
+        var body = RepinBody(("math", KidsKey, "sonnet", null), ("physics", "deepseek", "deepseek-v4-pro", true));
+        var (putStatus, putBody) = await PutAsync(id, body);
+        putStatus.Should().Be(HttpStatusCode.OK);
+
+        var (status, got) = await GetAsync(id);
+        status.Should().Be(HttpStatusCode.OK);
+        JsonElement.DeepEquals(putBody.GetProperty("profile"), got.GetProperty("profile")).Should().BeTrue(
+            "ответ GET равен ответу PUT: та же форма в обе стороны, живые предметы вместо пустого черновика");
+        got.GetProperty("tutorPersonaId").GetString().Should().Be(putBody.GetProperty("tutorPersonaId").GetString());
+
+        // Содержание по пунктам карточки — не только побайтовое равенство: профиль включён,
+        // предметы в порядке стора, у каждого свой репетитор, согласие предмета видно с моментом.
+        var profile = got.GetProperty("profile");
+        profile.GetProperty("enabled").GetBoolean().Should().BeTrue();
+        profile.GetProperty("providerKey").GetString().Should().Be(KidsKey);
+        profile.GetProperty("model").GetString().Should().Be("sonnet");
+        profile.GetProperty("spaces").GetProperty("lessons").GetProperty("dailyMinutes").GetInt32().Should().Be(40);
+        profile.GetProperty("spaces").GetProperty("lessons").GetProperty("windows")[0]
+            .GetProperty("from").GetString().Should().NotBeNullOrEmpty();
+        profile.GetProperty("dailyBudgetUsd").GetDecimal().Should().Be(2);
+
+        var subjects = profile.GetProperty("subjects");
+        subjects.EnumerateArray().Select(s => s.GetProperty("id").GetString())
+            .Should().Equal(new[] { "math", "physics" },
+                "порядок предметов — порядок плиток, как его сохраняет стор");
+        for (var i = 0; i < subjects.GetArrayLength(); i++)
+        {
+            var subject = subjects[i];
+            var stored = StoredSubject(id, subject.GetProperty("id").GetString()!);
+            subject.GetProperty("tutorPersonaId").GetString().Should().Be(stored.TutorPersonaId,
+                "репетитор предмета — живой ключ из стора, а не пуст");
+            subject.GetProperty("providerKey").GetString().Should().Be(stored.ProviderKey);
+            subject.GetProperty("model").GetString().Should().Be(stored.Model);
+            subject.GetProperty("acknowledgeRouteRisk").GetBoolean().Should().Be(stored.RouteAcknowledgedAt is not null);
+            subject.GetProperty("routeAcknowledgedAt").ValueKind
+                .Should().Be(stored.RouteAcknowledgedAt is null ? JsonValueKind.Null : JsonValueKind.String);
+        }
+    }
+
+    [Fact]
+    public async Task GetProfile_NoProfile_200_ProfileNull_НичегоНеСоздаёт()
+    {
+        // Профиля нет → 200 с profile: null: это документированная форма ChildProfileResponse
+        // (ChildProfileValidator.cs:262-264, тот же ответ, что отдаёт ветка выключения PUT),
+        // а не 404 и не «пустой включённый».
+        var id = await NewContainerUser("kid-get-none");
+        var (status, body) = await GetAsync(id);
+        status.Should().Be(HttpStatusCode.OK);
+        body.GetProperty("profile").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("tutorPersonaId").GetString().Should().BeEmpty();
+
+        // Только чтение: ни профиля, ни тьютора, ни записи в стор GET не делает.
+        _users.GetById(id)!.ChildMode.Should().BeNull();
+        PersonasOf(id).Should().BeEmpty();
+        _policy.For(id).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetProfile_AfterDisable_200_ВыключенныйПрофильЦелён()
+    {
+        // «Выключен» и «никогда не было» — разные состояния, и редактор обязан различать их:
+        // выключенный профиль остаётся в сторе с Enabled=false (тот же ответ ветки {enabled:false}).
+        var id = await EnableChild("kid-get-off");
+        var (status, body) = await PutAsync(id, new { enabled = false });
+        status.Should().Be(HttpStatusCode.OK);
+
+        var (getStatus, got) = await GetAsync(id);
+        getStatus.Should().Be(HttpStatusCode.OK);
+        var profile = got.GetProperty("profile");
+        profile.GetProperty("enabled").GetBoolean().Should().BeFalse();
+        profile.GetProperty("providerKey").GetString().Should().Be(KidsKey, "лимиты выключение не стирает");
+        got.GetProperty("tutorPersonaId").GetString().Should().NotBeNullOrEmpty("тьютор выключенного профиля жив");
+    }
+
+    [Fact]
+    public async Task Get_НеАдмин_403()
+    {
+        var id = await EnableChild("kid-get-403");
+        var client = _hosts.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        var resp = await client.GetAsync($"/api/users/{id}/child-profile");
+        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Get_Ребёнок_СвойПрофиль_403()
+    {
+        // Тот же приём, что у PUT: ребёнок свой профиль не читает и не правит — его состояние
+        // ему отдаёт status-ручка №1, а не админский контракт.
+        var id = await EnableChild("kid-get-self");
+        var client = _hosts.CreateAuthenticatedClient("kid-get-self", KidsPassword);
+        var resp = await client.GetAsync($"/api/users/{id}/child-profile");
+        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Get_НетПользователя_404_user_not_found()
+    {
+        var (status, body) = await GetAsync("no-such-user-id");
+        status.Should().Be(HttpStatusCode.NotFound);
+        CodeOf(body).Should().Be("user_not_found");
+        body.TryGetProperty("message", out _).Should().BeTrue("отказ формы {code,message}, как у PUT");
+    }
+
+    [Fact]
+    public async Task Get_ЛокальныйПользователь_200_ProfileNull_БезNotContainer()
+    {
+        // not_container — проверка ВКЛЮЧЕНИЯ (ChildProfileValidator.cs:34 достижим только из
+        // ветки enabled:true PUT, UsersController.cs:205). Та же локальная учётка через
+        // { enabled: false } даёт 200, поэтому и чтению нечего отказывать: профиля нет → null.
+        var resp = await _admin.PostAsJsonAsync("/api/users", new
+        {
+            username = "kid-get-local",
+            password = KidsPassword,
+            role = "user",
+        });
+        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        var id = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+
+        var (status, body) = await GetAsync(id);
+        status.Should().Be(HttpStatusCode.OK);
+        CodeOf(body).Should().NotBe("not_container");
+        body.GetProperty("profile").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
     /// <summary>Подменённый Dify: список датасетов — по слову теста, отказ — по флагу.
     /// Путь листинга — /v1/datasets (BaseAddress + «datasets?page=…» из ListDatasetsAsync);
     /// всё остальное — пустой лист, чтобы ни один фоновый потребитель хоста не увидел здесь

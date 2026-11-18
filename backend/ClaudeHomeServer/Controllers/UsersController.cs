@@ -171,6 +171,30 @@ public class UsersController(UserStore users, SessionManager sessions,
     }
 
     /// <summary>
+    /// Живой детский профиль пользователя для админского редактора (ADR-041 «Контракт», ручка №10;
+    /// Д1): та же форма ответа, что у PUT — { profile, tutorPersonaId }. Только снимок на момент
+    /// чтения: ни записей, ни провижна, ни валидатора тела — поэтому и отказов таблицы «при
+    /// включении» (not_container, invalid_window, guardian_not_found) здесь нет: локальному
+    /// пользователю, которого тот же PUT выключает телом { enabled: false } с 200 (ветка
+    /// `!req.Enabled` метода `SetChildProfile` ниже), здесь просто нет профиля — 200 с
+    /// profile: null (тот же случай, который документирует ChildProfileResponse). Роль — ровно
+    /// как у PUT: [Authorize] по claim и AdminByStore по стору; ребёнок свой профиль не читает.
+    /// </summary>
+    [HttpGet("{id}/child-profile")]
+    [Authorize(Policy = AdminByStoreRequirement.PolicyName)]
+    public IActionResult GetChildProfile(string id)
+    {
+        var user = users.GetById(id);
+        if (user is null)
+            return NotFound(new { code = "user_not_found", message = "Пользователь не найден." });
+
+        // Снимок, а не живой объект: ToChildProfileDto копирует поля и списки в новые записи,
+        // поэтому параллельная правка стора в ответ уже не попадает. Тьютор — живой ключ из
+        // профиля; у пользователя без профиля — пустая строка (тот же ответ ветки выключения PUT).
+        return Ok(new ChildProfileResponse(ToChildProfileDto(user.ChildMode), user.ChildMode?.TutorPersonaId ?? ""));
+    }
+
+    /// <summary>
     /// Детский профиль пользователя (ADR-041 «Контракт», ручка №10; KM-B1e): включает и правит
     /// режим только админ. Роль — и по claim ([Authorize] класса), и по стору (AdminByStore):
     /// сервисный токен хода — всегда роль "user", без политики он к админ-ручке не допускается,

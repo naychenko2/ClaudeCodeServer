@@ -17,8 +17,10 @@ namespace ClaudeHomeServer.Services.Sessions;
 // сам конструктор internal: Lazy<ITeamNotifier> — internal-тип (ITeamNotifier не публичный),
 // а публичная конструктор-сигнатура с ним краснеет по той же CS0051. Обход фасада закрывает
 // сторож формы ядра (правило 4).
-// Зависимости (5): store, route, providers, pool, шов Lazy<ITeamNotifier>. В таблице S3-0 их
-// шесть (с history) — в перенесённых телах история не встречается, лишней зависимости нет.
+// Зависимости (6): store, route, providers, pool, шов Lazy<ITeamNotifier>, IChildModeGate
+// (живой маршрут предмета ребёнка, добавлен в Т2e2) плюс логгер. В таблице S3-0 их шесть
+// (с history) — в перенесённых телах история не встречается: шестая здесь — детский шлюз,
+// а не история.
 public sealed class ProviderMigration
 {
     private readonly SessionStore _store;

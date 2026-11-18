@@ -94,16 +94,27 @@ public class ChildChatsController(
             var chats = sessions.GetProjectlessChats(UserId)
                 .Where(s => s.ChildSpace == space && s.OnboardingKind != OnboardingKinds.ChildRules)
                 .OrderByDescending(s => s.UpdatedAt)
-                .Select(s => new
+                .Select(s =>
                 {
-                    sessionId = s.Id, name = s.Name, updatedAt = s.UpdatedAt,
-                    subject = s.ChildSubject,
-                    // Предмет выключен или удалён: чат остаётся в списке, но только для чтения
-                    subjectClosed = !subjects.Any(x => x.Enabled &&
-                        string.Equals(x.Id, s.ChildSubject, StringComparison.OrdinalIgnoreCase)),
-                    // Озвучка чата: оболочка восстанавливает её при открытии (Т3c, субзадача
-                    // из отчёта Т3a — без этого поля старая озвучка терялась при открытии)
-                    voiceMode = s.VoiceMode,
+                    // Один поиск записи предмета по id (без учёта регистра): из неё и признак
+                    // закрытия, и подпись. Дубль id в профиле отвергает валидатор
+                    // (ChildProfileValidator.cs:110), поэтому совпадение не более одного.
+                    var subject = subjects.FirstOrDefault(x =>
+                        string.Equals(x.Id, s.ChildSubject, StringComparison.OrdinalIgnoreCase));
+                    return new
+                    {
+                        sessionId = s.Id, name = s.Name, updatedAt = s.UpdatedAt,
+                        subject = s.ChildSubject,
+                        // Предмет выключен или удалён: чат остаётся в списке, но только для чтения
+                        subjectClosed = subject is null || !subject.Enabled,
+                        // Название предмета из профиля — включённого или выключенного: строка
+                        // «Старых уроков» подписана даже без предмета в GET /api/child/subjects (ХВ2-Б1).
+                        // null — предмета у чата нет или он удалён из профиля.
+                        subjectLabel = subject?.Label,
+                        // Озвучка чата: оболочка восстанавливает её при открытии (Т3c, субзадача
+                        // из отчёта Т3a — без этого поля старая озвучка терялась при открытии)
+                        voiceMode = s.VoiceMode,
+                    };
                 })
                 .ToList();
             return Ok(new { chats });

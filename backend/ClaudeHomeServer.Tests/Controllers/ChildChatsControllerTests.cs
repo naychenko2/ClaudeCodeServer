@@ -225,24 +225,38 @@ public class ChildChatsControllerTests : IClassFixture<ChildChatsControllerTests
         var id = await NewChild("kid-chat-closed");
         AgreeRules(id);
         AddMath(id);
+        // Предмет «для удаления»: его чат создаётся, а запись потом вычёркивается из профиля —
+        // подписи взять неоткуда (ХВ2-Б1)
+        ChildTestSubjects.Seed(_hosts.Services, id, "history");
         var client = ChildClient("kid-chat-closed");
         var (_, mb) = await ReadAsync(await ChildTestSubjects.CreateChat(client, "math"));
         var mathId = mb.GetProperty("sessionId").GetString()!;
         var russianId = await CreateChatAs(client);
+        var (_, hb) = await ReadAsync(await ChildTestSubjects.CreateChat(client, "history"));
+        var historyId = hb.GetProperty("sessionId").GetString()!;
 
         _users.GetById(id)!.ChildMode!.Subjects.Single(x => x.Id == "math").Enabled = false;
+        _users.GetById(id)!.ChildMode!.Subjects.RemoveAll(x => x.Id == "history");
         // Озвучка включена на одном чате: список несёт voiceMode, оболочка восстанавливает
         // её при открытии (субзадача Т3c из отчёта Т3a)
         Sessions.GetById(mathId)!.VoiceMode = true;
         var (ls, lb) = await ReadAsync(await client.GetAsync("/api/child/spaces/lessons/chats"));
         ls.Should().Be(HttpStatusCode.OK);
         var chats = lb.GetProperty("chats").EnumerateArray().ToDictionary(c => c.GetProperty("sessionId").GetString()!);
+        // subjectLabel — подпись из профиля, включённого или выключенного: строка «Старых
+        // уроков» подписана даже без предмета в GET /api/child/subjects (дефект 698bcb27)
         chats[mathId].GetProperty("subject").GetString().Should().Be("math");
         chats[mathId].GetProperty("subjectClosed").GetBoolean().Should().BeTrue();
+        chats[mathId].GetProperty("subjectLabel").GetString().Should().Be("Математика");
         chats[mathId].GetProperty("voiceMode").GetBoolean().Should().BeTrue();
         chats[russianId].GetProperty("subject").GetString().Should().Be("russian");
         chats[russianId].GetProperty("subjectClosed").GetBoolean().Should().BeFalse();
+        chats[russianId].GetProperty("subjectLabel").GetString().Should().Be("Русский язык");
         chats[russianId].GetProperty("voiceMode").GetBoolean().Should().BeFalse();
+        // Предмет удалён из профиля: поле в ответе есть и равно null
+        chats[historyId].GetProperty("subject").GetString().Should().Be("history");
+        chats[historyId].GetProperty("subjectClosed").GetBoolean().Should().BeTrue();
+        chats[historyId].GetProperty("subjectLabel").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]

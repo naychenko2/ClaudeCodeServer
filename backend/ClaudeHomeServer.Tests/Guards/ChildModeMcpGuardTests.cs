@@ -25,13 +25,15 @@ public class ChildModeMcpGuardTests : IClassFixture<ChildModeMcpGuardTests.Hosts
 
     public ChildModeMcpGuardTests(Hosts host) => _host = host;
 
-    // Заморожено: единственный сервер — tutor (К3, ADR-041 «Редакция 3»): три инструмента материалов
-    // предмета. Студия волны 2 добавит сюда пары осознанной правкой.
+    // Заморожено: два сервера — tutor (К3, ADR-041 «Редакция 3»): три инструмента материалов
+    // предмета, и widgets (К9, разрез «Знания репетитора» §8 п.1): один инструмент widget_show.
+    // Студия волны 2 добавит сюда пары осознанной правкой.
     private static readonly (string Server, string Tool)[] FrozenAllowList =
     [
         ("tutor", "search_materials"),
         ("tutor", "list_materials"),
         ("tutor", "read_material"),
+        ("widgets", "widget_show"),
     ];
 
     private sealed class FakePolicy(ChildPolicySnapshot? snapshot) : IChildModePolicy
@@ -75,6 +77,21 @@ public class ChildModeMcpGuardTests : IClassFixture<ChildModeMcpGuardTests.Hosts
         kid.Denied("websearch", "web_search", "kid").Should().NotBeNull();
         kid.Denied("websearch", "web_read", "kid").Should().NotBeNull();
         kid.AllowsServer("kid", "websearch").Should().BeFalse();
+    }
+
+    // К9 (разрез «Знания репетитора» §8 п.1): виджет в ленте этого же чата — пара из allow-list.
+    // Расширение не открывает другие серверы: wsp остаётся закрытым; взрослый — без изменений.
+    [Fact]
+    public void ВиджетРазрешёнРебёнку_ПрочиеСервераКакПрежде()
+    {
+        var kid = Gate(child: true);
+        kid.AllowsServer("kid", "widgets").Should().BeTrue("виджет — часть allow-list (К9)");
+        kid.Denied("widgets", "widget_show", "kid").Should().BeNull();
+        kid.AllowsServer("kid", "wsp").Should().BeFalse("одна пара не открывает другие серверы");
+
+        var adult = Gate(child: false);
+        adult.AllowsServer("adult", "widgets").Should().BeTrue();
+        adult.Denied("widgets", "widget_show", "adult").Should().BeNull();
     }
 
     [Fact]
@@ -137,7 +154,10 @@ public class ChildModeMcpGuardTests : IClassFixture<ChildModeMcpGuardTests.Hosts
 
     // Третий гейт транспорта (п.9): контроллер вызывается напрямую, минуя ChildModeGateMiddleware
     // (оно само закрывает /mcp ребёнку — здесь проверяется глубокая оборона). Вызов инструмента от
-    // детского владельца отказывается content-ошибкой ДО выполнения тулсета.
+    // детского владельца отказывается content-ошибкой ДО выполнения тулсета. Пример — websearch:
+    // он вне allow-list (решение Андрея) и при этом проходит первые два гейта; widgets.widget_show
+    // с К9 ребёнку разрешён — на нём отказ проверить нельзя. Хвост параметризованного сервера —
+    // id чата-вызывателя, как в живом конфиге хода (/mcp/websearch/{sessionId}).
     private async Task<System.Text.Json.JsonElement> CallAsync(bool child)
     {
         var sp = _host.Services;
@@ -149,10 +169,10 @@ public class ChildModeMcpGuardTests : IClassFixture<ChildModeMcpGuardTests.Hosts
         var ctx = new Microsoft.AspNetCore.Http.DefaultHttpContext();
         ctx.User = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
             [new System.Security.Claims.Claim("sub", "kid")], "test"));
-        var body = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"widget_show","arguments":{"html":"<b>x</b>"}}}""";
+        var body = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"web_search","arguments":{"query":"погода"}}}""";
         ctx.Request.Body = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(body));
         controller.ControllerContext = new Microsoft.AspNetCore.Mvc.ControllerContext { HttpContext = ctx };
-        var result = await controller.Handle("widgets", null, CancellationToken.None);
+        var result = await controller.Handle("websearch", "s-1", CancellationToken.None);
         var content = result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ContentResult>().Subject;
         return System.Text.Json.JsonDocument.Parse(content.Content!).RootElement.Clone();
     }

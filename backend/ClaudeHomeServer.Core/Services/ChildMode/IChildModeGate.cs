@@ -55,8 +55,9 @@ public interface IChildModeGate
 }
 
 /// <summary>
-/// Детский allow-list пар (сервер, инструмент). Единственный сервер — tutor (ADR-041, «Редакция 3»,
-/// К3): материалы предмета для репетитора. Веб-поиск выключен решением Андрея, а
+/// Детский allow-list пар (сервер, инструмент). Два сервера: tutor (ADR-041, «Редакция 3», К3) —
+/// материалы предмета для репетитора, и widgets (разрез «Знания репетитора» §8 п.1, К9) —
+/// один инструмент widget_show, виджет в ленте этого же чата. Веб-поиск выключен решением Андрея, а
 /// websearch/notes/memory/tasks/wsp/медиа/внешние серверы вне списка. Состав для
 /// «Студии» волны 2 не обещан: какие инструменты медиа-серверов безопасны ребёнку, решается
 /// отдельно (ADR-041, «Последствия»), гейт под список уже есть.
@@ -70,6 +71,7 @@ public static class ChildModeAllowList
             ("tutor", "search_materials"),
             ("tutor", "list_materials"),
             ("tutor", "read_material"),
+            ("widgets", "widget_show"),
         };
 
     public static bool AllowsServer(string server) => Pairs.Any(p => p.Server == server);

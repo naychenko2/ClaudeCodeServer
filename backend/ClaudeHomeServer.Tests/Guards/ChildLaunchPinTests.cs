@@ -126,9 +126,17 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
         ctx.NotesMcp.Should().BeNull();
         ctx.TasksMcp.Should().BeNull();
         ctx.MemoryMcp.Should().BeNull();
-        // п.10 (К3): единственный сервер детского хода — tutor; ради него и активен http-транспорт
+        // п.10 (К3, К9): серверы детского хода — tutor и widgets; ради них и активен http-транспорт
         ctx.TutorMcp.Should().NotBeNull("ребёнку объявляется tutor");
-        ctx.HttpMcpActive.Should().Be(ctx.TutorMcp!.UseHttp, "других http-серверов у ребёнка нет");
+        ctx.WidgetsMcp.Should().NotBeNull("виджет в ленте — пара из allow-list (К9)");
+        // «ровно widget_show»: статический тулсет widgets отдаёт один инструмент — тот же, что в
+        // allow-list; ребёнку не из чего взять на этом сервере что-то другое
+        var widgets = (ClaudeHomeServer.Services.Mcp.Http.IMcpStaticToolset?)_host.Services
+            .GetRequiredService<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>().Find("widgets");
+        widgets.Should().NotBeNull("тулсет widgets обязан быть в реестре");
+        widgets!.Tools.Select(t => t.Name).Should().Equal("widget_show");
+        ctx.HttpMcpActive.Should().Be(ctx.TutorMcp!.UseHttp || ctx.WidgetsMcp!.UseHttp,
+            "у ребёнка два http-сервера: tutor и widgets");
     }
 
     [Fact]

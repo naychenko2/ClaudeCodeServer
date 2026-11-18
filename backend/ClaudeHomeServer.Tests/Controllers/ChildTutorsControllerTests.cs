@@ -524,16 +524,22 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
     }
 
     // Path-traversal: ..%2Fx — файл на уровень выше candidates/ не отдаётся: 404.
+    // Измерено в копии мутации (18.11): %2F в сегменте пути не раскодировывается в '/',
+    // значение {file} — литерал «..%2Fx» и не содержит разделителя: с одним литеральным
+    // файлом candidates/..%2Fx ручка отдаёт 200, с одним файлом «x» в родителе — 404.
+    // То есть запрос достает файлы только из candidates/, а мутация «без GetFileName»
+    // не детектируема ни одним запросом к этой ручке (снят только факт «родителя не
+    // отдаёт» — он и-guard'ится здесь).
     [Fact]
     public async Task GetTutorAvatarCandidate_Трейверсал_404()
     {
         var setup = SetupChild(("math", "Математика"));
         var tutor = _personas.Get(setup.TutorOf["math"], setup.ChildId)!;
-        // Файл лежит в папке персоны (на уровень выше candidates/): просочился бы traversal —
-        // ручка отдала бы его.
+        // Файл лежит в папке персоны (на уровень выше candidates/): ручка обязана его не
+        // отдать.
         var dir = Path.Combine(_personas.AssetsDir, tutor.Id);
         Directory.CreateDirectory(dir);
-        File.WriteAllBytes(Path.Combine(dir, "x.png"), PngSignature);
+        File.WriteAllBytes(Path.Combine(dir, "x"), PngSignature);
 
         var resp = await _admin.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{tutor.Id}/avatar/candidate/..%2Fx");
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);

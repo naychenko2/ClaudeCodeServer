@@ -225,7 +225,9 @@ export function ChildTutorCard({ userId, personaId, initial, onSaved }: Props) {
           width: 64, height: 64, borderRadius: R.full, flexShrink: 0,
           background: userAvatarColor(personaId), color: C.onDark,
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          fontFamily: FONT.sans, fontWeight: 700, fontSize: 26, lineHeight: 1, userSelect: 'none',
+          // Инициалы в аватаре — тот же размер, что у PersonaAvatar (0.4 от величины):
+          // это не текст UI, а знак в круге, шкала FS к нему не применяется
+          fontFamily: FONT.sans, fontWeight: 700, fontSize: Math.round(64 * 0.4), lineHeight: 1, userSelect: 'none',
         }}
       >
         {personaInitials(name || 'Репетитор')}
@@ -247,11 +249,13 @@ export function ChildTutorCard({ userId, personaId, initial, onSaved }: Props) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: SP.sm }}>
           <FieldLabel>{label}</FieldLabel>
-          {/* счётчик «n/12» — как в макете (.cnt-l .muted, 12px); за пределом — красным */}
-          <span style={{ fontSize: 12, color: n > 12 ? C.dangerText : C.textMuted, flexShrink: 0 }}>
+          {/* счётчик «n/12» — как в макете (.cnt-l .muted, FS.sm); за пределом — красным */}
+          <span style={{ fontSize: FS.sm, color: n > 12 ? C.dangerText : C.textMuted, flexShrink: 0 }}>
             {n}/12
           </span>
         </div>
+        {/* за пределом поле и само в состоянии ошибки контрола (invalid: красный
+            бордер + aria-invalid) — счётчик один краснеет, а поле молчало (ревью Т4e) */}
         <TextArea
           value={value}
           onChange={setValue}
@@ -259,6 +263,7 @@ export function ChildTutorCard({ userId, personaId, initial, onSaved }: Props) {
           minHeight={72}
           voice
           disabled={busy}
+          invalid={n > 12}
           ariaLabel={label}
           placeholder={placeholder}
         />
@@ -319,7 +324,7 @@ export function ChildTutorCard({ userId, personaId, initial, onSaved }: Props) {
               Загрузить
             </Button>
           </div>
-          <span style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.45 }}>
+          <span style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>
             Без аватара на плитке будут инициалы. Генерация списывается с бюджета администратора, не ребёнка.
           </span>
         </div>
@@ -347,7 +352,9 @@ export function ChildTutorCard({ userId, personaId, initial, onSaved }: Props) {
         <div
           role="group"
           aria-label="Кандидаты аватара"
-          style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: SP.sm, maxWidth: 240, marginTop: SP.sm }}
+          // два столбца, как галерея кандидатов в PersonaForm (PersonaForm.tsx:1123):
+          // при четырёх плитка кандидата — ~54 px, аватар в ней не разобрать
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: SP.sm, maxWidth: 240, marginTop: SP.sm }}
         >
           {candidates.map((file) => {
             const itemBusy = selecting === file;
@@ -389,9 +396,13 @@ export function ChildTutorCard({ userId, personaId, initial, onSaved }: Props) {
 
       <div style={{ marginTop: SP.md }}>
         <Field label="Голос" hint="Как репетитор звучит в голосовом режиме">
+          {/* «Голос по умолчанию» в списке скрыт: putTutor при null голоса — «не трогать»
+              (ChildTutorsController.cs:170), снять голос этой карточкой нечем — опция
+              мёртвая; список предлагает только реальные голоса (решение ревью Т4e) */}
           <PersonaVoicePicker
             value={d.voice}
             onChange={(v) => patch((p) => ({ ...p, voice: v }))}
+            allowDefaultOption={false}
           />
         </Field>
       </div>
@@ -427,7 +438,7 @@ export function ChildTutorCard({ userId, personaId, initial, onSaved }: Props) {
           'Не торопи с ответом\nНе сравнивай с другими детьми',
         )}
       </div>
-      <div style={{ marginTop: SP.xs, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+      <div style={{ marginTop: SP.xs, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>
         Правила безопасности и «не решать за ученицу» действуют поверх этих списков
       </div>
 

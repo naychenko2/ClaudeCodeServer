@@ -1,6 +1,8 @@
 // Т4e: карточка репетитора — сохранение через putTutor (тело с voice из формы), списки
 // «строка = пункт», аватар только через админские URL (ни одной строки /api/personas/
 // в запросах и в src), галерея кандидатов → select, гонка смены personaId и отказ ручки.
+// Х9: в пикере голоса карточки нет мёртвой опции «Голос по умолчанию» (бэк игнорирует
+// null голоса), поле правил сверх 12 пунктов — в состоянии ошибки контрола.
 // Окружение — node + linkedom, как в соседних .test.tsx волны. childApi мокается;
 // URL-хелперы — РЕАЛЬНЫЕ (importOriginal): src кандидатов проверяется настоящими строками.
 // lib/api мокается рекордером: единственный потребитель в графе — пикер голоса (tts.voices);
@@ -17,7 +19,17 @@ Object.assign(win, {
     matches: mobile, addEventListener: () => {}, removeEventListener: () => {},
     addListener: () => {}, removeListener: () => {},
   }),
+  // Размеры окна для расчёта позиции Menu (в linkedom их нет)
+  innerWidth: 1280, innerHeight: 800,
 });
+// Попап пикера голоса в linkedom: getBoundingClientRect (прямоугольник триггера — якорь
+// Menu) и scrollIntoView (протятка к выбранной строке) здесь нет. Тест проверяет состав
+// списка, а не геометрию — оба подменены no-op. Оба шима — про окружение, не про компонент.
+(win as unknown as { HTMLElement: { prototype: { getBoundingClientRect?: unknown } } })
+  .HTMLElement.prototype.getBoundingClientRect = () =>
+  ({ x: 0, y: 0, top: 0, left: 0, right: 270, bottom: 36, width: 270, height: 36 });
+(win as unknown as { Element: { prototype: { scrollIntoView?: unknown } } })
+  .Element.prototype.scrollIntoView = () => {};
 // Среда доводится до браузерной семантики textarea — иначе React в linkedom не может ни
 // показать controlled value (initTextarea пишет через defaultValue, которого у linkedom
 // нет), ни выдать onChange (isEventSupported('input') проверяет 'oninput' in document).
@@ -75,10 +87,14 @@ vi.mock('./api', async (importOriginal) => {
 // lib/api: пикер голоса зовёт только tts.voices; любое обращение к api.personas.* —
 // в рекордер (тест «никаких /api/personas/» краснеет на первой же записи).
 const apiCalls: string[] = [];
+// Реальный голос в каталоге: при выбранном триггер пикера показывает его именем, а не
+// «Голосом по умолчанию», и список открывается непустым — на этом проверяется отсутствие
+// мёртвой опции (пустой каталог сделал бы проверку пустой)
+const VOICES = [{ voice: 'alena', label: 'Алена · спокойная', gender: 'female', roles: ['good'], speedSupported: true }];
 vi.mock('../../lib/api', () => ({
   api: {
     tts: {
-      voices: () => { apiCalls.push('tts.voices'); return Promise.resolve({ voices: [], configured: true }); },
+      voices: () => { apiCalls.push('tts.voices'); return Promise.resolve({ voices: VOICES, configured: true }); },
     },
     personas: new Proxy({}, {
       get: () => () => { apiCalls.push('personas'); return Promise.resolve(null); },
@@ -125,6 +141,9 @@ const noticeText = (host: HTMLElement) =>
   (card(host).querySelector('[role="status"]') as HTMLElement | null)?.textContent ?? '';
 const imgSrcs = (host: HTMLElement) =>
   Array.from(card(host).querySelectorAll('img')).map((i) => i.getAttribute('src') ?? '');
+// Открытый Menu/Modal рендерится порталом в body — список проверяется по всему body,
+// карточка (с триггером пикера) тоже внутри него
+const bodyText = () => doc.body.textContent ?? '';
 
 // Ввод в textarea: родной сеттер prototype обходит value-обёртку React (трекер значения
 // остаётся старым), затем input-событие — React видит расхождение и зовёт onChange.
@@ -272,5 +291,34 @@ describe('ChildTutorCard', () => {
     const gen = buttonByText(m.host, 'Сгенерировать');
     await act(async () => { gen.click(); gen.click(); }); // два клика до перерисовки: один запрос
     expect(calls.filter((c) => c.path === 'generate').length).toBe(1);
+  });
+
+  it('VoicePicker_NoDefaultOption', async () => {
+    // Бэк игнорирует null голоса (ChildTutorsController.cs:170 — «не трогать»): выбор
+    // «Голос по умолчанию» в этой карточке ничего не меняет — мёртвая опция, её нет
+    const m = await mount({ userId: 'u1', personaId: 'p1', initial: initialFull() });
+    // триггер с выбранным голосом показывает его именем, а не «по умолчанию»
+    const trigger = buttonByText(m.host, 'Алена');
+    expect(trigger).toBeTruthy();
+    await click(trigger);
+    // список открылся и отрисован: иначе «отсутствия опции» было бы пустой проверкой
+    expect(bodyText()).toContain('Обычные');
+    expect(bodyText()).toContain('спокойная');
+    expect(bodyText()).not.toContain('Голос по умолчанию');
+  });
+
+  it('RulesField_ErrorStateOverLimit', async () => {
+    // 13 пунктов — поле в состоянии ошибки контрола (aria-invalid + красный бордер,
+    // как у остальных полей), 12 — нет; состояние следует текущему счёту, не предзаполнению
+    const many = Array.from({ length: 13 }, (_, i) => `правило ${i + 1}`);
+    const over = await mount({ userId: 'u1', personaId: 'p1', initial: { name: 'Кот Буквоед', mustDo: many, mustNot: many } });
+    expect(ta(over.host, 'Обязательно').getAttribute('aria-invalid')).toBe('true');
+    expect(ta(over.host, 'Никогда').getAttribute('aria-invalid')).toBe('true');
+    const at = await mount({ userId: 'u1', personaId: 'p2', initial: { name: 'Кот Буквоед', mustDo: many.slice(0, 12) } });
+    expect(ta(at.host, 'Обязательно').getAttribute('aria-invalid')).toBeNull();
+    await type(ta(at.host, 'Обязательно'), many.join('\n')); // 12 → 13: состояние появилось
+    expect(ta(at.host, 'Обязательно').getAttribute('aria-invalid')).toBe('true');
+    await type(ta(at.host, 'Обязательно'), many.slice(0, 12).join('\n')); // убрано лишнее — поле чистое
+    expect(ta(at.host, 'Обязательно').getAttribute('aria-invalid')).toBeNull();
   });
 });

@@ -60,7 +60,7 @@ function speedKey(speed?: number | null): 'slow' | 'normal' | 'fast' {
   return speed > 1.05 ? 'fast' : 'normal';
 }
 
-export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, greeting, onPickPanelChange }: {
+export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, greeting, onPickPanelChange, allowDefaultOption = true }: {
   value: PersonaVoice | null;
   onChange: (v: PersonaVoice | null) => void;
   // Подпись строки, пока голос не выбран (по умолчанию — «Голос по умолчанию»)
@@ -72,6 +72,11 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, gree
   // Открыта ли панель подбора: форма прячет подсказку поля, иначе она уезжает под панель
   // и отрывается от самого поля
   onPickPanelChange?: (open: boolean) => void;
+  // Скрыть пункт «Голос по умолчанию» из списка. Там, где бэк не умеет снять голос
+  // (null = «не трогать», напр. PUT child-tutors/{id}), выбор «по умолчанию» ничего
+  // не меняет — мёртвая опция, список предлагает только реальные голоса. Триггер
+  // поля не трогается: он описывает текущее состояние, а не предлагает действие
+  allowDefaultOption?: boolean;
 }) {
   const isMobile = useIsMobile();
   const [catalog, setCatalog] = useState<TtsVoiceInfo[] | null>(null);
@@ -227,8 +232,9 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, gree
       ) : (
         <>
           {/* Явный выбор голоса инстанса: при создании он отменяет подбор голоса сервером.
-              Подсветка — как у выбранной строки; пока голос лишь «подберётся», не горит */}
-          {!query.trim() && gender === 'all' && (
+              Подсветка — как у выбранной строки; пока голос лишь «подберётся», не горит.
+              allowDefaultOption=false — строки нет: у вызывающего снять голос нечем (см. проп) */}
+          {allowDefaultOption && !query.trim() && gender === 'all' && (
             <div style={{ background: !value?.voice && !emptyLabel ? C.accentLight : undefined, borderRadius: R.md }}>
               <MenuItem
                 isMobile={isMobile}

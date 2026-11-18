@@ -933,6 +933,53 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         File.Exists(dstOk).Should().BeTrue();
     }
 
+    /// <summary>Помечает чат идущим ходом (признак awaited-хода агента, один из входов HasTurnInFlight).</summary>
+    private void MarkTurnInFlight(string chatId)
+    {
+        var store = _hosts.Services.GetRequiredService<SessionStore>();
+        store.HasTurnInFlight(chatId).Should().BeFalse("чат до пометки свободен");
+        store.Sessions[chatId].TurnWaiter = new TaskCompletionSource<TurnResult>();
+        store.HasTurnInFlight(chatId).Should().BeTrue("пометка сработала");
+    }
+
+    [Fact]
+    public async Task PutProfile_SameProviderModelChanged_TurnInFlight_FieldsRewrittenAtOnce()
+    {
+        // Т2e2 (ревью be3ab479, п.1): идущий ход пропускает перенос только при СМЕНЕ ПОСТАВЩИКА.
+        // Смена модели у того же поставщика (ADR-041 р.4, Т2e) переписывает поля сразу — идущий
+        // ход доживает со старыми. Мутация «пропуск по HasTurnInFlight до providerChanged» — красный.
+        var kid = await EnableChildWithSubjects("kid-repin-inflight-model", ("russian", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-repin-inflight-model", "russian");
+        MarkTurnInFlight(chat.Id);
+
+        var (status, _) = await PutAsync(kid, RepinBody(("russian", KidsKey, "opus", null)));
+        status.Should().Be(HttpStatusCode.OK);
+
+        var live = _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!;
+        live.Model.Should().Be("opus", "тот же поставщик — поля переписаны, несмотря на идущий ход");
+        live.Provider.Should().Be(KidsKey);
+    }
+
+    [Fact]
+    public async Task PutProfile_ProviderChanged_TurnInFlight_ChatSkipped_TranscriptNotCopied()
+    {
+        // Т2e2 (ревью be3ab479, п.3): при смене поставщика чат с идущим ходом пропускается — копия
+        // неполного транскрипта потеряла бы хвост ответа, который доживающий процесс допишет в старый
+        // профиль. Поля и транскрипт не тронуты, PUT — 200. Мутация «удалить блок пропуска» — красный.
+        var kid = await EnableChildWithSubjects("kid-repin-inflight-prov", ("russian", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-repin-inflight-prov", "russian");
+        var dst = SeedTranscript(kid, chat, KidsKey, "csid-inflight-1", "deepseek", out _);
+        MarkTurnInFlight(chat.Id);
+
+        var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
+        status.Should().Be(HttpStatusCode.OK);
+
+        var live = _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!;
+        live.Provider.Should().Be(KidsKey, "идущий ход доживает на прежнем поставщике");
+        live.Model.Should().Be("sonnet");
+        File.Exists(dst).Should().BeFalse("транскрипт не копируется под идущим ходом");
+    }
+
     [Fact]
     public async Task PutProfile_SubjectPoolKeyChanged_ChatGetsExactlyThatKey_NotPick()
     {

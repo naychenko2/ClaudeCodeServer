@@ -230,10 +230,11 @@ public sealed class ProviderMigration
     // Цель — РОВНО ProviderKey предмета (И2′): _subscriptionPool.Pick здесь не зовётся никогда,
     // подмена аккаунта пула у ребёнка недопустима. Сменился поставщик — транскрипт копируется в
     // профиль нового (MoveTranscript, то же правило, что у MigrateProviderAsync): иначе --resume
-    // не найдёт его после рестарта. Идущий ход доживает: чат с ходом в полёте пропускается —
-    // копия неполного транскрипта потеряла бы хвост ответа, который доживающий процесс допишет
-    // в старый профиль (так же MigrateProviderAsync отказывает на идущем ходе, ChatSettings.cs:1076);
-    // чат остаётся на прежних полях, перенос происходит при следующем PUT. Сбой переноса одного
+    // не найдёт его после рестарта. Идущий ход доживает: при СМЕНЕ ПОСТАВЩИКА чат с ходом в полёте
+    // пропускается — копия неполного транскрипта потеряла бы хвост ответа, который доживающий
+    // процесс допишет в старый профиль (так же отказывает ChatSettings.UpdateAsync на идущем ходе);
+    // чат остаётся на прежних полях до следующего PUT. Смена модели у того же поставщика
+    // переписывает поля сразу, идущий ход доживает со старыми. Сбой переноса одного
     // чата — лог, чат остаётся на прежних полях, остальные переносятся. UpdatedAt не двигается:
     // маршрут — настройка чата, а не активность. Возвращает число перезакреплённых чатов.
     public async Task<int> RepinChildSubjectAsync(string ownerId, string subjectId, Func<ChildRepinTarget?> liveTarget)
@@ -268,14 +269,16 @@ public sealed class ProviderMigration
         var info = entry.Info;
         if (info.PersonaId == target.PersonaId && info.Provider == target.ProviderKey && info.Model == target.Model)
             return false;
-        if (SessionStore.HasTurnInFlight(entry))
-        {
-            _log.LogInformation("Детский режим: чат {Session} идёт ходом — перенос на новый маршрут отложен до следующего PUT", sessionId);
-            return false;
-        }
 
         var currentKey = _llmProviders.ResolveByModel(info.Model)?.Key ?? info.Provider ?? ClaudeSubscriptionPool.PrimaryKey;
         var providerChanged = !string.Equals(currentKey, target.ProviderKey, StringComparison.OrdinalIgnoreCase);
+        // Пропуск только при смене поставщика: копия неполного транскрипта потеряла бы хвост ответа.
+        // Смена модели у того же поставщика переписывает поля сразу — идущий ход доживает со старыми
+        if (providerChanged && SessionStore.HasTurnInFlight(entry))
+        {
+            _log.LogInformation("Детский режим: чат {Session} идёт ходом — перенос на нового поставщика отложен до следующего PUT", sessionId);
+            return false;
+        }
         var transcriptMoved = providerChanged && MoveTranscript(sessionId, ownerId, entry, currentKey, target.ProviderKey);
 
         lock (_store.SaveLock)
@@ -299,7 +302,7 @@ public sealed class ProviderMigration
     // Перенос транскрипта CLI из профиля текущей пары в профиль целевой. true — разговор
     // продолжится с контекстом (перенесён или живёт на устройстве), false — переносить нечего.
     // Сорвавшийся перенос найденного файла — исключение. Общий код MigrateProviderAsync и
-    // MigrateChildSubjectAsync: детский путь не должен расходиться с обычным по правилам переноса.
+    // RepinChildSubjectAsync: детский путь не должен расходиться с обычным по правилам переноса.
     private bool MoveTranscript(string sessionId, string ownerId, SessionEntry entry, string currentKey, string targetKey)
     {
         var transcriptMoved = false;

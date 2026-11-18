@@ -76,6 +76,18 @@ public class TranscriptionStateReaderTests : IDisposable
         File.SetLastWriteTimeUtc(p, mtime.UtcDateTime);
     }
 
+    // Маркер «последнего писавшего» в каталоге вывода (М5): строка «узел\tunix\tвремя\tseq» на
+    // узел, как его пишет lib_journal.mark_output_host. Колонку «время» читатель не читает —
+    // порядок задаёт seq.
+    private static void WriteOutputHostMarker(string dir, params (string Node, long Unix, int Seq)[] rows)
+    {
+        Directory.CreateDirectory(dir);
+        var lines = new List<string> { "# узел\tunix\tвремя\tseq" };
+        foreach (var (node, unix, seq) in rows)
+            lines.Add(string.Join('\t', node, unix, DateTimeOffset.FromUnixTimeSeconds(unix).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"), seq));
+        File.WriteAllText(Path.Combine(dir, TranscriptionStateReader.OutputHostName), string.Join('\n', lines) + "\n", new UTF8Encoding(false));
+    }
+
     private static TranscriptionStateReader Reader(string root, TimeProvider time, Func<int, bool>? alive = null) =>
         new(new Opts(new TranscriptionOptions { PipelineRoot = root }),
             new ConfigurationBuilder().Build(), time, alive ?? (_ => true));
@@ -723,6 +735,145 @@ public class TranscriptionStateReaderTests : IDisposable
 
         s.OutputHost.Should().Be("worker"); // «не проверялось» — не «не та машина»
         s.Level.Should().Be("ok");
+    }
+
+    // ─── «Пишет в» по маркеру конвейера output_host.tsv (Б2) ─────────────────────────────
+    // Маркер — запись самого конвейера о том, кто писал в каталог вывода последним (М5): строка
+    // с наибольшим seq. Он читаем — признак берётся из него, а не из времён файлов; маркера нет
+    // или он битый — прежняя сверка по журналу (фолбэк Б1 не ломается).
+
+    [Fact]
+    public void МаркерЧужогоУзлаSeqБольше_ПризнакНеТаМашина()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outDir = Path.Combine(root, "out");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
+        // часовой путь здесь дал бы «ok»: последний локальный «ok» час назад, его .md свой
+        Write(root, "logs/journal.tsv", string.Join('\n',
+            "# время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание",
+            JournalRowStr(now, TimeSpan.FromHours(1), "ok", "Video-RR", "RR.Своё.mp4", "2.9", "3", "asr 2.6м + саммари 0.4м (локально)")) + "\n");
+        WriteOutputFile(outDir, "RR.Своё.mp4.md", now.Subtract(TimeSpan.FromHours(1)));
+        // но маркер говорит: в этот каталог последним писал «ai» — его строка с большим seq
+        WriteOutputHostMarker(outDir,
+            ("worker", now.Subtract(TimeSpan.FromHours(1)).ToUnixTimeSeconds(), 3),
+            ("ai", now.Subtract(TimeSpan.FromMinutes(5)).ToUnixTimeSeconds(), 4));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().BeNull(); // «не та машина»: маркер источник однозначный
+        s.Level.Should().Be("warn");
+    }
+
+    [Fact]
+    public void МаркерСвоегоУзлаSeqБольше_ПризнакаНет()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outDir = Path.Combine(root, "out");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
+        // часовой путь здесь дал бы «warn»: последний локальный «ok» трёхдневной давности,
+        // а в каталоге .md свежее (принесён синхронизацией)
+        Write(root, "logs/journal.tsv", string.Join('\n',
+            "# время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание",
+            JournalRowStr(now, TimeSpan.FromDays(3), "ok", "Video-RR", "RR.Своё.mp4", "2.9", "3", "asr 2.6м + саммари 0.4м (локально)")) + "\n");
+        WriteOutputFile(outDir, "ИИ.Радул.Архсовет.2026-11-17 16-28-07.mp4.md", now.Subtract(TimeSpan.FromDays(1)));
+        // но маркер говорит: последним в этот каталог писал этот узел — его строка с большим seq
+        WriteOutputHostMarker(outDir,
+            ("ai", now.Subtract(TimeSpan.FromDays(1)).ToUnixTimeSeconds(), 2),
+            ("worker", now.Subtract(TimeSpan.FromMinutes(10)).ToUnixTimeSeconds(), 5));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().Be("worker"); // вывод здесь: маркер источник однозначный
+        s.Level.Should().Be("ok");
+    }
+
+    // Порядок задаёт seq, а не unix: часы узлов расходятся (замер конвейера ~80 с), и строка
+    // «новее по часам», но с меньшим seq, — не последняя. Мутация «взять последнего по unix»
+    // краснит этот тест.
+    [Fact]
+    public void ПорядокПоSeqАНеПоUnix_СтрокаСБольшимВременемМеньшимSeqНеПоследняя()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outDir = Path.Combine(root, "out");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
+        // «worker» новее по часам (минута назад), но его seq меньше: писал последним «ai» (час назад)
+        WriteOutputHostMarker(outDir,
+            ("worker", now.Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeSeconds(), 2),
+            ("ai", now.Subtract(TimeSpan.FromHours(1)).ToUnixTimeSeconds(), 7));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().BeNull();
+        s.Level.Should().Be("warn");
+    }
+
+    // Маркера нет / он пуст / только заголовок / битые строки — это НЕ «чужой узел»: работает
+    // прежняя сверка по журналу. Фикстура нормальная (свежий локальный «ok», свой файл в допуске
+    // строки) — во всех вариантах ложной тревоги нет. Мутация «пустой маркер = чужой узел»
+    // краснит этот тест.
+    [Theory]
+    [InlineData("")] // пусто
+    [InlineData("# узел\tunix\tвремя\tseq\n")] // только заголовок
+    [InlineData("мусор без табов\nworker\t1\t2\nai\t1\t2\tне-число\n")] // битые строки: нет колонок, нет seq
+    public void МаркерОтсутствуетИлиБитый_ФолбэкНаСверкуПоЖурналу(string markerBody)
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outDir = Path.Combine(root, "out");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
+        Write(root, "logs/journal.tsv", string.Join('\n',
+            "# время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание",
+            JournalRowStr(now, TimeSpan.FromMinutes(10), "ok", "Video-RR", "RR.Свежее.mp4", "2.9", "3", "asr 2.6м + саммари 0.4м (локально)")) + "\n");
+        // .md записан ДО строки «ok»: его время на 35 с позже отмеренной минуты строки — в допуске
+        WriteOutputFile(outDir, "RR.Свежее.mp4.md", now.Subtract(TimeSpan.FromMinutes(10)).Add(TimeSpan.FromSeconds(35)));
+        if (markerBody.Length > 0)
+            Write(root, Path.Combine("out", TranscriptionStateReader.OutputHostName), markerBody);
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().Be("worker"); // «не проверялось» по часовой сверке — не «не та машина»
+        s.Level.Should().Be("ok");
+    }
+
+    // Равные seq в маркерах разных папок: счётчик сквозной по ФАЙЛУ (на папку), поэтому равные
+    // значения — не «тот же писавший»: newer — строка с большим unix. Мутация «первая найденная
+    // строка с равным seq побеждает» краснит этот тест.
+    [Fact]
+    public void РавныйSeqВМаркерахРазныхПапок_НовееСтрокаСБольшимUnix()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        var watch = Path.Combine(root, "watch");
+        var outGpb = Path.Combine(root, "out", "ГПБ");
+        var outRr = Path.Combine(root, "out", "RR");
+        Directory.CreateDirectory(watch);
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(
+            ("Video-GPB", watch, outGpb),
+            ("Video-RR", watch, outRr)));
+        // в ГПБ последним писал «worker» (час назад), в RR — «ai» (минуту назад), seq в файлах равны
+        WriteOutputHostMarker(outGpb, ("worker", now.Subtract(TimeSpan.FromHours(1)).ToUnixTimeSeconds(), 4));
+        WriteOutputHostMarker(outRr, ("ai", now.Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeSeconds(), 4));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.OutputHost.Should().BeNull(); // последним писал «ai»
+        s.Level.Should().Be("warn");
     }
 
     // dify[] и checkedAt — из файла самого конвейера (dify_state.json, М2): времена unix-СЕКУНД →

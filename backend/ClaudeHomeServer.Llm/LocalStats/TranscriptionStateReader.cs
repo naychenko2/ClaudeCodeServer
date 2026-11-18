@@ -24,18 +24,25 @@ namespace ClaudeHomeServer.Services.Llm;
 //   logs/journal.tsv        — события: время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание;
 //                           итог = ok|asr|fail|batch|start|stop. Читается ХВОСТ: файл только растёт.
 //   config.yaml             — folders[].name/watch/output — папки конвейера и каталоги их вывода.
+//   <каталог вывода>/output_host.tsv — маркер «последнего писавшего» (М5): строка на узел
+//                           «узел\tunix\tвремя\tseq», seq — сквозной счётчик по файлу (максимум + 1).
+//                           Читатель берёт строку с наибольшим seq: часы узлов расходятся (~80 с),
+//                           по времени «последний» указал бы не на того.
 //
 // Устойчивость (требование задачи): файла нет / не читается / битый JSON — не исключение и не 500:
 // пустые блоки, фаза «stopped», уровня нет (null — «не проверялось», не «unknown»: значения
 // «unknown» во фронтовом типе level нет). Времена файлов — местное время узла
 // (конвейер пишет time.strftime без смещения), сравниваются с TimeProvider.GetUtcNow().
 //
-// «Пишет в» не туда (доработка Б1): вывод ведётся не на этом узле — когда в каталогах вывода есть
-// .md свежее, чем последний локальный «ok» журнала, и при этом этот конвейер сам сейчас файл не
-// пишет. Факт существования каталога ничего не значит: на worker его наполнила синхронизация с
-// другого узла (18.11: писал «ai», читали с «worker» — четыре встречи не дошли, а каталог был).
-// Оценить provenance можно только по данным конвейера — по его журналу: строку «ok» конвейер
-// дописывает ПОСЛЕ того, как записал .md (supervisor.py: сначала out_path, затем log_meeting).
+// «Пишет в» не туда (доработка Б1, маркер в Б2): вывод ведётся не на этом узле. Маркер самого
+// конвейера output_host.tsv — источник однозначный: узел из строки с наибольшим seq писал в
+// каталог вывода последним (порядок задаёт seq, а не время: часы узлов расходятся). Маркера нет
+// (записан до М5), он пуст или битый — фолбэк на журнал Б1: .md в каталогах вывода свежее, чем
+// последний локальный «ok», — их написал не этот конвейер. Факт существования каталога ничего
+// не значит: на worker его наполнила синхронизация с другого узла (18.11: писал «ai», читали с
+// «worker» — четыре встречи не дошли, а каталог был). Оценить provenance можно только по данным
+// конвейера — по маркеру или журналу: строку «ok» и метку узла конвейер дописывает ПОСЛЕ записи
+// .md (supervisor.py: сначала out_path, затем log_meeting, затем mark_output_host).
 public interface ITranscriptionStateReader
 {
     // Снимок состояния конвейера на момент вызова. Не бросает исключений.
@@ -62,6 +69,8 @@ public sealed class TranscriptionStateReader(
     internal const int RowLimit = 20;
     // Хвост journal.tsv: не больше этих байт с конца файла (день событий — единицы КБ).
     internal const int JournalTailBytes = 128 * 1024;
+    // Маркер «последнего писавшего» в каталоге вывода папки (М5, lib_journal.OUTPUT_HOST_NAME).
+    internal const string OutputHostName = "output_host.tsv";
     // Допуск «своего» файла над строкой «ok»: журнал метит время с точностью до минуты
     // (time.strftime %H:%M), а .md пишется ДО строки — то есть его mtime может быть на минуту
     // позже отмеренной метки. Без допуска собственный свежий файл дал бы «не та машина».
@@ -104,23 +113,26 @@ public sealed class TranscriptionStateReader(
             "ok";
 
         // «Пишет в»: общий каталог выходов папок против узла CCS. Каталога на узле нет — вывод
-        // здесь не ведут (как было). Он есть, но в нём .md свежее последнего локального «ok»
-        // журнала — их написал не этот конвейер: «не та машина» (warn), ровно случай 18.11.
-        // Локального журнала нет — provenance не известна: ложной тревоги не даём. Конфига нет —
-        // тоже «не проверялось».
+        // здесь не ведут (как было). Маркер конвейера output_host.tsv — источник однозначный:
+        // узел из строки с наибольшим seq писал в вывод последним; он не этот узел —
+        // «не та машина» (warn). Маркера нет / пуст / битый — фолбэк по журналу (Б1): .md свежее
+        // последнего локального «ok» — ровно случай 18.11. Ни маркера, ни локального журнала —
+        // provenance не известна: ложной тревоги не даём. Конфига нет — тоже «не проверялось».
         var outputDir = CommonOutputDir(folders);
         string? outputHost = null;
         var outputLevel = "unknown";
         if (outputDir is not null)
         {
+            var markerHost = LastOutputHost(folders);
             // Пока этот конвейер сам ведёт файл, вывод идёт здесь: его .md появится с минуты на
             // минуту и строка «ok» будет позже него — свежий файл не чужой.
             var writingHereNow = state?.Current is { Length: > 0 };
             var lastLocal = LastLocalOutputAt(journal);
             if (!Directory.Exists(outputDir)) outputLevel = "warn"; // каталога здесь нет
+            else if (markerHost is { } host) outputLevel = string.Equals(host, localNode, StringComparison.Ordinal) ? "ok" : "warn"; // маркер однозначен
             else if (writingHereNow) outputLevel = "ok"; // конвейер сам ведёт файл — вывод здесь
             else if (lastLocal is { } own) outputLevel = NewestForeignWriteAt(folders, own) is not null ? "warn" : "ok";
-            else outputLevel = "unknown"; // локального журнала нет — не с чем сравнивать
+            else outputLevel = "unknown"; // ни маркера, ни локального журнала — не с чем сравнивать
             // «не та машина» — имени чужого узла в плоском контракте нет: OutputHost = null при
             // известном outputDir (фронт красит строку по этому признаку, transcriptionFormat.ts).
             // «Не проверялось» — тоже свой узел: OutputHost=null фронт прочитал бы как тревогу.
@@ -430,6 +442,42 @@ public sealed class TranscriptionStateReader(
             }
         }
         return best;
+    }
+
+    // «Последний писавший» в каталогах вывода — по маркеру самого конвейера (М5,
+    // lib_journal.mark_output_host): output_host.tsv в каталоге вывода каждой папки, строка на
+    // узел «узел\tunix\tвремя\tseq»; пишущий узел трогает только свою строку, чужие приходят
+    // вместе с выводом (rsync берёт нескрытые файлы). Берётся строка с наибольшим seq: часы
+    // узлов расходятся (замер конвейера: ~80 с между двумя), «последний по времени» указал бы
+    // не на тот узел — порядок гарантирует сквозной счётчик по файлу. Счётчики по файлам
+    // независимы (на папку), поэтому при равном seq в разных файлах новее — строка с большим
+    // unix. Нет файла / не читается / ни одной целой строки (пустой или битый маркер) — null:
+    // фолбэк на сверку по журналу — до первой записи после перезапуска конвейера маркера ещё
+    // нет, и пустой файл не доказательство «чужого узла».
+    private static string? LastOutputHost(List<ConfigFolder> folders)
+    {
+        string? host = null;
+        long topSeq = -1, topUnix = -1;
+        foreach (var dir in folders.Select(f => f.Output).OfType<string>().Distinct(StringComparer.Ordinal))
+        {
+            string[] lines;
+            try { lines = File.ReadAllLines(Path.Combine(dir, OutputHostName)); }
+            catch (Exception) { continue; } // маркера нет / не читается — этой папки нет в оценке
+            foreach (var line in lines)
+            {
+                if (line.Length == 0 || line[0] == '#') continue; // заголовок и комментарии
+                var parts = line.Split('\t');
+                if (parts.Length < 4) continue; // битая строка: нет имени или нет seq
+                var name = parts[0].Trim();
+                if (name.Length == 0) continue;
+                if (!long.TryParse(parts[3].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var seq)) continue;
+                // unix — только тей-брейкер равных seq; не читается — 0, строка остаёт целой
+                long.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var unix);
+                if (seq < topSeq || (seq == topSeq && unix <= topUnix)) continue;
+                topSeq = seq; topUnix = unix; host = name;
+            }
+        }
+        return host;
     }
 
     // ─── dify_state.json (результат сверки конвейера с Dify, М2) ─────────────────────────

@@ -98,7 +98,8 @@ public class ChildChatsController(
                 {
                     // Один поиск записи предмета по id (без учёта регистра): из неё и признак
                     // закрытия, и подпись. Дубль id в профиле отвергает валидатор
-                    // (ChildProfileValidator.cs:110), поэтому совпадение не более одного.
+                    // (ChildProfileValidator.ValidateSubjects: !ids.Add(id) — отказ при повторном id),
+                    // поэтому совпадение не более одного.
                     var subject = subjects.FirstOrDefault(x =>
                         string.Equals(x.Id, s.ChildSubject, StringComparison.OrdinalIgnoreCase));
                     return new

@@ -315,6 +315,42 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
     prevState.current = eff?.state;
   }, [eff?.state]);
 
+  // ХВ7 (решение Софьи по QA-2): тело списка уроков — одна разметка для двух мест:
+  // острова сайдбара (широкий экран) и такого же острова под главной (мобильная 360).
+  // Строки, порядок, группировка «Старые уроки» (Д2) — общие; меняётся только обёртка.
+  // Текст «Уроков пока нет.» нужен только сайдбару: на мобиле при пустом списке острова
+  // нет вовсе (путь к уроку — плитка предмета).
+  const lessonsBody = (
+    <>
+      {chats.length === 0 && <div style={{ padding: SP.md, color: C.textMuted, fontSize: FS.sm }}>Уроков пока нет.</div>}
+      {openChats.map(c => (
+        <LessonRow
+          key={c.sessionId}
+          chat={c}
+          subjectLabel={subjectViewOf(c.subject)?.label ?? null}
+          active={c.sessionId === sessionId}
+          onOpen={() => openLesson(c.sessionId)}
+        />
+      ))}
+      {/* «Старые уроки · N» — та же сворачиваемая секция сайдбара, что в других
+          панелях (SidebarSection): строка-кнопка с заголовком и счётчиком,
+          свёрнута по умолчанию. Нет закрытых чатов — нет раздела. */}
+      {closedChats.length > 0 && (
+        <SidebarSection title="Старые уроки" count={closedChats.length} defaultOpen={false}>
+          {closedChats.map(c => (
+            <LessonRow
+              key={c.sessionId}
+              chat={c}
+              subjectLabel={subjectViewOf(c.subject)?.label ?? null}
+              active={c.sessionId === sessionId}
+              onOpen={() => openLesson(c.sessionId)}
+            />
+          ))}
+        </SidebarSection>
+      )}
+    </>
+  );
+
   let center: React.ReactNode;
   if (!eff) {
     center = null;
@@ -339,12 +375,13 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
       <EmptyState
         icon={<BookOpen size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
         title={activeSubject.label}
-        subtitle="Выбери урок слева или начни новый."
+        // ХВ7: на мобиле списка «слева» нет — прежние уроки стоят под главной (ХВ7-кадр)
+        subtitle={isMobile ? 'Начни новый урок. Прежние уроки — на главной.' : 'Выбери урок слева или начни новый.'}
         action={<Button size="lg" onClick={() => void startLesson(activeSubject.id)} disabled={starting}>Начать урок</Button>}
       />
     );
   } else {
-    center = (
+    const home = (
       <ChildHome
         childName={childName}
         status={eff}
@@ -355,6 +392,20 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
         onStartRules={() => void startRules()}
       />
     );
+    // ХВ7: на мобиле под главной встаёт тот же остров, что на широком экране рисует
+    // сайдбар, — в той же прокрутке, что и главная (один scroll-контейнер на двоих).
+    // Точка входа — вкладка «Уроки» или «назад» из урока: обе ведут сюда. Полей — по
+    // ChildHome (макет .mlist). Уроков нет — острова нет (кадр 3). Открытый урок или
+    // экран предмета — острова нет: список живёт на главной.
+    const mobileIsland = isMobile && chats.length > 0 ? (
+      <div data-testid="child-mobile-lessons-list" style={{ maxWidth: 760, width: '100%', margin: '0 auto', boxSizing: 'border-box', padding: `0 ${SP.lg}px ${SP.xl}px` }}>
+        <Island style={{ width: '100%', overflow: 'visible' }}>
+          <IslandHeader title="Мои уроки" />
+          <div style={{ padding: SP.sm }}>{lessonsBody}</div>
+        </Island>
+      </div>
+    ) : null;
+    center = mobileIsland ? <div style={{ height: '100%', overflowY: 'auto' }}>{home}{mobileIsland}</div> : home;
   }
 
   return (
@@ -409,34 +460,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
         {showSidebar && (
           <Island style={{ width: SIDEBAR_W, flexShrink: 0 }}>
             <IslandHeader title={activeSubject?.label ?? 'Уроки'} />
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: SP.sm }}>
-              {chats.length === 0 && <div style={{ padding: SP.md, color: C.textMuted, fontSize: FS.sm }}>Уроков пока нет.</div>}
-              {openChats.map(c => (
-                <LessonRow
-                  key={c.sessionId}
-                  chat={c}
-                  subjectLabel={subjectViewOf(c.subject)?.label ?? null}
-                  active={c.sessionId === sessionId}
-                  onOpen={() => openLesson(c.sessionId)}
-                />
-              ))}
-              {/* «Старые уроки · N» — та же сворачиваемая секция сайдбара, что в других
-                  панелях (SidebarSection): строка-кнопка с заголовком и счётчиком,
-                  свёрнута по умолчанию. Нет закрытых чатов — нет раздела. */}
-              {closedChats.length > 0 && (
-                <SidebarSection title="Старые уроки" count={closedChats.length} defaultOpen={false}>
-                  {closedChats.map(c => (
-                    <LessonRow
-                      key={c.sessionId}
-                      chat={c}
-                      subjectLabel={subjectViewOf(c.subject)?.label ?? null}
-                      active={c.sessionId === sessionId}
-                      onOpen={() => openLesson(c.sessionId)}
-                    />
-                  ))}
-                </SidebarSection>
-              )}
-            </div>
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: SP.sm }}>{lessonsBody}</div>
             {activeSubject && (
               <div style={{ padding: SP.sm }}>
                 <Button size="md" fullWidth onClick={() => void startLesson(activeSubject.id)} disabled={starting}>Новый урок</Button>

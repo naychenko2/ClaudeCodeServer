@@ -8,9 +8,12 @@ import { parseHTML } from 'linkedom';
 import type { ChildStatus } from './types';
 
 const { window: win, document: doc } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
+// Мобильная ветка (ХВ8): useIsMobile читает matchMedia при mount, useWindowWidth — innerWidth.
+// Переключатели ниже; по умолчанию — широкий экран, как было в этом файле.
+let mobile = false;
 Object.assign(win, {
   innerWidth: 1280,
-  matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {} }),
+  matchMedia: () => ({ matches: mobile, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {} }),
 });
 vi.stubGlobal('window', win);
 vi.stubGlobal('document', doc);
@@ -85,6 +88,15 @@ async function mount() {
   await act(async () => {});
   return root;
 }
+// Мобильная 360 (ХВ8): тот же mount при matchMedia.matches=true и width=360
+async function mountMobile() {
+  mobile = true;
+  win.innerWidth = 360;
+  const root = createRoot(doc.getElementById('root')!);
+  await act(async () => { root.render(createElement(ChildWorkspace, { auth, onLogout: () => {} })); });
+  await act(async () => {});
+  return root;
+}
 const click = async (el: Element) => { await act(async () => { el.dispatchEvent(new win.Event('click', { bubbles: true })); }); await act(async () => {}); };
 // Строка-заголовок группы «Старые уроки» (Д2): кнопка SidebarSection с aria-expanded и счётчиком
 const oldLessonsToggle = () => Array.from(doc.querySelectorAll('button')).find(b => /Старые уроки/.test(b.textContent ?? ''));
@@ -103,6 +115,7 @@ const SERVER_SUBJECTS = [
 
 beforeEach(() => {
   doc.getElementById('root')!.innerHTML = '';
+  mobile = false; win.innerWidth = 1280;
   h.status = status(); h.offline = false; h.mounts.length = 0;
   h.api.spaceChats.mockReset().mockResolvedValue({ chats: SERVER_CHATS });
   h.api.getSubjects.mockReset().mockResolvedValue(SERVER_SUBJECTS);
@@ -316,5 +329,83 @@ describe('ChildWorkspace', () => {
     expect(h.childMode).toHaveBeenLastCalledWith(true);
     await act(async () => { root.unmount(); });
     expect(h.childMode).toHaveBeenLastCalledWith(false);
+  });
+});
+
+// ХВ8 (решение Софьи по QA-2, макет ХВ7): на 360 список уроков — тот же остров сайдбара,
+// что под главной, в той же прокрутке. Кадр kids-tutors.html data-frame="child-mobile-lessons".
+describe('ChildWorkspace · мобильный список уроков (360)', () => {
+  // Кадр 1: есть открытые и закрытые чаты
+  const MIXED_CHATS = [
+    { sessionId: 's1', name: 'Дроби', updatedAt: '2026-11-17T10:00:00Z', subject: 'russian', subjectClosed: false, voiceMode: false },
+    { sessionId: 's2', name: 'Пирамиды', updatedAt: '2026-11-16T10:00:00Z', subject: 'history', subjectClosed: true, voiceMode: false },
+    { sessionId: 's3', name: 'Таблицы', updatedAt: '2026-11-15T10:00:00Z', subject: null, subjectClosed: true, voiceMode: false },
+  ];
+
+  it('на мобиле под главной — остров «Мои уроки»: строки открытых и свёрнутая «Старые уроки · 2»', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: MIXED_CHATS });
+    await mountMobile();
+    // точка входа из макета — главная («Уроки»/«назад» ведут сюда): остров есть без открытия предмета
+    expect(doc.querySelector('[data-testid="child-mobile-lessons-list"]'), 'остров «Мои уроки» под главной').toBeTruthy();
+    expect(doc.body.textContent).toContain('Мои уроки');
+    // строка открытого урока видна сразу; строка предмета — из живого списка
+    const live = Array.from(doc.querySelectorAll('button')).find(b => b.textContent?.startsWith('Дроби'));
+    expect(live, 'открытый урок в списке').toBeTruthy();
+    expect(live!.textContent).toContain('Русский язык');
+    // группа свёрнута по умолчанию, с числом закрытых
+    const toggle = oldLessonsToggle();
+    expect(toggle, 'группа «Старые уроки» есть').toBeTruthy();
+    expect(toggle!.getAttribute('aria-expanded'), 'свёрнута по умолчанию').toBe('false');
+    expect(toggle!.textContent).toContain('Старые уроки');
+    expect(toggle!.textContent).toContain('2');
+    // порядок: группа ниже открытых строк (тот же, что в сайдбаре)
+    const btns = Array.from(doc.querySelectorAll('button'));
+    expect(btns.indexOf(toggle!)).toBeGreaterThan(btns.indexOf(live!));
+  });
+
+  it('на мобиле тап по «Старые уроки» раскрывает группу; строка закрытого урока — только чтение, без строки предмета', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: MIXED_CHATS });
+    await mountMobile();
+    const toggle = oldLessonsToggle()!;
+    await click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const row = Array.from(doc.querySelectorAll('button')).find(b => b.textContent === 'Пирамиды')!;
+    // закрытого предмета нет в живом списке — строки предмета в строке нет
+    expect(row.textContent).toBe('Пирамиды');
+    await click(row);
+    // тот же путь, что на десктопе: чат только для чтения (И1-бис)
+    expect(h.mounts).toEqual(['s2:false:-:true']);
+  });
+
+  it('на мобиле уроков нет — острова «Мои уроки» нет, «Уроков пока нет.» не рисуется', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: [] });
+    await mountMobile();
+    expect(doc.querySelector('[data-testid="child-mobile-lessons-list"]'), 'острова нет').toBeNull();
+    expect(doc.body.textContent).not.toContain('Мои уроки');
+    expect(doc.body.textContent).not.toContain('Уроков пока нет');
+  });
+
+  it('на мобиле только старые уроки — остров есть, в нём одна свёрнутая секция', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: MIXED_CHATS.filter(c => c.subjectClosed) });
+    await mountMobile();
+    expect(doc.querySelector('[data-testid="child-mobile-lessons-list"]'), 'остров есть').toBeTruthy();
+    const toggle = oldLessonsToggle();
+    expect(toggle, 'секция одна, свёрнутая').toBeTruthy();
+    expect(toggle!.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle!.textContent).toContain('2');
+  });
+
+  it('на широком экране мобильного острова нет; сайдбар — как был', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: MIXED_CHATS });
+    await mount();
+    // 1280 без открытого предмета: острова под главной нет (он — только мобильная ветка)
+    expect(doc.querySelector('[data-testid="child-mobile-lessons-list"]')).toBeNull();
+    expect(doc.body.textContent).not.toContain('Мои уроки');
+    // сайдбар по-прежнему открывается с предметом и держит группу (существующее поведение)
+    const tile = Array.from(doc.querySelectorAll('button')).find(b => b.textContent?.includes('Математика'))!;
+    await click(tile);
+    const toggle = oldLessonsToggle();
+    expect(toggle, 'сайдбар с группой как был').toBeTruthy();
+    expect(toggle!.getAttribute('aria-expanded')).toBe('false');
   });
 });

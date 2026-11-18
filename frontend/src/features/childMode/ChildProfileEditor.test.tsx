@@ -15,7 +15,8 @@
 // «Subjects_RoutesResponseAfterUserSwitch_Ignored» краснеет; не резать tutorPersonaId из
 // предмета в теле → «без полей ответа» краснеет; не сличать serverSubjects в блоке файлов →
 // «новый несохранённый предмет» краснеет; не брать knowledge из ответа сохранения →
-// «ответ обновления обновляет привязку» краснеет.
+// «ответ обновления обновляет привязку» краснеет; не отдавать false при снятой галке
+// (subjectBody `!== undefined` → `=== true`) → «живое согласие → снять галку» краснеет (Т6-доработка).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, createElement } from 'react';
@@ -822,6 +823,25 @@ describe('ChildProfileEditor: «Предметы» — согласие на о�
     await click(saveBtn(host));
     const body = sentSubjects(0)[0];
     expect(body.acknowledgeRouteRisk, 'действие адмена уходит в тело как есть').toBe(true);
+  });
+
+  it('живое согласие → снять галку: acknowledgeRouteRisk=false в теле, строка «Разрешено…» исчезла', async () => {
+    const s = subject('math', {
+      providerKey: 'glm', model: 'glm-5', acknowledgeRouteRisk: true, routeAcknowledgedAt: '2026-11-10T09:00:00Z',
+    });
+    const { host } = await mount(liza({ childProfile: withSubjects(s) }));
+    await clickTab(host, 'Предметы');
+    // живое согласие видно: галка отмечена, строка с датой на месте (это ещё не действие адмена)
+    expect(rowAck(subjectRows(host)[0])?.getAttribute('aria-checked'), 'согласие стоит').toBe('true');
+    expect(panel(host).querySelector('[data-testid="subject-ack-at"]')?.textContent, 'строка живого согласия').toContain('Разрешено');
+    // адмен снимает галку — действие отзыва: строка даты гаснет сразу (ChildSubjectsEditor.tsx:347)
+    await click(rowAck(subjectRows(host)[0])!);
+    expect(rowAck(subjectRows(host)[0])?.getAttribute('aria-checked'), 'галка снята').toBe('false');
+    expect(panel(host).querySelector('[data-testid="subject-ack-at"]'), 'отозванное согласие: строки даты нет').toBeNull();
+    await click(saveBtn(host));
+    const body = sentSubjects(0)[0];
+    expect(body.acknowledgeRouteRisk, 'снятая галка — «отзываю» в теле').toBe(false);
+    expect('routeAcknowledgedAt' in body, 'поле ответа в тело не идёт').toBe(false);
   });
 });
 

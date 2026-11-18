@@ -96,14 +96,15 @@ export interface ChildSubjectAdmin {
   model: string;
   enabled: boolean;
   // Только в ответе: из тела не читается никогда — слияние берёт его по Id из живого профиля
-  // (ChildProfileValidator.cs:224-226). null — репетитора у предмета ещё нет (провижн — Т2c).
+  // (UserStore.cs:703-704), новый Id — пусто. null — репетитора у предмета ещё нет (провижн — Т2c).
   tutorPersonaId?: string | null;
   knowledge?: ChildSubjectKnowledge | null;
   // Согласие админа на не-Anthropic маршрут (Т5a/Т6, И2′). Только во ВХОДЕ, трёхзначно (Х1,
   // ревью Т5a): true — «соглашаюсь сейчас» (стор ставит дату и автора); поля нет — живое
   // согласие того же предмета при том же providerKey (при смене providerKey оно не переживает);
-  // false — отзыв: живое согласие не засчитывается, отказа на сохранении нет — 400 даст
-  // запуск хода (ChildProfileValidator.cs:116-131, UserStore.SetChildProfile).
+  // false — отзыв: живое согласие не засчитывается даже при том же providerKey, отказа на
+  // сохранении нет — 400 даст запуск хода. Решение — в сторе под замком по ЖИВОМУ предмету
+  // (UserStore.cs:711-729), проверка входа — ChildProfileValidator.cs:119-128.
   acknowledgeRouteRisk?: boolean;
   routeAcknowledgedAt?: string | null; // только в ответе: момент согласия, поле сервера
 }

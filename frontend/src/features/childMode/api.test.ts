@@ -409,7 +409,7 @@ describe('childApi.materials — /api/users/{id}/child-subjects/{subjectId}/mate
     expect((opts.method ?? 'GET').toUpperCase()).toBe(t.method);
   });
 
-  it('list: массив строк проходит как пришёл (обёртки нет), содержимого и preview в строке нет', async () => {
+  it('list: массив строк проходит как пришёл (обёртки нет и маппинга нет)', async () => {
     const rows = [
       { id: 'm_1', name: 'уравнения.pdf', kind: 'pdf', bytes: 20480, uploadedAt: '2026-11-18T10:00:00Z' },
       { id: 'm_2', name: 'страница.png', kind: 'image', bytes: 1024, uploadedAt: '2026-11-18T10:05:00Z' },

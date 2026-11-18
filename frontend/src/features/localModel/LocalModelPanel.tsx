@@ -31,6 +31,8 @@ import { C, FONT, SP, ICON_SIZE, ICON_STROKE, useContainerWidth } from 'aihome_s
 import type { WorkspacePanelDefCtx } from '../../lib/subsystems/registryCore';
 import { InlineSegmented, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { openChatById } from '../../lib/openChat';
+import { panelMetaResolved } from '../../pages/workspace/panelCatalog';
+import { LOCAL_MODEL_PANEL } from './manifest';
 import {
   isLocalModelPanelVisible,
   useLocalModelAdmin,
@@ -234,6 +236,9 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     </div>
   );
 
+  // Доступное имя панели берётся из того же реестра, что видимый заголовок шапки
+  // (тот же резолвер, что у PanelZone.tsx:128): переименование панели не требует
+  // правки строки здесь и не разъезжается с рельсой.
   return (
     <>
       {inHeader && isAdmin && (
@@ -241,8 +246,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
           <TabSwitch value={tab} onChange={changeTab} isMobile={ctx.isMobile} dotLevel={dotLevel} transDotLevel={transDotLevel} narrow={tabsNarrow} />
         </PanelHeaderSlot>
       )}
-      // Доступное имя панели — то же, что видимый заголовок (манифест/каталог панелей)
-      <div ref={panelRef} role="complementary" aria-label="Ферма"
+      <div ref={panelRef} role="complementary" aria-label={panelMetaResolved(LOCAL_MODEL_PANEL).title}
         style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', fontFamily: FONT.sans }}>
         {mobileSwitcher}
         {body}

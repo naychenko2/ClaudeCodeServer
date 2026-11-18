@@ -173,7 +173,7 @@ export const PANEL_META: Record<Exclude<PanelKey, 'pluginPanels'>, { title: stri
   // Персонажи редактора картинок (модуль image-editor): люди с фото для генераций
   characters: { title: 'Персонажи', Icon: Contact },
   // Локальные модели: статистика локального движка, только админ
-  localModel: { title: 'Локальные модели', Icon: Cpu },
+  localModel: { title: 'Ферма', Icon: Cpu },
   // Голоса редактора звука (модуль audio-editor): библиотека voices/ проекта
   voices: { title: 'Голоса', Icon: Mic },
   // Панели генерации: заголовок и иконку в рельсе отдаёт вклад, здесь — запасные

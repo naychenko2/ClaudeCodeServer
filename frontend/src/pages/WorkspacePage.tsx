@@ -2635,7 +2635,7 @@ const windowWidth = useWindowWidth();
         {/* «Локальные модели» — шторка (Modal = bottom-sheet на мобиле): открывается
             из меню «Ещё»; панель сама рисует переключатель «LLM · Медиа» в теле */}
         {localModelOpen && localModelVisible && localModelRender && (
-          <Modal title="Локальные модели" onClose={() => setLocalModelOpen(false)}>
+          <Modal title="Ферма" onClose={() => setLocalModelOpen(false)}>
             {localModelRender({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: true, onClose: () => setLocalModelOpen(false) })}
           </Modal>
         )}

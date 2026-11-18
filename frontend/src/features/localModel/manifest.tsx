@@ -39,7 +39,7 @@ export const LOCAL_MODEL_PANEL = 'localModel';
 
 export const manifest: SubsystemManifest = {
   key: 'localmodel',
-  title: 'Локальные модели',
+  title: 'Ферма',
   icon: <Cpu size={18} strokeWidth={2} />,
   order: 98,
   noPill: true,
@@ -54,7 +54,7 @@ export const manifest: SubsystemManifest = {
           <Suspense fallback={<PanelLoadingPlaceholder />}><LocalModelPanel ctx={ctx} /></Suspense>
         ),
         action: {
-          title: 'Локальные модели',
+          title: 'Ферма',
           icon: <Cpu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
           // Геттеры вне React: isAvailable вызывается из рендера страницы.
           // «движок без vLLM тоже configured» (макет §8.6, разрез принял «да»): когда

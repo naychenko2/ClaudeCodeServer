@@ -609,6 +609,119 @@ public class UserStore : IForgejoAccountStore, IUserStore
     }
 
     /// <summary>
+    /// Id закреплённой персоны-тьютора ребёнка (ChildProfile.TutorPersonaId, KM-B1d).
+    /// Пишет только в существующий профиль ребёнка; возвращает false, если пользователя
+    /// или профиля нет.
+    /// </summary>
+    public bool SetChildTutorPersona(string id, string personaId)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user?.ChildMode is null) return false;
+            user.ChildMode.TutorPersonaId = personaId;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Целый детский профиль пользователя (KM-B1e, ADR-041 ручка №10): чтение-изменение-запись
+    /// под одним локом — иначе параллельный agree ребёнка (RulesAgreedAt/RulesSummary пишет
+    /// только он, KM-B6b) затёрся бы снимком вызывающего, а два одновременных PUT дали бы
+    /// смесь полей вместо одного целого профиля.
+    /// Правила всегда берутся из живого профиля, кроме resetRules=true — тот же resetRules
+    /// просит админ (сбросить оба поля). TutorPersonaId берётся из живого профиля ВСЕГДА, и при
+    /// resetRules тоже: тьютор у ребёнка один, повторный PUT не должен плодить второго
+    /// «Помощника». profile=null — профиля нет (отказ включению:
+    /// провижн тьютора не удался, вызывающий откатывает прежний). Возвращает false, если
+    /// пользователь не найден.
+    /// </summary>
+    public bool SetChildProfile(string id, ChildProfile? profile, bool resetRules)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            if (profile is not null)
+            {
+                if (user.ChildMode is { } live)
+                {
+                    if (!resetRules)
+                    {
+                        profile.RulesAgreedAt = live.RulesAgreedAt;
+                        profile.RulesSummary = live.RulesSummary;
+                    }
+                    profile.TutorPersonaId = live.TutorPersonaId;
+                }
+                user.ChildMode = profile;
+            }
+            else
+            {
+                user.ChildMode = null;
+            }
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Согласие ребёнка с правилами (KM-B6b, ADR-041 ручка №7): под тем же локом, что и
+    /// SetChildProfile, пишет ТОЛЬКО RulesAgreedAt/RulesSummary в живой профиль — лимиты и
+    /// тьютора не трогает никогда. Уже согласован, пользователя или профиля нет — false;
+    /// вызывающий различает по живому состоянию: 409 только если согласовано на самом деле,
+    /// иначе 503 (в гонке двух agree выигрывает первый).
+    /// </summary>
+    public bool AgreeChildRules(string id, DateTime at, string summary)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user?.ChildMode is null || user.ChildMode.RulesAgreedAt is not null) return false;
+            user.ChildMode.RulesAgreedAt = at;
+            user.ChildMode.RulesSummary = summary;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Откат детского профиля целиком (KM-B1e): прежний снимок возвращается как есть, без
+    /// переноса правил и тьютора из живого — иначе откат при resetRules=true терял бы
+    /// previous.RulesAgreedAt. null — профиля не было.
+    /// </summary>
+    public bool RestoreChildProfile(string id, ChildProfile? previous)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            user.ChildMode = previous;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Выключение детского режима (KM-B1e): Enabled=false на существующем профиле, настройки
+    /// сохраняются — тело {enabled:false} просит выключить режим, а не стереть выставленные
+    /// админом лимиты; «профиль выключен» политика читает как обычного пользователя
+    /// (ChildModePolicy). Профиля нет — выключать нечего: true, состояние уже «не ребёнок».
+    /// </summary>
+    public bool DisableChildMode(string id)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            if (user.ChildMode is null) return true;
+            user.ChildMode.Enabled = false;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Сессия незавершённого онбординга пользователя (null — онбординг завершён/сброшен).
     /// Возвращает false если пользователь не найден.
     /// </summary>

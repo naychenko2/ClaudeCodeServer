@@ -20,7 +20,9 @@ export default defineConfig({
     // при 4 воркерах ~1,1–1,2 GB и 18–22 с против 10–12 с; 5–6 воркеров почти не
     // ускоряют прогон, а память растёт на ~0,1 GB с каждым.
     maxWorkers: 4,
-    include: ['src/**/*.test.ts'],
+    // .test.tsx — тесты с JSX-разметкой (render + linkedom): с KM-F5 такие появились,
+    // раньше в проекте были только .test.ts. Префикс .test. общий, суффикс tsx — тот же контент.
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/dev-dist/**', '**/e2e/**'],
   },
 });

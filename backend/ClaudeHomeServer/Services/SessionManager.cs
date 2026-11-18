@@ -731,6 +731,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     public string? SaveChatAttachment(string sessionId, string callerId, string? fileName, Action<string> write) =>
         _visibility.SaveChatAttachment(sessionId, callerId, fileName, write);
 
+    public string? SaveDerivedChatAttachment(string sessionId, string originalRel, string derivedExtension, Action<string> write) =>
+        _visibility.SaveDerivedChatAttachment(sessionId, originalRel, derivedExtension, write);
+
+    public bool IsRecordedAttachment(string sessionId, string rel) =>
+        _visibility.IsRecordedAttachment(sessionId, rel);
+
     public Task EvictForeignViewersAsync(string sessionId, string authorId) =>
         _visibility.EvictForeignViewersAsync(sessionId, authorId);
 
@@ -922,9 +928,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
         string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null)
+        string? onboardingKind = null, string? childSpace = null, string? providerKey = null)
         => await _creation.CreateChatAsync(ownerId, mode, resumeSessionId, name, model, effort,
-            personaId, taskExecution, taskId, onboardingKind);
+            personaId, taskExecution, taskId, onboardingKind, childSpace, providerKey);
 
     public async Task<Session> CreatePersonaChatAsync(string ownerId, string personaId,
         ClaudeMode mode, string? resumeSessionId = null, string? name = null,

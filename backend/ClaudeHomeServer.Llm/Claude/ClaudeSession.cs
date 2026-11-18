@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Turn;
@@ -53,6 +54,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Владелец хода: у проектной сессии Info.OwnerId пуст, владелец приходит из контекста
     private readonly string? _turnOwnerId;
+    private readonly Func<ChildPolicySnapshot?>? _childPolicy;
     internal string? TurnOwnerId => _turnOwnerId;
 
     // Каталоги плагинов владельца для --plugin-dir (ADR-031 §2.4/§2.5): шов IPluginDirSource
@@ -89,6 +91,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // _turnOwnerId; по Info.OwnerId хвост чата проекта брался из общего слота инстанса
     // (DEC-FALLBACK 3f2f33fb).
     internal IReadOnlyList<string> EffectiveTurnChain =>
+        // И2: у ребёнка фолбэка нет — цепочка из одной модели, отказ провайдера = ошибка хода.
+        // Решает снимок политики, а не наличие делегата: фабрика выдаёт делегат любому владельцу,
+        // у взрослого он возвращает null — и фолбэк ADR-007 обязан жить.
+        _childPolicy?.Invoke() is not null && EffectiveModel is { } childModel ? new[] { childModel } :
         _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
@@ -1244,6 +1250,17 @@ public class ClaudeSession : ILlmSessionAdapter
 
     private string GatewayBaseUrl(string turnId) => $"{_llmGatewayApiUrl!.TrimEnd('/')}/gw/t/{turnId}/llm";
 
+    // Ключи, вычищаемые из унаследованного env хода. У ребёнка (И2) к ним добавляется токен
+    // подписки: он живёт в окружении бэкенда (Program.cs) и без чистки доехал бы до ключевого хода.
+    // Чистим и при _inheritSystemEnv (там EnvKeysToClear пуст): для ребёнка это не опция.
+    private IReadOnlyList<string> TurnClearEnv(ChildPolicySnapshot? childSnapshot)
+    {
+        var keys = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys;
+        if (childSnapshot is null) return keys;
+        return LlmProviderRegistry.ProviderEnvKeys.Concat(keys)
+            .Append("CLAUDE_CODE_OAUTH_TOKEN").Distinct().ToList();
+    }
+
     // Настоящий токен шлюза новому процессу: заглушки env заменяются уже после сигнатуры.
     // Отзыв — финализация прогона (FinalizeRunAsync) или сбой запуска.
     private (string TurnId, string Token) BindGatewayTurn(IDictionary<string, string> env)
@@ -1333,6 +1350,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _bgLingerTimeout = bgLingerTimeout ?? TimeSpan.FromMinutes(30);
         Info = info;
         _turnOwnerId = context.OwnerId ?? info.OwnerId;
+        _childPolicy = context.ChildPolicyProvider;
         _pluginDirSource = context.PluginDirSource;
         _pluginProject = context.Project;
         _rootPath = context.RootPath;
@@ -3105,8 +3123,43 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Решение по инструменту: правила проекта → «всегда разрешать» этой сессии → карточка
     // пользователю. Возвращает "allow" | "deny" | "cancelled" (Interrupt во время ожидания).
+    // Решение по разрешению для хода ребёнка (И1, п.12): allow — только MCP-пара (сервер,
+    // инструмент) из детского allow-list; всё остальное, включая встроенные инструменты CLI, —
+    // deny. Имя от CLI — «mcp__{сервер}__{инструмент}»; нераспознанное имя — deny (fail-closed).
+    internal static string ChildPermissionDecision(string toolName)
+    {
+        const string prefix = "mcp__";
+        if (!toolName.StartsWith(prefix, StringComparison.Ordinal)) return "deny";
+        var rest = toolName[prefix.Length..];
+        var sep = rest.IndexOf("__", StringComparison.Ordinal);
+        if (sep <= 0 || sep + 2 >= rest.Length) return "deny";
+        return ChildModeAllowList.Allows(rest[..sep], rest[(sep + 2)..]) ? "allow" : "deny";
+    }
+
+    // Встроенные инструменты CLI ребёнку закрыты разрешающим списком (И1, п.11): «--tools ""»
+    // оставляет у хода ноль встроенных (проверено на CLI 2.1.325: init.tools = []). Список запретов
+    // тут не годится — набор встроенных меняется от версии к версии (в 'default' этого CLI уже нет
+    // Glob/Grep). Прежний «--tools» от BareMode (его BareTools) снимается: детский пустой список
+    // сильнее любого непустого.
+    internal static void ForceNoBuiltinTools(List<string> args)
+    {
+        for (var i = args.Count - 1; i >= 0; i--)
+        {
+            if (args[i] != "--tools") continue;
+            args.RemoveAt(i);
+            if (i < args.Count) args.RemoveAt(i);
+        }
+        args.AddRange(["--tools", ""]);
+    }
+
     private async Task<string> DecidePermissionAsync(string requestId, string toolName, JsonElement inputEl, object toolInput)
     {
+        // И1 (ADR-041, п.12): ход ребёнка решает ТОЛЬКО детский allow-list. Ни карточки, ни
+        // «всегда разрешать», ни авто-allow исполнителя/персоны/режима — любой запрос вне списка
+        // отклоняется сразу. Снимок политики, а не флаг сессии: выключение профиля действует
+        // со следующего запроса.
+        if (_childPolicy?.Invoke() is not null) return ChildPermissionDecision(toolName);
+
         // Гард «координатор не пишет код сам» (Э7-фикс): жёстче project-правил и «всегда
         // разрешать» — иначе достаточно один раз кликнуть «Разрешить всегда» на Bash, и
         // настройка перестаёт что-либо значить. См. CoordinatorWriteGuard про эвристику
@@ -3521,6 +3574,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // ход, сброс в finally ниже. Фолбэк-адаптер ставит то же значение ДО чтения цепочки,
         // поэтому EffectiveModel/EffectiveTurnChain видят его и на старте оркестрации.
         _turnModelOverride = turnModelOverride;
+        // Один снимок детской политики на запуск хода (И1/И2): аргументы, env, ключ и чистка env
+        // решаются по одному и тому же снимку, а не по трём независимым чтениям, между которыми
+        // профиль могли выключить. Запросы разрешений читают политику сами — им нужна свежесть.
+        var childSnapshot = _childPolicy?.Invoke();
 
         // P31: подстраховка от залипания pending control-состояния. К началу нового хода
         // (предыдущий завершился result'ом) _pendingQuestions/_pendingPlans/_permissionWaiters
@@ -3746,6 +3803,10 @@ public class ClaudeSession : ILlmSessionAdapter
             _lastBareModeMapBytes = 0;
         }
 
+        // Ход ребёнка (И1, п.11): ни одного встроенного инструмента CLI.
+        var childTurn = childSnapshot is not null;
+        if (childTurn) ForceNoBuiltinTools(args);
+
         // Подсказка следующего сообщения: CLI после result испускает prompt_suggestion
         // (генерация фоном с переиспользованием prompt cache хода; при холодном кэше CLI
         // сам пропускает). Только родной Claude — сторонним провайдерам фоновые запросы
@@ -3826,7 +3887,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // data/plugins смонтирована в /plugins (ro), ToRuntime переводит; локально — identity.
         // Локальный проект (ProjectCapabilities.Plugins = false, MVP) — GetPluginDirs отдаёт [],
         // аргументов нет. _pluginDirSource null — подсистема Plugins выключена.
-        if (_pluginDirSource is not null && _turnOwnerId is { } pluginOwnerId)
+        // Ход ребёнка (И1, п.13): плагинов нет вовсе — пустой набор, а не набор владельца.
+        if (!childTurn && _pluginDirSource is not null && _turnOwnerId is { } pluginOwnerId)
         {
             var pluginDirs = _pluginDirSource.GetPluginDirs(pluginOwnerId, Info.PersonaId, _pluginProject);
             foreach (var dir in pluginDirs)
@@ -4010,7 +4072,11 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasVideoEditorMcp: _videoEditorMcp is not null && McpDelivered(McpEndpoints.VideoEditorName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth),
                     ConsumersHookActive: ConsumersHookDelivered,
-                    Frame: turnFrame);
+                    Frame: turnFrame,
+                    // Детский ход — по тому же снимку политики, по которому живёт весь детский
+                    // слой (ChildPolicyProvider, KM-B3b): контрибьюторы recall-секций
+                    // проверяют признак в IsEnabled (KM-B6c), второго чтения стора нет.
+                    IsChild: _childPolicy?.Invoke() is not null);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
                 try
@@ -4670,12 +4736,33 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
 
+        // И2 (ADR-041): ход ребёнка идёт только по API-ключу записи пула из его профиля. Подписку
+        // не выбираем ни основную, ни пула; нет ключа у записи — отказ запуска, а не откат.
+        // Токен подписки из унаследованного env вычищает ChildTurnClearEnv (CLAUDE_CODE_OAUTH_TOKEN).
+        if (childSnapshot is not null)
+        {
+            var childSub = ChildApiKeyRoute.Resolve(childSnapshot, _subscriptionPool);
+            envOverrides[ChildTurnMarker.EnvKey] = "1";
+            // Блок пула выше мог положить токен подписки (Info.Provider указывает на setup-token запись)
+            envOverrides.Remove("CLAUDE_CODE_OAUTH_TOKEN");
+            // Модель стороннего провайдера (не Claude) ребёнку не положена: ключ пула ей не годится,
+            // а провайдерский ключ сервера — вне детского маршрута. Fail-closed, а не пропуск блока.
+            if (_providers?.ResolveByModel(EffectiveModel) is not null)
+                throw new ChildRouteRefusedException(ChildApiKeyRoute.RefusedText);
+            var childEnv = _providers?.BuildOAuthCliEnv(childSub.Key, "", childSub.ApiKey, EffectiveModel)
+                ?? throw new ChildRouteRefusedException(ChildApiKeyRoute.RefusedText);
+            foreach (var (k, v) in childEnv)
+                envOverrides[k] = v;
+        }
+
         // BareMode (замена --bare, задача 2026-09-15): переменная окружения отключает
         // автозагрузку CLAUDE.md, не трогая MCP/хуки/остальное. Не документирована в
         // claude --help (найдена строкой в бинарнике CLI 2.1.270) — сторож на пропажу
         // см. TrackContextTokens. Ставим только когда BareMode реально применён (карта
         // найдена), иначе у облачного провайдера переменная была бы лишним шумом.
-        if (_lastBareModeApplied)
+        // Ход ребёнка (И1, п.13): CLAUDE.md проекта не грузится в любом случае — BareMode тут
+        // не зависит от провайдера модели.
+        if (_lastBareModeApplied || childSnapshot is not null)
             envOverrides["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1";
 
         // Приватный чат общего проекта (S2d-5c): авто-память CLI пишет факты в общую папку
@@ -4794,7 +4881,7 @@ public class ClaudeSession : ILlmSessionAdapter
             Args = args,
             WorkingDirectory = _rootPath,
             Env = envOverrides,
-            ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
+            ClearEnv = TurnClearEnv(childSnapshot),
             RedirectStdin = true,
             TurnId = _currentTurnId,
         };
@@ -5015,7 +5102,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     Env = envOverrides,
                     // Маршрут хода определяем только мы: системные ANTHROPIC_*/CLAUDE_CONFIG_DIR
                     // машины в ход не пускаем, иначе чат «на Claude» молча уедет на чужой эндпоинт
-                    ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
+                    ClearEnv = TurnClearEnv(childSnapshot),
                     StdioEncoding = utf8NoBom,
                     TurnId = _currentTurnId,
                     // Раннер устройства привязывает к чату токен шлюза (ADR-016 §2); local/docker поле не читают

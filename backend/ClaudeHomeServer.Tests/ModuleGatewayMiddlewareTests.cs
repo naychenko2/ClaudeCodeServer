@@ -53,6 +53,9 @@ public class ModuleGatewayMiddlewareTests
         // в Program.cs как singleton; в тесте собираем вручную поверх того же сервиса.
         services.AddSingleton<IModuleFeatureFlagReader>(sp => new FeatureFlagGateway(sp.GetRequiredService<FeatureFlagService>()));
         services.AddSingleton<ModuleTokenService>();
+        // Гейт И1 детского режима (п.3 таблицы И1): модули ребёнку закрыты
+        services.AddSingleton<ClaudeHomeServer.Services.ChildMode.IChildModePolicy,
+            ClaudeHomeServer.Services.ChildMode.ChildModePolicy>();
         return services.BuildServiceProvider();
     }
 
@@ -170,6 +173,33 @@ public class ModuleGatewayMiddlewareTests
 
         var (status2, _, _) = await InvokeAsync(sp, "/api/modules/echo/api/data", null);
         Assert.Equal(StatusCodes.Status401Unauthorized, status2);
+    }
+
+    // Гейт И1 детского режима (п.3 таблицы И1): модули ребёнку закрыты целиком
+    [Fact]
+    public async Task Ребенок_не_доходит_до_модуля_403_child_mode()
+    {
+        var dir = TempDir();
+        Directory.CreateDirectory(dir);
+        using var sp = Build(dir);
+        var users = sp.GetRequiredService<UserStore>();
+        var jwt = sp.GetRequiredService<JwtService>();
+        var user = users.Add("child", "pw", "user");
+        user.ChildMode = new ClaudeHomeServer.Models.ChildProfile
+        {
+            Enabled = true,
+            TutorPersonaId = "tutor",
+            ProviderKey = "key",
+            Model = "sonnet",
+        };
+        var ccToken = jwt.Issue(user).token;
+
+        var (status, seenAuth, _) = await InvokeAsync(sp, "/api/modules/echo/api/data", $"Bearer {ccToken}");
+        Console.WriteLine($"[mod-gate] status={status} userId={user.Id} child={user.ChildMode?.Enabled}");
+
+        Assert.Equal(StatusCodes.Status403Forbidden, status);
+        // Модуль не вызван: обработчик за шлюзом не дошёл (токен модуля не подставлялся)
+        Assert.Empty(seenAuth);
     }
 
     [Fact]

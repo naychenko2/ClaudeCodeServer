@@ -43,7 +43,8 @@ public sealed record GatewayUpstreamDecision(GatewayUpstream? Upstream, int Fail
 public class UpstreamSelector(
     ClaudeSubscriptionPool pool,
     LlmProviderRegistry providers,
-    IOptionsMonitor<LlmGatewayOptions> options)
+    IOptionsMonitor<LlmGatewayOptions> options,
+    Services.ChildMode.IChildModePolicy? childPolicy = null)
 {
     public GatewayRouteDecision SelectRoute(string? model)
     {
@@ -80,6 +81,10 @@ public class UpstreamSelector(
         string? deviceId, string? model, TurnTokenLifetime lifetime = TurnTokenLifetime.Turn)
     {
         var decision = SelectRoute(model);
+        // И2: ребёнок (и неопознанный владелец — fail-closed) не получает маршрут по подписке никогда — шлюз единственный выдаёт такие маршруты.
+        if (decision.Route is { Kind: GatewayUpstreamKind.Subscription }
+            && (string.IsNullOrWhiteSpace(ownerId) || childPolicy?.For(ownerId) is not null))
+            return new(null, ChildApiKeyRoute.RefusedText);
         return decision.Route is null
             ? new(null, decision.FailureText)
             : new(tokens.Issue(ownerId, sessionId, deviceId, decision.Route, lifetime), null);

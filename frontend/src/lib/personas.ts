@@ -17,6 +17,17 @@ let _loading: Promise<void> | null = null;
 let _version = 0;   // бампается на любое изменение — deps для рефетча деталей
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
+// Детская оболочка: /api/personas вне детского allow-list (ADR-041, И1) — стор не ходит в сеть
+let _childMode = false;
+
+export function setPersonasChildMode(on: boolean): void {
+  if (_childMode === on) return;
+  _childMode = on;
+  // Смена режима: прежний снимок и загрузка принадлежат другому пользователю — не переносим
+  _personas = [];
+  _loaded = false;
+  _loading = null;
+}
 
 function emit() {
   _version++;
@@ -39,16 +50,18 @@ function wireRealtime() {
 }
 
 export async function reloadPersonas(): Promise<void> {
+  if (_childMode) return;
   _personas = await api.personas.list();
   _loaded = true;
   emit();
 }
 
 export function ensurePersonasLoaded(): Promise<void> {
+  if (_childMode) return Promise.resolve();
   wireRealtime();
   joinUserGroup();
   if (_loaded) return Promise.resolve();
-  if (!_loading) _loading = reloadPersonas().finally(() => { _loading = null; });
+  if (!_loading) _loading = reloadPersonas().catch(() => {}).finally(() => { _loading = null; });
   return _loading;
 }
 

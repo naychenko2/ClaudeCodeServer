@@ -57,9 +57,15 @@ import { primeAudio } from '../lib/tts';
 import { isMicKeyboardFallback } from '../lib/voiceInput';
 import { talkDiag, talkDiagSave } from '../lib/talkDiag';
 import { VOICE_STYLE_TALK, VOICE_STYLE_DIGEST, type VoiceStyle } from '../lib/voiceStyle';
+import { ChildComposer } from '../features/childMode/ChildComposer';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
 
 export interface ComposerProps {
+  // 'child' — детский вариант (KM-F8): поле, отправка, «+», чип вложения, «Читать вслух»;
+  // остальное скрыто. Не задан — взрослый композер без изменений
+  variant?: 'child';
+  // Подписи чипов вложений вместо имени файла из пути (детский вариант: у PDF путь ведёт на извлечённый .txt)
+  attachmentLabels?: Record<string, string>;
   // Ключ чата — под него хранится черновик недовведённого текста
   sessionId: string;
   // ADR-016 §3.4: проект чата — для гейта отправки (exec) и баннера «устройство офлайн».
@@ -566,7 +572,7 @@ function VoiceStatusRow({ icon, text, isMobile }: {
   );
 }
 
-export function Composer({
+function AdultComposer({
   sessionId,
   voicePersonaId,
   onSend,
@@ -2870,4 +2876,8 @@ export function Composer({
     )}
     </div>
   );
+}
+
+export function Composer(props: ComposerProps) {
+  return props.variant === 'child' ? <ChildComposer {...props} /> : <AdultComposer {...props} />;
 }

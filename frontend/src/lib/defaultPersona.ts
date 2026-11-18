@@ -27,11 +27,13 @@ interface MeState {
   // нему бейдж среды и предупреждение у stdio-записей у local-владельцев. null —
   // /me ещё не ответил; устаревшее значение не показываем, чтобы сигнал был свежим
   executionEnvironment: 'local' | 'container' | null;
+  // Детский режим (Me.isChild): приложение рисует только детскую оболочку
+  isChild: boolean;
 }
 
 let _me: MeState = {
   loaded: false, userId: null, username: null, defaultPersonaId: null, role: '',
-  needsOnboarding: false, onboardingSessionId: null, executionEnvironment: null,
+  needsOnboarding: false, onboardingSessionId: null, executionEnvironment: null, isChild: false,
 };
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
@@ -67,6 +69,7 @@ export function setMeFromServer(me: Me): void {
     needsOnboarding: !!me.needsOnboarding,
     onboardingSessionId: me.onboardingSessionId ?? null,
     executionEnvironment: me.executionEnvironment ?? null,
+    isChild: !!me.isChild,
   };
   emit();
 }
@@ -75,7 +78,7 @@ export function setMeFromServer(me: Me): void {
 export function clearMe(): void {
   _me = {
     loaded: false, userId: null, username: null, defaultPersonaId: null, role: '',
-    needsOnboarding: false, onboardingSessionId: null, executionEnvironment: null,
+    needsOnboarding: false, onboardingSessionId: null, executionEnvironment: null, isChild: false,
   };
   emit();
 }

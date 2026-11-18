@@ -7,7 +7,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { act, createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ChatItem } from '../../../types';
+import type { ChatItem, Project } from '../../../types';
 import { setAllFlags } from '../../../lib/featureFlags';
 import type { FeatureRun } from '../../../types/featureRun';
 import { ChatItemView, shouldHideAbortBanner } from '../ChatItemView';
@@ -17,6 +17,7 @@ import {
   SpeakingItemContext, AssistantNameContext,
 } from '../contexts';
 import { __test } from '../../../lib/featureRuns';
+import { noteProject, resetDeviceAgentForTests } from '../../../lib/deviceAgent';
 import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from './fakeDom';
 
 // Минимальный элемент нужного kind. Нам интересно только поведение плашки «Ветка от …»
@@ -527,6 +528,119 @@ describe('ChatItemView — строка ожидания слота локаль
     } finally {
       uninstallFakeDom();
     }
+  });
+});
+
+// === KM-F13b: миниатюры вложений в пузыре пользователя ===
+// AttachmentThumb в блоке item.attachedPaths: картинка → <img> через
+// /api/chats/{id}/attachments/raw (единственная точка — attachmentRawUrl);
+// не-картинка, чат без sessionId и файлы локального проекта (маршрут агента) —
+// тот же ярлык, что был до миниатюр. Мутация: вернуть plain <span> в блоке
+// attachedPaths → кейсы «1 <img>» краснеют; вернуть ярлык для агента → краснеет
+// кейс локального проекта.
+const ATTACH_ITEM: ChatItem = {
+  kind: 'user_message',
+  text: 'посмотри, что на фото',
+  attachedPaths: ['.cc-attachments/a/photo.png', '.cc-attachments/b/notes.pdf'],
+};
+
+// Та же обвязка контекстами, что renderItem, но sessionId и project задаются
+// явно: миниатюра живёт на ChatSessionContext, а решение «ярлык или <img>» —
+// на маршруте файлов проекта (projectRouteOf).
+function renderUserAttachments(
+  item: ChatItem,
+  opts: { sessionId: string | null; project?: { id: string; rootPath: string } | null },
+): string {
+  const noop = () => {};
+  const tree: ReactElement = createElement(
+    ChatProjectContext.Provider, { value: opts.project ?? null },
+    createElement(
+      ChatTreePathContext.Provider, { value: null },
+      createElement(
+        ChatSessionContext.Provider, { value: opts.sessionId },
+        createElement(
+          PersonaContext.Provider, { value: null },
+          createElement(
+            SpeakingItemContext.Provider, { value: null },
+            createElement(
+              AssistantNameContext.Provider, { value: 'Ассистент' },
+              createElement(ChatItemView, {
+                item,
+                index: 0,
+                online: true,
+                onToggleThinking: noop,
+                onAllowPermission: noop,
+                onDenyPermission: noop,
+                onAllowAlways: noop,
+                onAnswerQuestion: noop,
+                onRespondPlan: noop,
+                onSwitchMode: noop,
+                onRetry: noop,
+                onInterrupt: noop,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  return renderToStaticMarkup(tree);
+}
+
+const countImgs = (html: string): number => (html.match(/<img\b/g) ?? []).length;
+
+// Проект на устройстве: решение о маршруте живёт в сторе deviceAgent
+// (noteProject + матрица capabilities host='device') — та же форма, что helper
+// в deviceAgent.test.ts. Без пробы агента presence='unknown' → маршрут 'agent'.
+function deviceProject(id: string): Project {
+  return {
+    id, name: id, rootPath: '/p', createdAt: '', updatedAt: '',
+    capabilities: {
+      host: 'device', deviceId: 'd1',
+      files: { host: 'device', available: true, reason: null, features: [] },
+      platform: { host: 'server', available: true, reason: null, features: [] },
+      serverContent: { host: 'off', available: false, reason: null, features: [] },
+      exec: { available: true, reason: null },
+    },
+  };
+}
+
+describe('ChatItemView — миниатюры вложений в пузыре (KM-F13b)', () => {
+  // c2: чат вне проекта (как у ребёнка): картинка → ровно 1 <img> с адресом
+  // чатовой ручки; pdf — ярлык именем файла (полного пути в ярлыке нет)
+  it('чат вне проекта: картинка → <img> /api/chats/s1/…, pdf → ярлык именем файла', () => {
+    const html = renderUserAttachments(ATTACH_ITEM, { sessionId: 's1' });
+    expect(countImgs(html), 'миниатюра одна — только картинка').toBe(1);
+    expect(html).toContain('src="/api/chats/s1/attachments/raw?path=.cc-attachments%2Fa%2Fphoto.png"');
+    expect(html).toContain('notes.pdf');
+    expect(html, 'вне проекта ярлык — только имя файла').not.toContain('.cc-attachments/b/notes.pdf');
+  });
+
+  // c3: проектный чат (взрослый, серверный маршрут): та же картинка → 1 <img>
+  it('проектный чат (серверный маршрут): картинка → <img>', () => {
+    const html = renderUserAttachments(ATTACH_ITEM, { sessionId: 's1', project: { id: 'p1', rootPath: '/tmp/p1' } });
+    expect(countImgs(html), 'миниатюра одна — только картинка').toBe(1);
+    expect(html).toContain('src="/api/chats/s1/attachments/raw?path=.cc-attachments%2Fa%2Fphoto.png"');
+  });
+
+  // c3: локальный проект (projectRouteOf='agent'): файлы лежат на устройстве,
+  // чатовой ручки для них нет → ни одного <img>, ярлыки с относительным путём как до шага
+  it('локальный проект (маршрут агента): ни одного <img>, ярлыки как до миниатюр', () => {
+    resetDeviceAgentForTests();
+    noteProject(deviceProject('l1'));
+    const html = renderUserAttachments(ATTACH_ITEM, { sessionId: 's1', project: { id: 'l1', rootPath: '/p' } });
+    expect(countImgs(html), 'на маршруте агента миниатюр нет').toBe(0);
+    expect(html).toContain('.cc-attachments/a/photo.png');
+    expect(html).toContain('.cc-attachments/b/notes.pdf');
+    resetDeviceAgentForTests();
+  });
+
+  // Грань контракта AttachmentThumb (KM-F13a): нет sessionId → нет адреса → ярлык
+  it('нет sessionId: ни одного <img>, ярлыки как до миниатюр', () => {
+    const html = renderUserAttachments(ATTACH_ITEM, { sessionId: null });
+    expect(countImgs(html), 'без sessionId миниатюр нет').toBe(0);
+    expect(html).toContain('photo.png');
+    expect(html).toContain('notes.pdf');
   });
 });
 

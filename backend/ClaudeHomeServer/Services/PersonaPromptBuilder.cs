@@ -18,9 +18,14 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
     // формат сильнее слота «Формат ответов» персоны (сам слой клеится ПОСЛЕ секций промпта
     // и без неё перебил бы секцию voice-mode). voiceStyle — какая именно оговорка:
     // talk отменяет формат персоны целиком, digest — только внутри блока <voice>.
+    // childSafety — детский ход (KM-B6c): правила тьютора тем же приёмом «две точки» —
+    // секцией перед слотами характера и оговоркой последним блоком. Ставятся по признаку
+    // ребёнка, а не по тексту персоны: тьютора выбирает админ, его характер любой.
     public string Build(Persona persona, string? model, bool switched = false, bool greeted = false,
-        string? teamMechanicsBlock = null, bool voiceMode = false, string? voiceStyle = null) =>
-        BuildCore(persona, providers.ProviderKey(model), switched, greeted, teamMechanicsBlock, voiceMode, voiceStyle);
+        string? teamMechanicsBlock = null, bool voiceMode = false, string? voiceStyle = null,
+        bool childSafety = false) =>
+        BuildCore(persona, providers.ProviderKey(model), switched, greeted, teamMechanicsBlock,
+            voiceMode, voiceStyle, childSafety);
 
     // Промпт файлового сабагента: модель исполнения неизвестна на этапе генерации
     // (.md общий для чатов всех провайдеров, сабагент бежит на модели сессии) —
@@ -31,7 +36,8 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
     internal const string SubagentProviderKey = "subagent";
 
     internal static string BuildCore(Persona persona, string providerKey, bool switched, bool greeted,
-        string? teamMechanicsBlock = null, bool voiceMode = false, string? voiceStyle = null)
+        string? teamMechanicsBlock = null, bool voiceMode = false, string? voiceStyle = null,
+        bool childSafety = false)
     {
         var sb = new StringBuilder();
 
@@ -50,6 +56,14 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
             sb.Append(" Ты отвечаешь как женщина: о себе говори в женском роде.");
         else if (persona.Gender == PersonaGender.Male)
             sb.Append(" Ты отвечаешь как мужчина: о себе говори в мужском роде.");
+
+        // Детский слой (KM-B6c, ADR-041 §4): рамка тьютора — ПЕРЕД слотами характера и перед
+        // legacy-SystemPrompt: она задаёт границу того, как персона вообще работает с ребёнком,
+        // и не зависит от того, какой тьютор закреплён профилем. Приоритет после «Формата
+        // ответов» и примеров речи возвращает оговорка в конце слоя (тот же приём, что у
+        // voice-mode ниже: одной секции мало — слой читается целиком).
+        if (childSafety)
+            AppendText(sb, Prompts.ChildSafetyPrompts.SectionTitle, Prompts.ChildSafetyPrompts.SectionText);
 
         var contract = persona.Contract;
         if (contract is null || contract.IsEmpty)
@@ -100,6 +114,14 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
             sb.Append("\n\n").Append(VoiceStyles.Normalize(voiceStyle) == VoiceStyles.Digest
                 ? Prompts.VoicePrompts.DigestPersonaOverride
                 : Prompts.VoicePrompts.PersonaOverride);
+
+        // Правила тьютора — САМЫМ последним блоком слоя: ниже слотов контракта, примеров
+        // речи, дисциплинарного слоя провайдера, моста в механики и голосовой оговорки.
+        // Любой из них перебивает правило тем же способом, каким слой персоны перебивает
+        // секции промпта (TurnPromptAssembler.Combine), поэтому порядок здесь — часть
+        // правила, а не оформление: мутация «переставить оговорку выше» красит свой кейс.
+        if (childSafety)
+            sb.Append("\n\n").Append(Prompts.ChildSafetyPrompts.PersonaOverride);
 
         return sb.ToString();
     }

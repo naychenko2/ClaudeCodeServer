@@ -127,19 +127,29 @@ public sealed class TurnProcessHost
         // прогона от позднего exited доживающего (см. SessionEntry.DrainOnExitedRun)
         var runId = NextRunId();
 
-        var context = _factory.BuildForNewSession(session, ownerId,
-            session.ProjectId is { } launchProjectId ? _projects.GetById(launchProjectId) : null,
-            rootPath, projectRoot, rawSystemPrompt, permissionRules, accumulator, runId,
-            BuildEnqueueBypass(session.Id), _turnEvents,
-            _route.ConfigRootFor(ownerId, session.Provider),
-            // ADR-016: правило «транскрипт на диске сервера» — одна запись, в CliRoute
-            _route.TranscriptOnServer(session));
-        var adapter = _adapters.Create(session, context);
-        entry.Process = adapter;
-        entry.RunId = runId;
+        // Отказ старта (гейты И1-бис/И3, сбой адаптера) не оставляет чат в реестре: иначе он
+        // висит в списках владельца без процесса. Исключение уходит вызывающему как раньше.
+        try
+        {
+            var context = _factory.BuildForNewSession(session, ownerId,
+                session.ProjectId is { } launchProjectId ? _projects.GetById(launchProjectId) : null,
+                rootPath, projectRoot, rawSystemPrompt, permissionRules, accumulator, runId,
+                BuildEnqueueBypass(session.Id), _turnEvents,
+                _route.ConfigRootFor(ownerId, session.Provider),
+                // ADR-016: правило «транскрипт на диске сервера» — одна запись, в CliRoute
+                _route.TranscriptOnServer(session));
+            var adapter = _adapters.Create(session, context);
+            entry.Process = adapter;
+            entry.RunId = runId;
 
-        await adapter.StartAsync();
-        _store.SaveSessions();
+            await adapter.StartAsync();
+            _store.SaveSessions();
+        }
+        catch
+        {
+            _sessions.TryRemove(session.Id, out _);
+            throw;
+        }
     }
 
     internal async Task EnsureProcessAsync(string sessionId, SessionEntry entry)

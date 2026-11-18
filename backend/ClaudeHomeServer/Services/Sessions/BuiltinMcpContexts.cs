@@ -36,6 +36,10 @@ public sealed class BuiltinMcpContexts
     private readonly Mcp.HiggsfieldOAuthService? _higgsfieldOAuth;
     private readonly IConfiguration _config;
 
+    // Детский гейт И1 (KM-B3a): состав MCP хода и сверку полей чата на запуске читает
+    // TurnLaunchContextFactory через этот билдер — у фабрики потолок десять зависимостей.
+    internal ClaudeHomeServer.Services.ChildMode.IChildModeGate ChildGate { get; }
+
     private Services.Mcp.Http.McpToolsetRegistry? _mcpToolsets;
 
     // Секция Dify (ApiUrl/ApiKey/неймспейс) — для BuildDifyContext (волна 4): единственное
@@ -46,8 +50,10 @@ public sealed class BuiltinMcpContexts
     public BuiltinMcpContexts(McpEndpoint endpoint, FeatureFlagService flags,
         PersonaBindingsService bindings, IServiceProvider? services,
         SubsystemStateStore? subsystemStates, ProjectManager projects,
-        Mcp.HiggsfieldOAuthService? higgsfieldOAuth, IConfiguration config)
+        Mcp.HiggsfieldOAuthService? higgsfieldOAuth, IConfiguration config,
+        ClaudeHomeServer.Services.ChildMode.IChildModeGate childGate)
     {
+        ChildGate = childGate;
         _endpoint = endpoint;
         _flags = flags;
         _bindings = bindings;

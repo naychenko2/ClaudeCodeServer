@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Llm;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Team;
 
@@ -169,6 +170,26 @@ public static class SessionCoreRegistration
         // IDeviceExecChannel, прямая зависимость замкнула бы граф синглтонов. Опциональные
         // — GetService: та же семантика, что у параметров SessionManager (подсистема или
         // OAuth-сервис могут не быть в DI).
+        // Детская политика и гейт (ADR-041): BuiltinMcpContexts берёт гейт обязательным, поэтому
+        // ядро регистрирует их само (TryAdd — подмена в тестах остаётся возможной).
+        // IUserStore — GetService: тестовый хост ядра его не держит, берём проекцию UserStore.
+        services.TryAddSingleton<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>(sp =>
+            new ClaudeHomeServer.Services.ChildMode.ChildModePolicy(
+                sp.GetService<IUserStore>() ?? new UserStoreAdapter(sp.GetRequiredService<UserStore>()),
+                sp.GetService<ILogger<ClaudeHomeServer.Services.ChildMode.ChildModePolicy>>()));
+        // Калькулятор лимитов (И3, KM-B5d) — GetService: он зарегистрирован в Main-составе
+        // (Program.cs: журнал присутствия + шов Spend), а тестовый хост ядра их не поднимает.
+        // Отсутствие — не разрешение: для ребёнка гейт отказывает текстом Uncheckable (fail-closed);
+        // непустую проводку боевого состава проверяет ChildPolicyWiringGuardTests.
+        // Логгер — GetService, как у логгера политики выше: параметр гейта необязателен (default
+        // null), поэтому контейнер без зарегистрированного логгера остаётся рабочим. Без логгера
+        // LogWarning в catch гейта молчит — причину сбоя расчёта видно не будет (хвост R-KM-B5d);
+        // что проводка его передаёт, проверяет ChildPolicyWiringGuardTests.
+        services.TryAddSingleton<ClaudeHomeServer.Services.ChildMode.IChildModeGate>(sp =>
+            new ClaudeHomeServer.Services.ChildMode.ChildModeGate(
+                sp.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>(),
+                sp.GetService<ClaudeHomeServer.Services.ChildMode.ChildLimitsCalculator>(),
+                sp.GetService<ILogger<ClaudeHomeServer.Services.ChildMode.ChildModeGate>>()));
         services.AddSingleton(sp => new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(),
             sp.GetRequiredService<FeatureFlagService>(),
@@ -177,7 +198,8 @@ public static class SessionCoreRegistration
             sp.GetService<ClaudeHomeServer.Services.Composition.SubsystemStateStore>(),
             sp.GetRequiredService<ProjectManager>(),
             sp.GetService<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>(),
-            sp.GetRequiredService<IConfiguration>()));
+            sp.GetRequiredService<IConfiguration>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModeGate>()));
         // Слой персоны. ISphereDirectory — GetService: без подсистемы сфер зона персоны
         // работает через NoSphereDirectory, как и раньше.
         services.AddSingleton(sp => new PersonaLayerBuilder(
@@ -188,7 +210,8 @@ public static class SessionCoreRegistration
             sp.GetService<PersonaAgentFileSync>(),
             sp.GetRequiredService<ProjectManager>(),
             sp.GetService<Spheres.ISphereDirectory>(),
-            sp.GetRequiredService<ILogger<PersonaLayerBuilder>>()));
+            sp.GetRequiredService<ILogger<PersonaLayerBuilder>>(),
+            sp.GetService<ClaudeHomeServer.Services.ChildMode.IChildModeGate>()));
         // Внешние серверы владельца и рабочий пространство. Реестр/секреты/OAuth — GetService:
         // без них реестровых серверов в ход нет (та же опциональность, что у параметров фасада).
         services.AddSingleton(sp => new ExternalMcpContexts(
@@ -240,7 +263,8 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<Lazy<ITurnStarter>>(),
             sp.GetRequiredService<Lazy<IWorkLoopContinuation>>(),
             sp.GetRequiredService<Lazy<ITeamNotifier>>(),
-            sp.GetRequiredService<ILogger<TurnCompletion>>()));
+            sp.GetRequiredService<ILogger<TurnCompletion>>(),
+            sp.GetService<ClaudeHomeServer.Services.Turn.ITurnEventBus>()));
         // Шов «сообщения процесса → разбор ленты»: ленивый на TurnCompletion — с S3-6 его
         // владелец не фасад. Меняется ровно эта строка и одна строка запасной сборки в
         // конструкторе SessionManager (S3-5 → S3-6).

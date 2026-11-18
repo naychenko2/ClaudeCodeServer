@@ -1978,6 +1978,18 @@ public class TaskManagerTests : IDisposable
         FeatureStepAccounting.ActivePlans([p1, p2, p3]).Select(p => p.Id).Should().Equal(p3.Id);
     }
 
+    // План-дополнение с одним общим ключом большой план при создании не снимает.
+    [Fact]
+    public void Create_ПланДополнение_БольшойПланНеСнимается()
+    {
+        var epic = CreateEpic("u");
+        var big = CreatePlan("u", epic.Id, "A", "B", "C", "D");
+        var add = CreatePlan("u", epic.Id, "D", "E");
+
+        big.Verification.Should().BeNull();
+        add.Verification.Should().BeNull();
+    }
+
     [Fact]
     public void Create_ПланБезПересечения_РаннийНеТрогается()
     {

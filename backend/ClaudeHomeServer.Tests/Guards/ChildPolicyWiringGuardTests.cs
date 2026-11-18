@@ -1,0 +1,108 @@
+using System.Reflection;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChildMode;
+using ClaudeHomeServer.Services.Sessions;
+using ClaudeHomeServer.Tests.Helpers;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+namespace ClaudeHomeServer.Tests.Guards;
+
+/// <summary>
+/// Сторож проводки детской политики на реальном контейнере хоста (KM-B3b, пункт 2 ревью):
+/// пять потребителей берут политику или гейт опциональным параметром с null по умолчанию, поэтому
+/// ошибка DI-регистрации не ломает ни сборку, ни старт, а молча открывает ребёнку фон (fail-open).
+/// Проверка смотрит на сами поля резолвленных экземпляров: непустое и именно то, что в контейнере.
+/// </summary>
+[Trait("Category", "Host")]
+public class ChildPolicyWiringGuardTests : IClassFixture<ChildPolicyWiringGuardTests.Hosts>
+{
+    // Хост на КЛАСС (храповик «хост на класс»): тесты хост не мутируют, детская политика и гейт строятся
+    // локально поверх его DI, поэтому порядок тестов не важен
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly Hosts _host;
+
+    public ChildPolicyWiringGuardTests(Hosts host) => _host = host;
+
+    // Потребитель → тип детской зависимости, которую он обязан держать
+    private static readonly (string Name, Type Instance, Type Dependency)[] Consumers =
+    [
+        ("CheapTextRunner", typeof(ClaudeHomeServer.Services.Llm.CheapTextRunner), typeof(IChildModePolicy)),
+        ("OneShotClaudeRunner", typeof(ClaudeHomeServer.Services.Llm.OneShotClaudeRunner), typeof(IChildModePolicy)),
+        ("PersonaAutomationService", typeof(PersonaAutomationService), typeof(IChildModeGate)),
+        ("PersonasCrudService", typeof(PersonasCrudService), typeof(IChildModeGate)),
+        ("PersonaLayerBuilder", typeof(PersonaLayerBuilder), typeof(IChildModeGate)),
+    ];
+
+    // ICheapTextRunner в тестовом хосте подменён стабом, поэтому боевой CheapTextRunner собираем тем же
+    // способом, каким контейнер строит тип по `AddSingleton<ICheapTextRunner, CheapTextRunner>()`:
+    // самый жадный конструктор, параметры из контейнера, необязательные без регистрации — по умолчанию.
+    private static object Resolve(IServiceProvider sp, Type instance) =>
+        instance == typeof(ClaudeHomeServer.Services.Llm.CheapTextRunner)
+            ? ActivatorUtilities.CreateInstance(sp, instance)
+            : sp.GetRequiredService(instance);
+
+    // Значения полей экземпляра заданного типа (в том числе захваченные параметры первичных конструкторов)
+    internal static List<object?> HeldDependencies(object instance, Type dependency) =>
+        instance.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+            .Where(f => dependency.IsAssignableFrom(f.FieldType))
+            .Select(f => f.GetValue(instance)).ToList();
+
+    [Fact]
+    public void ПятьПотребителей_НаРеальномХосте_ДержатНепустуюДетскуюЗависимость()
+    {
+        _ = _host.CreateClient();
+        var sp = _host.Services;
+        var policy = sp.GetRequiredService<IChildModePolicy>();
+        var gate = sp.GetRequiredService<IChildModeGate>();
+
+        var problems = new List<string>();
+        foreach (var (name, instanceType, dependency) in Consumers)
+        {
+            var instance = Resolve(sp, instanceType);
+            instance.GetType().Should().Be(instanceType, $"{name}: в контейнере должен жить ровно этот тип");
+            var held = HeldDependencies(instance, dependency);
+            var expected = dependency == typeof(IChildModePolicy) ? (object)policy : gate;
+            if (held.Count == 0) problems.Add($"{name}: поля типа {dependency.Name} нет вовсе");
+            else if (held.Any(h => h is null)) problems.Add($"{name}: {dependency.Name} = null (fail-open)");
+            else if (!held.Any(h => ReferenceEquals(h, expected)))
+                problems.Add($"{name}: {dependency.Name} не тот экземпляр, что в контейнере");
+        }
+        problems.Should().BeEmpty("каждый из пяти потребителей обязан получить детскую политику из контейнера");
+    }
+
+    // И3 (KM-B5d): калькулятор в гейт приходит через GetService, поэтому потеря регистрации в
+    // Program.cs не ломает ни сборку, ни старт, а молча делает гейт fail-closed для каждого ребёнка
+    // (текст Uncheckable на каждый ход). Сторож смотрит на поле гейта из контейнера.
+    [Fact]
+    public void ГейтНаРеальномХосте_ДержитНепустойКалькуляторЛимитов()
+    {
+        _ = _host.CreateClient();
+        var sp = _host.Services;
+        var gate = sp.GetRequiredService<IChildModeGate>();
+        var calc = sp.GetService<ChildLimitsCalculator>();
+
+        calc.Should().NotBeNull("калькулятор лимитов зарегистрирован в Program.cs");
+        var held = HeldDependencies(gate, typeof(ChildLimitsCalculator));
+        held.Should().ContainSingle("гейт держит ровно одно поле калькулятора")
+            .Which.Should().BeSameAs(calc, "и это тот же экземпляр, что в контейнере (не null — иначе И3 глухо отказывает всем детям)");
+    }
+
+    // Хвост R-KM-B5d: логгер в боевую проводку. Параметр гейта необязательный (default null), поэтому
+    // отсутствие третьего аргумента в регистрации ядра не ломает ни сборку, ни старт — молчит только
+    // LogWarning в catch, и причину сбоя расчёта лимитов на сервере не видно вовсе. Он и GetService
+    // (тот же стиль, что у логгера политики): контейнер без логгера остаётся рабочим.
+    [Fact]
+    public void ГейтНаРеальномХосте_ДержитЛоггер()
+    {
+        _ = _host.CreateClient();
+        var sp = _host.Services;
+        var gate = sp.GetRequiredService<IChildModeGate>();
+
+        var held = HeldDependencies(gate, typeof(ILogger<ChildModeGate>));
+        held.Should().ContainSingle("гейт держит ровно одно поле логгера")
+            .Which.Should().NotBeNull("иначе LogWarning в catch гейта молчит: причина сбоя расчёта в журнал не попадает");
+    }
+}

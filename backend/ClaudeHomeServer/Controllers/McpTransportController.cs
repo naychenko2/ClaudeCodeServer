@@ -29,6 +29,7 @@ namespace ClaudeHomeServer.Controllers;
 public sealed class McpTransportController(McpToolsetRegistry registry,
     McpToolWhitelist whitelist,
     ClaudeHomeServer.Services.Access.IActorRightGate actorGate,
+    ClaudeHomeServer.Services.ChildMode.IChildModeGate childGate,
     ClaudeHomeServer.Services.ISessionDirectory sessionDirectory,
     ILogger<McpTransportController> logger,
     // Тайминги потоковой ветки; в тестах — укороченные, в бою — умолчание
@@ -261,6 +262,11 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
                     if (actorGate.Denied(toolset.Name, toolName, callerChat, context.OwnerId, callerProject)
                         is { } actorDenied)
                         return Ok(id, ToolContent(actorDenied, isError: true));
+                    // Детский гейт И1 (ADR-041, п.9): третий гейт рядом с whitelist и actorGate, по
+                    // владельцу из токена и allow-list пар (сервер, инструмент), fail-closed.
+                    // Состав tools/list он не трогает — тот зависит от владельца уже в конфиге хода.
+                    if (childGate.Denied(toolset.Name, toolName, context.OwnerId) is { } childDenied)
+                        return Ok(id, ToolContent(childDenied, isError: true));
                     var args = parms?["arguments"]?.DeepClone() as JsonObject ?? [];
                     try
                     {

@@ -161,6 +161,7 @@ MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.
 [ADR-029](adr/ADR-029-local-model-stats.md) (статистика локальных моделей: учёт за ход в шлюзе `/gw`, очередь текста без номера, реестр prompt_id ComfyUI как единственная точка атрибуции, чужим — только агрегаты; описание — [features/local-model-stats.md](features/local-model-stats.md)),
 [ADR-031](adr/ADR-031-feature-as-dimension.md) (фича как сквозное измерение чатов: членство «чат → фича» вычисляется индексом `features/index`, `Session` не расширяется, ключевой чат — цепочкой, «одна строка — одна группа»; за флагом `features-overview`),
 [ADR-033](adr/ADR-033-turn-auto-resume.md) (авто-возобновление ходов после рестарта сервера: фоновый `TurnAutoResumeService` с прогревом, снимок кандидатов из `Working` в `LoadSessions`, сторож crash-loop, фронт-ветка `server_restart` в `ChatItemView`; за флагом `turn-auto-resume`),
+[ADR-041](adr/ADR-041-child-mode.md) (детский режим: ребёнок = `user` с профилем `ChildMode`, allow-list с отказом по умолчанию по эндпоинтам, хабу и MCP, лимиты и бюджет на запуске хода, «Уроки» только по API-ключу; таблицы путей И1/И2 и контракт `/api/child/*`),
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение
@@ -209,7 +210,9 @@ ADR-016: задачи с владением файлами, сторожа, ра
 [chat-branching-2026-09.md](research/chat-branching-2026-09.md) (архитектурный разрез
 «Ветвления чата»: ветка как обычный чат с префиксом транскрипта, почему обход по
 `parentUuid` ломает контекст и почему граница ищется текстовым якорем — с замерами
-сопоставимости истории и транскрипта на данных прода). Читать как «так было тогда».
+сопоставимости истории и транскрипта на данных прода),
+[kids-mode-wave1-cut-2026-11.md](research/kids-mode-wave1-cut-2026-11.md) (разрез волны 1
+«Детского режима»: блоки Б1–Б8 и обоснования по коду под ADR-041). Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

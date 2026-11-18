@@ -47,6 +47,11 @@ public class DefaultAssistantProvisioner
         // Действующий дефолт резолвится в живую персону — возвращаем её без создания
         var me = _users.GetById(userId);
         if (me is null) return null;
+        // Ребёнку авто-ассистент не провится вовсе (KM-B1d): его персона — тьютор из
+        // ChildTutorProvisioner, связь держится на ChildProfile.TutorPersonaId, а не на
+        // DefaultPersonaId. Ранний выход и до резолвинга дефолта: ребёнку нечем ни создать,
+        // ни вернуть.
+        if (me.ChildMode is not null) return null;
         if (me.DefaultPersonaId is { } existingId && _personas.Get(existingId, userId) is { } existing)
             return existing;
 

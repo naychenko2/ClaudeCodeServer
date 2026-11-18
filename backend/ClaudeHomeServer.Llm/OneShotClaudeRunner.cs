@@ -40,7 +40,8 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     ClaudeSubscriptionPool? subscriptionPool = null,
     SubscriptionActivityTracker? activity = null,
     ILogger<OneShotClaudeRunner>? logger = null,
-    LocalEngineBusyTracker? localGate = null) : IOneShotRunner
+    LocalEngineBusyTracker? localGate = null,
+    ClaudeHomeServer.Services.ChildMode.IChildModePolicy? childPolicy = null) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 
@@ -149,6 +150,15 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         TimeSpan? timeout, CancellationToken ct, string? ownerId, string? effort, string? label,
         IReadOnlyList<ImageLabelInput>? images = null)
     {
+        // И2 + п.18 (ADR-041): фоновый one-shot идёт по подписке пула/основной, а у ребёнка
+        // подписки нет никогда. Последний рубеж для ВСЕХ потребителей раннера (CheapTextRunner
+        // отсекает раньше; прямые вызовы — персоны, разметка фото — упираются сюда): процесс не
+        // стартует, ответ пустой — то же «без ответа», которое потребители уже умеют разбирать.
+        if (!string.IsNullOrEmpty(ownerId) && childPolicy?.For(ownerId) is not null)
+        {
+            logger?.LogInformation("one-shot {Label}: владелец в детском режиме — вызов не выполняется", label);
+            return new OneShotResult("", null, 0);
+        }
         var launcher = launchers.ForOwner(ownerId);
         var workDir = Path.Combine(launcher.HostTempDir, "claude-oneshot");
         Directory.CreateDirectory(workDir);

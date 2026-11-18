@@ -112,13 +112,20 @@ public sealed class PersonaLayerContributor : IPromptSectionContributor
                 // персона удалена — слой не добавляется
                 return Task.FromResult<PromptSectionContribution?>(null);
             }
+            // Детский слой (KM-B6c): признак берётся из контекста хода (тот же снимок политики,
+            // по которому живёт весь детский слой), а не из персоны — правила тьютора ставятся
+            // любому закреплённому тьютору. Оговорка внутри Build'а остаётся ПОСЛЕДНИМ блоком
+            // и для этого хода: обе надстройки ниже — групповая и проектного онбординга —
+            // детскому чату не пишутся (участников и проекта не допускает сверка полей запуска,
+            // ChildModeGate.LaunchMismatch).
             var built = _promptBuilder.Build(persona, session.Model, session.PersonaSwitched,
                 greeted: !string.IsNullOrWhiteSpace(persona.Greeting),
                 teamMechanicsBlock: BuildTeamMechanicsBlock(session, persona),
                 voiceMode: session.VoiceMode,
                 voiceStyle: session.TaskExecution || session.AutomationRuleId is not null
                     ? VoiceStyles.Talk
-                    : session.VoiceStyle);
+                    : session.VoiceStyle,
+                childSafety: sessionContext.IsChild);
 
             // Групповой чат: надстройка со списком участников и правилом «говори только за себя».
             if (session.Participants is { Count: > 1 } memberIds)

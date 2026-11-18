@@ -148,6 +148,20 @@ public class DefaultAssistantProvisionerTests : IDisposable
     }
 
     [Fact]
+    public async Task EnsureAsync_Ребёнку_АссистентаНеСоздаёт()
+    {
+        // Профиль ребёнка на пользователе (действие админа; его PUT — KM-B1e).
+        // Авто-ассистент ребёнку не провится вовсе: его персона — тьютор из
+        // ChildTutorProvisioner, связь на ChildProfile.TutorPersonaId (KM-B1d).
+        _users.GetById(_userId)!.ChildMode = new ChildProfile { Enabled = true };
+
+        var persona = await _sut.EnsureAsync(_userId);
+
+        persona.Should().BeNull();
+        _personas.GetByOwner(_userId).Should().BeEmpty("ранний выход: ни одной новой персоны");
+    }
+
+    [Fact]
     public async Task EnsureAsync_ПослеСоздания_AssistantPersonaIdРавенDefaultPersonaId()
     {
         var persona = await _sut.EnsureAsync(_userId);

@@ -34,11 +34,14 @@ public sealed class PersonaLayerBuilder
     private readonly ProjectManager _projects;
     private readonly ISphereDirectory? _spheres;
     private readonly ILogger<PersonaLayerBuilder> _log;
+    private readonly ChildMode.IChildModeGate? _childGate;
 
     public PersonaLayerBuilder(SessionStore store, McpEndpoint endpoint, PersonaManager personas,
         PersonaBindingsService bindings, PersonaAgentFileSync? agentSync, ProjectManager projects,
-        ISphereDirectory? spheres, ILogger<PersonaLayerBuilder> log)
+        ISphereDirectory? spheres, ILogger<PersonaLayerBuilder> log,
+        ChildMode.IChildModeGate? childGate = null)
     {
+        _childGate = childGate;
         _store = store;
         _endpoint = endpoint;
         _personas = personas;
@@ -230,8 +233,8 @@ public sealed class PersonaLayerBuilder
                     _personas.GetForContext(ownerId, projectId).ToList());
                 // Порядок ВСЕГО плана — по handle (Ordinal). GetForContext отдаёт персон по UpdatedAt
                 // по убыванию: без этой сортировки определения per-run --agents (ClaudeAgentsJson →
-                // turnAgentsFingerprint, ClaudeSession.cs:3861-3870) и порядок pmem-серверов
-                // менялись бы от чата к чату при неизменном составе агентов: порядок
+                // turnAgentsFingerprint → BuildLaunchSignature, ClaudeSession.cs) и порядок
+                // pmem-серверов менялись бы от чата к чату при неизменном составе агентов: порядок
                 // определений влияет на отпечаток запуска (та же причина, что у
                 // AppendPersonaLines).
                 subagents.Sort((a, b) => string.CompareOrdinal(a.Handle, b.Handle));
@@ -406,11 +409,22 @@ public sealed class PersonaLayerBuilder
     // Сессия нужна для правила «координатор не пишет код сам» (режим «Командная реализация»):
     // у чата-штаба поверх прав персоны запрещены инструменты правки файлов — работа идёт
     // задачами на исполнителей, а не руками координатора.
+    // Встроенные инструменты CLI, закрытые ребёнку поверх пустого --tools. Имена — из набора,
+    // принимаемого CLI (тот же перечень держит OneShotClaudeRunner); неизвестные CLI имена в запретах
+    // роняют запуск, поэтому список короткий и проверенный.
+    internal static readonly string[] ChildDisallowedBuiltins =
+        ["Bash", "Read", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Skill"];
+
     internal IReadOnlyList<string>? BuildExtraDisallowed(string? ownerId, Persona? persona, Session session)
     {
         var byPersona = PersonaAccessPolicy.BuildExtraDisallowed(persona,
             webAllowed: _bindings.EffectiveToolEnabled(ownerId, persona, "web"),
             stageDisallowed: session.StageDisallowedTools);
+        // Детский слой (И1, п.11): запреты складываются с запретами персоны и этапа. Основной
+        // замок — пустой разрешающий список встроенных (--tools "" в ClaudeSession); этот список —
+        // второй рубеж и признак для ветки сабагентов (Task в запретах = персон-агентов ходу не даём).
+        if (_childGate?.IsChild(ownerId) == true)
+            byPersona = [.. (byPersona ?? []), .. ChildDisallowedBuiltins.Except(byPersona ?? [], StringComparer.Ordinal)];
         if (session.TeamImplement is not { } team) return byPersona;
         // Режим включён — ExitPlanMode запрещён всегда (Э8): на стадиях интервью и планирования
         // штаб сидит в план-режиме, и штатная карточка plan_review дала бы второе согласование

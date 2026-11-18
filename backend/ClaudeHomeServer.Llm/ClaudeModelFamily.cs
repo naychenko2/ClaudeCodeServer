@@ -12,6 +12,9 @@ namespace ClaudeHomeServer.Services.Llm;
 // 1M»: сервер дописывает суффикс [1m] при запуске (ClaudeSubscriptionPool.LaunchModel), если
 // флаг true и подписка хода тянет окно.
 //
+// Окно 1M объявлено у opus-5-5, fable-5-1, sonnet-5 (реестр моделей CLI 2.1.283, window 1e6);
+// вышедшая 2026-11-09 fable-5-2 — тоже 1M по докам Anthropic.
+//
 // Для haiku флаг false, хотя claude-haiku-5-5 (куда ведёт алиас haiku с CLI 2.1.2xx) умеет
 // 1M: окно не включаем — тариф Haiku 5.5 ×5 за промпт свыше 100K, порог автокомпакта
 // (CLAUDE_CODE_MAX_CONTEXT_TOKENS) держим 200K.

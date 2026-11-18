@@ -17,9 +17,21 @@ public sealed class CheapTextRunner(
     ILogger<CheapTextRunner> log, ITierModelResolver? appSettings = null,
     UserModelTierResolver? userTiers = null, ModelAssignmentResolver? assignment = null,
     EngineCallLedger? ledger = null, NamedLocalEngines? namedEngines = null,
-    LocalActionExecutorsStore? executorsStore = null, LlmProviderRegistry? providers = null)
+    LocalActionExecutorsStore? executorsStore = null, LlmProviderRegistry? providers = null,
+    ClaudeHomeServer.Services.ChildMode.IChildModePolicy? childPolicy = null)
     : ICheapTextRunner
 {
+    // П.18 (ADR-041): фоновые действия над данными ребёнка (теги, сводки, память, вики) выключены
+    // целиком — ни облако, ни локаль, ни подписка. Вызов отвечает «без ответа» (пустая строка /
+    // null), как при отказе маршрута: у потребителей это уже штатная ветка. Решает снимок
+    // политики владельца; без ownerId (системное действие) отказа нет.
+    private bool RefuseChildOwner(string actionKey, string? ownerId)
+    {
+        if (string.IsNullOrEmpty(ownerId) || childPolicy?.For(ownerId) is null) return false;
+        log.LogInformation("cheap-runner: действие {Action} не выполняется — владелец в детском режиме", actionKey);
+        return true;
+    }
+
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
 
     // Место с картинками на входе текстовым раннером не ходит никогда: текстовая модель
@@ -204,6 +216,7 @@ public sealed class CheapTextRunner(
         if (RefuseImageAction(actionKey))
             throw new InvalidOperationException(
                 $"Действие «{actionKey}» работает с картинками и не выполняется текстовым раннером");
+        if (RefuseChildOwner(actionKey, ownerId)) return (null, null);
         var route = ResolveRoute(actionKey);
 
         // Шаг 1 — выбранная админом модель. Два транспорта: префикс "direct:" → прямой
@@ -490,6 +503,7 @@ public sealed class CheapTextRunner(
         if (RefuseImageAction(actionKey))
             throw new InvalidOperationException(
                 $"Действие «{actionKey}» работает с картинками и не выполняется текстовым раннером");
+        if (RefuseChildOwner(actionKey, ownerId)) return new OneShotResult(string.Empty, null, 0);
         var route = ResolveRoute(actionKey);
         // Таймаут по маршруту: явный override потребителя (changelog), иначе ОБЛАЧНЫЙ
         // потолок профиля — вызов заканчивается на claude даже у действий на локали.
@@ -736,6 +750,7 @@ public sealed class CheapTextRunner(
         if (RefuseImageAction(actionKey))
             throw new InvalidOperationException(
                 $"Действие «{actionKey}» работает с картинками и не выполняется текстовым раннером");
+        if (RefuseChildOwner(actionKey, ownerId)) return null;
         try
         {
             if (IsMainLocalEngine(engine))

@@ -46,8 +46,13 @@ public sealed class CodeGraphContributor : IPromptSectionContributor
     public int Order => 600;
     public string Group => "project";
 
+    // KM-B6c (ADR-041 §4): граф кода детскому ходу не собирается вовсе. Отдельный рубеж, а не
+    // allow-list: ChildModeAllowList пуст в волне 1 и будет расширяться в волне 2 (медиа),
+    // а проектные знания ребёнка в подборку хода не должны возвращаться ни при каком составе
+    // списка — политика «защита данных несовершеннолетнего».
     public bool IsEnabled(PromptSessionContext sessionContext) =>
-        _provider is not null
+        !sessionContext.IsChild
+        && _provider is not null
         && sessionContext.ServerContent
         && !string.IsNullOrWhiteSpace(sessionContext.RootPath)
         && _toolGate.IsServerToolEnabled(sessionContext.OwnerId, sessionContext.Persona, "codegraph");

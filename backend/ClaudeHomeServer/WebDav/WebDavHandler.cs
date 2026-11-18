@@ -115,6 +115,14 @@ public static class WebDavHandler
 
         var davUserId = ctx.Items["DavUserId"]?.ToString() ?? "";
 
+        // Гейт И1 детского режима: файлы проектов по WebDAV ребёнку закрыты целиком
+        if (ctx.RequestServices.GetService<Services.ChildMode.IChildModePolicy>()?.For(davUserId) is not null)
+        {
+            ctx.Response.StatusCode = 403;
+            ctx.Response.ContentLength = 0;
+            return;
+        }
+
         // PROPFIND на корне /projects/ — виртуальная коллекция со списком проектов
         // Windows WebClient зондирует этот путь перед монтированием подпапки
         if (string.IsNullOrEmpty(projectName))

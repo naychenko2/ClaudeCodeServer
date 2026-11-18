@@ -59,7 +59,10 @@ public sealed class NotesRecallContributor : IPromptSectionContributor
         // не идёт вовсе. Recall ищет по единому индексу заметок владельца (SearchAsync ключуется
         // userId, personal/project разнятся только хитом) — разделить их на этом контрибьюторе
         // нельзя, поэтому при Narrow он выключается целиком.
-        && sessionContext.Frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Wide;
+        && sessionContext.Frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Wide
+        // KM-B6c (ADR-041 §4): заметки ребёнка в подборку хода не идут — политика волны 1,
+        // тот же приём отключения, что у рамки выше.
+        && !sessionContext.IsChild;
 
     public async Task<PromptSectionContribution?> BuildAsync(
         PromptSessionContext sessionContext, string? turnText)

@@ -492,4 +492,8 @@ public sealed record LlmSessionContext(
     // путь --settings мерцал бы в сигнатуре прогона и живой CLI перезапускался бы между ходами.
     // null — тесты/старый контракт: deny нет (у container-владельцев data/ в песочницу не
     // монтируется, отказ там выполнен построением).
-    string? DataDir = null);
+    string? DataDir = null,
+    // Политика ребёнка владельца хода (И2, ADR-041): вычисляется на КАЖДЫЙ ход, без кэша.
+    // null — не ребёнок или политика не подана (тесты). Не-null — ход идёт только по API-ключу
+    // записи пула из профиля, без подписки и без фолбэка (ChildApiKeyRoute).
+    Func<Services.ChildMode.ChildPolicySnapshot?>? ChildPolicyProvider = null);

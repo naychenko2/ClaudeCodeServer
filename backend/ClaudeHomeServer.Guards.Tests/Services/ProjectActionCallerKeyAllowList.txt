@@ -103,7 +103,9 @@ backend/ClaudeHomeServer/Controllers/ChatSubjectsController.cs|1
 # убраны вместе с фичей continue/handoff. Места волны целы: ResolvePersona группы и вызовы
 # CreateGroupChatAsync/SetParticipants по TenantOwnerId, а автора там называли именованные
 # аргументы createdByUserId/callerUserId — в словарь они не входят.
-backend/ClaudeHomeServer/Controllers/ChatsController.cs|62
+# KM-G1 (ADR-041, KM-B6f): 62→63 — CurrentOwnerIsChild() зовёт IChildModePolicy.For(UserId): это профиль
+# САМОГО вызывающего (ребёнок ли он), а не ключ хранилищ проекта; детские чаты всегда вне проекта (И1-бис).
+backend/ClaudeHomeServer/Controllers/ChatsController.cs|63
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 # S2c-8: FilesController 5→6 — ветка папки Delete: id вызывающего входит только в явную проверку
 # права Write (папка остаётся на Write, файл переведён на WriteContent); ключом хранилищ ничто

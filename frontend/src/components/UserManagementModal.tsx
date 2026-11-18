@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Lock, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Lock, Plus, Trash2 } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { api } from '../lib/api';
-import { C, R, FONT, SHADOW, MODAL_W } from '../lib/design';
+import { C, R, FONT, SHADOW, MODAL_W, SP } from '../lib/design';
 import { Modal, ModalActions, TextField, Button, SegmentedControl } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useIsMobile } from '../lib/breakpoints';
+import { FLAGS, useFeature } from '../lib/featureFlags';
+import { ChildProfileEditor } from '../features/childMode/ChildProfileEditor';
+import type { ChildProfile } from '../features/childMode/types';
 
 interface Props {
   currentUserId?: string;
@@ -88,6 +91,44 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
   const [loadError, setLoadError] = useState('');
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const isMobile = useIsMobile();
+  // Флаг child-mode прячет только этот интерфейс включения (ADR-041): ограничения ребёнка
+  // зависят только от его профиля, выключенный флаг не снимает ни одного запрета.
+  const childModeUi = useFeature(FLAGS.childMode);
+  // То, что здесь сохранили о профиле: список пользователей childProfile не отдаёт, отдельной
+  // GET профиля нет (ADR-041, ручка №10 — только PUT). Черновик редактора живёт, пока открыта модалка.
+  const [childProfiles, setChildProfiles] = useState<Record<string, ChildProfile>>({});
+  // Какие разделы раскрыты в этой сессии. По умолчанию свёрнуты: на десятке пользователей
+  // десяток открытых редакторов утащил бы строки (R-KM-F12, минор 3, решение Софьи).
+  const [childOpen, setChildOpen] = useState<Record<string, boolean>>({});
+
+  // Раздел «Детский режим» — только пользователям песочницы: ограничения ребёнка работают
+  // только в container, `local`-пользователям сервер отказывает not_container (REJECT_TEXT
+  // в ChildProfileEditor). Свёрнут в строку статуса; редактор — только в раскрытом виде.
+  const childSection = (user: UserProfile) => {
+    if (user.executionEnvironment !== 'container') return null;
+    const open = childOpen[user.id] === true;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, ...(isMobile ? {} : { padding: '0 16px 12px' }) }}>
+        <Button
+          variant="ghost" size="md" fullWidth
+          dataTestId="child-section-toggle"
+          ariaExpanded={open}
+          leftIcon={open
+            ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          onClick={() => setChildOpen(prev => ({ ...prev, [user.id]: !(prev[user.id] === true) }))}
+        >
+          Детский режим: {childProfiles[user.id]?.enabled === true ? 'включён' : 'выключен'}
+        </Button>
+        {open && (
+          <ChildProfileEditor
+            user={{ id: user.id, username: user.username, childProfile: childProfiles[user.id] }}
+            onSaved={(p) => setChildProfiles(prev => ({ ...prev, [user.id]: p }))}
+          />
+        )}
+      </div>
+    );
+  };
 
   useEffect(() => {
     api.users.list()
@@ -169,6 +210,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                 return (
                   <div
                     key={user.id}
+                    data-testid={`user-row-${user.id}`}
                     style={{
                       display: 'flex', flexDirection: 'column', gap: 10,
                       padding: '12px 14px',
@@ -222,59 +264,64 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                         </button>
                       </div>
                     )}
+
+                    {/* Раздел профиля ребёнка — после основных полей, под флагом (ADR-041) */}
+                    {childModeUi && childSection(user)}
                   </div>
                 );
               }
 
-              // Десктопный вид: горизонтальная строка
+              // Десктопный вид: горизонтальная строка; раздел профиля — под строкой
               return (
                 <div
                   key={user.id}
+                  data-testid={`user-row-${user.id}`}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    padding: '10px 16px',
                     borderBottom: !isLast ? `1px solid ${C.borderLight}` : 'none',
                     background: C.bgWhite,
                   }}
                 >
-                  <Avatar username={user.username} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px' }}>
+                    <Avatar username={user.username} />
 
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: C.textHeading }}>
-                        {user.username}
-                      </span>
-                      {isSelf && (
-                        <span style={{ fontSize: 11, color: C.textMuted }}>(вы)</span>
-                      )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 14, fontWeight: 600, color: C.textHeading }}>
+                          {user.username}
+                        </span>
+                        {isSelf && (
+                          <span style={{ fontSize: 11, color: C.textMuted }}>(вы)</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2 }}>
+                        {new Date(user.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </div>
                     </div>
-                    <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2 }}>
-                      {new Date(user.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })}
+
+                    <EnvBadge env={user.executionEnvironment} />
+                    <RoleBadge role={user.role} />
+
+                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                      <button
+                        disabled={isSelf}
+                        onClick={() => setDialog({ kind: 'resetPassword', user })}
+                        title="Сбросить пароль"
+                        style={actionBtn(isSelf)}
+                      >
+                        <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                        Сброс пароля
+                      </button>
+                      <button
+                        disabled={isSelf}
+                        onClick={() => setDialog({ kind: 'delete', user })}
+                        title="Удалить пользователя"
+                        style={actionBtn(isSelf, true)}
+                      >
+                        <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                      </button>
                     </div>
                   </div>
-
-                  <EnvBadge env={user.executionEnvironment} />
-                  <RoleBadge role={user.role} />
-
-                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                    <button
-                      disabled={isSelf}
-                      onClick={() => setDialog({ kind: 'resetPassword', user })}
-                      title="Сбросить пароль"
-                      style={actionBtn(isSelf)}
-                    >
-                      <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                      Сброс пароля
-                    </button>
-                    <button
-                      disabled={isSelf}
-                      onClick={() => setDialog({ kind: 'delete', user })}
-                      title="Удалить пользователя"
-                      style={actionBtn(isSelf, true)}
-                    >
-                      <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                    </button>
-                  </div>
+                  {childModeUi && childSection(user)}
                 </div>
               );
             })}

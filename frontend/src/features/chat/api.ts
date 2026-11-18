@@ -292,5 +292,16 @@ export const chatsApi = {
       }
       return res.json();
     },
+    // URL вложения чата для браузерного <img> (миниатюра, ADR-041, строка №12): токен через
+    // ?access_token=, потому что тег не шлёт заголовки (тот же приём, что fileUrl в files/api).
+    // path — относительный путь ровно в той форме, что вернула загрузка (.cc-attachments/…).
+    // Единственная точка, где этот URL формируется; бэк отдаёт байты только для учтённых в
+    // Session.Attachments файлов (404 file_not_found иначе — без различения причин).
+    attachmentRawUrl: (sessionId: string, path: string): string => {
+      const token = readStoredToken();
+      const params = new URLSearchParams({ path });
+      if (token) params.set('access_token', token);
+      return `/api/chats/${encodeURIComponent(sessionId)}/attachments/raw?${params}`;
+    },
   },
 };

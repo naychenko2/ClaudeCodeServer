@@ -286,12 +286,34 @@ select.inp{appearance:auto;padding-right:8px}
 .tutor{display:flex;gap:12px;align-items:flex-start}
 .m .tutor{flex-direction:column}
 .tutor .acts{display:flex;gap:8px;flex-wrap:wrap}
-.voice{display:flex;align-items:center;gap:10px;min-height:40px;padding:0 4px 0 12px;border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-white);font-size:14px}
-.voice .vn{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.vlist{border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-white);padding:4px}
-.vopt{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;padding:0 10px;border:none;background:none;border-radius:8px;cursor:pointer;font-size:14px;color:var(--c-text-primary);text-align:left}
+/* PersonaVoicePicker инлайн (как в ChildTutorCard): строка-триггер по шкале полей + ▶ + «Скорость» */
+.vrow{display:flex;align-items:center;gap:4px}
+.vtrig{flex:1;min-width:0;height:40px;display:flex;align-items:center;justify-content:space-between;gap:4px;padding:0 13px;border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-white);color:var(--c-text-primary);font:inherit;font-size:14px;text-align:left;cursor:pointer}
+.vtrig[aria-expanded="true"],.vtrig:focus-visible{outline:none;border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.vtrig .vn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vtrig .vn i{font-style:normal;color:var(--c-text-muted)}
+.vtrig .i{flex-shrink:0;color:var(--c-text-muted)}
+.vspeed{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--c-text-muted)}
+.m .vspeed{flex-direction:column;align-items:stretch;gap:2px}
+.vspeed .pill{align-self:flex-start}
+.m .vspeed .pill button{min-height:36px}
+/* Список голосов: десктоп — Menu шириной с поле, 360 — шторка Modal «Голос персоны» */
+.vlist{border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-card);box-shadow:var(--shadow-island);padding:4px;max-height:440px;overflow:auto}
+.vhead{display:flex;flex-direction:column;gap:8px;padding:4px 4px 8px}
+.vchips{display:flex;gap:4px}
+.chip{height:28px;padding:0 10px;border-radius:999px;border:1px solid var(--c-border);background:transparent;color:var(--c-text-secondary);font:inherit;font-size:12px;cursor:pointer}
+.m .chip{height:36px;padding:0 14px}
+.chip[aria-pressed="true"]{background:var(--c-accent-light);border-color:var(--c-accent-muted);color:var(--c-accent)}
+.vgrp{padding:12px 12px 2px;font-size:11px;font-weight:600;color:var(--c-text-muted)}
+.vgrp span{display:block;font-weight:400}
+.vopt{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:4px 4px 4px 12px;border-radius:8px;cursor:pointer}
 .vopt:hover{background:var(--c-bg-selected)}
-.vopt[aria-checked="true"]{color:var(--c-accent);font-weight:600}
+.vopt[aria-checked="true"]{background:var(--c-accent-light)}
+.vopt .vx{flex:1;min-width:0;display:flex;flex-direction:column}
+.vopt .vx b{font-size:14px;font-weight:500;color:var(--c-text-primary)}
+.vopt[aria-checked="true"] .vx b{color:var(--c-accent);font-weight:600}
+.vopt .vx span{font-size:12px;color:var(--c-text-muted)}
+.m .vopt{min-height:52px}
 
 /* Пикер «поставщик → модель» */
 .picker{display:flex;flex-direction:column;gap:8px;padding:10px;border-radius:12px;background:var(--c-bg-panel)}
@@ -363,6 +385,8 @@ select.inp{appearance:auto;padding-right:8px}
 <script>
 /* ===== Иконки (lucide, stroke 2) ===== */
 const P = {
+  volume:'<path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6A1.4 1.4 0 0 1 5.4 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.4 18.4a9 9 0 0 0 0-12.8"/>',
+  search:'<path d="m21 21-4.3-4.3"/><circle cx="11" cy="11" r="8"/>', chev:'<path d="m6 9 6 6 6-6"/>',
   up:'<path d="m18 15-6-6-6 6"/>', down:'<path d="m6 9 6 6 6-6"/>', right:'<path d="m9 18 6-6-6-6"/>', left:'<path d="m15 18-6-6 6-6"/>',
   trash:'<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   plus:'<path d="M12 5v14"/><path d="M5 12h14"/>', check:'<path d="M20 6 9 17l-5-5"/>',
@@ -390,13 +414,22 @@ const PALETTE = [
 // Поставщики: kind pool — запись пула с API-ключом (пачка 1); cloud / local — пачка 2.
 const PROVIDERS = [
   { key:'anthropic-api-kids', title:'Anthropic · ключ «kids»', kind:'pool',
-    models:[{ id:'claude-sonnet-5-5' }, { id:'claude-haiku-5-5' }, { id:'claude-opus-5-5' }] },
+    models:[{ id:'claude-sonnet-5-5', label:'Claude Sonnet 5.5' }, { id:'claude-haiku-5-5', label:'Claude Haiku 5.5' }, { id:'claude-opus-5-5', label:'Claude Opus 5.5' }] },
   { key:'deepseek', title:'DeepSeek', kind:'cloud',
-    models:[{ id:'deepseek-chat' }, { id:'deepseek-reasoner' }, { id:'deepseek-v4-lite', unpriced:true }] },
-  { key:'glm', title:'GLM (Zhipu)', kind:'cloud', models:[{ id:'glm-5' }, { id:'glm-5-air' }] },
-  { key:'strata', title:'Локальная · Strata', kind:'local', models:[{ id:'qwen3.8-27b' }] },
+    models:[{ id:'deepseek-chat', label:'DeepSeek Chat' }, { id:'deepseek-reasoner', label:'DeepSeek Reasoner' }, { id:'deepseek-v4-lite', label:'DeepSeek V4 Lite', unpriced:true }] },
+  { key:'glm', title:'GLM (Zhipu)', kind:'cloud', models:[{ id:'glm-5', label:'GLM-5' }, { id:'glm-5-air', label:'GLM-5 Air' }] },
+  { key:'strata', title:'Локальная · Strata', kind:'local', models:[{ id:'qwen3.8-27b', label:'Qwen 3.8 27B' }] },
 ];
-const VOICES = ['Алёна · обычно', 'Филипп · медленно', 'Джейн · обычно', 'Мадирус · быстро', 'Ермил · обычно'];
+// Каталог голосов как у PersonaVoicePicker: имя + характер тембра, группа «Обычные» (темп есть)
+// и LiveTTS (темп не настраивается). Строки «Голос по умолчанию» в карточке репетитора нет (Х9).
+const VOICES = [
+  { n:'Алёна', tr:'тёплый женский, спокойный', g:'f', live:false },
+  { n:'Филипп', tr:'мягкий мужской, неторопливый', g:'m', live:false },
+  { n:'Джейн', tr:'звонкий женский, бодрый', g:'f', live:false },
+  { n:'Ермил', tr:'низкий мужской, рассказчик', g:'m', live:false },
+  { n:'Мадирус', tr:'живой мужской, с интонациями', g:'m', live:true },
+];
+const SPEEDS = [['slow','медленно'], ['normal','обычно'], ['fast','быстро']];
 const PAV = ['blue','violet','green','orange','indigo','khaki'];
 
 const seed = () => ([
@@ -460,7 +493,7 @@ const KERR = {
 // Якоря: #k=empty&err=too_large&theme=dark&w=360 — открывают состояние сразу (список — в kids-tutors-proposal.md).
 const S = {
   theme:'light', width:1280, screen:'admin',
-  pack:1, adminState:'normal', tab:'subjects', homeN:3,
+  pack:1, pool:'full', adminState:'normal', tab:'subjects', homeN:3,
   k:'normal', kerr:'none', fileDel:null,
   subjects: seed(), open:'math', voiceOpen:null, confirmDel:null,
   helper:{ providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null },
@@ -477,12 +510,16 @@ function pav(t, size){
 }
 const glyph = (s, cls = '') => `<span class="glyph pal-${s.color} ${cls}" aria-hidden="true">${esc(s.glyph || '?')}</span>`;
 const provOf = (k) => PROVIDERS.find(p => p.key === k);
+// Подпись модели — label от сервера (DisplayName или id), обычным шрифтом, как в ChildRoutePicker.
+const modelLabel = (t) => provOf(t.providerKey)?.models.find(m => m.id === t.model)?.label ?? t.model;
 // Пачка 1 знает только пул с API-ключом: маршруты пачки 2 в ней показываем как пул (до Т5 их и нет).
 const routeOf = (t) => (S.pack === 1 && provOf(t.providerKey).kind !== 'pool')
   ? { providerKey:'anthropic-api-kids', model:'claude-sonnet-5-5', ack:null } : t;
 
 /* ===== Пикер «поставщик → модель» ===== */
 function picker(src, ref, err){
+  // Пул пуст (GET child-routes → routes: []): вместо двух пустых Select — причина, как в ChildRoutePicker.
+  if (S.pool === 'empty') return `<div class="notice warning" role="status" data-testid="child-route-picker"><span class="ic">${ic('alert',14)}</span><div class="tx">Нет записей пула с API-ключом</div></div>`;
   const pack1 = S.pack === 1;
   const target = routeOf(src);
   const list = PROVIDERS.filter(p => !pack1 || p.kind === 'pool');
@@ -493,7 +530,7 @@ function picker(src, ref, err){
     return `<optgroup label="${g}">${ps.map(p => `<option value="${p.key}" ${p.key === target.providerKey ? 'selected' : ''}>${esc(p.title)}</option>`).join('')}</optgroup>`;
   }).join('');
   const prov = provOf(target.providerKey) || list[0];
-  const mopts = prov.models.map(m => `<option value="${m.id}" ${m.id === target.model ? 'selected' : ''} ${m.unpriced ? 'disabled' : ''}>${m.id}${m.unpriced ? ' — без цены, бюджет не ограничит' : ''}</option>`).join('');
+  const mopts = prov.models.map(m => `<option value="${m.id}" ${m.id === target.model ? 'selected' : ''} ${m.unpriced ? 'disabled' : ''}>${esc(m.label)}${m.unpriced ? ' — без цены, бюджет не ограничит' : ''}</option>`).join('');
   const dis = S.adminState === 'saving' ? 'disabled' : '';
   let extra = '';
   if (pack1) {
@@ -518,7 +555,7 @@ function picker(src, ref, err){
   return `<div class="picker">
     <div class="row2">
       <div class="field"><label for="pv-${ref}">Поставщик</label><select class="inp" id="pv-${ref}" data-prov="${ref}" ${dis}>${opts}</select></div>
-      <div class="field"><label for="md-${ref}">Модель</label><select class="inp mono" id="md-${ref}" data-model="${ref}" ${dis} ${err && pack1 ? 'aria-invalid="true"' : ''}>${mopts}</select>${err && pack1 ? '<span class="err">Выбери конкретную модель из списка</span>' : ''}</div>
+      <div class="field"><label for="md-${ref}">Модель</label><select class="inp" id="md-${ref}" data-model="${ref}" ${dis} ${err && pack1 ? 'aria-invalid="true"' : ''}>${mopts}</select>${err && pack1 ? '<span class="err">Выбери конкретную модель из списка</span>' : ''}</div>
     </div>
     ${extra}
   </div>`;
@@ -593,6 +630,43 @@ function knowledge(s){
   </div>`;
 }
 
+/* ===== Репетитор · «Голос» — PersonaVoicePicker инлайн, как в ChildTutorCard (решение по Т4e) ===== */
+// Поле «Голос» с подсказкой; строка-триггер (имя голоса + ChevronDown) по шкале полей, рядом
+// IconButton «Послушать» (Volume2), ниже «Скорость» — только у голосов, которые её умеют.
+// Списка «Голос по умолчанию» нет: детскому репетитору голос инстанса не предлагаем (Х9).
+function voiceField(s, dis){
+  const t = s.tutor, v = VOICES[t.voice], open = S.voiceOpen === s.id, m = isM();
+  const rows = (live) => VOICES.map((x, k) => x.live !== live ? '' :
+    `<div class="vopt" role="radio" aria-checked="${t.voice === k}" data-voice="${s.id}:${k}" tabindex="0">
+      <span class="vx"><b>${esc(x.n)}</b><span>${esc(x.tr)}</span></span>
+      <button class="ib ${m ? 'lg' : ''}" aria-label="Послушать голос: ${esc(x.n)}">${ic('volume', m ? 16 : 14)}</button></div>`).join('');
+  const head = `<div class="vhead">
+      <div class="vrow"><span class="sr">Поиск</span><input class="inp" style="height:${m ? 44 : 36}px" placeholder="Имя или характер" aria-label="Поиск голоса"></div>
+      <div class="vchips">${[['Все',1],['Женские',0],['Мужские',0]].map(([l, on]) => `<button class="chip" aria-pressed="${!!on}">${l}</button>`).join('')}</div></div>`;
+  const list = `<div role="radiogroup" aria-label="Голос репетитора">
+      <div class="vgrp">Обычные</div>${rows(false)}
+      <div class="vgrp">LiveTTS<span>темп у этих голосов не настраивается</span></div>${rows(true)}</div>`;
+  const pop = !open ? '' : m
+    // 360: шторка Modal поверх кадра, «Готово» — во всю ширину
+    ? `<div class="overlay" style="align-items:flex-end"><div class="modal" role="dialog" aria-label="Голос персоны" style="max-height:88%;border-radius:16px 16px 0 0">
+        <div class="mhead">Голос персоны<button class="ib lg" aria-label="Закрыть" data-vopen="${s.id}">${ic('x')}</button></div>
+        <div class="mbody">${head}${list}</div>
+        <div class="mfoot"><button class="btn md primary" style="width:100%" data-vopen="${s.id}">Готово</button></div></div></div>`
+    : `<div class="vlist">${head}${list}</div>`;
+  const speed = v.live ? '' : `<div class="vspeed"><span>Скорость</span><div class="pill">${SPEEDS.map(([k, l]) =>
+    `<button aria-pressed="${(t.speed || 'normal') === k}" data-speed="${s.id}:${k}" ${dis}>${l}</button>`).join('')}</div></div>`;
+  return `<div class="field" data-testid="tutor-voice"><span class="lb">Голос</span>
+      <div class="vrow">
+        <button class="vtrig" aria-haspopup="${m ? 'dialog' : 'listbox'}" aria-expanded="${open}" data-vopen="${s.id}" ${dis}><span class="vn">${esc(v.n)}</span>${ic('chev',14)}</button>
+        <button class="ib ${m ? 'lg' : ''}" aria-label="Послушать голос: ${esc(v.n)}" ${dis}>${ic('volume', m ? 16 : 14)}</button>
+      </div>
+      ${m ? '' : pop}
+      ${speed}
+      <span class="hint">Как репетитор звучит в голосовом режиме</span>
+      ${m ? pop : ''}
+    </div>`;
+}
+
 /* ===== Админ: строка предмета ===== */
 function subjectRow(s, i, n){
   const open = S.open === s.id;
@@ -608,8 +682,6 @@ function subjectRow(s, i, n){
   let body = '';
   if (open) {
     const t = s.tutor;
-        const voiceList = S.voiceOpen === s.id ? `<div class="vlist" role="radiogroup" aria-label="Голос репетитора">${VOICES.map((v, k) =>
-      `<button class="vopt" role="radio" aria-checked="${t.voice === k}" data-voice="${s.id}:${k}">${ic('play',14)}${esc(v)}</button>`).join('')}</div>` : '';
     const delConfirm = S.confirmDel === s.id ? `<div class="notice danger" role="alert"><span class="ic">${ic('trash',14)}</span><div class="tx"><div class="tt">Удалить «${esc(s.label)}»?</div>Плитка пропадёт с главной. Чаты этого предмета останутся у ребёнка только для чтения. Репетитор удалится, если он не ведёт другие предметы.
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn ${isM() ? 'md' : 'sm'} danger solid" data-del="${s.id}">Удалить</button><button class="btn ${isM() ? 'md' : 'sm'} ghost" data-delno="1">Отмена</button></div></div></div>` : '';
     body = `<div class="sbody">
@@ -647,11 +719,7 @@ function subjectRow(s, i, n){
           </div>
         </div>
         <div class="field"><label for="tn-${s.id}">Имя</label><input class="inp" id="tn-${s.id}" value="${esc(t.name)}" data-tname="${s.id}" ${dis}></div>
-        <div class="field"><span class="lb">Голос</span>
-          <div class="voice"><span>${ic('mic',14)}</span><span class="vn">${esc(VOICES[t.voice])}</span>
-            <button class="btn ${isM() ? 'md' : 'sm'} secondary" aria-expanded="${S.voiceOpen === s.id}" data-vopen="${s.id}" ${dis}>${S.voiceOpen === s.id ? 'Готово' : 'Выбрать'}</button></div>
-          ${voiceList}
-        </div>
+        ${voiceField(s, dis)}
         <div class="field"><label for="ch-${s.id}">Характер</label>
           <textarea class="inp" id="ch-${s.id}" placeholder="Как репетитор говорит и объясняет: «добрый лесовичок, рассказывает про природу на примерах из леса»" ${dis}>${esc(t.character)}</textarea>
           <span class="hint">Правила безопасности детского режима добавятся сами — этим полем их не отменить.</span>
@@ -680,7 +748,7 @@ function subjectRow(s, i, n){
       ${glyph(s)}
       <button class="txt" aria-expanded="${open}" data-open="${s.id}">
         <span class="lbl">${esc(s.label || 'Без названия')}${s.isNew ? '<span class="badge plan">новый</span>' : ''}${s.enabled ? '' : '<span class="badge neutral">выключен</span>'}</span>
-        <span class="sub">${pav(s.tutor,16)}<span style="overflow:hidden;text-overflow:ellipsis">${esc(s.tutor.name)} · <span class="mono">${esc(routeOf(s).model)}</span></span>${provBadge}</span>
+        <span class="sub">${pav(s.tutor,16)}<span style="overflow:hidden;text-overflow:ellipsis">${esc(s.tutor.name)} · ${esc(modelLabel(routeOf(s)))}</span>${provBadge}</span>
       </button>
       <span class="tz"><button class="toggle" role="switch" aria-checked="${s.enabled}" aria-label="Предмет «${esc(s.label)}» включён" data-tg="${s.id}" ${dis}><i></i></button></span>
       ${arrows}
@@ -822,6 +890,7 @@ function render(){
     pill('Тема', 'theme', [['light','Светлая'], ['dark','Тёмная']]),
     pill('Ширина', 'width', [[1280,'1280'], [360,'360']]),
     pill('Пикер', 'pack', [[1,'Пачка 1'], [2,'Пачка 2']].map(x => [...x, !adm])),
+    pill('Пул', 'pool', [['full','Есть записи'], ['empty','Пул пуст']].map(x => [...x, !adm])),
     pill('Состояние', 'adminState', [['normal','Обычное'], ['empty','Пусто'], ['error','Ошибка 400'], ['saving','Сохранение']].map(x => [...x, !adm])),
     pill('Предметов', 'homeN', [[3,'3'], [6,'6']].map(x => [...x, S.screen !== 'home'])),
     pill('Д2 · Знания', 'k', [['normal','База + 3 файла'], ['empty','Без базы, пусто'], ['uploading','Идёт загрузка'], ['gone','База недоступна'], ['new','Новый предмет']].map(x => [...x, !adm])),
@@ -837,7 +906,7 @@ function render(){
 /* ===== События ===== */
 const find = (id) => S.subjects.find(s => s.id === id);
 document.addEventListener('click', (e) => {
-  const b = e.target.closest('button'); if (!b || b.disabled) return;
+  const b = e.target.closest('button,[data-voice]'); if (!b || b.disabled) return;
   const d = b.dataset;
   if (d.set) { const i = d.set.indexOf(':'); const k = d.set.slice(0, i), v = d.set.slice(i + 1); S[k] = isNaN(+v) ? v : +v; if (k === 'adminState' && v === 'empty') S.tab = 'subjects'; if (k === 'adminState' && v === 'error') { S.tab = 'subjects'; S.open = 'world'; const w = find('world'); w.ack = null; S.kerr = 'none'; } if (k === 'k' || k === 'kerr') kSync(); }
   else if (d.fask) S.fileDel = d.fask;
@@ -850,7 +919,8 @@ document.addEventListener('click', (e) => {
   else if (d.mv) { const [i, dir] = d.mv.split(':').map(Number); const a = S.subjects; const j = i + dir; if (j >= 0 && j < a.length) [a[i], a[j]] = [a[j], a[i]]; }
   else if (d.color) { const [id, k] = d.color.split(':'); find(id).color = k; }
   else if (d.vopen) S.voiceOpen = S.voiceOpen === d.vopen ? null : d.vopen;
-  else if (d.voice) { const [id, k] = d.voice.split(':'); find(id).tutor.voice = +k; }
+  else if (d.voice) { const [id, k] = d.voice.split(':'); find(id).tutor.voice = +k; S.voiceOpen = null; }
+  else if (d.speed) { const [id, k] = d.speed.split(':'); find(id).tutor.speed = k; }
   else if (d.delask) S.confirmDel = d.delask;
   else if (d.delno) S.confirmDel = null;
   else if (d.del) { S.subjects = S.subjects.filter(s => s.id !== d.del); S.confirmDel = null; S.open = null; }
@@ -886,12 +956,18 @@ function kSync(){
   if (h.get('w')) S.width = +h.get('w');
   if (h.get('k')) S.k = h.get('k');
   if (h.get('err') && KERR[h.get('err')]) S.kerr = h.get('err');
+  if (h.get('pool')) S.pool = h.get('pool');
+  if (h.get('voice')) S.voiceOpen = 'math';
   kSync();
   if (h.get('del')) S.fileDel = FILES[0].id;
 })();
 render();
 // Кадр сразу на блоке знаний (для якорей и скриншотов)
-if (location.hash) document.querySelector('[data-testid="subject-knowledge"]')?.scrollIntoView({ block:'start' });
+if (location.hash) {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const sel = h.get('voice') ? 'tutor-voice' : h.get('pool') ? 'child-route-picker' : 'subject-knowledge';
+  document.querySelector(`[data-testid="${sel}"]`)?.scrollIntoView({ block: h.get('pool') ? 'center' : 'start' });
+}
 </script>
 </body>
 </html>

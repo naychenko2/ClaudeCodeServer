@@ -13,14 +13,19 @@ namespace ClaudeHomeServer.Services.Llm;
 //
 // Файлы (формат задаёт конвейер, lib_journal.py / config.yaml):
 //   logs/state.json         — «чем занят конвейер сейчас»: phase (русскими), updated "yyyy-MM-dd HH:mm:ss"
-//                           (местное время узла), pid, queue; на этапе — current/folder, на старте пачки — batch_total.
+//                           (местное время узла), pid, queue (число), queue_items (файлы очереди
+//                           {file, folder, since}, since — unix-СЕКУНД → unix-мс); на этапе — current/folder,
+//                           на старте пачки — batch_total.
 //   logs/summary_state.json — снимок потока сводок: phase, pending, current, folder, updated, pid.
+//   logs/dify_state.json    — результат сверки с Dify (после М2): { checked: unix-сек, folders:
+//                           [{folder, local, inDify|null, checked, error?}] }.
 //   logs/journal.tsv        — события: время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание;
 //                           итог = ok|asr|fail|batch|start|stop. Читается ХВОСТ: файл только растёт.
 //   config.yaml             — folders[].name/watch/output — папки конвейера и каталоги их вывода.
 //
 // Устойчивость (требование задачи): файла нет / не читается / битый JSON — не исключение и не 500:
-// пустые блоки и уровень «unknown» («не проверялось»). Времена файлов — местное время узла
+// пустые блоки, фаза «stopped», уровня нет (null — «не проверялось», не «unknown»: значения
+// «unknown» во фронтовом типе level нет). Времена файлов — местное время узла
 // (конвейер пишет time.strftime без смещения), сравниваются с TimeProvider.GetUtcNow().
 public interface ITranscriptionStateReader
 {
@@ -61,6 +66,7 @@ public sealed class TranscriptionStateReader(
         var summary = ReadState(Path.Combine(root, "logs", "summary_state.json"));
         var folders = ReadConfigFolders(Path.Combine(root, "config.yaml"));
         var journal = ReadJournal(Path.Combine(root, "logs", "journal.tsv"), now);
+        var (difyRows, difyCheckedAt) = ReadDifyState(Path.Combine(root, "logs", "dify_state.json"));
 
         // Снимок сводок принадлежит живому потоку, только когда это тот же процесс
         // (правило status.py: старый снимок прошлого процесса или последовательного режима
@@ -70,9 +76,9 @@ public sealed class TranscriptionStateReader(
         var localNode = LocalNodeKey(_configuration);
         var alive = state?.Pid is { } pid && _processAlive(pid);
 
-        // «Завис?» и «Остановлен» (уровень плашки) — здесь, не на фронте:
-        // состояния нет — «unknown»; процесса нет (или он сам написал «остановлен») — «stopped»;
-        // снимок старше порога при живом pid — «stale»; иначе — «ok».
+        // «Завис?» и «Остановлен» (внутренний уровень плашки, в ответ не выходит — в плоском
+        // контракте его нет): состояния нет — «unknown»; процесса нет (или он сам написал
+        // «остановлен») — «stopped»; снимок старше порога при живом pid — «stale»; иначе — «ok».
         var pipelineLevel =
             state?.UpdatedAt is null ? "unknown" :
             state.Phase == "остановлен" || !alive ? "stopped" :
@@ -94,18 +100,6 @@ public sealed class TranscriptionStateReader(
             else outputLevel = "warn";
         }
 
-        var pipeline = new TranscriptionPipelineDto(
-            NormalizePhase(state?.Phase), state?.Phase,
-            state?.UpdatedAt?.ToUnixTimeMilliseconds(), localNode, state?.Pid, alive,
-            pipelineLevel, outputHost, outputDir, outputLevel);
-
-        var queue = new TranscriptionQueueDto(
-            state?.Queue ?? 0,
-            // Конвейер пишет очередь как число (state.json.queue); списка файлов в файлах нет —
-            // в v1 UI опирается на asrCount.
-            [],
-            summaryValid ? summary!.Pending ?? 0 : 0);
-
         TranscriptionFailDto[] fails =
             [.. journal.Where(r => r.Result == "fail").Take(RowLimit)
                 .Select(r => new TranscriptionFailDto(
@@ -118,30 +112,52 @@ public sealed class TranscriptionStateReader(
                     r.At.ToUnixTimeMilliseconds(), r.Folder, r.File!, r.Minutes, r.Speakers, r.Note,
                     MdPath(r, outputs)))];
 
-        // Сверка с Dify: локальную половину считаем по факту — число .md в каталоге вывода;
-        // половину Dify берём не откуда (результат сверки — только в systemd-журнале конвейера) — null.
-        TranscriptionDifyDto[] dify =
-            [.. folders.Where(f => f.Name.Length > 0).Select(f => new TranscriptionDifyDto(
-                f.Name,
-                f.Output is { } dir && Directory.Exists(dir) ? CountMd(dir) : null,
-                null))];
-
         // Свежесть сигналов конвейера та же, что у его плашки: stale/stopped/unknown — зависимости
         // не проверялись («не проверялось»).
         var deps = BuildDeps(state, summary, summaryValid, pipelineLevel, journal, folders, at);
 
         // Точка вкладки (proposal.md): красная при «Завис?», «Остановлен» или сбое зависимости;
-        // жёлтая при расхождении с Dify или «Пишет в» не туда.
+        // жёлтая при расхождении с Dify или «Пишет в» не туда. «Не проверялось» — уровня нет
+        // (null): фронтовый тип level знает только ok/warn/danger, «unknown» в нем нет.
         var level =
             pipelineLevel is "stale" or "stopped" ? "danger" :
-            deps.Any(d => d.Status == "down") ? "danger" :
+            deps.Any(d => d.State == "down") ? "danger" :
             outputLevel == "warn" ? "warn" :
-            dify.Any(d => d.Local is { } l && d.InDify is { } n && l > n) ? "warn" :
-            pipelineLevel == "unknown" ? "unknown" :
+            // сверка — из dify_state.json конвейера; дефицит (local > inDify) — жёлтая точка
+            difyRows.Any(d => d.Local is { } l && d.InDify is { } n && l > n) ? "warn" :
+            pipelineLevel == "unknown" ? null :
             "ok";
 
-        return new TranscriptionSnapshot(at, level, pipeline, BuildNow(state, summary, summaryValid, now),
-            queue, fails, recent, dify, deps);
+        var nowInfo = BuildNow(state, summary, summaryValid, now);
+
+        // Плоский ответ по proposal.md: поля блоков на верхнем уровне, вложенных
+        // pipeline/now/queue нет (форма — фронтовый тип TranscriptionSnapshot).
+        return new TranscriptionSnapshot
+        {
+            Phase = MapPhase(state?.Phase, alive),
+            UpdatedAt = state?.UpdatedAt?.ToUnixTimeMilliseconds(),
+            Host = localNode,
+            Pid = state?.Pid,
+            Alive = alive,
+            OutputHost = outputHost,
+            OutputDir = outputDir,
+            Level = level,
+            File = nowInfo?.File,
+            Folder = nowInfo?.Folder,
+            Stage = nowInfo?.Stage,
+            StageStartedAt = nowInfo?.StageStartedAt,
+            DurationMin = nowInfo?.DurationMin,
+            BatchIndex = nowInfo?.BatchIndex,
+            BatchSize = nowInfo?.BatchSize,
+            // asrQueue — из queue_items самого конвейера (М2); их нет — пустой список.
+            AsrQueue = state?.QueueItems ?? [],
+            SummaryQueue = summaryValid ? summary!.Pending ?? 0 : 0,
+            Fails = fails,
+            Recent = recent,
+            Dify = difyRows,
+            CheckedAt = difyCheckedAt,
+            Deps = deps,
+        };
     }
 
     // ─── state.json / summary_state.json ────────────────────────────────────────────
@@ -157,50 +173,87 @@ public sealed class TranscriptionStateReader(
             return new StateSnapshot(
                 node["phase"]?.GetValue<string>(),
                 TryParseStamp(node["updated"]?.GetValue<string>(), "yyyy-MM-dd HH:mm:ss", out var updated) ? updated : null,
-                AsInt(node["pid"]), AsInt(node["queue"]), AsInt(node["pending"]),
+                AsInt(node["pid"]), AsInt(node["pending"]),
                 node["current"]?.GetValue<string>(), node["folder"]?.GetValue<string>(),
-                AsInt(node["batch_total"]));
+                AsInt(node["batch_total"]),
+                ReadQueueItems(node));
         }
         catch (Exception) { return null; }
     }
 
     private sealed record StateSnapshot(
-        string? Phase, DateTimeOffset? UpdatedAt, int? Pid, int? Queue, int? Pending,
-        string? Current, string? Folder, int? BatchTotal);
+        string? Phase, DateTimeOffset? UpdatedAt, int? Pid, int? Pending,
+        string? Current, string? Folder, int? BatchTotal,
+        TranscriptionQueueFileDto[] QueueItems);
+
+    // queue_items (М2): файлы, ждущие распознавания, {file, folder, since} — since в unix-СЕКУНДАХ
+    // конвейера, в контракте unix-мс. Строки без имени пропускаются; с нечисловым since остаются
+    // без времени (файл ждёт — неизвестна только дата). Битый массив — пустой список, но не потеря снимка.
+    private static TranscriptionQueueFileDto[] ReadQueueItems(JsonNode node)
+    {
+        try
+        {
+            if (node["queue_items"] is not JsonArray arr) return [];
+            var items = new List<TranscriptionQueueFileDto>();
+            foreach (var n in arr)
+            {
+                try
+                {
+                    if (n?["file"]?.GetValue<string>() is { Length: > 0 } file)
+                        items.Add(new TranscriptionQueueFileDto(file, n["folder"]?.GetValue<string>(), ToUnixMs(n["since"])));
+                }
+                catch (Exception) { }
+            }
+            return [.. items];
+        }
+        catch (Exception) { return []; }
+    }
 
     private static int? AsInt(JsonNode? node)
     {
         try { return node?.GetValue<int>(); } catch (Exception) { return null; }
     }
 
-    // Нормализация русских фаз конвейера (supervisor.py) в контракт. Неизвестная фаза — "working":
-    // снимок свежий и pid живой — процесс чем-то занят; сырая строка остаётся в phaseText.
-    private static string NormalizePhase(string? raw) => raw switch
+    // unix-секунды файлов конвейера → unix-миллисекунды контракта.
+    private static long? ToUnixMs(JsonNode? node)
     {
-        null or "" => "unknown",
-        "ожидание" => "idle",
+        try { return node?.GetValue<long>() * 1000; } catch (Exception) { return null; }
+    }
+
+    // Нормализация русских фаз конвейера (supervisor.py) во фронтовое множество
+    // "idle"|"batch"|"stopped". Факт «остановлен» в state.json сильнее живой pid (процесс пишет
+    // этот снимок в finally); мёртвый pid — "stopped" при любой фазе; живый процесс при фазе,
+    // не описанной контрактом (ждёт зависимость, неизвестная строка) — занят, "batch".
+    private static string MapPhase(string? raw, bool alive) => raw switch
+    {
         "остановлен" => "stopped",
-        "ждёт машину с GPU" or "ждёт простоя ComfyUI" or "ждёт память GPU" => "waiting",
-        "очередь копится" or "остановка vLLM" or "транскрибация" or "саммари" or "подъём vLLM" => "working",
-        _ => "working",
+        _ when !alive => "stopped",
+        "ожидание" => "idle",
+        _ => "batch",
     };
+
+    // Внутренняя форма блока «Сейчас»: в ответе его поля — на верхнем уровне снимка, отдельного
+    // объекта «now» в контракте нет.
+    private sealed record NowInfo(
+        string File, string? Folder, string Stage, long? StageStartedAt, double? DurationMin, int? BatchIndex, int? BatchSize);
 
     // Блок «Сейчас»: основной поток (распознавание; в последовательном режиме и сводка — тот же
     // state.json), при простое основного — параллельный поток сводок (тот же процесс).
-    private static TranscriptionNowDto? BuildNow(StateSnapshot? state, StateSnapshot? summary, bool summaryValid, DateTimeOffset now)
+    // Этап не опознан — null: в плоском контракте «Сейчас» просто не отдаётся.
+    private static NowInfo? BuildNow(StateSnapshot? state, StateSnapshot? summary, bool summaryValid, DateTimeOffset now)
     {
         if (state?.Current is { Length: > 0 } mainFile)
         {
             var stage = state.Phase switch { "транскрибация" => "asr", "саммари" => "summary", _ => null };
             if (stage is not null)
-                return new TranscriptionNowDto(mainFile, state.Folder, stage,
+                return new NowInfo(mainFile, state.Folder, stage,
                     state.UpdatedAt?.ToUnixTimeMilliseconds(),
                     state.UpdatedAt is { } st ? Math.Round((now - st).TotalMinutes, 1) : null,
                     null, state.BatchTotal);
         }
 
         if (summaryValid && summary!.Phase == "саммари" && summary.Current is { Length: > 0 } sumFile)
-            return new TranscriptionNowDto(sumFile, summary.Folder, "summary",
+            return new NowInfo(sumFile, summary.Folder, "summary",
                 summary.UpdatedAt?.ToUnixTimeMilliseconds(),
                 summary.UpdatedAt is { } st ? Math.Round((now - st).TotalMinutes, 1) : null,
                 null, null);
@@ -302,10 +355,35 @@ public sealed class TranscriptionStateReader(
         return map;
     }
 
-    private static int CountMd(string dir)
+    // ─── dify_state.json (результат сверки конвейера с Dify, М2) ─────────────────────────
+
+    // Строки сверки по папкам и метка проверки из файла самого конвейера: времена — unix-СЕКУНД →
+    // unix-мс. Нет файла / не читается / битый JSON — пустой блок, не исключение. inDify null
+    // (конвейер не получил список Dify) отдаётся как есть; поле error папки в ответ не выходит —
+    // в dify-блоке контракта комментария нет, контракт не расширяем.
+    private static (TranscriptionDifyDto[] Rows, long? CheckedAt) ReadDifyState(string path)
     {
-        try { return Directory.GetFiles(dir, "*.md").Length; }
-        catch (Exception) { return 0; }
+        try
+        {
+            var node = JsonNode.Parse(File.ReadAllText(path));
+            if (node is null) return ([], null);
+
+            var rows = new List<TranscriptionDifyDto>();
+            if (node["folders"] is JsonArray arr)
+            {
+                foreach (var n in arr)
+                {
+                    try
+                    {
+                        if (n?["folder"]?.GetValue<string>() is { Length: > 0 } folder)
+                            rows.Add(new TranscriptionDifyDto(folder, AsInt(n["local"]), AsInt(n["inDify"])));
+                    }
+                    catch (Exception) { }
+                }
+            }
+            return ([.. rows], ToUnixMs(node["checked"]));
+        }
+        catch (Exception) { return ([], null); }
     }
 
     // Имя .md по строке журнала: старое форматирование писало «….mp4.md», новое пишет «….mp4»;
@@ -390,7 +468,7 @@ public sealed class TranscriptionStateReader(
         List<JournalRow> journal, List<ConfigFolder> folders, long at)
     {
         if (pipelineLevel is not "ok")
-            return [.. new[] { "asr", "summary", "dify", "share" }.Select(k => new TranscriptionDepDto(k, "unknown", at))];
+            return [.. TranscriptionSnapshot.UnknownDeps(at)];
 
         // pipelineLevel == "ok" возможен только при живом state с читаемым временем.
         var asr = state!.Phase switch

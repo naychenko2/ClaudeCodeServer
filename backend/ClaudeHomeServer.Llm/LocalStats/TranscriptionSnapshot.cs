@@ -4,95 +4,106 @@ namespace ClaudeHomeServer.Services.Llm;
 // Снимок состояния конвейера транскрибации; собирает его TranscriptionStateReader из файлов
 // самого конвейера при каждом запросе. Все уровни («Завис?», «не та машина», точка вкладки)
 // считает бэкенд (proposal.md: «фронт их не выводит сам»). Времена — unix-мс.
+//
+// Ответ ПЛОСКИЙ: поля блоков proposal.md на верхнем уровне, вложенных «pipeline»/«now»/«queue»
+// нет — по этому типу и фронтовый TranscriptionSnapshot (frontend/src/features/localModel/types.ts).
+// Множества значений — фронтовые: phase «idle»|«batch»|«stopped», stage «asr»|«summary»|«dify»,
+// level «ok»|«warn»|«danger», deps[].state «ok»|«slow»|«down»|«unknown». «Не проверялось» для
+// level и stage — отсутствие значения (null), а не «unknown»: таких значений во фронтовом типе
+// нет, и точка/баннер не появятся. Внутренние подуровни (stale плашки, уровень вывода) живут
+// только в ридере, в ответ не выходят.
 
-// Общий снимок. level — точка вкладки: "ok" | "warn" | "danger" | "unknown"
-// (красная: «Завис?», «Остановлен» или сбой зависимости; жёлтая: расхождение с Dify или «Пишет в» не туда).
-public sealed record TranscriptionSnapshot(
-    long At,
-    string Level,
-    TranscriptionPipelineDto Pipeline,
-    TranscriptionNowDto? Now,
-    TranscriptionQueueDto Queue,
-    TranscriptionFailDto[] Fails,
-    TranscriptionMeetingDto[] Recent,
-    TranscriptionDifyDto[] Dify,
-    TranscriptionDepDto[] Deps)
+public sealed record TranscriptionSnapshot
 {
-    // Пустой снимок «не проверялось»: сервиса нет в контейнере, файлов конвейера на узле нет,
-    // файлы не читаются. 200, не 500 (требование устойчивости).
-    public static TranscriptionSnapshot Unknown(long at) =>
-        new(at, "unknown",
-            new("unknown", null, null, null, null, false, "unknown", null, null, "unknown"),
-            null, new(0, [], 0), [], [], [], []);
-}
-
-// Блок «Конвейер».
-public sealed record TranscriptionPipelineDto(
-    // Нормализованная фаза: "idle" | "working" | "waiting" (ждёт зависимость: машину с GPU, простоя
-    // ComfyUI, память) | "stopped" | "unknown".
-    string Phase,
-    // Сырая фаза state.json русскими («ожидание», «транскрибация», …) — для строки подробностей;
-    // неизвестная конвейером фаза остаётся здесь при phase="working" (процесс жив и чем-то занят).
-    string? PhaseText,
+    // === Конвейер ===
+    // Нормализованная фаза: "idle" — пачки нет, "batch" — процесс занят (идёт работа, ждёт
+    // зависимость или фаза не опознана), "stopped" — сервис остановлен или pid мёртв.
+    public string Phase { get; init; } = "stopped";
     // unix-мс последней записи state.json; null — файла нет или время не читается.
-    long? UpdatedAt,
+    public long? UpdatedAt { get; init; }
     // Ключ узла, где читается состояние («Где работает»): файлы читаются локально — это узел CCS.
-    string? Host,
-    int? Pid,
+    public string? Host { get; init; }
+    public int? Pid { get; init; }
     // Жив ли на этом узле процесс с этим pid.
-    bool Alive,
-    // Плашка: "ok" | "stale" («Завис?»: state.json старше 5 мин при живом pid) | "stopped" | "unknown".
-    string Level,
+    public bool Alive { get; init; }
     // «Пишет в»: ключ узла каталога вывода; null — не этот узел или не проверялось.
-    string? OutputHost,
+    public string? OutputHost { get; init; }
     // Общий каталог выходов папок (config.yaml folders[].output).
-    string? OutputDir,
-    // "ok" (каталог виден на этом узле) | "warn" («не та машина»: каталога на узле нет) |
-    // "unknown" (конфига нет — не проверялось).
-    string OutputLevel);
+    public string? OutputDir { get; init; }
 
-// Блок «Сейчас». null whole — ничего не обрабатывается (или фаза не помечена файлом).
-public sealed record TranscriptionNowDto(
-    string File,
-    string? Folder,
+    // Точка вкладки: "ok" | "warn" | "danger". Красная: «Завис?», «Остановлен» или сбой
+    // зависимости; жёлтая: расхождение с Dify или «Пишет в» не туда. null — «не проверялось»:
+    // фронта нет ни точки, ни баннера (значения «unknown» в его типе нет).
+    public string? Level { get; init; }
+
+    // === Сейчас ===. Ничего не обрабатывается или этап не опознан — поля null:
+    // вкладка рисует «Ничего не обрабатывается».
+    public string? File { get; init; }
+    public string? Folder { get; init; }
     // "asr" (распознавание) | "summary" (сводка). Этапа «В Dify» конвейер в state.json не помечает —
-    // бэкенд его не выдумывает. null — этап не опознан (напр. «остановка vLLM»).
-    string? Stage,
+    // бэкенд его не выдумывает.
+    public string? Stage { get; init; }
     // unix-мс записи state, открывшей этап: конвейер перезаписывает снимок на переходе фаз,
-    // поэтому updated текущего снимка = начало текущего этапа.
-    long? StageStartedAt,
-    double? DurationMin,
+    // поэтому updatedAt текущего снимка = начало текущего этапа.
+    public long? StageStartedAt { get; init; }
+    public double? DurationMin { get; init; }
     // Место в пачке — state.json его не несёт (снимок на файле не содержит индекса), v1 всегда null.
-    int? BatchIndex,
+    public int? BatchIndex { get; init; }
     // batch_total из state.json — есть только в снимке старта пачки (без файла); на файле конвейер
     // его не повторяет. Чаще null.
-    int? BatchSize);
+    public int? BatchSize { get; init; }
 
-// Блок «Очередь». asrQueue — конвейер пишет счёт (state.json.queue), а не список файлов;
-// в v1 список пуст, UI показывает счётчик.
-public sealed record TranscriptionQueueDto(
-    int AsrCount,
-    TranscriptionQueueFileDto[] AsrQueue,
-    // Ждут сводки: summary_state.json.pending (staging) — только снимок того же процесса.
-    int SummaryCount);
+    // === Очередь ===. asrQueue — список файлов, ждущих распознавания, из state.json queue_items
+    // (М2); since — unix-мс (конвейер хранит unix-секунды). Их нет — пустой список.
+    // summaryQueue — ждут сводки: summary_state.json.pending (staging) — только снимок того же процесса.
+    public TranscriptionQueueFileDto[] AsrQueue { get; init; } = [];
+    public int? SummaryQueue { get; init; }
 
+    // === Сбои за 24 ч === (journal.tsv, итог=fail).
+    public TranscriptionFailDto[] Fails { get; init; } = [];
+
+    // === Готовые встречи за 24 ч === (journal.tsv, итог=ok). mdPath — путь .md на этом узле
+    // (output папки из конфига + имя файла с нормализованным расширением); null — папки в конфиге нет.
+    public TranscriptionMeetingDto[] Recent { get; init; } = [];
+
+    // === Сверка с Dify === по папке — из файла самого конвейера logs/dify_state.json (М2):
+    // local — записей локально, inDify — загружено в Dify (null — конвейер не получил список Dify).
+    // Бэкенд в Dify не ходит и строк не выдумывает: файла нет — пустой блок. checkedAt — unix-мс
+    // проверки из файла; null — метки в файле нет.
+    public TranscriptionDifyDto[] Dify { get; init; } = [];
+    public long? CheckedAt { get; init; }
+
+    // === Зависимости. key: "asr" (машина распознавания), "summary" (модель сводок), "dify", "share" (сетевая папка).
+    // state: "ok" | "slow" | "down" | "unknown". Состояние — по тому, что сам конвейер пишет о своих зависимостях
+    // (фазы «ждёт …» в state.json, метки «dify …» в журнале), и по наличию watch-каталогов на узле;
+    // «slow» из файлов не измеряется — v1 его не отдаёт; «unknown» = «не проверялось».
+    public TranscriptionDepDto[] Deps { get; init; } = [];
+
+    // Пустой снимок «не проверялось»: сервиса нет в контейнере, файлов конвейера на узле нет,
+    // файлы не читаются. 200, не 500 (требование устойчивости). Phase «stopped» — живого процесса
+    // не знаем; level отсутствует — «не проверялось», не тревога.
+    public static TranscriptionSnapshot Unknown(long at) => new()
+    {
+        Deps = [.. UnknownDeps(at)],
+    };
+
+    // Зависимости «не проверялось» — тот же набор ключей, что отдаёт ридер при нечитаемом снимке.
+    internal static IEnumerable<TranscriptionDepDto> UnknownDeps(long at) =>
+        new[] { "asr", "summary", "dify", "share" }.Select(k => new TranscriptionDepDto(k, "unknown", at));
+}
+
+// Файл в очереди распознавания. since — unix-мс, с когда файл ждёт («ждёт N мин»).
 public sealed record TranscriptionQueueFileDto(string File, string? Folder, long? Since);
 
 // Сбой за 24 ч (journal.tsv, итог=fail).
 public sealed record TranscriptionFailDto(long At, string? Folder, string? File, double? Minutes, string Comment);
 
-// Готовая встреча за 24 ч (journal.tsv, итог=ok). mdPath — путь .md на этом узле
-// (output папки из конфига + имя файла с нормализованным расширением); null — папки в конфиге нет.
+// Готовая встреча за 24 ч (journal.tsv, итог=ok).
 public sealed record TranscriptionMeetingDto(
     long At, string? Folder, string File, double? Minutes, int? Speakers, string? Comment, string? MdPath);
 
-// Строка сверки с Dify по папке. local — число .md в каталоге вывода (null — каталога нет на узле);
-// inDify — результат сверки конвейер пишет только в systemd-журнал (не в файлы), сам бэкенд
-// в Dify не ходит — в v1 null («не проверялось»).
+// Строка сверки с Dify по папке (dify_state.json). inDify null — конвейер не получил список Dify.
 public sealed record TranscriptionDifyDto(string Folder, int? Local, int? InDify);
 
-// Зависимость. key: "asr" (машина распознавания), "summary" (модель сводок), "dify", "share" (сетевая папка).
-// status: "ok" | "down" | "unknown". Состояние — по тому, что сам конвейер пишет о своих зависимостях
-// (фазы «ждёт …» в state.json, метки «dify …» в журнале), и по наличию watch-каталогов на узле;
-// «slow» из файлов не измеряется — v1 его не отдаёт; «unknown» = «не проверялось».
-public sealed record TranscriptionDepDto(string Key, string Status, long CheckedAt);
+// Зависимость. checkedAt — unix-мс последней проверки.
+public sealed record TranscriptionDepDto(string Key, string State, long CheckedAt);

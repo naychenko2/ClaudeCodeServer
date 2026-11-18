@@ -75,10 +75,12 @@ public class TranscriptionStateReaderTests : IDisposable
     private static string StampMin(DateTimeOffset now, TimeSpan ago) => now.Subtract(ago).ToString("yyyy-MM-dd HH:mm");
 
     private static string StateJson(string phase, DateTimeOffset now, int pid, TimeSpan age,
-        int? queue = null, int? pending = null, string? current = null, string? folder = null, int? batchTotal = null)
+        int? queue = null, int? pending = null, string? current = null, string? folder = null, int? batchTotal = null,
+        string? queueItems = null)
     {
         var f = new List<string> { $"\"phase\": \"{phase}\"", $"\"updated\": \"{Stamp(now, age)}\"", $"\"pid\": {pid}" };
         if (queue is not null) f.Add($"\"queue\": {queue}");
+        if (queueItems is not null) f.Add($"\"queue_items\": {queueItems}");
         if (pending is not null) f.Add($"\"pending\": {pending}");
         if (current is not null) f.Add($"\"current\": \"{current}\"");
         if (folder is not null) f.Add($"\"folder\": \"{folder}\"");
@@ -123,32 +125,30 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Pipeline.Phase.Should().Be("idle");
-        s.Pipeline.PhaseText.Should().Be("ожидание");
-        s.Pipeline.Level.Should().Be("ok");
-        s.Pipeline.Alive.Should().BeTrue();
-        s.Pipeline.Host.Should().Be("worker"); // реестра нет → фолбэк ровно один «worker»
-        s.Pipeline.OutputHost.Should().Be("worker");
-        s.Pipeline.OutputDir.Should().Be(output);
-        s.Pipeline.OutputLevel.Should().Be("ok");
+        s.Phase.Should().Be("idle");
+        s.Alive.Should().BeTrue();
+        s.Host.Should().Be("worker"); // реестра нет → фолбэк ровно один «worker»
+        s.OutputHost.Should().Be("worker");
+        s.OutputDir.Should().Be(output);
         s.Level.Should().Be("ok");
-        // очередь: счётчики из state.json/summary_state.json; списка файлов конвейер не пишет
-        s.Queue.AsrCount.Should().Be(2);
-        s.Queue.SummaryCount.Should().Be(1);
-        s.Queue.AsrQueue.Should().BeEmpty();
+        // очередь: summaryQueue из summary_state.json; списка файлов конвейер не пишет — asrQueue пуст (М2)
+        s.SummaryQueue.Should().Be(1);
+        s.AsrQueue.Should().BeEmpty(); // queue_items нет — очередь пустая (число «queue» в плоском контракте не отдаётся)
         // в простое зависимости не проверялись, кроме сетевой папки (есть на узле)
-        s.Deps.Select(d => (d.Key, d.Status)).Should().Equal(
+        s.Deps.Select(d => (d.Key, d.State)).Should().Equal(
             ("asr", "unknown"), ("summary", "unknown"), ("dify", "unknown"), ("share", "ok"));
-        s.Now.Should().BeNull();
+        s.File.Should().BeNull();
+        s.Stage.Should().BeNull();
         s.Fails.Should().BeEmpty();
         s.Recent.Should().BeEmpty();
     }
 
     // Граница порога строгая («старше 5 мин»): ровно 5 мин — ещё нет, 5 мин + 1 с — да.
+    // «stale» — внутренний подуровень ридера: в плоском контракте он внешний level «danger».
     [Theory]
     [InlineData(0, 4, 50, "ok")]
     [InlineData(0, 5, 0, "ok")]
-    [InlineData(0, 5, 1, "stale")]
+    [InlineData(0, 5, 1, "danger")]
     public void Завис_ГраницаПорога5МинПриЖивомPid(int h, int m, int sec, string expected)
     {
         var now = NowTrunc();
@@ -158,8 +158,8 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Pipeline.Level.Should().Be(expected);
-        s.Level.Should().Be(expected == "stale" ? "danger" : "ok");
+        s.Level.Should().Be(expected);
+        s.Phase.Should().Be("batch"); // живой процесс на файле — занят
     }
 
     [Fact]
@@ -172,11 +172,11 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now), pid => false).Read();
 
-        s.Pipeline.Alive.Should().BeFalse();
-        s.Pipeline.Level.Should().Be("stopped");
+        s.Alive.Should().BeFalse();
+        s.Phase.Should().Be("stopped"); // мёртвый pid — «stopped» при любой фазе
         s.Level.Should().Be("danger");
-        //stopped/stale — сигналы не проверялись
-        s.Deps.Should().OnlyContain(d => d.Status == "unknown");
+        // stopped/stale — сигналы не проверялись
+        s.Deps.Should().OnlyContain(d => d.State == "unknown");
     }
 
     [Fact]
@@ -189,29 +189,28 @@ public class TranscriptionStateReaderTests : IDisposable
         var s = Reader(root, new FixedTime(now)).Read();
 
         // сам факт «остановлен» в state.json сильнее живой pid: процесс пишет этот снимок
-        // в finally и доходит до выхода — уровень «stopped» независимо от живости
-        s.Pipeline.Phase.Should().Be("stopped");
-        s.Pipeline.Level.Should().Be("stopped");
+        // в finally и доходит до выхода — фаза «stopped» независимо от живости
+        s.Phase.Should().Be("stopped");
         s.Level.Should().Be("danger");
     }
 
     [Fact]
-    public void НетФайлов_СнимокUnknownБезИсключения()
+    public void НетФайлов_ПустойСнимокБезИсключения()
     {
         var now = NowTrunc();
         var root = NewRoot();
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Level.Should().Be("unknown");
-        s.Pipeline.Phase.Should().Be("unknown");
-        s.Pipeline.Level.Should().Be("unknown");
-        s.Pipeline.UpdatedAt.Should().BeNull();
-        s.Queue.AsrCount.Should().Be(0);
+        s.Phase.Should().Be("stopped"); // состояния нет — живого процесса не знаем
+        s.Level.Should().BeNull(); // «не проверялось» — уровня нет, а не «unknown»
+        s.UpdatedAt.Should().BeNull();
+        s.SummaryQueue.Should().Be(0);
         s.Fails.Should().BeEmpty();
         s.Recent.Should().BeEmpty();
         s.Dify.Should().BeEmpty();
-        s.Deps.Should().OnlyContain(d => d.Status == "unknown");
+        s.CheckedAt.Should().BeNull();
+        s.Deps.Should().OnlyContain(d => d.State == "unknown");
     }
 
     [Theory]
@@ -226,12 +225,12 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Pipeline.Level.Should().Be("unknown");
-        s.Level.Should().Be("unknown");
+        s.Level.Should().BeNull(); // «не проверялось» — уровня нет
+        s.Phase.Should().Be("stopped");
     }
 
     [Fact]
-    public void НеизвестнаяФаза_ПропускаетсяКакРаботаССыройТекстом()
+    public void НеизвестнаяФазаЖивогоПроцесса_КакЗанятBatch()
     {
         var now = NowTrunc();
         var root = NewRoot();
@@ -239,9 +238,35 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Pipeline.Phase.Should().Be("working");
-        s.Pipeline.PhaseText.Should().Be("проверка архива");
-        s.Pipeline.Level.Should().Be("ok");
+        // живый процесс при неопознанной фазе занят — «batch»; сырой текст в плоском контракте не отдаётся
+        s.Phase.Should().Be("batch");
+        s.Level.Should().Be("ok");
+    }
+
+    // Контракт значений (frontend/src/features/localModel/types.ts): phase — только
+    // "idle"|"batch"|"stopped"; «ждёт зависимость» и незнакомая фаза живого процесса — "batch",
+    // мёртвый pid — "stopped" при любой фазе. level, stage и deps[].state — вне своих множеств
+    // не выходят («не проверялось» — null в level/stage, «unknown» допустим только в deps).
+    [Theory]
+    [InlineData("ожидание", true, "idle")]
+    [InlineData("транскрибация", true, "batch")]
+    [InlineData("очередь копится", true, "batch")]
+    [InlineData("ждёт машину с GPU", true, "batch")]
+    [InlineData("что-то незнакомое", true, "batch")]
+    [InlineData("остановлен", true, "stopped")]
+    [InlineData("транскрибация", false, "stopped")]
+    public void КонтрактЗначений_ФазаТолькоИзФронтовогоМножества(string raw, bool alive, string expected)
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        Write(root, "logs/state.json", StateJson(raw, now, 100, TimeSpan.FromSeconds(10)));
+
+        var s = Reader(root, new FixedTime(now), _ => alive).Read();
+
+        s.Phase.Should().Be(expected);
+        s.Level.Should().BeOneOf("ok", "warn", "danger");
+        new[] { (string?)null, "asr", "summary", "dify" }.Should().Contain(s.Stage);
+        s.Deps.Should().OnlyContain(d => new[] { "ok", "slow", "down", "unknown" }.Contains(d.State));
     }
 
     // ─── «Сейчас» ───────────────────────────────────────────────────────────────────
@@ -256,16 +281,16 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Now!.File.Should().Be("X.mp4");
-        s.Now.Folder.Should().Be("Video-RR");
-        s.Now.Stage.Should().Be("asr");
-        s.Now.DurationMin.Should().Be(3.0);
-        s.Now.StageStartedAt.Should().Be(now.Subtract(TimeSpan.FromMinutes(3)).ToUnixTimeMilliseconds());
+        s.File.Should().Be("X.mp4");
+        s.Folder.Should().Be("Video-RR");
+        s.Stage.Should().Be("asr");
+        s.DurationMin.Should().Be(3.0);
+        s.StageStartedAt.Should().Be(now.Subtract(TimeSpan.FromMinutes(3)).ToUnixTimeMilliseconds());
         // место в пачке и размер пачки state.json на файле не несёт
-        s.Now.BatchIndex.Should().BeNull();
-        s.Now.BatchSize.Should().BeNull();
+        s.BatchIndex.Should().BeNull();
+        s.BatchSize.Should().BeNull();
         // распознавание идёт — зависимость asr «в норме»
-        s.Deps.First(d => d.Key == "asr").Status.Should().Be("ok");
+        s.Deps.First(d => d.Key == "asr").State.Should().Be("ok");
     }
 
     [Fact]
@@ -279,9 +304,9 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Now!.Stage.Should().Be("summary");
-        s.Now.File.Should().Be("Y.mp4");
-        s.Deps.First(d => d.Key == "summary").Status.Should().Be("ok");
+        s.Stage.Should().Be("summary");
+        s.File.Should().Be("Y.mp4");
+        s.Deps.First(d => d.Key == "summary").State.Should().Be("ok");
     }
 
     [Fact]
@@ -296,8 +321,9 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Now.Should().BeNull();
-        s.Queue.SummaryCount.Should().Be(0);
+        s.File.Should().BeNull();
+        s.Stage.Should().BeNull();
+        s.SummaryQueue.Should().Be(0);
     }
 
     [Fact]
@@ -312,8 +338,48 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Now!.Stage.Should().Be("asr");
-        s.Now.File.Should().Be("X.mp4");
+        s.Stage.Should().Be("asr");
+        s.File.Should().Be("X.mp4");
+    }
+
+    // ─── очередь asr (queue_items, М2) ──────────────────────────────────────────────
+
+    // asrQueue — из queue_items самого конвейера: {file, folder, since} в unix-СЕКУНДАХ → unix-мс.
+    // Строка без имени файла пропускается; строка с нечисловым since остаётся без времени
+    // (файл правда ждёт — неизвестна только дата, фронт рисует «ждёт»); порядка не меняем.
+    [Fact]
+    public void ОчередьAsrИзQueueItemsСекундыСтановятсяМс()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10), queue: 3,
+            queueItems: """[ { "file": "A.mp4", "folder": "Video-GPB", "since": 1794997217 }, { "file": "B.mp4", "since": "не число" }, { "noFile": 1 }, { "file": "C.mp4", "since": 1794997220 } ]"""));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.AsrQueue.Should().HaveCount(3);
+        s.AsrQueue[0].File.Should().Be("A.mp4");
+        s.AsrQueue[0].Folder.Should().Be("Video-GPB");
+        s.AsrQueue[0].Since.Should().Be(1_794_997_217_000);
+        s.AsrQueue[1].File.Should().Be("B.mp4");
+        s.AsrQueue[1].Since.Should().BeNull();
+        s.AsrQueue[2].File.Should().Be("C.mp4");
+        s.AsrQueue[2].Since.Should().Be(1_794_997_220_000);
+    }
+
+    // Битый queue_items (не массив) — пустой список, но снимок живой: фаза и уровень не теряются.
+    [Fact]
+    public void БитыйQueueItemsПустаяОчередьНоСнимокЖивой()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10), queueItems: "\"не массив\""));
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.AsrQueue.Should().BeEmpty();
+        s.Phase.Should().Be("idle");
+        s.Level.Should().Be("ok");
     }
 
     // ─── журнал: хвост, окно, лимиты ────────────────────────────────────────────────
@@ -468,31 +534,77 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Pipeline.OutputDir.Should().Be("/nonexistent-ccs-test/Встречи"); // общий префикс по сегментам
-        s.Pipeline.OutputHost.Should().BeNull();
-        s.Pipeline.OutputLevel.Should().Be("warn");
-        s.Level.Should().Be("warn");
-        // локальная половина сверки: каталога нет → «не проверялось» (null), не «ноль файлов»
-        s.Dify.Should().HaveCount(2);
-        s.Dify.Should().OnlyContain(d => d.Local == null && d.InDify == null);
+        s.OutputDir.Should().Be("/nonexistent-ccs-test/Встречи"); // общий префикс по сегментам
+        s.OutputHost.Should().BeNull();
+        s.Level.Should().Be("warn"); // «не та машина» — внешний уровень плоского контракта
+        // сверка — из файла конвейера; файла нет — пустой блок, не «ноль файлов»
+        s.Dify.Should().BeEmpty();
+        s.CheckedAt.Should().BeNull();
     }
 
+    // dify[] и checkedAt — из файла самого конвейера (dify_state.json, М2): времена unix-СЕКУНД →
+    // unix-мс; inDify null (конвейер не получил список Dify) отдаётся как есть, поле error папки в
+    // ответ не выходит (в dify-блоке контракта комментария нет).
     [Fact]
-    public void СверкаЛокальнаяПоловинаПоФактуЧислоMdВВыходе()
+    public void СверкаИзDifyStateJsonРядыCheckedAtINullInDify()
     {
         var now = NowTrunc();
         var root = NewRoot();
-        var outGpb = Path.Combine(root, "out", "ГПБ");
-        Directory.CreateDirectory(outGpb);
-        File.WriteAllText(Path.Combine(outGpb, "a.md"), "x");
-        File.WriteAllText(Path.Combine(outGpb, "b.md"), "x");
-        File.WriteAllText(Path.Combine(outGpb, "c.txt"), "x");
+        Directory.CreateDirectory(Path.Combine(root, "watch"));
+        Directory.CreateDirectory(Path.Combine(root, "out"));
         Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
-        Write(root, "config.yaml", ConfigYaml(("Video-GPB", Path.Combine(root, "watch"), outGpb)));
+        Write(root, "config.yaml", ConfigYaml(("Video-GPB", Path.Combine(root, "watch"), Path.Combine(root, "out"))));
+        Write(root, "logs/dify_state.json", """
+            { "checked": 1794997258, "folders": [
+                { "folder": "Video-GPB", "local": 897, "inDify": 897, "checked": 1794997252 },
+                { "folder": "Video-RR", "local": 12, "inDify": null, "error": "dify: список не получен" }
+            ], "updated": "2026-11-18 09:00:58", "pid": 777 }
+            """);
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Dify.Should().ContainSingle(d => d.Folder == "Video-GPB" && d.Local == 2 && d.InDify == null);
+        s.Dify.Should().HaveCount(2);
+        s.Dify[0].Folder.Should().Be("Video-GPB");
+        s.Dify[0].Local.Should().Be(897);
+        s.Dify[0].InDify.Should().Be(897);
+        s.Dify[1].InDify.Should().BeNull(); // отсутствия половины Dify не прячем
+        s.CheckedAt.Should().Be(1_794_997_258_000); // unix-секунды файла → unix-мс
+        // всё сходится, конвейер жив и свеж, вывод и watch на узле — тревоги нет
+        s.Level.Should().Be("ok");
+    }
+
+    // Жёлтая точка по proposal.md: расхождение с Dify (local > inDify). Конвейер жив, свеж,
+    // вывод и watch на узле — единственный повод тревоги — дефицит.
+    [Fact]
+    public void РасхождениеСDifyТочкаЖёлтая()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        Directory.CreateDirectory(Path.Combine(root, "watch"));
+        Directory.CreateDirectory(Path.Combine(root, "out"));
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "config.yaml", ConfigYaml(("Video-GPB", Path.Combine(root, "watch"), Path.Combine(root, "out"))));
+        Write(root, "logs/dify_state.json", """{ "checked": 1794997258, "folders": [ { "folder": "Video-GPB", "local": 5, "inDify": 3 } ] }""");
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.Level.Should().Be("warn");
+    }
+
+    // Битый dify_state.json — пустой блок и нет метки, остальной снимок живой (устойчивость).
+    [Fact]
+    public void БитыйDifyStateJsonПустойБлокНоСнимокЖивой()
+    {
+        var now = NowTrunc();
+        var root = NewRoot();
+        Write(root, "logs/state.json", StateJson("ожидание", now, 100, TimeSpan.FromSeconds(10)));
+        Write(root, "logs/dify_state.json", "{ «checked»: «не число»");
+
+        var s = Reader(root, new FixedTime(now)).Read();
+
+        s.Dify.Should().BeEmpty();
+        s.CheckedAt.Should().BeNull();
+        s.Phase.Should().Be("idle");
     }
 
     // ─── зависимости ────────────────────────────────────────────────────────────────
@@ -509,9 +621,9 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Pipeline.Phase.Should().Be("waiting");
-        s.Deps.First(d => d.Key == "asr").Status.Should().Be("down");
-        s.Deps.First(d => d.Key == "summary").Status.Should().Be("down");
+        s.Phase.Should().Be("batch"); // ждёт зависимость: процесс жив и занят, такой фазы во фронте нет
+        s.Deps.First(d => d.Key == "asr").State.Should().Be("down");
+        s.Deps.First(d => d.Key == "summary").State.Should().Be("down");
         s.Level.Should().Be("danger");
     }
 
@@ -531,7 +643,7 @@ public class TranscriptionStateReaderTests : IDisposable
         var s = Reader(root, new FixedTime(now)).Read();
 
         // самый свежий маркер — «dify отложено»
-        s.Deps.First(d => d.Key == "dify").Status.Should().Be("down");
+        s.Deps.First(d => d.Key == "dify").State.Should().Be("down");
         s.Level.Should().Be("danger");
     }
 
@@ -550,7 +662,7 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Deps.First(d => d.Key == "dify").Status.Should().Be("ok");
+        s.Deps.First(d => d.Key == "dify").State.Should().Be("ok");
         s.Level.Should().Be("ok");
     }
 
@@ -566,7 +678,7 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Deps.First(d => d.Key == "share").Status.Should().Be("down");
+        s.Deps.First(d => d.Key == "share").State.Should().Be("down");
         s.Level.Should().Be("danger");
     }
 
@@ -595,9 +707,9 @@ public class TranscriptionStateReaderTests : IDisposable
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Dify.Should().ContainSingle(d => d.Folder == "Video-GPB");
-        s.Pipeline.OutputDir.Should().Be("/nonexistent-ccs-test/Встречи/ГПБ");
+        s.OutputDir.Should().Be("/nonexistent-ccs-test/Встречи/ГПБ");
+        s.Dify.Should().BeEmpty(); // dify_state.json нет — пустой блок, конфиг его не заменяет
         // watch нет на узле теста → share down
-        s.Deps.First(d => d.Key == "share").Status.Should().Be("down");
+        s.Deps.First(d => d.Key == "share").State.Should().Be("down");
     }
 }

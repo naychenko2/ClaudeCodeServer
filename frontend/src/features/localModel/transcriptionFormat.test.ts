@@ -13,7 +13,9 @@
 //   поля) — краснеет тест combined: бэк даёт outputHost=null при чужом узле вывода;
 // - «запись» рисовать числом из durationMin (это время правки снимка, не длина файла) —
 //   краснеет тест «—»;
-// - «идёт» показывать числом меньше минуты («0 мин»/«0 с») — краснеет тест «меньше минуты».
+// - «идёт» показывать числом меньше минуты («0 мин»/«0 с») — краснеет тест «меньше минуты»;
+// - падать на строке сбоя без имени файла (meetingName на null) — краснеет тест «сбой без
+//   имени файла»: строка обязана остаться, выдуманное имя вместо неё — вранье.
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -315,6 +317,30 @@ describe('transTabView: низ вкладки (Ф4): сбои, встречи, �
     expect(f.openable).toBe(false);
     expect(f.comment).toBe('fail: ComfyUI не ответил за 600 с (узел CcsAudioWorker)');
     expect(f.lengthText).toBe('41 мин');
+  });
+
+  // Бэковый TranscriptionFailDto несёт string? File намеренно (сбой вне файла: упало
+  // распознавание, не один файл), и для fail фильтра «File is not null» нет — такие строки
+  // приходят как есть. Строку показываем: без имени, но со временем, папкой и комментарием
+  it('сбой без имени файла (file=null, folder=null): строка есть, имени нет, выдуманного нет', () => {
+    const v = transTabView(snap({
+      fails: [
+        { at: NOW - 5_000_000, folder: null, file: null, comment: 'fail: распознавание не ответило (узел CcsAudioWorker)' },
+        { at: NOW - 7_000_000, folder: 'Video-RR', file: null, minutes: null, comment: 'fail: пустая дорожка — нечего распознавать' },
+      ],
+    }), NOW);
+    expect(v.failures).toHaveLength(2);
+    const [a, b] = v.failures;
+    // имени нет — ни «undefined», ни «null», ни выдуманного «без имени»
+    expect([a.name, a.file, b.name, b.file]).toEqual([null, null, null, null]);
+    expect([a.folder, b.folder]).toEqual([null, 'Video-RR']);
+    // ключи двух строк без имени не совпадают: иначе collision ключей React в списке
+    expect(a.id).not.toEqual(b.id);
+    // всё остальное в строке живое
+    expect(a.timeText).toMatch(/^\d{2}:\d{2}$/); // сегодня: окно бэка — 24 ч
+    expect(a.comment).toBe('fail: распознавание не ответило (узел CcsAudioWorker)');
+    expect(b.lengthText).toBeNull(); // minutes=null — строки длины нет
+    expect([a.openable, b.openable]).toEqual([false, false]); // сбой не открывается
   });
 
   it('встреча с mdPath — открывается; «47 мин», «4 спикера», сегодня — только время', () => {

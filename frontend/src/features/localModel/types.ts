@@ -441,11 +441,14 @@ export interface TranscriptionQueuedFile {
 }
 
 // Сбой за сутки (journal.tsv, type=fail). comment — строка журнала целиком.
+// folder/file — nullable по бэку (TranscriptionSnapshot.cs: TranscriptionFailDto несёт
+// string? Folder, string? File): сбой вне файла (сбой всего конвейера, не одного файла) —
+// строка журнала есть, имени файла нет. Строку показываем, имя не выдумываем.
 export interface TranscriptionFail {
   // unix-мс сбоя
   at: number;
-  folder: string;
-  file: string;
+  folder: string | null;
+  file: string | null;
   // минуты, которые потеряла запись (для баннера «4 встречи не попали в Dify»)
   minutes?: number | null;
   comment?: string | null;
@@ -453,10 +456,13 @@ export interface TranscriptionFail {
 
 // Завершённая встреча (journal.tsv, type=ok). mdPath — путь .md во «Встречах»:
 // касание строки открывает его (UI следующего шага).
+// folder nullable по бэку (TranscriptionMeetingDto: string? Folder); file — string:
+// ридер отбрасывает строки журнала без имени (TranscriptionStateReader.cs: recent
+// фильтрует r.File is not null), на фронте это единственный путь к имени строки.
 export interface TranscriptionMeeting {
   // unix-мс завершения
   at: number;
-  folder: string;
+  folder: string | null;
   file: string;
   minutes?: number | null;
   speakers?: number | null;
@@ -466,10 +472,13 @@ export interface TranscriptionMeeting {
 
 // Строка сверки с Dify по папке: local — записей локально, inDify — загружено в Dify.
 // «не хватает N» = local − inDify (N > 0); «сходится» — равны.
+// Оба числа nullable по бэку (TranscriptionDifyDto: int? Local, int? InDify): local —
+// не посчитан, inDify — конвейер не получил список Dify. Дефицита из неизвестного нет:
+// строки с null отсекает typeof-фильтр в transcriptionFormat (он остаётся).
 export interface TranscriptionDifyRow {
   folder: string;
-  local: number;
-  inDify: number;
+  local: number | null;
+  inDify: number | null;
 }
 
 // Зависимость конвейера (ComfyUI/CcsAudioWorker, Strata, Dify, монтирование папки).

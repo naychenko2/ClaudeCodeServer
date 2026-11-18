@@ -137,10 +137,13 @@ export interface TransQueueView {
 // Строка «Сбоев за сутки» и «Последних встреч» одна по составу (макет .mt): имя, папка,
 // время, длина, спикеры, комментарий. Сбой не открывается (openable=false, красная
 // строка); встреча открывается, только когда mdPath в снимке есть.
+// name/file — null, когда имени файла нет (бэковый TranscriptionFailDto.File = string?:
+// сбой вне файла). Строка при этом остаётся: без имени, но со временем, папкой и
+// комментарием — выдуманного имени не подставляем.
 export interface TransMeetingRowView {
   id: string; // ключ строки (folder+file); его передают openMeetingNote (openMeetingNote.ts)
-  name: string; // имя без расширения; полное имя — в title
-  file: string;
+  name: string | null; // имя без расширения; полное имя — в title; null — имени нет
+  file: string | null;
   folder: string | null;
   timeText: string; // «11:42» сегодня, «вчера 18:05» вчера (окно бэка — 24 ч, старше нет)
   lengthText: string | null; // «47 мин»; минут нет — строки нет
@@ -332,8 +335,12 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
   };
 
   // === Сбои и встречи (одна форма строки, разные флаги; порядок — как в снимке) ===
-  const rowOf = (r: { at: number; folder?: string | null; file: string; minutes?: number | null }, openable: boolean): TransMeetingRowView => ({
-    id: `${r.folder ?? ''}/${r.file}`, // ключ строки журнала: своего id снимок не несёт
+  const rowOf = (r: { at: number; folder?: string | null; file: string | null; minutes?: number | null }, openable: boolean): TransMeetingRowView => ({
+    // ключ строки журнала: своего id снимок не несёт. У строки без имени файла ключа нет —
+    // уникальность даёт время сбоя: за сутки бывает несколько сбоев вне файла, одинаковый
+    // id дал бы collision ключей React. Такая строка не открывается — openMeetingNote её
+    // id не получает (ср. TranscriptionFail: file nullable у бэка намеренно)
+    id: r.file == null ? `${r.folder ?? ''}/#${r.at}` : `${r.folder ?? ''}/${r.file}`,
     name: meetingName(r.file),
     file: r.file,
     folder: r.folder ?? null,
@@ -359,11 +366,17 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
   // префикса «Video-» — в узкой ленте имена папок остаются читаемыми (proposal.md)
   const difyRows: TransDifyRowView[] = (s.dify ?? [])
     .filter(r => typeof r.local === 'number' && typeof r.inDify === 'number')
-    .map(r => ({
-      folder: r.folder.startsWith('Video-') ? r.folder.slice('Video-'.length) : r.folder,
-      local: r.local, inDify: r.inDify,
-      deficit: r.local > r.inDify ? r.local - r.inDify : null,
-    }));
+    .map(r => {
+      // поля типа — wire-контракт (int? Local, int? InDify), поэтому числа здесь — после
+      // фильтра выше, который и отсёк строки без чисел (дефицит из неизвестного не считается)
+      const local = r.local as number;
+      const inDify = r.inDify as number;
+      return {
+        folder: r.folder.startsWith('Video-') ? r.folder.slice('Video-'.length) : r.folder,
+        local, inDify,
+        deficit: local > inDify ? local - inDify : null,
+      };
+    });
   const difyAgeText = typeof s.checkedAt === 'number' ? agoText(s.checkedAt, nowMs) : null;
 
   // === Зависимости ===: порядок — как в снимке; значение вне множества — «не проверялось»
@@ -380,8 +393,11 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
 }
 
 // «2026-11-18 планёрка.md» → «2026-11-18 планёрка»: расширение в имени строки не нужно,
-// полное имя (с расширением) — в title строки
-function meetingName(file: string): string {
+// полное имя (с расширением) — в title строки. Имени нет (бэковый TranscriptionFailDto.File
+// = null — сбой вне файла) — нет и имени строки: lastIndexOf на null упал бы всей вкладкой,
+// а выдуманное имя («без имени», «сбой») было бы враньем
+function meetingName(file: string | null): string | null {
+  if (file == null) return null;
   const i = file.lastIndexOf('.');
   return i > 0 ? file.slice(0, i) : file;
 }

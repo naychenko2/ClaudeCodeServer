@@ -221,8 +221,10 @@ function MeetingRow({ row, alarm, top }: { row: TransMeetingRowView; alarm?: boo
   const body = (
     <>
       <Dot color={alarm ? C.danger : C.success} size={8} />
-      {/* Полное имя (с расширением) — в title: на узкой ленте имя режется многоточием */}
-      <span title={row.file} style={{
+      {/* Полное имя (с расширением) — в title: на узкой ленте имя режется многоточием.
+          Имени нет (сбой вне файла) — span пустой, строка остаётся: точка, время, папка,
+          комментарий; title не ставим (у атрибута нет значения) */}
+      <span title={row.file ?? undefined} style={{
         fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
       }}>{row.name}</span>

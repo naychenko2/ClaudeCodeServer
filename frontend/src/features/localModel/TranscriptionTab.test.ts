@@ -5,8 +5,11 @@
 // - баннер рисовать при любом level (краснеет «в норме баннера нет»);
 // - гашение не привязывать к stale (краснеют цвета «Завис?»);
 // - скелеты заменить нулями (краснеет тест загрузки);
-// - порядок блоков переставить (краснеет тест порядка);
+// - порядок любого из восьми блоков переставить (краснеет тест порядка: он проверяет все
+//   восемь по порядку макета tab(), а не только верхние три);
 // - карточку сбоев рисовать при пустом fails (краснеет тест «сбоев нет»);
+// - падать на строке сбоя без имени файла (краснеет тест «сбой без имени»: раньше
+//   meetingName на null ронял всю панель «Ферма»; строка обязана рендериться без имени);
 // - фильтр строк сверки брать «любые числа» (краснеет тест inDify=null: появилась бы
 //   плашка «не хватает» из неизвестного);
 // - «Показать ещё» не раскрывать список (краснеет тест шестой строки);
@@ -83,16 +86,37 @@ const mountTab = (data: TranscriptionSnapshot | null) =>
 beforeAll(() => { installFakeDom(); });
 afterAll(() => { uninstallFakeDom(); });
 
+// Данные нижних блоков (Ф4) — как в состоянии fail макета. Выше теста порядка: он проверяет
+// порядок всех восьми блоков и потому тоже их требует.
+const FAILS = [
+  { at: NOW - 4_000_000, folder: 'Video-RR', file: '2026-11-18 Интервью кандидата.mp4', minutes: 41, comment: 'fail: ComfyUI не ответил за 600 с (узел CcsAudioWorker)' },
+  { at: NOW - 6_000_000, folder: 'Video-GPB', file: '2026-11-18 Короткий синк.mp4', minutes: 3, comment: 'fail: пустая дорожка — нечего распознавать' },
+];
+const MEET = (i: number) => ({
+  at: NOW - (i + 1) * 3_600_000, folder: 'Video-GPB', file: `2026-11-18 встреча ${i}.md`,
+  minutes: 30 + i, speakers: 3, comment: 'asr 2.1м + саммари 0.9м (локально)', mdPath: `/srv/meetings/v${i}.md`,
+});
+const MEET6 = [0, 1, 2, 3, 4, 5].map(MEET);
+
 describe('TranscriptionTab: норма (снимка тревоги нет)', () => {
-  it('баннера нет; «Конвейер» → «Сейчас» → «Очередь» сверху вниз', () => {
-    const h = staticHtml(snap());
-    expect(h).not.toContain('role="status"');
-    const iPipe = h.indexOf('>Конвейер<');
-    const iNow = h.indexOf('>Сейчас<');
-    const iQueue = h.indexOf('>Очередь<');
-    expect(iPipe).toBeGreaterThanOrEqual(0);
-    expect(iNow).toBeGreaterThan(iPipe);
-    expect(iQueue).toBeGreaterThan(iNow);
+  it('баннера нет; порядок всех восьми блоков по макету tab(): конвейер → сейчас → очередь → сбои → встречи → сверка → зависимости', () => {
+    expect(staticHtml(snap())).not.toContain('role="status"');
+    // порядок проверяется на снимке, где есть все восемь: дефицит Dify даёт баннер,
+    // fails/recent/dify/deps — свои карточки. Перестановка любого из восьми краснит
+    const h = staticHtml(snap({
+      level: 'warn',
+      fails: FAILS,
+      recent: MEET6,
+      dify: [{ folder: 'Video-GPB', local: 128, inDify: 128 }, { folder: 'Video-SIAM', local: 41, inDify: 37 }],
+      checkedAt: NOW - 60_000,
+    }));
+    const at = (t: string) => h.indexOf(t);
+    const order = [
+      at('role="status"'), at('>Конвейер<'), at('>Сейчас<'), at('>Очередь<'),
+      at('Сбои за сутки'), at('>Последние встречи<'), at('>Сверка с Dify<'), at('>Зависимости<'),
+    ];
+    for (const i of order) expect(i).toBeGreaterThanOrEqual(0); // все восемь на месте
+    for (let i = 1; i < order.length; i++) expect(order[i]).toBeGreaterThan(order[i - 1]);
   });
 
   it('плашка «Идёт пачка», «worker · ~/meetings» без «не та машина», «пачка 2 из 5»', () => {
@@ -236,17 +260,6 @@ function buttonByText(root: unknown, text: string): unknown | null {
 
 const click = (node: unknown) => { act(() => { (reactProps(node as Parameters<typeof reactProps>[0])!.onClick as () => void)(); }); };
 
-// Нижняя часть (Ф4): данные как в состоянии fail макета
-const FAILS = [
-  { at: NOW - 4_000_000, folder: 'Video-RR', file: '2026-11-18 Интервью кандидата.mp4', minutes: 41, comment: 'fail: ComfyUI не ответил за 600 с (узел CcsAudioWorker)' },
-  { at: NOW - 6_000_000, folder: 'Video-GPB', file: '2026-11-18 Короткий синк.mp4', minutes: 3, comment: 'fail: пустая дорожка — нечего распознавать' },
-];
-const MEET = (i: number) => ({
-  at: NOW - (i + 1) * 3_600_000, folder: 'Video-GPB', file: `2026-11-18 встреча ${i}.md`,
-  minutes: 30 + i, speakers: 3, comment: 'asr 2.1м + саммари 0.9м (локально)', mdPath: `/srv/meetings/v${i}.md`,
-});
-const MEET6 = [0, 1, 2, 3, 4, 5].map(MEET);
-
 describe('TranscriptionTab: «Сбои за сутки» (Ф4)', () => {
   it('сбоев нет — карточки нет вовсе', () => {
     expect(staticHtml(snap({ fails: [] }))).not.toContain('Сбои за сутки');
@@ -263,6 +276,32 @@ describe('TranscriptionTab: «Сбои за сутки» (Ф4)', () => {
     expect(styleOfText(m.container, FAILS[0].comment!)?.color).toBe('var(--c-danger-text)');
     // строка сбоя — не ссылка: перехода нет ни у одной
     expect(m.container.querySelector('[aria-label="Открыть сводку: 2026-11-18 Интервью кандидата"]')).toBeNull();
+    expect(openMeetingNoteMock).not.toHaveBeenCalled();
+  });
+
+  // Бэковый TranscriptionFailDto несёт string? File намеренно (сбой вне файла: упало
+  // распознавание, не один файл), и для fail фильтра «File is not null» нет — строка
+  // приходит как есть. Раньше meetingName падал на null.lastIndexOf, и ErrorBoundary
+  // гасил всю панель «Ферма», а не одну вкладку. Строку показываем — без имени
+  it('сбой без имени файла (file=null, folder=null) — строка видна без имени, падения нет', () => {
+    const NO_NAME = [
+      { at: NOW - 5_000_000, folder: null, file: null, comment: 'fail: распознавание не ответило (узел CcsAudioWorker)' },
+      { at: NOW - 7_000_000, folder: 'Video-RR', file: null, comment: 'fail: пустая дорожка — нечего распознавать' },
+    ];
+    const h = staticHtml(snap({ fails: NO_NAME }));
+    expect(h).toContain('Сбои за сутки · 2');
+    expect(h).toContain('fail: распознавание не ответило (узел CcsAudioWorker)');
+    expect(h).toContain('>Video-RR<'); // папка второй строки на месте
+    // имени нет — и выдуманного нет: ни «undefined», ни «null» как текста строки
+    expect(h).not.toContain('undefined');
+    expect(h).not.toContain('>null<');
+    // ни падения, ни collision ключей (у двух строк без имени разные ключи) — консоль чиста
+    const errs: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errs.push(a.join(' ')); });
+    const m = mountTab(snap({ fails: NO_NAME }));
+    spy.mockRestore();
+    expect(errs).toEqual([]);
+    expect(styleOfText(m.container, 'fail: пустая дорожка — нечего распознавать')?.color).toBe('var(--c-danger-text)');
     expect(openMeetingNoteMock).not.toHaveBeenCalled();
   });
 });

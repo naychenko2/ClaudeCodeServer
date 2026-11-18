@@ -398,7 +398,7 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
     // обновления (PersonasCrudService.SetVoiceAsync), и без замка пары «обновление + голос»
     // перемешиваются: имя от одного запроса, голос от другого. Гонка строится барьером на
     // событии «updated» — последней точке UpdateAsync после записи стора (PersonasCrudService.cs:406):
-    // A удержан ровно между своей записью и своим голосом; барер держит только первое событие,
+    // A удержан ровно между своей записью и своим голосом; барьер держит только первое событие,
     // поэтому начатый вслед B без замка ничем не держится и проходит свою пару целиком.
     // Без замка (мутация «снять замок»): B пишет имя B и голос B, пока A стоит на барьере, затем
     // A дописывает голос A — итог имя B + голос A, смесь. Краснеют обе проверки: bFirst (B прошёл,
@@ -422,9 +422,13 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
             "запрос A не дошёл до рассылки «updated» — гонка не построена");
 
         var putB = _admin.PutAsJsonAsync(url, bodyB);
-        // С замком B стоит на PutTutorGates, пока A держится на барьере, и за 3 с не проходит;
-        // без замка (мутация) B проходит свою пару целиком — assertion красный.
-        var bFirst = await Task.WhenAny(putB, Task.Delay(3_000));
+        // С замком B стоит на PutTutorGates, пока A держится на барьере, и за 500 мс не
+        // проходит; без замка (мутация) B проходит свою пару целиком — assertion красный.
+        // Отрицательную проверку («B не прошёл») нельзя заменить TCS: события, которого тут
+        // ждут, нет — A своё уже испустил. 500 мс — нижний предел, при котором беззамковый
+        // B гарантированно проходит (его ничем не держит); 3 с той же проверки — цена
+        // прогона Host-класса без нужды.
+        var bFirst = await Task.WhenAny(putB, Task.Delay(500));
         bFirst.Should().NotBe(putB,
             "пока A держится на барьере, B обязан ждать своей очереди на замке персоны");
         release.SetResult();
@@ -443,6 +447,29 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
         (wholeA || wholeB).Should().BeTrue(
             $"два одновременных PUT дают одну целую запись, не смесь полей: " +
             $"name={persona.Name}, voice={persona.Voice?.Voice ?? "нет"}");
+    }
+
+    // Замки не копятся (хвост ревью X4): после серии завершённых PUT разных персон в
+    // статическом словаре не остаётся ни одной записи — её закрывает тот, кто отпустил
+    // последнюю ссылку. Поле приватное static — наблюдается отражением, как приватные
+    // состояния в других тестах (SessionModelStaticsTests.cs:37). Мутация «не удалять
+    // запись» (UnrefTutorGate без Remove) красит именно этот тест.
+    [Fact]
+    public async Task PutTutorGates_ЗавершённыеPUT_СловарьЗамковПуст()
+    {
+        var setup = SetupChild(("math", "Математика"), ("phys", "Физика"));
+        foreach (var tutorId in setup.TutorOf.Values)
+        {
+            var resp = await _admin.PutAsJsonAsync($"/api/users/{setup.ChildId}/child-tutors/{tutorId}",
+                new { name = "Имя " + tutorId });
+            resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+
+        var gates = typeof(ChildTutorsController)
+            .GetField("PutTutorGates", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .GetValue(null)!;
+        gates.GetType().GetProperty("Count")!.GetValue(gates).Should().Be(0,
+            "запись замка живёт, пока её держат или ждут; после завершённых PUT — ни одной");
     }
 
     /// <summary>Барьер для теста гонки: первый ToOwner события «updated» указанной персоны
@@ -483,7 +510,7 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
             if (message is not PersonasChangedMessage { Action: "updated", PersonaId: var pid }) return;
             var release = _release;
             // Держим ровно первое событие: второе — того же запроса (голос) или соседнего
-            // (B без замка) — проходит. Иначе барер держал бы оба запроса, и после release
+            // (B без замка) — проходит. Иначе барьер держал бы оба запроса, и после release
             // их голоса соревновались бы молча: итог — случайный, не смесь и не целая запись.
             if (release is null || pid != _personaId || _seen.Task.IsCompleted) return;
             _seen.TrySetResult();
@@ -579,6 +606,31 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
         SeedAvatar(_personas.Get(setup.TutorOf["math"], setup.ChildId)!, setup.ChildId);
         var resp = await setup.Child.GetAsync($"/api/users/{setup.ChildId}/child-tutors/{setup.TutorOf["math"]}/avatar");
         resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // Путь браузерного <img>: заголовок он послать не умеет, JWT приезжает в ?access_token=
+    // (OnMessageReceived — Program.cs:837-842). Допуск — тот же, что у заголовочного пути:
+    // админ 200, ребёнок 403. Проба с анонимного клиента: без токена — 401, иначе тест
+    // мерил бы совпадение с заголовочным путём.
+    [Fact]
+    public async Task GetTutorAvatar_ТокенТолькоВQuery_AccessToken_200и403()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        var tutorId = setup.TutorOf["math"];
+        SeedAvatar(_personas.Get(tutorId, setup.ChildId)!, setup.ChildId);
+        var url = $"/api/users/{setup.ChildId}/child-tutors/{tutorId}/avatar";
+
+        var anon = _hosts.CreateClient();
+        (await anon.GetAsync(url)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        var asAdmin = await anon.GetAsync(url + "?access_token=" + Uri.EscapeDataString(
+            _admin.DefaultRequestHeaders.Authorization!.Parameter!));
+        asAdmin.StatusCode.Should().Be(HttpStatusCode.OK);
+        asAdmin.Content.Headers.ContentType?.MediaType.Should().Be("image/png");
+
+        var asChild = await anon.GetAsync(url + "?access_token=" + Uri.EscapeDataString(
+            setup.Child.DefaultRequestHeaders.Authorization!.Parameter!));
+        asChild.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     // Чужая (взрослая) персона и своя-но-не-репетитор — один 404 tutor_not_found.

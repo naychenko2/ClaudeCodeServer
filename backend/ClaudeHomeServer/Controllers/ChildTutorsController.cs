@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
@@ -53,7 +52,18 @@ public class ChildTutorsController(
 
     // Замок PUT по ключу персоны (static — не по экземпляру контроллера: на один запрос
     // создаётся новый контроллер, а держать нужно пару запросов): см. PutTutor.
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> PutTutorGates = new();
+    // Запись живёт, только пока есть держатель или ожидающий: счётчик ссылок меняется и
+    // запись удаляется под одним GatesLock (хвост ревью X4: словарь не должен расти на
+    // каждую когда-либо правленную персону). Тот же приём, что у KeyedLocks (ImageEditor),
+    // но локально: граница вертикалей default-deny (тот же вывод, что у PluginsToolset.cs:195-196).
+    private static readonly object GatesLock = new();
+    private static readonly Dictionary<string, PutTutorGate> PutTutorGates = new();
+
+    private sealed class PutTutorGate
+    {
+        public readonly SemaphoreSlim Gate = new(1, 1);
+        public int Refs;
+    }
 
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -131,10 +141,24 @@ public class ChildTutorsController(
         // запроса, две отдельные записи стора; без замка два параллельных PUT одной персоны
         // перемешиваются: имя от одного, голос от другого. Ключ — personaId, не экземпляр
         // контроллера: разные персоны не ждут друг друга (тот же образец ключа, что у
-        // ProjectMapApplyService.cs:95-99). Отпущен в finally — отказ любой ветви не оставляет
-        // замок взятым.
-        var gate = PutTutorGates.GetOrAdd(personaId, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync();
+        // ProjectMapApplyService.cs:95-99). Отказ любой ветви отпускает замок в finally —
+        // вместе со ссылкой на запись. Взятие и отпускание записи — под GatesLock: два
+        // запроса одного ключа не получают разные семафоры (хвост ревью X4).
+        PutTutorGate entry;
+        lock (GatesLock)
+        {
+            if (!PutTutorGates.TryGetValue(personaId, out entry!)) PutTutorGates[personaId] = entry = new PutTutorGate();
+            entry.Refs++;
+        }
+        try
+        {
+            await entry.Gate.WaitAsync();
+        }
+        catch
+        {
+            UnrefTutorGate(personaId, entry);
+            throw;
+        }
         try
         {
             ActionResult<Persona> updated;
@@ -184,7 +208,20 @@ public class ChildTutorsController(
         }
         finally
         {
-            gate.Release();
+            entry.Gate.Release();
+            UnrefTutorGate(personaId, entry);
+        }
+    }
+
+    // Отпустить ссылку на замок — под тем же GatesLock, что и взятие. До нуля доходит
+    // только последний: запись удаляется ровно когда её никто не держит и не ждёт. Пока
+    // Refs > 0 ключ отображается на эту запись (новая запись для ключа возможна только
+    // после её удаления), поэтому ждущий всегда стоит на том же семафоре, что державший.
+    private static void UnrefTutorGate(string personaId, PutTutorGate entry)
+    {
+        lock (GatesLock)
+        {
+            if (--entry.Refs == 0) PutTutorGates.Remove(personaId);
         }
     }
 
@@ -225,12 +262,13 @@ public class ChildTutorsController(
             return StatusCode(500, new { code = "avatar_generation_failed", message = "Не удалось сгенерировать аватар репетитора." });
         }
 
-        // Успех сервиса приходит как OkObjectResult (Ok() — PersonasCrudService.cs:794); отказ
-        // формы {error,queued} переводится в {code,message} этой ручки по фактическим ветвям
-        // GenerateAvatarAsync: 404 «персоны нет» (:734) → tutor_not_found; 503 «вертикаль
-        // выключена» (:727) и 400 «нет провайдера для места» (:762) → 503 image_generation_off
-        // (отсутствует не запрос, а возможность генерировать — ADR-014 форма 3); 502 «провайдер
-        // не отдал картинок» (:778) → 502 avatar_generation_failed.
+        // Ветвление ровно по форме результата GenerateAvatarAsync, по её фактическим ветвям:
+        // успех — OkObjectResult (Ok() — PersonasCrudService.cs:794); 404 «персоны нет» (:734)
+        // → 404 tutor_not_found; 502 «провайдер не отдал картинок» (:778) → 502
+        // avatar_generation_failed. Прочее — одна catch-all ветвь ниже: любой другой статус
+        // сервиса (сегодня это 503 «вертикаль выключена» :727 и 400 «нет провайдера для
+        // места» :762) отдаётся как 503 image_generation_off — отсутствует не запрос, а
+        // возможность генерировать (ADR-014 форма 3); новый статус сервиса уйдёт в 503, не в 500.
         if (result is OkObjectResult ok) return Ok(ok.Value);
         if (result is NotFoundResult or NotFoundObjectResult)
             return NotFound(new { code = "tutor_not_found", message = "Эта персона — не репетитор этого ребёнка." });

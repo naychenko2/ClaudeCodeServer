@@ -748,12 +748,19 @@ describe('ChildProfileEditor: «Предметы» — тело, тьютор и
     expect(rows[0].getAttribute('data-error'), 'остальные строки не тронуты').toBeNull();
   });
 
-  it('subject_id_duplicate: id в тексте не назван — краснеет повтор в списке', async () => {
+  it('дубль ключа: сервер отдаёт subject_id_invalid с ключом в «ёлочках» — краснеет строка math', async () => {
     const { host } = await mount(liza({ childProfile: withSubjects(subject('math'), subject('math', { label: 'Алгебра', glyph: 'Ал', color: 'rose' })) }));
     await click(saveBtn(host));
-    await settle(() => pending.get(0)!.reject(httpErr(400, 'subject_id_duplicate', 'Два предмета с одним ключом. Обнови страницу и попробуй ещё раз.')));
+    // Реальный контракт валидатора: повтор ключа — тот же subject_id_invalid, id назван в message
+    // («Ключ предмета «math» недопустим: … без повторов в списке.») — его разбирает та же ветка.
+    await settle(() => pending.get(0)!.reject(httpErr(400, 'subject_id_invalid', 'Ключ предмета «math» недопустим: строчные буквы, цифры и «-», длина 1..32, без повторов в списке.')));
+    const n = notice(host);
+    expect(n).toBeTruthy();
+    expect(n!.textContent).toContain('Ключ предмета «math» недопустим'); // message — как есть
     expect(tabSelected(host, 'Предметы')).toBe(true);
-    expect(subjectRows(host)[1].getAttribute('data-error'), 'повтор — вторая строка').toBe('true');
+    const rows = subjectRows(host);
+    expect(rows[0].getAttribute('data-error'), 'подсветка по id: краснеют обе строки дубля').toBe('true');
+    expect(rows[1].getAttribute('data-error'), 'повтор — вторая строка').toBe('true');
   });
 
   it('отказ, не называющий предмета, красной строки не ставит', async () => {
@@ -952,6 +959,23 @@ describe('ChildProfileEditor: «Предметы» — база знаний и 
     const rows = subjectRows(host);
     expect(rows[1].getAttribute('data-error'), 'предмет с новой привязкой').toBe('true');
     expect(rows[0].getAttribute('data-error'), 'не тронутый предмет не краснеет').toBeNull();
+  });
+
+  it('400 dataset_not_attachable с названной базой: две новые привязки — краснеет строка названной базы, не первая', async () => {
+    // Валидатор отвергает первого неаттачаемого (в порядке тела), но message называет базу
+    // («ds-bad») — краснеть должна её строка, а не первая новая привязка (math → ds-math).
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math'), subject('istoriya', { label: 'История', glyph: 'Ист', color: 'accent' })) }));
+    await clickTab(host, 'Предметы');
+    await openSubject(host, 'Математика');
+    await changeSelect(knowledgeSelect(host)!, 'ds-math');
+    await openSubject(host, 'История');
+    await changeSelect(knowledgeSelect(host)!, 'ds-bad');
+    await click(saveBtn(host));
+    await settle(() => pending.get(0)!.reject(httpErr(400, 'dataset_not_attachable', 'База знаний «ds-bad» не найдена среди доступных датасетов или не может быть привязана к предмету.')));
+    expect(tabSelected(host, 'Предметы'), 'человек видит красную строку').toBe(true);
+    const rows = subjectRows(host);
+    expect(rows[1].getAttribute('data-error'), 'названная база — привязка второго предмета').toBe('true');
+    expect(rows[0].getAttribute('data-error'), 'первая новая привязка не краснеет').toBeNull();
   });
 
   it('новый несохранённый предмет: вместо блока файлов — строка о сохранении, ноль запросов materials', async () => {

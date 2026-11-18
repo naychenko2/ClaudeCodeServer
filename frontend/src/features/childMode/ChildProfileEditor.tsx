@@ -121,7 +121,6 @@ const REJECT_TEXT: Record<string, string> = {
   subject_label_invalid: 'Название предмета — от 1 до 40 символов.',
   subject_glyph_invalid: 'Глиф — от 1 до 3 символов.',
   subject_color_invalid: 'Такого цвета нет в палитре. Выбери один из пяти.',
-  subject_id_duplicate: 'Два предмета с одним ключом. Обнови страницу и попробуй ещё раз.',
   model_not_concrete: 'У предмета не задана конкретная модель. Выбери её из списка.',
   model_unpriced: 'У модели нет цены — бюджет не смог бы ограничить расход. Выбери другую.',
   route_risk_unacknowledged: 'Этот маршрут требует согласия: отметь «Понимаю риск и разрешаю этот маршрут».',
@@ -287,30 +286,28 @@ function subjectIdOf(message: string | undefined, subjects?: ChildSubjectAdmin[]
   if (!m) return undefined;
   return subjects?.some((s) => s.id === m[1]) ? m[1] : undefined;
 }
-// subject_id_duplicate: id в тексте не назван (двух одинаковых не видно) — повтор ищем в списке.
-function duplicateSubjectId(subjects?: ChildSubjectAdmin[]): string | undefined {
-  const seen = new Set<string>();
-  for (const s of subjects ?? []) {
-    if (!s.id) continue;
-    if (seen.has(s.id)) return s.id;
-    seen.add(s.id);
-  }
-  return undefined;
-}
-
-// Отказ знания (dataset_not_attachable / knowledge_unavailable) называет базу, а не предмет
-// (ChildProfileValidator.cs:201-204), а knowledge_unavailable не называет ничего. Предмет тот же,
-// на чём смотрит валидатор: новая привязка против серверной (или предмета нет на сервере вовсе).
-// Порядок поиска — порядок тела: валидатор отвергает первого такого предмета
-// (ChildProfileValidator.cs:183-205), и краснеет та же строка.
-function knowledgeRejectSubjectId(d: Draft, server: ServerSubject[]): string | undefined {
-  for (const s of d.subjects ?? []) {
+// Отказ знания называет в «ёлочках» базу, а не предмет: dataset_not_attachable —
+// «База знаний «{datasetId}» не найдена…» или «База знаний «{name}» не может быть привязана…»
+// (ChildProfileValidator, код dataset_not_attachable); knowledge_unavailable не называет ничего.
+// Если в message есть имя в «ёлочках» — ищем предмет с новой привязкой, чей datasetId ему равен:
+// черновик хранит только datasetId (ChildSubjectKnowledge, types.ts), названия базы в черновике
+// нет — отказ, называющий название, уходит к общему правилу. Не нашли (или knowledge_unavailable) —
+// тот же предмет, что отвергает валидатор: новая привязка против серверной (или предмета нет на
+// сервере вовсе), в порядке тела.
+const DATASET_REF_RE = /«([^»]+)»/;
+function knowledgeRejectSubjectId(d: Draft, known: ServerSubject[], message?: string): string | undefined {
+  const withNewBinding = (d.subjects ?? []).filter((s) => {
     const want = s.knowledge?.datasetId;
-    if (!want) continue;
-    const live = server.find((x) => x.id === s.id);
-    if (!live || live.knowledgeId !== want) return s.id;
+    if (!want) return false;
+    const live = known.find((x) => x.id === s.id);
+    return !live || live.knowledgeId !== want;
+  });
+  const named = message ? DATASET_REF_RE.exec(message)?.[1] : undefined;
+  if (named) {
+    const hit = withNewBinding.find((s) => s.knowledge?.datasetId === named);
+    if (hit) return hit.id;
   }
-  return undefined;
+  return withNewBinding[0]?.id;
 }
 
 // Тело PUT: выключенный режим — `{ enabled: false }` (ADR-041, ручка №10); включённый — ChildProfileDto.
@@ -454,11 +451,11 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
       // Отказ, называющий предмет, красит его строку и приводит человека туда, где эта строка
       // видна, — на вкладке «Режим и времени» красная рамка была бы не видна (тот же смысл,
       // что возврат на вкладку с невалидными полями времени).
-      // Отказ знания не называет предмета в тексте — его ищем по новой привязке (та же мера,
-      // что у валидатора); остальные отказы — по id в кавычках и по повтору, как раньше.
+      // Отказ знания называет базу, а не предмета — его ищем по новой привязке, а если message
+      // называет базу в «ёлочках» — по ней (та же мера, что у валидатора); остальные отказы —
+      // по id в кавычках.
       const subjectId = subjectIdOf(server, d.subjects)
-        ?? (code === 'subject_id_duplicate' ? duplicateSubjectId(d.subjects) : undefined)
-        ?? (code === 'dataset_not_attachable' || code === 'knowledge_unavailable' ? knowledgeRejectSubjectId(d, serverSubjects) : undefined);
+        ?? (code === 'dataset_not_attachable' || code === 'knowledge_unavailable' ? knowledgeRejectSubjectId(d, serverSubjects, server) : undefined);
       setReject({ text: err?.status === 403 ? FORBIDDEN_TEXT : (code && REJECT_TEXT[code]) || REJECT_FALLBACK, server, subjectId });
       if (subjectId) setTab('subjects');
       setSaving(false);

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
@@ -49,6 +50,10 @@ public class ChildTutorsController(
     // Пределы списков «Обязательно / Никогда» (ADR-041 редакция 3 §22): до 12 пунктов по 300 символов.
     private const int MaxRuleCount = 12;
     private const int MaxRuleLength = 300;
+
+    // Замок PUT по ключу персоны (static — не по экземпляру контроллера: на один запрос
+    // создаётся новый контроллер, а держать нужно пару запросов): см. PutTutor.
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> PutTutorGates = new();
 
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -122,48 +127,65 @@ public class ChildTutorsController(
             ? null
             : new PersonaContract { Character = req.Character, MustDo = mustDo, MustNot = mustNot };
 
-        ActionResult<Persona> updated;
+        // Замок по ключу персоны (минор ревью Т2c): «обновление + голос» — две мутации одного
+        // запроса, две отдельные записи стора; без замка два параллельных PUT одной персоны
+        // перемешиваются: имя от одного, голос от другого. Ключ — personaId, не экземпляр
+        // контроллера: разные персоны не ждут друг друга (тот же образец ключа, что у
+        // ProjectMapApplyService.cs:95-99). Отпущен в finally — отказ любой ветви не оставляет
+        // замок взятым.
+        var gate = PutTutorGates.GetOrAdd(personaId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
         try
         {
-            updated = await crud.UpdateAsync(id, personaId,
-                new UpdatePersonaRequest(
-                    Name: req.Name, Role: null, Description: null, SystemPrompt: null,
-                    // Model: null — и поле model тела игнорируется: маршрут репетитора живёт
-                    // в записи предмета, Persona.Model остаётся пустым (редакция 2 §12).
-                    Model: null, Effort: null, Scope: null, ProjectId: null, Color: null,
-                    Greeting: req.Greeting, MemoryEnabled: null,
-                    Contract: contract,
-                    Gender: req.Gender),
-                callerSessionId: null);
-        }
-        catch (Exception e)
-        {
-            logger.LogWarning(e, "Детский режим: правка репетитора {Persona} не удалась (ребёнок {Owner})", personaId, id);
-            return StatusCode(500, new { code = "tutor_update_failed", message = "Не удалось изменить персону-репетитора." });
-        }
-        // Отказ сервиса пробрасывается как есть (та же форма, что у PUT персоны): достижим здесь
-        // только потолок размера контракта — он про текст характера, не про списки.
-        // Результат без значения — конвертированный ActionResult из UpdateAsync (Value null,
-        // Result — исходный отказ).
-        if (updated.Value is not { } persona)
-            return updated.Result ?? new StatusCodeResult(500);
-
-        // Голос — отдельная мутация того же сервиса (как PUT /{id}/voice): после валидации
-        // отказа уже не будет; событие «updated» приходит по её итогу — с финальным состоянием.
-        if (req.Voice is not null)
-        {
+            ActionResult<Persona> updated;
             try
             {
-                await crud.SetVoiceAsync(id, personaId, req.Voice);
+                updated = await crud.UpdateAsync(id, personaId,
+                    new UpdatePersonaRequest(
+                        Name: req.Name, Role: null, Description: null, SystemPrompt: null,
+                        // Model: null — и поле model тела игнорируется: маршрут репетитора живёт
+                        // в записи предмета, Persona.Model остаётся пустым (редакция 2 §12).
+                        Model: null, Effort: null, Scope: null, ProjectId: null, Color: null,
+                        Greeting: req.Greeting, MemoryEnabled: null,
+                        Contract: contract,
+                        Gender: req.Gender),
+                    callerSessionId: null);
             }
             catch (Exception e)
             {
-                logger.LogWarning(e, "Детский режим: голос репетитора {Persona} не изменён (ребёнок {Owner})", personaId, id);
-                return StatusCode(500, new { code = "tutor_update_failed", message = "Не удалось изменить голос репетитора." });
+                logger.LogWarning(e, "Детский режим: правка репетитора {Persona} не удалась (ребёнок {Owner})", personaId, id);
+                return StatusCode(500, new { code = "tutor_update_failed", message = "Не удалось изменить персону-репетитора." });
             }
-        }
+            // У успеха UpdateAsync Value пуст: его Ok(persona) (PersonasCrudService.cs:409, хелпер
+            // Ok — OkObjectResult, :60) конвертируется в ActionResult<Persona> через Result
+            // (ActionResultOfT.cs), Value остаётся null. Проверка по Value считала бы успех
+            // отказом, и голос в теле не применялся бы никогда (минор ревью Т2c). Успех —
+            // OkObjectResult, persona — его значение; отказ сервиса пробрасывается как есть
+            // (та же форма, что у PUT персоны): достижим здесь только потолок размера контракта.
+            if (updated.Result is not OkObjectResult ok || ok.Value is not Persona persona)
+                return updated.Result ?? new StatusCodeResult(500);
 
-        return Ok(persona);
+            // Голос — отдельная мутация того же сервиса (как PUT /{id}/voice): после валидации
+            // отказа уже не будет; событие «updated» приходит по её итогу — с финальным состоянием.
+            if (req.Voice is not null)
+            {
+                try
+                {
+                    await crud.SetVoiceAsync(id, personaId, req.Voice);
+                }
+                catch (Exception e)
+                {
+                    logger.LogWarning(e, "Детский режим: голос репетитора {Persona} не изменён (ребёнок {Owner})", personaId, id);
+                    return StatusCode(500, new { code = "tutor_update_failed", message = "Не удалось изменить голос репетитора." });
+                }
+            }
+
+            return Ok(persona);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>
@@ -203,10 +225,12 @@ public class ChildTutorsController(
             return StatusCode(500, new { code = "avatar_generation_failed", message = "Не удалось сгенерировать аватар репетитора." });
         }
 
-        // Ok() сервиса приходит как OkObjectResult напрямую (та же обёртка, что пробрасывает
-        // PutTutor); отказ сервисной формы {error,queued} переводится в {code,message} этой
-        // ручки: 502 — провайдер не отдал картинок, остальной отказ генерации (400 «нет
-        // провайдера для места», 503 «вертикаль выключена») — 503 с причиной.
+        // Успех сервиса приходит как OkObjectResult (Ok() — PersonasCrudService.cs:794); отказ
+        // формы {error,queued} переводится в {code,message} этой ручки по фактическим ветвям
+        // GenerateAvatarAsync: 404 «персоны нет» (:734) → tutor_not_found; 503 «вертикаль
+        // выключена» (:727) и 400 «нет провайдера для места» (:762) → 503 image_generation_off
+        // (отсутствует не запрос, а возможность генерировать — ADR-014 форма 3); 502 «провайдер
+        // не отдал картинок» (:778) → 502 avatar_generation_failed.
         if (result is OkObjectResult ok) return Ok(ok.Value);
         if (result is NotFoundResult or NotFoundObjectResult)
             return NotFound(new { code = "tutor_not_found", message = "Эта персона — не репетитор этого ребёнка." });
@@ -259,8 +283,9 @@ public class ChildTutorsController(
     /// Выбор кандидата как аватар репетитора (Т2c2, путь И5 №12): тот же сервис, что у выбора
     /// аватара персоны (PersonasCrudService.SelectAvatarAsync), ключ — ребёнок. Строки расхода
     /// нет: выбор сохранённого кандидата — не генерация. Два одновременных выбора — последний
-    /// выигрывает: стор персон пишет запись атомарно (PersonaManager.Update). Отказы сервиса
-    /// пробрасываются как есть (та же форма, что у персоны select-ручки).
+    /// выигрывает: стор персон пишет запись атомарно (PersonaManager.Update). Отказ сервиса
+    /// переводится в {code,message} этой ручки (400 avatar_file_missing, 404
+    /// avatar_candidate_not_found) — та же форма, что у generate/upload, а не сервисный {error}.
     /// </summary>
     [HttpPost("child-tutors/{personaId}/avatar/select")]
     [Authorize(Policy = AdminByStoreRequirement.PolicyName)]
@@ -283,9 +308,18 @@ public class ChildTutorsController(
             logger.LogWarning(e, "Детский режим: выбор аватара репетитора {Persona} не удался (ребёнок {Owner})", personaId, id);
             return StatusCode(500, new { code = "avatar_select_failed", message = "Не удалось выбрать аватар репетитора." });
         }
-        // Результат без значения — конвертированный ActionResult сервиса (Value null,
-        // Result — исходный ответ), та же конверсия, что у PutTutor.
-        return result.Result ?? new StatusCodeResult(500);
+        // У успеха Value пуст (Ok() — PersonasCrudService.cs:818, та же конверсия, что у PutTutor):
+        // персона — значение исходного OkObjectResult. Отказ сервисной формы {error} в эту
+        // ручку фронту не показывается (read rejectText по body.message, ChildTutorCard.tsx:70-74),
+        // он переводится в {code,message}, как у generate/upload: пустой файл тела — 400
+        // avatar_file_missing (:802), нет файла кандидата на диске — 404 avatar_candidate_not_found (:806).
+        if (result.Result is OkObjectResult ok) return Ok(ok.Value);
+        return (result.Result as ObjectResult)?.StatusCode switch
+        {
+            400 => BadRequest(new { code = "avatar_file_missing", message = "Файл кандидата не указан." }),
+            404 => NotFound(new { code = "avatar_candidate_not_found", message = "Кандидат не найден." }),
+            _ => StatusCode(500, new { code = "avatar_select_failed", message = "Не удалось выбрать аватар репетитора." }),
+        };
     }
 
     /// <summary>

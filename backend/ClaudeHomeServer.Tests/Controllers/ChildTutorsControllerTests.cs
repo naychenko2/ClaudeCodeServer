@@ -4,7 +4,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
@@ -31,7 +33,18 @@ namespace ClaudeHomeServer.Tests.Controllers;
 [Trait("Category", "Host")]
 public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTests.Hosts>
 {
-    public sealed class Hosts : TestWebApplicationFactory { }
+    /// <summary>Хост с подменой рассылки событий: барьерный broadcaster для теста гонки
+    /// (PutTutor_Parallel_NoMixedFields). ExtraServices применяется после встроенных
+    /// регистраций и перетирает их (TestWebApplicationFactory.cs:48, образец подмены —
+    /// SpendControllerTests.cs:113). Прочие тесты класса событий не читают — no-op
+    /// рассылка им не мешает.</summary>
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+        internal GateBroadcaster Barrier { get; } = new();
+
+        public Hosts() => ExtraServices = s =>
+            s.AddSingleton<ISessionBroadcaster>(Barrier);
+    }
 
     private readonly Hosts _hosts;
     private readonly HttpClient _admin;
@@ -361,28 +374,126 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
         StoredTutor(setup).Contract!.Character.Should().Be("Характер");
     }
 
+    // Голос в теле PUT применяется (хвост Т2c, найден при построении гонки): прежняя проверка
+    // «updated.Value null» считала успех UpdateAsync отказом — его Ok() обёрнут в
+    // ActionResult<Persona> (Value null, Result — исходный Ok, ActionResultOfT.cs в dotnet/aspnetcore)
+    // — и SetVoiceAsync не выполнялся никогда.
+    [Fact]
+    public async Task PutTutor_ГолосПрименяется()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        var resp = await _admin.PutAsJsonAsync($"/api/users/{setup.ChildId}/child-tutors/{setup.TutorOf["math"]}",
+            new { name = "Марья Ивановна", voice = new { voice = "masha", role = "friendly" } });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var persona = StoredTutor(setup);
+        persona.Name.Should().Be("Марья Ивановна");
+        persona.Voice?.Voice.Should().Be("masha");
+        persona.Voice?.Role.Should().Be("friendly");
+    }
+
     // ── Конкурентность и автоматика ─────────────────────────────────────────
 
-    // Два PUT целиком: стор персон под замком (PersonaManager.Update — один _saveLock),
-    // итог гонки — одна из двух записей целиком, не смесь полей из разных вызовов.
+    // Два PUT одной персоны — имя и голос (минор ревью Т2c). Голос — вторая мутация после
+    // обновления (PersonasCrudService.SetVoiceAsync), и без замка пары «обновление + голос»
+    // перемешиваются: имя от одного запроса, голос от другого. Гонка строится барьером на
+    // событии «updated» — последней точке UpdateAsync после записи стора (PersonasCrudService.cs:406):
+    // A удержан ровно между своей записью и своим голосом; барер держит только первое событие,
+    // поэтому начатый вслед B без замка ничем не держится и проходит свою пару целиком.
+    // Без замка (мутация «снять замок»): B пишет имя B и голос B, пока A стоит на барьере, затем
+    // A дописывает голос A — итог имя B + голос A, смесь. Краснеют обе проверки: bFirst (B прошёл,
+    // хотя ждал бы замка) и целость записи. С замком (PutTutorGates по personaId): B ждёт
+    // окончания A и проходит последним целиком — итог целая запись B.
     [Fact]
     public async Task PutTutor_Parallel_NoMixedFields()
     {
         var setup = SetupChild(("math", "Математика"));
-        var bodyA = new { name = "Имя А", character = "Характер А", greeting = "Привет А" };
-        var bodyB = new { name = "Имя Б", character = "Характер Б", greeting = "Привет Б" };
+        var tutorId = setup.TutorOf["math"];
+        var url = $"/api/users/{setup.ChildId}/child-tutors/{tutorId}";
+        var bodyA = new { name = "Имя А", character = "Характер А", greeting = "Привет А",
+            voice = new { voice = "masha", role = "friendly" } };
+        var bodyB = new { name = "Имя Б", character = "Характер Б", greeting = "Привет Б",
+            voice = new { voice = "kirill", role = "strict" } };
 
-        var putA = _admin.PutAsJsonAsync($"/api/users/{setup.ChildId}/child-tutors/{setup.TutorOf["math"]}", bodyA);
-        var putB = _admin.PutAsJsonAsync($"/api/users/{setup.ChildId}/child-tutors/{setup.TutorOf["math"]}", bodyB);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _hosts.Barrier.HoldNext(tutorId, release);
+        var putA = _admin.PutAsJsonAsync(url, bodyA);
+        (await Task.WhenAny(_hosts.Barrier.SeenTask, Task.Delay(10_000))).Should().Be(_hosts.Barrier.SeenTask,
+            "запрос A не дошёл до рассылки «updated» — гонка не построена");
+
+        var putB = _admin.PutAsJsonAsync(url, bodyB);
+        // С замком B стоит на PutTutorGates, пока A держится на барьере, и за 3 с не проходит;
+        // без замка (мутация) B проходит свою пару целиком — assertion красный.
+        var bFirst = await Task.WhenAny(putB, Task.Delay(3_000));
+        bFirst.Should().NotBe(putB,
+            "пока A держится на барьере, B обязан ждать своей очереди на замке персоны");
+        release.SetResult();
+        _hosts.Barrier.Finish();
         await Task.WhenAll(putA, putB);
+
         (await putA).StatusCode.Should().Be(HttpStatusCode.OK);
         (await putB).StatusCode.Should().Be(HttpStatusCode.OK);
 
         var persona = StoredTutor(setup);
         persona.Contract!.Character.Should().BeOneOf("Характер А", "Характер Б");
-        var wholeA = persona.Name == "Имя А" && persona.Contract.Character == "Характер А" && persona.Greeting == "Привет А";
-        var wholeB = persona.Name == "Имя Б" && persona.Contract.Character == "Характер Б" && persona.Greeting == "Привет Б";
-        (wholeA || wholeB).Should().BeTrue("два одновременных PUT дают одну целую запись, не смесь полей");
+        var wholeA = persona.Name == "Имя А" && persona.Contract.Character == "Характер А"
+            && persona.Greeting == "Привет А" && persona.Voice?.Voice == "masha";
+        var wholeB = persona.Name == "Имя Б" && persona.Contract.Character == "Характер Б"
+            && persona.Greeting == "Привет Б" && persona.Voice?.Voice == "kirill";
+        (wholeA || wholeB).Should().BeTrue(
+            $"два одновременных PUT дают одну целую запись, не смесь полей: " +
+            $"name={persona.Name}, voice={persona.Voice?.Voice ?? "нет"}");
+    }
+
+    /// <summary>Барьер для теста гонки: первый ToOwner события «updated» указанной персоны
+    /// помечает SeenTask и держится до release от теста, всё остальное проходит как no-op.
+    /// Точка держания — внутри UpdateAsync на рассылке после записи стора
+    /// (PersonasCrudService.cs:406): запрос, стоящий здесь, уже записал обновление, но до
+    /// голоса ещё не дошёл. SeenTask нужен тесту, чтобы убедиться, что A дошёл до этой точки,
+    /// прежде чем пускать B: без такого сигнала гонка строилась бы вслепую (первая версия
+    /// барьера ждала гейт, который никто не заполнял, и проверяла несуществующее событие).
+    /// Реализация ISessionBroadcaster — та же, что у TestSessionBroadcaster (тот же шов).</summary>
+    internal sealed class GateBroadcaster : ISessionBroadcaster
+    {
+        private TaskCompletionSource _seen = NewGate();
+        private TaskCompletionSource? _release;
+        private string? _personaId;
+
+        private static TaskCompletionSource NewGate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Держать ближайшую рассылку об этой персоне: SeenTask — что она дошла до шва,
+        /// release — чем тест её отпускает.</summary>
+        public void HoldNext(string personaId, TaskCompletionSource release)
+        {
+            _personaId = personaId;
+            _release = release;
+            _seen = NewGate();
+        }
+
+        public void Finish()
+        {
+            _personaId = null;
+            _release = null;
+        }
+
+        public Task SeenTask => _seen.Task;
+
+        public async Task ToOwner(string ownerId, ServerMessage message)
+        {
+            if (message is not PersonasChangedMessage { Action: "updated", PersonaId: var pid }) return;
+            var release = _release;
+            // Держим ровно первое событие: второе — того же запроса (голос) или соседнего
+            // (B без замка) — проходит. Иначе барер держал бы оба запроса, и после release
+            // их голоса соревновались бы молча: итог — случайный, не смесь и не целая запись.
+            if (release is null || pid != _personaId || _seen.Task.IsCompleted) return;
+            _seen.TrySetResult();
+            await release.Task;
+        }
+
+        public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 
     // Путь №11: автоматика персон (И1 п.18) репетитору ребёнка не создаётся: админской
@@ -570,5 +681,33 @@ public class ChildTutorsControllerTests : IClassFixture<ChildTutorsControllerTes
         var controller = ActivatorUtilities.CreateInstance<ChildTutorsController>(_hosts.Services);
         controller.GetTutorAvatarCandidate(setup.ChildId, tutor.Id, "../x.png")
             .Should().BeOfType<NotFoundResult>();
+    }
+
+    // ── POST child-tutors/{personaId}/avatar/select — форма отказа (минор ревью Т2c2) ──
+
+    // Сервисный отказ {error} (PersonasCrudService.cs:802,:806) фронту не показывается:
+    // карточка читает code/message (ChildTutorCard.tsx:70-74). Ручка переводит его в
+    // {code,message}, как generate/upload: пустой файл — 400 avatar_file_missing, нет
+    // файла кандидата на диске — 404 avatar_candidate_not_found. То, что code именно эти,
+    // и есть проверка перевода: без него в теле остался бы сервисный {error} (прежняя
+    // строка `return result.Result ?? new StatusCodeResult(500);`), а 400 от MVC-модели
+    // дал бы ValidationProblemDetails без code — ни та, ни другая ветвь тест не проходят.
+    [Fact]
+    public async Task SelectTutorAvatar_ОтказФормаCodeMessage()
+    {
+        var setup = SetupChild(("math", "Математика"));
+        var url = $"/api/users/{setup.ChildId}/child-tutors/{setup.TutorOf["math"]}/avatar/select";
+
+        var noFile = await _admin.PostAsJsonAsync(url, new { file = "" });
+        noFile.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var noFileBody = await JsonAsync(noFile);
+        CodeOf(noFileBody).Should().Be("avatar_file_missing");
+        noFileBody.GetProperty("message").GetString().Should().NotBeNullOrWhiteSpace();
+
+        var noCandidate = await _admin.PostAsJsonAsync(url, new { file = "cand-нет-такого.png" });
+        noCandidate.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var noCandidateBody = await JsonAsync(noCandidate);
+        CodeOf(noCandidateBody).Should().Be("avatar_candidate_not_found");
+        noCandidateBody.GetProperty("message").GetString().Should().NotBeNullOrWhiteSpace();
     }
 }

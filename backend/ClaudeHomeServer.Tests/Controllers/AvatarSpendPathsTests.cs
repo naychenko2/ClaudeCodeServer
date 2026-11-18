@@ -816,12 +816,19 @@ public class ChildTutorAvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
     // Допуск тот же, что у остальных ручек репетитора (И5): ребёнок — 403 (closed-периметр),
     // чужая персона — 404 tutor_not_found (существование чужой не раскрываем); отказанный
     // вызов ничего не сгенерировал
+    // Проверка расхода — по снимку ДО вызовов и только по записям после него: CapturingSpend
+    // один на весь класс (общий экземпляр фабрики по IClassFixture), строки соседних тестов
+    // этого класса в общем списке есть всегда, и проверка по всему списку держала бы тест на
+    // чужих записях: сегодня ни один тест класса не списывает на ребёнка, но любой новый
+    // такой тест сделал бы этот красный без всякой связи с его вызовами
+    // (тот же приём снимка before, что у тестов выше этого файла).
     [Fact]
     public async Task АватарРепетитора_Ребёнок403_ЧужаяПерсона404()
     {
         var tutorId = SetupChildTutor();
         var child = _factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        var before = ImageRecords().Count;
 
         var asChild = await child.PostAsJsonAsync(
             $"/api/users/{ChildId}/child-tutors/{tutorId}/avatar/generate", new { prompt = "учительница" });
@@ -834,6 +841,6 @@ public class ChildTutorAvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
         asForeign.StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await JsonAsync(asForeign)).GetProperty("code").GetString().Should().Be("tutor_not_found");
 
-        ImageRecords().Any(r => r.OwnerId == ChildId).Should().BeFalse("отказанный вызов не дошёл до генерации");
+        ImageRecords().Skip(before).Should().BeEmpty("отказанный вызов не дошёл до генерации");
     }
 }

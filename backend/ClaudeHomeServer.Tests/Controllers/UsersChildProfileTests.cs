@@ -760,6 +760,161 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         }
     }
 
+    // --- перезакрепление маршрута предмета (Т2e, решение Андрея 18.11) ---
+
+    /// <summary>Тело формы с предметами заданных пар (id, поставщик, модель, согласие):
+    /// список тела авторитетен (тот же формат, что у теста «предмет удалён — чат цел»), окно
+    /// «Уроков» действительное «сейчас» — детский чат должен пройти И3 при создании.</summary>
+    private static Dictionary<string, object?> RepinBody(params (string Id, string ProviderKey, string Model, bool? Ack)[] subjects)
+    {
+        var local = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Moscow).DateTime;
+        return new Dictionary<string, object?>
+        {
+            ["enabled"] = true,
+            ["providerKey"] = KidsKey,
+            ["model"] = "sonnet",
+            ["spaces"] = new Dictionary<string, object>
+            {
+                ["lessons"] = new
+                {
+                    windows = new[] { new { from = local.AddHours(-2).ToString("HH:mm", CultureInfo.InvariantCulture), to = local.AddHours(2).ToString("HH:mm", CultureInfo.InvariantCulture) } },
+                    dailyMinutes = 40,
+                },
+            },
+            ["dailyBudgetUsd"] = 2,
+            ["monthlyBudgetUsd"] = 40,
+            ["subjects"] = subjects.Select(s => new Dictionary<string, object?>
+            {
+                ["id"] = s.Id, ["label"] = "Предмет " + s.Id, ["glyph"] = "×", ["color"] = "info",
+                ["providerKey"] = s.ProviderKey, ["model"] = s.Model,
+                ["acknowledgeRouteRisk"] = s.Ack,
+            }).ToArray(),
+        };
+    }
+
+    /// <summary>Ребёнок с предметами и согласованными правилами: включение → PUT с предметами
+    /// (провижн тьюторов, как у админа на живой ручке) → запись согласия правил — без него
+    /// чат не создаётся (RulesPending, тот же приём, что у SeedRules в тесте удаления).</summary>
+    private async Task<string> EnableChildWithSubjects(string name, params (string Id, string ProviderKey, string Model, bool? Ack)[] subjects)
+    {
+        var id = await NewContainerUser(name);
+        var (status, _) = await PutAsync(id, RepinBody(subjects));
+        status.Should().Be(HttpStatusCode.OK);
+        SeedRules(id, RulesT1, "правила согласованы");
+        return id;
+    }
+
+    /// <summary>Чат «Уроков» предмета, созданный клиентом ребёнка (логин — по имени, как в
+    /// тесте удаления), — и его закреплённые при создании поля: админ детский чат не создаёт.</summary>
+    private async Task<Session> CreateChildChatAsync(string childName, string subjectId)
+    {
+        var client = _hosts.CreateAuthenticatedClient(childName, KidsPassword);
+        (await ChildTestSubjects.CreateChat(client, subjectId)).EnsureSuccessStatusCode();
+        return ChildChatOf(_users.FindByUsername(childName)!.Id, subjectId);
+    }
+
+    /// <summary>Живой чат ребёнка с этим предметом — ровно один (реестр стора, не ответ ручки).</summary>
+    private Session ChildChatOf(string childId, string subjectId) =>
+        _hosts.Services.GetRequiredService<SessionManager>().GetAll()
+            .Single(s => s.ChildSpace is not null && s.ChildSubject == subjectId && s.OwnerId == childId);
+
+    [Fact]
+    public async Task PutProfile_SubjectModelChanged_ChatsGetNewModel_OtherSubjectsAndChildrenUnchanged()
+    {
+        // Т2e (c1): смена модели предмета перезакрепляет его чаты. Отбор точный: только чаты
+        // этого ребёнка этого предмета — соседний «math» того же ребёнка и «russian» другого
+        // ребёнка (id предмета — slug и повторяется между детьми) не тронуты.
+        // UpdatedAt не двигается: маршрут — настройка чата, а не активность (инвариант роли).
+        var kid = await EnableChildWithSubjects("kid-repin-model",
+            ("russian", KidsKey, "sonnet", null), ("math", KidsKey, "sonnet", null));
+        var other = await EnableChildWithSubjects("kid-repin-other", ("russian", KidsKey, "sonnet", null));
+
+        var russianChat = await CreateChildChatAsync("kid-repin-model", "russian");
+        var mathChat = await CreateChildChatAsync("kid-repin-model", "math");
+        var otherChat = await CreateChildChatAsync("kid-repin-other", "russian");
+        var before = (russianChat.UpdatedAt, mathChat.UpdatedAt, otherChat.UpdatedAt);
+
+        var (status, _) = await PutAsync(kid, RepinBody(("russian", KidsKey, "opus", null), ("math", KidsKey, "sonnet", null)));
+        status.Should().Be(HttpStatusCode.OK);
+
+        var sessions = _hosts.Services.GetRequiredService<SessionManager>();
+        sessions.GetById(russianChat.Id)!.Model.Should().Be("opus", "чат предмета продолжает на новой модели");
+        sessions.GetById(russianChat.Id)!.Provider.Should().Be(KidsKey, "та же запись пула — тот же профиль");
+        sessions.GetById(russianChat.Id)!.PersonaId.Should().Be(StoredSubject(kid, "russian").TutorPersonaId,
+            "репетитор предмета не изменился");
+        sessions.GetById(mathChat.Id)!.Model.Should().Be("sonnet", "предмет без смены маршрута не перезакрепляется");
+        sessions.GetById(otherChat.Id)!.Model.Should().Be("sonnet",
+            "тот же slug у другого ребёнка не тронут: перезакрепление по владельцу");
+
+        sessions.GetById(russianChat.Id)!.UpdatedAt.Should().Be(before.Item1, "перезакрепление не двигатель активности");
+        sessions.GetById(mathChat.Id)!.UpdatedAt.Should().Be(before.Item2);
+        sessions.GetById(otherChat.Id)!.UpdatedAt.Should().Be(before.Item3);
+    }
+
+    [Fact]
+    public async Task PutProfile_SubjectProviderChanged_ChatsNotRepinned_UntilTranscriptMove()
+    {
+        // Т2e (сторож границы, по решению Егора): сменился поставщик (пул → deepseek, с согласием) —
+        // чаты НЕ перезакрепляются: транскрипт CLI остаётся в профиле записи пула, следующий ход
+        // не нашёл бы его --resume в профиле deepseek — голая перезапись сломала бы чат вместо
+        // продолжения (llm-providers.md, «смена провайдера у начатого чата»). До Т2e2 (явный перенос
+        // транскрипта) ход такого чата отказывает сверкой И1-бис — это проверяем прямо на гейте.
+        var kid = await EnableChildWithSubjects("kid-repin-provider", ("russian", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-repin-provider", "russian");
+
+        var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
+        status.Should().Be(HttpStatusCode.OK);
+        StoredSubject(kid, "russian").Model.Should().Be("deepseek-v4-pro", "маршрут профиля изменён");
+
+        var live = _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!;
+        live.Model.Should().Be("sonnet", "чаты предмета при смене поставщика не перезакрепляются");
+        live.Provider.Should().Be(KidsKey);
+        _hosts.Services.GetRequiredService<IChildModeGate>().LaunchMismatch(kid, live)
+            .Should().Be("поставщик чата не совпадает с поставщиком профиля",
+                "до Т2e2 такой чат не стартует — отказ сверки И1-бис, а не тихая работа на старом профиле");
+    }
+
+    [Fact]
+    public async Task Repin_ParallelPuts_ChatsMatchFinalProfile()
+    {
+        // Т2e (c3): два PUT одного ребёнка. Первый записал свой маршрут (russian→opus) и встал
+        // внутри провижна нового предмета «art» — на вещании его создания, то есть ПОСЛЕ записи
+        // профиля и ДО перезакрепления; в этом окне второй PUT дошёл целиком (russian→haiku,
+        // «art» из списка убран) и перезакрепил чаты. Первый продолжается после него и берёт
+        // значения ЖИВОГО профиля, а не своего тела: чаты остаются при финальном профиле.
+        // Мутация «брать поля из снимка до замка» — первый дописывает свой «sonnet» после
+        // второго: чаты при значении старого запроса, тест красный.
+        var kid = await EnableChildWithSubjects("kid-repin-race", ("russian", KidsKey, "sonnet", null));
+        var chat = await CreateChildChatAsync("kid-repin-race", "russian");
+
+        _hosts.BroadcasterStub.ArmCreateHold(kid);
+        try
+        {
+            var putA = PutAsync(kid, RepinBody(("russian", KidsKey, "opus", null), ("art", KidsKey, "sonnet", null)));
+
+            var arrived = false;
+            try { arrived = await _hosts.BroadcasterStub.CreateHoldArrived!.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
+            catch (TimeoutException) { }
+            arrived.Should().BeTrue("первый запрос не встал на провиже нового предмета — окна гонки не было");
+
+            var (statusB, _) = await PutAsync(kid, RepinBody(("russian", KidsKey, "haiku", null)));
+            statusB.Should().Be(HttpStatusCode.OK);
+
+            _hosts.BroadcasterStub.OpenCreateHold();
+            var (statusA, _) = await putA;
+            statusA.Should().Be(HttpStatusCode.OK);
+        }
+        finally
+        {
+            _hosts.BroadcasterStub.ClearCreateHold();
+        }
+
+        StoredSubject(kid, "russian").Model.Should().Be("haiku", "финальный маршрут — последней записи");
+        _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.Model
+            .Should().Be(StoredSubject(kid, "russian").Model,
+                "чаты при финальном профиле, а не при значении старого запроса");
+    }
+
     // --- правила ребёнка: их не принимает тело, resetRules — единственный сброс ---
 
     [Fact]
@@ -1356,6 +1511,30 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             Volatile.Write(ref OnFirstCreated, hook);
         }
 
+        // Держатель первого «created» для владельца (Т2e, тест гонки перезакрепления): запрос
+        // стоит ВНУТРИ провижна — после записи профиля и до перезакрепления чатов; тест в этом
+        // окне дописывает второй PUT и открывает шлюз. В отличие от отказа-вклинивания выше,
+        // запрос не отменяется: окно между записью профиля и перезакреплением живое, и гонка
+        // настоящая. Счётчик обнуляется армингом — «первый» этого теста именно его.
+        public TaskCompletionSource<bool>? CreateHoldArrived;
+        private TaskCompletionSource<bool>? _holdOpen;
+        private string? _holdFor;
+        private int _holdCount;
+        public void ArmCreateHold(string ownerId)
+        {
+            Volatile.Write(ref _holdFor, ownerId);
+            Volatile.Write(ref _holdCount, 0);
+            CreateHoldArrived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _holdOpen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        public void OpenCreateHold() => Volatile.Read(ref _holdOpen)?.TrySetResult(true);
+        public void ClearCreateHold()
+        {
+            Volatile.Write(ref _holdFor, null);
+            Volatile.Write(ref CreateHoldArrived, null);
+            _holdOpen = null;
+        }
+
         private void MaybeThrow(string ownerId)
         {
             if (ownerId == ThrowFor) throw new InvalidOperationException("вещание тьютора не удалось");
@@ -1369,6 +1548,11 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             {
                 OnFirstCreated?.Invoke();
                 throw new InvalidOperationException("вещание создания отклонено тестом (вклинивание сделано)");
+            }
+            if (ownerId == _holdFor && message is PersonasChangedMessage { Action: "created" } && ++_holdCount == 1)
+            {
+                Volatile.Read(ref CreateHoldArrived)?.TrySetResult(true);
+                Volatile.Read(ref _holdOpen)!.Task.GetAwaiter().GetResult();
             }
             MaybeThrow(ownerId);
             return Task.CompletedTask;

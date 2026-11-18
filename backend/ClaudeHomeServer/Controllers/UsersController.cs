@@ -359,6 +359,36 @@ public class UsersController(UserStore users, SessionManager sessions,
         if (orphanTutors.Count > 0)
             await childTutorProvisioner.RemoveOrphanTutorsAsync(id, orphanTutors);
 
+        // Перезакрепление маршрута предмета (Т2e, решение Андрея 18.11): старые чаты предмета
+        // продолжают с новой моделью — их закреплённые при создании поля (PersonaId, Provider,
+        // Model) перезаписываются по живому маршруту. Условия вызова:
+        // • маршрут согласован — его принимает ChildRoute (не-пул только с согласием админа).
+        //   Без согласия чаты не трогаем: ход и так откажет им (ChildModeGate.LaunchMismatch →
+        //   ChildRoute), а чат с несогласованным маршрутом — намеренное состояние «ждёт согласия».
+        // • ProviderKey предмета не изменился (сравнение с прежним профилем): при смене поставщика
+        //   меняется и профиль CLI, а транскрипт чата остаётся в старом — следующий ход не найдёт
+        //   его --resume в новом (llm-providers.md, «смена провайдера у начатого чата»; тот же
+        //   текст — в ChatSettings.cs:1089-1093 про взрослые чаты). Перезакрепление без переноса
+        //   транскрипта сломало бы чат вместо продолжения; перенос — отдельный шаг.
+        // Поля читаются из ЖИВОГО профиля (finalProfile), прежний ProviderKey — из снимка до
+        // цикла: два параллельных PUT оставляют чаты при финальном профиле, а не при значении
+        // старого запроса (Repin_ParallelPuts_ChatsMatchFinalProfile).
+        var previousSubjects = new Dictionary<string, ChildSubject>(StringComparer.OrdinalIgnoreCase);
+        foreach (var subject in previous?.Subjects ?? [])
+            if (subject is not null && !string.IsNullOrWhiteSpace(subject.Id))
+                previousSubjects[subject.Id] = subject;
+        foreach (var subject in finalProfile.Subjects)
+        {
+            if (subject is null || string.IsNullOrWhiteSpace(subject.Id)) continue;
+            if (!previousSubjects.TryGetValue(subject.Id, out var previousSubject)
+                || !string.Equals(previousSubject.ProviderKey, subject.ProviderKey, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!ChildRoute.Evaluate(subject.ProviderKey, subject.Model,
+                    subject.RouteAcknowledgedAt is not null, subscriptionPool, llmProviders).Accepted)
+                continue;
+            sessions.RepinChildSubject(id, subject.Id, subject.TutorPersonaId, subject.ProviderKey, subject.Model);
+        }
+
         return Ok(new ChildProfileResponse(ToChildProfileDto(finalProfile), tutorId));
     }
 

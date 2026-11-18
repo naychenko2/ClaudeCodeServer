@@ -859,11 +859,17 @@ describe('ChildProfileEditor: «Предметы» — база знаний и 
       profile: withSubjects(subject('math', { knowledge: { datasetId: 'ds-math', attachedAt: '2026-11-18T09:00:00Z' } })),
       tutorPersonaId: 'p-tutor-math',
     }));
-    // Ответ — источник живого: пикер держит привязку из ответа
-    expect(kbSelected(knowledgeSelect(host)!, 'ds-math'), 'привязка из ответа').toBe(true);
+    // Ответ — источник живого: следующее тело несёт живую привязку с attachedAt ответа, а не
+    // черновую (без слияния серверный attachedAt теряется — а с ним и «вернуть как есть»).
+    await click(saveBtn(host));
+    expect(sentSubjects(1)[0].knowledge, 'живая привязка из ответа').toEqual({ datasetId: 'ds-math', attachedAt: '2026-11-18T09:00:00Z' });
+    await settle(() => pending.get(1)!.resolve({
+      profile: withSubjects(subject('math', { knowledge: { datasetId: 'ds-math', attachedAt: '2026-11-18T09:00:00Z' } })),
+      tutorPersonaId: 'p-tutor-math',
+    }));
     await changeSelect(knowledgeSelect(host)!, '');
     await click(saveBtn(host));
-    expect(sentSubjects(1)[0].knowledge, 'явный «Без базы» — null в теле').toBeNull();
+    expect(sentSubjects(2)[0].knowledge, 'явный «Без базы» — null в теле').toBeNull();
   });
 
   it('400 dataset_not_attachable: Notice с текстом ответа, красная строка предмета с новой привязкой', async () => {

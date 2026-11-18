@@ -20,6 +20,7 @@ import type {
   MediaQueue,
   MediaRunning,
   MediaSteps,
+  TranscriptionSnapshot,
 } from './types';
 
 // Методы REST «Локальных моделей»; lib/api.ts подмешивает их в объект api spread'ом
@@ -75,6 +76,12 @@ export const localModelApi = {
       const suffix = qs.toString() ? `?${qs.toString()}` : '';
       return request<LocalModelMedia>(`/local-model/stats/media${suffix}`);
     },
+    // GET /api/local-model/transcription: снимок конвейера транскрибации (вкладка
+    // «Встречи», предложение v1): только админ, опрос раз в 5 с при открытой вкладке.
+    // live: true — тот же смысл, что у /stats: снимок отвечает за «что происходит
+    // СЕЙЧАС», и подставленный из IndexedDB ответ сказал бы «конвейер жив» про конвейер,
+    // который уже встал, — ровно то вранье, ради которого вкладка и сделана.
+    transcription: () => request<TranscriptionSnapshot>('/local-model/transcription', { live: true }),
     // GET /api/local-model/history: история медиа-генераций за 7 дней (ADR-030).
     // Пустые фильтры не передаются; без query — вся история за 7 дней, страница 50.
     history: (q?: MediaHistoryQuery) => {
@@ -124,6 +131,22 @@ export type {
 // Источник истины — DTO бэкенда (LocalModelStatsController.cs, LocalModelMediaResponse):
 // время — unix-мс, chужие прогоны анонимны, gpus может быть null.
 export type { LocalModelMedia, MediaGpu, MediaSteps, MediaRunning, MediaQueue, MediaDone };
+
+// Типы ответа /api/local-model/transcription (вкладка «Встречи»). Источник истины —
+// таблица «Контракт данных» предложения v1 (docs/mockups/local-model-transcription-proposal.md);
+// бэкенда ещё нет, форма полей сверяется при его постановке.
+export type {
+  TranscriptionSnapshot,
+  TranscriptionPhase,
+  TranscriptionStage,
+  TranscriptionLevel,
+  TranscriptionDepState,
+  TranscriptionQueuedFile,
+  TranscriptionFail,
+  TranscriptionMeeting,
+  TranscriptionDifyRow,
+  TranscriptionDep,
+} from './types';
 
 // false — живые вызовы напрямую через `request` из lib/offline (JWT, ошибки, офлайн-кэш GET),
 // минуя `api` (иначе цикл: api подмешивает этот модуль).

@@ -409,3 +409,126 @@ export interface LocalModelTurnStats {
 export interface LocalModelTurnResponse {
   lastTurn: LocalModelTurnStats | null;
 }
+
+// === Вкладка «Встречи» (конвейер транскрибации): GET /api/local-model/transcription ===
+//
+// Один снимок состояния конвейера: предложение v1 (docs/mockups/
+// local-model-transcription-proposal.md, таблица «Контракт данных»), только админ,
+// опрос раз в 5 с при открытой вкладке. Время — unix-мс (как в прочих ручках фичи).
+//
+// Бэкенда ещё нет: имена и форма полей — по таблице предложения и сверяются заново
+// при постановке бэкенда (как duty у LocalModelDuty на Ф5). Поэтому всё, чего в
+// реальном снимке может не быть («Сейчас» при простое, «Сверка» до первой проверки),
+// — optional/nullable: частичный или пустой ответ даёт пустые блоки вкладки, а не
+// падение разбора. Неизвестные поля ответа просто не читаются (JSON → T).
+
+// Фаза конвейера: 'batch' — идёт пачка, 'idle' — пачки нет, 'stopped' — сервис остановлен.
+export type TranscriptionPhase = 'idle' | 'batch' | 'stopped';
+// Текущий этап файла: распознавание → сводка → загрузка в Dify (полоса «Сейчас»).
+export type TranscriptionStage = 'asr' | 'summary' | 'dify';
+// Уровень тревоги и точки вкладки. Считает БЕКЕНД (порог «Завис?» 5 мин, красное/жёлтое
+// условие точки): фронт только красит по level, свои пороги не дублирует. Нет поля или
+// null — уровня нет: ни точки на вкладке, ни баннера.
+export type TranscriptionLevel = 'ok' | 'warn' | 'danger';
+// Состояние зависимости: 'unknown' — ещё не проверялось (не «не отвечает»).
+export type TranscriptionDepState = 'ok' | 'slow' | 'down' | 'unknown';
+
+// Файл в очереди распознавания. since — unix-мс, с когда файл ждёт («ждёт N мин»).
+export interface TranscriptionQueuedFile {
+  file: string;
+  folder: string;
+  since: number;
+}
+
+// Сбой за сутки (journal.tsv, type=fail). comment — строка журнала целиком.
+export interface TranscriptionFail {
+  // unix-мс сбоя
+  at: number;
+  folder: string;
+  file: string;
+  // минуты, которые потеряла запись (для баннера «4 встречи не попали в Dify»)
+  minutes?: number | null;
+  comment?: string | null;
+}
+
+// Завершённая встреча (journal.tsv, type=ok). mdPath — путь .md во «Встречах»:
+// касание строки открывает его (UI следующего шага).
+export interface TranscriptionMeeting {
+  // unix-мс завершения
+  at: number;
+  folder: string;
+  file: string;
+  minutes?: number | null;
+  speakers?: number | null;
+  comment?: string | null;
+  mdPath?: string | null;
+}
+
+// Строка сверки с Dify по папке: local — записей локально, inDify — загружено в Dify.
+// «не хватает N» = local − inDify (N > 0); «сходится» — равны.
+export interface TranscriptionDifyRow {
+  folder: string;
+  local: number;
+  inDify: number;
+}
+
+// Зависимость конвейера (ComfyUI/CcsAudioWorker, Strata, Dify, монтирование папки).
+// key — идентификатор для подписи и иконки; имя поля состояния будет сверено с бэкендом
+// (в таблице предложения оно не названо).
+export interface TranscriptionDep {
+  key: string;
+  state: TranscriptionDepState;
+  // unix-мс последней проверки; null — не проверялось
+  checkedAt?: number | null;
+}
+
+// Снимок вкладки: GET /api/local-model/transcription (admin). Поля сгруппированы по
+// блокам макета (конвейер → сейчас → очередь → сбои → встречи → сверка → зависимости),
+// порядок в ответе не значим.
+export interface TranscriptionSnapshot {
+  // === Конвейер === (logs/state.json + systemctl + конфиг конвейера, каждый опрос).
+  phase: TranscriptionPhase;
+  // unix-мс последней записи state.json («Обновлено N назад», порог «Завис?»)
+  updatedAt: number;
+  // узел, где работает конвейер, и pid процесса; null — сервис остановлен
+  host?: string | null;
+  pid?: number | null;
+  // жив ли процесс (systemctl is-active)
+  alive?: boolean;
+  // «Пишет в»: узел и каталог вывода — прямой ответ на 18.11 (конвейер писал на ai,
+  // «Встречи» читали с worker). Расхождение «не туда» считает бэкенд (level).
+  outputHost?: string | null;
+  outputDir?: string | null;
+  // уровень тревоги — только показываем, сами не выводим (см. TranscriptionLevel)
+  level?: TranscriptionLevel | null;
+
+  // === Сейчас === (state.json + summary_state.json, каждый опрос).
+  // Ничего не обрабатывается — полей нет: вкладка рисует «Ничего не обрабатывается».
+  file?: string | null;
+  folder?: string | null;
+  stage?: TranscriptionStage | null;
+  // unix-мс начала текущего этапа; durationMin — сколько идёт файл
+  stageStartedAt?: number | null;
+  durationMin?: number | null;
+  // место в пачке: 1-based индекс и её длина
+  batchIndex?: number | null;
+  batchSize?: number | null;
+
+  // === Очередь ===: asrQueue — ждут распознавания (список), summaryQueue — ждут сводку (число).
+  asrQueue?: TranscriptionQueuedFile[];
+  summaryQueue?: number | null;
+
+  // === Сбои за 24 ч ===: хвост journal.tsv (type=fail), не больше 20 строк.
+  fails?: TranscriptionFail[];
+
+  // === Последние встречи ===: journal.tsv (type=ok), newest-first, не больше 20 строк.
+  recent?: TranscriptionMeeting[];
+
+  // === Сверка с Dify === (журнал systemd, раз в 30 мин). До первой проверки — полей нет.
+  dify?: TranscriptionDifyRow[];
+  checkedAt?: number | null;
+
+  // === Зависимости ===: пинг ComfyUI/CcsAudioWorker, Strata, Dify, монтирования папки
+  // (на сервере раз в 30–60 с).
+  deps?: TranscriptionDep[];
+}

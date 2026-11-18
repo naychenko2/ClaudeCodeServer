@@ -209,7 +209,11 @@ export function ChildHome({ childName, status, subjects, lastLesson, onOpenSubje
       {tiles.length > 0 && <div style={{ fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted }}>
         Предметы
       </div>}
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: SP.md }}>
+      {/* minmax(0,1fr), а не 1fr: минимум 1fr — min-content содержимого плитки (глиф 40 +
+          gap + nowrap-строка репетитора), и на узких планшетах (768) три колонки не сжимаются
+          в ширину контейнера — сетка вылезает за правый край (дефект c28b42bf). С нулевым
+          минимумом колонки делят ровно ширину контейнера; при 1280 размеры треков те же. */}
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))', gap: SP.md }}>
         {tiles.map((s) => (
           <button
             key={s.id}

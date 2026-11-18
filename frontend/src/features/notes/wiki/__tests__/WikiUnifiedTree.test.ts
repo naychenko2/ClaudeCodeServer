@@ -41,6 +41,14 @@ import { request } from '../../../../lib/offline';
 type MockFn = ReturnType<typeof vi.fn>;
 const req = request as unknown as MockFn;
 
+// localStorage для свёртки подгрупп: в окружении node её нет — минимальное in-memory хранилище.
+// Чистится в beforeEach: тесты не наследуют свёртки друг у друга.
+const foldStore = new Map<string, string>();
+(globalThis as { localStorage?: unknown }).localStorage = {
+  getItem: (k: string) => foldStore.get(k) ?? null,
+  setItem: (k: string, v: string) => { foldStore.set(k, v); },
+};
+
 const PROJECT_ID = '11121314-1516-1718-191a-1b1c1d1e1f10';
 const PROJECT_KEY = `projects/${PROJECT_ID}`;
 
@@ -156,8 +164,29 @@ const clickRow = (c: C, title: string) => {
   act(() => { (reactProps(r) as { onClick: () => void }).onClick(); });
 };
 
+// Подгруппы: заголовок по ключу раздела и виду (data-section/data-type — по ним и сверяем)
+const subHead = (c: C, sectionKey: string, typeKey: string) => {
+  const hit = allByAttr(c, 'data-testid', 'unified-subgroup')
+    .find(n => reactProps(n!)?.['data-section'] === sectionKey && reactProps(n!)?.['data-type'] === typeKey);
+  if (!hit) throw new Error(`нет подгруппы ${sectionKey}#${typeKey}`);
+  return hit;
+}
+const hasSub = (c: C, sectionKey: string, typeKey: string) =>
+  allByAttr(c, 'data-testid', 'unified-subgroup')
+    .some(n => reactProps(n!)?.['data-section'] === sectionKey && reactProps(n!)?.['data-type'] === typeKey);
+// Счётчик подгруппы — число в её заголовке
+const subCount = (c: C, sectionKey: string, typeKey: string) => {
+  const m = textNodes(subHead(c, sectionKey, typeKey)).join('').match(/(\d+)\s*$/);
+  if (!m) throw new Error(`нет счётчика у ${sectionKey}#${typeKey}`);
+  return Number(m[1]);
+};
+const clickSub = (c: C, sectionKey: string, typeKey: string) => {
+  act(() => { (reactProps(subHead(c, sectionKey, typeKey)) as { onClick: () => void }).onClick(); });
+};
+
 beforeEach(() => {
   wikiStore.reset();
+  foldStore.clear();
   req.mockReset();
   req.mockImplementation((url: string) => {
     if (url.startsWith('/wiki/section')) return Promise.resolve(CATALOGS[sectionFromUrl(url)]);
@@ -432,6 +461,149 @@ describe('Узлы сфер (решение Андрея 04.11)', () => {
     expect(hasGroup(container, 'Дом и семья')).toBe(true);
     expect(has(container, 'Страниц пока нет — раздел сферы наполняется отдельной фичей')).toBe(true);
     expect(has(container, 'Здесь будут ваши заметки')).toBe(false);
+  });
+});
+
+describe('Подгруппы по видам (3А)', () => {
+  const pk = (rel: string) => `Проекты/${PROJECT_ID}/${rel}`;
+  // Проектный каталог со страницами всех видов + без типа; свои отметки — отдельной группой
+  const MIXED: Record<string, unknown> = {
+    ...CATALOGS,
+    [PROJECT_KEY]: {
+      key: PROJECT_KEY, name: 'AI Home', orphan: false,
+      pages: [
+        page(pk('d1.md'), 'Решение 1', 'ai', null, 'decision'),
+        page(pk('d2.md'), 'Решение 2', 'ai', null, 'decision'),
+        page(pk('r1.md'), 'Правило 1', 'human', null, 'rule'),
+        page(pk('t1.md'), 'Термин 1', 'ai', null, 'term'),
+        page(pk('s1.md'), 'Состояние 1', 'together', null, 'state'),
+        page(pk('c1.md'), 'Хроника 1', 'ai', null, 'chronicle'),
+        page(pk('o1.md'), 'Обзор 1', 'ai', null, 'overview'),
+        page(pk('e1.md'), 'Сущность 1', 'human', null, 'entity'),
+        page(pk('n0.md'), 'Без типа', 'ai', null, null),
+      ],
+    },
+  };
+  const MY_NOTE = note('nm1', 'Моя заметка', PROJECT_ID);
+  const serve = (catalogs: Record<string, unknown>) =>
+    req.mockImplementation((url: string) => Promise.resolve(url.startsWith('/wiki/section') ? catalogs[sectionFromUrl(url)] : null));
+
+  it('узел раскладывается по подгруппам в фиксированном порядке; заметки — отдельная группа', () => {
+    const groups = buildUnifiedGroups(SECTIONS, [MY_NOTE], MIXED as never, '');
+    const g = groups.find(x => x.key === PROJECT_KEY)!;
+    expect(g.subgroups.map(s => s.typeKey)).toEqual(['decision', 'rule', 'term', 'state', 'chronicle', 'other', 'note']);
+    expect(g.subgroups.map(s => s.label)).toEqual(['Решение', 'Правило', 'Термин', 'Состояние', 'Хроника', 'Прочее', 'Мои заметки']);
+    expect(g.subgroups.map(s => s.items.length)).toEqual([2, 1, 1, 1, 1, 3, 1]);
+    // «Прочее» — типы вне фиксированного списка (overview, entity) и страница без типа;
+    // ключ свёртки — раздел + вид
+    expect(g.subgroups[5].items.map(i => i.title)).toEqual(['Обзор 1', 'Сущность 1', 'Без типа']);
+    expect(g.subgroups.map(s => s.key)).toEqual([
+      `${PROJECT_KEY}#decision`, `${PROJECT_KEY}#rule`, `${PROJECT_KEY}#term`, `${PROJECT_KEY}#state`,
+      `${PROJECT_KEY}#chronicle`, `${PROJECT_KEY}#other`, `${PROJECT_KEY}#note`,
+    ]);
+    // общий вид узла — строки в порядке подгрупп
+    expect(g.items.map(i => i.kind)).toEqual(Array(9).fill('page').concat(['note']));
+  });
+
+  // Мутация: заметки не отдельная группа (NOTE_SUB убран из отображения → 'other') → краснеет
+  it('заметка не смешивается со страницами без типа: своя подгруппа', () => {
+    const cats = {
+      ...CATALOGS,
+      [PROJECT_KEY]: { key: PROJECT_KEY, name: 'AI Home', orphan: false, pages: [page(pk('n0.md'), 'Без типа', 'ai', null, null)] },
+    };
+    const g = buildUnifiedGroups(SECTIONS, [MY_NOTE], cats as never, '').find(x => x.key === PROJECT_KEY)!;
+    expect(g.subgroups.map(s => `${s.typeKey}:${s.items.map(i => i.title).join(',')}`)).toEqual([
+      'other:Без типа', 'note:Моя заметка',
+    ]);
+  });
+
+  it('пустые подгруппы в раскладку не попадают', () => {
+    const cats = {
+      ...CATALOGS,
+      [PROJECT_KEY]: { key: PROJECT_KEY, name: 'AI Home', orphan: false, pages: [page(pk('d.md'), 'Только решение', 'ai', null, 'decision')] },
+    };
+    const g = buildUnifiedGroups(SECTIONS, [], cats as never, '').find(x => x.key === PROJECT_KEY)!;
+    expect(g.subgroups.map(s => s.typeKey)).toEqual(['decision']);
+  });
+
+  it('дерево: узел содержит подгруппы по порядку и со счётчиками', async () => {
+    serve(MIXED);
+    const { container } = render(baseProps({ notes: [MY_NOTE] }));
+    await settle();
+    const heads = allByAttr(container, 'data-testid', 'unified-subgroup')
+      .filter(n => reactProps(n!)?.['data-section'] === PROJECT_KEY);
+    expect(heads.map(n => reactProps(n!)?.['data-type'])).toEqual(['decision', 'rule', 'term', 'state', 'chronicle', 'other', 'note']);
+    expect(subCount(container, PROJECT_KEY, 'decision')).toBe(2);
+    expect(subCount(container, PROJECT_KEY, 'other')).toBe(3);
+    expect(subCount(container, PROJECT_KEY, 'note')).toBe(1);
+  });
+
+  it('фильтр «кто написал»: счётчики подгрупп равны видимым строкам; ставшая пустой — скрыта', async () => {
+    serve(MIXED);
+    const { container } = render(baseProps({ notes: [], sections: [SECTIONS[2]] }));
+    await settle();
+    expect(subCount(container, PROJECT_KEY, 'decision')).toBe(2);
+    clickChip(container, 'Мои');
+    await settle();
+    const visible = rowTitles(container);
+    expect(visible.sort()).toEqual(['Правило 1', 'Сущность 1']);
+    // видны ровно столько строк, сколько показывают счётчики оставшихся подгрупп
+    const counts = allByAttr(container, 'data-testid', 'unified-subgroup')
+      .filter(n => reactProps(n!)?.['data-section'] === PROJECT_KEY)
+      .map(n => subCount(container, String(reactProps(n!)?.['data-section']), String(reactProps(n!)?.['data-type'])));
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(visible.length);
+    // подгруппы без строк исчезли, с ними — их заголовки
+    expect(hasSub(container, PROJECT_KEY, 'decision')).toBe(false);
+    expect(hasSub(container, PROJECT_KEY, 'term')).toBe(false);
+    expect(subCount(container, PROJECT_KEY, 'rule')).toBe(1);
+    expect(subCount(container, PROJECT_KEY, 'other')).toBe(1);
+  });
+
+  it('поиск: подгруппы по найденному, счётчик — число после поиска', async () => {
+    serve(MIXED);
+    const { container } = render(baseProps({ notes: [], sections: [SECTIONS[2]], query: 'термин' }));
+    await settle();
+    expect(subCount(container, PROJECT_KEY, 'term')).toBe(1);
+    expect(rowTitles(container)).toEqual(['Термин 1']);
+    expect(hasSub(container, PROJECT_KEY, 'decision')).toBe(false);
+  });
+
+  it('свёртка подгруппы сохраняется в localStorage под ключом cc_ и возвращается при повторном рендере', async () => {
+    serve(MIXED);
+    const m = render(baseProps({ notes: [], sections: [SECTIONS[2]] }));
+    await settle();
+    expect(reactProps(subHead(m.container, PROJECT_KEY, 'decision'))?.['aria-expanded']).toBe(true);
+    clickSub(m.container, PROJECT_KEY, 'decision');
+    await settle();
+    expect(reactProps(subHead(m.container, PROJECT_KEY, 'decision'))?.['aria-expanded']).toBe(false);
+    const raw = (globalThis as { localStorage: { getItem: (k: string) => string | null } }).localStorage.getItem('cc_wiki_tree_folds');
+    expect(raw).toBeTruthy();
+    expect(JSON.parse(String(raw))).toContain(`${PROJECT_KEY}#decision`);
+    // перечитка: новый экземпляр читает хранилище — подгруппа снова свёрнута, строки скрыты
+    const m2 = render(baseProps({ notes: [], sections: [SECTIONS[2]] }));
+    roots.push(m2.root);
+    await settle();
+    expect(reactProps(subHead(m2.container, PROJECT_KEY, 'decision'))?.['aria-expanded']).toBe(false);
+    expect(rowTitles(m2.container)).not.toContain('Решение 1');
+    // раскрытие — тоже пишется: после клика строки видны
+    clickSub(m2.container, PROJECT_KEY, 'decision');
+    await settle();
+    expect(rowTitles(m2.container)).toContain('Решение 1');
+  });
+
+  it('заголовок подгруппы на мобильной ширине — цель касания не ниже 40 px', async () => {
+    installFakeDom();
+    (globalThis as unknown as { window: { matchMedia: unknown } }).window.matchMedia =
+      () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} });
+    serve(MIXED);
+    const m = mount(createElement(WikiUnifiedTree, baseProps({ notes: [MY_NOTE] })));
+    roots.push(m.root);
+    await settle();
+    const subs = allByAttr(m.container, 'data-testid', 'unified-subgroup');
+    expect(subs.length).toBeGreaterThan(0);
+    for (const s of subs) {
+      expect((reactProps(s!)?.style as { minHeight: number }).minHeight).toBeGreaterThanOrEqual(40);
+    }
   });
 });
 

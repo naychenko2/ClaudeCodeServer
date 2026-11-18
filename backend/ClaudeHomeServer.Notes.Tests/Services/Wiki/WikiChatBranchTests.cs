@@ -129,7 +129,7 @@ public class WikiChatBranchTests : IDisposable
     private WikiChatIngestService Sut(FakeLlm llm) =>
         new(new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
             new WikiIngestService(llm, new NoSpheres(), _apply, _config),
-            _sessions, _keeper, _config);
+            _sessions, _keeper, new NoSpheres(), _config);
 
     private string PathOf(string pageKey) => SafePath.JoinBelowRoot(Root, "pages/" + pageKey);
 

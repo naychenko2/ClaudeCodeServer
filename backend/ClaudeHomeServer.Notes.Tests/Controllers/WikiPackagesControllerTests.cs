@@ -66,7 +66,7 @@ public class WikiPackagesControllerTests : IDisposable
         _chat = new WikiChatIngestService(
             new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
             new WikiIngestService(new NoopCheapRunner(), new NoSpheres(), _apply, _config),
-            _sessions, _keeper, _config);
+            _sessions, _keeper, new NoSpheres(), _config);
     }
 
     public void Dispose()

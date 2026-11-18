@@ -35,6 +35,7 @@ public class WikiApplyJudgeTests : IDisposable
     private const string OldClaim = "Прежний план был остаться на Windows";
     private const string Base2Claim = "Контенер собран на второй машине";
     private const string AutoClaim = "Третий план был собрать его на третьей машине";
+    private const string NewClaim = "Четвёртый план был вести поиск на новой машине";
     private const string JudgeModel = "cloud-judge-1";
 
     private static readonly string CardFile = $$"""
@@ -238,6 +239,61 @@ public class WikiApplyJudgeTests : IDisposable
         StatusOnDisk(id).Should().Be(WikiPackage.StatusApplied);
     }
 
+    // ─── 4. D0: отказ по спорным не выбрасывает авто-операции ────────────────
+
+    [Fact]
+    public async Task ОтклонённоеСпорноеПриАвто_АвтоПрименяется_ПакетApplied()
+    {
+        // Мутация «вернуть старое условие rejected» (StatusAfterDecisions без проверки
+        // авто-операций): пакет стал бы rejected, ApplyDecidedAsync не позвал бы применение
+        // (Apply=null) — краснеет Applied(r).
+        var id = NewPackage([RealOp(), AutoOp()]);
+        var decided = WikiPackageStore.DecideOperation(Root(), id, 0, false, "не подтверждено источником");
+        decided.Ok.Should().BeTrue(decided.Reason);
+        decided.Package!.Status.Should().Be(WikiPackage.StatusPartiallyAccepted,
+            "отказ по спорным не выбрасывает авто-операции (D0)");
+
+        var r = await _sut.ApplyDecidedAsync(User, Root(), Read(id));
+
+        r.Outcome.Should().Be(WikiApplyService.DecidedOutcome.Ok);
+        var apply = Applied(r);
+        apply.Applied.Should().BeTrue(apply.Reason);
+        r.Package!.Status.Should().Be(WikiPackage.StatusApplied);
+        // Отклонённая спорная в рендер не вошла: её страница осталась как была.
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), PagePath)).Should()
+            .Contain(OldClaim).And.NotContain(Claim);
+        // Авто-операция применена обычным путём — тем же, что в пакете без спорных.
+        File.ReadAllText(Path.Combine(WikiPaths.Pages(_dir, User), Page2Path)).Should()
+            .Contain(AutoClaim, "отказ по спорным не снял авто-операцию");
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplied);
+    }
+
+    [Fact]
+    public async Task АвтоAppendКОтклонённомуCreateЭтогоЖеПакета_ОтказПримененияСПричиной()
+    {
+        // Риск 7 (D0): авто-операция опирается на create этого же пакета, отклонённый
+        // решением человека: страницы не было никогда — это не «stale» (база не исчезала,
+        // новый разбор предложил бы тот же create). Отказ применения с причиной, страница
+        // не записана, пакет не висит в «applying». Мутация «снять ветку CodeDependency»:
+        // краснеет StatusOnDisk — пакет стал бы «stale» с причиной про несуществующую базу.
+        var newPage = "Общее/Новая-сущность.md";
+        var id = NewPackage([CreateOp(newPage), AppendToNewPageOp(newPage)]);
+        var decided = WikiPackageStore.DecideOperation(Root(), id, 0, false, "новая страница не нужна");
+        decided.Ok.Should().BeTrue(decided.Reason);
+        decided.Package!.Status.Should().Be(WikiPackage.StatusPartiallyAccepted);
+
+        var r = await _sut.ApplyDecidedAsync(User, Root(), Read(id));
+
+        r.Outcome.Should().Be(WikiApplyService.DecidedOutcome.Ok);
+        var apply = Applied(r);
+        apply.Applied.Should().BeFalse();
+        apply.Code.Should().Be(WikiApplyService.CodeDependency);
+        apply.Reason.Should().NotBeNullOrWhiteSpace("отказ обязан называть причину");
+        r.Package!.Status.Should().Be(WikiPackage.StatusApplyFailed);
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplyFailed);
+        File.Exists(Path.Combine(WikiPaths.Pages(_dir, User), newPage)).Should().BeFalse();
+    }
+
     // ─── Фикстура ───────────────────────────────────────────────────────────
 
     private string Root() => WikiPaths.Root(_dir, User);
@@ -278,6 +334,29 @@ public class WikiApplyJudgeTests : IDisposable
         Class = WikiPackage.ClassKey("session", WikiPackage.OpAppend),
         Decision = WikiPackage.DecisionAuto,
         BaseHashes = new Dictionary<string, string> { [Page2Path] = Hash },
+    };
+
+    // create новой страницы — той же формой, что у плана: BaseHashes пуст, базы нет.
+    private static WikiPackage.Operation CreateOp(string page) => new()
+    {
+        Op = WikiPackage.OpCreate,
+        Page = page,
+        Text = NewClaim,
+        Class = WikiPackage.ClassKey("session", WikiPackage.OpCreate),
+        Decision = WikiPackage.DecisionInbox,
+        Reason = "новая страница знаний",
+        BaseHashes = new Dictionary<string, string>(),
+    };
+
+    // авто-append к странице, которой на диске нет (она — create этого же пакета): базы нет.
+    private static WikiPackage.Operation AppendToNewPageOp(string page) => new()
+    {
+        Op = WikiPackage.OpAppend,
+        Page = page,
+        Text = AutoClaim,
+        Class = WikiPackage.ClassKey("session", WikiPackage.OpAppend),
+        Decision = WikiPackage.DecisionAuto,
+        BaseHashes = new Dictionary<string, string>(),
     };
 
     // Пакет в proposed (его создал бы Хранитель), доведённый до «accepted» вердиктом судьи:

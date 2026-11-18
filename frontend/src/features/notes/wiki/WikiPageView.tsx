@@ -19,15 +19,18 @@
 // MarkdownViewer — S5e, здесь его не ждём: маркер-
 // надстрочник с цитатой в title и блок «Источники» из определений сносок.
 //
-// Открытие страницы — из каталога (WikiTab, одна точка подключения); открытие по ссылкам
-// внутри страницы не в этом шаге. Сирота: имени и даты удаления проекта бэк не отдаёт
+// Открытие страницы — из каталога (WikiTab, одна точка подключения) и из блока «Связанные»
+// (2Б, Q1-S7): он под текстом страницы и ведёт существующим каналом стора requestOpenWikiPage
+// (тот же, что у «Журнала», «Решений» и дерева). Открытие по вики-ссылке в тексте — по-прежнему
+// не этот шаг: [[…]] рендерится как текст, цели перехода на фронте нет (резолвер ссылки живёт
+// на бэке, WikiGate.ResolveLink). Сирота: имени и даты удаления проекта бэк не отдаёт
 // (хвост S2f) — плашка общая, как в каталоге (WikiTab.OrphanNotice).
 
 import { useMemo, useState } from 'react';
 import type { MouseEvent, KeyboardEvent } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, Lock, Pencil, Quote, ScrollText, Sparkles, Undo2 } from 'lucide-react';
-import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, normWikiStatement, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiSectionDto } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, requestOpenWikiPage, sectionKeyOfPagePath, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, normWikiStatement, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiRelatedGroupDto, type WikiRelatedItemDto, type WikiRelatedKind, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Notice } from '../../../components/ui/Notice';
@@ -301,6 +304,73 @@ function SourcesBlock({ footnotes }: { footnotes: ParsedWikiPage['footnotes'] })
   );
 }
 
+// ─── «Связанные» (2Б, Q1-S7) ───
+
+// Подписи групп — по постановке шага; kind — контракт бэка (WikiRelated.KindSource…KindBacklinks).
+// Порядок групп — порядок массива с бэка (по приоритету), порядок пунктов — Ordinal пути:
+// экран ничего не переупорядочивает (тот же принцип, что у секций страницы). Пустая группа
+// не рисуется: бэк её не отдаёт, но и пустую в ответе экран не показывает; без поля или с
+// нулём непустых групп блока нет вовсе.
+const RELATED_LABELS: Record<WikiRelatedKind, string> = {
+  source: 'Тот же источник',
+  chronicle: 'Та же хроника',
+  mentions: 'Упоминают эту страницу',
+  mentionedHere: 'Упомянуты здесь',
+  backlinks: 'Ссылаются сюда',
+};
+
+// Тач-цель пункта на телефоне — та же, что у строк каталога и дерева (WikiTab ROW_H_TOUCH,
+// WikiUnifiedTree ROW_H_TOUCH)
+const RELATED_ROW_H_TOUCH = 44;
+
+// Пункт ведёт на страницу каналом открытия страницы стора (requestOpenWikiPage → OPEN-1 в
+// WikiTab) — тем же, каким ведут «Журнал», «Решения» и дерево; своей точки перехода у
+// страницы нет. Раздел пункта бэк в related не несёт (только путь под pages/) — он берётся
+// из самого пути (sectionKeyOfPagePath — зеркало бэкового WikiSections.Parse): бэк проверяет
+// пару (раздел, страница) (WikiController.cs:241), и сосед из цепочки вверх открылся бы
+// чужим разделом в 400. Путь вне раздела (ни одна из папок) — не переход: строка остаётся
+// неактивной, чужую строку в канал не пускаем.
+function RelatedRow({ item, isMobile }: { item: WikiRelatedItemDto; isMobile: boolean }) {
+  const sectionKey = sectionKeyOfPagePath(item.pageKey);
+  const open = () => { if (sectionKey) requestOpenWikiPage({ section: sectionKey, path: item.pageKey }); };
+  return (
+    <button
+      type="button"
+      data-testid="wiki-related-item"
+      data-page-key={item.pageKey}
+      aria-disabled={!sectionKey}
+      onClick={open}
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start', width: '100%',
+        textAlign: 'left', padding: `${SP.sm}px ${SP.sm}px`, border: 'none', borderRadius: R.md,
+        background: 'transparent', cursor: 'pointer', fontFamily: FONT.sans,
+        ...(isMobile ? { minHeight: RELATED_ROW_H_TOUCH } : null),
+      }}
+    >
+      <span style={{ fontSize: FS.base, fontWeight: 500, color: C.textHeading, overflowWrap: 'break-word' }}>{item.title}</span>
+      <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
+        {PAGE_TYPE[item.type ?? ''] ?? 'Страница'}
+      </span>
+    </button>
+  );
+}
+
+function RelatedBlock({ groups, isMobile }: { groups: WikiRelatedGroupDto[]; isMobile: boolean }) {
+  return (
+    <section data-testid="wiki-related" style={{ marginTop: SP.lg }}>
+      <h3 style={{ margin: 0, fontFamily: FONT.serif, fontSize: FS.lg, fontWeight: 700, color: C.textHeading }}>Связанные</h3>
+      {groups.map(g => (
+        <div key={g.kind} data-testid="wiki-related-group" data-kind={g.kind} style={{ marginTop: SP.sm }}>
+          <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textSecondary }}>{RELATED_LABELS[g.kind]}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', marginTop: SP.xs }}>
+            {g.items.map(it => <RelatedRow key={it.pageKey} item={it} isMobile={isMobile} />)}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 // Сводный бейдж авторства страницы (записка макета, §3)
 const AUTHORSHIP_BADGE: Record<WikiAuthorship, string> = {
   ai: 'Ведёт ИИ',
@@ -336,6 +406,9 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   const st = page.status ? PAGE_STATUS[page.status] : undefined;
   const drift = dto?.drift === true;
   const quotes = new Map(page.footnotes.map(f => [f.id, f.quote]));
+  // «Связанные» — поле того же ответа GET /wiki/page (2Б): своего запроса нет, порядок групп
+  // остаётся бэковым. Пустая группа не рисуется; без поля или из одних пустых групп — блока нет
+  const relatedGroups = (dto?.related ?? []).filter(g => g.items.length > 0);
 
   // Сноски с происхождением (footnotes[] страницы, B7); нет поля — прежний вид
   const authored = dto as WikiPageOverriddenDto | null;
@@ -651,6 +724,8 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
       )}
 
       {page.footnotes.length > 0 && <SourcesBlock footnotes={page.footnotes} />}
+
+      {relatedGroups.length > 0 && <RelatedBlock groups={relatedGroups} isMobile={isMobile} />}
         </>
       )}
 

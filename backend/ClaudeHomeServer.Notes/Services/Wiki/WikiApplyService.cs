@@ -97,6 +97,10 @@ public sealed class WikiApplyService
     public const string CodeManifest = "wiki_apply_manifest";
     public const string CodeDrift = "wiki_apply_drift";
     public const string CodeStale = "wiki_apply_stale";
+    // Риск 7 (D0): авто-операция опирается на create этого же пакета, отклонённый решением
+    // человека или судьи: целевой страницы не было никогда — это не «stale» (база не исчезала,
+    // новый разбор предложил бы тот же create снова). Отказ применения с причиной, не молчание.
+    public const string CodeDependency = "wiki_apply_dependency";
     public const string CodeGate = "wiki_apply_gate";
     // Внутренний сбой проверки (ФС, чтение файла, неожиданный вход): пакет ведётся в
     // «apply_failed» с текстом сбоя — исключение наружу не выходит (ревью S4b-1, MAJOR 2).
@@ -779,8 +783,16 @@ public sealed class WikiApplyService
 
             var existing = working.FirstOrDefault(d => d.Path == op.Page);
             if (op.Op != WikiPackage.OpCreate && existing.Path != op.Page)
+            {
+                // Риск 7 (D0): цель этой операции — create этого же пакета, отклонённый решением
+                // человека или судьи: применять нечего — отказ с причиной, а не «stale» (страницы
+                // не было никогда; новый разбор предложил бы тот же create снова).
+                if (package.Operations.Any(o => o.Op == WikiPackage.OpCreate && o.Page == op.Page && !Applies(o)))
+                    return FailApply(root, package.Id, CodeDependency,
+                        $"авто-операция «{op.Op}» на «{op.Page}»: create этой страницы отклонён решением по спорному — применять нечего");
                 return StaleResult(root, package.Id,
                     $"страница «{op.Page}» не в состоянии раздела: база операции «{op.Op}» исчезла, пакет требует нового разбора");
+            }
 
             // Цитата заново выводится из текста источника: утверждение может быть своей
             // цитатой только если оно дословно в источнике (мера 1). Не выводится — операция

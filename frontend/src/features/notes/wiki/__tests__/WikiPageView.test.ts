@@ -34,7 +34,7 @@ import {
 } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiPageView, parseWikiPage } from '../WikiPageView';
 import { ReplacementDot } from '../WikiUnifiedChrome';
-import { __test as wikiStore, loadWikiPage, wikiActiveLines, wikiOverridesOf, type WikiPageDto, type WikiPageAuthoredDto, type WikiOverrideDto, type WikiPageOverriddenDto } from '../../../../lib/wiki';
+import { __test as wikiStore, consumeOpenWikiPage, loadWikiPage, wikiActiveLines, wikiOverridesOf, type WikiPageDto, type WikiPageAuthoredDto, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiRelatedGroupDto } from '../../../../lib/wiki';
 import { FOOTNOTE_TEXT, fmtDayMonth } from '../WikiFootnotePopover';
 
 // Мок с сохранением остальных экспортов: компонент берёт эти модули через кит хоста,
@@ -63,6 +63,14 @@ const openChat = vi.hoisted(() => vi.fn());
 vi.mock('../../../../lib/openChat', async (orig) => ({
   ...await orig<typeof import('../../../../lib/openChat')>(),
   openChatById: openChat,
+}));
+// useIsMobile мокан (приём WikiPurgeBlock.test): тач-цель пункта «Связанных» проверяется
+// на телефоне. Мок по относительному пути ловит и цепочку через кит. По умолчанию false —
+// прежние тесты видят прежний (десктопный) вид.
+const { mobileFlag } = vi.hoisted(() => ({ mobileFlag: { v: false } }));
+vi.mock('../../../../lib/breakpoints', async (orig) => ({
+  ...await orig<typeof import('../../../../lib/breakpoints')>(),
+  useIsMobile: () => mobileFlag.v,
 }));
 
 import { request } from '../../../../lib/offline';
@@ -242,6 +250,23 @@ ${LONG_LINE}
 - ${LONG_LINE}
 `;
 
+// «Связанные» (2Б, Q1-S7): две непустые группы — сосед по сноске (source) и обратные ссылки,
+// одна из них из «Общего» (цепочка вверх). Пути — форма бэка (путь под pages/,
+// WikiController.cs:309): «Проекты/{id}/…», «Общее/…»; порядок — бэковый (по приоритету kind)
+const RELATED_TWO: WikiRelatedGroupDto[] = [
+  {
+    kind: 'source',
+    items: [{ pageKey: 'Проекты/p1/Источники/Чат.md', title: 'Чат «Ревью фронта»', type: 'source' }],
+  },
+  {
+    kind: 'backlinks',
+    items: [
+      { pageKey: 'Проекты/p1/Решения/р1.md', title: 'Ревюить звук до пятницы', type: 'rule' },
+      { pageKey: 'Общее/Термины/звук.md', title: 'Ревью звука', type: null },
+    ],
+  },
+];
+
 type Cont = ReturnType<typeof mount>['container'];
 type AnyNode = Cont;
 
@@ -322,6 +347,7 @@ function sectionNames(container: Cont): string[] {
 beforeEach(() => {
   flags.on.clear();
   openChat.mockReset();
+  mobileFlag.v = false;
   wikiStore.reset();
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
@@ -1152,5 +1178,122 @@ describe('Плашка «только чтение» и правка (F3a-qa)', 
     expect(findNodeByAttr(c, 'data-testid', 'wiki-readonly')).not.toBeNull();
     expect(has(c, 'Только чтение')).toBe(true);
     expect(buttonByText(c, 'Править')).toBeNull();
+  });
+});
+
+// ─── «Связанные» (2Б, Q1-S7) ───
+// Блок под текстом страницы, из поля related того же ответа GET /wiki/page (своего запроса
+// нет): группы — порядок с бэка, подписи — по постановке шага; пустая группа не рисуется;
+// поля нет или групп 0 — блока нет. Пункт ведёт существующим каналом стора requestOpenWikiPage
+// (тот же, что у «Журнала», «Решений» и дерева): раздел пункта бэк не несёт, он берётся из
+// самого пути — сосед из цепочки вверх открылся бы чужим разделом в 400 (WikiController.cs:241).
+// Мутации этого прогона (вывод — в отчёте задачи): «передать title вместо pageKey» →
+// «пункт ведёт…» краснеет; «не фильтровать пустые группы» → «пустая группа…» краснеет;
+// «не фильтровать related вовсе (рисовать пустой блок)» → «без поля…» краснеет.
+
+const relatedRows = (c: Cont) => allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-related-item');
+const relatedGroupKinds = (c: Cont) => allNodes(c)
+  .filter(n => n.getAttribute('data-testid') === 'wiki-related-group')
+  .map(n => String(n.getAttribute('data-kind')));
+
+describe('«Связанные» (2Б, Q1-S7)', () => {
+  it('две группы: заголовки — подписи из постановки, порядок групп и пунктов — бэковый', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN, related: RELATED_TWO });
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-related')).not.toBeNull();
+    // порядок групп — порядок массива с бэка (source раньше backlinks), не сортировка
+    expect(relatedGroupKinds(c)).toEqual(['source', 'backlinks']);
+    expect(has(c, 'Тот же источник')).toBe(true);
+    expect(has(c, 'Ссылаются сюда')).toBe(true);
+    // групп этой фикстуры нет — их подписей на экране нет
+    expect(has(c, 'Та же хроника')).toBe(false);
+    expect(has(c, 'Упоминают эту страницу')).toBe(false);
+    expect(has(c, 'Упомянуты здесь')).toBe(false);
+    // порядок пунктов — Ordinal пути с бэка; экран не переупорядочивает
+    expect(relatedRows(c).map(n => n.getAttribute('data-page-key')))
+      .toEqual([
+        'Проекты/p1/Источники/Чат.md',
+        'Проекты/p1/Решения/р1.md',
+        'Общее/Термины/звук.md',
+      ]);
+    // заголовок соседа и его вид — внутри своей строки: вид подписью словаря типов,
+    // type null — «Страница», не пусто. (По всему экрану «Источник» дал бы и заголовок
+    // блока «Источники» — здесь проверка по строке пункта.)
+    const rowText = (n: AnyNode) => textNodes(n).map(t => t.trim()).join(' ');
+    const rows = relatedRows(c);
+    expect(rows).toHaveLength(3);
+    expect(rowText(rows[0])).toContain('Чат «Ревью фронта»');
+    expect(rowText(rows[0])).toContain('Источник');
+    expect(rowText(rows[1])).toContain('Ревюить звук до пятницы');
+    expect(rowText(rows[1])).toContain('Правило');
+    expect(rowText(rows[2])).toContain('Ревью звука');
+    expect(rowText(rows[2])).toContain('Страница');
+  });
+
+  it('пункт ведёт существующим каналом открытия страницы: раздел — из пути пункта', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN, related: RELATED_TWO });
+    const c = renderPage();
+    await settle();
+    const rows = relatedRows(c);
+    expect(rows).toHaveLength(3);
+    // Мутация «передать title вместо pageKey» краснит ровно этот тест
+    click(rows[0], 'пункт «Тот же источник»');
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: 'Проекты/p1/Источники/Чат.md' });
+    // сосед из цепочки вверх («Общее») — СВОЙ раздел, а не тот, где открыта страница:
+    // бэк проверяет пару (раздел, страница), чужой раздел дал бы 400 wiki_page_key
+    click(rows[2], 'пункт из «Общего»');
+    expect(consumeOpenWikiPage()).toEqual({ section: 'common', path: 'Общее/Термины/звук.md' });
+  });
+
+  it('пустая группа не рисуется; из одних пустых групп — блока нет', async () => {
+    await seedPage({
+      pageKey: PAGE_KEY,
+      content: PAGE_PLAIN,
+      related: [
+        { kind: 'mentions', items: [] },
+        { kind: 'source', items: [{ pageKey: 'Проекты/p1/Источники/Чат.md', title: 'Чат «Ревью фронта»', type: 'source' }] },
+        { kind: 'backlinks', items: [] },
+      ],
+    });
+    const c = renderPage();
+    await settle();
+    expect(relatedGroupKinds(c)).toEqual(['source']);
+    expect(has(c, 'Упоминают эту страницу')).toBe(false);
+    expect(has(c, 'Ссылаются сюда')).toBe(false);
+  });
+
+  it('related с единственной пустой группой — блока «Связанные» нет', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN, related: [{ kind: 'mentions', items: [] }] });
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-related')).toBeNull();
+    expect(has(c, 'Связанные')).toBe(false);
+  });
+
+  it('поля related нет (старый бэк) — блока нет', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN });
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-related')).toBeNull();
+    expect(has(c, 'Связанные')).toBe(false);
+  });
+
+  it('related: [] — блока нет', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN, related: [] });
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-related')).toBeNull();
+    expect(has(c, 'Связанные')).toBe(false);
+  });
+
+  it('на телефоне тач-цель пункта ≥ 40 px', async () => {
+    mobileFlag.v = true;
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN, related: RELATED_TWO });
+    const c = renderPage();
+    await settle();
+    const rows = relatedRows(c);
+    expect(rows).toHaveLength(3);
+    for (const r of rows) expect(Number(styleOf(r).minHeight)).toBeGreaterThanOrEqual(40);
   });
 });

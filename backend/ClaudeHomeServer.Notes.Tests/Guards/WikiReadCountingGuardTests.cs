@@ -185,6 +185,10 @@ public class WikiReadCountingGuardTests : IDisposable
         new("NotesRecallContributor", PathKind.Ref, PathClass.Counted, "R6",
             "recall в ходе в момент сборки подсказки (ADR-039 §7, таблица «Учитываемые пути»); "
             + "не ручка и не инструмент — справочная строка перечня"),
+        new("WikiController.Page.related", PathKind.Ref, PathClass.NotCounted, null,
+            "чтение соседей раздела при сборке блока «Связанные» страницы (Q1-S6b): текст соседа "
+            + "человеку не отдаётся, чтение фоновое и в учёт не входит (ADR-039 §7); "
+            + "не отдельная ручка — строка внутри GET Page, рефлексией не сверяется"),
     ];
 
     // ─── 1. REST: каждая GET-ручка вертикали — в таблице; каждая строка таблицы — в коде ───

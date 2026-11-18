@@ -118,7 +118,7 @@ public class WikiPrivateChatTests : IDisposable
         new(new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
             new WikiIngestService(_llm, new NoSpheres(),
                 new WikiApplyService(_notes, _keeper, new NoSpheres(), _config), _config),
-            _sessions, _keeper, _config);
+            _sessions, _keeper, new NoSpheres(), _config);
 
     private WikiChatsController Controller()
     {

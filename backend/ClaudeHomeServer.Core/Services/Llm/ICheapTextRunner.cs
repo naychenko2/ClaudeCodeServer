@@ -23,6 +23,18 @@ public sealed record OneShotResult(string Text, OneShotUsage? Usage, long Durati
 public sealed class LlmTimeoutException(string? message = null)
     : InvalidOperationException(message ?? "AI не ответил за отведённое время");
 
+// Отказ места вики по переполнению входа (Q1-S10, LocalAction.FailOnInputOverflow): для этих
+// мест обрезка хвоста промпта — не работа, а потеря смысла (ночь не увидела бы половины
+// дельты, судья судил бы по неполным цитатам), поэтому переполнение отказывает ДО вызова
+// движка: модель не звалась ни разу, слот не занят. Типизирован, чтобы вызывающий различал
+// его от сбоя движка и отказа по слоту (тот же приём, что у LocalEngineSlotRefusalException).
+// Сообщение с нижнего регистра и с цифрами: им вызывающий составляет причину отказа окна, а
+// лог места по ним разбирает, чьё окно и в какой бюджет не влезло.
+public sealed class LocalInputOverflowException(int promptChars, int budgetChars, int numCtx, int numPredict)
+    : InvalidOperationException(
+        $"вход окна не влезает в контекст движка: {promptChars} симв. при бюджете {budgetChars} "
+        + $"(NumCtx {numCtx} − NumPredict {numPredict})");
+
 // Исполнитель-движок места: какая локальная модель способна принять его работу и как она
 // подписана для владельца. Engine — «local» (основная локальная модель, значение
 // LocalActionOverridesStore.LocalRoute) или имя движка LocalEngines:<имя>; третьего вида

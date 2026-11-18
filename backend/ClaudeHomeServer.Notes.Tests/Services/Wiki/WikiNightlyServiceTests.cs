@@ -164,7 +164,7 @@ public class WikiNightlyServiceTests : IDisposable
     private WikiChatIngestService RealIngest(
         Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? midJudge = null) =>
         new(new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
-            new WikiIngestService(_llm, new NoSpheres(), _apply, _config, null, midJudge), _sessions, _keeper, _config);
+            new WikiIngestService(_llm, new NoSpheres(), _apply, _config, null, midJudge), _sessions, _keeper, new NoSpheres(), _config);
 
     // log — захват журнала для тестов строки итога (J-O1); без него — тихий SUT, как раньше.
     // judge — фейк точки (а) (проход судьи в конце), midJudge — фейк точки (б) в настоящей цепочке.
@@ -771,6 +771,51 @@ public class WikiNightlyServiceTests : IDisposable
         e.Cursor.Should().Be(8, "курсор сдвинул AnalyzeAsync по штатному исходу nothing_new");
         e.Zone.Should().Be(WikiChatIngestService.ZoneNothingNew);
         Last().Analyzed.Should().Be(1);
+    }
+
+    // ─── Q1-S2 (1А): каталог промпта — часть входа окна в оценке ночи (риск 1 разреза) ───
+
+    // Оценка окна = символы дельты /4 плюс символы каталога промпта /4: без каталога
+    // оценка занижалась примерно на 20 % и бюджет ночи решался по неверной мере.
+    [Fact]
+    public async Task НочьПрибавляетКаталогПромпта_ОценкаРастётНаЕгоДлину()
+    {
+        Configure();
+        AddChat("c1");
+        // Предпосылка: в разделе страницы есть (фикстура пишет «Сущность»), каталог не пуст.
+        var upChain = WikiSections.UpChain(Section, User, new NoSpheres());
+        var catalog = WikiIngestService.BuildSectionIndex(Root(), Section, upChain,
+            WikiIngestService.ReadSectionState(Root(), Section, upChain));
+        catalog.Length.Should().BeGreaterThan(0);
+
+        await Tick(RealSut());
+
+        var history = _sessions.History["c1"];
+        long chatEst = (WikiChatSlicer.Lines(history, 1, history.Count).Sum(l => (long)l.Text.Length) + 3) / 4;
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+        last.EstTokens.Should().Be(chatEst + catalog.Length / 4,
+            "оценка дельты плюс каталог промпта /4: модель его видела — он часть входа");
+    }
+
+    [Fact]
+    public async Task НочьНеПлатитКаталог_КогдаМодельДоНегоНеДошла()
+    {
+        // Отказ «модели нет» до вызова: каталог GPU не занимал — в оценку он не входит
+        // (тот же смысл, что у нулевого InputTokens в WC-4a).
+        Configure();
+        AddChat("c1");
+        var upChain = WikiSections.UpChain(Section, User, new NoSpheres());
+        var catalog = WikiIngestService.BuildSectionIndex(Root(), Section, upChain,
+            WikiIngestService.ReadSectionState(Root(), Section, upChain));
+        catalog.Length.Should().BeGreaterThan(0);
+        _llm.LocalDown = true;
+
+        await Tick(RealSut());
+
+        var history = _sessions.History["c1"];
+        long chatEst = (WikiChatSlicer.Lines(history, 1, history.Count).Sum(l => (long)l.Text.Length) + 3) / 4;
+        Last().EstTokens.Should().Be(chatEst, "окно не дошло до модели — его каталог не оплачен");
     }
 
     [Fact]

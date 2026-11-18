@@ -8,7 +8,7 @@
 // ответ отбрасывает по ключу запроса: набор разделов поменялся (проект удалён, дерево
 // перечитано), пока первый запрос был в пути, — его поздний ответ не должен затереть свежий.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ChevronDown, ChevronRight, Folder, Globe, Layers, Lock, Search } from 'lucide-react';
 import {
@@ -22,7 +22,7 @@ import { Chip } from '../../../components/ui/Chip';
 import { EmptyState } from '../../../components/ui/EmptyState';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { OriginGlyph, type OriginKind } from './OriginGlyph';
-import { wikiErrorText } from './wikiLabels';
+import { PAGE_TYPE, wikiErrorText } from './wikiLabels';
 
 // Строка дерева: 30 на десктопе, 44 на тач (макет .tr / .app.m .tr)
 const ROW_H = 30;
@@ -38,6 +38,45 @@ const SOURCE_CARD_DIR = 'Источники';
 // Раздел сферы — место зарезервировано, запись в него отказана ('wiki_sphere_reserved', ADR-036 §7),
 // наполнение — отдельная фича. В раскрытом пустом узле вместо строк — только это пояснение.
 const SPHERE_EMPTY_HINT = 'Страниц пока нет — раздел сферы наполняется отдельной фичей';
+
+// ─── Подгруппы узла раздела (3А) ───
+// Внутри узла страницы раскладываются по подгруппам по типу каталога (WikiPageInfoDto.type —
+// источник правды), порядок фиксированный списком ниже, не по алфавиту. Пустые подгруппы
+// в раскладку не попадают. Счётчик подгруппы — число строк после фильтра и поиска.
+// Свёртка подгруппы переживает перечитку: ключ localStorage — FOLDS_KEY, запись —
+// «ключ раздела#вид».
+const FOLDS_KEY = 'cc_wiki_tree_folds';
+
+const NOTE_SUB = 'note';
+// «Прочее» — types из каталога, не вошедшие в список выше, и страницы без типа
+const OTHER_SUB = 'other';
+// Порядок подгрупп внутри узла: решения → правила → термины → состояния → хроники →
+// прочее → мои заметки. Подписи — из PAGE_TYPE (wikiLabels); «Прочее» и «Мои заметки» —
+// здесь: единой метки для группы типов и для заметок в PAGE_TYPE нет.
+const SUBGROUP_ORDER: { key: string; label: string }[] = [
+  { key: 'decision', label: PAGE_TYPE.decision },
+  { key: 'rule', label: PAGE_TYPE.rule },
+  { key: 'term', label: PAGE_TYPE.term },
+  { key: 'state', label: PAGE_TYPE.state },
+  { key: 'chronicle', label: PAGE_TYPE.chronicle },
+  { key: OTHER_SUB, label: 'Прочее' },
+  { key: NOTE_SUB, label: 'Мои заметки' },
+];
+
+// Ключ свёртки: раздел + вид. '#'-суффикс не пересекается с ключом узла (тот его не несёт)
+const foldKey = (sectionKey: string, subKey: string) => `${sectionKey}#${subKey}`;
+
+function readFolds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(FOLDS_KEY);
+    const arr: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? arr.filter((k): k is string => typeof k === 'string') : []);
+  } catch { return new Set(); } // приватный режим/переполнение — свёртка удобство, не данные
+}
+
+function writeFolds(folds: ReadonlySet<string>): void {
+  try { localStorage.setItem(FOLDS_KEY, JSON.stringify([...folds])); } catch { /* та же причина */ }
+}
 
 export type OriginFilter = 'all' | 'note' | 'ai' | 'together' | 'me';
 
@@ -56,6 +95,18 @@ export interface UnifiedItem {
   sectionKey: string;
   title: string;
   origin: OriginFilter;
+  /** Тип страницы из каталога (source of truth по видам); у заметки — null */
+  type: string | null;
+}
+
+export interface UnifiedSubgroup {
+  /** Ключ подгруппы для свёртки: `${ключ раздела}#${вид}` */
+  key: string;
+  sectionKey: string;
+  /** Вид: тип каталога, 'other' (прочие/без типа) или 'note' (мои заметки) */
+  typeKey: string;
+  label: string;
+  items: UnifiedItem[];
 }
 
 export interface UnifiedGroup {
@@ -64,7 +115,10 @@ export interface UnifiedGroup {
   /** Тип узла — иконка и порядок: проекты, сферы, общее, личное, прочие */
   kind: 'project' | 'sphere' | 'common' | 'personal' | 'other';
   orphan: boolean;
+  /** Строки узла в порядке подгрупп — общий вид для счётчиков и порядка строк */
   items: UnifiedItem[];
+  /** Подгруппы непустые, в фиксированном порядке */
+  subgroups: UnifiedSubgroup[];
 }
 
 const GLYPH_OF: Record<Exclude<OriginFilter, 'all'>, OriginKind> = {
@@ -101,7 +155,7 @@ export function buildUnifiedGroups(
   const addAll = (list: readonly WikiSectionDto[], kind: UnifiedGroup['kind'], label: (s: WikiSectionDto) => string) => {
     for (const s of list) {
       if (s.local) continue;
-      groups.set(s.key, { key: s.key, orphan: s.orphan, kind, label: label(s), items: [] });
+      groups.set(s.key, { key: s.key, orphan: s.orphan, kind, label: label(s), items: [], subgroups: [] });
     }
   };
   // Порядок узлов: проекты → сферы → «Общее» → «Личное» (решение Андрея 04.11); «Другие заметки» — после них.
@@ -111,16 +165,23 @@ export function buildUnifiedGroups(
   addAll(by.sphere, 'sphere', s => s.name ?? 'Сфера');
   addAll(by.common, 'common', () => 'Общее');
   addAll(by.personal, 'personal', () => 'Личное');
-  const other: UnifiedGroup = { key: OTHER_KEY, label: 'Другие заметки', kind: 'other', orphan: false, items: [] };
+  const other: UnifiedGroup = { key: OTHER_KEY, label: 'Другие заметки', kind: 'other', orphan: false, items: [], subgroups: [] };
+
+  const itemsOf = new Map<string, UnifiedItem[]>();
+  const push = (g: UnifiedGroup, item: UnifiedItem) => {
+    let list = itemsOf.get(g.key);
+    if (!list) { list = []; itemsOf.set(g.key, list); }
+    list.push(item);
+  };
 
   for (const g of groups.values()) {
     for (const p of (catalogs[g.key]?.pages ?? []) as WikiPageInfoAuthoredDto[]) {
       if (isSourceCard(p)) continue;
       if (text && !`${p.title} ${p.summary ?? ''}`.toLowerCase().includes(text)) continue;
       const a = wikiAuthorshipOf(p);
-      g.items.push({
+      push(g, {
         kind: 'page', id: p.pageKey, sectionKey: g.key, title: p.title,
-        origin: a === 'human' ? 'me' : a,
+        origin: a === 'human' ? 'me' : a, type: p.type ?? null,
       });
     }
   }
@@ -130,11 +191,38 @@ export function buildUnifiedGroups(
     if (n.source === 'wiki') continue;
     const key = noteSectionKey(n, sections);
     const target = (key && groups.get(key)) || other;
-    target.items.push({ kind: 'note', id: n.id, sectionKey: target.key, title: n.title, origin: 'note' });
+    push(target, { kind: 'note', id: n.id, sectionKey: target.key, title: n.title, origin: 'note', type: null });
   }
+  for (const g of groups.values()) {
+    const items = itemsOf.get(g.key);
+    if (items?.length) splitSubgroups(g, items);
+  }
+  const otherItems = itemsOf.get(OTHER_KEY);
+  if (otherItems?.length) splitSubgroups(other, otherItems);
   const out = [...groups.values()];
   if (other.items.length) out.push(other);
   return out;
+}
+
+// Раскладка строк узла по подгруппам фиксированного порядка: тип из списка → своя
+// подгруппа; остальные типы и страницы без типа → «Прочее»; заметки → «Мои заметки».
+// Пустые подгруппы не создаются; items узла — строки в порядке подгрупп
+// (общий вид для счётчиков и порядка строк).
+export function splitSubgroups(g: UnifiedGroup, items: readonly UnifiedItem[]): void {
+  const byType = new Map<string, UnifiedItem[]>();
+  for (const it of items) {
+    const key = it.kind === 'note' ? NOTE_SUB : (it.type && SUBGROUP_ORDER.some(s => s.key === it.type) ? it.type : OTHER_SUB);
+    const list = byType.get(key);
+    if (list) list.push(it); else byType.set(key, [it]);
+  }
+  const subs: UnifiedSubgroup[] = [];
+  for (const s of SUBGROUP_ORDER) {
+    const list = byType.get(s.key);
+    if (!list?.length) continue;
+    subs.push({ key: foldKey(g.key, s.key), sectionKey: g.key, typeKey: s.key, label: s.label, items: list });
+  }
+  g.subgroups = subs;
+  g.items = subs.flatMap(s => s.items);
 }
 
 export function countByOrigin(groups: readonly UnifiedGroup[]): Record<OriginFilter, number> {
@@ -145,8 +233,14 @@ export function countByOrigin(groups: readonly UnifiedGroup[]): Record<OriginFil
 
 export function filterGroups(groups: readonly UnifiedGroup[], filter: OriginFilter): UnifiedGroup[] {
   if (filter === 'all') return groups.map(g => ({ ...g }));
+  // Подгруппы пересобираются из отфильтрованных строк: счётчик подгруппы — число после
+  // фильтра; подгруппа, ставшая пустой, исчезает
   return groups
-    .map(g => ({ ...g, items: g.items.filter(i => i.origin === filter) }))
+    .map(g => {
+      const next: UnifiedGroup = { ...g, items: [], subgroups: [] };
+      splitSubgroups(next, g.items.filter(i => i.origin === filter));
+      return next;
+    })
     .filter(g => g.items.length > 0);
 }
 
@@ -216,6 +310,9 @@ export function WikiUnifiedTree({
   const isMobile = useIsMobile();
   const [filter, setFilter] = useState<OriginFilter>('all');
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  // Свёртка подгрупп переживает перечитку: читаем хранилище при монтировании (один раз,
+  // синхронно — localStorage), а не в эффекте
+  const [folded, setFolded] = useState<ReadonlySet<string>>(readFolds);
   const [hovered, setHovered] = useState<string | null>(null);
   const { catalogs, loading, error, reload } = useSectionCatalogs(sections);
 
@@ -230,6 +327,16 @@ export function WikiUnifiedTree({
     if (!next.delete(key)) next.add(key);
     return next;
   });
+
+  // Сворачиваем подгруппу — запись сразу в хранилище (своего ключа), состояние — за ним
+  const toggleSub = useCallback((key: string) => {
+    setFolded(prev => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      writeFolds(next);
+      return next;
+    });
+  }, []);
 
   const rowStyle = (selected: boolean, hover: boolean): CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%', textAlign: 'left', border: 'none',
@@ -269,6 +376,34 @@ export function WikiUnifiedTree({
     return g.kind === 'common' ? <Globe {...p} /> : g.kind === 'personal' ? <Lock {...p} /> : <Folder {...p} />;
   };
 
+  // Подгруппа узла: заголовок со счётчиком (число после фильтра/поиска) и свёрткой;
+  // строки — с отступом на уровень глубже. Поиск/фильтр раскрывают найденное — как узел.
+  const subgroupNode = (sub: UnifiedSubgroup) => {
+    const open = searching || !folded.has(sub.key);
+    return (
+      <Fragment key={sub.key}>
+        <button
+          type="button" data-testid="unified-subgroup" data-section={sub.sectionKey} data-type={sub.typeKey} aria-expanded={open}
+          onClick={() => toggleSub(sub.key)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: SP.xs, width: '100%', textAlign: 'left', border: 'none',
+            background: 'transparent', minHeight: rowH, padding: `${SP.xs}px ${SP.sm}px`, paddingLeft: SP.lg,
+            cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 500, color: C.textSecondary,
+          }}
+        >
+          {open
+            ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
+            : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />}
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub.label}</span>
+          <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>
+            {sub.items.length}
+          </span>
+        </button>
+        {open && sub.items.map(itemRow)}
+      </Fragment>
+    );
+  };
+
   const groupNode = (g: UnifiedGroup) => {
     // Поиск или фильтр раскрывают найденное: свёрнутый узел спрятал бы результат
     const open = searching || !collapsed.has(g.key);
@@ -292,7 +427,7 @@ export function WikiUnifiedTree({
             {g.items.length}
           </span>
         </button>
-        {open && g.items.map(itemRow)}
+        {open && g.subgroups.map(subgroupNode)}
         {open && g.kind === 'sphere' && !g.items.length && (
           <div
             data-testid="unified-sphere-hint"

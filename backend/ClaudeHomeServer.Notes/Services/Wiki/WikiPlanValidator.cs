@@ -199,6 +199,15 @@ public static class WikiPlanValidator
         }
         var targetPages = pages.Where(p => p.Section == sectionKey).ToList();
 
+        // Снимок для резолва ссылок claim — те же страницы и те же правила, что у гейта
+        // (WikiGate.ResolveLink): второй копии правил в проекте нет. Страниц самого плана
+        // в снимке нет: ссылка на страницу, которую создаёт этот же план, — «иное»,
+        // в ветке синтеза она снимается (очередь 1, 2А).
+        var linkSnapshot = new List<(string Section, WikiPage Page, string Path)>();
+        foreach (var p in pages)
+            if (p.Model is not null)
+                linkSnapshot.Add((p.Section, p.Model, p.Path));
+
         // Карточка источника — цель сносок принятых операций. Нет её в разделе или вверх
         // по цепочке — сноска не резолвится: каждая опирающаяся на неё операция отклоняется.
         var card = FindByTitle(pages, source.Card);
@@ -283,6 +292,18 @@ public static class WikiPlanValidator
             }
             var claimText = op.Claim!;
             var quotes = op.Quotes!;
+
+            // Неразрешимые ссылки в claim снимаются, а не валят план (очередь 1, 2А):
+            // каждая [[…]], не найденная тем же правилом, что и весь гейт, заменяется своим
+            // текстом без скобок — алиасом после «|», а если его нет — заголовком без
+            // префикса раздела. Найденная в разделе или вверх по цепочке остаётся как
+            // написана. «Иное» — чужой раздел, призрак, нераспознанный префикс и страница,
+            // которую создаёт этот же план (её нет в снимке). Снятые дальше идут как
+            // обычный текст утверждения: их видит дедуп, числа и рендер. Цель операции
+            // «link» и правка человека — строгий гейт без изменений.
+            var strippedLinks = 0;
+            if (synth)
+                claimText = WikiGate.StripUnresolvedLinks(claimText, sectionKey, chain, linkSnapshot, out strippedLinks);
 
             // Мера 1: каждая цитата дословно в тексте источника. Нет — анти-петля (c3): цитата
             // дословна на странице вики, а не в источнике — модель пересказала вики.
@@ -419,7 +440,10 @@ public static class WikiPlanValidator
                 });
 
             // Числа утверждения (ADR-039, решение 2): не подтверждённое цитатой число — не отказ,
-            // а «Входящие» с причиной: решает человек.
+            // а «Входящие» с причиной: решает человек. Что считается числом утверждения и его
+            // подтверждением — одно место, WikiClaimNumbers.Unconfirmed: там и правило ссылок
+            // (текст уцелевших [[ссылок]] не часть утверждения; текст снятой ссылки уже
+            // обычный текст утверждения, его числа считаются).
             var decision = verdict.Decision;
             var decisionReason = verdict.Reason;
             var decisionReasonCode = verdict.ReasonCode;
@@ -462,6 +486,9 @@ public static class WikiPlanValidator
                 Decision = decision,
                 Reason = decisionReason,
                 ReasonCode = decisionReasonCode,
+                // Число снятых ссылок — поле принятой операции: по нему шаг журнала
+                // (Q1-S5) доложит о снятии; у старой формы такого понятия нет — null.
+                StrippedLinks = synth ? strippedLinks : null,
                 BaseHashes = isCreate
                     ? new Dictionary<string, string>()
                     : new Dictionary<string, string> { [page.Path] = Sha256Hex(page.Content) },
@@ -799,6 +826,11 @@ public static class WikiPlanValidator
         }
         return new(null, -1);
     }
+
+    // ─── Ссылки в claim (очередь 1, 2А) ────────────────────────────────────────
+    // Снятие неразрешимых ссылок и сам резолв живут в WikiGate (StripUnresolvedLinks /
+    // ResolveLink), учёт ссылок при проверке чисел — в WikiClaimNumbers: второй копии
+    // правил в проекте нет, здесь их больше нет.
 
     // Форма цепочки «вверх» (ADR-036, решение 4): только сферы и общее, без проектов,
     // повторов, пустых элементов и самого раздела назначения. Содержательную цепочку

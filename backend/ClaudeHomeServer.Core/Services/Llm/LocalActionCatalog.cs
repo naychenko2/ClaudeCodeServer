@@ -57,12 +57,18 @@ public sealed record CheapProfileSpec(
 // остальных мест цепочка одна, как раньше: одна работа, один проход по цепочке. Флаг только
 // описательный — он ничего не разрешает сам, он говорит вызывающему, что тому можно делить
 // работу на исполнителей.
+// FailOnInputOverflow — переполнение входа для этого места = отказ окна, а не обрезка хвоста
+// промпта (Q1-S10): местам вики неполный вход дороже отказа — ночной разбор не увидел бы
+// половины дельты, судья судил бы по неполным цитатам, и потеря пропала бы молча. Раннер
+// отказывает LocalInputOverflowException ДО вызова движка (CheapTextRunner.RunOnClientAsync).
+// Флаг стоит только у мест вики (wiki-ingest / wiki-nightly / wiki-judge): остальные места
+// режутся клиентом, как раньше (num_ctx Ollama, TrimToBudget LlamaServerClient).
 public sealed record LocalAction(
     string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
     bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null,
     int? CloudNumPredict = null, ActionInput Input = ActionInput.Text, bool FacePose = false,
     int? NumCtx = null, int? NumPredict = null, int? TimeoutMs = null,
-    bool ParallelExecutors = false);
+    bool ParallelExecutors = false, bool FailOnInputOverflow = false);
 
 // Вход места каталога: только текст или текст плюс картинки (разметка фото персонажа)
 public enum ActionInput { Text, Images }
@@ -243,9 +249,12 @@ public static class LocalActionCatalog
         // это бюджет обрезки промпта), ответ не влезает в потолок вывода, работа не
         // укладывается в профильное время. Значения только у этих мест, остальные
         // места Large — с профилем.
+        // NumPredict 8192 (Q1-S14): законный ответ раздела — ≤ ~7k токенов, вырожденная
+        // генерация держит GPU вдвое меньше; бюджет входа (NumCtx − NumPredict) от этого растёт.
         new(WikiIngest, "Разбор источника в вики", "Заметки", CheapProfile.Large,
             DefaultLocal: true, Tier: ModelTier.Medium,
-            NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000),
+            NumCtx: 65_536, NumPredict: 8_192, TimeoutMs: 600_000,
+            FailOnInputOverflow: true),
         // Факт по заявке агента (wiki_add_fact): одно утверждение с дословной цитатой.
         // Text, а не Small: на Small num_ctx обрезал бы выдержку источника, и цитата
         // не сверялась бы QuoteMatcher-ом в отсечённой части. Слот weak — явный (ADR-035 §7).
@@ -259,10 +268,11 @@ public static class LocalActionCatalog
         // ParallelExecutors: true — единственное место, которое делит свою работу между
         // движками: ночь разбирает отобранные чаты параллельно (W1a → W2a). Остальные места —
         // одна работа за один проход цепочки.
+        // NumPredict 8192 — то же, что у wiki-ingest выше (Q1-S14).
         new(WikiNightly, "Ночной разбор вики", "Заметки", CheapProfile.Large,
             DefaultLocal: true, Tier: ModelTier.Medium,
-            NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000,
-            ParallelExecutors: true),
+            NumCtx: 65_536, NumPredict: 8_192, TimeoutMs: 600_000,
+            ParallelExecutors: true, FailOnInputOverflow: true),
         // Ступень 2 отбора чатов для вики (Ф2, ADR-035 решение 12а): вердикт «есть ли в чате
         // что-то стоящее» — вход готовит вызывающий (обрезанный отрезок чата), ответ —
         // маленький JSON. Слот weak — явный.
@@ -276,7 +286,7 @@ public static class LocalActionCatalog
         // исполнителя для этого места выбирает админ в «Поставщиках моделей». Ночной синтез
         // (wiki-nightly) этой записи не касается: он остаётся только локальным.
         new(WikiJudge, "Судья спорных правок вики", "Заметки", CheapProfile.Large,
-            DefaultLocal: false, Tier: ModelTier.Strong),
+            DefaultLocal: false, Tier: ModelTier.Strong, FailOnInputOverflow: true),
         new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),

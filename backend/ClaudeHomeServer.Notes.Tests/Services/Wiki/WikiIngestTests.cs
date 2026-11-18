@@ -95,6 +95,24 @@ public class WikiIngestTests : IDisposable
 
     private static readonly string CardFile = CardFileTitled(CardTitle);
 
+    // Страница знаний с именем (для тестов каталога промпта): пустые секции, сводки нет.
+    private static string PageTitled(string title) => $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {{title}}
+
+        ## Сводка
+        ## Хронология
+        ## Противоречия
+        ## История
+        """;
+
     private static readonly string PageBase = $$"""
         ---
         type: topic
@@ -198,12 +216,16 @@ public class WikiIngestTests : IDisposable
     [Fact]
     public async Task C1_ПромптСинтеза_видитТолькоРазделНазначенияИВерх()
     {
-        // Соседний проект и личное: их _index есть на диске (тест генерирует сам) —
-        // в промпт они не попадают (ADR-036, решение 3). «Общее» — вверх по цепочке: его
-        // каталог в промпте обязан быть.
+        // Соседний проект и личное: их страницы и карточки есть на диске, их _index
+        // перегенерирован (тест зовёт сам) — в промпт они не попадают (ADR-036, решение 3).
+        // «Общее» — вверх по цепочке: его страница знаний в промпте обязан быть. Карточка
+        // источника — нет ни своего, ни верхнего раздела: карточки в каталог промпта не
+        // входят (Q1-S2) — они цель сносок, а не страницы знаний.
         Write(User, "projects/q1", "Проекты/q1/Источники/Соседняя-карточка.md", CardFileTitled("Соседняя-карточка"));
+        Write(User, "projects/q1", "Проекты/q1/Соседняя-страница.md", PageTitled("Соседняя-страница"));
         Write(User, "personal", "Личное/Источники/Личная-карточка.md", CardFileTitled("Личная-карточка"));
         Write(User, "common", "Общее/Источники/Общая-карточка.md", CardFileTitled("Общая-карточка"));
+        Write(User, "common", "Общее/Общая-страница.md", PageTitled("Общая-страница"));
         WikiProjections.RegenerateSection(Root, "projects/q1");
         WikiProjections.RegenerateSection(Root, "personal");
 
@@ -213,9 +235,10 @@ public class WikiIngestTests : IDisposable
         res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew);
         var promptS = llm.PromptOf("S");
         promptS.Should().Contain(PageTitle, "каталог раздела назначения — в промпте");
-        promptS.Should().Contain("Общая-карточка", "цепочка вверх (common) — в промпте");
-        promptS.Should().NotContain("Соседняя-карточка", "каталог соседнего проекта — вне промпта");
-        promptS.Should().NotContain("Личная-карточка", "каталог личного раздела — вне промпта");
+        promptS.Should().Contain("Общая-страница", "цепочка вверх (common) — её страница знаний в промпте");
+        promptS.Should().NotContain("Общая-карточка", "карточки source в каталог промпта не входят (Q1-S2)");
+        promptS.Should().NotContain("Соседняя-", "соседний проект — ни его карточка, ни его страница вне промпта");
+        promptS.Should().NotContain("Личная-", "каталог личного раздела — вне промпта");
     }
 
     // ── c2: «нечего добавить» — пакет не создан, исход nothing_new, ровно два вызова ──

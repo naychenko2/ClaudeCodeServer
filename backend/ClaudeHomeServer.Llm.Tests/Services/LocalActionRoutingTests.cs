@@ -191,7 +191,7 @@ public class LocalActionRoutingTests
         foreach (var key in new[] { LocalActionCatalog.WikiIngest, LocalActionCatalog.WikiNightly })
         {
             var spec = router.ProfileFor(key);
-            Assert.Equal(16_384, spec.NumPredict);
+            Assert.Equal(8_192, spec.NumPredict); // Q1-S14: 16 384 → 8 192
             Assert.Equal(600_000, spec.TimeoutMs);
         }
         // Сосед по профилю Large не тронут: doc-summary — значения профиля.
@@ -214,7 +214,7 @@ public class LocalActionRoutingTests
             ["Ollama:Profiles:large:TimeoutMs"] = "120000",
         });
         var nightly = router.ProfileFor(LocalActionCatalog.WikiNightly);
-        Assert.Equal(16_384, nightly.NumPredict);
+        Assert.Equal(8_192, nightly.NumPredict); // Q1-S14: 16 384 → 8 192
         Assert.Equal(600_000, nightly.TimeoutMs);
         var doc = router.ProfileFor(LocalActionCatalog.DocSummary);
         Assert.Equal(2048, doc.NumPredict);
@@ -701,7 +701,7 @@ public class LocalActionRoutingTests
 
         result.Should().NotBeNull();
         engine.Calls.Should().Be(1, "шаг локали должен быть пройден ровно один раз");
-        engine.LastNumPredict.Should().Be(16_384, "пер-местный num_predict wiki-места, не профильный 1024");
+        engine.LastNumPredict.Should().Be(8_192, "пер-местный num_predict wiki-места (Q1-S14), не профильный 1024");
         engine.LastNumCtx.Should().Be(65_536, "пер-местный num_ctx wiki-места, не профильный 16384");
     }
 

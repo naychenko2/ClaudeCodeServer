@@ -22,15 +22,18 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // 2. Карточка источника читается с диска: она уже захвачена (S6h) и лежит в разделе
 //    назначения; её заголовок — цель сносок. Карточки нет или она не страница type: source —
 //    отказ до обращения к модели (неожиданный вход — отказ с причиной, не исключение).
-// 3. Код уточняет кандидатов-страниц: страницы раздела назначения и цепочки вверх, чей
-//    заголовок или алиас встречается в тексте выдержки (тот же порядок нормализации,
-//    что у индекса ByName — WikiDedup.NormalizeName), не больше MaxCandidatePages. Их текст —
-//    в промпт синтеза («CURRENT CONTENT»), чтобы supersede/conflict называли цель дословно.
+// 3. Код уточняет кандидатов-страниц: страницы раздела назначения и цепочки вверх по
+//    пересечению значимых слов выдержки с заголовком (×2), сводкой и алиасами; дословное
+//    совпадение заголовка или алиаса — первой очереди, прежней нормализацией (Q1-S3,
+//    WikiCandidates), не больше MaxCandidatePages. Их текст — в промпт синтеза
+//    («CURRENT CONTENT»), чтобы supersede/conflict называли цель дословно.
 // 4. Синтез — one-shot без инструментов (ICheapTextRunner; место задаёт заявка,
 //    по умолчанию wiki-ingest): операции с утверждением и цитатами (ADR-039, решение 2).
-//    В промпт — _index только раздела назначения и
-//    цепочки вверх: каталогов соседних проектов и личного в промпте не бывает (ADR-036,
-//    решение 3; совпадения с соседями ищет код, не модель).
+//    В промпт — каталог только раздела назначения и цепочки вверх, построенный из того же
+//    снимка страниц раздела, что и кандидаты (Q1-S2): каталогов соседних проектов и личного
+//    в промпте не бывает (ADR-036, решение 3; совпадения с соседями ищет код, не модель).
+//    Его символы — часть входа окна: они идут в исходе (CatalogChars) и складываются в
+//    оценку расхода ночи (риск 1 разреза).
 // 5. WikiPlanValidator.ValidateSynth; решение — по Rejected: это вина плана. При ней — одна
 //    попытка ремонта с перечнем Rejected (следующий вызов модели); после ремонта все операции
 //    пакета
@@ -96,8 +99,16 @@ public sealed class WikiIngestService
     public const string OutcomeRejected = "rejected";
 
     /// <summary>Кандидатов-страниц, чей текст показывается модели в промпте синтеза, не больше
-    /// пяти: промпт не должен разрастись до половины раздела.</summary>
+    /// пяти: промпт не должен разрастись до половины раздела. Это внешний потолок: порядок
+    /// кандидатов — top-6 в WikiCandidates, до промпта доходит не больше этого числа.</summary>
     public const int MaxCandidatePages = 5;
+
+    /// <summary>Потолок каталога промпта, символов (Q1-S2, риск 1 разреза): полный каталог
+    /// реального раздела (~130 строк со сводкой) съедает 8–9k токенов локального контекста,
+    /// и окно дельты 35k токенов вместе с ним не помещается в NumCtx места. В пределах
+    /// потолка к строке приложена сводка, за ним — только имя и вид; каталог человека
+    /// (_index.md) потолка не знает — он полный.</summary>
+    public const int PromptCatalogMaxChars = 14_000;
 
     /// <summary>Причина отказа окна, когда локальный маршрут места не дал ответа (дефект 2e13d45c,
     /// J-O1): «модель дала пустой ответ» лжёт, когда модель не звалась вовсе (движок не настроен,
@@ -127,10 +138,17 @@ public sealed class WikiIngestService
     /// ответившего вызова — сумма всех состоявшихся вызовов прогона независимо от исхода:
     /// отказанный план расход не отменяет (он понесён). Dropped/DropReasons — операции синтеза,
     /// отброшенные проверками кода при пакете из принятых (поштучный приём): число и первые
-    /// MaxDropReasons причин; 0/null — отбрасывать было нечего.</summary>
+    /// MaxDropReasons причин; 0/null — отбрасывать было нечего. CatalogChars (Q1-S2, риск 1
+    /// разреза) — символы каталога промпта, построенного этим прогоном: каталог — часть входа
+    /// окна, ночь прибавляет его /4 к оценке расхода. 0 — прогон не дошёл до каталога (отказ
+    /// входа, карточки) или раздел был пуст (пустой раздел каталога не даёт). StrippedLinks
+    /// (Q1-S5) — сумма по окну ссылок, снятых валидатором из claim принятых операций
+    /// (Operation.StrippedLinks, Q1-S4): только число, без текста — снятые ссылки уже лежат
+    /// обычным текстом в утверждении, счётчик говорит лишь, сколько их было снято.
+    /// 0 — снимать было нечего.</summary>
     public readonly record struct IngestResult(string Outcome, string? Reason, string? PackageId,
         long InputTokens = 0, int Dropped = 0, IReadOnlyList<string>? DropReasons = null,
-        int Operations = 0);
+        int Operations = 0, int CatalogChars = 0, int StrippedLinks = 0);
 
     /// <summary>Сколько причин отброшенных операций нести в исходе.</summary>
     public const int MaxDropReasons = 3;
@@ -235,6 +253,18 @@ public sealed class WikiIngestService
     }
 
     private const string SynthUnparsed = "синтез: ответ модели не разобран";
+
+    // D3 (Q1-S12): длина «начала ответа» в причине непарсимого ответа. Это диагностика, а не
+    // цитата: ровно столько, чтобы отличить «ответ обрезан по лимиту вывода» (ровный хвост
+    // JSON-плана) от «ответ не JSON вовсе» (проза с самого начала).
+    private const int UnparsedAnswerHeadChars = 300;
+
+    // D9 (Q1-S14): длина «хвоста ответа» — последние UnparsedAnswerTailChars символов с
+    // видимой пробелью (пробел → ·, \n → ⏎, \t → →). Начало не отличает петлю повтора от
+    // бесконечных пробелов: у gemma DisableThinking, вырожденная генерация видна только по
+    // хвосту. Хвоста нет, когда ответа не больше начала: при 300 символов он совпал бы с
+    // началом символ в символ.
+    private const int UnparsedAnswerTailChars = 200;
 
     /// <summary>Ключ заявки — версия источника, а не только его ссылка. Путь карточки —
     /// функция (ref, version): имя карточки строится из хэша версии (WikiSourceCapture.cs:309,
@@ -354,16 +384,27 @@ public sealed class WikiIngestService
                 return Rejected($"страницы раздела не читаются: {e.Message}");
             }
 
-            var sectionIndex = BuildSectionIndex(root, sectionKey, upChain);
+            // Каталог промпта строится из того же снимка страниц раздела, что и кандидаты:
+            // второй точки правды о состоянии раздела в окне не появляется (Q1-S2).
+            var sectionIndex = BuildSectionIndex(root, sectionKey, upChain, sectionPages);
             var usage = new UsageAccumulator();
+
+            // Исход прогона после того, как каталог промпта построен: каталог — часть входа
+            // окна и входит в каждый исход этого прогона, включая отказ после модели (он
+            // понесён). Ночь прибавляет его /4 к оценке расхода (риск 1 разреза).
+            IngestResult Res(string outcome, string? reason, string? packageId = null,
+                long tokens = 0, int operations = 0) =>
+                new(outcome, reason, packageId, tokens, 0, null, operations, sectionIndex.Length);
 
             // Отказ ПОСЛЕ ответившего вызова модели: понесённый расход остаётся в исходе
             // (WC-4a) — он был, даже если разбор его не окупил. Отказ до первого вызова —
             // прежний Rejected: там расхода нет (usage пуст и сам, но форма называет смысл).
-            IngestResult RejectedUsed(string reason) => new(OutcomeRejected, reason, null, usage.InputTokens);
+            IngestResult RejectedUsed(string reason) => Res(OutcomeRejected, reason, null, usage.InputTokens);
 
-            // 3. Кандидаты-страницы: чей заголовок или алиас встречается в тексте окна
-            //    (нормализация — та же, что у индекса ByName), не больше MaxCandidatePages.
+            // 3. Кандидаты-страницы: пересечение значимых слов окна с заголовком, сводкой
+            //    и алиасами; дословное совпадение заголовка — первой очереди, как раньше
+            //    (WikiCandidates, Q1-S3). Тот же снимок sectionPages, что у каталога.
+            //    Не больше MaxCandidatePages.
             var candidates = PickCandidatePages(sectionPages, request.SourceText);
             string? existingPages = candidates.Count == 0
                 ? null
@@ -418,20 +459,22 @@ public sealed class WikiIngestService
                 if (nothingE)
                     // Второй отказ молчит без своей причины — остаётся первая: модель
                     // сказала это о том же окне, повтор её не опроверг.
-                    return new IngestResult(OutcomeNothingNew, modelReasonE ?? nothingReasonS, null, usage.InputTokens);
+                    return Res(OutcomeNothingNew, modelReasonE ?? nothingReasonS, tokens: usage.InputTokens);
                 if (planE is not { Operations: { Count: > 0 } })
-                    return new IngestResult(OutcomeNothingNew, nothingReasonS, null, usage.InputTokens);
+                    return Res(OutcomeNothingNew, nothingReasonS, tokens: usage.InputTokens);
                 // Повтор дал план — он судится общим путём ниже (тот же валидатор и, при
                 // отказе кода, обычный ремонт: это ремонт плана, а не повтор nothing_new
                 // — цикл дыры WC-2 всё равно один).
                 plan = planE;
             }
             else if (nothingS)
-                return new IngestResult(OutcomeNothingNew, modelReasonS, null, usage.InputTokens);
+                return Res(OutcomeNothingNew, modelReasonS, tokens: usage.InputTokens);
             else if (plan is null)
-                return RejectedUsed(parseErrorS ?? SynthUnparsed);
+                // D3: к причине — сколько этот вызов отдал вывода против лимита вывода места и
+                // чем ответ начинается: по этому видно, обрезан ли он по лимиту или не JSON вовсе.
+                return RejectedUsed(WithUnparsedDiagnostics(parseErrorS ?? SynthUnparsed, answerS, actionKey));
             else if (plan.Operations is { Count: 0 })
-                return new IngestResult(OutcomeNothingNew, "план без операций: писать нечего", null, usage.InputTokens);
+                return Res(OutcomeNothingNew, "план без операций: писать нечего", tokens: usage.InputTokens);
 
             // 5. Проверки кода. Решение — по Rejected: это вина плана. Violations — состояние
             // раздела (уже лежит на страницах): план от него не зависит, модель его не чинит —
@@ -480,14 +523,15 @@ public sealed class WikiIngestService
                     return WithSectionIssues(RejectedUsed(answerR.Reason), verdict);
                 var planR = ParseSynthPlan(answerR.Text!, out var nothingR, out var modelReasonR, out var parseErrorR);
                 if (nothingR)
-                    return WithSectionIssues(
-                        new IngestResult(OutcomeNothingNew, modelReasonR, null, usage.InputTokens), verdict);
+                    return WithSectionIssues(Res(OutcomeNothingNew, modelReasonR, tokens: usage.InputTokens), verdict);
                 if (planR is null)
-                    return WithSectionIssues(RejectedUsed("ремонт не дал плана: " + parseErrorR), verdict);
+                    // Та же диагностика D3, но по ответу ремонта: его вывод и есть то, что не
+                    // разобрано (ответ первого вызова здесь уже разобран — он прошёл в ремонт).
+                    return WithSectionIssues(RejectedUsed(
+                        WithUnparsedDiagnostics("ремонт не дал плана: " + parseErrorR, answerR, actionKey)), verdict);
                 if (planR.Operations is { Count: 0 })
                     return WithSectionIssues(
-                        new IngestResult(OutcomeNothingNew, "после ремонта план без операций", null,
-                            usage.InputTokens), verdict);
+                        Res(OutcomeNothingNew, "после ремонта план без операций", tokens: usage.InputTokens), verdict);
                 // Пакет после ремонта — весь в «Входящие»: признак низкого качества прохода
                 // (WikiApplyPolicy.PackageAfterModelRepair), человек решает, код не применяет.
                 verdict = WikiPlanValidator.ValidateSynth(
@@ -504,9 +548,9 @@ public sealed class WikiIngestService
                 // Все операции оказались отклонёнными сверх лимитов (Waiting) — пакета нет,
                 // человек их не спрашивает (мера 3); исход — тот же штатный.
                 var waiting = verdict.Waiting.FirstOrDefault();
-                return WithSectionIssues(new IngestResult(OutcomeNothingNew,
-                    waiting is null ? "ни одна операция не прошла проверки" : waiting.Reason, null,
-                    usage.InputTokens), verdict);
+                return WithSectionIssues(Res(OutcomeNothingNew,
+                    waiting is null ? "ни одна операция не прошла проверки" : waiting.Reason,
+                    tokens: usage.InputTokens), verdict);
             }
 
             // 6. Пакет: usage разбора — в каждую его операцию (токены того разбора,
@@ -543,19 +587,21 @@ public sealed class WikiIngestService
                     RejectedUsed($"вердикт проверок не записан: {proposed.Reason ?? proposed.Code}"), verdict);
 
             if (created.Package.Operations.Any(o => o.Decision != WikiPackage.DecisionAuto))
-                return WithSectionIssues(new IngestResult(OutcomeAwaitingHuman,
+                return WithSectionIssues(Res(OutcomeAwaitingHuman,
                     "в пакете есть спорные операции: их решает человек («Входящие»)", created.Package.Id,
                     usage.InputTokens,
-                    Operations: created.Package.Operations.Count(o => o.Decision == WikiPackage.DecisionInbox)), verdict);
+                    operations: created.Package.Operations.Count(o => o.Decision == WikiPackage.DecisionInbox)), verdict);
 
             var accepted = WikiPackageStore.Transition(root, created.Package.Id, WikiPackage.StatusAccepted);
             if (!accepted.Ok)
                 return WithSectionIssues(
                     RejectedUsed($"пакет не переведён в «accepted»: {accepted.Reason ?? accepted.Code}"), verdict);
 
-            return WithSectionIssues(
-                await ApplyAutoAsync(ownerId, root, created.Package,
-                    new WikiApplyService.ApplyContext(cardTitle, request.SourceText), usage.InputTokens), verdict);
+            // Исход пути применения строит ApplyAutoAsync без контекста прогона: символы
+            // каталога дописывает здесь тот, кто прогон ведёт — этот прогон их построил.
+            var appliedRes = await ApplyAutoAsync(ownerId, root, created.Package,
+                new WikiApplyService.ApplyContext(cardTitle, request.SourceText), usage.InputTokens);
+            return WithSectionIssues(appliedRes with { CatalogChars = sectionIndex.Length }, verdict);
         }
         finally
         {
@@ -616,8 +662,10 @@ public sealed class WikiIngestService
 
     /// <summary>Снимок страниц раздела назначения и цепочки вверх: все .md их папок,
     /// служебные «_*» — не страницы (тот же предикат, что у Хранителя). Нечитаемый файл —
-    /// отказ прогона: половины состояния раздела в проверку плана не пускаем.</summary>
-    private static IReadOnlyList<WikiGate.Draft> ReadSectionState(string root, string sectionKey,
+    /// отказ прогона: половины состояния раздела в проверку плана не пускаем.
+    /// internal — тот же снимок нужен записи хроники (WikiChatIngestService.
+    /// AppendChronicleAsync, Q1-S4b): второй читатель состояния раздела не заводим.</summary>
+    internal static IReadOnlyList<WikiGate.Draft> ReadSectionState(string root, string sectionKey,
         IReadOnlyList<string> upChain)
     {
         var drafts = new List<WikiGate.Draft>();
@@ -638,58 +686,159 @@ public sealed class WikiIngestService
         return drafts;
     }
 
-    /// <summary>Каталог для промпта: текст _index только раздела назначения и цепочки
-    /// вверх (ADR-036, решение 3): каталогов соседних проектов и личного в промпте нет.
-    /// Каталога ещё нет, а папка раздела есть — проекции генерируются (они производные и
-    /// идемпотентные); пустой папке вверх каталог не создаётся: пустого раздела на диске
-    /// трогать нечем.</summary>
-    private static string BuildSectionIndex(string root, string sectionKey, IReadOnlyList<string> upChain)
+    /// <summary>Каталог промпта (Q1-S2): строится из того же снимка страниц раздела, что и
+    /// кандидаты, — перечитыванием _index.md или самих файлов состояния больше не занимается:
+    /// второй точки правды о состоянии раздела в окне нет (критерий c3). Только раздел
+    /// назначения и цепочка вверх (ADR-036, решение 3): каталогов соседних проектов и личного
+    /// в промпте не бывает. Карточек source в каталоге промпта нет: они цель сносок, а не
+    /// страницы знаний; неразобранные страницы тоже — модель не назовёт то, что код не читает.
+    /// Порядок внутри раздела — по времени создания файла, новые в конце блока раздела:
+    /// позиция страницы не меняется от правки её содержания, а новая страница дописывается
+    /// в конец своего блока и префикс промпта с уже известными страницами не сдвигает.
+    /// _index.md человека при этом
+    /// остаётся полным и по пути (WikiProjections.WriteIndex). Потолок — PromptCatalogMaxChars:
+    /// сначала строится голый скелет (имя и вид) — он гарантирует присутствие новых страниц;
+    /// освободившийся бюджет тратится на сводки старых строк порядка, хвост остаётся
+    /// «[[Заголовок]] — вид». Скелет, который не вмещается сам, теряет старые страницы
+    /// первыми: текущие для разбора должны остаться (полный каталог видит человек).
+    /// Пустой раздел каталога не даёт вовсе: ни заголовка, ни строк — пустой раздел был
+    /// в промпте без описания и раньше.</summary>
+    internal static string BuildSectionIndex(string root, string sectionKey, IReadOnlyList<string> upChain,
+        IReadOnlyList<WikiGate.Draft> sectionPages)
     {
-        var sb = new StringBuilder();
+        // Потолок держится двумя проходами ради одного: новые страницы остаются в конце и
+        // в каталоге всегда, а весь каталог не перерастает потолок. Сначала — голый скелет
+        // (имя и вид) всех непустых разделов; на него смотрит потолок. Освободившийся
+        // бюджет тратится на сводки старых строк порядка; дальше первой невместившейся
+        // сводки строки остаются голыми (риск 1 разреза: полный каталог реального раздела
+        // съедал 8–9k токенов, и окно не помещалось в контекст места).
+        var blocks = new List<(string Header, List<string> Lines)>();
+        var used = 0;
         foreach (var key in new[] { sectionKey }.Concat(upChain))
         {
             var folder = WikiSections.Folder(key)!;
-            var dir = SafePath.JoinBelowRoot(root, "pages/" + folder);
-            if (!System.IO.Directory.Exists(dir))
+            var entries = new List<WikiGate.Draft>();
+            foreach (var d in sectionPages)
+            {
+                if (!d.Path.StartsWith(folder, StringComparison.Ordinal))
+                    continue;
+                var fm = WikiFrontmatter.Parse(d.Content);
+                if (fm.Model is null || fm.Model.Type == WikiFrontmatter.TypeSource)
+                    continue;
+                entries.Add(d);
+            }
+            if (entries.Count == 0)
                 continue;
-            var indexFull = SafePath.JoinBelowRoot(root, "pages/" + folder + WikiProjections.IndexFileName);
-            if (!File.Exists(indexFull))
-                WikiProjections.RegenerateSection(root, key);
-            if (File.Exists(indexFull))
-                sb.Append(File.ReadAllText(indexFull, Encoding.UTF8)).Append('\n');
+            entries.Sort((a, b) =>
+            {
+                var ca = CreatedUtc(root, a.Path);
+                var cb = CreatedUtc(root, b.Path);
+                return ca != cb ? ca.CompareTo(cb) : string.CompareOrdinal(a.Path, b.Path);
+            });
+
+            var header = $"# Каталог раздела «{key}»\n";
+            if (used + header.Length > PromptCatalogMaxChars)
+                break; // даже заголовок блока не вмещается — дальше не соберётся
+            var fulls = entries
+                .Select(d => WikiProjections.CatalogLine(d.Path, d.Content))
+                .ToList();
+            var bares = entries
+                .Select(d => WikiProjections.CatalogLine(d.Path, d.Content, withSummary: false))
+                .ToList();
+            var bareTotal = header.Length + bares.Sum(b => b.Length + 1);
+
+            // Даже голый скелет этого раздела не вмещается: старые страницы выпадают
+            // первыми — новые, текущие для разбора, должны остаться.
+            while (bares.Count > 0 && used + bareTotal > PromptCatalogMaxChars)
+            {
+                bareTotal -= bares[0].Length + 1;
+                fulls.RemoveAt(0);
+                bares.RemoveAt(0);
+            }
+            if (bares.Count == 0)
+                break; // и с одним голым рядом раздела не хватает — дальше не соберётся
+
+            var budget = PromptCatalogMaxChars - used - bareTotal;
+            var spent = 0;
+            var lines = new List<string>(bares.Count);
+            var swodok = true;
+            for (var i = 0; i < bares.Count; i++)
+            {
+                if (swodok && spent + fulls[i].Length - bares[i].Length <= budget)
+                {
+                    spent += fulls[i].Length - bares[i].Length;
+                    lines.Add(fulls[i]);
+                }
+                else
+                {
+                    // Сводки дальше по порядку уже не в бюджет: хвост блока — голые строки,
+                    // новая страница дописывается в его конец и префикс промпта не сдвигает.
+                    swodok = false;
+                    lines.Add(bares[i]);
+                }
+            }
+            used += bareTotal + spent; // приписанные сводки — тоже длина каталога: следующий
+            // раздел не должен получить бюджет, который уже занят сводками этого
+            blocks.Add((header, lines));
+        }
+
+        var sb = new StringBuilder();
+        foreach (var (header, lines) in blocks)
+        {
+            sb.Append(header);
+            foreach (var line in lines)
+                sb.Append(line).Append('\n');
         }
         return sb.ToString();
     }
 
-    /// <summary>Кандидаты-страницы: существующие страницы раздела назначения и вверх, чей
-    /// заголовок или алиас встречается в тексте окна (нормализация — та же, что у индекса
-    /// резолва ByName: WikiDedup.NormalizeName). Карточки источников не кандидаты: они цель
-    /// сносок, а не страницы знаний. Не больше MaxCandidatePages.</summary>
+    // «Created» страницы для порядка каталога — время рождения файла; Хранитель пишет
+    // страницу через temp + File.Move (WikiFileWriter.cs:28, WikiApplyService.cs:652),
+    // поэтому каждое применение даёт файлу новый inode: рождение = время последней записи,
+    // и страница, в которую дописали, уходит в конец блока. Если файловая система birth
+    // time не отдаёт (GetCreationTime ставит UnixEpoch) — берётся время последней записи,
+    // оно совпадает с первым. Время снимается только с файлов из снимка: каталог не смотрит
+    // на остальной диск и не перечитывает его содержимое.
+    private static DateTimeOffset CreatedUtc(string root, string pageRel)
+    {
+        try
+        {
+            var full = SafePath.JoinBelowRoot(root, "pages/" + pageRel);
+            var created = File.GetCreationTimeUtc(full);
+            return created > DateTimeOffset.UnixEpoch ? created : File.GetLastWriteTimeUtc(full);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Файла из снимка уже нет (его удалили под этим же шлюзом раздела): порядок по пути,
+            // содержание страницы уже лежит в снимке — каталог о ней не молчит.
+            return DateTimeOffset.UnixEpoch;
+        }
+    }
+
+    /// <summary>Кандидаты-страницы: существующие страницы раздела назначения и вверх по
+    /// пересечению значимых слов окна с заголовком (вес ×2), сводкой (та же проекция, что
+    /// у строки каталога) и алиасами; дословное совпадение заголовка или алиаса — первой
+    /// очереди, прежней нормализацией (WikiDedup.NormalizeName). Порядок и потолок TopN —
+    /// в WikiCandidates; MaxCandidatePages остаётся внешним потолком промпта. Карточки
+    /// источников не кандидаты: они цель сносок, а не страницы знаний (предикат тот же).
+    /// Вход — тот же снимок sectionPages, что у каталога промпта: второй точки правды о
+    /// состоянии раздела в окне нет.</summary>
     private static List<WikiGate.Draft> PickCandidatePages(IReadOnlyList<WikiGate.Draft> sectionPages,
         string sourceText)
     {
-        var wanted = WikiDedup.NormalizeName(sourceText);
-        var picked = new List<WikiGate.Draft>();
-        foreach (var draft in sectionPages)
-        {
-            var page = WikiPage.Parse(draft.Content).Model;
-            if (page is null || page.Frontmatter.Type == WikiFrontmatter.TypeSource)
-                continue;
-            var names = new List<string> { WikiDedup.NormalizeName(page.Title) };
-            names.AddRange(page.Frontmatter.Aliases.Select(WikiDedup.NormalizeName));
-            if (names.Any(n => n.Length > 0 && wanted.Contains(n, StringComparison.Ordinal)))
-            {
-                picked.Add(draft);
-                if (picked.Count >= MaxCandidatePages)
-                    break;
-            }
-        }
-        return picked;
+        var picked = WikiCandidates.Pick(sectionPages, sourceText, WikiCandidates.TopN);
+        // TopN упорядочивает кандидатов; потолок промпта — внешний и остаётся за этим
+        // сервисом: «не больше пяти», промпт не должен разрастись до половины раздела.
+        return picked.Count > MaxCandidatePages ? picked[..MaxCandidatePages] : picked;
     }
 
     // ── модель и разбор её ответов ─────────────────────────────────────────────────
 
-    private readonly record struct ModelAnswer(string? Text, string? Reason);
+    /// <summary>Ответ одного вызова или причина его отказа. OutputTokens — токены вывода ЭТОГО
+    /// вызова (метрик движок не дал — null): по ним WithUnparsedDiagnostics описывает непарсимый
+    /// ответ (D3) — расход накопленного аккумулятора для этого не годится, там сумма по всем
+    /// вызовам окна.</summary>
+    private readonly record struct ModelAnswer(string? Text, string? Reason, long? OutputTokens = null);
 
     /// <summary>Один one-shot вызов места разбора (без инструментов; формат — «json»):
     /// actionKey — место заявки (N7a), null — прежний wiki-ingest; все вызовы передают его
@@ -787,6 +936,18 @@ public sealed class WikiIngestService
             // дословно — в rejected и firstRejectReason (WN-4).
             return new ModelAnswer(null, $"{passName}: {e.Message}");
         }
+        catch (LocalInputOverflowException e)
+        {
+            // Q1-S12: вход промпта не влез в контекст движка (FailOnInputOverflow мест вики,
+            // Q1-S10): модель не звалась ни разу, слот не занят. Общий catch подписал бы это
+            // «модель не ответила» — ложь: её не звали, и по такой формулировке ночной журнал
+            // читал бы переполнение как сбой модели. Причина доезжает дословно (тот же приём,
+            // что у отказа по слоту выше): в ней нет ReasonLocalUnavailable, поэтому
+            // IsLocalDownRejection (WikiNightlyService.Pass.cs:640) не считает отказ мёртвым
+            // движком и исполнитель не выбывает; окно уходит обычным rejected — курсор стоит,
+            // окно остаётся в дельте.
+            return new ModelAnswer(null, $"{passName}: {e.Message}");
+        }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Ожидание слота прервано остановкой ночи / закрытием окна / остановкой службы:
@@ -805,7 +966,64 @@ public sealed class WikiIngestService
             usage.InputTokens += u.TotalInputTokens;
             usage.OutputTokens += u.OutputTokens;
         }
-        return new ModelAnswer(text, null);
+        return new ModelAnswer(text, null, used?.OutputTokens);
+    }
+
+    /// <summary>D3 (Q1-S12): к отказу непарсимого ответа — чем он был непарсим. «вывод {N} ток.
+    /// из лимита {M}»: N — токены вывода ЭТОГО вызова (метрик движок не дал — строки нет:
+    /// выдуманного числа в журнале быть не должно); M — потолок вывода места по каталогу
+    /// (NumPredict записи; у мест вики он задан). Без ключа заявки — только N: человеческий
+    /// «Разобрать» идёт облачным путём, у облака свой потолок (CloudNumPredict), и подставлять
+    /// ему локальный было бы ложью. По отношению N к M человек отличает «ответ обрезан по
+    /// лимиту вывода» (N = M) от «ответ не JSON вовсе» (N ≪ M) — настоящий finish_reason для
+    /// этого же вне шага. «начало ответа» — первые UnparsedAnswerHeadChars символов дословно,
+    /// переводы строк пробелом: одна строка журнала вместо разорванной. «хвост ответа» —
+    /// последние UnparsedAnswerTailChars с видимой пробелью (пробел → ·, \n → ⏎, \r → пусто,
+    /// \t → →): петля повтора и бесконечные пробелы различимы только по хвосту (у gemma
+    /// DisableThinking — это не рассуждения). Ответ не длиннее UnparsedAnswerHeadChars — хвоста
+    /// нет: он повторил бы начало. Границы среза головы и хвоста не режут суррогатную пару
+    /// (SafeCut). Код ремонта JSON не писать: он не ответ модели, он текст промпта, который
+    /// модель не увидела.</summary>
+    private static string WithUnparsedDiagnostics(string reason, ModelAnswer answer, string? actionKey)
+    {
+        var diag = new StringBuilder(reason);
+        if (answer.OutputTokens is { } outTokens)
+        {
+            var limit = actionKey is not null ? LocalActionCatalog.Find(actionKey)?.NumPredict : null;
+            diag.Append(limit is { } m ? $" вывод {outTokens} ток. из лимита {m}" : $" вывод {outTokens} ток.");
+        }
+        if (answer.Text is { } text)
+        {
+            var head = text.ReplaceLineEndings(" ");
+            if (head.Length > UnparsedAnswerHeadChars)
+            {
+                // Порог по длине начала ДО среза: при 300 символов хвост был бы тем же началом.
+                // Хвост — из дословного текста: ReplaceLineEndings стёр бы различие «пробел» /
+                // «перевод строки», а в нём весь смысл.
+                diag.Append($" начало ответа: «{SafeCut(head, UnparsedAnswerHeadChars, 0)}»");
+                var tail = SafeCut(text, text.Length, text.Length - UnparsedAnswerTailChars);
+                foreach (var ch in new[] { ' ', '\n', '\r', '\t' })
+                    tail = tail.Replace(ch, ch switch { ' ' => '·', '\n' => '⏎', '\r' => '\0', '\t' => '→' });
+                diag.Append($" хвост ответа: «{tail.Replace("\0", "")}»");
+            }
+            else
+            {
+                diag.Append($" начало ответа: «{head}»");
+            }
+        }
+        return diag.ToString();
+    }
+
+    /// <summary>Срез [from..to) без резаной суррогатной пары (остаток ревью S12): граница
+    /// внутри пары сдвигается на 1 символ так, чтобы пара осталась целой и не вошла во
+    /// фрагмент — одиночного суррогата в журнале не будет. Правило одно для головы и хвоста.</summary>
+    private static string SafeCut(string s, int to, int from)
+    {
+        if (to < s.Length && char.IsHighSurrogate(s[to - 1]) && char.IsLowSurrogate(s[to]))
+            to--;
+        if (from > 0 && char.IsHighSurrogate(s[from - 1]) && char.IsLowSurrogate(s[from]))
+            from++;
+        return s[from..to];
     }
 
     private sealed class UsageAccumulator
@@ -964,6 +1182,16 @@ public sealed class WikiIngestService
                 Dropped = verdict.Rejected.Count,
                 DropReasons = verdict.Rejected.Take(MaxDropReasons).Select(i => i.Reason).ToList(),
             };
+        // Q1-S5: число ссылок, снятых валидатором из claim принятых операций, — сумма по
+        // окну в исходе (только число, без текста): снятые ссылки уже лежат обычным текстом
+        // в утверждении (Q1-S4), вызывающему нужно лишь знать, сколько их было снято.
+        // Сумма — по финальному вердикту (после ремонта — по вердикту ремонта): тот же
+        // набор, из которого собран пакет.
+        var stripped = 0;
+        foreach (var op in verdict.Accepted)
+            stripped += op.StrippedLinks ?? 0;
+        if (stripped > 0)
+            r = r with { StrippedLinks = stripped };
         if (verdict.Violations.Count == 0)
             return r;
         var issues = "в разделе есть нарушения: " + string.Join("; ", verdict.Violations);

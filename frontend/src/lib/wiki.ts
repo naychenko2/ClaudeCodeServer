@@ -62,8 +62,24 @@ export interface WikiPageInfoDto {
 // Оглавление раздела строится отсюда: проекции _index/_log через /api/wiki/page не читаются (400 wiki_page_key)
 export interface WikiCatalogDto { key: string; name: string | null; orphan: boolean; pages: WikiPageInfoDto[] }
 
+// «Связанные» (2Б, Q1-S6a/S6b): чистая проекция при показе — что относится к странице по её
+// же содержанию (бэковый WikiRelated). Группы — в порядке приоритета с бэка, пункты — по
+// Ordinal пути, не больше 8 в группе (GroupLimit на бэке, на фронте не режем). Пустых групп
+// бэк не отдаёт; отсутствие поля и пустой список — одно «связанных нет» (старый бэк без поля
+// читается как есть — тот же приём, что отсутствующий lastNight). pageKey — путь под pages/
+// (та же форма, что у каталога), type — вид шапки соседа (для карточек источника — 'source').
+export type WikiRelatedKind = 'source' | 'chronicle' | 'mentions' | 'mentionedHere' | 'backlinks';
+export interface WikiRelatedItemDto { pageKey: string; title: string; type: string | null }
+export interface WikiRelatedGroupDto { kind: WikiRelatedKind; items: WikiRelatedItemDto[] }
+
 // drift — тот же сигнал, что у каталога: сверка файла с манифестом на бэке (доработка S5b)
-export interface WikiPageDto { pageKey: string; content: string; drift?: boolean; manifestState?: WikiManifestState }
+export interface WikiPageDto {
+  pageKey: string;
+  content: string;
+  drift?: boolean;
+  manifestState?: WikiManifestState;
+  related?: WikiRelatedGroupDto[];
+}
 
 export interface WikiInitResult { initialized: boolean }
 export interface WikiAdoptResult { status: 'applied' }
@@ -88,6 +104,29 @@ export function parseSectionKey(key: string): WikiSectionRef | null {
   if (key.startsWith(PROJECTS_PREFIX)) return idSegment(key.slice(PROJECTS_PREFIX.length), 'project');
   if (key.startsWith(SPHERES_PREFIX)) return idSegment(key.slice(SPHERES_PREFIX.length), 'sphere');
   return null;
+}
+
+// Путь страницы → ключ раздела — зеркало бэкового WikiSections.Parse (WikiSections.cs:36):
+// папки под pages/ («Проекты/Сферы/Общее/Личное») дают тот же ключ, что у дерева; id — та же
+// проверка, что у бэка (ASCII буквы/цифры/«-»/«_», WikiSections.cs:154). Нужен переходу по
+// «Связанному»: их pageKey — путь под pages/ (та же форма, что у каталога), а канал открытия
+// страницы (requestOpenWikiPage → openPage в WikiTab) просит пару (раздел, путь) — бэк
+// проверяет принадлежность страницы разделу (WikiController.cs:241). Путь вне раздела — null:
+// чужую строку в модель не пускаем (fail-closed, ADR-036 §2).
+const PAGE_FOLDER_KEYS: Record<string, string> = { Проекты: 'projects/', Сферы: 'spheres/', Общее: 'common', Личное: 'personal' };
+const SECTION_ID_RX = /^[A-Za-z0-9_-]+$/;
+
+export function sectionKeyOfPagePath(relPath: string): string | null {
+  // Тот же отказ разбора, что у бэка: любой синтаксис кроме чистого «a/b/c» — не путь
+  if (!relPath || relPath.includes('\\') || [...relPath].some(c => c < ' ') || relPath.startsWith('/')) return null;
+  if (relPath.length > 1 && relPath[1] === ':') return null;
+  const parts = (relPath.endsWith('/') ? relPath.slice(0, -1) : relPath).split('/');
+  if (parts.some(p => !p || p === '.' || p === '..')) return null;
+  const prefix = PAGE_FOLDER_KEYS[parts[0]];
+  if (prefix === undefined) return null;
+  if (prefix === 'common' || prefix === 'personal') return prefix;
+  const id = parts[1] ?? '';
+  return SECTION_ID_RX.test(id) ? `${prefix}${id}` : null;
 }
 
 export type WikiSectionsByKind = Record<WikiSectionKind, WikiSectionDto[]>;

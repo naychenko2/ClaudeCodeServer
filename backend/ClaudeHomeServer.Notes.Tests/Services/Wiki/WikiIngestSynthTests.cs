@@ -330,7 +330,31 @@ public class WikiIngestSynthTests : IDisposable
 
         res.Dropped.Should().Be(0);
         res.DropReasons.Should().BeNull();
+        res.StrippedLinks.Should().Be(0, "в этих claim ссылок нет — пустой случай счётчика");
         WikiPackageStore.TryRead(Root, res.PackageId!).Package!.Operations.Should().HaveCount(2);
+    }
+
+    // Q1-S5: число ссылок, снятых валидатором из claim, — сумма по окну в исходе (только
+    // число). В плане две принятые операции: в одном claim два призрака, в другом один —
+    // валидатор снимает их текстом без скобок (Q1-S4), итог окна называет 2+1=3. Мутация
+    // «не суммировать» (убрать сумму в WithSectionIssues) → StrippedLinks 0, тест красный.
+    [Fact]
+    public async Task СнятыеСсылкиВКлимах_СуммаПоОкнуВИсходе()
+    {
+        var plan = WikiSynthJson.Ok(
+            WikiSynthJson.Op("append", PageTitle,
+                "Сборку решено перенести на Linux, см. [[Призрак1]] и [[Призрак2]]", [Quote1]),
+            WikiSynthJson.Op("append", PageTitle,
+                "Контейнер собран отдельно, связан с [[Призрак3]]", [Quote2]));
+        var llm = new FakeLlm(plan);
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().NotBe(WikiIngestService.OutcomeRejected, res.Reason);
+        res.StrippedLinks.Should().Be(3, "2 ссылки первой операции + 1 второй — сумма по окну");
+        var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
+        pkg.Operations.Sum(o => o.StrippedLinks ?? 0).Should().Be(3,
+            "та же сумма, что по операциям пакета: счётчик не живёт отдельным счётом");
     }
 
     // Минор ревью C2R-Sh1, п.3: сбой хранилища пакета не отменяет, что часть операций была
@@ -430,6 +454,134 @@ public class WikiIngestSynthTests : IDisposable
         PackagesOnDisk().Should().BeEmpty("частичного пакета нет");
     }
 
+    // ── Q1-S12: переполнение входа синтеза — отказ окна (D1) и описание непарсимого ответа (D3) ──
+
+    [Fact]
+    public async Task ПереполнениеВходаСинтеза_ОтказОкна_АНеСбойМодели()
+    {
+        // Мутация «удалить catch (LocalInputOverflowException)» (WikiIngestService.CallModelAsync):
+        // общий catch подписывает «модель не ответила» — первый StartWith красный, второй NotContain
+        // красный (проверено на копии мутации).
+        var llm = new FakeLlm(WikiSynthJson.Append(PageTitle, Claim1, Quote1))
+        {
+            ThrowOnLocal = new LocalInputOverflowException(
+                promptChars: 120_000, budgetChars: 49_152, numCtx: 32_768, numPredict: 16_384),
+        };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().StartWith("синтез: вход окна не влезает в контекст движка",
+            "модель не звалась ни разу: причина называет переполнение входа, а не сбой модели");
+        res.Reason.Should().NotContain("модель не ответила", "общий catch на этом отказе лжёт");
+        res.Reason.Should().NotContain(WikiIngestService.ReasonLocalUnavailable,
+            "это не отказ мёртвого движка: IsLocalDownRejection (WikiNightlyService.Pass.cs:640) его не признаёт");
+        llm.Calls.Should().BeEmpty("переполнение отказывает до обращения к движку — ответа не было ни разу");
+        PackagesOnDisk().Should().BeEmpty("отказанное окно не оставляет пакета; курсор стоит, окно в дельте");
+    }
+
+    [Fact]
+    public async Task НепарсимыйОтвет_ПричинаНазываетВыводПротивЛимита_ИНачалоОднойСтрокой()
+    {
+        // D3: «вывод N из лимита M» + начало ответа. N = M — ответ упёрся в потолок вывода места
+        // (NumPredict записи каталога wiki-nightly = 8 192, Q1-S14). Мутация «вернуть reason без
+        // WithUnparsedDiagnostics» → оба новых assert красные.
+        var lines = Enumerable.Range(0, 40).Select(i => $"строка {i}: {new string('о', 20)}").ToList();
+        var answer = string.Join("\n", lines); // ~1200 симв. с переводами строк: и не JSON, и длиннее 300
+        var llm = new FakeLlm(answer) { LocalOutputTokens = 8_192 };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("ответ модели не разобран");
+        res.Reason.Should().Contain("вывод 8192 ток. из лимита 8192",
+            "N против M: по ним видно, обрезан ли ответ по лимиту вывода");
+        var head = string.Join(" ", lines)[..300];
+        res.Reason.Should().Contain($"начало ответа: «{head}»");
+        res.Reason.Should().NotContain("\n", "переводы строк заменены пробелом: журнал — одна строка");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task РемонтНеДалПлана_ТажеДиагностикаПоОтветуРемонта()
+    {
+        // :514 — та же диагностика, но по ответу ЭТОГО ремонта: первый вызов дал план (он прошёл
+        // в ремонт), непарсим — ответ ремонта. Мутация «без WithUnparsedDiagnostics» прогонялась
+        // на :461 (копия дерева); здесь она краснит тем же снятым вызовом хелпера.
+        var bad = WikiSynthJson.Append(PageTitle, Claim1, BadQuote);
+        var lines = Enumerable.Range(0, 40).Select(i => $"строка {i}: {new string('о', 20)}").ToList();
+        var llm = new FakeLlm(bad, repair: string.Join("\n", lines)) { LocalOutputTokens = 8_192 };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        llm.Calls.Select(c => c.Pass).Should().Equal("S", "R");
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("ремонт не дал плана")
+            .And.Contain("вывод 8192 ток. из лимита 8192")
+            .And.Contain($"начало ответа: «{string.Join(" ", lines)[..300]}»");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НепарсимыйОтвет_ХвостПробельнойПетли_ВиденСимволамиПробелиПереносов()
+    {
+        // D9 (Q1-S14): вырожденная генерация (бесконечные пробелы) отличается от петли повтора
+        // только по хвосту: последние 200 симв. — с видимой пробелью (пробел → ·, \n → ⏎).
+        // Мутация «не добавлять хвост» (WithUnparsedDiagnostics) → оба новых assert красные.
+        var answer = new string('x', 700) + new string(' ', 250) + "\n" + new string(' ', 49);
+        var llm = new FakeLlm(answer) { LocalOutputTokens = 8_192 };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("вывод 8192 ток. из лимита 8192");
+        // Хвост (символы 800..999 ответа): 150 пробелов, перевод строки, 49 пробелов —
+        // ровно 200 видимых символов.
+        var tail = new string('·', 150) + "⏎" + new string('·', 49);
+        res.Reason.Should().Contain($"хвост ответа: «{tail}»");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НепарсимыйОтвет_ЭмодзиНаГраницахСреза_ОдиночногоСуррогатаВЖурналеНет()
+    {
+        // D9 (Q1-S14), остаток ревью S12: граница среза головы (300) и хвоста (200) попадает
+        // внутрь суррогатной пары → сдвиг на 1 символ, пара целиком остаётся за фрагментом.
+        // Мутация «убрать сдвиг границы в SafeCut» (return s[from..to]) → краснеют assert'ы
+        // HaveLength и IsSurrogate (в журнале появляется одиночный суррогат); проверено на
+        // копии дерева.
+        var emoji = char.ConvertFromUtf32(0x1F600); // 😀 = высокая + низкая суррогатная пара
+        var answer = new string('a', 299) + emoji + new string('b', 499) + emoji + new string('c', 199);
+        // Длина 1001: эмодзи на 299–300 — ровно внутри границы головы (срез [..300));
+        // эмодзи на 800–801 — ровно внутри границы хвоста (он начинается с 1001−200 = 801).
+        var llm = new FakeLlm(answer) { LocalOutputTokens = 8_192 };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        var head = ExtractQuoted(res.Reason!, "начало ответа: «");
+        var tail = ExtractQuoted(res.Reason!, "хвост ответа: «");
+        head.Should().HaveLength(299, "граница 300 внутри пары — сдвиг назад, пара не входит во фрагмент");
+        tail.Should().HaveLength(199, "граница 801 внутри пары — сдвиг вперёд, пара не входит во фрагмент");
+        char.IsSurrogate(head[0]).Should().BeFalse();
+        char.IsSurrogate(head[^1]).Should().BeFalse();
+        char.IsSurrogate(tail[0]).Should().BeFalse();
+        char.IsSurrogate(tail[^1]).Should().BeFalse();
+        head.Should().StartWith(new string('a', 299));
+        tail.Should().Be(new string('c', 199));
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    private static string ExtractQuoted(string reason, string marker)
+    {
+        var i = reason.IndexOf(marker, StringComparison.Ordinal);
+        i.Should().BeGreaterThanOrEqualTo(0, $"в причине есть «{marker}…»");
+        var start = i + marker.Length;
+        var end = reason.IndexOf('»', start);
+        end.Should().BeGreaterThan(start, "фрагмент непустой");
+        return reason[start..end];
+    }
+
     // ── гонка ──
 
     [Fact]
@@ -511,6 +663,163 @@ public class WikiIngestSynthTests : IDisposable
             "вердикт дошёл до стора: сквозной путь ночной операции закрыт");
     }
 
+    // ── Q1-S2 (1А): каталог промпта из снимка раздела ──
+
+    // Страница знаний с заполненной «Сводкой» (без summary в шапке): сводка каталога
+    // проектируется из неё.
+    private static string KnowledgePage(string title, string swodka) =>
+        $"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {title}
+
+        ## Сводка
+        {swodka}
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+
+        """;
+
+    // Та же страница, но с телом в «Хронологии»: маркер тела виден в промпте только если
+    // страница попала в кандидаты (в каталог промпта тело не входит — там строка с
+    // заголовком и, если влезает, сводкой).
+    private static string KnowledgePageWithBody(string title, string swodka, string body) =>
+        KnowledgePage(title, swodka).Replace("## Хронология\n", "## Хронология\n" + body + "\n");
+
+    [Fact]
+    public void КаталогПромпта_200Страниц_ПотолокКарточекНетНоваяПоследняя()
+    {
+        // 200 страниц знаний с длинными «Сводками» + карточка источника + 201-я новая
+        // страница. Порядок записи — обратный именам: порядок каталога проверяет именно
+        // created, а не путь. Мутация «снять потолок» (PromptCatalogMaxChars → int.MaxValue):
+        // все строки получают сводки, каталог перерастает потолок — первый assert красный.
+        for (var i = 199; i >= 0; i--)
+            Write(Section, $"Проекты/p1/П{i:000}.md", KnowledgePage($"П{i:000}", new string('с', 160)));
+        Write(Section, "Проекты/p1/ПНовая.md", KnowledgePage("ПНовая", new string('с', 160)));
+
+        var upChain = WikiSections.UpChain(Section, User, new NoSpheres());
+        var snapshot = WikiIngestService.ReadSectionState(Root, Section, upChain);
+        var catalog = WikiIngestService.BuildSectionIndex(Root, Section, upChain, snapshot);
+
+        // Потолок — договорённость, она названа числом: мутация «снять потолок»
+        // (PromptCatalogMaxChars → int.MaxValue) краснит именно эту строку.
+        WikiIngestService.PromptCatalogMaxChars.Should().Be(14_000);
+        catalog.Length.Should().BeLessOrEqualTo(14_000,
+            "потолок каталога промпта (риск 1 разреза): окно вместе с ним помещается в контекст места");
+        catalog.Should().NotContain("— source").And.NotContain(CardTitle,
+            "карточки source в каталог промпта не входят");
+
+        var titles = catalog.Split('\n')
+            .Where(l => l.StartsWith("- [[", StringComparison.Ordinal))
+            .Select(l => l[4..l.IndexOf("]]", StringComparison.Ordinal)])
+            .ToList();
+        var expected = new List<string> { PageTitle };
+        for (var i = 199; i >= 0; i--) expected.Add($"П{i:000}");
+        expected.Add("ПНовая");
+        titles.Should().Equal(expected,
+            "порядок — по created, новые в конце: позиция не зависит от имени и правок содержания");
+        titles.Should().HaveCount(202, "потолок не покупается выбрасыванием хвоста: новая страница в каталоге");
+    }
+
+    [Fact]
+    public void КаталогПромпта_ПотолокОбщийДляРазделаНазначенияИЦепочкиВверх()
+    {
+        // Раздел назначения съедает потолок своими сводками; цепочка вверх обязана получить
+        // остаток — голые строки новых страниц. Сводки назначения — тоже длина каталога:
+        // при их невписании в бюджет следующего раздела суммарный каталог перерастает
+        // потолок (мутация «учёт без приписанных сводок» → первый assert красный).
+        for (var i = 0; i < 100; i++)
+            Write(Section, $"Проекты/p1/Т{i:000}.md", KnowledgePage($"Т{i:000}", new string('с', 160)));
+        for (var i = 0; i < 10; i++)
+            Write("common", $"Общее/В{i:000}.md", KnowledgePage($"В{i:000}", new string('с', 160)));
+
+        var upChain = WikiSections.UpChain(Section, User, new NoSpheres());
+        var snapshot = WikiIngestService.ReadSectionState(Root, Section, upChain);
+        var catalog = WikiIngestService.BuildSectionIndex(Root, Section, upChain, snapshot);
+
+        catalog.Length.Should().BeLessOrEqualTo(14_000,
+            "потолок считается суммарно по разделу назначения и цепочке вверх");
+        catalog.Should().Contain("[[В009]]", "новая страница цепочки вверх остаётся, даже когда потолок плотный");
+    }
+
+    [Fact]
+    public void КаталогПромпта_СтраницаПослеСнимка_ВКаталогОкнаНеПопадает()
+    {
+        // Каталог и кандидаты — один снимок под шлюзом раздела. Страница, появившаяся на
+        // диске после снимка (Хранитель перегенерировал её _index.md — прежняя реализация
+        // читала каталог оттуда и пустила бы её), в каталог этого окна не входит.
+        var upChain = WikiSections.UpChain(Section, User, new NoSpheres());
+        var snapshot = WikiIngestService.ReadSectionState(Root, Section, upChain);
+
+        Write(Section, "Проекты/p1/ПослеСнимка.md", KnowledgePage("ПослеСнимка", "то, чего в снимке нет"));
+
+        var catalog = WikiIngestService.BuildSectionIndex(Root, Section, upChain, snapshot);
+        catalog.Should().NotContain("ПослеСнимка", "второй точки правды о состоянии раздела в окне нет");
+    }
+
+    [Fact]
+    public async Task КандидатыПоЗначимымСловам_СтраницаБезДословногоЗаголовка_ВПромпте()
+    {
+        // Q1-S3 (1А): в окне нет дословного заголовка страницы («Сущность»), но её сводка
+        // делит с окном значимые слова («прежний план … Windows») — страница становится
+        // кандидатом, и её текст входит в промпт синтеза. Под прежним правилом («заголовок
+        // или алиас дословно») этот тест красный: ни заголовок, ни алиас в окне не стоят.
+        var llm = new FakeLlm(WikiSynthJson.Ok());
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew, res.Reason);
+        llm.Calls.Should().ContainSingle().Which.Prompt
+            .Should().Contain("CURRENT CONTENT OF THE SECTION PAGES")
+            .And.Contain("Прежний план был остаться на Windows",
+                "сводка делит слова с окном — страница кандидат, а не по дословному заголовку");
+    }
+
+    [Fact]
+    public async Task КандидатыПоЗначимымСловам_СтраницаСНулевойОценкой_ВПромптНеПопадает()
+    {
+        // Негатив к предыдущему тесту: «Зимняя вишня» не делит с окном ни одной значимой
+        // основы (заголовок и сводка — о зиме), оценка 0: страница не кандидат, её текст не
+        // входит в блок страниц промпта. При этом она остаётся строкой каталога раздела —
+        // значит исключена именно оценкой, а не тем, что раздел не прочитан.
+        // Мутация «снять отсечку оценки 0» (WikiCandidates.Pick: if (!exact && score == 0)
+        // continue → без continue): страница становится кандидатом, маркер её тела — в
+        // промпте, тест красный (другие тесты файла на этом не меняются).
+        const string coldMarker = "Морозный узор на стекле";
+        Write(Section, "Проекты/p1/Зимняя-вишня.md",
+            KnowledgePageWithBody("Зимняя вишня", "Зимняя вишня цветёт зимой", coldMarker));
+        var llm = new FakeLlm(WikiSynthJson.Ok());
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew, res.Reason);
+        var prompt = llm.Calls.Should().ContainSingle().Which.Prompt;
+        prompt.Should().Contain("CURRENT CONTENT OF THE SECTION PAGES")
+            .And.Contain("Прежний план был остаться на Windows", "кандидат — в промпте")
+            .And.Contain("[[Зимняя вишня]]", "не-кандидат остаётся строкой каталога раздела")
+            .And.NotContain(coldMarker, "страница с нулевой оценкой не кандидат: её текст в промпт не входит");
+    }
+
+    [Fact]
+    public void КаталогПромпта_ПустойРаздел_КаталогаНетВовсе()
+    {
+        // Пустой раздел был в промпте без описания и раньше: ни заголовка, ни строк.
+        // На этом держатся точные оценки ночи: пустой раздел не платит каталога.
+        var upChain = WikiSections.UpChain(EmptySection, User, new NoSpheres());
+        var snapshot = WikiIngestService.ReadSectionState(Root, EmptySection, upChain);
+        WikiIngestService.BuildSectionIndex(Root, EmptySection, upChain, snapshot).Should().BeEmpty();
+    }
+
     // ── подмена модели ──
 
     private sealed class FakeLlm : ICheapTextRunner
@@ -520,6 +829,13 @@ public class WikiIngestSynthTests : IDisposable
         // путём прошло место: ключ сам по себе этого не говорит.
         public List<(string ActionKey, string Prompt, string Pass, string Route)> Calls { get; } = [];
         public bool LocalRoute { get; init; } = true;
+
+        // Q1-S12: поведение локального шага для новых кейсов. ThrowOnLocal — бросить отказ
+        // переполнения входа ДО ответа (как раннер: до обращения к движку, поэтому ни одной
+        // записи в Calls). LocalOutputTokens — отдать ответ с метриками движка; без него —
+        // usage=null, как тело по умолчанию шва, то есть прежнее поведение всех тестов файла.
+        public Exception? ThrowOnLocal { get; init; }
+        public long? LocalOutputTokens { get; init; }
 
         private readonly Dictionary<string, Queue<string>> _answers = new();
 
@@ -543,6 +859,18 @@ public class WikiIngestSynthTests : IDisposable
         public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
             object? jsonFormat = null, CancellationToken ct = default) =>
             Task.FromResult<string?>(Answer(actionKey, prompt, "local"));
+
+        // Локальный шаг с расходом (путь ночи): без LocalOutputTokens — usage=null, ровно как
+        // тело по умолчанию шва, на котором стоят прежние тесты файла.
+        public Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            if (ThrowOnLocal is { } ex)
+                throw ex;
+            var text = Answer(actionKey, prompt, "local");
+            OneShotUsage? usage = LocalOutputTokens is { } ot ? new OneShotUsage(10, 0, 0, ot, 0.0, "fake") : null;
+            return Task.FromResult<OneShotResult?>(new OneShotResult(text, usage, 1));
+        }
 
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,

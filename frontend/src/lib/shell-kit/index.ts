@@ -36,7 +36,7 @@ export {
 // через кит — своя копия относительных импортов дублировала бы состояние стора и давала
 // отдельный экземпляр WikiError (QA P1, дефект B1).
 export {
-  parseSectionKey, groupSectionsByKind, WikiError,
+  parseSectionKey, groupSectionsByKind, sectionKeyOfPagePath, WikiError,
   ensureWikiLoaded, loadWikiTree, loadWikiCatalog, loadWikiPage,
   getWikiTreeSnapshot, initializeWiki, adoptWikiPage, deleteWikiSection,
   listWikiPackages, decideWikiPackage, acceptAllWikiPackage,
@@ -63,6 +63,7 @@ export type {
   WikiAdoptMineResult,
   WikiPurgeDto, WikiPurgePageDto,
   WikiNightDecisionDto, WikiNightDecisionsDto, WikiRevertDto,
+  WikiRelatedKind, WikiRelatedItemDto, WikiRelatedGroupDto,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────

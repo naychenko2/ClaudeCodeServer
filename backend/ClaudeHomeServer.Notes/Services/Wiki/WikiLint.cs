@@ -270,7 +270,10 @@ internal static class WikiLint
         // 3. Упоминание без ссылки: заголовок другой записи базы встречается в тексте страницы
         // как отдельное слово, и разрешённой ссылки на неё нет (определение базовой линии).
         // Вхождения внутри кода не считаются — тот же смысл, что у маски «вне кода» после
-        // фикса 7928ce94 (ADR-035, «Последствия», зависимость 0).
+        // фикса 7928ce94 (ADR-035, «Последствия», зависимость 0). Сам матчер — общий с
+        // проекцией «Связанных» (WikiRelated.IsMention): нормализация заголовка в нём —
+        // та же, что у резолва ссылок (WikiGate.Norm), а не своя Trim+ToLower: «упомянуто»
+        // и «ссылка резолвится» не могут судить одно имя по-разному.
         private void UnlinkedMentions(List<(PageRef, WikiPageFacts)> pages, List<WikiFinding> findings)
         {
             foreach (var (node, facts) in pages)
@@ -282,8 +285,7 @@ internal static class WikiLint
                 {
                     if (other.Id == node.Id)
                         continue;
-                    var title = Norm(other.Title);
-                    if (title.Length < 3 || NotesService.FindWord(lower, title, mask) < 0)
+                    if (!WikiRelated.IsMention(lower, mask, other.Title))
                         continue;
                     if (linked.Contains(other.Id))
                         continue;
@@ -532,8 +534,7 @@ internal static class WikiLint
                 {
                     if (other.Id == page.Id)
                         continue;
-                    var title = Norm(other.Title);
-                    if (title.Length < 3 || NotesService.FindWord(lower, title, mask) < 0)
+                    if (!WikiRelated.IsMention(lower, mask, other.Title))
                         continue;
                     if (linked.Contains(other.Id))
                         continue;

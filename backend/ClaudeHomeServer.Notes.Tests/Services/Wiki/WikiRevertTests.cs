@@ -139,7 +139,7 @@ public class WikiRevertTests : IDisposable
         _chat = new WikiChatIngestService(
             new WikiSourceCapture(_notes, _projects, noSessions, _config, _keeper),
             new WikiIngestService(new NoopCheapRunner(), new NoSpheres(), _sut, _config),
-            noSessions, _keeper, _config);
+            noSessions, _keeper, new NoSpheres(), _config);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
     }
 

@@ -83,6 +83,74 @@ public class WikiPlanValidatorSynthTests
         [^s1]: [[{{CardTitle}}]] — «{{QLinux}}»
         """;
 
+    // Страница чужого раздела: в снимок валидатора не входит (снимок — раздел и цепочка),
+    // ссылка на неё — «вбок», в ветке синтеза снимается.
+    private const string ForeignPath = "Проекты/p2/Чужое.md";
+    private static readonly string ForeignFile = """
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Чужое
+
+        ## Сводка
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+        """;
+
+    // Страница раздела common — вверх по цепочке: ссылка на неё уцелевает.
+    private const string CommonPath = "Общее/Знание.md";
+    private static readonly string CommonFile = """
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Знание
+
+        ## Сводка
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+        """;
+
+    // Страница раздела с числом в заголовке: проверка чисел — по claim без текста
+    // уцелевших ссылок, это число — не число утверждения.
+    private const string ReportPath = "Проекты/p1/Отчёт-2023.md";
+    private static readonly string ReportFile = """
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Отчёт 2023
+
+        ## Сводка
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+        """;
+
     private static WikiPlanValidator.SynthOp Op(
         string op, string page, string claim, string[]? quotes, string? kind = null, string? asOf = null, string? target = null) =>
         new(op, kind, page, claim, quotes, target, asOf);
@@ -474,5 +542,132 @@ public class WikiPlanValidatorSynthTests
         var lines = content.Split('\n');
         lines.Should().Contain("type: state").And.Contain("as_of: 2026-11-01");
         lines.Should().NotContain(l => l.StartsWith("kind:"));
+    }
+
+    // —— Очередь 1, 2А: неразрешимые ссылки в claim снимаются, а не валят план ——
+    // Инвариант: боковая ссылка не попадает на диск ни в каком виде. Резолв — тот же,
+    // что у гейта (WikiGate.ResolveLink); «иное» — чужой раздел, призрак, нераспознанный
+    // префикс и страница, которую создаёт этот же план. Снятая ссылка заменяется своим
+    // текстом без скобок: алиасом, а если его нет — заголовком без префикса раздела.
+
+    [Fact]
+    public void ValidateSynth_ПризракВClaim_СнятТекстомБезСкобок_ОперацияПроходитВалидаторИГейт()
+    {
+        // Без снятия план отвергался бы итоговым гейтом («ссылка не найдена в разделе и
+        // вверх по цепочке»); с снятием — принимается, и на страницу идёт текст без скобок.
+        var r = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка уходит на Linux, см. [[Призрак]]", [QLinux]));
+
+        r.Rejected.Should().BeEmpty();
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Text.Should().Be("Сборка уходит на Linux, см. Призрак");
+        op.StrippedLinks.Should().Be(1);
+    }
+
+    [Fact]
+    public void ValidateSynth_ГолаяСсылкаВбок_Снята_ИмяОстаётсяТекстом()
+    {
+        var r = Run([new(CardPath, CardFile), new(PagePath, PageFile), new(ForeignPath, ForeignFile)],
+            Op(WikiPackage.OpAppend, "Сущность", "См. [[Чужое]] — решение принято", [QWindows]));
+
+        r.Rejected.Should().BeEmpty();
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Text.Should().Be("См. Чужое — решение принято");
+        op.StrippedLinks.Should().Be(1);
+    }
+
+    [Fact]
+    public void ValidateSynth_СсылкаСПрефиксомЧужогоРаздела_СнятаБезПрефикса()
+    {
+        var r = Run([new(CardPath, CardFile), new(PagePath, PageFile), new(ForeignPath, ForeignFile)],
+            Op(WikiPackage.OpAppend, "Сущность", "См. [[Проекты/p2/Чужое]] — решение", [QWindows]));
+
+        r.Rejected.Should().BeEmpty();
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Text.Should().Be("См. Чужое — решение");
+        op.StrippedLinks.Should().Be(1);
+    }
+
+    [Fact]
+    public void ValidateSynth_СсылкаСАлиасом_СнятаВАлиас_ЦельНеПомогает()
+    {
+        // Полное имя ссылки — «Сущность|подробнее о сборке»: страницы с таким именем нет
+        // (целое имя — цель, как её читает гейт). Снимается в алиас — текст без скобок.
+        var r = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка уходит на Linux [[Сущность|подробнее о сборке]]", [QLinux]));
+
+        r.Rejected.Should().BeEmpty();
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Text.Should().Be("Сборка уходит на Linux подробнее о сборке");
+        op.StrippedLinks.Should().Be(1);
+    }
+
+    [Fact]
+    public void ValidateSynth_СсылкаНаCreateТогоЖеПлана_Снята_ОбеОперацииПриняты()
+    {
+        // Страниц самого плана в снимке нет: «Вторая» создаётся этим же планом — ссылка
+        // на неё «иное» и снимается до текста.
+        var r = Run(
+            Op(WikiPackage.OpCreate, "Вторая", "Новая страница", [QLinux], kind: "decision"),
+            Op(WikiPackage.OpAppend, "Сущность", "Связано с [[Вторая]]", [QWindows]));
+
+        r.Rejected.Should().BeEmpty();
+        var created = r.Accepted.Single(o => o.Page.EndsWith("Вторая.md"));
+        created.StrippedLinks.Should().Be(0);
+        var linked = r.Accepted.Single(o => o.Page.EndsWith("Сущность.md"));
+        linked.Text.Should().Be("Связано с Вторая");
+        linked.StrippedLinks.Should().Be(1);
+    }
+
+    [Fact]
+    public void ValidateSynth_СсылкиВРазделеИВверх_УцелелиКакНаписаны()
+    {
+        var r = Run([new(CardPath, CardFile), new(PagePath, PageFile), new(OtherPath, OtherFile), new(CommonPath, CommonFile)],
+            Op(WikiPackage.OpAppend, "Сущность", "Связано с [[Другая]] и [[Знание]] и [[Общее/Знание]]", [QWindows]));
+
+        r.Rejected.Should().BeEmpty();
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Text.Should().Be("Связано с [[Другая]] и [[Знание]] и [[Общее/Знание]]");
+        op.StrippedLinks.Should().Be(0);
+    }
+
+    [Fact]
+    public void ValidateSynth_ЧислоТолькоВЗаголовкеУцелевшейСсылки_НеДаётNumberUnconfirmed()
+    {
+        var r = Run([new(CardPath, CardFile), new(PagePath, PageFile), new(ReportPath, ReportFile)],
+            Op(WikiPackage.OpAppend, "Сущность", "См. [[Отчёт 2023]] — решение принято", [QLinux]));
+
+        r.Rejected.Should().BeEmpty();
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Text.Should().Be("См. [[Отчёт 2023]] — решение принято");
+        op.StrippedLinks.Should().Be(0);
+        op.Decision.Should().Be(WikiPackage.DecisionAuto);
+        op.Reason.Should().NotContain("число не подтверждено цитатой");
+    }
+
+    [Fact]
+    public void ValidateSynth_ЧислоВСнятойСсылке_СчитаетсяЧисломClaim_ВоВходящих()
+    {
+        // Та же фраза, но «Отчёт 2023» — призрак: текст стал обычным текстом утверждения,
+        // его число больше не подтверждено цитатой → «Входящие» с причиной чисел.
+        var r = Run(Op(WikiPackage.OpAppend, "Сущность", "См. [[Отчёт 2023]] — решение принято", [QLinux]));
+
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Text.Should().Be("См. Отчёт 2023 — решение принято");
+        op.StrippedLinks.Should().Be(1);
+        op.Decision.Should().Be(WikiPackage.DecisionInbox);
+        op.Reason.Should().Contain("число не подтверждено цитатой").And.Contain("2023");
+    }
+
+    [Fact]
+    public void Validate_СтараяФорма_СсылкиClaimНеТрогаются_СтрогийГейтБезИзменений()
+    {
+        // Снятие — только ветка синтеза. Старая форма остаётся при строгом гейте:
+        // неразрешимая ссылка по-прежнему отклоняет операцию.
+        var claims = new[] { new WikiPlanValidator.Claim("См. [[Призрак]] — решение", QLinux) };
+        var plan = new WikiPlanValidator.Plan([new WikiPlanValidator.PlanOp(WikiPackage.OpAppend, "Сущность", 0, null)]);
+        var r = WikiPlanValidator.Validate(plan, claims, Src, Section, [WikiSections.Common],
+            [new(CardPath, CardFile), new(PagePath, PageFile)], new());
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("не найдена в разделе");
     }
 }

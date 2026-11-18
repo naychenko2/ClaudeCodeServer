@@ -376,6 +376,63 @@ public class WikiApplyClaimTests : IDisposable
         r.Reason.Should().Contain("число");
     }
 
+    // Страница раздела с числом в заголовке: ссылка на неё уцелевает (резолвится в
+    // разделе), проверка чисел — по claim без её текста.
+    private const string ReportPath = "Общее/Отчёт-2023.md";
+    private static readonly string ReportFile = """
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Отчёт 2023
+
+        ## Сводка
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+        """;
+
+    [Fact]
+    public async Task Синтез_ЧислоТолькоВЗаголовкеУцелевшейСсылки_Применяется()
+    {
+        // Доработка Q1-S4 (вердикт 3007451c): применение считает числа так же, как
+        // валидатор, — текст уцелевшей [[ссылки]] не часть утверждения. Пакет этой
+        // формы даёт боевой конвейер: валидатор оставляет разрешимую ссылку как
+        // написанной и отдаёт «auto» (WikiPlanValidatorSynthTests.cs:633).
+        await WriteCardAndPage();
+        await WriteViaKeeper(ReportPath, ReportFile);
+        var pkg = CreateAccepted(Claim(WikiPackage.OpAppend, PagePath, "См. [[Отчёт 2023]] — решение принято", [Quote]));
+
+        var r = await _sut.PrepareAsync(User, pkg, Ctx);
+
+        // Мутация «не вырезать текст ссылок из claim» (WikiClaimNumbers.Unconfirmed):
+        // краснеет здесь же — «число утверждения не подтверждено цитатой» по «2023».
+        r.Ready.Should().BeTrue(r.Reason);
+        r.Rendered.Single(d => d.Path == PagePath).Content.Should().Contain("См. [[Отчёт 2023]] — решение принято");
+    }
+
+    [Fact]
+    public async Task Синтез_ЧислоВСнятойСсылке_ПоПрежнемуОтказ()
+    {
+        // Граница инварианта: текст снятой ссылки — уже обычный текст утверждения,
+        // его числа считаются (тот же итог, что в валидаторе,
+        // WikiPlanValidatorSynthTests.cs:647).
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Claim(WikiPackage.OpAppend, PagePath, "См. Отчёт 2023 — решение принято", [Quote]));
+
+        var r = await _sut.PrepareAsync(User, pkg, Ctx);
+
+        r.Ready.Should().BeFalse();
+        r.Reason.Should().Contain("число");
+    }
+
     [Fact]
     public async Task Синтез_ИнбоксПринятыйЧеловеком_СЧислом_Применяется()
     {

@@ -90,7 +90,7 @@ public class NotesToolsetWikiTests : IDisposable
         var apply = new WikiApplyService(_notes, _keeper, _spheres, _config);
         _ingest = new WikiIngestService(new NothingLlm(), _spheres, apply, _config);
         _capture = new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper);
-        _chatIngest = new WikiChatIngestService(_capture, _ingest, _sessions, _keeper, _config);
+        _chatIngest = new WikiChatIngestService(_capture, _ingest, _sessions, _keeper, _spheres, _config);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
     }
 

@@ -160,7 +160,7 @@ public class WikiChatIngestTests : IDisposable
     private WikiChatIngestService Sut(FakeLlm llm) =>
         new(new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
             new WikiIngestService(llm, new NoSpheres(), _apply, _config),
-            _sessions, _keeper, _config);
+            _sessions, _keeper, new NoSpheres(), _config);
 
     private List<string> ChronicleFiles()
     {
@@ -314,6 +314,148 @@ public class WikiChatIngestTests : IDisposable
         var parsed = WikiPage.Parse(text).Model!;
         parsed.Footnotes.Should().ContainSingle().Which.Quote.Should().Be(shortText);
         parsed.Footnotes.Should().OnlyContain(f => !QuoteMatcher.MeasureQuoteLength(f.Quote).OutOfContract);
+    }
+
+    // Q1-S4b (риск 8 разреза): после Q1-S4 в claim остаются уцелевшие [[…]], разрешённые
+    // в разделе пакета. При записи хроники каждая прогоняется тем же резолвером
+    // (WikiGate.StripUnresolvedLinks — второй копии правил нет) уже для раздела дома
+    // хроники и его цепочки вверх: боковая или несуществующая ссылка заменяется своим
+    // видимым текстом — на диск в таком виде она не попадает ни в каком виде. Мутация
+    // «убрать резолв в хронике» (строка statement = WikiGate.StripUnresolvedLinks(...)
+    // в AppendChronicleAsync) — красное здесь, и только здесь.
+    [Fact]
+    public async Task Hronika_SsilkaNaChuzhoyRazdel_SnimaetsyaDoTeksta_BezSkobok()
+    {
+        AddSession();
+
+        // Страница чужого раздела: пакет стоит в projects/p2, дом хроники — projects/p1,
+        // цепочка вверх при NoSpheres — только common. Ни голая, ни префиксная ссылка
+        // для дома не резолвится (WikiGate.ResolveLink).
+        const string OtherTitle = "Чужое знание";
+        var otherKey = "Проекты/p2/" + OtherTitle + ".md";
+        var otherText = $$"""
+            ---
+            type: topic
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # {{OtherTitle}}
+
+            ## Сводка
+
+            ## Хронология
+
+            ## Противоречия
+
+            ## История
+            """;
+        (await _keeper.WritePageAsync(User, "projects/p2", otherKey, otherText))
+            .Status.Should().Be(WikiOpStatus.Applied, "страница чужого раздела на диске");
+
+        var opBare = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpAppend, Page = otherKey, Text = Claim1,
+            Claim = $"{Claim1}. См. [[{OtherTitle}]]", Quotes = [Claim1],
+            Class = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpAppend),
+            Decision = WikiPackage.DecisionAuto,
+        };
+        var opPrefixed = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpAppend, Page = otherKey, Text = Claim2,
+            Claim = $"{Claim2}. См. [[Проекты/p2/{OtherTitle}]]", Quotes = [Claim2],
+            Class = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpAppend),
+            Decision = WikiPackage.DecisionAuto,
+        };
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(), Section = "projects/p2",
+            Sources = [new WikiPackage.SourceRef("session", ChatId)],
+            Operations = [opBare, opPrefixed], Status = WikiPackage.StatusChecking,
+        };
+        var created = WikiPackageStore.Create(Root, pkg);
+        created.Ok.Should().BeTrue(created.Reason);
+
+        var (ok, reason) = await Sut(new FakeLlm()).AppendChronicleAsync(
+            User, WikiChatIngestService.HomeOf(_sessions.All[0]), _sessions.All[0], ChatId, [(pkg.Id, "Карточка")]);
+        ok.Should().BeTrue(reason);
+
+        var text = File.ReadAllText(ChronicleFiles().Single(), System.Text.Encoding.UTF8);
+        text.Should().NotContain("[[" + OtherTitle + "]]", "голая боковая ссылка не попадает на диск");
+        text.Should().NotContain("[[Проекты/p2/" + OtherTitle + "]]", "префиксная ссылка в чужой раздел — тоже");
+        StatementLines(text, $"{Claim1}. См. {OtherTitle}").Should().Be(1, "ссылка заменена своим видимым текстом");
+        StatementLines(text, $"{Claim2}. См. {OtherTitle}").Should().Be(1, "заголовок без префикса раздела");
+    }
+
+    // Q1-S4b, вторая половина инварианта: разрешённая для дома ссылка остаётся как
+    // написана — страница дома и страница вверх по цепочке (common) не снимаются.
+    // Мутация «снимать всегда» (PlainLinkText без резолва в StripUnresolvedLinks) —
+    // красное здесь.
+    [Fact]
+    public async Task Hronika_SsilkaNaStranicuDomaIVerkhOstaetsyaSsilkoj()
+    {
+        AddSession();
+
+        // Страница common-раздела — вверх по цепочке дома (projects/p1 → common,
+        // WikiSections.UpChain при NoSpheres).
+        const string CommonTitle = "Общий порядок";
+        var commonKey = "Общее/" + CommonTitle + ".md";
+        var commonText = $$"""
+            ---
+            type: topic
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # {{CommonTitle}}
+
+            ## Сводка
+
+            ## Хронология
+
+            ## Противоречия
+
+            ## История
+            """;
+        (await _keeper.WritePageAsync(User, WikiSections.Common, commonKey, commonText))
+            .Status.Should().Be(WikiOpStatus.Applied, "страница общего раздела на диске");
+
+        var opHome = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpAppend, Page = PagePath, Text = Claim1,
+            Claim = $"{Claim1}. См. [[{PageTitle}]]", Quotes = [Claim1],
+            Class = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpAppend),
+            Decision = WikiPackage.DecisionAuto,
+        };
+        var opUp = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpAppend, Page = PagePath, Text = Claim2,
+            Claim = $"{Claim2}. См. [[Общее/{CommonTitle}]]", Quotes = [Claim2],
+            Class = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpAppend),
+            Decision = WikiPackage.DecisionAuto,
+        };
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(), Section = Section,
+            Sources = [new WikiPackage.SourceRef("session", ChatId)],
+            Operations = [opHome, opUp], Status = WikiPackage.StatusChecking,
+        };
+        var created = WikiPackageStore.Create(Root, pkg);
+        created.Ok.Should().BeTrue(created.Reason);
+
+        var (ok, reason) = await Sut(new FakeLlm()).AppendChronicleAsync(
+            User, WikiChatIngestService.HomeOf(_sessions.All[0]), _sessions.All[0], ChatId, [(pkg.Id, "Карточка")]);
+        ok.Should().BeTrue(reason);
+
+        var text = File.ReadAllText(ChronicleFiles().Single(), System.Text.Encoding.UTF8);
+        text.Should().Contain("[[" + PageTitle + "]]", "ссылка на страницу дома не снимается");
+        text.Should().Contain("[[Общее/" + CommonTitle + "]]", "ссылка вверх по цепочке — тоже");
+        StatementLines(text, $"{Claim1}. См. [[{PageTitle}]]").Should().Be(1, "строка записана как написана");
+        StatementLines(text, $"{Claim2}. См. [[Общее/{CommonTitle}]]").Should().Be(1);
     }
 
     // ── «О чём» не трогается при дописывании; новая хроника — без строки «Продолжение чата» ──

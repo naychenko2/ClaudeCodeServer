@@ -27,6 +27,9 @@ public class WikiKeeperCatalogTests
         // Слот по умолчанию места — то, что диалог показывает в маршруте (tier:medium / tier:weak)
         Assert.Equal(ModelTier.Medium, LocalActionCatalog.DefaultTierOf(LocalActionCatalog.WikiIngest));
         Assert.Equal(ModelTier.Weak, LocalActionCatalog.DefaultTierOf(LocalActionCatalog.WikiFact));
+        // Локальный лимит вывода места (Q1-S14: 16 384 → 8 192) — тот же снимок, что у ночи.
+        Assert.Equal(65_536, ingest.NumCtx);
+        Assert.Equal(8_192, ingest.NumPredict);
     }
 
     [Fact]
@@ -81,7 +84,7 @@ public class WikiKeeperCatalogTests
         Assert.True(nightly.DefaultLocal);
         Assert.Equal(ModelTier.Medium, nightly.Tier);
         Assert.Equal(65_536, nightly.NumCtx);
-        Assert.Equal(16_384, nightly.NumPredict);
+        Assert.Equal(8_192, nightly.NumPredict); // Q1-S14: 16 384 → 8 192
         Assert.Equal(600_000, nightly.TimeoutMs);
 
         var triage = LocalActionCatalog.Find(LocalActionCatalog.WikiTriage);

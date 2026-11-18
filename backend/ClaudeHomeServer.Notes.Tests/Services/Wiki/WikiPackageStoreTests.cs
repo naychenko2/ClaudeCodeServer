@@ -291,6 +291,80 @@ public class WikiPackageStoreTests : IDisposable
             .Should().Be(WikiPackageStore.CodeNotDecidable);
     }
 
+    // ─── 6b. D0: отказ по спорным не выбрасывает авто-операции ───────────────
+    //
+    // Правило StatusAfterDecisions на всех трёх путях решения (человек :289, «принять всё»
+    // :316, судья :384): есть нерешённая спорная → proposed; все спорные приняты → accepted;
+    // ни одна спорная не принята И авто-операций нет → rejected; иначе → partially_accepted.
+    // rejected больше не снимает авто-операции: при них пакет partially_accepted и их
+    // применяет обычный путь применения.
+
+    [Fact]
+    public void ОтказВсеСпорныхПриАвто_PartiallyAccepted_АвтоНеТронуто_БезАвто_Rejected()
+    {
+        // Путь решения человека (DecideOperation). Мутация «вернуть старое условие
+        // rejected» (без проверки авто-операций): первое Should краснеет — пакет стал бы
+        // rejected и его авто-операции не применились бы никогда.
+        var withAuto = At(WikiPackage.StatusProposed,
+            AppendOp(), // неспорная: её никто не решает и отказ по спорным её не выбрасывает
+            AppendOp("Общее/Z.md", WikiPackage.DecisionInbox));
+        var res = WikiPackageStore.DecideOperation(_root, withAuto, 1, false, "не подтверждено источником");
+        res.Ok.Should().BeTrue(res.Reason);
+        res.Package!.Status.Should().Be(WikiPackage.StatusPartiallyAccepted,
+            "отказ по спорным не выбрасывает авто-операции (D0)");
+        res.Package.Operations[0].Decision.Should().Be(WikiPackage.DecisionAuto);
+        res.Package.Operations[0].HumanDecision.Should().BeNull("авто-операцию человек не решает");
+        ReadStatus(withAuto).Should().Be(WikiPackage.StatusPartiallyAccepted);
+
+        // Граница правила: ни одной принятой спорной и авто-операций нет — прежний rejected.
+        var noAuto = At(WikiPackage.StatusProposed, AppendOp("Общее/Z.md", WikiPackage.DecisionInbox));
+        WikiPackageStore.DecideOperation(_root, noAuto, 0, false, "не подтверждено источником").Ok.Should().BeTrue();
+        ReadStatus(noAuto).Should().Be(WikiPackage.StatusRejected);
+    }
+
+    [Fact]
+    public void СудьяОтклоняетВсеСпорныеПриАвто_PartiallyAccepted_АвтоНеТронуто()
+    {
+        // Путь судьи (JudgeOperations): вердикт ведёт статус ровно так же, как решение
+        // человека, — и по тому же новому правилу. Мутация старого условия краснеет здесь же.
+        var id = At(WikiPackage.StatusProposed,
+            AppendOp(), AppendOp("Общее/Z.md", WikiPackage.DecisionInbox));
+        var res = WikiPackageStore.JudgeOperations(_root, id,
+            [new WikiPackageStore.JudgeOutcome(1, false, "нет цитаты", "test-judge", null)]);
+        res.Ok.Should().BeTrue(res.Reason);
+        res.Package!.Status.Should().Be(WikiPackage.StatusPartiallyAccepted);
+        res.Package.Operations[1].JudgeDecision.Should().Be(WikiPackage.HumanRejected);
+        res.Package.Operations[0].Decision.Should().Be(WikiPackage.DecisionAuto);
+        res.Package.Operations[0].HumanDecision.Should().BeNull();
+        ReadStatus(id).Should().Be(WikiPackage.StatusPartiallyAccepted);
+    }
+
+    [Fact]
+    public void ПринятьВсёПослеОтказаСудьи_PartiallyAccepted_ВердиктОстаётся_АвтоНеТронута()
+    {
+        // Путь «принять всё» (AcceptAllContested): вердикт судьи по одной спорной остаётся
+        // (И1), нерешённые принимаются, итог — partially_accepted по общему правилу;
+        // авто-операция не получает никакого решения.
+        var id = At(WikiPackage.StatusProposed,
+            AppendOp(),
+            AppendOp("Общее/A.md", WikiPackage.DecisionInbox),
+            AppendOp("Общее/Z.md", WikiPackage.DecisionInbox));
+        WikiPackageStore.JudgeOperations(_root, id,
+            [new WikiPackageStore.JudgeOutcome(1, false, "нет цитаты", "test-judge", null)]).Ok.Should().BeTrue();
+        ReadStatus(id).Should().Be(WikiPackage.StatusProposed, "вторая спорная ещё не решена");
+
+        var res = WikiPackageStore.AcceptAllContested(_root, id);
+        res.Ok.Should().BeTrue(res.Reason);
+        var pkg = res.Package!;
+        pkg.Operations[1].JudgeDecision.Should().Be(WikiPackage.HumanRejected, "вердикт судьи остаётся: у операции одно решение");
+        pkg.Operations[1].HumanDecision.Should().BeNull();
+        pkg.Operations[2].HumanDecision.Should().Be(WikiPackage.HumanAccepted);
+        pkg.Operations[0].Decision.Should().Be(WikiPackage.DecisionAuto);
+        pkg.Operations[0].HumanDecision.Should().BeNull();
+        pkg.Status.Should().Be(WikiPackage.StatusPartiallyAccepted);
+        ReadStatus(id).Should().Be(WikiPackage.StatusPartiallyAccepted);
+    }
+
     // ─── 7. Гонка записи: чтение → пересчёт → перезапись атомарны (MAJOR 1, ревью S4a) ───
 
     [Fact]
@@ -326,6 +400,46 @@ public class WikiPackageStoreTests : IDisposable
         disk.Package.Operations[1].HumanDecision.Should().Be(WikiPackage.HumanRejected);
         disk.Package.Operations[1].HumanReason.Should().Be("это уточнение, а не противоречие");
         disk.Package.Status.Should().Be(WikiPackage.StatusPartiallyAccepted);
+    }
+
+    [Fact]
+    public async Task СудьяИЧеловекРешаютРазныеОперацииОдновременно_СтатусПоОбимРешениям()
+    {
+        // Мутация «снять замок стора» (WithPackageLock в DecideOperation/JudgeOperations):
+        // последний писатель кладёт файл по своему чтению — одно из решений теряется,
+        // остаётся нерешённая операция, статус proposed и краснеют последние Should.
+        // Пакет большой (600 операций), как в тесте двух человеческих решений: окно гонки —
+        // миллисекунды чтения и перезаписи, пересечение двух путей не случайно.
+        var ops = new List<WikiPackage.Operation>
+        {
+            AppendOp("Общее/A.md", WikiPackage.DecisionInbox),
+            AppendOp("Общее/Z.md", WikiPackage.DecisionInbox),
+            AppendOp(), // авто: ни одно из решений её не касается
+        };
+        for (var i = 0; i < 600; i++) ops.Add(AppendOp($"Общее/A{i:D3}.md"));
+        var id = At(WikiPackage.StatusProposed, ops.ToArray());
+
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var human = Task.Run(async () => { await barrier.Task; return WikiPackageStore.DecideOperation(_root, id, 0, true); });
+        var judge = Task.Run(async () =>
+        {
+            await barrier.Task;
+            return WikiPackageStore.JudgeOperations(_root, id,
+                [new WikiPackageStore.JudgeOutcome(1, false, "нет цитаты", "test-judge", null)]);
+        });
+        barrier.SetResult();
+
+        var r1 = await human.WaitAsync(TimeSpan.FromSeconds(30));
+        var r2 = await judge.WaitAsync(TimeSpan.FromSeconds(30));
+        r1.Ok.Should().BeTrue(r1.Reason);
+        r2.Ok.Should().BeTrue(r2.Reason);
+
+        var disk = WikiPackageStore.TryRead(_root, id);
+        disk.State.Should().Be(WikiPackageFileState.Valid);
+        disk.Package!.Operations[0].HumanDecision.Should().Be(WikiPackage.HumanAccepted, "решение человека не затёрто вердиктом");
+        disk.Package.Operations[1].JudgeDecision.Should().Be(WikiPackage.HumanRejected, "вердикт судьи не затёрт решением человека");
+        disk.Package.Operations[2].HumanDecision.Should().BeNull();
+        disk.Package.Status.Should().Be(WikiPackage.StatusPartiallyAccepted, "итог учитывает оба решения");
     }
 
     [Fact]

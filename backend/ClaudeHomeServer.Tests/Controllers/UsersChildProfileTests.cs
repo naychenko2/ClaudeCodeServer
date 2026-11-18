@@ -318,6 +318,32 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     [Fact]
+    public async Task PutProfile_RulesChatProviderRoute_Returns400()
+    {
+        // Сторож «чат правил + облачный провайдер = отказ» (минор ревью Т5a): deepseek —
+        // законный маршрут ПРЕДМЕТА с согласия админа (тесты Т5a дают ему 200), но маршрут
+        // чата правил — только запись пула с API-ключом: Evaluate профиля всегда идёт с
+        // acknowledged: false (ChildProfileValidator.cs:40), а flag согласия в теле — не поле
+        // контракта профиля и не читается никогда. Отказ — ветка RouteReject(..., forPool: true).
+        var id = await NewContainerUser("kid-rules-provider");
+        var body = new
+        {
+            enabled = true,
+            providerKey = "deepseek",
+            model = "deepseek-v4-pro",
+            spaces = new Dictionary<string, object>(),
+            acknowledgeRouteRisk = true,   // поля профиля нет в контракте: согласия для него не бывает
+        };
+
+        var (status, resp) = await PutAsync(id, body);
+        status.Should().Be(HttpStatusCode.BadRequest);
+        CodeOf(resp).Should().Be("route_risk_unacknowledged");
+        resp.GetProperty("message").GetString().Should().Contain("профиля",
+            "отказ называет маршрут профиля, а не предмета");
+        _users.GetById(id)!.ChildMode.Should().BeNull("отказ включению — профиль не сохранён");
+    }
+
+    [Fact]
     public async Task Put_ОкноНечитаемое_400_invalid_window()
     {
         var id = await NewContainerUser("kid-window");

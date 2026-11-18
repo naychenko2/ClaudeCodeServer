@@ -13,16 +13,28 @@
 // сервер, его 400-код и отказы 403/404 переводятся в человеческий текст (REJECT_TEXT), message
 // ответа показываем как есть.
 //
-// Т4f: вкладка «Предметы». «Помощник (правила)» — пикер ChildRoutePicker вместо текстовых полей
-// (значения те же: providerKey/model профиля), под ним список предметов ChildSubjectsEditor,
+// Т4f/Т6: вкладка «Предметы». «Помощник (правила)» — пикер ChildRoutePicker вместо текстовых
+// полей (значения те же: providerKey/model профиля), под ним список предметов ChildSubjectsEditor,
 // под списком — карточка репетитора открытого предмета. Список маршрутов — один GET на
-// пользователя при открытии; пикеры знают только записи пула (макет Д1, пачка 1): cloud/local
-// до Т6 админ не может выбрать без согласия. «Сохранить» несёт subjects в порядке редактора;
-// тьюторов предметов берём из ответа (у нового предмета его создаёт сервер); отказ, называющий
-// id предмета, красит его строку (макет «рамка C.danger») и приводит на вкладку «Предметы».
+// пользователя при открытии. Пикер помощника знает только записи пула: маршрут профиля
+// валидируется без согласий (ChildProfileValidator.cs:36-41). Пикеры предметов (Т6) знают весь
+// список — облачные и локальные с предупреждением и галкой согласия (разрез §3).
+// «Сохранить» несёт subjects в порядке редактора; acknowledgeRouteRisk уходит в тело только как
+// действие этой сессии — прочитанное из ответа согласие в черновик не пишется (ревью Т4a: иначе
+// нетронутый профиль молча согласовал бы свой маршрут заново). Тьюторов и состояние согласия
+// берём из ответа; отказ, называющий id предмета, красит его строку (макет «рамка C.danger»)
+// и приводит на вкладку «Предметы».
+//
+// К5d: знания открытого предмета (макет Д2). Под карточкой репетитора — пикер базы знаний
+// ChildSubjectKnowledgePicker, затем файлы предмета ChildSubjectMaterials. Привязка живёт в черновике
+// предмета (ключ — subject.id) и уходит в тело при «Сохранить» вместе с subjects; ответ сохранения
+// обновляет knowledge и тьютора предметов одним слиянием. Отказ знания называет базу, а не предмет
+// (ChildProfileValidator.cs:201-204) — предмет находится по отличению привязки от серверной и красит
+// свою строку тем же механизмом, что отказ маршрута. Предмета, которого на сервере ещё нет, файлы
+// не грузятся (загрузка дала бы 404) — вместо описи строка о сохранении профиля.
 
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, Info, Plus, Trash2 } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { Notice } from '../../components/ui/Notice';
 import { Button } from '../../components/ui/Button';
@@ -33,6 +45,8 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { childApi } from './api';
 import { ChildRoutePicker, type ChildRouteValue } from './ChildRoutePicker';
+import { ChildSubjectKnowledgePicker } from './ChildSubjectKnowledgePicker';
+import { ChildSubjectMaterials } from './ChildSubjectMaterials';
 import { ChildSubjectsEditor } from './ChildSubjectsEditor';
 import { ChildTutorCard } from './ChildTutorCard';
 import type { ChildProfile, ChildRoute, ChildSubjectAdmin, TimeWindow } from './types';
@@ -111,6 +125,11 @@ const REJECT_TEXT: Record<string, string> = {
   model_not_concrete: 'У предмета не задана конкретная модель. Выбери её из списка.',
   model_unpriced: 'У модели нет цены — бюджет не смог бы ограничить расход. Выбери другую.',
   route_risk_unacknowledged: 'Этот маршрут требует согласия: отметь «Понимаю риск и разрешаю этот маршрут».',
+  // Привязка знания (К1b/К5d): отказ называет базу, а не предмет (ChildProfileValidator.cs:192-204,
+  // early exit контроллера UsersController.cs:217-229) — строку предмета красит поиск по новой
+  // привязке (knowledgeRejectSubjectId); message ответа показывается строкой ниже, как есть.
+  dataset_not_attachable: 'Эту базу нельзя привязать к предмету: допустимы только общая или своя самостоятельная. Выбери другую базу или «Без базы».',
+  knowledge_unavailable: 'Раздел «Знания» сейчас недоступен — привязать базу нельзя. Сохрани предмет «Без базы», файлы работают и так.',
 };
 const REJECT_FALLBACK = 'Сохранить не удалось. Попробуй ещё раз.';
 // 403 гейта авторизации ручки №10 (политика админа): тело отказа пустое, кода нет — текст по status.
@@ -143,19 +162,29 @@ interface Draft {
   otherSpaces: Record<string, { windows: TimeWindow[]; dailyMinutes?: number | null }>;
 }
 
-// Снимок редактора: черновик + только-чтение + список маршрутов, всё под одним id. Смена id —
-// новый снимок: черновик, маршруты и открытые состояния прежнего пользователя не переносятся.
+// Предмет, известный серверу: id и его живая привязка (null — привязки нет). «Известный» = тот,
+// что пришёл из профиля вызывающего или из ответа сохранения: нового предмета на сервере ещё нет,
+// его файлы дали бы 404, а «новая привязка» — мера отказа знания (knowledgeRejectSubjectId).
+interface ServerSubject { id: string; knowledgeId: string | null }
+const serverSubjectsOf = (p: ChildProfile | null | undefined): ServerSubject[] =>
+  (p?.subjects ?? []).map((s) => ({ id: s.id, knowledgeId: s.knowledge?.datasetId ?? null }));
+
+// Снимок редактора: черновик + только-чтение + список маршрутов + известные серверу предметы,
+// всё под одним id. Смена id — новый снимок: черновик, маршруты и открытые состояния прежнего
+// пользователя не переносятся.
 interface Snapshot {
   id: string; draft: Draft; tutorPersonaId: string | null; rulesAgreedAt: string | null;
   // Маршруты для пикеров: null — ещё не пришли (или не удалось), список — получены, как с сервера.
   routes: ChildRoute[] | null;
   routesError: string | null;
+  serverSubjects: ServerSubject[];
 }
 
 function snapshotOf(user: ChildProfileEditorUser): Snapshot {
   return {
     id: user.id, draft: draftOf(user), tutorPersonaId: user.tutorPersonaId ?? null,
     rulesAgreedAt: user.rulesAgreedAt ?? null, routes: null, routesError: null,
+    serverSubjects: serverSubjectsOf(user.childProfile),
   };
 }
 
@@ -180,7 +209,13 @@ function draftOf(user: ChildProfileEditorUser): Draft {
   d.warnMinutes = String(p.warnMinutes ?? DEFAULT_WARN_MINUTES);
   // Предметы читаются из профиля как есть: порядок списка, привязка знаний и маршрут
   // существующего предмета не теряются от того, что здесь их никто не правил.
-  d.subjects = p.subjects ? [...p.subjects] : undefined;
+  // Кроме согласия: серверный acknowledgeRouteRisk — информация «согласие стоит», не действие
+  // админа, и в черновик оно не пишется (живое согласие показывает его дата, строка редактора).
+  // Иначе нетронутый профиль ушёл бы в тело с этим флагом как с «соглашаюсь сейчас» и молча
+  // согласовал бы свой маршрут заново (ревью Т4a).
+  d.subjects = p.subjects
+    ? p.subjects.map((s) => (s.acknowledgeRouteRisk === undefined ? s : { ...s, acknowledgeRouteRisk: undefined }))
+    : undefined;
   const { [LESSONS]: lessons, ...other } = p.spaces ?? {};
   d.otherSpaces = other;
   d.windows = (lessons?.windows ?? []).map((w) => ({ from: w.from, to: w.to, days: w.weekdays ?? [] }));
@@ -197,26 +232,50 @@ const numOrNull = (s: string): number | null => {
 
 const splitIds = (s: string): string[] => s.split(',').map((x) => x.trim()).filter(Boolean);
 
-// Предмет в теле (Т2a): только поля тела. tutorPersonaId и routeAcknowledgedAt — поля ответа
-// (ChildProfileValidator.cs:224-226), acknowledgeRouteRisk обратно как есть не отправляем
-// (ревью Т4a): прежнее согласие держится на бэке сверкой живого ProviderKey с присланным
-// (ChildProfileValidator.cs:117-118), а при другой модели оно обязано быть новым явным — это Т6.
+// Предмет в теле (Т2a/Т6): только поля тела. tutorPersonaId и routeAcknowledgedAt — поля ответа
+// (ChildProfileValidator.cs:224-226), в тело не идут. acknowledgeRouteRisk — только как действие
+// этой сессии (ревью Т4a): true — «соглашаюсь сейчас», false — «отзываю» (Х1, 43b77058a);
+// отсутствие поля — «живое согласие не трогать» (бэк держит его при том же providerKey,
+// UserStore.SetChildProfile). Серверного флага в черновике нет (draftOf), значит здесь — только
+// то, что сделал админ.
 function subjectBody(s: ChildSubjectAdmin): ChildSubjectAdmin {
   return {
     id: s.id, label: s.label, glyph: s.glyph, color: s.color,
     providerKey: s.providerKey, model: s.model, enabled: s.enabled,
-    // Привязку знаний возвращаем как есть: отсутствие в теле её снимает (UsersController.cs:456-458).
-    ...(s.knowledge ? { knowledge: s.knowledge } : {}),
+    ...(s.acknowledgeRouteRisk !== undefined ? { acknowledgeRouteRisk: s.acknowledgeRouteRisk } : {}),
+    // Привязку знаний возвращаем как есть: отсутствие или null в теле её снимает (UsersController.cs:456-458).
+    // Трёхзначно, как и само поле: поля в черновике нет — мы его не знаем (в теле его нет);
+    // явный null (выбор «Без базы» в пикере) — уходит в тело как null.
+    ...(s.knowledge !== undefined ? { knowledge: s.knowledge } : {}),
   };
 }
 
-// Тьюторов предметов берём из ответа: провижн сохранения создаёт его новому предмету
-// (UsersController.cs:279-305). Слияние — по id; своего id, которого в ответе нет, тьютора не теряем.
-function subjectTutor(d: Draft, res?: ChildProfile): Draft {
+// Слияние ответа сохранения в черновик: тьютора — из ответа (провижн создания его новому предмету,
+// UsersController.cs:279-305), привязку знания — тоже из ответа: живая она, не черновая (стор держит
+// прежнюю пару id/момент, когда id не изменился — UsersController.cs:465-468). Согласие — тем же
+// порядком (Т6): дата из ответа (стор записал её на наше «соглашаюсь сейчас» или оставил живую;
+// отзыва — null), черновой флаг действия снимается — после сохранения это снова живое согласие,
+// а не pending-действие, и следующее сохранение его не перепишет. Слияние — по id; своего
+// id, которого в ответе нет, не трогаем; поля, которого в ответе нет, черновика тоже не касаемся.
+function subjectApplied(d: Draft, res?: ChildProfile): Draft {
   const subjects = d.subjects;
   if (!subjects) return d;
-  const byId = new Map((res?.subjects ?? []).map((s) => [s.id, s.tutorPersonaId ?? null]));
-  return { ...d, subjects: subjects.map((s) => (byId.has(s.id) ? { ...s, tutorPersonaId: byId.get(s.id) } : s)) };
+  const byId = new Map((res?.subjects ?? []).map((s) => [s.id, s]));
+  return {
+    ...d,
+    subjects: subjects.map((s) => {
+      const r = byId.get(s.id);
+      return r
+        ? {
+            ...s,
+            tutorPersonaId: r.tutorPersonaId ?? null,
+            acknowledgeRouteRisk: undefined,
+            ...(r.routeAcknowledgedAt !== undefined ? { routeAcknowledgedAt: r.routeAcknowledgedAt ?? null } : {}),
+            ...(r.knowledge !== undefined ? { knowledge: r.knowledge } : {}),
+          }
+        : s;
+    }),
+  };
 }
 
 // Отказ по предмету: бэк называет id в кавычках («Ключ предмета «math» …»,
@@ -235,6 +294,21 @@ function duplicateSubjectId(subjects?: ChildSubjectAdmin[]): string | undefined 
     if (!s.id) continue;
     if (seen.has(s.id)) return s.id;
     seen.add(s.id);
+  }
+  return undefined;
+}
+
+// Отказ знания (dataset_not_attachable / knowledge_unavailable) называет базу, а не предмет
+// (ChildProfileValidator.cs:201-204), а knowledge_unavailable не называет ничего. Предмет тот же,
+// на чём смотрит валидатор: новая привязка против серверной (или предмета нет на сервере вовсе).
+// Порядок поиска — порядок тела: валидатор отвергает первого такого предмета
+// (ChildProfileValidator.cs:183-205), и краснеет та же строка.
+function knowledgeRejectSubjectId(d: Draft, server: ServerSubject[]): string | undefined {
+  for (const s of d.subjects ?? []) {
+    const want = s.knowledge?.datasetId;
+    if (!want) continue;
+    const live = server.find((x) => x.id === s.id);
+    if (!live || live.knowledgeId !== want) return s.id;
   }
   return undefined;
 }
@@ -277,6 +351,7 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
   const d = snap.id === user.id ? snap.draft : draftOf(user);
   const routes = snap.id === user.id ? snap.routes : null;
   const routesError = snap.id === user.id ? snap.routesError : null;
+  const serverSubjects = snap.id === user.id ? snap.serverSubjects : serverSubjectsOf(user.childProfile);
   const [saving, setSaving] = useState(false);
   // Пустое поле окна подсвечивается только после попытки сохранить; некорректное — сразу, пока правят.
   const [attempted, setAttempted] = useState(false);
@@ -309,6 +384,13 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
   // порядок плиток у ребёнка (И5), здесь он не переставляется.
   const patchSubjects = (next: ChildSubjectAdmin[]) =>
     setSnap((s) => (s.id === user.id ? { ...s, draft: { ...s.draft, subjects: next } } : s));
+  // Привязка знания открытого предмета (К5d): меняется только её поле, порядок списка остаётся
+  // (он и есть порядок плиток у ребёнка, И5). null — явный «Без базы»: уходит в тело как null.
+  const patchSubjectKnowledge = (subjectId: string, datasetId: string | null) =>
+    patch((prev) => ({
+      ...prev,
+      subjects: (prev.subjects ?? []).map((s) => (s.id === subjectId ? { ...s, knowledge: datasetId ? { datasetId } : null } : s)),
+    }));
   const patchWindow = (i: number, fn: (w: DraftWindow) => DraftWindow) =>
     patch((prev) => ({ ...prev, windows: prev.windows.map((w, j) => (j === i ? fn(w) : w)) }));
 
@@ -320,10 +402,11 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
   const showBadDaily = d.enabled && badMinutes(d.dailyMinutes);
   const showBadWarn = d.enabled && badWarn(d.warnMinutes);
 
-  // Пачка 1 (макет Д1): пикеры знают только записи пула с API-ключом — cloud/local до Т6 админ
-  // не выбрал бы без согласия. Значение вне этого списка (прежнее из профиля) пикер держит
-  // «недоступным»: его видно, выбрать повторно нельзя, в тело оно уходит как есть — и живое
-  // согласие такого маршрута на бэке не трогается (ChildProfileValidator.cs:117-118).
+  // Пикер помощника — только записи пула (Т6 не меняет): маршрут профиля валидируется без
+  // согласий, облачное и локальное для него не открыты (ChildProfileValidator.cs:36-41,
+  // forPool: true). Пикеры предметов (Т6) получают весь список: облачные и локальные с
+  // предупреждением и галкой согласия (разрез §3). Значение вне списка (прежнее из профиля)
+  // пикер держит «недоступным»: его видно, выбрать повторно нельзя, в тело оно уходит как есть.
   const poolRoutes = (routes ?? []).filter((r) => r.kind === 'pool');
   // Маршрут «Помощника (правила)» — он же маршрут нового предмета (проп defaultRoute Т4d).
   const assistantRoute: ChildRouteValue = { providerKey: d.providerKey, model: d.model };
@@ -351,11 +434,15 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
       setAttempted(false);
       setSnap((s) => (s.id === forId ? {
         ...s,
-        // Тьютора (и тьюторов предметов) берём из ответа: при первом включении их создаёт сервер.
-        // Согласие сбрасываем только когда сброс просили этим сохранением — дата не теряется сама.
+        // Тьютора (и тьюторов предметов) и привязки знания берём из ответа: при первом включении
+        // тьюторов создаёт сервер, живая привязка — его слияние, не черновик. Согласие сбрасываем
+        // только когда сброс просили этим сохранением — дата не теряется сама.
         tutorPersonaId: res.tutorPersonaId ?? s.tutorPersonaId,
         rulesAgreedAt: d.resetRules ? null : s.rulesAgreedAt,
-        draft: subjectTutor(s.draft, res.profile),
+        draft: subjectApplied(s.draft, res.profile),
+        // Предметы после сохранения — какие вернул ответ: новый предмет стал известным серверу,
+        // его файлы грузятся; удалённого в ответе нет — он больше не «на сервере».
+        serverSubjects: serverSubjectsOf(res.profile),
       } : s));
       onSaved(res.profile);
     } catch (e) {
@@ -367,7 +454,11 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
       // Отказ, называющий предмет, красит его строку и приводит человека туда, где эта строка
       // видна, — на вкладке «Режим и времени» красная рамка была бы не видна (тот же смысл,
       // что возврат на вкладку с невалидными полями времени).
-      const subjectId = subjectIdOf(server, d.subjects) ?? (code === 'subject_id_duplicate' ? duplicateSubjectId(d.subjects) : undefined);
+      // Отказ знания не называет предмета в тексте — его ищем по новой привязке (та же мера,
+      // что у валидатора); остальные отказы — по id в кавычках и по повтору, как раньше.
+      const subjectId = subjectIdOf(server, d.subjects)
+        ?? (code === 'subject_id_duplicate' ? duplicateSubjectId(d.subjects) : undefined)
+        ?? (code === 'dataset_not_attachable' || code === 'knowledge_unavailable' ? knowledgeRejectSubjectId(d, serverSubjects) : undefined);
       setReject({ text: err?.status === 403 ? FORBIDDEN_TEXT : (code && REJECT_TEXT[code]) || REJECT_FALLBACK, server, subjectId });
       if (subjectId) setTab('subjects');
       setSaving(false);
@@ -535,9 +626,9 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
       {routes !== null && !routesError && (
       <div data-testid="assistant-route" style={fieldStyle}>
         {sectionTitle('Помощник (правила)')}
-        <span style={{ fontSize: FS.sm, color: C.textMuted, marginTop: -SP.sm }}>
-          Только записи пула с API-ключом: ход ребёнка не идёт по подписке. Другие поставщики подключатся позже.
-        </span>
+        {/* Подпись выбранного маршрута — у самого пикера (макет Д1, пикер (б)); отдельной
+            строки «подключатся позже» больше нет: для предметов они уже подключены (Т6),
+            для помощника — никогда (маршрут профиля валидируется без согласий). */}
         <ChildRoutePicker
           routes={poolRoutes}
           value={assistantRoute}
@@ -551,7 +642,11 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
       <div data-testid="subjects-list">
         <ChildSubjectsEditor
           subjects={d.subjects ?? []}
-          routes={poolRoutes}
+          // Пикеры предметов (Т6) — весь список: облачные и локальные с предупреждением и
+          // согласием. При отказе загрузки — пустой список плюс routesError: строки не врут
+          // «пула нет», пикеры заглушены, как пикер помощника (ревью Т4f).
+          routes={routes ?? []}
+          routesError={!!routesError}
           onChange={patchSubjects}
           selectedId={selectedId}
           onSelect={setSelectedId}
@@ -561,9 +656,29 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
         />
       </div>
 
-      {/* Открытый предмет: карточка его репетитора. У несохранённого предмета персоны ещё нет —
+      {/* Открытый предмет: карточка его репетитора, под ней — знания предмета (макет Д2):
+          «База знаний», затем «Файлы предмета». У несохранённого предмета персоны ещё нет —
           карточка сама говорит «репетитор появится после сохранения». */}
-      {selectedSubject && <ChildTutorCard userId={user.id} personaId={selectedSubject.tutorPersonaId ?? ''} />}
+      {selectedSubject && (<>
+      <ChildTutorCard userId={user.id} personaId={selectedSubject.tutorPersonaId ?? ''} />
+      <div data-testid="subject-knowledge" style={fieldStyle}>
+        {sectionTitle('Знания предмета')}
+        <ChildSubjectKnowledgePicker
+          value={selectedSubject.knowledge?.datasetId ?? null}
+          onChange={(datasetId) => patchSubjectKnowledge(selectedSubject.id, datasetId)}
+          disabled={saving}
+        />
+        {/* Предмета, которого на сервере ещё нет: его опись файлов дала бы 404 — вместо блока
+            строка о сохранении. База при этом правится: это поле профиля, не запись сервера. */}
+        {serverSubjects.some((x) => x.id === selectedSubject.id) ? (
+          <ChildSubjectMaterials userId={user.id} subjectId={selectedSubject.id} />
+        ) : (
+          <Notice tone="info" icon={Info} data-testid="subject-materials-unsaved">
+            Файлы можно добавить после сохранения профиля.
+          </Notice>
+        )}
+      </div>
+      </>)}
       </>)}
       </>)}
 

@@ -2,13 +2,20 @@
 // отказы 400 человеческим текстом и гонка смены пользователя. Т4f: вкладка «Предметы» — пикер
 // «Помощника (правила)» вместо текстовых полей, список предметов и карточка его репетитора,
 // subjects в теле, тьютор из ответа и красная строка названного отказом предмета.
+// К5d: знания открытого предмета под карточкой репетитора (макет Д2): пикер базы с живым значением,
+// knowledge в теле («Без базы» — явный null), ответ обновления обновляет привязку, отказ знания красит
+// строку по новой привязке, файлы — только предмета, известного серверу (нового — строка о
+// сохранении и ноль запросов). Пикер и блок файлов — настоящие компоненты, подменены только их
+// сети (knowledgeBases.list и materials.list).
 // Окружение — node + linkedom, как в соседних .test.tsx волны: тело запроса проверяется по mock childApi,
 // состояния — по атрибутам и inline-стилям. Черновик заполняется через user.childProfile (профиль даёт
 // вызывающий), поэтому набирать текст в полях в тесте не нужно; переключения — кликами по контролам.
 // «Необработанных rejection нет» не слушается отдельно: неохваченный rejection сам краснит прогон vitest.
 // Мутации этого прогона (вывод — в отчёте задачи): снять сверку id в ответе getRoutes →
 // «Subjects_RoutesResponseAfterUserSwitch_Ignored» краснеет; не резать tutorPersonaId из
-// предмета в теле → «без полей ответа» краснеет.
+// предмета в теле → «без полей ответа» краснеет; не сличать serverSubjects в блоке файлов →
+// «новый несохранённый предмет» краснеет; не брать knowledge из ответа сохранения →
+// «ответ обновления обновляет привязку» краснеет.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, createElement } from 'react';
@@ -43,6 +50,8 @@ let callIdx = 0;
 let routeCalls: { signal?: AbortSignal }[] = [];
 let routeAnswers: (Error | ChildRoute[])[] = [];
 let routePending = new Map<number, { resolve: (v: ChildRoute[]) => void; reject: (e: unknown) => void }>();
+// Вызовы materials.list (К5b): на них проверяется «0 для нового предмета, 1 для известного».
+let materialCalls: { userId: string; subjectId: string }[] = [];
 
 // URL-хелперы — РЕАЛЬНЫЕ (тот же приём, что ChildTutorCard.test): карточка репетитора строит
 // src настоящим хелпером, и проверяется именно эта строка.
@@ -67,9 +76,34 @@ vi.mock('./api', async (importOriginal) => {
         if (a) return Promise.resolve(a);
         return new Promise((res, rej) => { routePending.set(i, { resolve: res, reject: rej }); });
       },
+      // ChildSubjectMaterials (К5b) — настоящий, его опись под моком: важен протокол вызовов
+      // («0 для нового предмета, 1 для известного»). Ответ не приходит: блок остаётся в загрузке
+      // и не мешает утверждениям.
+      materials: {
+        list: (userId: string, subjectId: string) => {
+          materialCalls.push({ userId, subjectId });
+          return new Promise(() => {});
+        },
+      },
     },
   };
 });
+
+// knowledgeApi.knowledgeBases.list — по индексу вызова (та же форма, что в тесте пикера):
+// пикер настоящий, список баз — отсюда: на нём значение пикера и привязка, уходящая в тело.
+let kbAnswers: (Error | { configured: boolean; items: KnowledgeBaseSummary[] })[] = [];
+let kbIdx = 0;
+vi.mock('../knowledge/api', () => ({
+  knowledgeApi: {
+    knowledgeBases: {
+      list: () => {
+        const a = kbAnswers[kbIdx++];
+        if (a instanceof Error) return Promise.reject(a);
+        return Promise.resolve(a ?? { configured: true, items: [] });
+      },
+    },
+  },
+}));
 
 // Пикер голоса в карточке репетитора при монтировании зовёт api.tts.voices — мокаем:
 // свой каталог голосов тесту не нужен, а реальный вызов ушёл бы за пределы mock-слоя.
@@ -80,6 +114,7 @@ vi.mock('../../lib/api', () => ({
 const { ChildProfileEditor } = await import('./ChildProfileEditor');
 import type { ChildProfileEditorUser } from './ChildProfileEditor';
 import type { ChildProfile, ChildRoute, ChildSubjectAdmin } from './types';
+import type { KnowledgeBaseSummary } from '../knowledge/types';
 
 // Состав GET /api/admin/child-routes (тот же, что в тесте редактора предметов): пул и облачный —
 // на этом проверяется, что пачка 1 отдаёт пикерам только пул.
@@ -123,6 +158,19 @@ const subject = (id: string, over: Partial<ChildSubjectAdmin> = {}): ChildSubjec
   tutorPersonaId: 'p-tutor-math', ...over,
 });
 const withSubjects = (...subjects: ChildSubjectAdmin[]): ChildProfile => ({ ...fullProfile(), subjects });
+
+// Список баз — форма ответа GET /api/knowledge (тот же состав, что в тесте пикера): своя
+// самостоятельная и общая — attachable; «Заметки» (deletable=false) пикер скрывает.
+const kb = (over: Partial<KnowledgeBaseSummary>): KnowledgeBaseSummary => ({
+  id: 'id', title: 'т', type: 'т', visibility: 'personal', documentCount: 0, createdAt: null, deletable: false, ...over,
+});
+const kbList = () => ({
+  configured: true,
+  items: [
+    kb({ id: 'ds-math', title: 'Математика (Моро)', type: 'Самостоятельная', deletable: true, documentCount: 5 }),
+    kb({ id: 'ds-textbook', title: 'учебники', type: 'Публичная', visibility: 'public', deletable: true, documentCount: 3 }),
+  ],
+});
 
 // Тело на проводе: то, что уйдёт в JSON запроса (undefined-поля выбрасываются).
 const wire = (i: number) => JSON.parse(JSON.stringify(calls[i].body)) as Record<string, unknown>;
@@ -221,11 +269,30 @@ const rowInput = (row: HTMLElement, label: string) => {
 };
 const sentSubjects = (i: number) => (wire(i).subjects ?? []) as Record<string, unknown>[];
 
+// Пикер знания и блок файлов (К5d) — открытые состояния открытого предмета.
+const knowledgePicker = (host: HTMLElement) => panel(host).querySelector('[data-testid="child-knowledge-picker"]') as HTMLElement | null;
+const knowledgeSelect = (host: HTMLElement) => (knowledgePicker(host)?.querySelector('select') ?? null) as HTMLSelectElement | null;
+const materialsBlock = (host: HTMLElement) => panel(host).querySelector('[data-testid="child-subject-materials"]') as HTMLElement | null;
+const openSubject = async (host: HTMLElement, name: string) => {
+  const b = subjectBtn(host, `Открыть: ${name}`);
+  expect(b, `строка предмета «${name}»`).toBeTruthy();
+  await click(b!);
+};
+// «Пикер показывает значение» — пункт с этим value selected (тот же приём, что isSelected
+// в тесте пикера: сеттер option.selected в linkedom действует внутри своего parentElement).
+const kbSelected = (sel: HTMLSelectElement, value: string) =>
+  Array.from(sel.options).some((o) => o.value === value && (o as unknown as { selected?: boolean }).selected === true);
+const changeSelect = async (el: HTMLSelectElement, v: string) => {
+  await act(async () => { reactProps(el)?.onChange?.({ target: { value: v } }); });
+};
+
 beforeEach(() => {
   calls = []; answers = []; pending = new Map(); callIdx = 0; saved = [];
   // Маршруты по умолчанию приходят сразу: на этом проверяется обычный экран. Без записи в
   // routeAnswers запрос висит — на этом проверяются загрузка и гонка.
   routeCalls = []; routeAnswers = [ROUTES]; routePending = new Map();
+  // Список баз по умолчанию приходит: на этом проверяется обычный экран пикера.
+  materialCalls = []; kbAnswers = [kbList()]; kbIdx = 0;
   mobile = false;
 });
 
@@ -536,10 +603,11 @@ describe('ChildProfileEditor: вкладки «Режим и время» / «П
     expect(assistantSelects(host).map((s) => s.value)).toEqual(['anthropic-api-kids', 'sonnet']);
     expect(windowInputs(host).length, 'окно скрыто на другой вкладке').toBe(0);
     expect(subjectsEditor(host), 'список предметов').toBeTruthy();
-    // пачка 1 (макет Д1): пикер знает только записи пула — облачный в списке не появляется,
-    // и его подпись стоит у вкладки, а не у пикера
+    // пикер помощника (Т6 не меняет): только записи пула — облачный в его списке не появляется
+    // (маршрут профиля валидируется без согласий); подпись выбранного маршрута — у пикера,
+    // отдельной строки вкладки больше нет (макет Д1, пикер (б))
     expect(optionValues(assistantSelects(host)[0])).toEqual(['anthropic-api-kids']);
-    expect(panel(host).textContent).toContain('Только записи пула с API-ключом');
+    expect(assistantPicker(host)?.textContent, 'подпись пула — у пикера').toContain('Anthropic по API-ключу');
     expect(panel(host).textContent).not.toContain('GLM');
   });
 
@@ -701,6 +769,155 @@ describe('ChildProfileEditor: «Предметы» — тело, тьютор и
   });
 });
 
+// Т6 (ревью Т4a): acknowledgeRouteRisk в ответе = «согласие стоит», в теле = «соглашаюсь
+// сейчас». В тело оно уходит только когда админ поставил галку заново в этой сессии;
+// смена поставщика без галки — флага нет, и 400 route_risk_unacknowledged спрашивает
+// согласие по-настоящему (его текст и красная строка — в тесте выше).
+describe('ChildProfileEditor: «Предметы» — согласие на облачный маршрут (Т6)', () => {
+  const ACK_LABEL = 'Понимаю риск и разрешаю этот маршрут';
+  const rowAck = (row: HTMLElement) => row.querySelector(`[role="checkbox"][aria-label="${ACK_LABEL}"]`) as HTMLElement | null;
+  const rowSelect = (row: HTMLElement, label: string) => {
+    const lbl = Array.from(row.querySelectorAll('label')).find((l) => (l.textContent ?? '').includes(label));
+    return (lbl?.parentElement?.querySelector('select') ?? null) as HTMLSelectElement | null;
+  };
+  const changeRow = async (row: HTMLElement, label: string, value: string) => {
+    const sel = rowSelect(row, label);
+    expect(sel, `поле «${label}» строки`).not.toBeNull();
+    await act(async () => { reactProps(sel!)?.onChange?.({ target: { value } }); });
+  };
+
+  it('полученный профиль как есть: живое согласие не едет в тело флагом действия', async () => {
+    const s = subject('math', {
+      providerKey: 'glm', model: 'glm-5', acknowledgeRouteRisk: true, routeAcknowledgedAt: '2026-11-10T09:00:00Z',
+    });
+    const { host } = await mount(liza({ childProfile: withSubjects(s) }));
+    await clickTab(host, 'Предметы');
+    // живое согласие видно: галка отмечена (это не действие админа, и в теле его не будет)
+    expect(rowAck(subjectRows(host)[0])?.getAttribute('aria-checked'), 'согласие стоит').toBe('true');
+    await click(saveBtn(host));
+    const body = sentSubjects(0)[0];
+    expect('acknowledgeRouteRisk' in body, 'прочитанное согласие — не «соглашаюсь сейчас»').toBe(false);
+    expect('routeAcknowledgedAt' in body, 'поле ответа в тело не идёт').toBe(false);
+    expect(body.providerKey, 'маршрут при этом не трогается').toBe('glm');
+  });
+
+  it('смена поставщика без галки: флага в теле нет — сервер спросит согласие заново', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    await changeRow(subjectRows(host)[0], 'Поставщик', 'glm');
+    expect(rowAck(subjectRows(host)[0])?.getAttribute('aria-checked'), 'галка сброшена').toBe('false');
+    await click(saveBtn(host));
+    const body = sentSubjects(0)[0];
+    expect(body.providerKey).toBe('glm');
+    expect('acknowledgeRouteRisk' in body, 'без действия адмена флага нет').toBe(false);
+  });
+
+  it('галка согласия: acknowledgeRouteRisk=true в теле этого сохранения', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    await changeRow(subjectRows(host)[0], 'Поставщик', 'glm');
+    const box = rowAck(subjectRows(host)[0]);
+    expect(box, 'у облачного маршрута — галка').not.toBeNull();
+    await click(box!);
+    await click(saveBtn(host));
+    const body = sentSubjects(0)[0];
+    expect(body.acknowledgeRouteRisk, 'действие адмена уходит в тело как есть').toBe(true);
+  });
+});
+
+describe('ChildProfileEditor: «Предметы» — база знаний и файлы предмета (К5d)', () => {
+  it('открытый предмет: под карточкой репетитора группа «Знания предмета», пикер с привязанным значением, файлы известного предмета', async () => {
+    const s = subject('math', { knowledge: { datasetId: 'ds-math', attachedAt: '2026-11-01T00:00:00Z' } });
+    const { host } = await mount(liza({ childProfile: withSubjects(s) }));
+    await clickTab(host, 'Предметы');
+    expect(knowledgePicker(host), 'без открытого предмета блоков нет').toBeNull();
+    expect(materialsBlock(host), 'без открытого предмета файлов нет').toBeNull();
+    await openSubject(host, 'Математика');
+    // Порядок (макет Д2): карточка репетитора, затем знания — по порядку обхода DOM
+    const order = Array.from(panel(host).querySelectorAll('[data-testid="child-tutor-card"],[data-testid="subject-knowledge"]')).map((e) => e.getAttribute('data-testid'));
+    expect(order).toEqual(['child-tutor-card', 'subject-knowledge']);
+    expect(panel(host).querySelector('[data-testid="subject-knowledge"]')!.textContent).toContain('Знания предмета');
+    // Пикер показывает привязанное из профиля: значение — subject.knowledge.datasetId
+    const sel = knowledgeSelect(host);
+    expect(sel, 'пикер под карточкой').toBeTruthy();
+    expect(kbSelected(sel!, 'ds-math'), 'привязанная база выбрана в пикере').toBe(true);
+    // Файлы предмета, известного серверу: ровно один read, по его id
+    expect(materialsBlock(host), 'файлы известного предмета').toBeTruthy();
+    expect(materialCalls, 'один read, по id предмета').toEqual([{ userId: 'u-liza', subjectId: 'math' }]);
+  });
+
+  it('выбор базы в пикере → knowledge {datasetId} в теле; «Без базы» → knowledge: null; ответ обновления обновляет привязку', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    await openSubject(host, 'Математика');
+    const sel = knowledgeSelect(host)!;
+    expect(kbSelected(sel, ''), 'без привязки выбран «Без базы»').toBe(true);
+    await changeSelect(sel, 'ds-math');
+    await click(saveBtn(host));
+    expect(sentSubjects(0)[0].knowledge, 'привязка уходит в тело вместе с subjects').toEqual({ datasetId: 'ds-math' });
+    await settle(() => pending.get(0)!.resolve({
+      profile: withSubjects(subject('math', { knowledge: { datasetId: 'ds-math', attachedAt: '2026-11-18T09:00:00Z' } })),
+      tutorPersonaId: 'p-tutor-math',
+    }));
+    // Ответ — источник живого: пикер держит привязку из ответа
+    expect(kbSelected(knowledgeSelect(host)!, 'ds-math'), 'привязка из ответа').toBe(true);
+    await changeSelect(knowledgeSelect(host)!, '');
+    await click(saveBtn(host));
+    expect(sentSubjects(1)[0].knowledge, 'явный «Без базы» — null в теле').toBeNull();
+  });
+
+  it('400 dataset_not_attachable: Notice с текстом ответа, красная строка предмета с новой привязкой', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math'), subject('istoriya', { label: 'История', glyph: 'Ист', color: 'accent' })) }));
+    await clickTab(host, 'Предметы');
+    await openSubject(host, 'История');
+    await changeSelect(knowledgeSelect(host)!, 'ds-bad');
+    await click(saveBtn(host));
+    await settle(() => pending.get(0)!.reject(httpErr(400, 'dataset_not_attachable', 'База знаний «ds-bad» не найдена среди доступных датасетов или не может быть привязана к предмету.')));
+    const n = notice(host);
+    expect(n).toBeTruthy();
+    expect(n!.textContent).toContain('Эту базу нельзя привязать к предмету');
+    expect(n!.textContent).toContain('База знаний «ds-bad» не найдена'); // message — как есть
+    expect(n!.textContent).not.toContain('dataset_not_attachable');
+    expect(tabSelected(host, 'Предметы'), 'человек видит красную строку').toBe(true);
+    const rows = subjectRows(host);
+    expect(rows[1].getAttribute('data-error'), 'предмет с новой привязкой').toBe('true');
+    expect(rows[0].getAttribute('data-error'), 'не тронутый предмет не краснеет').toBeNull();
+  });
+
+  it('новый несохранённый предмет: вместо блока файлов — строка о сохранении, ноль запросов materials', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    await click(panel(host).querySelector('[data-testid="add-subject"]') as HTMLElement);
+    const nameInput = rowInput(subjectRows(host)[1], 'Название');
+    await typeInto(nameInput!, 'Астрономия');
+    await openSubject(host, 'Астрономия');
+    expect(materialsBlock(host), 'блока файлов у неизвестного предмета нет').toBeNull();
+    const unsaved = panel(host).querySelector('[data-testid="subject-materials-unsaved"]') as HTMLElement;
+    expect(unsaved, 'вместо блока — строка').toBeTruthy();
+    expect(unsaved.textContent).toContain('Файлы можно добавить после сохранения профиля');
+    expect(knowledgePicker(host), 'база — поле профиля: доступна и у нового предмета').toBeTruthy();
+    expect(materialCalls.length, 'запроса к предмету, которого нет на сервере').toBe(0);
+  });
+
+  it('ответ сохранения делает предмет известным: после сохранения его файлы грузятся', async () => {
+    const { host } = await mount(liza({ childProfile: withSubjects(subject('math')) }));
+    await clickTab(host, 'Предметы');
+    await click(panel(host).querySelector('[data-testid="add-subject"]') as HTMLElement);
+    const nameInput = rowInput(subjectRows(host)[1], 'Название');
+    await typeInto(nameInput!, 'Астрономия');
+    await openSubject(host, 'Астрономия');
+    expect(materialCalls.length).toBe(0);
+    await click(saveBtn(host));
+    await settle(() => pending.get(0)!.resolve({
+      profile: withSubjects(subject('math'), subject('astronomiya', { label: 'Астрономия', glyph: 'Аст', tutorPersonaId: 'p-tutor-new' })),
+      tutorPersonaId: 'p-tutor-old',
+    }));
+    expect(panel(host).querySelector('[data-testid="subject-materials-unsaved"]')).toBeNull();
+    expect(materialsBlock(host), 'файлы нового предмета после сохранения').toBeTruthy();
+    expect(materialCalls.map((c) => c.subjectId), 'read нового предмета — по его id').toEqual(['astronomiya']);
+  });
+});
+
 describe('ChildProfileEditor: «Предметы» — загрузка и гонка списка маршрутов', () => {
   it('пока ответа нет — экран загрузки; свой ответ открыл пикеры и список', async () => {
     routeAnswers = [];
@@ -781,5 +998,17 @@ describe('ChildProfileEditor: мобила (360)', () => {
     expect(Number.parseFloat(up!.style.minHeight), 'тач-цель «Выше»').toBeGreaterThanOrEqual(40);
     const open = subjectBtn(host, 'Открыть: Математика');
     expect(Number.parseFloat(open!.style.minHeight), 'тач-цель строки предмета').toBeGreaterThanOrEqual(40);
+  });
+
+  it('«Знания предмета»: база и файлы — в одну колонку, «Сохранить» во всю ширину', async () => {
+    mobile = true;
+    const s = subject('math', { knowledge: { datasetId: 'ds-math', attachedAt: '2026-11-01T00:00:00Z' } });
+    const { host } = await mount(liza({ childProfile: withSubjects(s) }));
+    await clickTab(host, 'Предметы');
+    await openSubject(host, 'Математика');
+    const group = panel(host).querySelector('[data-testid="subject-knowledge"]') as HTMLElement;
+    expect(group, 'группа знания').toBeTruthy();
+    expect(group.style.flexDirection, 'база и файлы — в одну колонку (макет Д2, 360)').toBe('column');
+    expect(Number.parseFloat(saveBtn(host).style.minHeight), 'тач-цель «Сохранить»').toBeGreaterThanOrEqual(40);
   });
 });

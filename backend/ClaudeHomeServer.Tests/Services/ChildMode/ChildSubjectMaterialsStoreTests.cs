@@ -981,6 +981,91 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
         Directory.Exists(Path.Combine(_root, "kid-a")).Should().BeFalse();
     }
 
+    // Ревью К2c (минор 2): список каталогов предметов снимался ДО захвата семафоров — узкое
+    // окно, в котором AddAsync НОВОГО предмета (его каталога ещё нет на снимке) писал без
+    // ожидания сноса. Теперь список перечитывается ПОСЛЕ захвата известных семафоров, пока
+    // не станет стабильным.
+    //
+    // Детерминированная гонка «снос не ждёт новый предмет»:
+    //   • существующий «math» держит свой семафор в конвертере (оригинал на диске, описи нет —
+    //     тот же приём, что УдалениеРебёнкаЖдётИдущийAddAsync) → снос сделал снимок («math»)
+    //     и встал на его семафоре; на снимке «new» ещё нет;
+    //   • поднимается новый «new» (тот же конвертер, независимое окно): каталог и оригинал на
+    //     диске, запись стоит в конвертере, семафор занят;
+    //   • отпускаем «math» ПРИ СТОЯЩЕМ «new». Исправленный снос перечитает список, увидит
+    //     «new» и ждёт его семафор — его запись дойдёт под семафором, затем снос снесёт её.
+    //     Мутация «снимок до семафора» снесёт весь каталог ПОСРЕДИ записи «new», а её
+    //     CreateDirectory+Save воссоздадут каталог после сноса: он остаётся.
+    // Флаги конвертера — в отдельном контрольном каталоге вне каталога предмета: снос его не
+    // сносит, и тест доходит до проверки no-dir, а не падает на записи флага.
+    [Fact]
+    public async Task УдалениеРебёнка_НовыйПредметМеждуСнимкомИСносом_КаталогНеВоскресает()
+    {
+        var ctrl = Path.Combine(_tempDir, "conv-ctl");
+        Directory.CreateDirectory(ctrl);
+        // Конвертер: id предмета — родитель каталога files (путь = .../<subject>/files/<file>);
+        // отметка запуска и флаг отпуска — в контрольном каталоге, по id предмета.
+        var script = Path.Combine(_tempDir, OperatingSystem.IsWindows() ? "ccs-wait-conv.bat" : "ccs-wait-conv.sh");
+        if (OperatingSystem.IsWindows())
+            File.WriteAllText(script,
+                "@echo off\r\n" +
+                "set \"sd=%~dp1\\..\"\r\n" +
+                "for %%i in (\"%sd%\") do set \"sid=%%~nxi\"\r\n" +
+                $"echo started> \"{ctrl}\\%sid%.started\"\r\n:loop\r\n" +
+                $"if exist \"{ctrl}\\%sid%.release\" (echo DOCX-MARKER&exit /b 0)\r\ntimeout /t 1 /nobreak >nul\r\ngoto loop\r\n");
+        else
+            File.WriteAllText(script,
+                "#!/bin/sh\n" +
+                "sid=$(basename \"$(dirname \"$(dirname \"$1\")\")\")\n" +
+                $"echo started > '{ctrl}/'$sid.started\n" +
+                $"while [ ! -e '{ctrl}/'$sid.release ]; do sleep 0.05; done\n" +
+                "echo DOCX-MARKER\n");
+
+        var store = Store(Config(new Dictionary<string, string?>
+        {
+            ["Markitdown:Command"] = OperatingSystem.IsWindows() ? $"cmd /c {script}" : $"bash {script}",
+        }));
+
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        async Task WaitInConverter(string subjectId)
+        {
+            var started = Path.Combine(ctrl, subjectId + ".started");
+            while (!File.Exists(started))
+            {
+                if (DateTime.UtcNow > deadline) Assert.Fail($"конвертер {subjectId} не запустился: фикстура неработает");
+                await Task.Delay(50);
+            }
+        }
+        void Release(string subjectId) => File.WriteAllText(Path.Combine(ctrl, subjectId + ".release"), "go");
+
+        // Существующий «math»: держит свой семафор в конвертере (оригинал на диске, описи нет).
+        var mathTask = Task.Run(() => store.AddAsync("kid-a", "math", "урок.pdf", PdfBytes, "admin-1"));
+        await WaitInConverter("math");
+
+        var deleteTask = Task.Run(() => store.DeleteChildAsync("kid-a"));
+        // Снимок «math» сделан, снос стоит на его семафоре. Поднимается новый «new» — на снимке его нет.
+        await Task.Delay(100);
+        var newTask = Task.Run(() => store.AddAsync("kid-a", "new", "справка.pdf", PdfBytes, "admin-1"));
+        await WaitInConverter("new"); // «new» посреди записи: каталог и оригинал на диске, описи нет, семафор занят.
+
+        // Отпускаем «math», ПОКА «new» ещё в конвертере: снос продолжит обход над стоящим «new».
+        Release("math");
+        await Task.Delay(200); // дать сносу дойти: исправленный встанет на семафоре «new», мутация — снесёт каталог.
+        // Теперь отпускаем «new»: в исправленном его запись дойдёт под семафором сноса; в мутации
+        // каталог уже снесён, но её CreateDirectory+Save воссоздадут его после сноса.
+        Release("new");
+
+        var newRes = await newTask;
+        // Контракт «снос ждёт идущую запись»: в исправленном «new» дописан под семафором сноса
+        // (Accepted). Мутация «снимок до семафора» снесла каталог посреди его записи — текст не
+        // лёг, описи нет, сама записка оборвана (storage_error).
+        newRes.Accepted.Should().BeTrue(newRes.Code);
+        await Task.WhenAll(mathTask, deleteTask);
+
+        // Конечное состояние полного цикла: каталог ребёнка не появился ни после какой записи.
+        Directory.Exists(Path.Combine(_root, "kid-a")).Should().BeFalse();
+    }
+
     // Тот же шов закрывает ту же гонку обычной загрузки: AddAsync проверяет живого владельца
     // первой же проверкой под семафором — каталог первой загрузки не создаётся после
     // удаления ребёнка. Мутация: убрать ChildAlive из AddAsync — краснеет этот тест.

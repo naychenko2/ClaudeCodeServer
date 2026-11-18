@@ -515,11 +515,18 @@ public sealed class ChildSubjectMaterialsStore(
     /// Снести каталог материалов ребёнка (каскад удаления пользователя-ребёнка, разрез §2):
     /// best-effort, лог, исключения наружу нет — как соседние звенья каскада UsersController.
     ///
-    /// Семафоры предметов (ревью К2a): идущий AddAsync держит семафор предмета и дописывает
-    /// опись/файлы ПОСЛЕ Directory.Delete — каталог воскресал бы после сноса. Снос ждёт
-    /// идущие записи: каждый уже созданный каталог предмета берётся под свой семафор
-    /// (порядок — Ordinal, два параллельных сноса одного ребёнка не держат друг друга
-    /// за разные наборы ключей), затем сносится весь каталог.
+    /// Семафоры предметов (ревью К2a; окно снимка — ревью К2c): идущий AddAsync держит
+    /// семафор предмета и дописывает опись/файлы ПОСЛЕ Directory.Delete — каталог воскресал
+    /// бы после сноса. Снос ждёт идущие записи: каждый каталог предмета берётся под свой
+    /// семафор (порядок — Ordinal, два параллельных сноса одного ребёнка не держат друг
+    /// друга за разные наборы ключей), затем сносится весь каталог. Список перечитывается
+    /// ПОСЛЕ захвата уже известных семафоров, пока не станет стабильным: снимок ДО захвата
+    /// оставлял окно, в котором AddAsync нового предмета (его каталога ещё нет на снимке)
+    /// писал без ожидания сноса. Каталог предмета создаётся только под своим семафором
+    /// (AddAsync), поэтому новый видимый каталог либо уже дописан (его семафор свободен),
+    /// либо ещё пишется (его семафор занят — WaitAsync дождется конца записи). После
+    /// стабильного снимка новый предмет — уже после обхода: каталог ребёнка не появляется
+    /// ни в каком порядке.
     ///
     /// Загрузка, пришедшая после удаления пользователя, к стору ДОХОДИТ (ревью КИ1b):
     /// проверка контроллера К2b (ChildOf → child_not_found) была до минуты распознавания
@@ -532,30 +539,38 @@ public sealed class ChildSubjectMaterialsStore(
     {
         RequireChild(childId);
         var dir = SafePath.Join(root, childId);
+        var held = new List<SemaphoreSlim>();
+        var taken = new HashSet<string>(StringComparer.Ordinal);
         try
         {
-            var subjectDirs = Directory.Exists(dir)
-                ? Directory.GetDirectories(dir).OrderBy(d => d, StringComparer.Ordinal).ToArray()
-                : [];
-            var held = new List<SemaphoreSlim>(subjectDirs.Length);
-            try
+            // Обход под семафорами (ревью К2c): список перечитывается после захвата
+            // известных, пока не станет стабильным — новый предмет между снимком и сном
+            // не должен писать вне ожидания сноса.
+            while (true)
             {
-                foreach (var subjectDir in subjectDirs)
+                if (!Directory.Exists(dir)) break;
+                var fresh = Directory.GetDirectories(dir)
+                    .Where(d => !taken.Contains(d))
+                    .OrderBy(d => d, StringComparer.Ordinal)
+                    .ToArray();
+                if (fresh.Length == 0) break;
+                foreach (var subjectDir in fresh)
                 {
+                    taken.Add(subjectDir);
                     var sem = LockFor(subjectDir);
                     await sem.WaitAsync();
                     held.Add(sem);
                 }
-                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
             }
-            finally
-            {
-                foreach (var sem in held) sem.Release();
-            }
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
         }
         catch (Exception e)
         {
             _log?.LogWarning(e, "Детский режим: каталог материалов ребёнка не снесён (child {Child})", childId);
+        }
+        finally
+        {
+            foreach (var sem in held) sem.Release();
         }
     }
 

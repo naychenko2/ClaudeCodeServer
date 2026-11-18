@@ -183,7 +183,7 @@ internal sealed class TurnLaunchContextFactory
         // allow-list. НЕ через Gate(...): у взрослого AllowsServer = true для любого сервера, и tutor
         // объявился бы всем (разрез «Знания репетитора» §3). Решение — свойство владельца, не хода.
         var tutorMcp = ownerId is not null && childGate.IsChild(ownerId) && ChildModeAllowList.AllowsServer("tutor")
-            ? _builtin.BuildTutorContext(ownerId, session.Id) : null;
+            ? _builtin.BuildTutorContext(ownerId) : null;
         var webSearchMcp = Gate("websearch", _builtin.BuildWebSearchContext(ownerId, persona.Persona));
         var higgsfieldMcp = Gate("higgsfield", _builtin.BuildHiggsfieldContext(ownerId, persona.Persona));
         var imageEditorMcp = Gate("image-editor", _builtin.BuildImageEditorContext(ownerId, session));

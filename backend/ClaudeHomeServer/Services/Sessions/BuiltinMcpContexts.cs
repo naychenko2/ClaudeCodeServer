@@ -146,10 +146,9 @@ public sealed class BuiltinMcpContexts
     }
 
     // Контекст MCP-сервера репетитора детского режима (К3): сессия-вызыватель едет хвостом URL
-    // (/mcp/tutor/{sessionId}), его строит ClaudeSession из Info.Id; sessionId здесь — для
-    // симметрии с вызовом фабрики и ради будущих контекстов с привязкой к чату. Решение «объявлять ли» — у вызывающего (TurnLaunchContextFactory:
-    // IsChild и allow-list), здесь только сборка адреса.
-    internal TutorMcpContext BuildTutorContext(string ownerId, string sessionId)
+    // (/mcp/tutor/{sessionId}), его строит ClaudeSession из Info.Id. Решение «объявлять ли» —
+    // у вызывающего (TurnLaunchContextFactory: IsChild и allow-list), здесь только сборка адреса.
+    internal TutorMcpContext BuildTutorContext(string ownerId)
     {
         var apiUrl = _endpoint.ResolveTasksApiUrl(ownerId);
         return new TutorMcpContext(apiUrl, () => _endpoint.GetServiceToken(ownerId), _endpoint.HttpEndpointUsable(apiUrl));

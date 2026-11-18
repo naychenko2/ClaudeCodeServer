@@ -606,9 +606,9 @@ public sealed class TranscriptionStateReader(
     // ─── зависимости ────────────────────────────────────────────────────────────────
 
     // Состояние зависимостей — по тому, что конвейер сам пишет о них: фазы «ждёт …» — сбой машины
-    // распознавания, «ждёт модель» — сбой модели сводок, «dify отложено» в журнале — Dify не принял,
-    // «dify=ok» — принял. «Медленно» (slow) из этих файлов не измеряется. Свежесть — как у плашки:
-    // stale/stopped/unknown → всё «не проверялось».
+    // распознавания, «ждёт модель» — сбой модели сводок, «dify отложено» в примечании последней
+    // удачной загрузки — Dify не принял, чистое примечание — принял. «Медленно» (slow) из этих
+    // файлов не измеряется. Свежесть — как у плашки: stale/stopped/unknown → всё «не проверялось».
     private static TranscriptionDepDto[] BuildDeps(
         StateSnapshot? state, StateSnapshot? summary, bool summaryValid, string pipelineLevel,
         List<JournalRow> journal, List<ConfigFolder> folders, long at)
@@ -631,10 +631,12 @@ public sealed class TranscriptionStateReader(
             _ => "unknown",
         } : "unknown";
 
-        // Самый свежий dify-маркер журнала в окне (rows уже по убыванию времени).
-        var difyMarker = journal.FirstOrDefault(r => r.Note.Contains("dify", StringComparison.OrdinalIgnoreCase));
-        var dify = difyMarker is null ? "unknown" :
-            difyMarker.Note.Contains("dify отложено", StringComparison.OrdinalIgnoreCase) ? "down" : "ok";
+        // Судим по самой свежей удачной загрузке в окне (rows уже по убыванию времени). Конвейер
+        // пишет в её примечании «dify отложено» только когда загрузку отложил (supervisor.py:274-275);
+        // в удачной загрузке слова «dify» нет вовсе — его отсутствие и есть «принял», а не «не проверялось».
+        var lastOk = journal.FirstOrDefault(r => r.Result == "ok");
+        var dify = lastOk is null ? "unknown" :
+            lastOk.Note.Contains("dify отложено", StringComparison.OrdinalIgnoreCase) ? "down" : "ok";
 
         var watched = folders.Where(f => f.Watch is { Length: > 0 }).ToList();
         var share = watched.Count == 0 ? "unknown" :

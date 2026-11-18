@@ -585,7 +585,7 @@ public class TranscriptionStateReaderTests : IDisposable
             "# время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание",
             JournalRowStr(now, TimeSpan.FromMinutes(10), "ok", "Video-RR", "RR.Встреча.mp4", "2.9", "3", "asr 2.6м + саммари 0.4м (локально)"),
             // старое форматирование журнала писало имя уже с .md
-            JournalRowStr(now, TimeSpan.FromMinutes(20), "ok", "Video-RR", "RR.Старое.mp4.md", "1.1", "2", "dify=ok"),
+            JournalRowStr(now, TimeSpan.FromMinutes(20), "ok", "Video-RR", "RR.Старое.mp4.md", "1.1", "2", "asr 1.0м + саммари 0.1м (локально)"),
             // папки нет в конфиге → mdPath null
             JournalRowStr(now, TimeSpan.FromMinutes(30), "ok", "Video-XX", "НетПапки.mp4"),
             // вне окна
@@ -707,7 +707,7 @@ public class TranscriptionStateReaderTests : IDisposable
         Write(root, "config.yaml", ConfigYaml(("Video-RR", watch, outDir)));
         Write(root, "logs/journal.tsv", string.Join('\n',
             "# время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание",
-            JournalRowStr(now, TimeSpan.FromHours(2), "ok", "Video-RR", "RR.Прежнее.mp4", "1.0", "2", "dify=ok")) + "\n");
+            JournalRowStr(now, TimeSpan.FromHours(2), "ok", "Video-RR", "RR.Прежнее.mp4", "1.0", "2", "asr 1.0м + саммари 0.1м (локально)")) + "\n");
         WriteOutputFile(outDir, "X.mp4.md", now.Subtract(TimeSpan.FromMinutes(1))); // записан минуту назад, строки ещё нет
 
         var s = Reader(root, new FixedTime(now)).Read();
@@ -1142,18 +1142,18 @@ public class TranscriptionStateReaderTests : IDisposable
         Write(root, "config.yaml", ConfigYaml(("Video-GPB", Path.Combine(root, "watch"), Path.Combine(root, "out"))));
         Write(root, "logs/journal.tsv", string.Join('\n',
             "# время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание",
-            JournalRowStr(now, TimeSpan.FromMinutes(30), "ok", "Video-GPB", "A.mp4", "1.0", "2", "dify=ok"),
+            JournalRowStr(now, TimeSpan.FromMinutes(30), "ok", "Video-GPB", "A.mp4", "1.0", "2", "asr 1.0м + саммари 0.1м (локально)"),
             JournalRowStr(now, TimeSpan.FromMinutes(10), "ok", "Video-GPB", "B.mp4", "1.0", "2", "asr 0.9м + саммари 0.2м (локально), dify отложено")) + "\n");
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        // самый свежий маркер — «dify отложено»
+        // самая свежая удачная загрузка — с «dify отложено»
         s.Deps.First(d => d.Key == "dify").State.Should().Be("down");
         s.Level.Should().Be("danger");
     }
 
     [Fact]
-    public void DifyПринялМаркерOk_ЗависимостьDifyOk()
+    public void DifyПринялЗагрузку_ЗависимостьDifyOk()
     {
         var now = NowTrunc();
         var root = NewRoot();
@@ -1163,7 +1163,7 @@ public class TranscriptionStateReaderTests : IDisposable
         Write(root, "config.yaml", ConfigYaml(("Video-GPB", Path.Combine(root, "watch"), Path.Combine(root, "out"))));
         Write(root, "logs/journal.tsv", string.Join('\n',
             "# время\tитог\tпапка\tфайл\tминут\tспикеров\tпримечание",
-            JournalRowStr(now, TimeSpan.FromMinutes(10), "ok", "Video-GPB", "B.mp4", "1.0", "2", "dify=ok")) + "\n");
+            JournalRowStr(now, TimeSpan.FromMinutes(10), "ok", "Video-GPB", "B.mp4", "1.0", "2", "asr 1.0м + саммари 0.1м (локально)")) + "\n");
 
         var s = Reader(root, new FixedTime(now)).Read();
 

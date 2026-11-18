@@ -202,6 +202,8 @@ interface ChildProfileDto {     // тело PUT child-profile и поле отв
 
 **Предметы, репетиторов и маршрут меняет только админ через профиль ребёнка; ребёнок видит только проекцию своих репетиторов (имя, аватар, плитка).** Новые точки `[ChildAllowed]`: `GET /api/child/subjects` и `GET /api/personas/{id}/avatar` (ребёнку — только персоны своих предметов). Таблица путей — в разрезе, §4. Расход генерации аватара из админки пишется на админа, а не на ребёнка.
 
+Админские ручки репетитора (Т2c, `ChildTutorsController`, строки таблицы И5 «Репетиторы» §5): `POST /api/users/{id}/child-subjects/{subjectId}/tutor` — повторный провижн репетитора предмета (`EnsureSubjectTutorAsync`, идемпотентно; нет предмета → 404 `subject_not_found`); `PUT /api/users/{id}/child-tutors/{personaId}` — правка характера и списков «Обязательно / Никогда» (§22: `name`, `character`, `greeting`, `voice`, `gender`, `mustDo`/`mustNot` — до 12 пунктов по 300 символов, иначе 400 `rules_too_long`; модель и прочие слоты контракта в теле игнорируются). Обе — `[Authorize(Roles="admin")]` + `AdminByStore`, без `[ChildAllowed]`; персона проверяется как репетитор этого ребёнка (иначе 404 `tutor_not_found`).
+
 ### Отвергнуто (редакция 2)
 
 - Модель в `Persona.Model` — сорок путей записи вместо одного.

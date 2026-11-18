@@ -98,6 +98,7 @@ public class FallbackProcessKilledTests
                 return Task.CompletedTask;
             },
             pool, BuildProviders(), Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            isChildTurn: () => false,
             effectiveChain: chain is null ? null : () => chain,
             events: new TurnEventBus());
         inner.Sink = sut.HandleMessageAsync;

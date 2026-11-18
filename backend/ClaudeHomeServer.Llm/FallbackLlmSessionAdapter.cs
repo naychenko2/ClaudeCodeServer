@@ -49,8 +49,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Вычисляется вызывающим (фабрикой через ClaudeSession.EffectiveTurnChain) на каждом ходу.
     private readonly Func<IReadOnlyList<string>>? _effectiveChain;
     // Детский ли ход (по снимку политики, ClaudeSession.IsChildTurn): у ребёнка ротации подписок
-    // нет — урок никогда не идёт по подписке (решение владельца, И2′). null (тесты) — не детский.
-    private readonly Func<bool>? _isChildTurn;
+    // нет — урок никогда не идёт по подписке (решение владельца, И2′). Параметр обязательный и
+    // не-nullable: опциональный признак молча включал бы ротацию у ребёнка (ревью Х6).
+    private readonly Func<bool> _isChildTurn;
     // Кулдаун недоступности провайдера (волна 2): провайдер, вернувший Unreachable/ProviderError,
     // помечается недоступным на TTL; фолбэк пропускает его шаги цепочки (fail-open). null (тесты).
     private readonly ProviderHealthRegistry? _health;
@@ -141,6 +142,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         string rootPath,
         Execution.IProcessLauncher? launcher,
         string? initialProfileRoot,
+        Func<bool> isChildTurn,
         FallbackSettingsStore? fallbackSettings = null,
         Func<IReadOnlyList<string>>? effectiveChain = null,
         ProviderHealthRegistry? health = null,
@@ -159,8 +161,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         bool transcriptOnServer = true,
         string? turnOwnerId = null,
         LocalEngineBusyTracker? localGate = null,
-        Func<TurnStartTimings>? startTimings = null,
-        Func<bool>? isChildTurn = null)
+        Func<TurnStartTimings>? startTimings = null)
     {
         _isChildTurn = isChildTurn;
         _startTimings = startTimings;
@@ -565,7 +566,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var chain = _effectiveChain?.Invoke() ?? Array.Empty<string>();
         var chainIndex = 0;
         // Детский ход определяем один раз за оркестрацию — тем же снимком, что и цепочку.
-        var childTurn = _isChildTurn?.Invoke() == true;
+        var childTurn = _isChildTurn();
         // Отладка «почему выбралась эта модель»: построенная цепочка хода одной строкой.
         LogDebug($"Цепочка хода ({Info.Id}): [{string.Join(", ", chain)}]");
 

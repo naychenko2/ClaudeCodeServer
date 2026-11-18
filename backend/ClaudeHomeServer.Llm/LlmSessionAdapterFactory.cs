@@ -214,7 +214,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         fallback = new FallbackLlmSessionAdapter(claudeSession,
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,
-            context.Launcher, context.CliConfigRoot, _fallbackSettings,
+            context.Launcher, context.CliConfigRoot, () => claudeSession.IsChildTurn, _fallbackSettings,
             () => claudeSession.EffectiveTurnChain, _health, _log, context.PersistSessions,
             _capacity, BuildContextEstimate(claudeSession),
             context.EnqueueBypass, context.OrchestrationDone,
@@ -225,7 +225,6 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             localProbe: _localProbe,
             transcriptOnServer: context.TranscriptOnServer,
             turnOwnerId: claudeSession.TurnOwnerId,
-            isChildTurn: () => claudeSession.IsChildTurn,
             localGate: context.LocalEngineBusy ?? LocalEngineBusyTracker.Instance);
         return fallback;
     }

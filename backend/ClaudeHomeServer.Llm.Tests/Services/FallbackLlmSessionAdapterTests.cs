@@ -219,7 +219,8 @@ public class FallbackLlmSessionAdapterTests
             egress: egress,
             events: events,
             startTimings: startTimings,
-            isChildTurn: isChildTurn,
+            // конструктор требует признак; тест без признака — не ребёнок
+            isChildTurn: isChildTurn ?? (() => false),
             // Пауза повтора при лежащем канале — миллисекунды: ждать продовые 5 с в тесте нельзя
             egressRetryDelay: TimeSpan.FromMilliseconds(10));
         inner.Sink = sut.HandleMessageAsync;
@@ -771,6 +772,7 @@ public class FallbackLlmSessionAdapterTests
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            isChildTurn: () => false,
             fallbackSettings: store,
             effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
@@ -799,6 +801,7 @@ public class FallbackLlmSessionAdapterTests
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            isChildTurn: () => false,
             fallbackSettings: store,
             effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
@@ -828,6 +831,7 @@ public class FallbackLlmSessionAdapterTests
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            isChildTurn: () => false,
             fallbackSettings: store,
             effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
@@ -2440,6 +2444,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "sonnet" });
             inner.Sink = sut.HandleMessageAsync;
             var accBFile = Path.Combine(subAccB, "projects", flat, csid + ".jsonl");
@@ -2492,6 +2497,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "sonnet" }, transcriptOnServer: false);
             inner.Sink = sut.HandleMessageAsync;
             inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
@@ -2535,6 +2541,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "sonnet", "deepseek-chat" });
             inner.Sink = sut.HandleMessageAsync;
             var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
@@ -2589,6 +2596,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "sonnet", "deepseek-chat" }, log: spy);
             inner.Sink = sut.HandleMessageAsync;
             var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
@@ -2662,6 +2670,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
             inner.Sink = sut.HandleMessageAsync;
             var aliveFile = Path.Combine(aliveDir, csid + ".jsonl");
@@ -2733,6 +2742,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
             inner.Sink = sut.HandleMessageAsync;
             inner.Scripts.Enqueue(() => inner.Emit(Success()));
@@ -2781,6 +2791,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "m1", "m2", "m3" });
             inner.Sink = sut.HandleMessageAsync;
             // m1/p1 — сбой → шаг m2/p2 (копия p1→p2). m2/p2 — сбой → шаг m3/p3 (копия p2→p3).
@@ -2858,6 +2869,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "deepseek-chat", "opus" },
                 persist: () => persisted.Add((session.Model, session.Provider)));
             inner.Sink = sut.HandleMessageAsync;
@@ -2936,6 +2948,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "sonnet", "deepseek-chat" });
             inner.Sink = sut.HandleMessageAsync;
             var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
@@ -3375,6 +3388,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
             inner.Sink = sut.HandleMessageAsync;
             inner.Scripts.Enqueue(() =>

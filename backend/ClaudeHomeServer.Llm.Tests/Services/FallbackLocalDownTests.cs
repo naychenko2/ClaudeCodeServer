@@ -116,6 +116,7 @@ public class FallbackLocalDownTests
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, BuildProviders(), Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            isChildTurn: () => false,
             effectiveChain: chain is null ? null : () => chain,
             egressRetryDelay: TimeSpan.FromMilliseconds(10),
             localProbe: localProbe);

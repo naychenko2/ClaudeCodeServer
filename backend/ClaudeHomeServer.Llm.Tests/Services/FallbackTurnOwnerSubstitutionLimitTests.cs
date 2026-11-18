@@ -64,7 +64,8 @@ public class FallbackTurnOwnerSubstitutionLimitTests : IDisposable
         var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder().Build());
         return new FallbackLlmSessionAdapter(new StubInner(session), () => session.Model,
             _ => Task.CompletedTask, pool, null, Path.GetTempPath(), launcher: null,
-            initialProfileRoot: null, fallbackSettings: new FallbackSettingsStore(cfg),
+            initialProfileRoot: null, isChildTurn: () => false,
+            fallbackSettings: new FallbackSettingsStore(cfg),
             turnOwnerId: turnOwnerId);
     }
 

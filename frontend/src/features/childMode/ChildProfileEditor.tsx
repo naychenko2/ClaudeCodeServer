@@ -63,7 +63,9 @@ export interface ChildProfileEditorUser {
 
 interface Props {
   user: ChildProfileEditorUser;
-  onSaved: (profile: ChildProfile) => void;
+  // Второй аргумент — тьютор из ответа PUT (та же форма, что у GET): при провиже создания
+  // сервер возвращает новый id, своей копией вызывающий его не знает (хвост 69c3ee96).
+  onSaved: (profile: ChildProfile, tutorPersonaId: string) => void;
 }
 
 // Единственное пространство волны 1 («Уроки»); ключ — из ADR-041.
@@ -441,7 +443,8 @@ export function ChildProfileEditor({ user, onSaved }: Props) {
         // его файлы грузятся; удалённого в ответе нет — он больше не «на сервере».
         serverSubjects: serverSubjectsOf(res.profile),
       } : s));
-      onSaved(res.profile);
+      // Тьютора вызывающему несём из ответа, а не из его копии: провиж создаёт новый id.
+      onSaved(res.profile, res.tutorPersonaId);
     } catch (e) {
       if (activeIdRef.current !== forId) { setSaving(false); return; }
       const err = e as { status?: number; body?: { code?: string; message?: string } } | null;

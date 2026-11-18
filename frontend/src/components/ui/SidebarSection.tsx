@@ -7,7 +7,8 @@
 
 import { useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { C, FONT, SP } from '../../lib/design';
+import { C, FONT, SP, TB } from '../../lib/design';
+import { useIsTouch } from '../../lib/breakpoints';
 import { ICON_SIZE, ICON_STROKE } from './icons';
 
 export function SidebarSection({ title, count, hint, actions, collapsedActions, storageKey, defaultOpen = true, open: openProp, onToggle, children }: {
@@ -41,10 +42,18 @@ export function SidebarSection({ title, count, hint, actions, collapsedActions, 
     return !v;
   }));
 
+  // Тач-цель шапки: на сенсорном вводе строка-переключатель не меньше TB.iconHitMobile (40) —
+  // «тач-цель меньше 40 в чек-лист не проходит» (docs/design/guidelines.md:180). На мобиле
+  // через этот примитив открывается группа «Старые уроки» (детский режим), и пальцем в 23 px
+  // шапку не попасть. От указателя, а не от ширины: широкая панель на десктопе с мышью
+  // (useIsTouch — '(pointer: coarse)', lib/breakpoints.ts:82, как в GitChangesRail/TagChip;
+  // TB.iconHitMobile для тач-minHeight — как в FeatureBriefActive.tsx:34) сохраняет прежний вид.
+  const touch = useIsTouch();
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-        <button onClick={toggle} aria-expanded={open} style={headStyle}>
+        <button onClick={toggle} aria-expanded={open} style={touch ? { ...headStyle, minHeight: TB.iconHitMobile } : headStyle}>
           {open
             ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted }} />
             : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted }} />}

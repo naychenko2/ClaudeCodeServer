@@ -321,13 +321,35 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     [Fact]
+    public async Task Put_ПровайдерНеРезолвится_400_provider_not_api_key_ТекстВеткиForPool()
+    {
+        // Ключ, который не резолвится ни в одну запись (нет в пуле, нет в реестре провайдеров):
+        // ChildRoute.Evaluate → NoRoute → ветка forPool:true RouteReject: тот же код, что у
+        // «не запись с ключом», а текст называет пул подписок. Сторож именно этой ветки:
+        // предыдущий тест проверяет код, текст forPool здесь — единственный в классе.
+        // Мутация «поменять местами тексты веток NoRoute» — красный на Contain, не на коде.
+        var id = await NewContainerUser("kid-provider-unresolved");
+        var body = new { enabled = true, providerKey = "no-such-provider", model = "sonnet", spaces = new Dictionary<string, object>() };
+
+        var (status, resp) = await PutAsync(id, body);
+        status.Should().Be(HttpStatusCode.BadRequest);
+        CodeOf(resp).Should().Be("provider_not_api_key");
+        resp.GetProperty("message").GetString().Should().Contain("пула подписок с API-ключом",
+            "отказ профиля — ветка forPool:true: текст называет пул подписок");
+        _users.GetById(id)!.ChildMode.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PutProfile_RulesChatProviderRoute_Returns400()
     {
         // Сторож «чат правил + облачный провайдер = отказ» (минор ревью Т5a): deepseek —
         // законный маршрут ПРЕДМЕТА с согласия админа (тесты Т5a дают ему 200), но маршрут
         // чата правил — только запись пула с API-ключом: Evaluate профиля всегда идёт с
         // acknowledged: false (ChildProfileValidator.cs:40), а flag согласия в теле — не поле
-        // контракта профиля и не читается никогда. Отказ — ветка RouteReject(..., forPool: true).
+        // контракта профиля и не читается никогда. Отказ здесь — ChildRouteRefusal.RiskUnacknowledged
+        // → код route_risk_unacknowledged в ChildProfileValidator.RouteReject: deepseek резолвится
+        // в реестре хоста, но не-Anthropic без согласия. Флаг forPool меняет только текст ветки
+        // NoRoute (до неё здесь не доходит) — текст отказа потому называет «не Anthropic», а не пул.
         var id = await NewContainerUser("kid-rules-provider");
         var body = new
         {
@@ -1833,9 +1855,9 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     [Fact]
     public async Task Get_ЛокальныйПользователь_200_ProfileNull_БезNotContainer()
     {
-        // not_container — проверка ВКЛЮЧЕНИЯ (ChildProfileValidator.cs:34 достижим только из
-        // ветки enabled:true PUT, UsersController.cs:205). Та же локальная учётка через
-        // { enabled: false } даёт 200, поэтому и чтению нечего отказывать: профиля нет → null.
+        // not_container — проверка ВКЛЮЧЕНИЯ (ChildProfileValidator.cs:34 достижим только когда
+        // ветка `!req.Enabled` метода `UsersController.SetChildProfile` не взята). Та же локальная
+        // учётка через { enabled: false } даёт 200, поэтому и чтению нечего отказывать: профиля нет → null.
         var resp = await _admin.PostAsJsonAsync("/api/users", new
         {
             username = "kid-get-local",

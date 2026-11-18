@@ -5,6 +5,10 @@
 // Д1 (дефект 06201244): при раскрытии живой профиль читается GET-ом — до ответа и при отказе
 // редактора нет (пустой черновик затёр бы профиль), при отказе — Notice с «Повторить»; ответ
 // проверяется по id: чужой профиль в чужую строку не попадает.
+// ХВ5 (хвост 69c3ee96): строка статуса без снимка ничего не утверждает («Детский режим…»),
+// при отказе — «не загрузилось», «выключен» — только по подтверждённому снимку; «Повторить» —
+// prop action у Notice (он держит мобильный перенос); тело Notice — только серверный текст;
+// тесты повторного раскрытия из loaded/error и конкурентность висящего запроса.
 // Окружение — node + linkedom, как в соседних .test.tsx волны. Modal — портал в document.body:
 // createPortal подменён pass-through (паттерн Modal.test.ts); список пользователей — фикстура
 // через mock api.users.list; PUT child-profile — mock childApi, ответ повторяет тело запроса;
@@ -197,12 +201,12 @@ describe('UserManagementModal: раздел «Детский режим» тол
     expect(papa, 'строка админа на месте').toBeTruthy();
     expect(toggleIn(papa), 'local-пользователю раздела нет').toBeNull();
     expect(editorIn(papa)).toBeNull();
-    // Песочница: свёрнутая строка со статусом, редактора до нажатия нет.
+    // Песочница: свёрнутая строка без утверждения статуса (снимка ещё нет), редактора до нажатия нет.
     for (const id of ['u-liza', 'u-mira']) {
       const r = row(id)!;
       const t = toggleIn(r);
       expect(t, `строка статуса ${id}`).toBeTruthy();
-      expect(t!.textContent).toContain('Детский режим: выключен');
+      expect(t!.textContent).toContain('Детский режим…');
       expect(t!.getAttribute('aria-expanded'), 'по умолчанию свёрнут').toBe('false');
       expect(editorIn(r), 'редактор до нажатия не смонтирован').toBeNull();
       // «после основных полей»: раздел — последний блок строки
@@ -242,7 +246,7 @@ describe('UserManagementModal: раздел «Детский режим» тол
     expect(toggleIn(row('u-papa')!), 'local-пользователю раздела нет и на мобиле').toBeNull();
     const t = toggleIn(row('u-liza')!);
     expect(t, 'строка статуса в мобильной карточке').toBeTruthy();
-    expect(t!.textContent).toContain('Детский режим: выключен');
+    expect(t!.textContent).toContain('Детский режим…');
     await clickSettle(t!);
     const ed = editorIn(row('u-liza')!);
     expect(ed).toBeTruthy();
@@ -276,10 +280,12 @@ describe('UserManagementModal: сохранение профиля (R-KM-F12, м
     expect(providerSelect(ed2).value).toBe('anthropic-api-kids');
     await clickTabIn(ed2, 'Режим и время');
     expect(ed2.querySelectorAll('[data-testid="time-window"]').length, 'окон не было').toBe(0);
-    // Соседняя песочница: ни запроса, ни изменения — статус и черновик пустые.
+    // Соседняя песочница: ни запроса, ни изменения — строка без утверждения, черновик пустой.
     const tMira = toggleIn(row('u-mira')!)!;
-    expect(tMira.textContent).toContain('Детский режим: выключен');
+    expect(tMira.textContent).toContain('Детский режим…');
     await clickSettle(tMira);
+    // «выключен» — только когда снимок пришёл: пустой профиль подтверждён сервером.
+    expect(toggleIn(row('u-mira')!)!.textContent).toContain('Детский режим: выключен');
     const edMira = editorIn(row('u-mira')!)!;
     expect(enableToggle(edMira).getAttribute('aria-checked')).toBe('false');
     await clickTabIn(edMira, 'Предметы');
@@ -294,9 +300,9 @@ describe('UserManagementModal: живой профиль грузится при
     resolveProfile('u-liza', lizaProfile);
     await mountModal();
     const r = row('u-liza')!;
-    // До раскрытия — ни запроса, ни редактора; строка честная: профиля мы не знаем.
+    // До раскрытия — ни запроса, ни редактора; строка без утверждения: профиля мы не знаем.
     expect(getProfileCalls.length, 'свёрнутый раздел не грузится').toBe(0);
-    expect(toggleIn(r)!.textContent).toContain('Детский режим: выключен');
+    expect(toggleIn(r)!.textContent).toContain('Детский режим…');
     await clickSettle(toggleIn(r)!);
     expect(getProfileCalls, 'раскрытие — запрос своего id').toEqual(['u-liza']);
     const ed = editorIn(r)!;
@@ -319,19 +325,24 @@ describe('UserManagementModal: живой профиль грузится при
     expect(editorIn(r), 'редактор до снимка не монтируется').toBeNull();
     expect(saveIn(r), 'сохранения до снимка нет').toBeNull();
     expect(putCalls.length, 'PUT не уходит').toBe(0);
-    // Загрузка упала — Notice с текстом и кнопкой; пустой черновик не показываем.
+    // Загрузка упала без серверного текста («нет связи» — сетевой сбой, не ответ контроллера):
+    // Notice с заголовком и кнопкой, выдуманного тела нет; строка статуса при отказе — «не загрузилось».
     await act(async () => { d.reject(new Error('нет связи')); });
     expect(loadingIn(r)).toBeNull();
     const notice = errorIn(r);
     expect(notice, 'Notice отказа').toBeTruthy();
-    expect(notice!.textContent).toContain('Не удалось загрузить профиль ребёнка');
+    expect(notice!.textContent).toContain('Профиль ребёнка не загрузился');
+    expect(notice!.textContent, 'без серверного текста тела нет').not.toContain('Не удалось загрузить профиль');
+    expect(toggleIn(r)!.textContent).toContain('Детский режим: не загрузилось');
     expect(editorIn(r), 'при отказе редактора нет').toBeNull();
     expect(saveIn(r), 'сохранения при отказе нет').toBeNull();
     expect(putCalls.length).toBe(0);
-    // «Повторить» — новый запрос того же id; сервер отвечает пустым профилем — редактор чист.
+    // «Повторить» (prop action у Notice) — новый запрос того же id; сервер отвечает пустым
+    // профилем — редактор чист, строка подтверждает «выключен» снимком.
     await clickSettle(retryIn(r)!);
     expect(getProfileCalls, 'повтор — второй запрос своего id').toEqual(['u-liza', 'u-liza']);
     expect(errorIn(r), 'после успешного повтора Notice снят').toBeNull();
+    expect(toggleIn(r)!.textContent).toContain('Детский режим: выключен');
     const ed = editorIn(r)!;
     expect(ed).toBeTruthy();
     expect(enableToggle(ed).getAttribute('aria-checked')).toBe('false');
@@ -353,7 +364,8 @@ describe('UserManagementModal: живой профиль грузится при
     await act(async () => { dLiza.resolve(lizaProfile); });
     expect(loadingIn(rMira), 'чужой ответ не снял загрузку Миры').toBeTruthy();
     expect(editorIn(rMira), 'чужой профиль не открыл редактор Миры').toBeNull();
-    expect(toggleIn(rMira)!.textContent, 'чужой профиль не красит строку Миры').toContain('Детский режим: выключен');
+    // Мира в загрузке — строка без утверждения (и чужой «включён», и «выключен» ей не ставятся).
+    expect(toggleIn(rMira)!.textContent, 'чужой профиль не красит строку Миры').toContain('Детский режим…');
     // Свой ответ Миры — пустой профиль: её редактор пуст, а не Лизин.
     await act(async () => { dMira.resolve({ profile: null, tutorPersonaId: '' }); });
     const edMira = editorIn(rMira)!;
@@ -367,5 +379,67 @@ describe('UserManagementModal: живой профиль грузится при
     await clickSettle(toggleIn(rLiza)!);
     const edLiza = editorIn(rLiza)!;
     expect(enableToggle(edLiza).getAttribute('aria-checked'), 'свой профиль дошёл до своего редактора').toBe('true');
+  });
+});
+
+describe('UserManagementModal: повторное раскрытие грузит профиль заново (хвост 69c3ee96)', () => {
+  it('из «loaded»: свернуть → раскрыть — второй GET, редактор по новому снимку', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    resolveProfile('u-liza', lizaProfile);
+    await mountModal();
+    const r = row('u-liza')!;
+    await clickSettle(toggleIn(r)!);
+    expect(getProfileCalls.length).toBe(1);
+    await click(toggleIn(r)!);
+    expect(editorIn(r), 'свёрнут — редактора нет').toBeNull();
+    // Снова раскрыть — запрос живого профиля, а не показ прежнего снимка.
+    resolveProfile('u-liza', lizaProfile);
+    await clickSettle(toggleIn(r)!);
+    expect(getProfileCalls, 'повторное раскрытие — второй запрос').toEqual(['u-liza', 'u-liza']);
+    expect(editorIn(r), 'редактор по новому снимку').toBeTruthy();
+  });
+
+  it('из «error»: свернуть → раскрыть — второй GET, Notice снят', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    const d = deferred('u-liza');
+    await mountModal();
+    const r = row('u-liza')!;
+    await click(toggleIn(r)!);
+    await act(async () => { d.reject(new Error('нет связи')); });
+    expect(errorIn(r)).toBeTruthy();
+    await click(toggleIn(r)!);
+    expect(errorIn(r), 'в свёрнутом разделе Notice нет').toBeNull();
+    resolveProfile('u-liza', { profile: null, tutorPersonaId: '' });
+    await clickSettle(toggleIn(r)!);
+    expect(getProfileCalls, 'раскрытие из error — второй запрос').toEqual(['u-liza', 'u-liza']);
+    expect(errorIn(r), 'новая попытка — Notice снят').toBeNull();
+  });
+
+  it('первый запрос висящий: раскрыть → свернуть → раскрыть — второго запроса нет', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    // Ответ висит и остаётся висящим: весь тест — про состояние loading между раскрытиями.
+    deferred('u-liza');
+    await mountModal();
+    const r = row('u-liza')!;
+    await click(toggleIn(r)!);
+    expect(getProfileCalls.length).toBe(1);
+    await click(toggleIn(r)!);
+    await click(toggleIn(r)!);
+    expect(getProfileCalls.length, 'пока первый в пути — второго нет').toBe(1);
+    expect(loadingIn(r), 'состояние ожидания сохранено').toBeTruthy();
+  });
+
+  it('серверный текст отказа — тело Notice; без серверного текста — только заголовок', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    const d = deferred('u-liza');
+    await mountModal();
+    const r = row('u-liza')!;
+    await click(toggleIn(r)!);
+    // Отказ с телом { code, message } — форма отказа UsersController.GetChildProfile.
+    const err = Object.assign(new Error('Not Found'), { body: { code: 'user_not_found', message: 'Пользователь не найден.' } });
+    await act(async () => { d.reject(err); });
+    const notice = errorIn(r);
+    expect(notice, 'Notice отказа').toBeTruthy();
+    expect(notice!.textContent).toContain('Пользователь не найден.');
   });
 });

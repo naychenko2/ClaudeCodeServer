@@ -179,13 +179,15 @@ const kbList = () => ({
 // Тело на проводе: то, что уйдёт в JSON запроса (undefined-поля выбрасываются).
 const wire = (i: number) => JSON.parse(JSON.stringify(calls[i].body)) as Record<string, unknown>;
 
-let saved: unknown[] = [];
+// onSaved — два аргумента (хвост 69c3ee96): фиксируем оба, чтобы проверять не только сам
+// вызов, но и тьютора из ответа PUT (второй аргумент обязан быть значением мока, не копией вызывающего).
+let saved: { profile: unknown; tutorPersonaId: string }[] = [];
 
 async function mount(user: ChildProfileEditorUser) {
   const host = doc.createElement('div');
   doc.getElementById('root')!.appendChild(host);
   const root = createRoot(host as unknown as HTMLElement);
-  const onSaved = (p: ChildProfile) => { saved.push(p); };
+  const onSaved = (p: ChildProfile, t: string) => { saved.push({ profile: p, tutorPersonaId: t }); };
   await act(async () => { root.render(createElement(ChildProfileEditor, { user, onSaved })); });
   return {
     host: host as HTMLElement,
@@ -621,6 +623,8 @@ describe('ChildProfileEditor: гонка и только-чтение', () => {
     expect(textOf(host, 'tutor-state')).toContain('p-tutor-new');
     expect(textOf(host, 'rules-state')).toContain('15 ноября 2026');
     expect(saved.length).toBe(1);
+    // Второй аргумент — тьютор из ответа мока PUT ('p-tutor-new'), а не своя копия ('p-tutor-old').
+    expect(saved[0].tutorPersonaId, 'onSaved несёт тьютора из ответа PUT').toBe('p-tutor-new');
   });
 
   it('resetRules этого сохранения гасит «Правила договорены»: «ещё нет»', async () => {

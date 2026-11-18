@@ -101,8 +101,10 @@ export interface ChildSubjectAdmin {
   // Пустая строка — репетитора у предмета ещё нет (провижн — Т2c).
   tutorPersonaId?: string | null;
   knowledge?: ChildSubjectKnowledge | null;
-  // Согласие админа на не-Anthropic маршрут (Т5a/Т6, И2′). Только во ВХОДЕ, трёхзначно (Х1,
-  // ревью Т5a): true — «соглашаюсь сейчас»: дату и автора штампует контроллер при сборке
+  // Согласие админа на не-Anthropic маршрут (Т5a/Т6, И2′). Во входе — трёхзначно (Х1,
+  // ревью Т5a); в ответе — производное: true, когда у предмета есть живое согласие
+  // (RouteAcknowledgedAt != null, UsersController.ToChildProfileDto).
+  // true — «соглашаюсь сейчас»: дату и автора штампует контроллер при сборке
   // профиля из тела (UsersController → RouteAcknowledgedAt/RouteAcknowledgedBy), а слияние
   // предметов профиля (UserStore) сохраняет живую пару того же предмета при том же
   // providerKey, иначе берёт этот кандидат или сбрасывает её; поля нет — живое

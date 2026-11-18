@@ -144,13 +144,16 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
 
     // OCR, который «распознаёт» до отмены: ждёт токен вызывающего с охраной в 5 с. Без
     // проброса токена (стор передаёт None) срабатывает охрана и фейк отдаёт успех —
-    // тест краснеет на утверждении, а не виснет.
+    // тест краснеет на утверждении, а не виснет. Started сигналит, что RecognizeAsync начат:
+    // тест отмены отменяет вызов только ПОСЛЕ этого сигнала, без опоры на время.
     private sealed class CancelAwareOcr : ILocalPageOcr
     {
         public bool SawCancellation { get; private set; }
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<OcrResult> RecognizeAsync(ReadOnlyMemory<byte> png, OcrRequestInfo info, CancellationToken ct)
         {
+            Started.TrySetResult();
             var canceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             using (ct.Register(() => canceled.TrySetResult(true)))
             {
@@ -684,6 +687,9 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
     // CancellationToken вызывающего в OCR. Мутация: вернуть CancellationToken.None в
     // RecognizeAsync — фейк не видит отмены, через охрану в 5 с отдаёт успех, и тест
     // краснеет на коде (принят вместо ocr_unavailable), а не виснет.
+    // Отмена приходит только ПОСЛЕ сигнала «OCR вызван» (Started), без опоры на время:
+    // сигнала нет за 10 с — тест падает TimeoutException, а не виснет и не зависит от
+    // того, успел ли растр к паузе.
     [Fact]
     public async Task КартинкаОтменаЗапросаПрерываетOcr_OcrUnavailable_НаДискеНичего()
     {
@@ -692,7 +698,7 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
         using var cts = new CancellationTokenSource();
 
         var addTask = Task.Run(() => store.AddAsync("kid-a", "math", "page.png", PngOf(40, 30), "admin-1", cts.Token));
-        await Task.Delay(100); // растр успел, распознавание идёт
+        await ocr.Started.Task.WaitAsync(TimeSpan.FromSeconds(10)); // сигнал: распознавание начато
         cts.Cancel();
 
         var res = await addTask;

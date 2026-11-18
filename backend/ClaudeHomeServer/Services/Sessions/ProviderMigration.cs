@@ -17,8 +17,10 @@ namespace ClaudeHomeServer.Services.Sessions;
 // сам конструктор internal: Lazy<ITeamNotifier> — internal-тип (ITeamNotifier не публичный),
 // а публичная конструктор-сигнатура с ним краснеет по той же CS0051. Обход фасада закрывает
 // сторож формы ядра (правило 4).
-// Зависимости (5): store, route, providers, pool, шов Lazy<ITeamNotifier>. В таблице S3-0 их
-// шесть (с history) — в перенесённых телах история не встречается, лишней зависимости нет.
+// Зависимости (6): store, route, providers, pool, шов Lazy<ITeamNotifier>, IChildModeGate
+// (живой маршрут предмета ребёнка, добавлен в Т2e2) плюс логгер. В таблице S3-0 их шесть
+// (с history) — в перенесённых телах история не встречается: шестая здесь — детский шлюз,
+// а не история.
 public sealed class ProviderMigration
 {
     private readonly SessionStore _store;
@@ -234,7 +236,8 @@ public sealed class ProviderMigration
     // не найдёт его после рестарта. Идущий ход доживает: при СМЕНЕ ПОСТАВЩИКА чат с ходом в полёте
     // пропускается — копия неполного транскрипта потеряла бы хвост ответа, который доживающий
     // процесс допишет в старый профиль (так же отказывает ChatSettings.UpdateAsync на идущем ходе);
-    // чат остаётся на прежних полях до следующего PUT. Смена модели у того же поставщика
+    // чат остаётся на прежних полях: его догоняет CatchUpChildChatAsync на старте
+    // следующего хода ребёнка. Смена модели у того же поставщика
     // переписывает поля сразу, идущий ход доживает со старыми. Сбой переноса одного
     // чата — лог, чат остаётся на прежних полях, остальные переносятся. UpdatedAt не двигается:
     // маршрут — настройка чата, а не активность. Возвращает число перезакреплённых чатов.
@@ -301,7 +304,7 @@ public sealed class ProviderMigration
         // Смена модели у того же поставщика переписывает поля сразу — идущий ход доживает со старыми
         if (providerChanged && SessionStore.HasTurnInFlight(entry))
         {
-            _log.LogInformation("Детский режим: чат {Session} идёт ходом — перенос на нового поставщика отложен до следующего PUT", sessionId);
+            _log.LogInformation("Детский режим: чат {Session} идёт ходом — перенос на нового поставщика отложен до старта следующего хода (догон)", sessionId);
             return false;
         }
         var transcriptMoved = providerChanged && MoveTranscript(sessionId, ownerId, entry, currentKey, target.ProviderKey);

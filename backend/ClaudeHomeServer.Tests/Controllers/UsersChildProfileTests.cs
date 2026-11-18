@@ -909,6 +909,31 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     [Fact]
+    public async Task PutProfile_SubjectProviderChanged_OneChatFails_OthersMoved_Put200()
+    {
+        // Т2e2: у первого чата целевой файл транскрипта занят каталогом — копия падает; чат остаётся на
+        // старых полях (его ход откажет «предмет закрыт»/несовпадением), второй чат переносится, PUT — 200.
+        var kid = await EnableChildWithSubjects("kid-repin-partial", ("russian", KidsKey, "sonnet", null));
+        var client = _hosts.CreateAuthenticatedClient("kid-repin-partial", KidsPassword);
+        (await ChildTestSubjects.CreateChat(client, "russian")).EnsureSuccessStatusCode();
+        (await ChildTestSubjects.CreateChat(client, "russian")).EnsureSuccessStatusCode();
+        var sessions = _hosts.Services.GetRequiredService<SessionManager>();
+        var chats = sessions.GetAll().Where(c => c.ChildSpace is not null && c.ChildSubject == "russian" && c.OwnerId == kid)
+            .OrderBy(c => c.Id).ToList();
+        chats.Should().HaveCount(2);
+        var dstBad = SeedTranscript(kid, chats[0], KidsKey, "csid-partial-bad", "deepseek", out _);
+        Directory.CreateDirectory(dstBad);
+        var dstOk = SeedTranscript(kid, chats[1], KidsKey, "csid-partial-ok", "deepseek", out _);
+
+        var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
+        status.Should().Be(HttpStatusCode.OK);
+
+        sessions.GetById(chats[0].Id)!.Provider.Should().Be(KidsKey, "сбой переноса — чат остаётся на старых полях");
+        sessions.GetById(chats[1].Id)!.Provider.Should().Be("deepseek");
+        File.Exists(dstOk).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task PutProfile_SubjectPoolKeyChanged_ChatGetsExactlyThatKey_NotPick()
     {
         // Т2e2, сторож И2′: цель переноса — ровно ProviderKey предмета. Мутация «targetKey =

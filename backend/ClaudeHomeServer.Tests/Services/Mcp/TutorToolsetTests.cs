@@ -419,6 +419,30 @@ public class TutorToolsetTests : IClassFixture<TutorToolsetTests.Hosts>
     }
 
     [Fact]
+    public async Task Поиск_ПривязавшийБывшийАдмин_ИмяДатасетаПроходитПредикат_Отказ()
+    {
+        // Разжалованный админ остаётся AttachedByUserId, а его датасет по имени проходит IsTutorAttachable:
+        // отказать здесь может только проверка роли привязавшего, а не предикат имени.
+        var k = await NewKidAsync();
+        var formerName = "former-" + Guid.NewGuid().ToString("N")[..8];
+        var resp = await _admin.PostAsJsonAsync("/api/users", new
+        {
+            username = formerName, password = ChildPassword, role = "user",
+            executionEnvironment = ExecutionEnvironments.Container,
+        });
+        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        var formerId = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        _hosts.DifyStub.RecordsJson = "[" + Record("Учебник", "текст") + "]";
+        _hosts.DifyStub.DatasetsJson = DatasetsWhere(formerName + ":kb:математика");
+        Subj(k).Knowledge = new ChildSubjectKnowledge(DatasetId, formerId, DateTime.UtcNow);
+        var before = _hosts.DifyStub.RetrievePaths.Count;
+
+        (await Call(k, "search_materials", new { query = "дроби" })).Should().Be(Denied());
+        _hosts.DifyStub.RetrievePaths.Count.Should().Be(before, "к Dify при отказе по роли не ходим");
+    }
+
+    [Fact]
     public async Task Поиск_ДатасетПереименованВНепривязываемый_ИЛиДругойАдмин_Отказ()
     {
         var k = await NewKidAsync();

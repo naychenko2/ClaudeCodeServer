@@ -39,8 +39,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // Ключ владельца — _turnOwnerId (владелец хода), а не Info.OwnerId: у проектной сессии
     // тот пуст по контракту и резолв по нему падал на общий слот инстанса, хотя старт
     // заморожен из личного слота арендатора (DEC-FALLBACK 3f2f33fb).
+    // И2′: у ребёнка модель — явная модель предмета (профиля), назначение места и модель хода её не
+    // переопределяют: иначе ChatPersona на другую модель увела бы ход мимо маршрута предмета.
     private string? EffectiveModel =>
-        _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId)
+        ((_turnChildSnapshot ?? _childPolicy?.Invoke()) is { } childSnap ? ChildRoute.ExplicitModelFor(childSnap, Info) : null)
+        ?? _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId)
         ?? (_turnModelOverride ?? Info.Model);
 
     // Эффективная модель для слоя фолбэка (FallbackLlmSessionAdapter): пара «модель × подписка»
@@ -1166,6 +1169,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // внутри _turnLock, поэтому поле не гонится. volatile — EffectiveModel/EffectiveTurnChain
     // читаются из других потоков (Capabilities, фолбэк-оркестратор).
     private volatile string? _turnModelOverride;
+    // Снимок детской политики ИДУЩЕГО хода (И2′): EffectiveModel читается десятки раз за ход, а политику
+    // на запуске читаем один раз (ЗапускХода_ДетскаяПолитикаЧитаетсяОдинРаз). Вне хода — null, чтение живое.
+    private volatile ChildPolicySnapshot? _turnChildSnapshot;
 
     // Сигнатура запуска последнего собранного хода (BuildLaunchSignature) — для сторожей
     // стабильности: два хода чата с одинаковыми свойствами обязаны дать одну сигнатуру
@@ -2961,6 +2967,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     // Явная модель хода (голосовой) тоже действует ровно на ход: сбрасываем,
                     // чтобы следующий (обычный) ход шёл на модели чата, а не на голосовой
                     _turnModelOverride = null;
+                    _turnChildSnapshot = null;
                     // Строка фазы принадлежит ходу: ход, закончившийся без своего события (смерть/
                     // ошибка до первого события), не должен оставлять флаг «показано» — иначе
                     // опоздавшая строка убираемого процесса дала бы «done» без первого события
@@ -3605,6 +3612,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // решаются по одному и тому же снимку, а не по трём независимым чтениям, между которыми
         // профиль могли выключить. Запросы разрешений читают политику сами — им нужна свежесть.
         var childSnapshot = _childPolicy?.Invoke();
+        _turnChildSnapshot = childSnapshot;
 
         // P31: подстраховка от залипания pending control-состояния. К началу нового хода
         // (предыдущий завершился result'ом) _pendingQuestions/_pendingPlans/_permissionWaiters
@@ -3767,7 +3775,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // (подсказки следующего сообщения ниже); карта и BareTools — от профиля облегчённого контекста.
         var bareProvider = _providers?.ResolveByModel(EffectiveModel);
         var bareLight = LightProfile;
-        if (bareLight is { BareMode: true })
+        // Ход ребёнка (И2′): ни одного аргумента BuildBareModeArgs — карта AI Home системным промптом
+        // ребёнку не отдаётся даже на локальном провайдере с BareMode (CLAUDE.md не грузится env'ом ниже).
+        if (bareLight is { BareMode: true } && childSnapshot is null)
         {
             try
             {
@@ -4747,8 +4757,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // env (BuildCliEnv выше), и подписочные CLAUDE_CONFIG_DIR/CLAUDE_CODE_OAUTH_TOKEN/
         // ANTHROPIC_AUTH_TOKEN поверх него накладываться не должны: они доехали бы до чужого
         // эндпоинта (находка задачи c47fe6da: чат с Info.Provider="claude-2", модель ушла к MiniMax).
-        if (_providers?.ResolveByModel(EffectiveModel) is null && _subscriptionPool?.HasExtra == true
-            && _providers?.GetByKey(Info.Provider) is null)
+        // Ход ребёнка (И2′) пул-блок не исполняет вовсе: подписку пула он не получает ни при каком
+        // Info.Provider, ключ его маршрута кладёт ветка ниже.
+        if (childSnapshot is null && _providers?.ResolveByModel(EffectiveModel) is null
+            && _subscriptionPool?.HasExtra == true && _providers?.GetByKey(Info.Provider) is null)
         {
             // Подписка пула (включая "claude", если задана с токеном) — свой OAuth-профиль и
             // токен. Если ключ не найден в пуле (локальный режим — пул пуст, HasExtra=false, сюда
@@ -4763,28 +4775,33 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
 
-        // И2 (ADR-041): ход ребёнка идёт только по API-ключу записи пула из его профиля. Подписку
-        // не выбираем ни основную, ни пула; нет ключа у записи — отказ запуска, а не откат.
-        // Токен подписки из унаследованного env вычищает ChildTurnClearEnv (CLAUDE_CODE_OAUTH_TOKEN).
+        // И2′ (ADR-041 ред. 2): ход ребёнка идёт по маршруту предмета — запись пула с API-ключом либо
+        // провайдер LlmProviders. Подписку не выбираем (ни основную, ни пула), пару «провайдер-модель»
+        // не лечим; нет допустимого маршрута или рассогласование модели с ним — отказ запуска, а не откат.
+        // Токен подписки из унаследованного env вычищает TurnClearEnv (CLAUDE_CODE_OAUTH_TOKEN).
         if (childSnapshot is not null)
         {
             var childRoute = ChildRoute.Resolve(childSnapshot, ChildRoute.SubjectFor(childSnapshot, Info),
                 _subscriptionPool, _providers);
-            // Маршрут «провайдер» (облако/локальная) ChildRoute уже принимает, но запуск по нему — Т5b:
-            // до тех пор ход по такому маршруту — отказ, а не пул-ветка с чужой моделью.
-            var childSub = childRoute.Pool
-                ?? throw new ChildRouteRefusedException(ChildRoute.RefusedText);
             envOverrides[ChildTurnMarker.EnvKey] = "1";
-            // Блок пула выше мог положить токен подписки (Info.Provider указывает на setup-token запись)
-            envOverrides.Remove("CLAUDE_CODE_OAUTH_TOKEN");
-            // Модель стороннего провайдера (не Claude) ребёнку не положена: ключ пула ей не годится,
-            // а провайдерский ключ сервера — вне детского маршрута. Fail-closed, а не пропуск блока.
-            if (_providers?.ResolveByModel(EffectiveModel) is not null)
+            var modelProvider = _providers?.ResolveByModel(EffectiveModel);
+            if (childRoute.Kind == ChildRouteKind.Pool)
+            {
+                // Ключ пула годится только Anthropic-модели: чужая модель с ним — чужой эндпоинт.
+                if (modelProvider is not null)
+                    throw new ChildRouteRefusedException(ChildRoute.RefusedText);
+                var childEnv = _providers?.BuildOAuthCliEnv(childRoute.Pool!.Key, "", childRoute.Pool.ApiKey, EffectiveModel)
+                    ?? throw new ChildRouteRefusedException(ChildRoute.RefusedText);
+                foreach (var (k, v) in childEnv)
+                    envOverrides[k] = v;
+            }
+            else if (modelProvider is null
+                || !string.Equals(modelProvider.Key, childRoute.Provider!.Key, StringComparison.Ordinal))
+            {
+                // Провайдер модели обязан совпасть с маршрутом предмета. Env провайдера (cliEnv выше) —
+                // BuildCliEnv, как у взрослого.
                 throw new ChildRouteRefusedException(ChildRoute.RefusedText);
-            var childEnv = _providers?.BuildOAuthCliEnv(childSub.Key, "", childSub.ApiKey, EffectiveModel)
-                ?? throw new ChildRouteRefusedException(ChildRoute.RefusedText);
-            foreach (var (k, v) in childEnv)
-                envOverrides[k] = v;
+            }
         }
 
         // BareMode (замена --bare, задача 2026-09-15): переменная окружения отключает

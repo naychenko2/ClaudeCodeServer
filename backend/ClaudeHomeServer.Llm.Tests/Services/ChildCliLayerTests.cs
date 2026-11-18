@@ -248,9 +248,12 @@ public class ChildCliLayerTests : IDisposable
                 ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
             }).Build());
 
-        var (spec, errors) = await LaunchAsync(() => Child(), "deepseek-chat", providers);
+        // Модель хода ребёнка — модель профиля/предмета (И2′): маршрут «ключ пула» с чужой моделью — отказ
+        var foreign = new ChildPolicySnapshot("kid",
+            new ChildProfile { Enabled = true, ProviderKey = "kids-api", Model = "deepseek-chat" }, false);
+        var (spec, errors) = await LaunchAsync(() => foreign, "deepseek-chat", providers);
 
-        spec.Should().BeNull("ключ сервера внешнего провайдера ребёнку не уходит");
+        spec.Should().BeNull("ключ пула ребёнка чужой модели не уходит");
         errors.Should().ContainSingle().Which.Should().Be(ChildRoute.RefusedText);
     }
 

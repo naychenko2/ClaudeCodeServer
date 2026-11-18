@@ -163,8 +163,12 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         var usageKey = session.TaskExecution || session.TaskId is not null ? LocalActionCatalog.TasksExecutor
             : !string.IsNullOrWhiteSpace(session.PersonaId) ? LocalActionCatalog.ChatPersona
             : LocalActionCatalog.ChatNew;
-        provider ??= _providers.ResolveByModel(
-            _assignments?.Resolve(usageKey, session.Model, turnOwnerId) ?? session.Model);
+        // И2′: у ребёнка модель — явная модель предмета (профиля); назначение места ChatPersona её не
+        // переопределяет (тот же резолв, что EffectiveModel в ClaudeSession).
+        var childSnapshot = context.ChildPolicyProvider?.Invoke();
+        var childModel = childSnapshot is null ? null : ChildRoute.ExplicitModelFor(childSnapshot, session);
+        string? ResolveModel() => childModel ?? _assignments?.Resolve(usageKey, session.Model, turnOwnerId) ?? session.Model;
+        provider ??= _providers.ResolveByModel(ResolveModel());
 
         // Guard согласованности пары «модель × провайдер»: модель — единственный источник
         // правды (см. комментарий ResolveByModel), поле Provider вторично. Инцидент 14.08.2026:
@@ -174,10 +178,13 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         // (self-heal и старых записей), с warning — молча такое проглатывать нельзя.
         if (provider is not null)
         {
-            var effectiveModel = _assignments?.Resolve(usageKey, session.Model, turnOwnerId) ?? session.Model;
+            var effectiveModel = ResolveModel();
             var byModelKey = _providers.ProviderKey(effectiveModel);
             if (provider.Key != byModelKey)
             {
+                // И2′: пара ребёнка не самолечится и пул подписок не спрашивается (Pick) — отказ, как И1-бис.
+                if (childSnapshot is not null)
+                    throw new ChildRouteRefusedException(ChildRoute.RefusedText);
                 _log?.LogWarning(
                     "Сессия {SessionId}: рассогласованная пара Model={Model} × Provider={Provider} — исправлена по модели на {FixedProvider}",
                     session.Id, effectiveModel ?? session.Model, session.Provider, byModelKey);

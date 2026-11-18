@@ -274,6 +274,31 @@ public class UpstreamSelectorGatewayTests
         selector.RewriteModel(sub, "claude-opus-5-5").Should().Be("opus");
     }
 
+    // ---- И2′: шлюз и ребёнок ----
+
+    private sealed class KidPolicy : ClaudeHomeServer.Services.ChildMode.IChildModePolicy
+    {
+        public ClaudeHomeServer.Services.ChildMode.ChildPolicySnapshot? For(string ownerId) =>
+            ownerId == "kid" ? new("kid", new ClaudeHomeServer.Models.ChildProfile { Enabled = true }, false) : null;
+    }
+
+    [Fact]
+    public void И2_РебёнокПодписка_Отказ_ПровайдерРазрешён()
+    {
+        using var kit = new GatewayTestKit(("st", "tok-st", null));
+        var selector = new UpstreamSelector(kit.Pool, kit.Providers, kit.Options, new KidPolicy());
+        var tokens = new TurnTokenService(new TurnEventBus());
+
+        var sub = selector.StartTurn(tokens, "kid", "chat", "device", "claude-opus-5-5");
+        var prov = selector.StartTurn(tokens, "kid", "chat", "device", "deepseek-v4-pro");
+        var adult = selector.StartTurn(tokens, "adult", "chat", "device", "claude-opus-5-5");
+
+        sub.Token.Should().BeNull("подписку ребёнку шлюз не выдаёт");
+        sub.FailureText.Should().Be(ChildRoute.RefusedText);
+        prov.Token.Should().NotBeNull("провайдерский маршрут ребёнку разрешён");
+        adult.Token.Should().NotBeNull("взрослого гейт не трогает");
+    }
+
     private static string RepoRoot()
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)

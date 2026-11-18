@@ -121,6 +121,23 @@ public static class ChildRoute
     }
 
     /// <summary>
+    /// Явная модель хода ребёнка (И2′): модель предмета (чат «Уроков») или профиля (чат правил) —
+    /// первый шаг цепочки, назначение места ChatPersona её не переопределяет. Без исключений:
+    /// нет профиля/предмета — null (отказ даст Resolve при запуске).
+    /// </summary>
+    public static string? ExplicitModelFor(ChildPolicySnapshot snapshot, Session session)
+    {
+        if (snapshot.Profile is not { } profile) return null;
+        static string? NonBlank(string? m) => string.IsNullOrWhiteSpace(m) ? null : m;
+        var lessonsChat = session.ChildSpace is not null && session.OnboardingKind != OnboardingKinds.ChildRules;
+        if (!lessonsChat) return NonBlank(profile.Model);
+        var subject = session.ChildSubject is { } id
+            ? profile.Subjects?.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase))
+            : null;
+        return NonBlank(subject?.Model);
+    }
+
+    /// <summary>
     /// Запуск хода: маршрут предмета (subject) либо — для чата правил (subject == null) — полей профиля,
     /// тем же резолвером. Отказ — <see cref="ChildRouteRefusedException"/>.
     /// </summary>

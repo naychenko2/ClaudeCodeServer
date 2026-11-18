@@ -1,4 +1,4 @@
-// Скриншоты панели «Локальные модели» (вкладка «Текст»): все состояния макета
+// Скриншоты панели «Ферма» (вкладка «Текст»): все состояния макета
 // на моках. Запуск: npx vite (5199) + бэкенд (5000) → node scripts/lm-screenshots.mjs
 // Вывод: .cc-attachments/lm-*.png (папка скрыта из дерева файлов и git)
 import { chromium } from '@playwright/test';
@@ -68,18 +68,18 @@ try {
 
     // Кнопка панели в правом рельсе
     // Новая панель по умолчанию лежит в ящике «Ещё» — открываем его, если кнопки нет в столбце
-    const btn = page.getByRole('button', { name: 'Локальные модели' }).first();
+    const btn = page.getByRole('button', { name: 'Ферма' }).first();
     if (!(await btn.isVisible())) {
       await page.getByRole('button', { name: 'Ещё' }).first().click();
       await page.waitForTimeout(500);
     }
-    const target = page.getByText('Локальные модели', { exact: true }).first();
+    const target = page.getByText('Ферма', { exact: true }).first();
     await (await btn.isVisible() ? btn : target).waitFor({ state: 'visible', timeout: 15000 });
     await (await btn.isVisible() ? btn : target).click();
     // Панель: ждём заголовок вкладки «Текст» (InlineSegmented) или скелетон
     await page.waitForFunction(() => {
       const el = [...document.querySelectorAll('[role="complementary"], [role="dialog"]')]
-        .find(x => x.getAttribute('aria-label') === 'Локальные модели');
+        .find(x => x.getAttribute('aria-label') === 'Ферма');
       return !!el;
     }, null, { timeout: 15000 });
     // Дать моку ответить (или дождаться конца задержки)

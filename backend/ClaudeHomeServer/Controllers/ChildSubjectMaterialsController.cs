@@ -55,10 +55,6 @@ public class ChildSubjectMaterialsController(
     UserStore users,
     ILogger<ChildSubjectMaterialsController> logger) : ControllerBase
 {
-    // Транспортный потолок тела — дефолт ChildMode:Materials:MaxFileBytes (20 МБ):
-    // контрактная проверка — в сторе (значение конфига может быть снижено без правки
-    // здесь; поднять выше этого потолка — правка обеих величин одним решением,
-    // тот же приём, что у ChildAttachmentsController).
     [HttpGet("{subjectId}/materials")]
     public async Task<IActionResult> ListMaterials(string id, string subjectId)
     {
@@ -76,6 +72,10 @@ public class ChildSubjectMaterialsController(
         }
     }
 
+    // Транспортный потолок тела — дефолт ChildMode:Materials:MaxFileBytes (20 МБ):
+    // контрактная проверка — в сторе (значение конфига может быть снижено без правки
+    // здесь; поднять выше этого потолка — правка обеих величин одним решением,
+    // тот же приём, что у ChildAttachmentsController).
     [HttpPost("{subjectId}/materials")]
     [RequestSizeLimit(ChildSubjectMaterialsStore.DefaultMaxFileBytes)]
     public async Task<IActionResult> AddMaterial(string id, string subjectId, IFormFile? file, CancellationToken ct)

@@ -9,8 +9,10 @@ using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging.Abstractions;
 using SkiaSharp;
 
 namespace ClaudeHomeServer.Tests.Controllers;
@@ -480,5 +482,122 @@ public class ChildSubjectMaterialsControllerTests : IClassFixture<ChildSubjectMa
 
         var file = await dav.GetAsync($"/projects/{ChildSubjectMaterialsStore.DirName}/{childId}/web/materials.json");
         file.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+}
+
+/// <summary>
+/// Ревью К2b (минор 1): ветка «исключение стора → 500 {code:"storage_error"}» в catch трёх
+/// ручек контроллера (List/Add/Delete) не была покрыта ни одним тестом. Подмена регистрации
+/// ChildSubjectMaterialsStore на экземпляр с null-root: SafePath.Join бросает на построении
+/// пути (ArgumentNullException) — это общая точка всех трёх ручек (SubjectDir вызывается до
+/// их внутренних try и до internal-catch стора), т.е. ровно то, что обязан ловить catch
+/// контроллера. Тот же приём, что UsersDeleteChildMaterialsBrokenStoreTests.
+///
+/// Мутация (критерий c2): убрать catch в AddMaterial — краснеет AddMaterial_StoreThrows…
+/// (необработанное исключение вместо 500 storage_error); то же для List/Delete.
+/// </summary>
+[Trait("Category", "Host")]
+public class ChildSubjectMaterialsStorageFailureTests : IClassFixture<ChildSubjectMaterialsStorageFailureTests.BrokenHosts>
+{
+    public sealed class BrokenHosts : TestWebApplicationFactory
+    {
+        public BrokenHosts() => ExtraServices = services =>
+        {
+            var cfg = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Markitdown:Command"] = "ccs-no-such-converter-9f3a",
+            }).Build();
+            // Подмена боевой регистрации: null-root → SubjectDir бросает на SafePath.Join.
+            services.RemoveAll<ChildSubjectMaterialsStore>();
+            services.AddSingleton(new ChildSubjectMaterialsStore(
+                null!,
+                new ClaudeHomeServer.Services.Docs.MarkitdownService(cfg, NullLogger<ClaudeHomeServer.Services.Docs.MarkitdownService>.Instance),
+                cfg,
+                _ => true,
+                new UnusedOcr(),
+                raster: null,
+                NullLogger<ChildSubjectMaterialsStore>.Instance));
+        };
+    }
+
+    private sealed class UnusedOcr : ILocalPageOcr
+    {
+        public Task<OcrResult> RecognizeAsync(ReadOnlyMemory<byte> png, OcrRequestInfo info, CancellationToken ct) =>
+            throw new InvalidOperationException("OCR в этом тесте не вызывается");
+    }
+
+    private readonly BrokenHosts _hosts;
+    private readonly UserStore _users;
+    private readonly HttpClient _admin;
+
+    public ChildSubjectMaterialsStorageFailureTests(BrokenHosts hosts)
+    {
+        _hosts = hosts;
+        _users = _hosts.Services.GetRequiredService<UserStore>();
+        _admin = _hosts.CreateAuthenticatedClient();
+    }
+
+    private static string Url(string childId, string subjectId, string? materialId = null) =>
+        $"/api/users/{childId}/child-subjects/{subjectId}/materials" + (materialId is null ? "" : "/" + materialId);
+
+    // Ребёнок — второй пользователь этого хоста: профиль пишется прямо в сторе (тот же
+    // приём, что SetupChild выше). Предмет валиден — контроллер обязан дойти до стора.
+    private string SetupChild(params string[] subjectIds)
+    {
+        var user = _users.FindByUsername(TestWebApplicationFactory.SecondUsername)!;
+        user.ChildMode = new ChildProfile
+        {
+            Enabled = true, TutorPersonaId = "tutor", ProviderKey = "key", Model = "sonnet",
+            Subjects = [.. subjectIds.Select(s => new ChildSubject
+            {
+                Id = s, Label = "Предмет " + s, Glyph = "Аа", Color = "info",
+                ProviderKey = "key", Model = "sonnet",
+            })],
+        };
+        return user.Id;
+    }
+
+    private static MultipartFormDataContent Multipart(string name, byte[] bytes)
+    {
+        var content = new ByteArrayContent(bytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        var form = new MultipartFormDataContent();
+        form.Add(content, "file", name);
+        return form;
+    }
+
+    private static async Task<string> CodeAsync(HttpResponseMessage r)
+    {
+        var text = await r.Content.ReadAsStringAsync();
+        if (text.Length == 0) return "";
+        var body = JsonSerializer.Deserialize<JsonElement>(text);
+        return body.TryGetProperty("code", out var c) ? c.GetString() ?? "" : "";
+    }
+
+    [Fact]
+    public async Task ListMaterials_StoreThrows_Returns500StorageError()
+    {
+        var childId = SetupChild("math");
+        var get = await _admin.GetAsync(Url(childId, "math"));
+        get.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        (await CodeAsync(get)).Should().Be(ChildSubjectMaterialsStore.CodeStorageError);
+    }
+
+    [Fact]
+    public async Task AddMaterial_StoreThrows_Returns500StorageError()
+    {
+        var childId = SetupChild("math");
+        var post = await _admin.PostAsync(Url(childId, "math"), Multipart("урок.txt", "текст"u8.ToArray()));
+        post.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        (await CodeAsync(post)).Should().Be(ChildSubjectMaterialsStore.CodeStorageError);
+    }
+
+    [Fact]
+    public async Task DeleteMaterial_StoreThrows_Returns500StorageError()
+    {
+        var childId = SetupChild("math");
+        var del = await _admin.DeleteAsync(Url(childId, "math", "m_000000000000"));
+        del.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        (await CodeAsync(del)).Should().Be(ChildSubjectMaterialsStore.CodeStorageError);
     }
 }

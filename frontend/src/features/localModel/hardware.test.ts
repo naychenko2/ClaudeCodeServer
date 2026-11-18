@@ -4,10 +4,14 @@
 //
 // Окружение node (без jsdom): чистые функции — прямыми вызовами, компоненты —
 // renderToStaticMarkup (паттерн GpuCard.test.ts / localModelSelfScope.test.ts).
+// Клик-тест строки-ссылки — DOM-монт linkedom+act (паттерн LocalModelPanel.test.ts),
+// область одного теста: глобалы снимает vi.unstubAllGlobals в finally.
 
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
+import { parseHTML } from 'linkedom';
 import type { HardwareReport, HardwareBrief, HwLevel } from './hardwareTypes';
 import {
   hwClosest, hwLevelLabel, hwMemMargin, hwScalePos, hwSummary, hwBriefMem, hwBriefLevel,
@@ -267,6 +271,35 @@ describe('HwLinkRow — строка-ссылка «Видеокарты»', () 
   });
   it('hwBriefFlags — thermal/powerCap', () => {
     expect(hwBriefFlags(brief())).toEqual({ thermal: false, powerCap: true });
+  });
+  it('клик по строке — onOpen вызван ровно раз (переход на «Стенды» инициирован)', async () => {
+    // Поведение контрола, а не его разметка: касание строки обязано звать обработчик
+    // перехода (в панели это changeTab('hardware'); для не-админа строка не рендерится
+    // вовсе — localModelSelfScope.test.ts). Мутация (убрать onClick в HwLinkRow) краснит тест.
+    const { window: domWin, document: domDoc } = parseHTML('<!doctype html><html><body></body></html>');
+    (domWin as unknown as Record<string, unknown>).matchMedia = () => ({
+      matches: false, addEventListener: () => {}, removeEventListener: () => {},
+      addListener: () => {}, removeListener: () => {},
+    });
+    vi.stubGlobal('window', domWin);
+    vi.stubGlobal('document', domDoc);
+    vi.stubGlobal('HTMLElement', domWin.HTMLElement);
+    vi.stubGlobal('Node', domWin.Node);
+    vi.stubGlobal('Event', domWin.Event);
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      const onOpen = vi.fn();
+      const host = domDoc.createElement('div');
+      const root = createRoot(host as unknown as HTMLElement);
+      await act(async () => { root.render(createElement(HwLinkRow, { brief: brief(), onOpen })); });
+      const row = (host as unknown as HTMLElement).querySelector('[role="button"]') as HTMLElement | null;
+      expect(row).not.toBeNull();
+      await act(async () => { row!.click(); });
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      await act(async () => { root.unmount(); });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

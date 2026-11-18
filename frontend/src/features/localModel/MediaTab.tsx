@@ -118,8 +118,11 @@ function LoadedModelLine({ media }: { media: LocalModelMedia }) {
 
 // === Видеокарта медиа: строка-ссылка на «Стенды» (только админ) ===
 // GpuCard ушёл на «Стенды»; здесь — строка-ссылка только по картам с ролью media
-// (пересечение hardware-сводки и media.gpus по uuid). Не-админу (scope=self)
-// строки нет: gpus=null и hardware-сводки нет (ADR-030).
+// (пересечение hardware-сводки и media.gpus по uuid). Не-админу (scope=self) строки
+// нет вовсе: она ведёт в админскую вкладку «Стенды» (resolveTab для не-админа всегда
+// 'media'), и данных для неё сервер не отдаёт (gpus=null, hardware=null, ADR-030).
+// Скрытие — по роли ответа (guard '!self'), а не по наличию обработчика: onOpenHardware
+// обязателен — строка не может существовать без перехода (хвост Р-Ф2д, «мёртвый контрол»).
 function MediaGpuCard({ media, onOpenHardware }: { media: LocalModelMedia; onOpenHardware: () => void }) {
   const brief = media.hardware;
   if (!brief || brief.gpus.length === 0) return null;
@@ -455,7 +458,9 @@ export function MediaTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpe
   isMobile: boolean;
   onOpenChat: (sessionId: string) => void;
   onRefetch: () => void;
-  onOpenHardware?: () => void;
+  // Обязателен: строка-ссылка «Стенды» рисуется только там, где переход есть
+  // (панель передаёт changeTab('hardware'); для не-админа строка скрыта guard'ом).
+  onOpenHardware: () => void;
 }) {
   // Первое открытие до первого ответа — скелетоны
   if (loading && !data) return <MediaTabSkeleton />;
@@ -466,7 +471,8 @@ export function MediaTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpe
   const stale: CSSProperties = down
     ? { opacity: 0.55, filter: 'grayscale(0.6)', pointerEvents: 'none' }
     : {};
-  // Не-админ: только свои данные — карта не показывается (gpus=null)
+  // Не-админ (scope=self): только свои данные — строка-ссылка «→ Стенды» не показывается
+  // вовсе: она ведёт в админскую вкладку, а у не-админа её нет (resolveTab всегда 'media').
   const self = (data.scope ?? 'all') === 'self';
 
   return (
@@ -476,7 +482,7 @@ export function MediaTab({ data, loading, isMobile, onOpenChat, onRefetch, onOpe
       <ComfySubline media={data} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <LoadedModelLine media={data} />
-        {!self && <MediaGpuCard media={data} onOpenHardware={onOpenHardware ?? (() => {})} />}
+        {!self && <MediaGpuCard media={data} onOpenHardware={onOpenHardware} />}
         {data.running.length === 0 && data.queue.length === 0
           ? <GpuFreeCard />
           : <>

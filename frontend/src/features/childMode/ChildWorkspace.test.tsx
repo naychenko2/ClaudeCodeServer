@@ -334,7 +334,7 @@ describe('ChildWorkspace', () => {
 
 // ХВ8 (решение Софьи по QA-2, макет ХВ7): на 360 список уроков — тот же остров сайдбара,
 // что под главной, в той же прокрутке. Кадр kids-tutors.html data-frame="child-mobile-lessons".
-describe('ChildWorkspace · мобильный список уроков (360)', () => {
+describe('ChildWorkspace · список уроков под главной (360 и планшет 700)', () => {
   // Кадр 1: есть открытые и закрытые чаты
   const MIXED_CHATS = [
     { sessionId: 's1', name: 'Дроби', updatedAt: '2026-11-17T10:00:00Z', subject: 'russian', subjectClosed: false, voiceMode: false },
@@ -395,10 +395,10 @@ describe('ChildWorkspace · мобильный список уроков (360)',
     expect(toggle!.textContent).toContain('2');
   });
 
-  it('на широком экране мобильного острова нет; сайдбар — как был', async () => {
+  it('на широком экране (1280) острова под главной нет; сайдбар — как был', async () => {
     h.api.spaceChats.mockResolvedValue({ chats: MIXED_CHATS });
     await mount();
-    // 1280 без открытого предмета: острова под главной нет (он — только мобильная ветка)
+    // 1280 без открытого предмета: острова под главной нет (он — только ветка без боковой панели)
     expect(doc.querySelector('[data-testid="child-mobile-lessons-list"]')).toBeNull();
     expect(doc.body.textContent).not.toContain('Мои уроки');
     // сайдбар по-прежнему открывается с предметом и держит группу (существующее поведение)
@@ -407,5 +407,34 @@ describe('ChildWorkspace · мобильный список уроков (360)',
     const toggle = oldLessonsToggle();
     expect(toggle, 'сайдбар с группой как был').toBeTruthy();
     expect(toggle!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  // ХВ11 c1: планшет в портрете (700 CSS px) — между MOBILE_MAX и SIDEBAR_MIN: боковой
+  // панели там нет, а раньше не было и острова; теперь остров под главной — тот же,
+  // что на мобиле (раскладка не менялась).
+  it('на планшете 700 остров под главной, как на мобиле; старый урок открывается из него', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: MIXED_CHATS });
+    win.innerWidth = 700; // не мобил (десктопная оболочка), но и не wide: сайдбара нет
+    await mount();
+    expect(doc.querySelector('[data-testid="child-mobile-lessons-list"]'), 'остров «Мои уроки» на 700').toBeTruthy();
+    const live = Array.from(doc.querySelectorAll('button')).find(b => b.textContent?.startsWith('Дроби'));
+    expect(live, 'открытый урок в списке').toBeTruthy();
+    await click(live!);
+    // тот же путь, что на десктопе: строка открывает чат урока
+    expect(h.mounts).toEqual(['s1:false:russian:false']);
+  });
+
+  // ХВ11 c3: при !lessonsAllowed (rules_pending) остров не рисуется, даже если список
+  // был загружен прежде — статус меняется при живой оболочке, мёртвые строки не остаются.
+  it('rules_pending: острова нет, даже когда уроки уже загружены', async () => {
+    h.api.spaceChats.mockResolvedValue({ chats: MIXED_CHATS });
+    win.innerWidth = 700;
+    const root = await mount();
+    expect(doc.querySelector('[data-testid="child-mobile-lessons-list"]'), 'сначала остров есть').toBeTruthy();
+    h.status = status({ state: 'rules_pending' });
+    await act(async () => { root.render(createElement(ChildWorkspace, { auth, onLogout: () => {} })); });
+    await act(async () => {});
+    expect(doc.querySelector('[data-testid="child-mobile-lessons-list"]'), 'при rules_pending острова нет').toBeNull();
+    expect(doc.body.textContent).not.toContain('Мои уроки');
   });
 });

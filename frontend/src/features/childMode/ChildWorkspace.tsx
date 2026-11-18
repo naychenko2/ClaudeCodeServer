@@ -316,7 +316,8 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
   }, [eff?.state]);
 
   // ХВ7 (решение Софьи по QA-2): тело списка уроков — одна разметка для двух мест:
-  // острова сайдбара (широкий экран) и такого же острова под главной (мобильная 360).
+  // острова сайдбара (широкий экран) и такого же острова под главной (узкий экран:
+  // мобильная 360 и планшет 601–899 — ХВ11).
   // Строки, порядок, группировка «Старые уроки» (Д2) — общие; меняётся только обёртка.
   // Текст «Уроков пока нет.» нужен только сайдбару: на мобиле при пустом списке острова
   // нет вовсе (путь к уроку — плитка предмета).
@@ -392,12 +393,16 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
         onStartRules={() => void startRules()}
       />
     );
-    // ХВ7: на мобиле под главной встаёт тот же остров, что на широком экране рисует
+    // ХВ7: под главной встаёт тот же остров, что на широком экране рисует
     // сайдбар, — в той же прокрутке, что и главная (один scroll-контейнер на двоих).
     // Точка входа — вкладка «Уроки» или «назад» из урока: обе ведут сюда. Полей — по
     // ChildHome (макет .mlist). Уроков нет — острова нет (кадр 3). Открытый урок или
     // экран предмета — острова нет: список живёт на главной.
-    const mobileIsland = isMobile && chats.length > 0 ? (
+    // ХВ11 (миноры ревью 0fbaa524): остров — на любой ширине без боковой панели
+    // (< SIDEBAR_MIN, планшет 601–899 включён), а не только на мобиле; и его нет при
+    // !lessonsAllowed (rules_pending): раньше загруженный список не должен оставаться
+    // мёртвыми строками.
+    const lessonsIsland = !wide && lessonsAllowed && chats.length > 0 ? (
       <div data-testid="child-mobile-lessons-list" style={{ maxWidth: 760, width: '100%', margin: '0 auto', boxSizing: 'border-box', padding: `0 ${SP.lg}px ${SP.xl}px` }}>
         <Island style={{ width: '100%', overflow: 'visible' }}>
           <IslandHeader title="Мои уроки" />
@@ -405,7 +410,7 @@ export function ChildWorkspace({ auth, onLogout }: Props) {
         </Island>
       </div>
     ) : null;
-    center = mobileIsland ? <div style={{ height: '100%', overflowY: 'auto' }}>{home}{mobileIsland}</div> : home;
+    center = lessonsIsland ? <div style={{ height: '100%', overflowY: 'auto' }}>{home}{lessonsIsland}</div> : home;
   }
 
   return (

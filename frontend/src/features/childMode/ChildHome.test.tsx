@@ -39,7 +39,7 @@ const status = (over: Partial<ChildStatus> = {}): ChildStatus => ({
   attachmentTypes: ['image/png'], rulesAgreedAt: '2026-11-10T12:00:00+03:00', dailyMinutes: 60, windows: [], minutesToday: 0, ...over,
 });
 
-const lastLesson: ChildLastLesson = { subjectId: 'math', title: 'Сравнение дробей', progress: 'Шаг 2 из 3' };
+const lastLesson: ChildLastLesson = { subjectId: 'math', title: 'Сравнение дробей' };
 
 // Моки типуются как сами колбэки пропсов: createElement(ChildHome, props) проверяется
 // типом Props, «голый» vi.fn под него не подходит.
@@ -128,7 +128,10 @@ describe('ChildHome: обычный день', () => {
     expect(html).toContain('Вчера остановились тут');
     expect(html).toContain('Математика');
     expect(html).toContain('Сравнение дробей');
-    expect(html).toContain('Шаг 2 из 3');
+    // строка репетитора есть, шага и « · » после имени нет (Х19)
+    expect(html).toContain('Сова Ульяна');
+    expect(html).not.toContain('Сова Ульяна ·');
+    expect(html).not.toContain('Шаг');
   });
 
   it('«Студия» неактивна: бейдж «скоро», клик по ней не зовёт ни один колбэк', async () => {
@@ -198,13 +201,18 @@ describe('ChildHome: плитки с сервера', () => {
     expect(glyphOf(tileOf(host, 'history')).getAttribute('style') ?? '').toContain('var(--c-info-bg)');
   });
 
-  it('карточка «Вчера остановились тут» — из серверного списка: метка, репетитор и шаг', async () => {
-    const last: ChildLastLesson = { subjectId: 'chess', title: 'Конь и пешки', progress: 'Шаг 2 из 3' };
+  it('карточка «Вчера остановились тут» — из серверного списка: метка и репетитор без шага', async () => {
+    const last: ChildLastLesson = { subjectId: 'chess', title: 'Конь и пешки' };
     const { host } = await render({}, handlers(), last, SERVER_SUBJECTS);
-    const text = host.textContent ?? '';
+    // имя репетитора проверяем по карточке: та же строка есть на плитке шахмат
+    const label = byText(host, 'Вчера остановились тут')!;
+    const card = label.parentElement!.parentElement!.parentElement!;
+    const text = card.textContent ?? '';
     expect(text).toContain('Вчера остановились тут');
     expect(text).toContain('Шахматы · Конь и пешки');
-    expect(text).toContain('Гроссмейстер Ёж · Шаг 2 из 3');
+    expect(text).toContain('Гроссмейстер Ёж');
+    expect(text).not.toContain('Гроссмейстер Ёж ·');
+    expect(text).not.toContain('Шаг');
   });
 
   it('чата по закрытому/удалённому предмету: карточка есть — без метки предмета, в нейтральном цвете (Т3e)', async () => {

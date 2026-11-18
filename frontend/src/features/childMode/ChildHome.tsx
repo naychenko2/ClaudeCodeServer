@@ -29,8 +29,6 @@ import type { ChildStatus, ChildSubjectTutor, ChildSubjectView } from './types';
 export interface ChildLastLesson {
   subjectId: string;
   title: string;
-  // «Шаг 2 из 3» — как принёс сервер; нет — строка шага не рисуется
-  progress?: string | null;
 }
 
 interface Props {
@@ -189,13 +187,12 @@ export function ChildHome({ childName, status, subjects, lastLesson, onOpenSubje
               <div style={{ fontSize: FS.lg, fontWeight: 600, color: C.textHeading, marginTop: 2 }}>
                 {lastSubject ? `${lastSubject.label} · ${lastLesson.title}` : lastLesson.title}
               </div>
-              {/* Строка репетитора и шага (макет .card): аватар 20 + «Имя · Шаг 2 из 3»;
-                  репетитора нет — остаётся одна строка шага, как была */}
-              {(lastSubject?.tutor || lastLesson.progress) && (
+              {/* Строка репетитора (макет .card): аватар 20 + имя репетитора */}
+              {lastSubject?.tutor && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: SP.xs, fontSize: FS.sm, color: C.textMuted, minWidth: 0 }}>
-                  {lastSubject?.tutor && <TutorMark tutor={lastSubject.tutor} size={20} />}
+                  <TutorMark tutor={lastSubject.tutor} size={20} />
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {lastSubject?.tutor?.name ?? ''}{lastSubject?.tutor && lastLesson.progress ? ' · ' : ''}{lastLesson.progress ?? ''}
+                    {lastSubject.tutor.name}
                   </span>
                 </div>
               )}

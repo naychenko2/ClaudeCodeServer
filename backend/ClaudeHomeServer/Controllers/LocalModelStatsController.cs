@@ -36,6 +36,9 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     private readonly IGpuSampler? _gpus = services.GetService<IGpuSampler>();
     // Вкладка «Железо» (Б1): отчёт с уровнями на бэкенде. `?` — тот же остаток (см. выше).
     private readonly IHardwareReportService? _hardware = services.GetService<IHardwareReportService>();
+    // Вкладка «Встречи» (Б1): снимок состояния конвейера транскрибации — читается из файлов
+    // конвейера при каждом запросе. `?` — тот же остаток (см. выше).
+    private readonly ITranscriptionStateReader? _transcription = services.GetService<ITranscriptionStateReader>();
     // Счётчик хода: живые чаты на движке (chats) и прогоны, которые он не видит (othersCount).
     private readonly ILocalModelTurnMeter? _meter = services.GetService<ILocalModelTurnMeter>();
     // Стенд второй модели (Б3c): справочник дорожек статистики, словарь известных движков
@@ -424,6 +427,16 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     [HttpGet("hardware/farm")]
     public IActionResult HardwareFarm() =>
         Ok(_hardware?.Farm() ?? new HardwareFarmReport(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "ok", []));
+
+    // GET /api/local-model/transcription — снимок состояния конвейера транскрибации (вкладка «Встречи», Б1).
+    // ТОЛЬКО admin (как hardware/farm). Состояние читается из файлов конвейера при каждом запросе:
+    // фоновых опросов и хранилища нет. Файлов нет / не читаются / битый JSON → 200 с пустыми блоками
+    // и уровнем «unknown» («не проверялось»), не 500. Нет и сервиса (ветка эпохи отключаемой llm,
+    // ADR-014 §5) → тот же пустой снимок.
+    [Authorize(Roles = "admin")]
+    [HttpGet("transcription")]
+    public IActionResult Transcription() =>
+        Ok(_transcription?.Read() ?? TranscriptionSnapshot.Unknown(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
 
     // GET /api/local-model/stats/media?since=<unix ms>
     // Вкладка «Медиа»: статус ComfyUI + слоты + running/queue/lastHour.

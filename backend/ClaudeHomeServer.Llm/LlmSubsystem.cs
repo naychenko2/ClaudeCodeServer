@@ -565,5 +565,12 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<HardwareSampler>());
         services.AddSingleton<IHardwareSampler>(sp => sp.GetRequiredService<HardwareSampler>());
         services.AddSingleton<IHardwareReportService, HardwareReportService>();
+
+        // Вкладка «Встречи» (Б1): читатель состояния конвейера транскрибации. Файлы конвейера
+        // на этом узле читаются в момент запроса: поллера и хранилища нет. Путь — Transcription:PipelineRoot
+        // (дефолт — установка на worker, в отслеживаемые appsettings не пишем).
+        services.AddOptions<TranscriptionOptions>()
+            .Bind(config.GetSection(TranscriptionOptions.Section));
+        services.AddSingleton<ITranscriptionStateReader, TranscriptionStateReader>();
     }
 }

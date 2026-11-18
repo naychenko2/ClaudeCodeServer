@@ -2,9 +2,13 @@
 // пользователям песочницы (минор 3, решение Софьи), свёрнут по умолчанию в строку статуса,
 // раскрытие по нажатию. Тесты: граница container/local, раздел без флага на мобиле (минор 1),
 // после сохранения профиль обновляется только у своего пользователя (минор 2).
+// Д1 (дефект 06201244): при раскрытии живой профиль читается GET-ом — до ответа и при отказе
+// редактора нет (пустой черновик затёр бы профиль), при отказе — Notice с «Повторить»; ответ
+// проверяется по id: чужой профиль в чужую строку не попадает.
 // Окружение — node + linkedom, как в соседних .test.tsx волны. Modal — портал в document.body:
 // createPortal подменён pass-through (паттерн Modal.test.ts); список пользователей — фикстура
-// через mock api.users.list; PUT child-profile — mock childApi, ответ повторяет тело запроса.
+// через mock api.users.list; PUT child-profile — mock childApi, ответ повторяет тело запроса;
+// GET child-profile — mock с отложенными ответами: тест сам решает, что и когда придёт.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, createElement } from 'react';
@@ -53,13 +57,43 @@ vi.mock('../lib/api', () => ({
 }));
 
 // PUT child-profile: записываем запрос; ответ повторяет тело и добавляет тьютора —
-// как реальное сохранение (сервер возвращает то, что сохранил).
+// как реальное сохранение (сервер возвращает то, что сохранил). saveAsSaved — то же, что
+// отдал PUT: следующий GET по этому id отвечает сохранённым профилем (сервер возвращает
+// то, что сохранил), «полный цикл» модалки после сохранения остаётся честным.
 let putCalls: { userId: string; body: unknown }[] = [];
+// GET child-profile (Д1): по умолчанию — сохранённый профиль id или пустой (пользователь,
+// которого никогда не включали). prepared — ответ, который тест приготовил для конкретного
+// вызова: он сам решает, когда тот придёт (состояние загрузки, отказ, порядок ответов).
+type ProfileResp = { profile: unknown; tutorPersonaId: string };
+let getProfileCalls: string[] = [];
+const saveAsSaved = new Map<string, ProfileResp>();
+const prepared = new Map<string, Promise<ProfileResp>>();
+// Отложенный ответ для id: resolve/reject — во власти теста (загрузка «висит», пока не ответили).
+function deferred(id: string): { resolve: (r: ProfileResp) => void; reject: (e: unknown) => void } {
+  let resolve!: (r: ProfileResp) => void;
+  let reject!: (e: unknown) => void;
+  prepared.set(id, new Promise<ProfileResp>((res, rej) => { resolve = res; reject = rej; }));
+  return { resolve, reject };
+}
+function resolveProfile(id: string, resp: ProfileResp) {
+  deferred(id).resolve(resp);
+}
 vi.mock('../features/childMode/api', () => ({
   childApi: {
     putProfile: (userId: string, body: unknown) => {
       putCalls.push({ userId, body });
-      return Promise.resolve({ profile: body, tutorPersonaId: 'p-tutor-new' });
+      const res = { profile: body, tutorPersonaId: 'p-tutor-new' };
+      saveAsSaved.set(userId, res);
+      return Promise.resolve(res);
+    },
+    getProfile: (userId: string) => {
+      getProfileCalls.push(userId);
+      const p = prepared.get(userId);
+      if (p) {
+        prepared.delete(userId);
+        return p;
+      }
+      return Promise.resolve(saveAsSaved.get(userId) ?? { profile: null, tutorPersonaId: '' });
     },
     // Список маршрутов для пикера (Т4f): одна запись пула — на ней и выбирается провайдер.
     getRoutes: () => Promise.resolve([
@@ -90,6 +124,11 @@ const toggles = () => Array.from(doc.querySelectorAll('[data-testid="child-secti
 const row = (id: string) => doc.querySelector(`[data-testid="user-row-${id}"]`) as HTMLElement | null;
 const toggleIn = (r: HTMLElement) => r.querySelector('[data-testid="child-section-toggle"]') as HTMLElement | null;
 const editorIn = (r: HTMLElement) => r.querySelector('[data-testid="child-profile-editor"]') as HTMLElement | null;
+// Состояния загрузки профиля (Д1): блок «Загрузка…», Notice отказа с кнопкой «Повторить».
+const loadingIn = (r: HTMLElement) => r.querySelector('[data-testid="child-profile-loading"]') as HTMLElement | null;
+const errorIn = (r: HTMLElement) => r.querySelector('[data-testid="child-profile-error"]') as HTMLElement | null;
+const retryIn = (r: HTMLElement) => r.querySelector('[data-testid="child-profile-retry"]') as HTMLButtonElement | null;
+const saveIn = (r: HTMLElement) => r.querySelector('[data-testid="save-profile"]') as HTMLElement | null;
 const enableToggle = (ed: HTMLElement) => ed.querySelector('[role="checkbox"][aria-label="Детский режим"]') as HTMLButtonElement;
 const saveBtn = (ed: HTMLElement) => ed.querySelector('[data-testid="save-profile"]') as HTMLButtonElement;
 // Маршрут помощника (providerKey/model) — пикер на вкладке «Предметы» (Т4f): первый Select
@@ -128,7 +167,26 @@ beforeEach(() => {
   setAllFlags({});
   mobile = false;
   putCalls = [];
+  getProfileCalls = [];
+  saveAsSaved.clear();
+  prepared.clear();
 });
+
+// Живой профиль Лизы для тестов загрузки (Д1): включённый режим, окно, предмет — тем и
+// проверяем, что в редактор дошёл профиль сервера, а не пустой черновик.
+const lizaProfile: ProfileResp = {
+  profile: {
+    enabled: true,
+    guardianUserIds: [],
+    providerKey: 'anthropic-api-kids',
+    model: 'sonnet',
+    spaces: { lessons: { windows: [{ from: '09:00', to: '12:00' }], dailyMinutes: 30 } },
+    subjects: [
+      { id: 'math', label: 'Математика', glyph: '×', color: 'accent', providerKey: 'anthropic-api-kids', model: 'sonnet', enabled: true },
+    ],
+  },
+  tutorPersonaId: 'p-liza-tutor',
+};
 
 describe('UserManagementModal: раздел «Детский режим» только у песочницы, свёрнут по умолчанию', () => {
   it('флаг включён: раздела нет у local-пользователя; у container — строка статуса, редактор после нажатия', async () => {
@@ -152,7 +210,8 @@ describe('UserManagementModal: раздел «Детский режим» тол
       expect(last.querySelector('[data-testid="child-section-toggle"]'), 'раздел после основных полей').toBeTruthy();
     }
     // Нажатие — редактор внутри строки этого пользователя; соседняя строка не раскрылась.
-    await click(toggleIn(row('u-liza')!)!);
+    // clickSettle: после раскрытия профиль грузится GET-ом (Д1), редактор монтируется по ответу.
+    await clickSettle(toggleIn(row('u-liza')!)!);
     const ed = editorIn(row('u-liza')!);
     expect(ed, 'редактор после нажатия').toBeTruthy();
     expect(ed!.textContent, 'редактор привязан к этому пользователю').toContain('Лиза');
@@ -184,7 +243,7 @@ describe('UserManagementModal: раздел «Детский режим» тол
     const t = toggleIn(row('u-liza')!);
     expect(t, 'строка статуса в мобильной карточке').toBeTruthy();
     expect(t!.textContent).toContain('Детский режим: выключен');
-    await click(t!);
+    await clickSettle(t!);
     const ed = editorIn(row('u-liza')!);
     expect(ed).toBeTruthy();
     expect(ed!.textContent).toContain('Лиза');
@@ -206,10 +265,11 @@ describe('UserManagementModal: сохранение профиля (R-KM-F12, м
     expect(putCalls.map((c) => c.userId), 'запрос только по своему id').toEqual(['u-liza']);
     // Строка статуса своего пользователя отразила сохранённый профиль.
     expect(toggleIn(row('u-liza')!)!.textContent).toContain('Детский режим: включён');
-    // Полный цикл свернуть/раскрыть: редактор инициализирован сохранённым профилем.
+    // Полный цикл свернуть/раскрыть: раскрытие снова грузит профиль — сервер отдаёт то, что
+    // сохранил (mock повторяет PUT-ответ), редактор инициализирован сохранённым профилем.
     await click(toggleIn(row('u-liza')!)!);
     expect(editorIn(row('u-liza')!), 'свёрнут обратно').toBeNull();
-    await click(toggleIn(row('u-liza')!)!);
+    await clickSettle(toggleIn(row('u-liza')!)!);
     const ed2 = editorIn(row('u-liza')!)!;
     expect(enableToggle(ed2).getAttribute('aria-checked'), 'режим включён из сохранённого профиля').toBe('true');
     await clickTabIn(ed2, 'Предметы');
@@ -219,11 +279,93 @@ describe('UserManagementModal: сохранение профиля (R-KM-F12, м
     // Соседняя песочница: ни запроса, ни изменения — статус и черновик пустые.
     const tMira = toggleIn(row('u-mira')!)!;
     expect(tMira.textContent).toContain('Детский режим: выключен');
-    await click(tMira);
+    await clickSettle(tMira);
     const edMira = editorIn(row('u-mira')!)!;
     expect(enableToggle(edMira).getAttribute('aria-checked')).toBe('false');
     await clickTabIn(edMira, 'Предметы');
     expect(providerSelect(edMira).value).toBe('');
     expect(putCalls.length, 'чужого сохранения не было').toBe(1);
+  });
+});
+
+describe('UserManagementModal: живой профиль грузится при раскрытии (Д1, дефект 06201244)', () => {
+  it('раскрытие: getProfile своего id; редактор инициализирован живым профилем; строка — «включён»', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    resolveProfile('u-liza', lizaProfile);
+    await mountModal();
+    const r = row('u-liza')!;
+    // До раскрытия — ни запроса, ни редактора; строка честная: профиля мы не знаем.
+    expect(getProfileCalls.length, 'свёрнутый раздел не грузится').toBe(0);
+    expect(toggleIn(r)!.textContent).toContain('Детский режим: выключен');
+    await clickSettle(toggleIn(r)!);
+    expect(getProfileCalls, 'раскрытие — запрос своего id').toEqual(['u-liza']);
+    const ed = editorIn(r)!;
+    expect(ed, 'редактор после ответа').toBeTruthy();
+    expect(enableToggle(ed).getAttribute('aria-checked'), 'режим из живого профиля').toBe('true');
+    expect(ed.querySelectorAll('[data-testid="time-window"]').length, 'живое окно дошло').toBe(1);
+    await clickTabIn(ed, 'Предметы');
+    expect(ed.textContent, 'предмет живого профиля виден').toContain('Математика');
+    // Строка статуса — по загруженному профилю.
+    expect(toggleIn(r)!.textContent).toContain('Детский режим: включён');
+  });
+
+  it('до ответа — «Загрузка…», редактора и сохранения нет, PUT не уходит; при отказе — Notice и «Повторить»', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    const d = deferred('u-liza');
+    await mountModal();
+    const r = row('u-liza')!;
+    await click(toggleIn(r)!);
+    expect(loadingIn(r), 'состояние загрузки').toBeTruthy();
+    expect(editorIn(r), 'редактор до снимка не монтируется').toBeNull();
+    expect(saveIn(r), 'сохранения до снимка нет').toBeNull();
+    expect(putCalls.length, 'PUT не уходит').toBe(0);
+    // Загрузка упала — Notice с текстом и кнопкой; пустой черновик не показываем.
+    await act(async () => { d.reject(new Error('нет связи')); });
+    expect(loadingIn(r)).toBeNull();
+    const notice = errorIn(r);
+    expect(notice, 'Notice отказа').toBeTruthy();
+    expect(notice!.textContent).toContain('Не удалось загрузить профиль ребёнка');
+    expect(editorIn(r), 'при отказе редактора нет').toBeNull();
+    expect(saveIn(r), 'сохранения при отказе нет').toBeNull();
+    expect(putCalls.length).toBe(0);
+    // «Повторить» — новый запрос того же id; сервер отвечает пустым профилем — редактор чист.
+    await clickSettle(retryIn(r)!);
+    expect(getProfileCalls, 'повтор — второй запрос своего id').toEqual(['u-liza', 'u-liza']);
+    expect(errorIn(r), 'после успешного повтора Notice снят').toBeNull();
+    const ed = editorIn(r)!;
+    expect(ed).toBeTruthy();
+    expect(enableToggle(ed).getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('ответ прежнего пользователя не применяется: соседняя строка получает только свой профиль', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    const dLiza = deferred('u-liza');
+    const dMira = deferred('u-mira');
+    await mountModal();
+    // Открыли Лизу (ответ висит) — закрыли. Открыли Миру (её ответ тоже висит).
+    const rLiza = row('u-liza')!;
+    const rMira = row('u-mira')!;
+    await click(toggleIn(rLiza)!);
+    await click(toggleIn(rLiza)!);
+    await click(toggleIn(rMira)!);
+    expect(loadingIn(rMira), 'Мира ждёт свой ответ').toBeTruthy();
+    // Ответ Лизы приходит первым — в строку Миры он не попадает: та всё ещё ждёт.
+    await act(async () => { dLiza.resolve(lizaProfile); });
+    expect(loadingIn(rMira), 'чужой ответ не снял загрузку Миры').toBeTruthy();
+    expect(editorIn(rMira), 'чужой профиль не открыл редактор Миры').toBeNull();
+    expect(toggleIn(rMira)!.textContent, 'чужой профиль не красит строку Миры').toContain('Детский режим: выключен');
+    // Свой ответ Миры — пустой профиль: её редактор пуст, а не Лизин.
+    await act(async () => { dMira.resolve({ profile: null, tutorPersonaId: '' }); });
+    const edMira = editorIn(rMira)!;
+    expect(edMira).toBeTruthy();
+    expect(enableToggle(edMira).getAttribute('aria-checked'), 'чужой профиль не вошёл в черновик').toBe('false');
+    expect(edMira.querySelectorAll('[data-testid="time-window"]').length).toBe(0);
+    // Ответ Лизы остался при Лизе: её строка — «включён», её черновик — живой.
+    // (Раскрытие — всегда запрос живого профиля; сервер для этого теста отвечает тем же профилем.)
+    expect(toggleIn(rLiza)!.textContent).toContain('Детский режим: включён');
+    resolveProfile('u-liza', lizaProfile);
+    await clickSettle(toggleIn(rLiza)!);
+    const edLiza = editorIn(rLiza)!;
+    expect(enableToggle(edLiza).getAttribute('aria-checked'), 'свой профиль дошёл до своего редактора').toBe('true');
   });
 });

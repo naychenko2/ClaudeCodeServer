@@ -245,6 +245,37 @@ describe('POST /api/child/stop-signal', () => {
   });
 });
 
+describe('GET /api/users/{id}/child-profile', () => {
+  it('id экранирован, GET, live (редактор чернит текущий профиль, не копию кэша)', async () => {
+    await childApi.getProfile('u 1');
+    const { url, opts } = await lastCall();
+    expect(url).toBe('/users/u%201/child-profile');
+    expect((opts.method ?? 'GET').toUpperCase()).toBe('GET');
+    expect(opts.live).toBe(true);
+  });
+
+  it('ответ — та же форма, что у PUT: { profile, tutorPersonaId }; профиля нет — profile: null проходит как есть', async () => {
+    const r = await req();
+    const profile: ChildProfile = {
+      enabled: true, guardianUserIds: [], providerKey: 'pk', model: 'm',
+      spaces: { lessons: { windows: [], dailyMinutes: null } },
+    };
+    r.mockResolvedValueOnce({ profile, tutorPersonaId: 'p-1' });
+    expect(await childApi.getProfile('u1')).toEqual({ profile, tutorPersonaId: 'p-1' });
+
+    r.mockResolvedValueOnce({ profile: null, tutorPersonaId: '' });
+    expect(await childApi.getProfile('u2')).toEqual({ profile: null, tutorPersonaId: '' });
+  });
+
+  it('404 user_not_found — как прочие отказы: status + body.code', async () => {
+    const r = await req();
+    r.mockRejectedValueOnce(httpErr(404, 'user_not_found', 'Пользователь не найден.'));
+    const e = (await rejection(childApi.getProfile('u1'))) as { status?: number; body?: { code?: string } };
+    expect(e.status).toBe(404);
+    expect(e.body?.code).toBe('user_not_found');
+  });
+});
+
 describe('PUT /api/users/{id}/child-profile', () => {
   const profile: ChildProfile = {
     enabled: true,

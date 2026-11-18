@@ -135,6 +135,18 @@ export const childApi = {
       body: JSON.stringify({ sessionId }),
     }),
 
+  // GET /api/users/{id}/child-profile — живой профиль для админского редактора (Д1, дефект 06201244):
+  // ответ той же формы, что у PUT: { profile, tutorPersonaId }; профиля нет — profile: null
+  // (UsersController.GetChildProfile). Только админ — та же политика, что у PUT (AdminByStore).
+  // live: редактор обязан черновить текущий профиль сервера — прошлая копия из офлайн-кэша ровно
+  // тем и опасна, что сохранение затрёт живой профиль (тот же дефект, который исправляется);
+  // офлайн-фолбэк здесь значил бы «показать то, чего уже может не быть». Отказы 404 user_not_found /
+  // 403 — на status и error.body.code, как у putProfile.
+  getProfile: (userId: string) =>
+    request<{ profile: ChildProfile | null; tutorPersonaId: string }>(`/users/${encodeURIComponent(userId)}/child-profile`, {
+      live: true,
+    }),
+
   // PUT /api/users/{id}/child-profile — только админ ([Authorize(Roles="admin")] + AdminByStore,
   // без [ChildAllowed]); { enabled: false } — выключение режима. Отказы 400 not_container/
   // provider_not_api_key/invalid_window/invalid_space/guardian_not_found — на error.body.code.

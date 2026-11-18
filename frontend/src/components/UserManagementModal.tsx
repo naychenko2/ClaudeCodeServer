@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Lock, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Lock, Plus, Trash2 } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { api } from '../lib/api';
-import { C, R, FONT, SHADOW, MODAL_W, SP } from '../lib/design';
-import { Modal, ModalActions, TextField, Button, SegmentedControl } from './ui';
+import { C, R, FONT, SHADOW, MODAL_W, SP, FS } from '../lib/design';
+import { Modal, ModalActions, TextField, Button, Notice, SegmentedControl } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useIsMobile } from '../lib/breakpoints';
 import { FLAGS, useFeature } from '../lib/featureFlags';
 import { ChildProfileEditor } from '../features/childMode/ChildProfileEditor';
+import { childApi } from '../features/childMode/api';
 import type { ChildProfile } from '../features/childMode/types';
 
 interface Props {
@@ -85,6 +86,14 @@ type Dialog =
   | { kind: 'delete'; user: UserProfile }
   | { kind: 'resetPassword'; user: UserProfile };
 
+// Состояние детского профиля одного пользователя в этой сессии модалки (Д1, дефект 06201244):
+// снимок приходит только из GET (или из ответа сохранения здесь — это тот же ответ сервера).
+// До снимка редактор не монтируется: с пустым черновиком он затёр бы живой профиль.
+type ProfileState =
+  | { status: 'loading' }
+  | { status: 'error'; text: string }
+  | { status: 'loaded'; profile: ChildProfile | null; tutorPersonaId: string };
+
 export function UserManagementModal({ currentUserId, onClose }: Props) {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,19 +103,44 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
   // Флаг child-mode прячет только этот интерфейс включения (ADR-041): ограничения ребёнка
   // зависят только от его профиля, выключенный флаг не снимает ни одного запрета.
   const childModeUi = useFeature(FLAGS.childMode);
-  // То, что здесь сохранили о профиле: список пользователей childProfile не отдаёт, отдельной
-  // GET профиля нет (ADR-041, ручка №10 — только PUT). Черновик редактора живёт, пока открыта модалка.
-  const [childProfiles, setChildProfiles] = useState<Record<string, ChildProfile>>({});
+  // Живой профиль каждого пользователя по id (Д1): список пользователей childProfile не отдаёт,
+  // он читается отдельным GET при раскрытии раздела. Ключ — user.id: ответ для прежнего
+  // пользователя не попадает в чужое состояние (тот же приём, что сверка user.id в save).
+  const [profileStates, setProfileStates] = useState<Record<string, ProfileState>>({});
   // Какие разделы раскрыты в этой сессии. По умолчанию свёрнуты: на десятке пользователей
   // десяток открытых редакторов утащил бы строки (R-KM-F12, минор 3, решение Софьи).
   const [childOpen, setChildOpen] = useState<Record<string, boolean>>({});
 
+  // Загрузка живого профиля одного пользователя (UsersController.GetChildProfile). Пока снимок
+  // не пришёл — редактора нет: его пустой черновик затёр бы живой профиль при сохранении
+  // (дефект 06201244). Ответ и отказ пишутся только состоянию «жду» того же id: ответ для
+  // другого пользователя в чужое состояние не попадает (тот же приём, что сверка user.id в save).
+  const loadProfile = (userId: string) => {
+    setProfileStates(prev => (prev[userId]?.status === 'loading' ? prev : { ...prev, [userId]: { status: 'loading' } }));
+    childApi.getProfile(userId)
+      .then((res) => setProfileStates(prev => (
+        prev[userId]?.status === 'loading'
+          ? { ...prev, [userId]: { status: 'loaded', profile: res.profile ?? null, tutorPersonaId: res.tutorPersonaId ?? '' } }
+          : prev
+      )))
+      .catch(() => setProfileStates(prev => (
+        prev[userId]?.status === 'loading'
+          ? { ...prev, [userId]: { status: 'error', text: 'Не удалось загрузить профиль ребёнка.' } }
+          : prev
+      )));
+  };
+
   // Раздел «Детский режим» — только пользователям песочницы: ограничения ребёнка работают
   // только в container, `local`-пользователям сервер отказывает not_container (REJECT_TEXT
-  // в ChildProfileEditor). Свёрнут в строку статуса; редактор — только в раскрытом виде.
+  // в ChildProfileEditor). Свёрнут в строку статуса; редактор — только в раскрытом виде
+  // и только по загруженному профилю.
   const childSection = (user: UserProfile) => {
     if (user.executionEnvironment !== 'container') return null;
     const open = childOpen[user.id] === true;
+    const st = profileStates[user.id];
+    // Строка статуса — по загруженному профилю: «включён» утверждается только снимком;
+    // до него и при отказе — «выключен» (профиля мы не знаем, утверждать обратное нечем).
+    const enabled = st?.status === 'loaded' && st.profile?.enabled === true;
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, ...(isMobile ? {} : { padding: '0 16px 12px' }) }}>
         <Button
@@ -116,14 +150,42 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
           leftIcon={open
             ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-          onClick={() => setChildOpen(prev => ({ ...prev, [user.id]: !(prev[user.id] === true) }))}
+          onClick={() => {
+            const willOpen = !(childOpen[user.id] === true);
+            setChildOpen(prev => ({ ...prev, [user.id]: willOpen }));
+            // Раскрытие — запрос живого профиля (Д1): редактор без снимка не открывается.
+            // Пока запрос в пути — второго нет; «error» при раскрытии не молчит — тоже попытка.
+            if (willOpen && st?.status !== 'loading') loadProfile(user.id);
+          }}
         >
-          Детский режим: {childProfiles[user.id]?.enabled === true ? 'включён' : 'выключен'}
+          Детский режим: {enabled ? 'включён' : 'выключен'}
         </Button>
-        {open && (
+        {open && st?.status === 'loading' && (
+          <div data-testid="child-profile-loading" style={{ padding: SP.md, color: C.textMuted, fontSize: FS.sm }}>
+            Загрузка…
+          </div>
+        )}
+        {open && st?.status === 'error' && st && (
+          <Notice tone="danger" icon={AlertTriangle} title="Профиль ребёнка не загрузился" data-testid="child-profile-error">
+            {st.text}
+            <div style={{ marginTop: SP.sm }}>
+              <Button variant="secondary" size="md" dataTestId="child-profile-retry" onClick={() => loadProfile(user.id)}>
+                Повторить
+              </Button>
+            </div>
+          </Notice>
+        )}
+        {open && st?.status === 'loaded' && st && (
           <ChildProfileEditor
-            user={{ id: user.id, username: user.username, childProfile: childProfiles[user.id] }}
-            onSaved={(p) => setChildProfiles(prev => ({ ...prev, [user.id]: p }))}
+            user={{ id: user.id, username: user.username, childProfile: st.profile, tutorPersonaId: st.tutorPersonaId }}
+            // Ответ сохранения — живой профиль сервера: им и обновляем состояние (строка статуса
+            // после сохранения обязана показать то, что сохранилось).
+            onSaved={(p) => setProfileStates(prev => {
+              const cur = prev[user.id];
+              return cur?.status === 'loaded'
+                ? { ...prev, [user.id]: { status: 'loaded', profile: p, tutorPersonaId: cur.tutorPersonaId } }
+                : prev;
+            })}
           />
         )}
       </div>

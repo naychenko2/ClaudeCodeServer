@@ -986,16 +986,19 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
     // ожидания сноса. Теперь список перечитывается ПОСЛЕ захвата известных семафоров, пока
     // не станет стабильным.
     //
-    // Детерминированная гонка «снос не ждёт новый предмет»:
+    // Гонка «снос не ждёт новый предмет» держится на сигналах, а не на паузах (ревью Х16):
+    // тестовая точка стора OnDeleteWaitingSubject сообщает каждый предмет, на семафоре
+    // которого снос собирается встать (вызывается до WaitAsync).
     //   • существующий «math» держит свой семафор в конвертере (оригинал на диске, описи нет —
-    //     тот же приём, что УдалениеРебёнкаЖдётИдущийAddAsync) → снос сделал снимок («math»)
-    //     и встал на его семафоре; на снимке «new» ещё нет;
+    //     тот же приём, что УдалениеРебёнкаЖдётИдущийAddAsync); тест ждёт сигнал
+    //     «снос встал на math»: снимок сделан, снос стоит; на снимке «new» ещё нет;
     //   • поднимается новый «new» (тот же конвертер, независимое окно): каталог и оригинал на
     //     диске, запись стоит в конвертере, семафор занят;
-    //   • отпускаем «math» ПРИ СТОЯЩЕМ «new». Исправленный снос перечитает список, увидит
-    //     «new» и ждёт его семафор — его запись дойдёт под семафором, затем снос снесёт её.
-    //     Мутация «снимок до семафора» снесёт весь каталог ПОСРЕДИ записи «new», а её
-    //     CreateDirectory+Save воссоздадут каталог после сноса: он остаётся.
+    //   • отпускаем «math» ПРИ СТОЯЩЕМ «new» и ждём сигнала «снос встал на new»: что снос
+    //     дошёл до этой записи — факт из сигнала, а не предположение по задержке. Его
+    //     запись дойдёт под семафором сноса, затем снос снесёт её. Мутация «снимок до
+    //     семафора» никогда не сигналит «new» (список не перечитывает): тест краснеет на
+    //     предохранителе ожидания сигнала, а не на задержке и не на финальном состоянии.
     // Флаги конвертера — в отдельном контрольном каталоге вне каталога предмета: снос его не
     // сносит, и тест доходит до проверки no-dir, а не падает на записи флага.
     [Fact]
@@ -1026,6 +1029,19 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
             ["Markitdown:Command"] = OperatingSystem.IsWindows() ? $"cmd /c {script}" : $"bash {script}",
         }));
 
+        // Сигналы сноса (ревью Х16): id предмета → «снос собирается встать на его семафоре».
+        // Тестовая точка передаёт путь каталога; id — последний сегмент этого пути.
+        var gates = new System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource>(StringComparer.Ordinal);
+        store.OnDeleteWaitingSubject = subjectDir =>
+            gates.GetOrAdd(Path.GetFileName(subjectDir), _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously))
+                .TrySetResult();
+        async Task WaitDeleteWaitingOn(string subjectId)
+        {
+            var gate = gates.GetOrAdd(subjectId, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            var winner = await Task.WhenAny(gate.Task, Task.Delay(15_000)); // потолок-предохранитель: сигнала нет — гонка не построена
+            winner.Should().Be(gate.Task, $"снос не дошёл до семафора предмета «{subjectId}»");
+        }
+
         var deadline = DateTime.UtcNow.AddSeconds(30);
         async Task WaitInConverter(string subjectId)
         {
@@ -1043,14 +1059,16 @@ public sealed class ChildSubjectMaterialsStoreTests : IDisposable
         await WaitInConverter("math");
 
         var deleteTask = Task.Run(() => store.DeleteChildAsync("kid-a"));
-        // Снимок «math» сделан, снос стоит на его семафоре. Поднимается новый «new» — на снимке его нет.
-        await Task.Delay(100);
+        // Сигнал: снос встал на семафоре «math» — снимок сделан. Поднимается новый «new» — на снимке его нет.
+        await WaitDeleteWaitingOn("math");
         var newTask = Task.Run(() => store.AddAsync("kid-a", "new", "справка.pdf", PdfBytes, "admin-1"));
         await WaitInConverter("new"); // «new» посреди записи: каталог и оригинал на диске, описи нет, семафор занят.
 
         // Отпускаем «math», ПОКА «new» ещё в конвертере: снос продолжит обход над стоящим «new».
         Release("math");
-        await Task.Delay(200); // дать сносу дойти: исправленный встанет на семафоре «new», мутация — снесёт каталог.
+        // Сигнал: снос встал на семафоре «new» — дошёл до его записи. В мутации «снимок до
+        // семафора» этот сигнал не приходит никогда: краснеет предохранитель, не финальная проверка.
+        await WaitDeleteWaitingOn("new");
         // Теперь отпускаем «new»: в исправленном его запись дойдёт под семафором сноса; в мутации
         // каталог уже снесён, но её CreateDirectory+Save воссоздадут его после сноса.
         Release("new");

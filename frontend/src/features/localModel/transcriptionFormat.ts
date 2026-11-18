@@ -5,10 +5,10 @@
 // Уровень тревоги (level) приходит со снимком — своих порогов («Завис?» 5 мин) здесь
 // нет. «Завис?» и «Остановлен» — интерпретация данного бэком level + phase, а не новый
 // вывод: «danger» при живом процессе без севших зависимостей — это ровно тот «stale»,
-// который посчитал бэкенд (см. TranscriptionStateReader.level); «warn» без расхождения
-// Dify — ровно то «Пишет в не туда». Отдельных сигналов по полям плоский контракт не
-// несёт (у незачемённого бэка они есть: pipeline.level / outputLevel) — при сверке
-// контракта эти две строки заменяются прямыми полями.
+// который посчитал бэкенд (см. TranscriptionStateReader.level). Тревога строки «Пишет в»
+// — по прямому полю снимка (outputHost=null при известном outputDir,
+// TranscriptionStateReader.cs:91-97), а не по level: при дефиците Dify и чужом узле вывода
+// на экране нужны обе строки сразу (макет «Сбои + расхождение»).
 
 import type { TranscriptionSnapshot } from './types';
 
@@ -59,14 +59,20 @@ export function sinceWords(fromMs: number, nowMs: number): string {
   return rm ? `${h} ч ${rm} мин` : durationWords(h * 60);
 }
 
-// «3 мин 12 с», «48 с», «26 мин» — длительность работы файла (durationMin — минуты,
-// как их считает бэкенд: (now − updated))
-export function durationText(min: number): string {
-  const total = Math.max(0, Math.round(min * 60));
+// «меньше минуты», «3 мин 12 с», «26 мин», «1 ч 5 мин» — короткая форма длительности для
+// «идёт», «не отчитывался …» и длины встречи: по макету и proposal.md («Конвейер не
+// отчитывался 23 мин»), а не разговорная «23 минуты» (она — у «N минут назад» в agoText).
+// Меньше минуты — отдельная форма: «0 мин» читается как «только что началось», «0 с» — как
+// выдуманная точность
+export function shortDuration(dMs: number): string {
+  if (dMs < MINUTE) return 'меньше минуты';
+  const total = Math.round(dMs / 1000);
   const m = Math.floor(total / 60);
   const s = total % 60;
-  if (m === 0) return `${s} с`;
-  return s ? `${m} мин ${s} с` : `${m} мин`;
+  if (m < 60) return s ? `${m} мин ${s} с` : `${m} мин`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h} ч ${r} мин` : `${h} ч`;
 }
 
 // «07:12» — местное время (для «не обрабатываются с 07:12»)
@@ -109,7 +115,10 @@ export type TransNowView =
     file: string;
     folder: string | null;
     steps: TransStageStepView[];
+    // «идёт» — с отметки этапа в снимке; null — отметки нет, строки нет
     runningText: string | null;
+    // «запись» — длина самой записи; «—» — её нет в контракте (см. transTabView)
+    lengthText: string;
     batchText: string | null;
   };
 
@@ -201,6 +210,12 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
   // бэка (TranscriptionStateReader) именно так и получается «stale»
   const hung = level === 'danger' && !stopped && !depsDown(s);
   const stale = stopped || hung;
+  // «не та машина» — прямой бэковый сигнал, своего порога здесь нет: OutputHost ставится
+  // именем узла только если каталог вывода существует локально (TranscriptionStateReader.cs:
+  // 91-97); известный outputDir при outputHost=null — конвейер пишет не на этом узле
+  // (ровно случай 18.11). Тревога строки не зависит от баннера: при дефиците Dify жёлтая
+  // строка остаётся (макет «Сбои + расхождение»: и баннер, и она)
+  const writesWarn = s.outputHost == null && typeof s.outputDir === 'string' && s.outputDir.length > 0;
 
   // === Баннер: текст строго из proposal.md; свой текст не сочиняем.
   // danger по севшей зависимости — текста в предложении нет: причину видит блок
@@ -216,10 +231,10 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
         body: `Новые записи не обрабатываются${since}. Запустить можно на worker: systemctl --user start transcription-supervisor.`,
       };
     } else if (hung && typeof s.updatedAt === 'number') {
-      const mins = Math.max(1, Math.round((nowMs - s.updatedAt) / MINUTE));
       banner = {
         tone: 'danger',
-        title: `Конвейер не отчитывался ${durationWords(mins)}`,
+        // форма макета и proposal.md:28 — «23 мин», а не разговорная «23 минуты»
+        title: `Конвейер не отчитывался ${shortDuration(nowMs - s.updatedAt)}`,
         body: 'state.json обновляется каждые ~10 с. Похоже, процесс завис на файле ниже — загляните в журнал сервиса.',
       };
     }
@@ -227,10 +242,17 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
     const rows = difyDeficient(s);
     if (rows.length) {
       const total = rows.reduce((a, r) => a + r.local - r.inDify, 0);
+      // Пояснение случая 18.11 (макет v1.html:234): «Конвейер пишет на ai, а „Встречи“
+      // читают с worker». Имени чужого узла в плоском контракте нет — OutputHost=null
+      // значит лишь «не этот узел» (TranscriptionStateReader.cs:91-97), поэтому узел в
+      // строке — тот, что читает («Где работает»), а чужой не назван
+      const why = writesWarn && typeof s.host === 'string' && s.host.length > 0
+        ? ` Конвейер пишет не на этом узле, а «Встречи» читают с ${s.host}.`
+        : '';
       banner = {
         tone: 'warning',
         title: `${total} ${plural(total, 'встреча', 'встречи', 'встреч')} не ${plural(total, 'попала', 'попали', 'попало')} в Dify`,
-        body: rows.map(r => `${r.folder}: локально ${r.local}, в Dify ${r.inDify}`).join('; '),
+        body: rows.map(r => `${r.folder}: локально ${r.local}, в Dify ${r.inDify}`).join('; ') + why,
       };
     }
   }
@@ -252,7 +274,6 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
   const pidText = typeof s.pid === 'number' ? `pid ${s.pid}` : null;
 
   const outParts = [s.outputHost, s.outputDir].filter((x): x is string => typeof x === 'string' && x.length > 0);
-  const writesWarn = level === 'warn' && !difyDeficient(s).length;
   const writesText = outParts.length
     ? outParts.join(' · ') + (writesWarn ? ' — не та машина' : '')
     : '—';
@@ -261,12 +282,13 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
   let now: TransNowView;
   if (typeof s.file !== 'string' || s.file.length === 0) {
     // Пустое состояние: когда закончилась последняя работа — по последней завершённой
-    // встрече (своего поля «конец пачки» контракт не несёт)
+    // встрече (своего поля «конец пачки» контракт не несёт); форма строки — по макету
+    // (v1.html:225): «последняя пачка закончилась в HH:MM»
     const last = (s.recent ?? [])[0];
     const note = stopped
       ? 'Процесса нет.'
       : last
-        ? `Последняя завершена в ${clockText(last.at)}. Новые записи из сетевой папки конвейер подхватит сам.`
+        ? `последняя пачка закончилась в ${clockText(last.at)}. Новые записи из сетевой папки конвейер подхватит сам.`
         : 'Новые записи из сетевой папки конвейер подхватит сам.';
     now = { kind: 'empty', note };
   } else {
@@ -275,16 +297,22 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
       label,
       state: i < idx ? ('done' as const) : i === idx ? ('cur' as const) : ('todo' as const),
     }));
-    const runningText = typeof s.durationMin === 'number'
-      ? durationText(s.durationMin)
-      : typeof s.stageStartedAt === 'number'
-        ? durationText((nowMs - s.stageStartedAt) / MINUTE)
-        : null;
+    // «идёт» — с отметки этапа в state.json. Бэк ставит её как запись снимка, открывшего
+    // этап (TranscriptionStateReader.cs:249-251), а конвейер перечисляет снимок каждые
+    // ~10 с, поэтому elapsed меньше минуты — честная форма «меньше минуты», а не «0 мин»
+    // и не выдуманная длительность. durationMin (тот же отрезок, в минутах) в строке не
+    // участвует. Точное начало этапа — вопрос к бэку, он в хвосте фичи.
+    const runningText = typeof s.stageStartedAt === 'number' ? shortDuration(nowMs - s.stageStartedAt) : null;
+    // «запись» — длина самой записи (макет v1.html:272 «запись 52 мин»). Реальной длины в
+    // плоском контракте нет: durationMin = (now − updatedAt state.json) — время последней
+    // правки снимка, а не длительность файла. По инварианту «поля нет — «—»»: строка есть,
+    // значения нет; не 0 и не выдуманное число. Настоящая длина — хвост фичи.
+    const lengthText = '—';
     // Место в пачке — только когда есть индекс (в v1 бэкенд его не несёт)
     const batchText = typeof s.batchIndex === 'number' && typeof s.batchSize === 'number'
       ? `пачка ${s.batchIndex} из ${s.batchSize}`
       : null;
-    now = { kind: 'active', file: s.file, folder: s.folder ?? null, steps, runningText, batchText };
+    now = { kind: 'active', file: s.file, folder: s.folder ?? null, steps, runningText, lengthText, batchText };
   }
 
   // === Очередь ===
@@ -310,7 +338,7 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
     file: r.file,
     folder: r.folder ?? null,
     timeText: meetingTimeText(r.at, nowMs),
-    lengthText: typeof r.minutes === 'number' ? meetingLengthText(r.minutes) : null,
+    lengthText: typeof r.minutes === 'number' ? shortDuration(r.minutes * MINUTE) : null,
     speakersText: null,
     comment: null,
     openable,
@@ -356,16 +384,6 @@ export function transTabView(s: TranscriptionSnapshot, nowMs: number): TransTabV
 function meetingName(file: string): string {
   const i = file.lastIndexOf('.');
   return i > 0 ? file.slice(0, i) : file;
-}
-
-// «47 мин», «1 ч 5 мин» — длина записи короткой формой (макет .mt .sub; не разговорные
-// «47 минут», как у предупреждений баннера)
-export function meetingLengthText(min: number): string {
-  const m = Math.max(0, Math.round(min));
-  if (m < 60) return `${m} мин`;
-  const h = Math.floor(m / 60);
-  const r = m % 60;
-  return r ? `${h} ч ${r} мин` : `${h} ч`;
 }
 
 // «11:42» сегодня, «вчера 18:05» вчера: окно бэка — 24 часа, старше этих двух дней

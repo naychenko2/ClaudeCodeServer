@@ -17,12 +17,14 @@ import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { AudioLines, Clock, FileText, TriangleAlert } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
+import { useNow } from '../../lib/useNow';
 import { Badge } from '../../components/ui/Badge';
 import { Dot } from '../../components/ui/Dot';
 import { Notice } from '../../components/ui/Notice';
 import { PressableArea } from '../../components/ui/PressableArea';
 import { DEP_WORDS, transTabView, type TransDepRowView, type TransDifyRowView, type TransMeetingRowView, type TransTabView } from './transcriptionFormat';
 import { openMeetingNote } from './openMeetingNote';
+import { TRANSCRIPTION_POLL_MS } from './useTranscription';
 import type { TranscriptionSnapshot } from './types';
 
 // «Последние встречи»: изначально пять строк, «Показать ещё» раскрывает остальные
@@ -149,11 +151,13 @@ function NowCard({ view }: { view: TransTabView }) {
           );
         })}
       </div>
-      {/* Факты: «идёт» краснеет при «Завис?»/«Остановлен» (макет runLv) */}
+      {/* Факты (макет .facts): «идёт» краснеет при «Завис?»/«Остановлен» (runLv); «запись» —
+          длина записи, значения в контракте нет → «—» (не 0 и не выдуманное число) */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: `${SP.xxs}px ${SP.md}px`, fontSize: FS.xs, color: C.textSecondary }}>
         {n.runningText != null && (
           <span>идёт <b style={{ fontFamily: FONT.mono, fontWeight: 600, color: muted ? C.dangerText : C.textHeading }}>{n.runningText}</b></span>
         )}
+        <span>запись <b style={{ fontFamily: FONT.mono, fontWeight: 600, color: muted ? C.textMuted : C.textHeading }}>{n.lengthText}</b></span>
       </div>
     </Card>
   );
@@ -371,9 +375,12 @@ function SkeletonCard({ title }: { title: string }) {
 
 // data — последний снимок (null до первого успеха); loading здесь не нужен: между
 // попытками опроса поллера он false, а данные всё ещё не пришли — ожидание одно.
-// now — «сейчас» для относительных времён («обновлено N назад»); по умолчанию текущий
-// момент (пересбор при каждом опросе), в тесте — фиксированный.
-export function TranscriptionTab({ data, now = Date.now() }: { data: TranscriptionSnapshot | null; now?: number }) {
+// now — «сейчас» для относительных времён («обновлено N назад»): в тесте приходит явно и
+// фиксировано. В приложении его нет — берём живое состояние useNow по такту поллера,
+// а не Date.now() в фазе рендера (нечистый рендер по react-hooks/purity; паттерн
+// FeatureTimelineTab/TeamCommandCenter). Интервал живёт, только пока есть данные.
+export function TranscriptionTab({ data, now }: { data: TranscriptionSnapshot | null; now?: number }) {
+  const tick = useNow(TRANSCRIPTION_POLL_MS, data != null);
   // Снимка нет — состояние ожидания (поллер опрашивает каждые 5 с): скелеты вместо
   // значений; нулей и выдуманных статусов нет.
   if (data == null) {
@@ -386,7 +393,7 @@ export function TranscriptionTab({ data, now = Date.now() }: { data: Transcripti
       </>
     );
   }
-  const view = transTabView(data, now);
+  const view = transTabView(data, now ?? tick);
   return (
     <>
       {view.banner && (

@@ -8,11 +8,16 @@
 //   севшей зависимости: там конвейер жив, «Завис?» — вранье;
 // - гашение (stale) раскинуть на всю вкладку, включая карточку конвейера, — краснеет
 //   тест «Сбоев» (макет: при севшей зависимости значения не гасятся);
-// - тексты баннера сочинять свои — краснеют дословные проверки по proposal.md.
+// - тексты баннера сочинять свои — краснеют дословные проверки по proposal.md;
+// - «Пишет в» красить по level или гасить при баннере дефицита (свой порог вместо прямого
+//   поля) — краснеет тест combined: бэк даёт outputHost=null при чужом узле вывода;
+// - «запись» рисовать числом из durationMin (это время правки снимка, не длина файла) —
+//   краснеет тест «—»;
+// - «идёт» показывать числом меньше минуты («0 мин»/«0 с») — краснеет тест «меньше минуты».
 
 import { describe, expect, it } from 'vitest';
 import {
-  agoText, durationText, durationWords, meetingLengthText, sinceWords, transTabView,
+  agoText, durationWords, shortDuration, sinceWords, transTabView,
 } from './transcriptionFormat';
 import type { TranscriptionSnapshot } from './types';
 
@@ -56,7 +61,7 @@ describe('transTabView: норма (макет «Идёт пачка»)', () => 
     expect(p.writesWarn).toBe(false);
   });
 
-  it('«Сейчас»: активный файл, этап «Распознавание» текущий, «3 мин 12 с», «пачка 2 из 5»', () => {
+  it('«Сейчас»: активный файл, этап «Распознавание» текущий, «3 мин 12 с», «запись —», «пачка 2 из 5»', () => {
     const n = transTabView(snap(), NOW).now;
     expect(n.kind).toBe('active');
     if (n.kind !== 'active') return;
@@ -65,6 +70,9 @@ describe('transTabView: норма (макет «Идёт пачка»)', () => 
     expect(n.steps.map(s => s.state)).toEqual(['cur', 'todo', 'todo']);
     expect(n.steps.map(s => s.label)).toEqual(['Распознавание', 'Сводка', 'В Dify']);
     expect(n.runningText).toBe('3 мин 12 с');
+    // длины записи в контракте нет (durationMin — время последней правки state.json):
+    // строка есть, значение «—», не 0 и не выдуманное число
+    expect(n.lengthText).toBe('—');
     expect(n.batchText).toBe('пачка 2 из 5');
   });
 
@@ -110,26 +118,34 @@ describe('transTabView: «Ожидание» и пустое «Сейчас» (�
     expect(n.kind).toBe('empty');
     if (n.kind !== 'empty') return;
     // время локальное (пояс тестовой машины) — проверяем форму, не «17:00»
-    expect(n.note).toMatch(/^Последняя завершена в \d{2}:\d{2}\./);
+    expect(n.note).toMatch(/^последняя пачка закончилась в \d{2}:\d{2}\./);
     expect(n.note).toContain('конвейер подхватит сам');
   });
 
   it('завершённых встреч нет — второй строки про «последнюю» нет', () => {
     const n = transTabView(snap({ phase: 'idle', file: null, recent: [] }), NOW).now;
     if (n.kind !== 'empty') throw new Error('expected empty');
-    expect(n.note).not.toContain('Последняя завершена');
+    expect(n.note).not.toContain('пачка закончилась');
   });
 
-  it('durationMin нет, stageStartedAt есть — «идёт» считается от начала этапа', () => {
+  it('«идёт» — по stageStartedAt, а не по durationMin: тот же отрезок, что и у отметки', () => {
     const n = transTabView(snap({ durationMin: null }), NOW).now;
     if (n.kind !== 'active') throw new Error('expected active');
     expect(n.runningText).toBe('3 мин 12 с');
   });
 
-  it('ни того, ни другого — «идёт» не рисуется (null), не «0 с»', () => {
-    const n = transTabView(snap({ durationMin: null, stageStartedAt: null }), NOW).now;
+  it('отметки этапа нет — «идёт» не рисуется (null), не «0 мин» и не «0 с»', () => {
+    const n = transTabView(snap({ stageStartedAt: null, durationMin: null }), NOW).now;
     if (n.kind !== 'active') throw new Error('expected active');
     expect(n.runningText).toBeNull();
+  });
+
+  it('отметка младше минуты — «меньше минуты», а не «0 мин» и не «12 с»', () => {
+    // бэковый снимок перечисляется каждые ~10 с, поэтому stageStartedAt почти всегда
+    // младше минуты: число в этой строке читается как выдуманная длительность
+    const n = transTabView(snap({ stageStartedAt: NOW - 12_000 }), NOW).now;
+    if (n.kind !== 'active') throw new Error('expected active');
+    expect(n.runningText).toBe('меньше минуты');
   });
 });
 
@@ -140,7 +156,7 @@ describe('transTabView: «Завис?» (макет stale)', () => {
     const v = transTabView(hung, NOW);
     expect(v.banner).not.toBeNull();
     expect(v.banner!.tone).toBe('danger');
-    expect(v.banner!.title).toBe('Конвейер не отчитывался 23 минуты');
+    expect(v.banner!.title).toBe('Конвейер не отчитывался 23 мин');
     expect(v.banner!.body).toContain('state.json обновляется каждые ~10 с');
     expect(v.pipeline.badge).toEqual({ tone: 'danger', label: 'Завис?' });
   });
@@ -207,11 +223,37 @@ describe('transTabView: расхождения (макет fail)', () => {
     expect(v.banner).toBeNull();
   });
 
-  it('level warn без Dify — «Пишет в не туда»: жёлтая строка карточки, не баннер', () => {
-    const v = transTabView(snap({ level: 'warn' }), NOW);
+  it('combined (18.11): outputHost=null при известном outputDir + дефицит Dify — баннер И жёлтая строка', () => {
+    // ровно то, что даёт бэк в этом случае: OutputHost=null, когда каталог вывода не
+    // локальный (TranscriptionStateReader.cs:91-97), и level=warn по дефициту Dify
+    const v = transTabView(snap({
+      level: 'warn', outputHost: null, outputDir: '/srv/meetings/Встречи',
+      dify: [{ folder: 'Video-SIAM', local: 41, inDify: 37 }],
+    }), NOW);
+    expect(v.banner).not.toBeNull();
+    expect(v.banner!.title).toBe('4 встречи не попали в Dify');
+    expect(v.banner!.body).toContain('Video-SIAM: локально 41, в Dify 37');
+    expect(v.banner!.body).toContain('Конвейер пишет не на этом узле, а «Встречи» читают с worker.');
+    expect(v.pipeline.writesWarn).toBe(true);
+    expect(v.pipeline.writesText).toBe('/srv/meetings/Встречи — не та машина');
+  });
+
+  it('outputHost=null без дефицита Dify — только жёлтая строка, баннера нет', () => {
+    const v = transTabView(snap({ level: 'warn', outputHost: null, outputDir: '/srv/meetings/Встречи' }), NOW);
     expect(v.banner).toBeNull();
     expect(v.pipeline.writesWarn).toBe(true);
-    expect(v.pipeline.writesText).toBe('worker · ~/meetings — не та машина');
+  });
+
+  it('outputHost=«worker» (свой узел) — строка не жёлтая, «не та машина» нет', () => {
+    const v = transTabView(snap({ level: 'warn' }), NOW);
+    expect(v.pipeline.writesWarn).toBe(false);
+    expect(v.pipeline.writesText).toBe('worker · ~/meetings');
+  });
+
+  it('outputDir нет (не проверялось) — ни жёлтой строки, ни значения: «—»', () => {
+    const v = transTabView(snap({ level: 'warn', outputHost: null, outputDir: null }), NOW);
+    expect(v.pipeline.writesWarn).toBe(false);
+    expect(v.pipeline.writesText).toBe('—');
   });
 
   it('уровня нет (null) — ни баннера, ни гашения, плашка по фазе', () => {
@@ -238,10 +280,15 @@ describe('форматтеры времени', () => {
     expect(agoText(NOW + 5_000, NOW)).toBe('только что'); // часы вразнобой — не «-5 с назад»
   });
 
-  it('durationText: «48 с» / «3 мин 12 с» / «26 мин»', () => {
-    expect(durationText(0.8)).toBe('48 с');
-    expect(durationText(3.2)).toBe('3 мин 12 с');
-    expect(durationText(26)).toBe('26 мин');
+  it('shortDuration: «меньше минуты» / «1 мин» / «3 мин 12 с» / «26 мин» / «1 ч 5 мин» / «2 ч»', () => {
+    expect(shortDuration(0)).toBe('меньше минуты');
+    expect(shortDuration(48_000)).toBe('меньше минуты');
+    expect(shortDuration(60_000)).toBe('1 мин');
+    expect(shortDuration(192_000)).toBe('3 мин 12 с');
+    expect(shortDuration(26 * 60_000)).toBe('26 мин');
+    expect(shortDuration(47 * 60_000)).toBe('47 мин');
+    expect(shortDuration(65 * 60_000)).toBe('1 ч 5 мин');
+    expect(shortDuration(120 * 60_000)).toBe('2 ч');
   });
 
   it('durationWords и sinceWords: согласование («1 минуту», «23 минуты», «1 час 5 минут»)', () => {
@@ -253,12 +300,6 @@ describe('форматтеры времени', () => {
     expect(sinceWords(NOW - 45_000, NOW)).toBe('45 с');
   });
 
-  it('meetingLengthText: короткая форма длины «47 мин», «1 ч 5 мин», «2 ч»', () => {
-    expect(meetingLengthText(47)).toBe('47 мин');
-    expect(meetingLengthText(65)).toBe('1 ч 5 мин');
-    expect(meetingLengthText(120)).toBe('2 ч');
-    expect(meetingLengthText(0)).toBe('0 мин');
-  });
 });
 
 describe('transTabView: низ вкладки (Ф4): сбои, встречи, сверка, зависимости', () => {

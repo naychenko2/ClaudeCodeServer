@@ -11,7 +11,12 @@
 //   плашка «не хватает» из неизвестного);
 // - «Показать ещё» не раскрывать список (краснеет тест шестой строки);
 // - делать ссылкой строку без mdPath (краснеет тест openMeetingNote: вызов на
-//   неоткрываемой строке или лишний вызов).
+//   неоткрываемой строке или лишний вызов);
+// - не рисовать строку «запись» (краснеет её тест; значение — «—», не 0);
+// - красить «Пишет в» только без баннера дефицита (краснеет тест combined: при чужом
+//   узле вывода и дефиците Dify нужны оба);
+// - не гасить «запись» при «Завис?» (макет .stale .facts b гасит все значения строки
+//   фактов, красный только «идёт») — краснеет тест «Завис?».
 
 import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -101,10 +106,12 @@ describe('TranscriptionTab: норма (снимка тревоги нет)', ()
     expect(h).toContain('В Dify');
   });
 
-  it('файл, «идёт 3 мин 12 с» и счётчики очереди — обычными цветами (не гашены, не красные)', () => {
+  it('файл, «идёт 3 мин 12 с», «запись —» и счётчики очереди — обычными цветами (не гашены, не красные)', () => {
     const m = mountTab(snap());
     expect(styleOfText(m.container, '2026-11-18 Обсуждение бюджета.mp4')?.color).toBe('var(--c-text-heading)');
     expect(styleOfText(m.container, '3 мин 12 с')?.color).toBe('var(--c-text-heading)');
+    // строка «запись» есть всегда, значения в контракте нет — «—», не 0
+    expect(styleOfText(m.container, '—')?.color).toBe('var(--c-text-heading)');
     expect(styleOfText(m.container, '2')?.color).toBe('var(--c-text-heading)'); // asrCount
     expect(styleOfText(m.container, '1')?.color).toBe('var(--c-text-heading)'); // sumCount
     expect(styleOfText(m.container, '8 с назад')?.color).toBe('var(--c-text-primary)');
@@ -125,10 +132,10 @@ describe('TranscriptionTab: норма (снимка тревоги нет)', ()
 describe('TranscriptionTab: «Завис?» (level danger при живом процессе)', () => {
   const hung = () => snap({ level: 'danger', updatedAt: NOW - 23 * 60_000 });
 
-  it('баннер тревоги с текстом по proposal; плашка «Завис?»', () => {
+  it('баннер тревоги с текстом по proposal (форма «23 мин»); плашка «Завис?»', () => {
     const h = staticHtml(hung());
     expect(h).toContain('role="status"');
-    expect(h).toContain('Конвейер не отчитывался 23 минуты');
+    expect(h).toContain('Конвейер не отчитывался 23 мин');
     expect(h).toContain('Завис?');
   });
 
@@ -136,6 +143,9 @@ describe('TranscriptionTab: «Завис?» (level danger при живом пр
     const m = mountTab(hung());
     expect(styleOfText(m.container, '2026-11-18 Обсуждение бюджета.mp4')?.color).toBe('var(--c-text-muted)');
     expect(styleOfText(m.container, '3 мин 12 с')?.color).toBe('var(--c-danger-text)');
+    // «запись» гасится вместе со всеми значениями строки фактов (макет .stale .facts b),
+    // в отличие от «идёт» — он красный
+    expect(styleOfText(m.container, '—')?.color).toBe('var(--c-text-muted)');
   });
 
   it('значения очереди гаснут', () => {
@@ -148,6 +158,37 @@ describe('TranscriptionTab: «Завис?» (level danger при живом пр
     const m = mountTab(hung());
     expect(styleOfText(m.container, '23 минуты назад')?.color).toBe('var(--c-danger-text)');
     expect(styleOfText(m.container, 'worker')?.color).toBe('var(--c-text-primary)');
+  });
+});
+
+describe('TranscriptionTab: «Пишет в» не туда (18.11: чужой узел вывода)', () => {
+  // Как это приходит с бэка: OutputHost=null при известном outputDir (каталог вывода не
+  // локальный) и level=warn по дефициту Dify — TranscriptionStateReader.cs:91-97
+  const foreign = () => snap({
+    level: 'warn', outputHost: null, outputDir: '/srv/meetings/Встречи',
+    dify: [{ folder: 'Video-SIAM', local: 41, inDify: 37 }],
+  });
+
+  it('дефицит Dify и чужой узел — баннер И жёлтая строка «Пишет в», а не вместо неё', () => {
+    const h = staticHtml(foreign());
+    expect(h).toContain('4 встречи не попали в Dify');
+    expect(h).toContain('Конвейер пишет не на этом узле, а «Встречи» читают с worker.');
+    expect(h).toContain('/srv/meetings/Встречи — не та машина');
+    const m = mountTab(foreign());
+    expect(styleOfText(m.container, '/srv/meetings/Встречи — не та машина')?.color).toBe('var(--c-warning-text)');
+  });
+
+  it('чужой узел без дефицита — жёлтая строка есть, баннера нет', () => {
+    const noDeficit = snap({ level: 'warn', outputHost: null, outputDir: '/srv/meetings/Встречи' });
+    expect(staticHtml(noDeficit)).not.toContain('role="status"');
+    const m = mountTab(noDeficit);
+    expect(styleOfText(m.container, '/srv/meetings/Встречи — не та машина')?.color).toBe('var(--c-warning-text)');
+  });
+
+  it('свой узел вывода — строка обычным цветом, «не та машина» нет', () => {
+    const h = staticHtml(snap());
+    expect(h).not.toContain('не та машина');
+    expect(styleOfText(mountTab(snap()).container, 'worker · ~/meetings')?.color).toBe('var(--c-text-primary)');
   });
 });
 

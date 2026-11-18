@@ -543,8 +543,9 @@ public class TranscriptionStateReaderTests : IDisposable
     }
 
     // dify[] и checkedAt — из файла самого конвейера (dify_state.json, М2): времена unix-СЕКУНД →
-    // unix-мс; inDify null (конвейер не получил список Dify) отдаётся как есть, поле error папки в
-    // ответ не выходит (в dify-блоке контракта комментария нет).
+    // unix-мс; inDify null (конвейер не получил список Dify) и local null (ошибка сверки папки по
+    // R-М2) отдаются как есть, не 0; поле error папки в ответ не выходит (в dify-блоке контракта
+    // комментария нет).
     [Fact]
     public void СверкаИзDifyStateJsonРядыCheckedAtINullInDify()
     {
@@ -557,17 +558,20 @@ public class TranscriptionStateReaderTests : IDisposable
         Write(root, "logs/dify_state.json", """
             { "checked": 1794997258, "folders": [
                 { "folder": "Video-GPB", "local": 897, "inDify": 897, "checked": 1794997252 },
-                { "folder": "Video-RR", "local": 12, "inDify": null, "error": "dify: список не получен" }
+                { "folder": "Video-RR", "local": 12, "inDify": null, "error": "dify: список не получен" },
+                { "folder": "Video-УТ", "local": null, "inDify": null, "error": "dify: таймаут" }
             ], "updated": "2026-11-18 09:00:58", "pid": 777 }
             """);
 
         var s = Reader(root, new FixedTime(now)).Read();
 
-        s.Dify.Should().HaveCount(2);
+        s.Dify.Should().HaveCount(3);
         s.Dify[0].Folder.Should().Be("Video-GPB");
         s.Dify[0].Local.Should().Be(897);
         s.Dify[0].InDify.Should().Be(897);
         s.Dify[1].InDify.Should().BeNull(); // отсутствия половины Dify не прячем
+        s.Dify[2].Local.Should().BeNull(); // local null (ошибка сверки папки, R-М2) — как есть, не 0
+        s.Dify[2].InDify.Should().BeNull();
         s.CheckedAt.Should().Be(1_794_997_258_000); // unix-секунды файла → unix-мс
         // всё сходится, конвейер жив и свеж, вывод и watch на узле — тревоги нет
         s.Level.Should().Be("ok");

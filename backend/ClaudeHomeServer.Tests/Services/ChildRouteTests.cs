@@ -12,9 +12,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// И2 (ADR-041): точки шлюза и песочницы. Сам запуск хода ребёнка — в Llm.Tests/ChildApiKeyRouteTests.
+// И2 (ADR-041): точки шлюза и песочницы. Сам запуск хода ребёнка — в Llm.Tests/ChildRouteTests.
 [Collection(TestCollections.ProcessGlobalState)]
-public class ChildApiKeyRouteTests
+public class ChildRouteTests
 {
     private sealed class StubPolicy(params string[] children) : IChildModePolicy
     {
@@ -39,7 +39,7 @@ public class ChildApiKeyRouteTests
         var start = Selector(new StubPolicy("kid")).StartTurn(new TurnTokenService(new TurnEventBus()), "kid", "chat", null, "sonnet");
 
         start.Token.Should().BeNull();
-        start.FailureText.Should().Be(ChildApiKeyRoute.RefusedText);
+        start.FailureText.Should().Be(ChildRoute.RefusedText);
     }
 
     [Fact]

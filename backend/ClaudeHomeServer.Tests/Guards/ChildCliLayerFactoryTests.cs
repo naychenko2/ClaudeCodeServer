@@ -51,6 +51,14 @@ public class ChildCliLayerFactoryTests : IClassFixture<ChildCliLayerFactoryTests
         {
             Enabled = true, TutorPersonaId = "tutor-1", ProviderKey = "pool-key", Model = "sonnet",
             RulesAgreedAt = new DateTime(2026, 11, 16, 10, 0, 0, DateTimeKind.Utc),
+            Subjects =
+            [
+                new ChildSubject
+                {
+                    Id = "math", Label = "Математика", Glyph = "×÷", Color = "info",
+                    TutorPersonaId = "tutor-1", ProviderKey = "pool-key", Model = "sonnet", Enabled = true,
+                },
+            ],
             Spaces =
             {
                 ["lessons"] = new SpaceLimits
@@ -70,7 +78,7 @@ public class ChildCliLayerFactoryTests : IClassFixture<ChildCliLayerFactoryTests
     private static Session KidSession() => new()
     {
         Id = "s-1", OwnerId = Kid, PersonaId = "tutor-1", Provider = "pool-key", Model = "sonnet",
-        ProjectId = null, Mode = ChildModeLaunch.RequiredMode, ChildSpace = "lessons",
+        ProjectId = null, Mode = ChildModeLaunch.RequiredMode, ChildSpace = "lessons", ChildSubject = "math",
     };
 
     private (PersonaLayerBuilder Layer, TurnLaunchContextFactory Factory, IServiceProvider Sp)
@@ -90,7 +98,8 @@ public class ChildCliLayerFactoryTests : IClassFixture<ChildCliLayerFactoryTests
             {
                 [ChildLimitsCalculator.ConfigTimeZoneKey] = "Europe/Moscow",
             }).Build(), NullLogger<ChildLimitsCalculator>.Instance);
-        var gate = new ChildModeGate(policy, calc);
+        var (pool, llm) = ChildRouteKit.For("pool-key");
+        var gate = new ChildModeGate(policy, calc, null, pool, llm);
         var layer = new PersonaLayerBuilder(sp.GetRequiredService<SessionStore>(), sp.GetRequiredService<McpEndpoint>(),
             sp.GetRequiredService<PersonaManager>(), sp.GetRequiredService<PersonaBindingsService>(),
             sp.GetService<PersonaAgentFileSync>(), sp.GetRequiredService<ProjectManager>(),

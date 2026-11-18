@@ -428,7 +428,12 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         if (localVoice)
             await _process.EnsureAccumulatorAsync(entry);
         else
+        {
+            // Догон перезакрепления детского чата ДО EnsureProcessAsync и снаружи его EnsureLock
+            if (entry.Info.ChildSpace is not null && _store.ResolveOwnerId(entry.Info) is { } childOwner)
+                await _settings.CatchUpChildChatAsync(sessionId, childOwner);
             await _process.EnsureProcessAsync(sessionId, entry);
+        }
 
         // Авторство реплик хода: text-сообщения истории получают персону на момент хода
         // (после смены собеседника старые реплики сохраняют прежний аватар)
@@ -716,6 +721,8 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
                 senderPersonaId, senderOrigin, agentDepth, SenderChatName: senderChatName,
                 SenderUserId: senderUserId));
 
+        if (entry.Info.ChildSpace is not null && _store.ResolveOwnerId(entry.Info) is { } childOwner)
+            await _settings.CatchUpChildChatAsync(sessionId, childOwner);
         await _process.EnsureProcessAsync(sessionId, entry);
         entry.Accumulator?.SetPersona(entry.Info.PersonaId);
 

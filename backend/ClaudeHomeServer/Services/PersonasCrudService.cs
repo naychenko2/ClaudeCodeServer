@@ -685,14 +685,19 @@ public sealed class PersonasCrudService(
     // обратившийся человек (userId), в MCP-тулсете — актор хода (GetTurnActor), а не владелец
     // песочницы: токен арендатора, а ход принадлежит участнику. Не назван — актор равняется
     // обратившемуся (как было).
+    // spendOwnerId — владелец расхода, названный вызывающим (Т2c2, путь И5 №12): админская
+    // детская ветка (ChildTutorsController) — персона принадлежит ребёнку, а платит админ,
+    // подавший вызов: бюджет ребёнка аватар репетитора не съедает никогда. Применяется только
+    // к персоне вне проекта: трата проектной персоны — арендатору проекта (прежний инвариант
+    // им не перебивается). Не назван — поведение прежнее: трата владельцу.
     private (string OwnerId, string? ActorUserId, string? ProjectId) AvatarSpendAttribution(
-        Persona persona, string userId, string? actorUserId = null)
+        Persona persona, string userId, string? actorUserId = null, string? spendOwnerId = null)
     {
         var actor = string.IsNullOrWhiteSpace(actorUserId) ? userId : actorUserId;
         var project = persona.ProjectId is { Length: > 0 } pid ? projects.GetById(pid) : null;
         return project is { } p && !string.IsNullOrEmpty(p.OwnerId)
             ? (p.OwnerId, actor, p.Id)
-            : (userId, actor, null);
+            : (string.IsNullOrWhiteSpace(spendOwnerId) ? userId : spendOwnerId, actor, null);
     }
 
     // Сгенерировать НЕСКОЛЬКО вариантов аватар-фото по описанию (для выбора); провайдера
@@ -705,8 +710,13 @@ public sealed class PersonasCrudService(
     // actorUserId — актор операции (п.2 хвоста R-S-SPEND-2): называет его вызывающий —
     // MCP-тулсет передаёт актора хода, а не владельца песочницы; не назван (REST) — актор
     // равняется обратившемуся.
+    // spendOwnerId — владелец расхода (Т2c2, путь И5 №12): называет его вызывающий для
+    // чужой с точки зрения бюджета ветки (админский аватар репетитора ребёнка — платит админ).
+    // С названным владельцем расхода фоновый догон не ставится: заявка очереди оплачивается
+    // по OwnerId сущности (ImageBackfillService), а другого владельца расхода очередь не
+    // называет — это формат очереди (вертикаль images), не этот вызов. Без него — всё прежнее.
     public async Task<ActionResult> GenerateAvatarAsync(string userId, string id, GenerateAvatarRequest req,
-        string initiator, string? actorUserId = null)
+        string initiator, string? actorUserId = null, string? spendOwnerId = null)
     {
         // Вертикаль генерации выключена: ни генерировать, ни ставить в очередь нечем — их
         // сервисов нет в контейнере. Отказ с настоящей причиной, а не «провайдер не подключён»
@@ -731,13 +741,17 @@ public sealed class PersonasCrudService(
         // Очередь снимает заявку, как только у сущности есть картинка (Resolve → HasImage),
         // поэтому перерисовка УЖЕ стоящего аватара фоном не догоняется — обещать «появится
         // сам» здесь нельзя, отказ остаётся отказом.
-        var canBackfill = persona.Avatar.Kind != PersonaAvatarKind.Image
-            || string.IsNullOrEmpty(persona.Avatar.ImageFile);
+        // Названный владелец расхода (админская ветка репетитора ребёнка): догон не ставится
+        // вовсе — заявка оплачивается по OwnerId сущности (ребёнка), а другой владелец расхода
+        // в очереди не назван: отказ возвращается как есть, админ повторит, когда генератор
+        // появится (инвариант И5: бюджет ребёнка аватар репетитора не съедает никогда).
+        var canBackfill = string.IsNullOrWhiteSpace(spendOwnerId)
+            && (persona.Avatar.Kind != PersonaAvatarKind.Image || string.IsNullOrEmpty(persona.Avatar.ImageFile));
 
         // Атрибуция траты одна на оба пути этого вызова — и на генерацию, и на заявку, если
         // генерации не будет: персона известна здесь, догоняющая генерация её не вычислит
         // (п.1-4 ревью R-S-SPEND-2)
-        var (spendOwner, spendActor, spendProject) = AvatarSpendAttribution(persona, userId, actorUserId);
+        var (spendOwner, spendActor, spendProject) = AvatarSpendAttribution(persona, userId, actorUserId, spendOwnerId);
 
         // Провайдера нет — отвечаем отказом, но аватар не теряем: заявка догонит его,
         // как только генерацию настроят

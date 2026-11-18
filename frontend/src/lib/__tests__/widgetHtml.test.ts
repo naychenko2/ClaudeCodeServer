@@ -73,6 +73,104 @@ describe('buildWidgetSrcDoc', () => {
   });
 });
 
+// --- buildWidgetSrcDoc: оболочка (навигацию фрейма держит оболочка, ADR-031 §3.6) ---
+
+// Первый <meta CSP> документа: для внешнего — CSP оболочки; для внутреннего
+// (после innerDoc, где srcdoc уже разэкранирован) — CSP внутреннего документа.
+function cspMeta(doc: string): string {
+  const m = doc.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/);
+  expect(m).not.toBeNull();
+  return m![1];
+}
+
+// Значение srcdoc внутреннего фрейма → сам внутренний документ (обратное экранирование:
+// &quot; раньше &amp;, иначе &amp;quot; из исходного текста модели развернётся неверно).
+function innerDoc(doc: string): string {
+  const m = doc.match(/<iframe sandbox="allow-scripts" srcdoc="([^"]*)"><\/iframe>/);
+  expect(m).not.toBeNull();
+  return m![1].replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+}
+
+describe('buildWidgetSrcDoc: оболочка и внутренний документ', () => {
+  it('CSP оболочки держит навигацию фрейма: frame-src/base-uri none', () => {
+    const csp = cspMeta(buildWidgetSrcDoc('<b>w</b>', 'light'));
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("frame-src 'none'");
+    expect(csp).toContain("base-uri 'none'");
+    expect(csp).toContain("script-src 'unsafe-inline'");
+  });
+
+  // Одна константа WIDGET_CSP на оба уровня (по образцу PANEL_CSP): srcdoc-документ
+  // наследует CSP создателя, политики складываются пересечением (ADR-031 §3.6) —
+  // более строгая оболочка вырезала бы data:/blob: картинки/шрифты/медиа самого
+  // виджета (картинка data:image/png была бы битой). Список ниже — контракт виджета,
+  // он держится в тесте отдельно от кода: исчезнет директива из константы — тест красный.
+  const WIDGET_REQUIRED_CSP = [
+    "default-src 'none'", "script-src 'unsafe-inline'", "style-src 'unsafe-inline'",
+    "img-src data: blob:", "font-src data:", "media-src data: blob:",
+    "form-action 'none'", "connect-src 'none'", "base-uri 'none'", "frame-src 'none'",
+  ];
+
+  it('CSP оболочки не строже внутренней: директивы виджета есть на обоих уровнях', () => {
+    const doc = buildWidgetSrcDoc('<b>w</b>', 'light');
+    const shell = cspMeta(doc);
+    const inner = cspMeta(innerDoc(doc));
+    for (const d of WIDGET_REQUIRED_CSP) {
+      expect(shell).toContain(d);
+      expect(inner).toContain(d);
+    }
+    // Каждая директива внутренней есть в оболочке: внутренняя строгой не станет
+    for (const d of inner.split(';').map(s => s.trim()).filter(Boolean)) {
+      expect(shell).toContain(d);
+    }
+  });
+
+  it('ровно один внутренний iframe с sandbox="allow-scripts", без allow-forms/allow-modals', () => {
+    const doc = buildWidgetSrcDoc('<b>hi</b>', 'light');
+    expect((doc.match(/<iframe/g) ?? []).length).toBe(1);
+    expect(doc).toContain('<iframe sandbox="allow-scripts" srcdoc="');
+    expect(doc).not.toContain('allow-forms');
+    expect(doc).not.toContain('allow-modals');
+  });
+
+  it('внутренняя CSP — прежняя плюс явные connect-src/base-uri/frame none', () => {
+    const inner = innerDoc(buildWidgetSrcDoc('<b>hi</b>', 'light'));
+    for (const d of [
+      "default-src 'none'", "form-action 'none'",
+      "connect-src 'none'", "base-uri 'none'", "frame-src 'none'",
+    ]) {
+      expect(inner).toContain(d);
+    }
+  });
+
+  it('html с </script> и кавычками кругом даёт тот же внутренний документ', () => {
+    const tricky = '<b onclick="alert(\'x\')">a</b><script>var s="</script>";</script>&amp;<i style="color:red">y</i>';
+    expect(innerDoc(buildWidgetSrcDoc(tricky, 'light'))).toContain(tricky);
+  });
+
+  it('оболочка пересылает наверх только сообщения своего iframe: чужое окно игнорируется', () => {
+    const doc = buildWidgetSrcDoc('<b>hi</b>', 'light');
+    // Скрипт оболочки — последний <script> документа (скрипты внутреннего документа
+    // сидят внутри значения srcdoc и начаться с «var f=document» не могут)
+    const m = doc.match(/<script>(\(function\(\)\{var f=document[\s\S]*?)<\/script><\/body><\/html>$/);
+    expect(m).not.toBeNull();
+    const innerWin = { tag: 'inner' };
+    const foreignWin = { tag: 'foreign' };
+    const forwarded: unknown[] = [];
+    const handlers: Array<(e: { source: unknown; data: unknown }) => void> = [];
+    new Function('document', 'parent', 'addEventListener', m![1])(
+      { querySelector: () => ({ contentWindow: innerWin }) },
+      { postMessage: (data: unknown) => { forwarded.push(data); } },
+      (_type: string, h: (e: { source: unknown; data: unknown }) => void) => { handlers.push(h); },
+    );
+    const onMessage = handlers[0];
+    onMessage({ source: innerWin, data: { type: WIDGET_HEIGHT_MSG, h: 123 } });
+    expect(forwarded).toEqual([{ type: WIDGET_HEIGHT_MSG, h: 123 }]);
+    onMessage({ source: foreignWin, data: { type: WIDGET_HEIGHT_MSG, h: 999 } });
+    expect(forwarded.length).toBe(1);
+  });
+});
+
 // --- isWidgetShow: детект инструмента по суффиксу ---
 
 describe('isWidgetShow', () => {

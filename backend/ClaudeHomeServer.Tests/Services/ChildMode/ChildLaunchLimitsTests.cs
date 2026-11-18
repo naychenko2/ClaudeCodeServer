@@ -100,6 +100,11 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
             TutorPersonaId = "tutor-1",
             ProviderKey = "pool-key",
             Model = "sonnet",
+            Subjects = [new ChildSubject
+            {
+                Id = "russian", Label = "Русский язык", Glyph = "Аа", Color = "info",
+                TutorPersonaId = "tutor-1", ProviderKey = "pool-key", Model = "sonnet", Enabled = true,
+            }],
             Spaces =
             {
                 ["lessons"] = new SpaceLimits
@@ -133,6 +138,7 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
         ProjectId = null,
         Mode = ChildModeLaunch.RequiredMode,
         ChildSpace = childSpace,
+        ChildSubject = onboardingKind is null ? "russian" : null,
         OnboardingKind = onboardingKind,
     };
 
@@ -154,7 +160,8 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
                 [ChildLimitsCalculator.ConfigTimeZoneKey] = "Europe/Moscow",
             }).Build(),
             NullLogger<ChildLimitsCalculator>.Instance);
-        var gate = new ChildModeGate(_policy, withoutCalculator ? null : calc, gateLog);
+        var (pool, llm) = ChildRouteKit.For("pool-key");
+        var gate = new ChildModeGate(_policy, withoutCalculator ? null : calc, gateLog, pool, llm);
         // BuiltinMcpContexts строим заново — со своим гейтом; остальное берём из DI как есть
         var builtin = new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(), sp.GetRequiredService<FeatureFlagService>(),

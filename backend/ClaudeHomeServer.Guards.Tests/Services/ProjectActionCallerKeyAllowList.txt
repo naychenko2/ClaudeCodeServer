@@ -208,7 +208,12 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # запись траты ключуется владельцем из RequestScope, id — лишь адрес чата-вызывателя.
 # W3-SYNC (слияние master в ветку): 29 + 9 = 38 — миграция ключа волны цела (ни одной строки
 # 29 мерж не снял), к ней легла атрибуция траты master (+9).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|38
+# Т1e доработа (остаток 2e840b0aa, тот же класс мест, что вердикт ChildSubjectsController ниже):
+# 38→39 — «_childPolicy?.For(UserId)» в детской ветке GET {id}/avatar (PersonasController.cs:665):
+# id вызывающего — актор проверки «это репетитор этого ребёнка» (чтение своего детского профиля
+# вызывающего). Ключом хранилищ не служит: ничего не пишется, дальше чтение персоны — по
+# TenantOwnerId из RequestScope (строка 671).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|39
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 # R-ФИНАЛ (сведение feat/opt-components с master): ProjectBackgroundsController 0→1 — явный
 # IProjectAccess.Resolve вместо [ProjectScope] (тот же путь, что CodeGraphController): на выключенной
@@ -350,3 +355,9 @@ backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|1
 # класс мест, что вердикт S2c-6 выше. Ключом хранилищ он не служит: заметка и задача адресуются
 # context.OwnerId из токена арендатора (PromoteAsync вызывается им, как и раньше).
 backend/ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs|1
+# Т1e доработа (PersonaScopeGuard → ResolvePersona): ChildSubjectsController 0→3 — файл входит в
+# область вместе с внедрением IProjectAccess: «access.ResolvePersona(UserId, …)» — аргумент И-1
+# (тот же класс мест, что «access.ResolvePersona(UserId, …)» в PersonaNameOf B01); «policy.For(UserId)» —
+# чтение собственного детского профиля вызывающего (ребёнка); третья — владелец в записи лога.
+# Ключом хранилищ ничто из этого не служит: проекция только читает, ничего не пишется.
+backend/ClaudeHomeServer/Controllers/ChildSubjectsController.cs|3

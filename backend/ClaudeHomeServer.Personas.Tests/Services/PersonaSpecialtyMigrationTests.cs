@@ -253,6 +253,88 @@ public class PersonaSpecialtyMigrationTests : IDisposable
         again.GetRaw("match", Owner)!.InheritsAccess.Should().BeTrue();
     }
 
+    // И5 №10 (разрез §2): персона-репетитор в форме провижера (Specialty=None, TemplateKey
+    // = null, MemoryEnabled=false — ChildTutorProvisioner.cs:74-87) не переписывается
+    // фоновой синхронизацией. Механизмы при этом живые: миграция при загрузке доходит до
+    // этой персоны (маркер решения стоит), но её текст остаётся байт в байт; авто-обновление
+    // регламентов пантеона пропускает её по TemplateKey==null (PersonaManager.cs:737);
+    // SectionsVersion для None не считается вовсе (PersonaManager.cs:177), и MarkSectionsSeen
+    // при null-версии ничего не пишет.
+    [Fact]
+    public void Репетитор_БезСпециальностиИШаблона_НеПереписывается()
+    {
+        var config = Config(migrationOn: true);
+        var specialty = SpecialtyStore(config);
+        var stamp = new DateTime(2026, 11, 1, 12, 0, 0, DateTimeKind.Utc);
+        var tutor = Stored("tutor", PersonaSpecialty.None, PersonaAccess.Full, ["tasks", "notes"],
+            updatedAt: stamp);
+        // Форма реальной персоны-тьютора (ChildTutorProvisioner.cs:74-87) и её текст:
+        // legacy-промпт и собственные оверрайды секций — не из каталога и не из специальности.
+        tutor.Name = "Помощник";
+        tutor.Role = "Репетитор 4–5 класс: математика, русский, английский";
+        tutor.MemoryEnabled = false;
+        tutor.SystemPrompt = "Объясняй коротко и по-русски.";
+        tutor.PromptSections = [new PromptSectionOverride("roleRules", true, "Свой текст репетитора.")];
+        WriteStore(tutor);
+
+        var manager = NewManager(config, specialty); // Load: RefreshPantheon + миграция при загрузке
+
+        var raw = manager.GetRaw("tutor", Owner)!;
+        // Фоновая миграция живая: она видела эту персону и приняла по ней решение…
+        raw.InheritsAccessMigratedAt.Should().NotBeNull();
+        // …но текст не тронут ни ей, ни авто-обновлением регламентов (TemplateKey null — пропуск).
+        raw.Name.Should().Be("Помощник");
+        raw.Role.Should().Be("Репетитор 4–5 класс: математика, русский, английский");
+        raw.SystemPrompt.Should().Be("Объясняй коротко и по-русски.");
+        raw.PromptSections!.Single().Text.Should().Be("Свой текст репетитора.");
+        raw.MemoryEnabled.Should().BeFalse();
+        raw.TemplateKey.Should().BeNull();
+        raw.UpdatedAt.Should().Be(stamp, "фоновая переписка не трогает и отметку времени персоны");
+
+        // SectionsVersion: у None нет набора секций (SpecialtySettingsStore.cs:264) — версия
+        // не считается, отмечать нечего, стора не касаются.
+        manager.CurrentSectionsVersion(raw).Should().BeNull();
+        var hashAfterLoad = Hash(_storePath);
+        manager.MarkSectionsSeen("tutor", Owner);
+        Hash(_storePath).Should().Be(hashAfterLoad, "MarkSectionsSeen при null-версии ничего не пишет");
+        manager.GetRaw("tutor", Owner)!.SectionsSeenVersion.Should().BeNull();
+    }
+
+    // Разрез §5 «Фоновая переписка»: у репетитора Specialty=None и TemplateKey=null, поэтому
+    // ни миграция прав, ни авто-обновление регламентов пантеона не пишут его «Обязательно /
+    // Никогда» (PersonaContract.MustDo/MustNot, их даёт админская ручка Т2c). Сторож: после
+    // живого пуска стора списки равны исходным — и в сырой записи, и на пути чтения (Hydrate
+    // наследует права, не текст персоны). Мутация «миграция обнуляет контракт» красит кейс.
+    [Fact]
+    public void Репетитор_ФоноваяПереписка_НеТрогаетMustDoИMustNot()
+    {
+        var config = Config(migrationOn: true);
+        var specialty = SpecialtyStore(config);
+        var tutor = Stored("tutor", PersonaSpecialty.None, PersonaAccess.Full, ["tasks", "notes"]);
+        tutor.Name = "Помощник";
+        tutor.Role = "Репетитор 4–5 класс: математика, русский, английский";
+        tutor.MemoryEnabled = false;
+        tutor.Contract = new PersonaContract
+        {
+            Character = "Спокойный и терпеливый.",
+            MustDo = ["Всегда сразу давай готовый ответ"],
+            MustNot = ["Никогда не проверяй решение"],
+        };
+        WriteStore(tutor);
+
+        var manager = NewManager(config, specialty); // Load: RefreshPantheon + миграция при загрузке
+
+        var raw = manager.GetRaw("tutor", Owner)!;
+        // Переписка дошла до этой персоны и приняла по ней решение — но текст не тронут.
+        raw.InheritsAccessMigratedAt.Should().NotBeNull();
+        raw.TemplateKey.Should().BeNull();
+        raw.Contract!.MustDo.Should().Equal("Всегда сразу давай готовый ответ");
+        raw.Contract!.MustNot.Should().Equal("Никогда не проверяй решение");
+
+        manager.Get("tutor", Owner)!.Contract!.MustDo.Should().Equal("Всегда сразу давай готовый ответ");
+        manager.Get("tutor", Owner)!.Contract!.MustNot.Should().Equal("Никогда не проверяй решение");
+    }
+
     [Fact]
     public void СухойПрогон_НичегоНеПишет_НиPersonasНиSpecialtySettings()
     {

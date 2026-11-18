@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Turn;
 
@@ -178,6 +179,11 @@ internal sealed class TurnLaunchContextFactory
 
         var widgetsMcp = Gate("widgets", _builtin.BuildWidgetsContext(ownerId, persona.Persona));
         var watchMcp = Gate("watch", _builtin.BuildWatchContext(ownerId));
+        // Репетитор детского режима: объявляется ТОЛЬКО ребёнку и только пока у сервера есть пара в
+        // allow-list. НЕ через Gate(...): у взрослого AllowsServer = true для любого сервера, и tutor
+        // объявился бы всем (разрез «Знания репетитора» §3). Решение — свойство владельца, не хода.
+        var tutorMcp = ownerId is not null && childGate.IsChild(ownerId) && ChildModeAllowList.AllowsServer("tutor")
+            ? _builtin.BuildTutorContext(ownerId) : null;
         var webSearchMcp = Gate("websearch", _builtin.BuildWebSearchContext(ownerId, persona.Persona));
         var higgsfieldMcp = Gate("higgsfield", _builtin.BuildHiggsfieldContext(ownerId, persona.Persona));
         var imageEditorMcp = Gate("image-editor", _builtin.BuildImageEditorContext(ownerId, session));
@@ -238,7 +244,7 @@ internal sealed class TurnLaunchContextFactory
             HttpMcpActive: BuiltinMcpContexts.HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                 workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
                 imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp,
-                pluginsMcp),
+                pluginsMcp, tutorMcp),
             HttpMcpEnabledProvider: _builtin.HttpMcpEnabled,
             ArchitectureMcp: architectureMcp,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
@@ -246,6 +252,7 @@ internal sealed class TurnLaunchContextFactory
             ChatContextProvider: session.ProjectId is not null ? _external.BuildChatContextProvider(session.Id) : null,
             Events: events,
             WatchMcp: watchMcp,
+            TutorMcp: tutorMcp,
             WebSearchMcp: webSearchMcp,
             HiggsfieldMcp: higgsfieldMcp,
             ImageEditorMcp: imageEditorMcp,

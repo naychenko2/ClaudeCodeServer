@@ -38,6 +38,12 @@ namespace ClaudeHomeServer.Services.Sessions;
 // (ITeamNotifier), DI — factory-лямбда в AddSessionCore.
 public sealed class TurnCompletion : ITurnMessageSink
 {
+    // И6 (детский режим, разрез «Знания репетитора» §4, строки 5–6): результат инструмента
+    // детского чата не уходит ни в историю, ни в хреб — ребёнку не отдаются материалы. Вместо
+    // Content в оба канала идёт эта заглушка; IsError и прочие поля сохраняются (на них
+    // держатся виджет и детская лента). Взрослый чат её не видит.
+    public const string ChildToolResultPlaceholder = "Репетитор заглянул в материалы";
+
     private readonly SessionStore _store;
     private readonly ChatHistoryService _history;
     private readonly CliRoute _route;
@@ -232,6 +238,14 @@ public sealed class TurnCompletion : ITurnMessageSink
                     break;
                 case ToolResultMessage m:
                     m = m with { FinishedAt = m.FinishedAt ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+                    // И6: в детском чате результат инструмента вырезается ДО записи в историю
+                    // (acc.OnToolResult) и ДО широковещания — дальше по ветке идёт один заменённый
+                    // объект, и в history.json, и в хреб. Меняется ТОЛЬКО Content; IsError и прочие
+                    // поля (тайминги) целы. Чат взрослый — как раньше. Сессии нет (удалена посреди хода,
+                    // entry null): признак ребёнка узнать нечем, а читателя у результата уже нет — вырезаем
+                    // (fail-closed), иначе материалы удалённого детского чата уходили бы в хаб и историю.
+                    if (entry is null || entry.Info.ChildSpace is not null)
+                        m = m with { Content = ChildToolResultPlaceholder };
                     msg = m;
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError, m.FinishedAt);
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call

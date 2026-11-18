@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Team;
 using Microsoft.Extensions.Logging;
@@ -28,6 +29,7 @@ public sealed class ProviderMigration
     // штаб возвращает чат из стадии. Рекурсия через фасад (ITeamNotifier реализует
     // SessionManager) — названа ленивым швом (S3-0 §3, S3-6 переклюет на владельца).
     private readonly Lazy<ITeamNotifier> _teamNotifier;
+    private readonly IChildModeGate _childGate;
     private readonly ILogger<ProviderMigration> _log;
 
     internal ProviderMigration(
@@ -36,6 +38,7 @@ public sealed class ProviderMigration
         LlmProviderRegistry llmProviders,
         ClaudeSubscriptionPool subscriptionPool,
         Lazy<ITeamNotifier> teamNotifier,
+        IChildModeGate childGate,
         ILogger<ProviderMigration> log)
     {
         _store = store;
@@ -43,6 +46,7 @@ public sealed class ProviderMigration
         _llmProviders = llmProviders;
         _subscriptionPool = subscriptionPool;
         _teamNotifier = teamNotifier;
+        _childGate = childGate;
         _log = log;
     }
 
@@ -169,6 +173,163 @@ public sealed class ProviderMigration
 
         // Разделитель «Продолжено на …» ставим только по факту переноса: в чате, где
         // переносить было нечего, продолжать тоже нечего — карточка врала бы.
+        var transcriptMoved = MoveTranscript(sessionId, ownerId, entry, currentKey, targetKey);
+
+        entry.Info.Model = newModel;
+        entry.Info.Provider = targetKey;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        // Адаптер собран под прежнего провайдера (env и сигнатура хода) — убираем лениво,
+        // как при смене собеседника: мгновенный dispose рвал бы доживающих агентов
+        if (entry.Process is not null) entry.AdapterStale = true;
+        // Minor (волна 3): миграция посреди план-фазы (интервью/планирование) на провайдера
+        // без поддержки «План» — раньше SavedMode оставался висеть навсегда: селектор режима
+        // заблокирован (SetMode отказывает при SavedMode != null), а ход уже идёт не в
+        // план-режиме (новый провайдер --permission-mode plan не понимает). Та же деградация
+        // «молча остаёмся в прежнем режиме», что и EnterPlanPhaseMode на входе в план-фазу —
+        // только тут применяется задним числом, когда план-фаза уже шла на другом провайдере.
+        if (entry.Info.TeamImplement is { SavedMode: not null }
+            && !_llmProviders.CapabilitiesFor(newModel).SupportsPlanMode)
+            _teamNotifier.Value.RestoreUserMode(sessionId);
+        _store.SaveSessions();
+
+        // Явно выбранный аккаунт пула — подпись «на подписке», а не безликое «на AI».
+        // Label = null — сообщение уходит без разделителя: висящую карточку «Продолжить на …»
+        // оно всё равно гасит (chatReducer), а ленту не засоряет. Разделителя нет в двух
+        // случаях: переносить было нечего (продолжать нечего — карточка врала бы) и автовыбор
+        // ДРУГОГО аккаунта того же пула Claude (ротация подписок по договорённости тихая: тип
+        // поставщика не менялся, а «Продолжено на AI» читается как уход к другому вендору).
+        // Явный тык в карточку подписки (pickedSub) подпись сохраняет — это выбор человека.
+        string? switchLabel = null;
+        if (transcriptMoved)
+        {
+            if (pickedSub is not null)
+                switchLabel = "Продолжено на подписке "
+                    + $"«{(string.IsNullOrWhiteSpace(pickedSub.DisplayName) ? pickedSub.Key : pickedSub.DisplayName)}»";
+            else if (target is not null)
+                switchLabel = "Продолжено на "
+                    + (string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName);
+            // Возврат СО стороннего провайдера на родной Claude — смена типа поставщика, подпись нужна
+            else if (_llmProviders.GetByKey(currentKey) is not null)
+                switchLabel = "Продолжено на AI";
+        }
+        await _store.BroadcastAsync(sessionId, new ProviderSwitchedMessage(targetKey, newModel, switchLabel));
+        Console.WriteLine($"[SessionManager] Чат {sessionId} мигрирован: {currentKey} → {targetKey} "
+            + $"({newModel ?? "по умолчанию"}, транскрипт: {(transcriptMoved ? "перенесён" : "нечего переносить")})");
+        return entry.Info;
+    }
+
+    // Одновременное перезакрепление чатов детских предметов — строго по одному: два PUT подряд
+    // не копируют один транскрипт параллельно и не пишут поля вперемешку (RepinCrossProvider_TwoPuts_
+    // SingleFinalRoute). Статический: ProviderMigration — синглтон, но сторож не должен зависеть от DI.
+    private static readonly SemaphoreSlim ChildRepinGate = new(1, 1);
+
+    // Перезакрепление маршрута предмета (Т2e, решение Андрея 18.11) и перенос чатов при смене
+    // поставщика (Т2e2): каждый чат этого ребёнка и предмета получает персону, поставщика и модель
+    // из ЖИВОГО маршрута предмета. liveTarget зовётся на каждый чат внутри очереди: два PUT подряд
+    // оставляют чаты при итоговом маршруте, а не при значении старого запроса; null — маршрут
+    // не принят ChildRoute или предмета нет (чат не трогаем, ход ему и так откажет).
+    // Цель — РОВНО ProviderKey предмета (И2′): _subscriptionPool.Pick здесь не зовётся никогда,
+    // подмена аккаунта пула у ребёнка недопустима. Сменился поставщик — транскрипт копируется в
+    // профиль нового (MoveTranscript, то же правило, что у MigrateProviderAsync): иначе --resume
+    // не найдёт его после рестарта. Идущий ход доживает: при СМЕНЕ ПОСТАВЩИКА чат с ходом в полёте
+    // пропускается — копия неполного транскрипта потеряла бы хвост ответа, который доживающий
+    // процесс допишет в старый профиль (так же отказывает ChatSettings.UpdateAsync на идущем ходе);
+    // чат остаётся на прежних полях до следующего PUT. Смена модели у того же поставщика
+    // переписывает поля сразу, идущий ход доживает со старыми. Сбой переноса одного
+    // чата — лог, чат остаётся на прежних полях, остальные переносятся. UpdatedAt не двигается:
+    // маршрут — настройка чата, а не активность. Возвращает число перезакреплённых чатов.
+    public async Task<int> RepinChildSubjectAsync(string ownerId, string subjectId, Func<ChildRepinTarget?> liveTarget)
+    {
+        var candidates = _store.Sessions.Values.Select(e => e.Info)
+            .Where(i => i.ChildSpace is not null
+                && string.Equals(i.ChildSubject, subjectId, StringComparison.OrdinalIgnoreCase)
+                && _store.ResolveOwnerId(i) == ownerId)
+            .Select(i => i.Id).ToList();
+        var changed = 0;
+        foreach (var sessionId in candidates)
+        {
+            await ChildRepinGate.WaitAsync();
+            try
+            {
+                if (await RepinOneChildChatAsync(sessionId, ownerId, liveTarget)) changed++;
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Детский режим: чат {Session} предмета {Subject} не перенесён на новый маршрут (ребёнок {Owner})",
+                    sessionId, subjectId, ownerId);
+            }
+            finally { ChildRepinGate.Release(); }
+        }
+        return changed;
+    }
+
+    // Догон отложенного перезакрепления на старте хода: PUT со сменой поставщика пропустил чат с
+    // идущим ходом, а ход кончился — чат расходится с живым маршрутом предмета и отказал бы по
+    // LaunchMismatch. Цель — гейт (LiveRouteFor: то же решение, что у сверки), ровно ProviderKey
+    // предмета, Pick не зовётся (И2′). Зовётся ДО EnsureProcessAsync и снаружи его EnsureLock.
+    // Идущий ход (сам старт) — пропуск как у PUT; сбой переноса — лог, ход пойдёт и откажет сверкой.
+    // Строгий порядок общий с PUT: тот же ChildRepinGate.
+    public async Task<bool> CatchUpChildChatAsync(string sessionId, string ownerId)
+    {
+        if (!_store.Sessions.TryGetValue(sessionId, out var entry)) return false;
+        var info = entry.Info;
+        if (info.ChildSpace is null || _childGate.LiveRouteFor(ownerId, info) is null) return false;
+        await ChildRepinGate.WaitAsync();
+        try
+        {
+            return await RepinOneChildChatAsync(sessionId, ownerId, () => _childGate.LiveRouteFor(ownerId, info));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Детский режим: догон чата {Session} на маршрут предмета не удался (ребёнок {Owner})", sessionId, ownerId);
+            return false;
+        }
+        finally { ChildRepinGate.Release(); }
+    }
+
+    private async Task<bool> RepinOneChildChatAsync(string sessionId, string ownerId, Func<ChildRepinTarget?> liveTarget)
+    {
+        if (liveTarget() is not { } target) return false;
+        if (!_store.Sessions.TryGetValue(sessionId, out var entry)) return false;
+        var info = entry.Info;
+        if (info.PersonaId == target.PersonaId && info.Provider == target.ProviderKey && info.Model == target.Model)
+            return false;
+
+        var currentKey = _llmProviders.ResolveByModel(info.Model)?.Key ?? info.Provider ?? ClaudeSubscriptionPool.PrimaryKey;
+        var providerChanged = !string.Equals(currentKey, target.ProviderKey, StringComparison.OrdinalIgnoreCase);
+        // Пропуск только при смене поставщика: копия неполного транскрипта потеряла бы хвост ответа.
+        // Смена модели у того же поставщика переписывает поля сразу — идущий ход доживает со старыми
+        if (providerChanged && SessionStore.HasTurnInFlight(entry))
+        {
+            _log.LogInformation("Детский режим: чат {Session} идёт ходом — перенос на нового поставщика отложен до следующего PUT", sessionId);
+            return false;
+        }
+        var transcriptMoved = providerChanged && MoveTranscript(sessionId, ownerId, entry, currentKey, target.ProviderKey);
+
+        lock (_store.SaveLock)
+        {
+            info.PersonaId = target.PersonaId;
+            info.Provider = target.ProviderKey;
+            info.Model = target.Model;
+            // Адаптер собран под прежний маршрут (env и сигнатура хода) — гасим лениво до следующего хода
+            if (providerChanged && entry.Process is not null) entry.AdapterStale = true;
+            _store.SaveSessions();
+        }
+        if (providerChanged)
+        {
+            await _store.BroadcastAsync(sessionId, new ProviderSwitchedMessage(target.ProviderKey, target.Model, null));
+            _log.LogInformation("Детский режим: чат {Session} перенесён {From} → {To} (транскрипт: {Moved})",
+                sessionId, currentKey, target.ProviderKey, transcriptMoved ? "перенесён" : "нечего переносить");
+        }
+        return true;
+    }
+
+    // Перенос транскрипта CLI из профиля текущей пары в профиль целевой. true — разговор
+    // продолжится с контекстом (перенесён или живёт на устройстве), false — переносить нечего.
+    // Сорвавшийся перенос найденного файла — исключение. Общий код MigrateProviderAsync и
+    // RepinChildSubjectAsync: детский путь не должен расходиться с обычным по правилам переноса.
+    private bool MoveTranscript(string sessionId, string ownerId, SessionEntry entry, string currentKey, string targetKey)
+    {
         var transcriptMoved = false;
         // Локальный проект: транскрипт живёт на устройстве в единственном профиле CLI,
         // провайдера выбирает шлюз — разговор продолжится без переноса
@@ -224,48 +385,7 @@ public sealed class ProviderMigration
             else
                 transcriptMoved = true;
         }
-
-        entry.Info.Model = newModel;
-        entry.Info.Provider = targetKey;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        // Адаптер собран под прежнего провайдера (env и сигнатура хода) — убираем лениво,
-        // как при смене собеседника: мгновенный dispose рвал бы доживающих агентов
-        if (entry.Process is not null) entry.AdapterStale = true;
-        // Minor (волна 3): миграция посреди план-фазы (интервью/планирование) на провайдера
-        // без поддержки «План» — раньше SavedMode оставался висеть навсегда: селектор режима
-        // заблокирован (SetMode отказывает при SavedMode != null), а ход уже идёт не в
-        // план-режиме (новый провайдер --permission-mode plan не понимает). Та же деградация
-        // «молча остаёмся в прежнем режиме», что и EnterPlanPhaseMode на входе в план-фазу —
-        // только тут применяется задним числом, когда план-фаза уже шла на другом провайдере.
-        if (entry.Info.TeamImplement is { SavedMode: not null }
-            && !_llmProviders.CapabilitiesFor(newModel).SupportsPlanMode)
-            _teamNotifier.Value.RestoreUserMode(sessionId);
-        _store.SaveSessions();
-
-        // Явно выбранный аккаунт пула — подпись «на подписке», а не безликое «на AI».
-        // Label = null — сообщение уходит без разделителя: висящую карточку «Продолжить на …»
-        // оно всё равно гасит (chatReducer), а ленту не засоряет. Разделителя нет в двух
-        // случаях: переносить было нечего (продолжать нечего — карточка врала бы) и автовыбор
-        // ДРУГОГО аккаунта того же пула Claude (ротация подписок по договорённости тихая: тип
-        // поставщика не менялся, а «Продолжено на AI» читается как уход к другому вендору).
-        // Явный тык в карточку подписки (pickedSub) подпись сохраняет — это выбор человека.
-        string? switchLabel = null;
-        if (transcriptMoved)
-        {
-            if (pickedSub is not null)
-                switchLabel = "Продолжено на подписке "
-                    + $"«{(string.IsNullOrWhiteSpace(pickedSub.DisplayName) ? pickedSub.Key : pickedSub.DisplayName)}»";
-            else if (target is not null)
-                switchLabel = "Продолжено на "
-                    + (string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName);
-            // Возврат СО стороннего провайдера на родной Claude — смена типа поставщика, подпись нужна
-            else if (_llmProviders.GetByKey(currentKey) is not null)
-                switchLabel = "Продолжено на AI";
-        }
-        await _store.BroadcastAsync(sessionId, new ProviderSwitchedMessage(targetKey, newModel, switchLabel));
-        Console.WriteLine($"[SessionManager] Чат {sessionId} мигрирован: {currentKey} → {targetKey} "
-            + $"({newModel ?? "по умолчанию"}, транскрипт: {(transcriptMoved ? "перенесён" : "нечего переносить")})");
-        return entry.Info;
+        return transcriptMoved;
     }
 
     // Сравнение корней профиля «одна папка или нет»: корни собирает разный код (ConfigRootFor,

@@ -43,6 +43,14 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
     {
         Enabled = true, TutorPersonaId = "tutor-1", ProviderKey = "pool-key", Model = "sonnet",
         RulesAgreedAt = new DateTime(2026, 11, 16, 10, 0, 0, DateTimeKind.Utc),
+        Subjects =
+        [
+            new ChildSubject
+            {
+                Id = "math", Label = "Математика", Glyph = "×÷", Color = "info",
+                TutorPersonaId = "tutor-math", ProviderKey = "pool-math", Model = "haiku", Enabled = true,
+            },
+        ],
         Spaces =
         {
             ["lessons"] = new SpaceLimits
@@ -61,8 +69,8 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
 
     private static Session ValidSession() => new()
     {
-        Id = "s-1", OwnerId = Kid, PersonaId = "tutor-1", Provider = "pool-key", Model = "sonnet",
-        ProjectId = null, Mode = ChildModeLaunch.RequiredMode, ChildSpace = "lessons",
+        Id = "s-1", OwnerId = Kid, PersonaId = "tutor-math", Provider = "pool-math", Model = "haiku",
+        ProjectId = null, Mode = ChildModeLaunch.RequiredMode, ChildSpace = "lessons", ChildSubject = "math",
     };
 
     private TurnLaunchContextFactory Build(ChildPolicySnapshot? snapshot)
@@ -81,7 +89,8 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
             {
                 [ChildLimitsCalculator.ConfigTimeZoneKey] = "Europe/Moscow",
             }).Build(), NullLogger<ChildLimitsCalculator>.Instance);
-        var gate = new ChildModeGate(policy, calc);
+        var (pool, llm) = ChildRouteKit.For("pool-key", "pool-math");
+        var gate = new ChildModeGate(policy, calc, null, pool, llm);
         // BuiltinMcpContexts строим заново — с подменённым гейтом; остальное берём из DI как есть
         var builtin = new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(), sp.GetRequiredService<FeatureFlagService>(),
@@ -118,7 +127,36 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
         ctx.NotesMcp.Should().BeNull();
         ctx.TasksMcp.Should().BeNull();
         ctx.MemoryMcp.Should().BeNull();
-        ctx.HttpMcpActive.Should().BeFalse();
+        // п.10 (К3, К9): серверы детского хода — tutor и widgets; ради них и активен http-транспорт
+        ctx.TutorMcp.Should().NotBeNull("ребёнку объявляется tutor");
+        ctx.WidgetsMcp.Should().NotBeNull("виджет в ленте — пара из allow-list (К9)");
+        // «ровно widget_show»: статический тулсет widgets отдаёт один инструмент — тот же, что в
+        // allow-list; ребёнку не из чего взять на этом сервере что-то другое
+        var widgets = (ClaudeHomeServer.Services.Mcp.Http.IMcpStaticToolset?)_host.Services
+            .GetRequiredService<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>().Find("widgets");
+        widgets.Should().NotBeNull("тулсет widgets обязан быть в реестре");
+        widgets!.Tools.Select(t => t.Name).Should().Equal("widget_show");
+        ctx.HttpMcpActive.Should().Be(ctx.TutorMcp!.UseHttp || ctx.WidgetsMcp!.UseHttp,
+            "у ребёнка два http-сервера: tutor и widgets");
+    }
+
+    [Fact]
+    public void ЧатПравил_ТоженеСетсяСервер_АСоставПустойРешаетТулсет()
+    {
+        var s = ValidSession();
+        s.OnboardingKind = OnboardingKinds.ChildRules;
+        s.ChildSubject = null; s.PersonaId = "tutor-1"; s.Provider = "pool-key"; s.Model = "sonnet";
+        Launch(Build(ValidChild()), s).TutorMcp.Should().NotBeNull(
+            "отдельной ветки «не объявлять в чате правил» нет: ToolsFor там пуст");
+    }
+
+    [Fact]
+    public void ОбычныйВладелец_TutorMcpНеОбъявляется()
+    {
+        // п.10: у взрослого AllowsServer = true для любого сервера — tutor объявился бы всем, если бы
+        // шёл через Gate(...). Он идёт по IsChild && allow-list.
+        var ctx = Launch(Build(null), ValidSession());
+        ctx.TutorMcp.Should().BeNull();
     }
 
     public static TheoryData<string> Fields => ["persona", "provider", "model", "project", "mode"];
@@ -138,6 +176,81 @@ public class ChildLaunchPinTests : IClassFixture<ChildLaunchPinTests.Hosts>
             case "mode": s.Mode = ClaudeMode.Bypass; break;
         }
         var act = () => Launch(factory, s);
+        act.Should().Throw<InvalidOperationException>().WithMessage("Детский режим*");
+    }
+
+    // И2′ (Т5a): маршрут предмета, который ChildRoute не принимает, останавливает запуск, даже когда поля
+    // чата совпадают с полями предмета (чат «закреплён» на тот же маркер/провайдера).
+    [Theory]
+    [InlineData("tier:strong")]
+    [InlineData("preset:chain-1")]
+    [InlineData("default")]
+    [InlineData("claude")]
+    public void МаркерВМоделиПредмета_ХодНеСтартует(string marker)
+    {
+        var snapshot = ValidChild();
+        snapshot.Profile!.Subjects[0].Model = marker;
+        var s = ValidSession();
+        s.Model = marker;
+        var act = () => Launch(Build(snapshot), s);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*маршрут модели не допускается*");
+    }
+
+    [Fact]
+    public void ОблачныйМаршрутПредмета_БезСогласияАдмина_ХодНеСтартует_СоСогласием_Стартует()
+    {
+        var snapshot = ValidChild();
+        var subject = snapshot.Profile!.Subjects[0];
+        subject.ProviderKey = "deepseek"; subject.Model = "deepseek-v4-pro";
+        var s = ValidSession();
+        s.Provider = "deepseek"; s.Model = "deepseek-v4-pro";
+        var act = () => Launch(Build(snapshot), s);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*маршрут модели не допускается*");
+
+        subject.RouteAcknowledgedAt = DateTime.UtcNow;
+        Launch(Build(snapshot), s).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void ПредметЧужаяМодельПровайдера_ХодНеСтартует()
+    {
+        var snapshot = ValidChild();
+        var subject = snapshot.Profile!.Subjects[0];
+        (subject.ProviderKey, subject.Model, subject.RouteAcknowledgedAt) = ("deepseek", "glm-5.2", DateTime.UtcNow);
+        var s = ValidSession();
+        s.Provider = "deepseek"; s.Model = "glm-5.2";
+        var act = () => Launch(Build(snapshot), s);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*маршрут модели не допускается*");
+    }
+
+    [Theory]
+    [InlineData("disabled")]
+    [InlineData("deleted")]
+    [InlineData("null")]
+    public void ПредметЗакрыт_ХодНеСтартует(string how)
+    {
+        var snapshot = ValidChild();
+        var s = ValidSession();
+        switch (how)
+        {
+            case "disabled": snapshot.Profile!.Subjects[0].Enabled = false; break;
+            case "deleted": snapshot.Profile!.Subjects.Clear(); break;
+            case "null": s.ChildSubject = null; break;
+        }
+        var act = () => Launch(Build(snapshot), s);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Этот предмет закрыт*");
+    }
+
+    [Fact]
+    public void ЧатПравил_СверяетсяСПрофилем_БезПредмета()
+    {
+        var s = ValidSession();
+        s.OnboardingKind = OnboardingKinds.ChildRules;
+        s.ChildSubject = null; s.PersonaId = "tutor-1"; s.Provider = "pool-key"; s.Model = "sonnet";
+        var factory = Build(ValidChild());
+        var act = () => Launch(factory, s);
+        act.Should().NotThrow();
+        s.Model = "haiku"; // запись предмета чату правил не указ
         act.Should().Throw<InvalidOperationException>().WithMessage("Детский режим*");
     }
 

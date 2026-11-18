@@ -187,6 +187,23 @@ public class LocalOcrServiceTests
         result.Reason.Should().Be(OcrFailureReason.BadResponse);
     }
 
+    // Defect 1e017cf7 (замер КИ0 на qwen3.8-27b): пустая страница даёт content=null при
+    // finish_reason=stop («текст» — в reasoning_content). Это штатный результат «текста
+    // нет»: успех с пустой строкой, не BadResponse. Вызывающий (стор материалов, КИ1b)
+    // превращает пустой текст в image_no_text, а не в ocr_unavailable.
+    [Fact]
+    public async Task ContentNull_ПустаяСтраница_УспехСПустымТекстом()
+    {
+        var (service, _) = Make(new FakeVllm(
+            """{"choices":[{"message":{"role":"assistant","content":null}}],"finish_reason":"stop","usage":{"prompt_tokens":1234,"completion_tokens":7}}"""));
+        var result = await service.RecognizeAsync(SmallImage(), Info(), CancellationToken.None);
+
+        result.Ok.Should().BeTrue(result.Message);
+        result.Text.Should().BeEmpty();
+        result.PromptTokens.Should().Be(1234);
+        result.CompletionTokens.Should().Be(7);
+    }
+
     [Fact]
     public async Task BadResponse_Не2xx_БезИсключения()
     {

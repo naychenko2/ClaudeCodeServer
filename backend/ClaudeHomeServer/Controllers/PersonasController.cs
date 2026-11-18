@@ -7,6 +7,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
@@ -60,7 +61,13 @@ public class PersonasController(
     INoteAccessor? notes = null,
     // Доступ к проекту для списков и /match по projectId (W3-B2, разрез §3.1): область и ключ —
     // IProjectAccess.Resolve; null — fail-closed (проект недоступен)
-    IProjectAccess? access = null) : ControllerBase
+    IProjectAccess? access = null,
+    // Проекция репетиторов (KM-T1e, И5, разрез §4 №3): GET {id}/avatar по этой политике
+    // решает, ребёнок запрашивающий или взрослый. Регистрируется безусловно (AddSessionCore);
+    // зависимость опциональна — ради юнит-тестов, создающих контроллер напрямую
+    // (PrivateChat*Tests): без политики вызывающий читается взрослым, поведение
+    // взрослых ручек не меняется.
+    IChildModePolicy? childPolicy = null) : ControllerBase
 {
     private readonly PersonaManager _personas = personas;
     private readonly ProjectManager _projects = projects;
@@ -84,6 +91,7 @@ public class PersonasController(
     private readonly ILogger<PersonasController> _log = log;
     private readonly IHubContext<SessionHub> _hub = hub;
     private readonly Services.Turn.PromptSectionsContributor _promptSections = promptSections;
+    private readonly IChildModePolicy? _childPolicy = childPolicy;
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -643,8 +651,20 @@ public class PersonasController(
     // оригинал (нужен для перекропа и большого вида).
     [HttpGet("{id}/avatar")]
     [ProjectScope(From = ScopeSource.Persona)]
+    [ChildAllowed]
     public async Task<IActionResult> Avatar(string id, [FromQuery] int? size = null)
     {
+        // KM-T1e (И5, разрез §4 №3): ребёнку открыт только аватар его репетиторов — проекция,
+        // а не любая его персона: id из Subjects[*].TutorPersonaId или TutorPersonaId профиля.
+        // Чужая и не-репетитор — один 404 (существование персоны не раскрываем); DenyAll и
+        // нечитаемый профиль — тоже 404: репетиторов назвать нечем (fail-closed). Взрослому
+        // (политика null) ветка не выполняется — поведение ручки не меняется.
+        // Статичный DenyAll до этой строки не доходит: его отбивает 403 сам гейт
+        // (ChildModeGateMiddleware.cs:37). Сюда DenyAll приходит гонкой двух чтений — профиль
+        // стал невалидным между чтением гейта и этим (тот же случай, что у ChildStatusController).
+        if (_childPolicy?.For(UserId) is { } child && (child.DenyAll || !IsChildTutor(child.Profile, id)))
+            return NotFound();
+
         // W3-B1c (разрез §3.1 строка GET {id}/avatar; И-2): ключ чтения персоны — арендатор:
         // аватар проектной персоны лежит в пространстве владельца проекта.
         var scope = HttpContext.GetRequestScope();
@@ -681,6 +701,16 @@ public class PersonasController(
         Response.Headers.CacheControl = "private, max-age=604800, immutable";
         return ImageAssetHelper.PhysicalFileByExt(thumb);
     }
+
+    // Репетитор ребёнка (KM-T1e, разрез §4 №3): закреплённая персона профиля или репетитор
+    // ЛЮБОГО его предмета — и включённого, и выключенного: выключенный предмет скрыт с главной,
+    // но это всё равно репетитор ребёнка из его профиля. Нечитаемый профиль (null) — не репетитор
+    // никого (fail-closed). Сравнение id — Ordinal: это GUID.
+    private static bool IsChildTutor(ChildProfile? profile, string id) =>
+        profile is not null &&
+        (string.Equals(profile.TutorPersonaId, id, StringComparison.Ordinal)
+         || (profile.Subjects ?? []).Any(s => s is not null
+             && string.Equals(s.TutorPersonaId, id, StringComparison.Ordinal)));
 
     // Оригинал загруженного аватара (для перекропа). access_token в query — как GET avatar.
     // v в URL — имя файла оригинала: меняется при повторной загрузке, кэш — как у аватара.

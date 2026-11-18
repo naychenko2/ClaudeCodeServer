@@ -28,6 +28,21 @@ public static class KnowledgeAccess
             && !rest.StartsWith("sphere:", StringComparison.Ordinal);
     }
 
+    // Можно ли привязать базу к предмету ребёнка (срез §3 «Какие датасеты можно привязать»):
+    // глобальная (без префикса) и своя самостоятельная админа ({admin}:kb:…) — да; всё остальное —
+    // нет: своя внутренняя память (persona:/team:/sphere:), привязанные базы (заметок/проектов), чужие.
+    public static bool IsTutorAttachable(string name, string adminUsername, IEnumerable<string> others)
+    {
+        if (name.StartsWith(adminUsername + ":", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = name[(adminUsername.Length + 1)..];
+            return rest.StartsWith("kb:", StringComparison.Ordinal);                   // своя самостоятельная
+        }
+        foreach (var u in others)
+            if (name.StartsWith(u + ":", StringComparison.OrdinalIgnoreCase)) return false;  // чужая
+        return true;                                                                   // глобальная
+    }
+
     // Можно ли удалить базу из раздела: самостоятельные ({user}:kb:…) и публичные (без префикса,
     // только админ); привязанные (заметок/проектов/персон/команды) и чужие — нельзя.
     public static bool IsDeletable(string name, string username, IReadOnlySet<string> others, bool isAdmin)

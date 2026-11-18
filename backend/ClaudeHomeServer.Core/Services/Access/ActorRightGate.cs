@@ -151,6 +151,9 @@ public static class ActorToolRights
             ["draft_create", "draft_delete_file", "draft_write_file"]);
         // context_attach/detach правят общую строку контекста чата (основной объект один на чат)
         Server("turn-context", ["context_state"], ["context_attach", "context_detach"]);
+        // Тулсет репетитора (детский режим, ADR-041, К3): все три инструмента только читают материалы
+        // предмета своего ребёнка — предмет и ребёнок берутся из хвоста его чата, не из аргументов.
+        Server("tutor", ["search_materials", "list_materials", "read_material"], []);
         // watch_start исполняет произвольный poll_command на сервере и пишет watchdogs.json
         Server("watch", ["watch_list"], ["watch_cancel", "watch_start"]);
         Server("websearch", ["web_read", "web_search"], []);

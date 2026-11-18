@@ -539,6 +539,13 @@ public class Session
     // Аддитивное nullable-поле: старые записи sessions.json читаются с null,
     // BackupSchema.Version не двигается.
     public string? ChildSpace { get; set; }
+    // Предмет чата «Уроков» (срез §1): slug из ChildProfile.Subjects этого ребёнка;
+    // null — чат правил, обычный чат и старые записи. Закрепляется при СОЗДАНИИ вместе
+    // с ChildSpace; при запуске хода сверяется с записью предмета (LaunchMismatch).
+    // Строковая ключ-метка, не enum: предметы пишет профиль без миграции формата.
+    // Аддитивное nullable-поле: старые записи sessions.json читаются с null,
+    // BackupSchema.Version не двигается.
+    public string? ChildSubject { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
     // Сообщения, ждущие устройство локального проекта (ADR-016, вариант А плана §5): фоновые

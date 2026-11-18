@@ -84,7 +84,7 @@ public class UpstreamSelector(
         // И2: ребёнок (и неопознанный владелец — fail-closed) не получает маршрут по подписке никогда — шлюз единственный выдаёт такие маршруты.
         if (decision.Route is { Kind: GatewayUpstreamKind.Subscription }
             && (string.IsNullOrWhiteSpace(ownerId) || childPolicy?.For(ownerId) is not null))
-            return new(null, ChildApiKeyRoute.RefusedText);
+            return new(null, ChildRoute.RefusedText);
         return decision.Route is null
             ? new(null, decision.FailureText)
             : new(tokens.Issue(ownerId, sessionId, deviceId, decision.Route, lifetime), null);

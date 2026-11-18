@@ -2,7 +2,13 @@ using System.Diagnostics;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChildMode;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -177,7 +183,8 @@ public class FallbackLlmSessionAdapterTests
         IEgressProbe? egress = null,
         TurnRunLog? turnRuns = null,
         ITurnEventBus? events = null,
-        Func<TurnStartTimings>? startTimings = null)
+        Func<TurnStartTimings>? startTimings = null,
+        Func<bool>? isChildTurn = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -212,6 +219,8 @@ public class FallbackLlmSessionAdapterTests
             egress: egress,
             events: events,
             startTimings: startTimings,
+            // конструктор требует признак; тест без признака — не ребёнок
+            isChildTurn: isChildTurn ?? (() => false),
             // Пауза повтора при лежащем канале — миллисекунды: ждать продовые 5 с в тесте нельзя
             egressRetryDelay: TimeSpan.FromMilliseconds(10));
         inner.Sink = sut.HandleMessageAsync;
@@ -302,6 +311,172 @@ public class FallbackLlmSessionAdapterTests
             .Which.Subtype.Should().Be("success");
         // Ход — одно сообщение пользователя, сколько бы попыток ни было
         inner.Info.MessageCount.Should().Be(1);
+    }
+
+    // Детский ход: ротации подписок нет — урок ребёнка никогда не идёт по подписке (И2′).
+    // Взрослый ход на тех же условиях (тест выше) ротируется на acc-b; ребёнок — получает ошибку,
+    // Info.Provider не меняется, вторая подписка не пробуется.
+    [Fact]
+    public async Task Ошибка429_ДетскийХод_РотацииПодпискиНет_ПровайдерНеМеняется()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool, isChildTurn: () => true);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("помоги с уроком");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts.Should().ContainSingle("у ребёнка нет ротации подписок");
+        inner.Attempts[0].Provider.Should().Be("acc-a");
+        inner.Info.Provider.Should().Be("acc-a", "провайдер хода ребёнка не уходит на подписку");
+        pool.IsExhausted("acc-b").Should().BeFalse();
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+    }
+
+    // --- Проводка фабрики: признак ребёнка для адаптера (LlmSessionAdapterFactory, isChildTurn) ---
+
+    // Тест выше подаёт () => true прямо в адаптер и не покрывает проводку фабрики
+    // (isChildTurn: () => claudeSession.IsChildTurn). Здесь адаптер собран ФАБРИКОЙ:
+    // внутренний — живой ClaudeSession, его CLI подменён скриптом, печатающим result с
+    // api_error_status=429 (паттерн ClaudeSessionDiedEmptyRetryTests: эхо user-сообщения с
+    // тем же uuid, затем result). Пул из двух записей (HasExtra) — без запрета И2′ ребёнок
+    // ушёл бы на claude-2. Ожидание: один запуск CLI, провайдер не меняется, финал — ошибка.
+    // Мутация «убрать isChildTurn: из вызова фабрики» красит тест: childTurn=false,
+    // ротация стартует вторым процессом.
+    private static string WriteChild429CliScript(string dir)
+    {
+        var resultLine = """{"type":"result","subtype":"success","duration_ms":1,"num_turns":1,"result":"","is_error":true,"api_error_status":429}""";
+        string script;
+        if (OperatingSystem.IsWindows())
+        {
+            // Эхо user-сообщения (как в sh-ветке и в ClaudeSessionDiedEmptyRetryTests): читаем
+            // строку stdin, достаём uuid и печатаем эхо с isReplay. Без эха result считается чужим.
+            var text = "@echo off\r\nsetlocal enabledelayedexpansion\r\n"
+                + "set /p L=\r\n"
+                + "set \"L=!L:\"=#!\"\r\n"
+                + "for /f \"tokens=8 delims=#\" %%U in (\"!L!\") do set \"U=%%U\"\r\n"
+                + "echo {\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"x\"},\"uuid\":\"!U!\",\"isReplay\":true}\r\n"
+                + "echo " + resultLine + "\r\n";
+            script = Path.Combine(dir, "fake-cli-429.cmd");
+            File.WriteAllText(script, text, System.Text.Encoding.ASCII);
+        }
+        else
+        {
+            var text = "#!/bin/sh\n"
+                + "read -r L\n"
+                + "U=$(printf '%s' \"$L\" | sed 's/.*\"uuid\":\"\\([^\"]*\\)\".*/\\1/')\n"
+                + "echo \"{\\\"type\\\":\\\"user\\\",\\\"message\\\":{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"x\\\"},\\\"uuid\\\":\\\"$U\\\",\\\"isReplay\\\":true}\"\n"
+                + "echo '" + resultLine + "'\n";
+            script = Path.Combine(dir, "fake-cli-429.sh");
+            File.WriteAllText(script, text, System.Text.Encoding.ASCII);
+        }
+        return script;
+    }
+
+    // Фейковый CLI-запуск: считает старты (ротация подписки в живом потоке — это второй старт)
+    private sealed class CountingCliLauncher(string scriptPath, List<Process> processes) : IProcessLauncher
+    {
+        private int _starts;
+        public int StartCount => Volatile.Read(ref _starts);
+        public bool IsSandboxed => false;
+        public bool TargetIsWindows => OperatingSystem.IsWindows();
+        public IPathMapper Paths => IdentityPathMapper.Instance;
+        public string ClaudeCliCommand => "fake-claude";
+        public string HostTempDir => Path.GetTempPath();
+        public string? McpApiUrlOverride => null;
+
+        public Process Start(ProcessSpec spec)
+        {
+            Interlocked.Increment(ref _starts);
+            var process = LocalProcessRunner.Instance.Start(new ProcessSpec
+            {
+                FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                Args = OperatingSystem.IsWindows() ? ["/c", scriptPath] : [scriptPath],
+                WorkingDirectory = spec.WorkingDirectory,
+                ClearEnv = spec.ClearEnv,
+                StdioEncoding = spec.StdioEncoding,
+                EnableRaisingEvents = spec.EnableRaisingEvents,
+                RedirectStdin = spec.RedirectStdin,
+                Track = false, // тестовый процесс: в реестр боевых PID его не пишем
+            });
+            lock (processes) processes.Add(process);
+            return process;
+        }
+
+        public int EstimateCommandLineLength(ProcessSpec spec) =>
+            (spec.FileName ?? string.Empty).Length + spec.Args.Sum(TurnPromptAssembler.ArgCost);
+
+        public void Kill(Process process, string? turnId = null)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
+        }
+    }
+
+    [Fact]
+    public async Task ПроводкаФабрики_ДетскийХодНа429_РотацииПодпискиНет_ОдинЗапускCli()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ccs_fb_child429_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var script = WriteChild429CliScript(tempDir);
+        var processes = new List<Process>();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(tempDir, "projects.json"),
+            // Маршрут ребёнка — запись пула с API-ключом (И2′); вторая запись — та, на которую
+            // ушла бы ротация, не стой запрет: HasExtra=true.
+            [$"{ClaudeSubscriptionPool.Section}:kids-api:ApiKey"] = "sk-ant-kids",
+            [$"{ClaudeSubscriptionPool.Section}:claude-2:OAuthToken"] = "oauth-2",
+        }).Build();
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection().Build());
+        var pool = new ClaudeSubscriptionPool(config);
+        var factory = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
+            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), providers, pool);
+        var launcher = new CountingCliLauncher(script, processes);
+        var context = new LlmSessionContext(
+            RootPath: tempDir,
+            OnMessage: msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+            RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null, TasksMcp: null,
+            Launcher: launcher, ContentRootPath: tempDir, OwnerId: "kid",
+            ChildPolicyProvider: () => new ChildPolicySnapshot("kid", new ChildProfile
+            {
+                Enabled = true, ProviderKey = "kids-api", Model = "sonnet",
+                Subjects = [new ChildSubject
+                {
+                    Id = "math", Label = "Математика", Enabled = true,
+                    ProviderKey = "kids-api", Model = "sonnet",
+                }],
+            }, false));
+        var session = new Session
+        {
+            OwnerId = "kid", PersonaId = "tutor-1", ChildSpace = "lessons", ChildSubject = "math",
+            Provider = "kids-api", Model = "sonnet",
+        };
+
+        try
+        {
+            var sut = factory.Create(session, context);
+            await sut.SendMessageAsync("помоги с уроком");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+            launcher.StartCount.Should().Be(1,
+                "у ребёнка нет ротации подписок: второй попытки на другой подписке не было");
+            session.Provider.Should().Be("kids-api", "провайдер хода ребёнка не уходит на подписку");
+            Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+            Downstream().OfType<ResultMessage>().Should().ContainSingle()
+                .Which.Subtype.Should().Be("error", "429 без ротации — честная ошибка хода");
+            await sut.DisposeAsync();
+        }
+        finally
+        {
+            foreach (var p in processes)
+            {
+                try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
+                ProcessTestCleanup.SafeDispose(p);
+            }
+            try { Directory.Delete(tempDir, recursive: true); } catch { /* уже удалён */ }
+        }
     }
 
     // --- Окно 1M недоступно (блокер ревью волны 3) ---
@@ -597,6 +772,7 @@ public class FallbackLlmSessionAdapterTests
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            isChildTurn: () => false,
             fallbackSettings: store,
             effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
@@ -625,6 +801,7 @@ public class FallbackLlmSessionAdapterTests
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            isChildTurn: () => false,
             fallbackSettings: store,
             effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
@@ -654,6 +831,7 @@ public class FallbackLlmSessionAdapterTests
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            isChildTurn: () => false,
             fallbackSettings: store,
             effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
@@ -2266,6 +2444,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "sonnet" });
             inner.Sink = sut.HandleMessageAsync;
             var accBFile = Path.Combine(subAccB, "projects", flat, csid + ".jsonl");
@@ -2318,6 +2497,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "sonnet" }, transcriptOnServer: false);
             inner.Sink = sut.HandleMessageAsync;
             inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
@@ -2361,6 +2541,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "sonnet", "deepseek-chat" });
             inner.Sink = sut.HandleMessageAsync;
             var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
@@ -2415,6 +2596,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "sonnet", "deepseek-chat" }, log: spy);
             inner.Sink = sut.HandleMessageAsync;
             var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
@@ -2488,6 +2670,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
             inner.Sink = sut.HandleMessageAsync;
             var aliveFile = Path.Combine(aliveDir, csid + ".jsonl");
@@ -2559,6 +2742,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
             inner.Sink = sut.HandleMessageAsync;
             inner.Scripts.Enqueue(() => inner.Emit(Success()));
@@ -2607,6 +2791,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "m1", "m2", "m3" });
             inner.Sink = sut.HandleMessageAsync;
             // m1/p1 — сбой → шаг m2/p2 (копия p1→p2). m2/p2 — сбой → шаг m3/p3 (копия p2→p3).
@@ -2684,6 +2869,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "deepseek-chat", "opus" },
                 persist: () => persisted.Add((session.Model, session.Provider)));
             inner.Sink = sut.HandleMessageAsync;
@@ -2762,6 +2948,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "sonnet", "deepseek-chat" });
             inner.Sink = sut.HandleMessageAsync;
             var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
@@ -3201,6 +3388,7 @@ public class FallbackLlmSessionAdapterTests
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
                 pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
                 effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
             inner.Sink = sut.HandleMessageAsync;
             inner.Scripts.Enqueue(() =>

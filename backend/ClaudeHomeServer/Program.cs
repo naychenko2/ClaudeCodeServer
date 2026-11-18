@@ -15,7 +15,9 @@ using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
@@ -400,6 +402,10 @@ builder.Services.AddPersonas(builder.Configuration);
 // gated hosted: в Testing не стартует, повторный проход отсекается marker-файлом в data.
 // Живёт в спине рядом с прочими миграциями сторов, а не в вертикали Llm (см. шапку файла).
 builder.Services.AddGatedHostedService<GlmModelAliasMigration>(builder.Configuration);
+// Засев трёх предметов волны 1 существующим профилям детей (срез §1, Т1b): gated hosted,
+// идемпотентен состоянием — непустой Subjects не трогается; проверка пустоты — в одном
+// локе UserStore, в миграции не дублируется. Ошибка стора не роняет старт (лог).
+builder.Services.AddGatedHostedService<ChildSubjectsMigration>(builder.Configuration);
 // Разовое сведение моделей родного Claude к семействам (opus/fable/sonnet/haiku) во всех сторах —
 // gated hosted, повторный проход отсекается маркером model-families-migration-v1.done в data.
 builder.Services.AddGatedHostedService<ClaudeModelFamilyMigration>(builder.Configuration);
@@ -615,6 +621,25 @@ builder.Services.AddSingleton(sp => new ChildLimitsCalculator(
 // Провижн персоны-тьютора ребёнка (KM-B1d, ADR-041): «Помощник» с ключом в
 // ChildProfile.TutorPersonaId. Вызывается только точками записи детского профиля (KM-B1e).
 builder.Services.AddSingleton<ChildTutorProvisioner>();
+// Каталог материалов предмета (разрез «Знания репетитора» §2, К2a): data/child-subjects/
+// {childId}/{subjectId}/ — опись, оригиналы и извлечённый текст. Пишет его ручка админа (К2b),
+// читает тулсет репетитора (К3). MarkitdownService регистрирует AddDocs ниже по файлу:
+// синглтон резолвится лениво — порядок строк при резолве не важен.
+builder.Services.AddSingleton(sp => new ChildSubjectMaterialsStore(
+    ChildSubjectMaterialsStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
+    sp.GetRequiredService<MarkitdownService>(),
+    sp.GetRequiredService<IConfiguration>(),
+    // Шов-делегат живого владельца (ревью КИ1b): запись под семафором проверяет, что id ещё
+    // в стору пользователей — снесённый каталог ребёнка не должен воскреснуть после минуты
+    // OCR. Именно пользователя, не «ребёнка с включённым режимом»: выключенный детский
+    // режим каталог не сносит, и отменять загрузку из-за него не за чем.
+    id => sp.GetRequiredService<IUserStore>().GetById(id) is not null,
+    // Шов OCR (КИ1a): форвардер LlmSubsystem на единственный LocalOcrService.
+    sp.GetRequiredService<ILocalPageOcr>(),
+    // Растр — необязательно: вертикаль Images отключаемая, без неё картинка отказана
+    // как ocr_unavailable (GetService, не GetRequiredService).
+    sp.GetService<IImageRaster>(),
+    sp.GetRequiredService<ILogger<ChildSubjectMaterialsStore>>()));
 // Стоп-сигнал ребёнка → уведомление взрослым без текста переписки (KM-B6d, ADR-041 решение 1).
 builder.Services.AddSingleton<ChildStopSignalService>();
 builder.Services.AddHostedService<ChildStopSignalSubscriber>();

@@ -41,6 +41,27 @@ public class BackupPathsTests
         BackupPaths.ShouldInclude(path).Should().BeTrue();
     }
 
+    // Каталог материалов предмета (К2c, разрез «Знания репетитора» §2): данные ребёнка —
+    // опись, оригиналы и извлечённый текст. В архив по умолчанию (исключений ShouldInclude
+    // для него нет) и не секретный (в реестре секретов его нет). Сторож: имя корня — из
+    // константы стора, её же читает RootFromConfig; переименование корня покраснило бы
+    // и этот тест, и чтение стора.
+    [Fact]
+    public void МатериалыПредмета_ПопадаютВАрхив_ИНеСекреты()
+    {
+        var root = ClaudeHomeServer.Services.ChildMode.ChildSubjectMaterialsStore.DirName;
+        BackupPaths.ShouldInclude($"{root}/kid-a/math/materials.json").Should().BeTrue();
+        BackupPaths.ShouldInclude($"{root}/kid-a/math/files/m_000000000001.pdf").Should().BeTrue();
+        BackupPaths.ShouldInclude($"{root}/kid-a/math/text/m_000000000001.txt").Should().BeTrue();
+
+        // Служебный временный файл атомарной записи описи (.tmp — общее исключение мусора) — вне архива.
+        BackupPaths.ShouldInclude($"{root}/kid-a/math/materials.json.tmp").Should().BeFalse();
+
+        // Секретом он не стал: ни корень каталога, ни имя описи не входят в реестр секретов.
+        BackupPaths.SecretFileNames.Should().NotContain(root);
+        BackupPaths.SecretFileNames.Should().NotContain("materials.json");
+    }
+
     [Theory]
     // OAuth-токены аккаунтов — основной архив уезжает в облако
     [InlineData("claude-profiles/deepseek/.credentials.json")]

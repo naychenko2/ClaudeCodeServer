@@ -140,6 +140,7 @@ public class LocalTurnGateTests
         var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
             msg => { beforeRecord?.Invoke(msg); lock (outList) outList.Add(msg); return Task.CompletedTask; },
             Pool(), providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            isChildTurn: () => false,
             effectiveChain: chain is null ? null : () => chain,
             health: _health, egressRetryDelay: TimeSpan.FromMilliseconds(10), localGate: gate);
         inner.Sink = sut.HandleMessageAsync;
@@ -334,7 +335,7 @@ public class LocalTurnGateTests
             var session = new Session { Model = LocalModel, Provider = Local };
             var inner = new FakeInner(session);
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model, _ => Task.CompletedTask,
-                Pool(), providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null, localGate: null);
+                Pool(), providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null, isChildTurn: () => false, localGate: null);
             inner.Sink = sut.HandleMessageAsync;
             return (sut, inner);
         }).ToList();

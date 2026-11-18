@@ -103,6 +103,26 @@ public class ChildCliLayerTests : IDisposable
     public void ChildPermissionDecision_НераспознанноеИмя_Deny(string tool) =>
         ClaudeSession.ChildPermissionDecision(tool).Should().Be("deny");
 
+    // --- п.12 (К3, К9): пары детского allow-list — allow без карточки, остальное — deny ---
+
+    [Theory]
+    [InlineData("mcp__tutor__search_materials")]
+    [InlineData("mcp__tutor__list_materials")]
+    [InlineData("mcp__tutor__read_material")]
+    [InlineData("mcp__widgets__widget_show")]
+    public void ChildPermissionDecision_ПарыAllowList_Allow(string tool) =>
+        ClaudeSession.ChildPermissionDecision(tool).Should().Be("allow");
+
+    [Theory]
+    [InlineData("mcp__dify__search_knowledge")]
+    [InlineData("mcp__dify__list_datasets")]
+    [InlineData("mcp__tutor__write_material")]
+    [InlineData("mcp__tutor__search_materials__x")]
+    [InlineData("mcp__wsp__files_read")]
+    [InlineData("Read")]
+    public void ChildPermissionDecision_ОстальноеВключаяDify_Deny(string tool) =>
+        ClaudeSession.ChildPermissionDecision(tool).Should().Be("deny");
+
     // --- п.11: встроенные инструменты ---
 
     [Fact]
@@ -228,10 +248,13 @@ public class ChildCliLayerTests : IDisposable
                 ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
             }).Build());
 
-        var (spec, errors) = await LaunchAsync(() => Child(), "deepseek-chat", providers);
+        // Модель хода ребёнка — модель профиля/предмета (И2′): маршрут «ключ пула» с чужой моделью — отказ
+        var foreign = new ChildPolicySnapshot("kid",
+            new ChildProfile { Enabled = true, ProviderKey = "kids-api", Model = "deepseek-chat" }, false);
+        var (spec, errors) = await LaunchAsync(() => foreign, "deepseek-chat", providers);
 
-        spec.Should().BeNull("ключ сервера внешнего провайдера ребёнку не уходит");
-        errors.Should().ContainSingle().Which.Should().Be(ChildApiKeyRoute.RefusedText);
+        spec.Should().BeNull("ключ пула ребёнка чужой модели не уходит");
+        errors.Should().ContainSingle().Which.Should().Be(ChildRoute.RefusedText);
     }
 
     [Fact]

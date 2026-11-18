@@ -31,9 +31,12 @@ function StatusRow({ spinner, text, danger }: { spinner?: boolean; text: string;
 }
 
 // Карточка HTML-виджета в ленте чата: html из input вызова рендерится в изолированном
-// sandbox-iframe (без allow-same-origin и allow-popups — виджет живёт в opaque origin,
-// CSP обёртки блокирует любые внешние запросы). Успешный item.result — инструкция для
-// модели («не дублируй…»), в UI не выводится: видимы только iframe и error-плашки.
+// sandbox-iframe (без allow-same-origin и allow-popups — виджет живёт в opaque origin).
+// srcDoc — оболочка (см. widgetHtml.ts): её meta-CSP держит навигацию внутреннего фрейма
+// (frame-src 'none') и внешние запросы. allow-forms/allow-modals здесь не нужны: формы
+// и модальные окна относятся к внутреннему фрейму, а ему — только allow-scripts.
+// Успешный item.result — инструкция для модели («не дублируй…»), в UI не выводится:
+// видимы только iframe и error-плашки.
 export const WidgetView = memo(function WidgetView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }) {
   const mobile = useIsMobile();
   // Эффективная тема с подпиской: subscribeThemeMode эмитит и при смене системной темы
@@ -55,8 +58,10 @@ export const WidgetView = memo(function WidgetView({ item }: { item: Extract<Cha
   const [collapsed, setCollapsed] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
-  // Канал авто-высоты: origin у sandbox-iframe без allow-same-origin — 'null', по нему
-  // фильтровать нельзя; сверяем источник с contentWindow нашего iframe (анти-спуфинг)
+  // Канал авто-высоты: внутренний фрейм шлёт высоту оболочке, оболочка пересылает наверх
+  // (пропускает только сообщения своего iframe). origin у sandbox-iframe без
+  // allow-same-origin — 'null', по нему фильтровать нельзя; сверяем источник с
+  // contentWindow нашего iframe-оболочки (анти-спуфинг: чужое окно высоты не даёт)
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
@@ -114,7 +119,7 @@ export const WidgetView = memo(function WidgetView({ item }: { item: Extract<Cha
             ref={iframeRef}
             key={theme}
             srcDoc={srcDoc!}
-            sandbox="allow-scripts allow-forms allow-modals"
+            sandbox="allow-scripts"
             title={title}
             style={{
               width: '100%', height, border: 'none', display: 'block',

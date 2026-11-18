@@ -85,6 +85,7 @@ public class TurnTokenAdapterBranchesTests
             () => session.Model,
             _ => Task.CompletedTask,
             pool, providers: null, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            isChildTurn: () => false,
             lastContextTokens: contextEstimate,
             egress: new LiveEgress(),
             events: _bus,

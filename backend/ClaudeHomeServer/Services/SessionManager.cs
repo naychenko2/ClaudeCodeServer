@@ -8,6 +8,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ChatSubjects;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
@@ -787,6 +788,17 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // То же с произвольным сведением: map(id) → новое значение или null (не менять).
     public int RemapModels(Func<string, string?> map) => _settings.RemapModels(map);
 
+    // Досев предмета старым детским чатам (миграция Т1b2): ChildSpace есть, предмета нет →
+    // subjectId; чаты с предметом и не-детские не трогает. Возвращает число изменённых чатов.
+    public int BackfillChildSubject(string subjectId) => _settings.BackfillChildSubject(subjectId);
+
+    // Перезакрепление маршрута предмета (Т2e, Т2e2): поля (PersonaId, Provider, Model) детских чатов
+    // этого предмета этого ребёнка приводятся к ЖИВОМУ маршруту; при смене поставщика транскрипт
+    // переезжает в профиль нового (ProviderMigration.RepinChildSubjectAsync). Чаты другого предмета
+    // и другого ребёнка не трогает. Возвращает число перезакреплённых чатов.
+    public Task<int> RepinChildSubjectAsync(string ownerId, string subjectId, Func<ChildRepinTarget?> liveTarget) =>
+        _providerMigration.RepinChildSubjectAsync(ownerId, subjectId, liveTarget);
+
     // Рабочая папка чата, принадлежащего пользователю (для загрузки вложений): у чата вне
     // проекта — {дом}/Chats, у проектного — рабочая папка сессии (worktree, иначе корень
     // проекта), чтобы Claude нашёл вложение по относительному пути из своего cwd.
@@ -928,9 +940,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
         string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null, string? childSpace = null, string? providerKey = null)
+        string? onboardingKind = null, string? childSpace = null, string? providerKey = null,
+        string? childSubject = null)
         => await _creation.CreateChatAsync(ownerId, mode, resumeSessionId, name, model, effort,
-            personaId, taskExecution, taskId, onboardingKind, childSpace, providerKey);
+            personaId, taskExecution, taskId, onboardingKind, childSpace, providerKey, childSubject);
 
     public async Task<Session> CreatePersonaChatAsync(string ownerId, string personaId,
         ClaudeMode mode, string? resumeSessionId = null, string? name = null,

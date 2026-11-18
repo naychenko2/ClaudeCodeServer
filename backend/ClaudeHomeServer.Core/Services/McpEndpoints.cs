@@ -19,6 +19,8 @@ public static class McpEndpoints
     public const string PersonasName = "personas";
     public const string NotificationsName = "notifications";
     public const string WatchName = "watch";
+    // Репетитор детского режима (ADR-041, К3): материалы предмета; сервер есть только у ребёнка
+    public const string TutorName = "tutor";
     public const string WebSearchName = "websearch";
     public const string CodeGraphName = "codegraph";
     public const string DifyName = "dify";

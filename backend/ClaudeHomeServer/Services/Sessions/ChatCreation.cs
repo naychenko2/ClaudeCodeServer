@@ -416,7 +416,8 @@ public sealed class ChatCreation
     internal async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
         string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null, string? childSpace = null, string? providerKey = null)
+        string? onboardingKind = null, string? childSpace = null, string? providerKey = null,
+        string? childSubject = null)
     {
         var rootPath = _route.ResolveChatRoot(ownerId);
 
@@ -442,6 +443,7 @@ public sealed class ChatCreation
             OnboardingKind = onboardingKind,
             // Пространство детского чата — тоже до старта: гейты И1-бис/И3 читают его при сборке хода
             ChildSpace = childSpace,
+            ChildSubject = childSubject,
         };
 
         await _process.StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);

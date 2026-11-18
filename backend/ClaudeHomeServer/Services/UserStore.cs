@@ -636,8 +636,23 @@ public class UserStore : IForgejoAccountStore, IUserStore
     /// «Помощника». profile=null — профиля нет (отказ включению:
     /// провижн тьютора не удался, вызывающий откатывает прежний). Возвращает false, если
     /// пользователь не найден.
+    /// Предметы (Т2a, разрез §2): список тела авторитетен (админ правит его, порядок
+    /// сохраняется), но TutorPersonaId каждого предмета берётся из ЖИВОГО профиля по Id,
+    /// как тьютор профиля: админ не может подменить персону через DTO, её пишет только
+    /// SetChildSubjectTutor. Новый Id — пустой (провижн Т2b); без живого профиля новые все
+    /// Id — тьюторы тела обнуляются так же. Привязка базы знаний предмета (К1b) — тот же
+    /// приём: из тела берётся только кандидат (id датасета + автор и момент вызывающего),
+    /// живая пара сохраняется, когда id не изменился. profile.Subjects=null —
+    /// сигнал вызывающего «предметов в теле нет»: живой список сохраняется как есть
+    /// (PUT вкладки «Режим и время» не стирает предметы); без живого профиля — [].
+    /// В сохранённом профиле Subjects никогда не null (тот же сигнал нормализуется здесь).
+    /// revokeAcknowledgedSubjectIds (Х1): id предметов, чьё согласие на не-Anthropic маршрут админ
+    /// ОТОЗВАЛ (acknowledgeRouteRisk=false в теле): под этим же локом пара обнуляется даже при
+    /// том же providerKey — решение по живому предмету, а не по снимку: одновременные PUT с true и
+    /// false дают одно из двух состояний целиком.
     /// </summary>
-    public bool SetChildProfile(string id, ChildProfile? profile, bool resetRules)
+    public bool SetChildProfile(string id, ChildProfile? profile, bool resetRules,
+        IReadOnlySet<string>? revokeAcknowledgedSubjectIds = null)
     {
         lock (_lock)
         {
@@ -653,6 +668,87 @@ public class UserStore : IForgejoAccountStore, IUserStore
                         profile.RulesSummary = live.RulesSummary;
                     }
                     profile.TutorPersonaId = live.TutorPersonaId;
+                    if (profile.Subjects is null)
+                    {
+                        // Тела без предметов — живой список копиями (сами предметы
+                        // неизменяемы здесь; копия — чтобы новый профиль не делил список
+                        // с откатываемым снимком вызывающего).
+                        profile.Subjects = [.. live.Subjects];
+                    }
+                    else
+                    {
+                        var tutors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        // Привязка базы знаний (К1b, разрез §1/§3): в теле — только кандидат
+                        // (id датасета, автор и момент вызывающего); решение — здесь, по ЖИВОМУ
+                        // значению под этим же локом: тот же datasetId → прежняя пара (автор и
+                        // момент не меняются, повторный PUT другого админа их не переставляет),
+                        // другой id или нового датасета в живом нет → кандидат вызывающего,
+                        // null в теле → привязка снята. Слияние вне этого замка (по снимку
+                        // профиля до записи) вернуло бы пару, какой она была на первом чтении
+                        // запроса, — параллельная привязка затёрлась бы.
+                        var knowledge = new Dictionary<string, ChildSubjectKnowledge?>(StringComparer.OrdinalIgnoreCase);
+                        var liveSubjects = new Dictionary<string, ChildSubject>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var subject in live.Subjects)
+                        {
+                            if (subject is null) continue;
+                            tutors[subject.Id] = subject.TutorPersonaId;
+                            knowledge[subject.Id] = subject.Knowledge;
+                            liveSubjects[subject.Id] = subject;
+                        }
+                        foreach (var subject in profile.Subjects)
+                        {
+                            if (subject is null) continue;
+                            // Тьютор предмета никогда не берётся из тела: живой по Id
+                            // (админ список правит, персону не подменяет), новый Id — пусто.
+                            subject.TutorPersonaId =
+                                tutors.TryGetValue(subject.Id, out var tutor) ? tutor : "";
+                            // Согласие админа на не-Anthropic маршрут (Т5a, И2′) — решение ЗДЕСЬ, под замком,
+                            // по ЖИВОМУ предмету (вне замка слияние по снимку вернуло бы согласие от старого
+                            // providerKey параллельному PUT со сменой). В теле — кандидат (момент и админ запроса)
+                            // либо пусто. Тот же providerKey и живое согласие — прежняя пара остаётся; тело просит
+                            // согласие — берётся кандидат; иначе (смена providerKey без согласия, предмет новый,
+                            // согласия не было) — сброс. Согласие от старого providerKey не переживает смену.
+                            var hasLiveSubject = liveSubjects.TryGetValue(subject.Id, out var liveSubject);
+                            // Отзыв согласия (Х1, ревью Т5a): id в наборе отзыва — пара обнуляется даже при
+                            // том же providerKey: предмет сохраняется «не согласованным», 400 даст запуск
+                            // хода. Под тем же замком и по тому же живому разбору, что и сохранение: два
+                            // одновременных PUT (true и false) дают одно из двух состояний целиком, не смесь пар.
+                            if (revokeAcknowledgedSubjectIds is not null
+                                && revokeAcknowledgedSubjectIds.Contains(subject.Id))
+                            {
+                                subject.RouteAcknowledgedAt = null;
+                                subject.RouteAcknowledgedBy = null;
+                            }
+                            else if (hasLiveSubject && liveSubject!.RouteAcknowledgedAt is not null
+                                && liveSubject.ProviderKey == subject.ProviderKey)
+                            {
+                                subject.RouteAcknowledgedAt = liveSubject.RouteAcknowledgedAt;
+                                subject.RouteAcknowledgedBy = liveSubject.RouteAcknowledgedBy;
+                            }
+                            else if (subject.RouteAcknowledgedAt is null)
+                                subject.RouteAcknowledgedBy = null;
+                            if (subject.Knowledge is { } requested
+                                && knowledge.TryGetValue(subject.Id, out var stored)
+                                && stored?.DatasetId == requested.DatasetId)
+                                subject.Knowledge = stored;
+                        }
+                    }
+                }
+                else
+                {
+                    if (profile.Subjects is null)
+                    {
+                        profile.Subjects = [];
+                    }
+                    else
+                    {
+                        // Нет живого профиля — новые все Id: тьюторы тела обнуляются
+                        // (тот же контракт, что в живой ветке: персону пишет только
+                        // SetChildSubjectTutor, Т2b).
+                        foreach (var subject in profile.Subjects)
+                            if (subject is not null)
+                                subject.TutorPersonaId = "";
+                    }
                 }
                 user.ChildMode = profile;
             }
@@ -660,6 +756,46 @@ public class UserStore : IForgejoAccountStore, IUserStore
             {
                 user.ChildMode = null;
             }
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Id персоны-репетитора предмета (ChildSubject.TutorPersonaId, Т2a; провижн Т2b
+    /// закрепляет персону только этим методом — через DTO профиля её подменить нельзя).
+    /// Пишет только в существующий предмет существующего профиля ребёнка, по образцу
+    /// SetChildTutorPersona: возвращает false, если пользователя, профиля или предмета нет.
+    /// </summary>
+    public bool SetChildSubjectTutor(string userId, string subjectId, string personaId)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == userId);
+            if (user?.ChildMode is null) return false;
+            var subject = user.ChildMode.Subjects.FirstOrDefault(s => s.Id == subjectId);
+            if (subject is null) return false;
+            subject.TutorPersonaId = personaId;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Засев предметов детского профиля (Т1b, срез §1): пустой Subjects — пишется, непустой —
+    /// не трогается никогда (список админа авторитетнее засева). Проверка пустоты и запись —
+    /// под этим одним локом: иначе параллельный PUT админа (SetChildProfile) затёрся бы
+    /// снимком засевом, а два одновременных засев дали бы два тройных списка — кто взял
+    /// лок позже, тот видит непустой Subjects и пропускает. Возвращает false, если
+    /// пользователя или профиля нет либо Subjects уже непустой.
+    /// </summary>
+    public bool SeedChildSubjectsIfEmpty(string id, List<ChildSubject> subjects)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user?.ChildMode is null || user.ChildMode.Subjects.Count > 0) return false;
+            user.ChildMode.Subjects = [.. subjects];
             Save();
             return true;
         }

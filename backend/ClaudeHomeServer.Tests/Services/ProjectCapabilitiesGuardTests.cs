@@ -63,6 +63,12 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/CloudCheapClient.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (3, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Gateway/UpstreamSelector.cs"] = (1, "LLM-провайдер"),
+        // Маршрут хода ребёнка (Т5b): provider.IsLocal — локальность LLM-поставщика (своей модели
+        // цена не нужна), не локальность проекта.
+        ["backend/ClaudeHomeServer.Llm/ChildRoute.cs"] = (1, "IsLocal поставщика LLM, не проекта"),
+        // Ручка child-routes (Т2f): kind/priced маршрута пикера строятся из IsLocal поставщика
+        // (код плюс два упоминания в комментарии ручки) — локальность поставщика, не проекта.
+        ["backend/ClaudeHomeServer/Controllers/ChildRoutesController.cs"] = (4, "IsLocal поставщика LLM, не проекта"),
         // Шлюз: наблюдатель метрик создаётся, когда маршрут — локальный LLM-провайдер
         // (LlmProviderConfig.IsLocal), не «локальный проект» — чужой смысл того же слова.
         ["backend/ClaudeHomeServer.Llm/Gateway/LlmGatewayEndpoints.cs"] = (2, "LLM-провайдер"),

@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -84,6 +85,7 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
             dailyBudgetUsd = 2m, monthlyBudgetUsd = 40m,
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
+        ChildTestSubjects.Seed(_hosts.Services, id);
         var p = _hosts.Services.GetRequiredService<UserStore>().GetById(id)!.ChildMode!;
         p.RulesAgreedAt = new DateTime(2026, 11, 17, 10, 0, 0, DateTimeKind.Utc);
         p.RulesSummary = "правила";
@@ -94,7 +96,7 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
     private async Task<(string ChildId, string ChatId, string Root)> ChildChat(string name)
     {
         var id = await NewChild(name);
-        var resp = await _hosts.CreateAuthenticatedClient(name, ChildPassword).PostAsync("/api/child/spaces/lessons/chat", null);
+        var resp = await ChildTestSubjects.CreateChat(_hosts.CreateAuthenticatedClient(name, ChildPassword));
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
         var chatId = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync()).GetProperty("sessionId").GetString()!;
         return (id, chatId, Sessions.GetChatRoot(chatId, id)!);
@@ -187,6 +189,36 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
 
         r.StatusCode.Should().Be(HttpStatusCode.OK);
         r.Content.Headers.ContentType!.MediaType.Should().Be(expectedMime);
+    }
+
+    // И6 №3 (К3, разрез «Знания репетитора» §4): ручка миниатюр не отдаёт материалы предмета —
+    // каталог data/child-subjects вне корня чата. Три формы пути (абсолютный, обход от корня, «data/…»),
+    // каждая и без учёта, и с записью в Session.Attachments: ни одна не 2xx, содержимого в ответе нет.
+    [Fact]
+    public async Task ДетскийЧат_ПутьВКаталогМатериаловПредмета_НеОтдаётся()
+    {
+        var name = "kid-raw-materials";
+        var (childId, chatId, root) = await ChildChat(name);
+        var dataDir = Path.GetDirectoryName(ChildSubjectMaterialsStore.RootFromConfig(
+            _hosts.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()))!;
+        var materials = Path.Combine(dataDir, ChildSubjectMaterialsStore.DirName, childId, "russian", "text", "m_000000000001.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(materials)!);
+        File.WriteAllBytes(materials, Png); // даже валидная картинка по сигнатуре не должна уйти ребёнку
+        var traversal = Path.GetRelativePath(root, materials).Replace('\\', '/');
+        var viaData = $"data/{ChildSubjectMaterialsStore.DirName}/{childId}/russian/text/m_000000000001.txt";
+        var attachments = Sessions.GetById(chatId)!.Attachments ??= [];
+        using var child = _hosts.CreateAuthenticatedClient(name, ChildPassword);
+
+        foreach (var recorded in new[] { false, true })
+        {
+            if (recorded) { attachments.Add(materials); attachments.Add(traversal); attachments.Add(viaData); }
+            foreach (var path in new[] { materials, traversal, viaData })
+            {
+                var r = await child.GetAsync(Url(chatId, path));
+                ((int)r.StatusCode).Should().BeGreaterThanOrEqualTo(400, $"путь «{path}» (учтён: {recorded})");
+                (await r.Content.ReadAsByteArrayAsync()).Should().NotEqual(Png, "байты материала ребёнку не уходят");
+            }
+        }
     }
 
     [Fact]

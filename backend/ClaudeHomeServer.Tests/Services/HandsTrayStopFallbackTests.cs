@@ -192,7 +192,7 @@ public class HandsTrayStopFallbackTests
         var downstream = new List<ServerMessage>();
         sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
             msg => { lock (downstream) downstream.Add(msg); return Task.CompletedTask; },
-            pool, providers: null, Path.GetTempPath(), launcher: null, initialProfileRoot: null);
+            pool, providers: null, Path.GetTempPath(), launcher: null, initialProfileRoot: null, isChildTurn: () => false);
         inner.Sink = sut.HandleMessageAsync;
         return new Rig(sut, inner, downstream, stop);
     }

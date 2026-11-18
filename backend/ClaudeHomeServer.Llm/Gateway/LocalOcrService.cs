@@ -18,14 +18,16 @@ namespace ClaudeHomeServer.Services.Llm.Gateway;
 // агентов, поэтому второй вызов ждёт слот до BusyWaitSec, иначе BusyTimeout.
 //
 // Ответы vLLM недоверенные: мусорный JSON, пустые choices, обрыв, не-2xx — всё BadResponse,
-// не исключение наружу (для ожидаемых отказов наружу ничего не уходит). В логах — только
-// агрегаты (размер, мс, токены): ни распознанного текста, ни base64-картинки.
+// не исключение наружу (для ожидаемых отказов наружу ничего не уходит). Пустая страница
+// (content=null при finish_reason=stop) — штатный успех с пустым текстом, не отказ
+// (defect 1e017cf7): «текста нет» — результат, а не поломка. В логах — только агрегаты
+// (размер, мс, токены): ни распознанного текста, ни base64-картинки.
 public sealed class LocalOcrService(
     LlmProviderRegistry providers,
     ILocalEndpointProbe probe,
     IHttpClientFactory httpFactory,
     IOptionsMonitor<LlmGatewayOptions> options,
-    ILogger<LocalOcrService> log)
+    ILogger<LocalOcrService> log) : ILocalPageOcr
 {
     // Единственный источник адреса и id модели: локальная vision-модель.
     public const string ProviderKey = "local-qwen";
@@ -230,8 +232,11 @@ public sealed class LocalOcrService(
             || choices.GetArrayLength() == 0)
             return null;
 
-        var content = choices[0].GetProperty("message").GetProperty("content").GetString();
-        if (content is null) return null;
+        // Пустая страница у локальной модели: message.content=null, «текст» живёт в
+        // reasoning_content (defect 1e017cf7, замер КИ0 на qwen3.8-27b). Это штатный ответ
+        // «текста нет», а не мусорный ответ: доезжает пустой строкой, вызывающий (стор
+        // материалов, КИ1b) превращает пустой текст в image_no_text.
+        var content = choices[0].GetProperty("message").GetProperty("content").GetString() ?? "";
 
         var promptTokens = 0;
         var completionTokens = 0;

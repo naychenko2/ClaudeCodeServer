@@ -37,6 +37,14 @@ public interface IChildModeGate
     string? LaunchMismatch(string? ownerId, Session session);
 
     /// <summary>
+    /// Живой маршрут предмета чата «Уроков» (репетитор, поставщик, модель из записи предмета в профиле)
+    /// для догона отложенного перезакрепления на старте хода. null — владелец не ребёнок, профиль не
+    /// читается, чат не «Уроков», предмет закрыт или <c>ChildRoute</c> маршрут не принимает. Та же
+    /// запись и тот же вердикт, что у <see cref="LaunchMismatch"/> (общий хелпер, второго места правды нет).
+    /// </summary>
+    ChildRepinTarget? LiveRouteFor(string? ownerId, Session session);
+
+    /// <summary>
     /// И3 (KM-B5d), точка запуска хода: вне окна, сверх дневного лимита пространства и сверх
     /// бюджета новый ход ребёнка не стартует. Возвращает детский текст отказа либо null, если ход
     /// идёт (владелец не ребёнок, состояние ok/warn, или rules_pending в чате онбординга правил —
@@ -55,8 +63,10 @@ public interface IChildModeGate
 }
 
 /// <summary>
-/// Детский allow-list пар (сервер, инструмент). В волне 1 ПУСТ: веб-поиск выключен решением
-/// Андрея, а websearch/notes/memory/tasks/wsp/медиа/внешние серверы вне списка. Состав для
+/// Детский allow-list пар (сервер, инструмент). Два сервера: tutor (ADR-041, «Редакция 3», К3) —
+/// материалы предмета для репетитора, и widgets (разрез «Знания репетитора» §8 п.1, К9) —
+/// один инструмент widget_show, виджет в ленте этого же чата. Веб-поиск выключен решением Андрея, а
+/// websearch/notes/memory/tasks/wsp/медиа/внешние серверы вне списка. Состав для
 /// «Студии» волны 2 не обещан: какие инструменты медиа-серверов безопасны ребёнку, решается
 /// отдельно (ADR-041, «Последствия»), гейт под список уже есть.
 /// Расширение списка — осознанная правка сторожа ChildModeMcpGuardTests.
@@ -64,7 +74,13 @@ public interface IChildModeGate
 public static class ChildModeAllowList
 {
     public static readonly IReadOnlySet<(string Server, string Tool)> Pairs =
-        new HashSet<(string, string)>();
+        new HashSet<(string, string)>
+        {
+            ("tutor", "search_materials"),
+            ("tutor", "list_materials"),
+            ("tutor", "read_material"),
+            ("widgets", "widget_show"),
+        };
 
     public static bool AllowsServer(string server) => Pairs.Any(p => p.Server == server);
 

@@ -125,7 +125,7 @@ public class ClaudeSessionLocalEngineBusyTests : IDisposable
                 return Task.CompletedTask;
             },
             new ClaudeSubscriptionPool(Helpers.TestConfig.Build(new Dictionary<string, string?>())),
-            providers, root, context.Launcher, initialProfileRoot: null, localGate: busy);
+            providers, root, context.Launcher, initialProfileRoot: null, isChildTurn: () => false, localGate: busy);
 
         await adapter.SendMessageAsync("тестовый ход");
         var startedFirst = await Task.WhenAny(started.Task, Task.Delay(TimeSpan.FromSeconds(15)));

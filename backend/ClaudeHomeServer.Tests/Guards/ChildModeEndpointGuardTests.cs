@@ -47,6 +47,11 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         "GET api/chats/{id}/history",
         // Чтение картинки-вложения чата для миниатюры (KM-B7, ADR-041 ручка №12); у ребёнка — только свой ChildSpace-чат
         "GET api/chats/{id}/attachments/raw",
+        // Проекция репетиторов (KM-T1e, разрез §4 №3–4): список плиток включённых предметов и
+        // аватар репетитора; сама аватар-ручка дополнительно проверяет «это репетитор этого
+        // ребёнка» — чужая персона даёт 404 уже внутри ручки
+        "GET api/child/subjects",
+        "GET api/personas/{id}/avatar",
         // Health-пинг (хвост дельта-ревью R-KM-F10): probeHealth фронта шлёт GET /api/health
         // со своим токеном; ответ — пустой 204, данных нет
         "GET,HEAD api/health",
@@ -94,6 +99,27 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
             .Where(e => e.Metadata.GetMetadata<ChildAllowedAttribute>() is not null)
             .Select(Describe).Distinct().Order(StringComparer.Ordinal).ToArray();
         actual.Should().Equal(FrozenAllowed.Order(StringComparer.Ordinal));
+    }
+
+    // Ревью К4a (К3): WorkflowController.GetTimeline отдаёт ToolResult из транскрипта workflow-агента, а защита
+    // у него одна — TranscriptRoots.IsPathAllowed. Ребёнку он закрыт тем, что у ручки нет [ChildAllowed]:
+    // обе ручки (список агентов и таймлайн) отвечают детскому токену 403 до контроллера, а метки на них нет.
+    [Fact]
+    public async Task WorkflowAgents_ТаймлайнИСписок_РебёнкуЗакрыты_МеткиНет()
+    {
+        SetChild();
+        var workflow = Endpoints()
+            .Where(e => (e.RoutePattern.RawText ?? "").StartsWith("api/workflow-agents", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        workflow.Should().NotBeEmpty();
+        workflow.Should().OnlyContain(e => e.Metadata.GetMetadata<ChildAllowedAttribute>() == null,
+            "ручки транскриптов workflow-агентов ребёнку не открываются никогда");
+
+        using var client = ChildClient();
+        (await client.GetAsync("/api/workflow-agents/timeline?transcriptDir=x&agentId=y")).StatusCode
+            .Should().Be(System.Net.HttpStatusCode.Forbidden);
+        (await client.GetAsync("/api/workflow-agents?transcriptDir=x")).StatusCode
+            .Should().Be(System.Net.HttpStatusCode.Forbidden);
     }
 
     [Fact]

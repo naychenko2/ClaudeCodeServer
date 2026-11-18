@@ -670,6 +670,36 @@ public sealed class ChatSettings
         return changed;
     }
 
+    // Досев предмета старым детским чатам (Т1b2, срез §1): чаты «Уроков», заведённые до Т1b,
+    // остались с ChildSubject = null, и на запуске хода И1-бис отказывает им «Этот предмет
+    // закрыт» (ChildModeGate.LaunchMismatch: предмет не резолвится, ChildModeGate.cs:103-106).
+    // Досев приводит запись к тому же первому предмету тройки, который засев ставит профилю
+    // ребёнка (ChildSubjectsMigration.DefaultSubjectId): чат и профиль пишут один id.
+    // Чаты с заданным предметом и чаты без
+    // ChildSpace (обычные) не трогает. Возвращает число изменённых чатов; 0 — стор на диск
+    // не переписывается. Идёт через живой реестр, а не через файл (то же, что RemapModels).
+    //
+    // Проверка «пусто» и запись — под одним замком стора (_store.SaveLock), как в
+    // UserStore.SeedChildSubjectsIfEmpty: параллельное создание детского чата с предметом
+    // (POST /api/child/spaces/{space}/chat) пишет то же поле, и проверка вне замка прочла бы
+    // null до его записи и затёрла бы выбор человека (Backfill_ParallelWithPinnedChat_KeepsPinnedSubject).
+    // UpdatedAt не двигается: предмет — настройка чата, а не активность (инвариант роли).
+    public int BackfillChildSubject(string subjectId)
+    {
+        lock (_store.SaveLock)
+        {
+            var changed = 0;
+            foreach (var info in _store.Sessions.Values.Select(e => e.Info))
+            {
+                if (info.ChildSpace is null || info.ChildSubject is not null) continue;
+                info.ChildSubject = subjectId;
+                changed++;
+            }
+            if (changed > 0) _store.SaveSessions();
+            return changed;
+        }
+    }
+
     // Гейты режима по модели (подготовка к S3-7, вердикт архитектора 07.11): эти две проверки
     // уже делаются здесь — сравнение провайдеров через ProviderKey в SetPersona, гейт
     // план-фазы — в ProviderMigration. Приём хода не получает одиннадцатую зависимость
@@ -861,6 +891,11 @@ public sealed class ChatSettings
     // хода (Working/Waiting) состав не трогаем — переключение подействует со следующего.
     // S3-7: опущено из приёма хода к владельцу смены спикера (SwitchSpeaker здесь же);
     // точка вызова — приём хода (фасадная обёртка и приватные форвардеры в SessionManager сняты).
+    // Догон перезакрепления детского чата на старте хода — тонкий делегат к ProviderMigration
+    // (TurnIntake держит _settings, своих зависимостей на миграцию у него нет).
+    internal Task<bool> CatchUpChildChatAsync(string sessionId, string ownerId)
+        => _providerMigration.CatchUpChildChatAsync(sessionId, ownerId);
+
     internal async Task RouteGroupSpeakerAsync(string sessionId, SessionEntry entry, string text)
     {
         if (entry.Info.Participants is not { Count: > 1 } participantIds) return;

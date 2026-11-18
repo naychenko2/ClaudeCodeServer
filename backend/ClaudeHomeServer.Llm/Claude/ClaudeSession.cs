@@ -39,9 +39,21 @@ public class ClaudeSession : ILlmSessionAdapter
     // Ключ владельца — _turnOwnerId (владелец хода), а не Info.OwnerId: у проектной сессии
     // тот пуст по контракту и резолв по нему падал на общий слот инстанса, хотя старт
     // заморожен из личного слота арендатора (DEC-FALLBACK 3f2f33fb).
+    // И2′: у ребёнка модель — явная модель предмета (профиля), назначение места и модель хода её не
+    // переопределяют: иначе ChatPersona на другую модель увела бы ход мимо маршрута предмета.
     private string? EffectiveModel =>
-        _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId)
+        (ChildSnapshotNow is { } childSnap ? ChildRoute.ExplicitModelFor(childSnap, Info) : null)
+        ?? _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId)
         ?? (_turnModelOverride ?? Info.Model);
+
+    // Детская политика «сейчас»: снимок идущего хода, а вне хода (старт оркестрации фолбэка идёт
+    // ДО RunTurnAsync) — живое чтение. Охват: модель (EffectiveModel), цепочка (EffectiveTurnChain)
+    // и флаг фолбэка (IsChildTurn). IsChild для сборки промпта — не отсюда: она зовёт
+    // _childPolicy напрямую, мимо этого кэша (см. PromptSessionContext в RunTurnAsync).
+    private ChildPolicySnapshot? ChildSnapshotNow => _turnChildSnapshot ?? _childPolicy?.Invoke();
+
+    // Детский ли ход (по снимку политики): фолбэк-адаптер по нему запрещает ротацию подписок.
+    internal bool IsChildTurn => ChildSnapshotNow is not null;
 
     // Эффективная модель для слоя фолбэка (FallbackLlmSessionAdapter): пара «модель × подписка»
     // учитывается по модели, которой реально идёт ход. Сам резолв остаётся приватным.
@@ -94,7 +106,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // И2: у ребёнка фолбэка нет — цепочка из одной модели, отказ провайдера = ошибка хода.
         // Решает снимок политики, а не наличие делегата: фабрика выдаёт делегат любому владельцу,
         // у взрослого он возвращает null — и фолбэк ADR-007 обязан жить.
-        _childPolicy?.Invoke() is not null && EffectiveModel is { } childModel ? new[] { childModel } :
+        ChildSnapshotNow is not null && EffectiveModel is { } childModel ? new[] { childModel } :
         _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
@@ -1049,6 +1061,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly WidgetsMcpContext? _widgetsMcp;
     // MCP-сервер сторожей чатов (watch_*): null — чат без владельца
     private readonly WatchMcpContext? _watchMcp;
+    // MCP-сервер репетитора детского режима: null у взрослого владельца (ADR-041, К3)
+    private readonly TutorMcpContext? _tutorMcp;
     // Сводный признак «в сессии есть продуктовые MCP-серверы, чей адрес допускает http»:
     // решён SessionManager на едином гейте СХЕМЫ адреса, сюда приезжает готовым
     // (pmem-консультанты уточняют на ходу). Рубильник в нём НЕ сидит — он живой, ниже.
@@ -1064,6 +1078,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // решает, клеить ли секцию промпта mcp-watch: рассинхрон обучал бы модель вызывать
     // watch_start при отсутствующем туле — «No such tool available» (блокер ревью)
     private bool WatchHttpOn() => _watchMcp is { UseHttp: true } && HttpMcpOnNow();
+    // Репетитор: stdio-отката нет — условие то же, что у сторожей (схема адреса И рубильник)
+    private bool TutorHttpOn() => _tutorMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер веб-поиска (web_search/web_read): null — чат без владельца или пустой
     // Perplexity:ApiKey (сервер не настроен)
     private readonly WebSearchMcpContext? _webSearchMcp;
@@ -1162,6 +1178,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // внутри _turnLock, поэтому поле не гонится. volatile — EffectiveModel/EffectiveTurnChain
     // читаются из других потоков (Capabilities, фолбэк-оркестратор).
     private volatile string? _turnModelOverride;
+    // Снимок детской политики ИДУЩЕГО хода (И2′): EffectiveModel читается десятки раз за ход, а политику
+    // на запуске читаем один раз (ЗапускХода_ДетскаяПолитикаЧитаетсяОдинРаз). Вне хода — null, чтение живое.
+    private volatile ChildPolicySnapshot? _turnChildSnapshot;
 
     // Сигнатура запуска последнего собранного хода (BuildLaunchSignature) — для сторожей
     // стабильности: два хода чата с одинаковыми свойствами обязаны дать одну сигнатуру
@@ -1388,6 +1407,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _modulesMcp = context.ModulesMcp;
         _widgetsMcp = context.WidgetsMcp;
         _watchMcp = context.WatchMcp;
+        _tutorMcp = context.TutorMcp;
         _webSearchMcp = context.WebSearchMcp;
         _architectureMcp = context.ArchitectureMcp;
         _higgsfieldMcp = context.HiggsfieldMcp;
@@ -1468,6 +1488,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // Сторожа чатов: stdio-ветки отката НЕТ (node-сервера не существовало) — при
         // негодном для http адресе или выключенном рубильнике тулсет ходу не объявляется
         var hasWatch = WatchHttpOn();
+        // Репетитор ребёнка: stdio-ветки нет, у взрослого контекста нет вовсе. В KeepMcpServers-срез
+        // не входит сознательно: это единственный сервер детского хода, а его состав и так минимален
+        var hasTutor = TutorHttpOn();
         // Веб-поиск: та же история — stdio-ветки нет, контекста нет вовсе при пустом
         // Perplexity:ApiKey (тогда схемы web_search/web_read не занимают окно модели)
         var hasWebSearch = WebSearchHttpOn();
@@ -1613,7 +1636,7 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
             && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasPlugins && !hasTurnContext && !hasLocalMedia && !hasTests && !hasDev && userServers is null
-            && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
+            && !hasExternal && !hasWatch && !hasTutor && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
 
@@ -1933,6 +1956,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
                 // Состав фиксирован (3 инструмента), вариативен только транспорт
                 shapes["watch"] = "t:http";
+            }
+
+            if (hasTutor)
+            {
+                // Репетитор детского режима: единственная ветка — http, сессия-вызыватель едет
+                // хвостом URL (/mcp/tutor/{sessionId}); тулсет сам сверяет ребёнка, чат и предмет.
+                // Состав фиксирован (3 инструмента), вариативен только транспорт.
+                servers["tutor"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_tutorMcp!.ApiUrl, McpEndpoints.TutorName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_tutorMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                shapes["tutor"] = "t:http";
             }
 
             if (hasMemory)
@@ -2934,6 +2976,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     // Явная модель хода (голосовой) тоже действует ровно на ход: сбрасываем,
                     // чтобы следующий (обычный) ход шёл на модели чата, а не на голосовой
                     _turnModelOverride = null;
+                    _turnChildSnapshot = null;
                     // Строка фазы принадлежит ходу: ход, закончившийся без своего события (смерть/
                     // ошибка до первого события), не должен оставлять флаг «показано» — иначе
                     // опоздавшая строка убираемого процесса дала бы «done» без первого события
@@ -3583,6 +3626,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // решаются по одному и тому же снимку, а не по трём независимым чтениям, между которыми
         // профиль могли выключить. Запросы разрешений читают политику сами — им нужна свежесть.
         var childSnapshot = _childPolicy?.Invoke();
+        _turnChildSnapshot = childSnapshot;
 
         // P31: подстраховка от залипания pending control-состояния. К началу нового хода
         // (предыдущий завершился result'ом) _pendingQuestions/_pendingPlans/_permissionWaiters
@@ -3745,7 +3789,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // (подсказки следующего сообщения ниже); карта и BareTools — от профиля облегчённого контекста.
         var bareProvider = _providers?.ResolveByModel(EffectiveModel);
         var bareLight = LightProfile;
-        if (bareLight is { BareMode: true })
+        // Ход ребёнка (И2′): ни одного аргумента BuildBareModeArgs — карта AI Home системным промптом
+        // ребёнку не отдаётся даже на локальном провайдере с BareMode (CLAUDE.md не грузится env'ом ниже).
+        if (bareLight is { BareMode: true } && childSnapshot is null)
         {
             try
             {
@@ -4078,9 +4124,11 @@ public class ClaudeSession : ILlmSessionAdapter
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth),
                     ConsumersHookActive: ConsumersHookDelivered,
                     Frame: turnFrame,
-                    // Детский ход — по тому же снимку политики, по которому живёт весь детский
-                    // слой (ChildPolicyProvider, KM-B3b): контрибьюторы recall-секций
-                    // проверяют признак в IsEnabled (KM-B6c), второго чтения стора нет.
+                    // Детский ход для сборки промпта — отдельное живое чтение провайдера
+                    // политики (тот же источник, что у всего детского слоя, ChildPolicyProvider,
+                    // KM-B3b), а не снимок идущего хода _turnChildSnapshot: провайдер сам не
+                    // кэширует (LlmSessionContext.ChildPolicyProvider). Контрибьюторы
+                    // recall-секций проверяют признак в IsEnabled (KM-B6c).
                     IsChild: _childPolicy?.Invoke() is not null);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
@@ -4730,8 +4778,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // env (BuildCliEnv выше), и подписочные CLAUDE_CONFIG_DIR/CLAUDE_CODE_OAUTH_TOKEN/
         // ANTHROPIC_AUTH_TOKEN поверх него накладываться не должны: они доехали бы до чужого
         // эндпоинта (находка задачи c47fe6da: чат с Info.Provider="claude-2", модель ушла к MiniMax).
-        if (_providers?.ResolveByModel(EffectiveModel) is null && _subscriptionPool?.HasExtra == true
-            && _providers?.GetByKey(Info.Provider) is null)
+        // Ход ребёнка (И2′) пул-блок не исполняет вовсе: подписку пула он не получает ни при каком
+        // Info.Provider, ключ его маршрута кладёт ветка ниже.
+        if (childSnapshot is null && _providers?.ResolveByModel(EffectiveModel) is null
+            && _subscriptionPool?.HasExtra == true && _providers?.GetByKey(Info.Provider) is null)
         {
             // Подписка пула (включая "claude", если задана с токеном) — свой OAuth-профиль и
             // токен. Если ключ не найден в пуле (локальный режим — пул пуст, HasExtra=false, сюда
@@ -4746,23 +4796,33 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
 
-        // И2 (ADR-041): ход ребёнка идёт только по API-ключу записи пула из его профиля. Подписку
-        // не выбираем ни основную, ни пула; нет ключа у записи — отказ запуска, а не откат.
-        // Токен подписки из унаследованного env вычищает ChildTurnClearEnv (CLAUDE_CODE_OAUTH_TOKEN).
+        // И2′ (ADR-041 ред. 2): ход ребёнка идёт по маршруту предмета — запись пула с API-ключом либо
+        // провайдер LlmProviders. Подписку не выбираем (ни основную, ни пула), пару «провайдер-модель»
+        // не лечим; нет допустимого маршрута или рассогласование модели с ним — отказ запуска, а не откат.
+        // Токен подписки из унаследованного env вычищает TurnClearEnv (CLAUDE_CODE_OAUTH_TOKEN).
         if (childSnapshot is not null)
         {
-            var childSub = ChildApiKeyRoute.Resolve(childSnapshot, _subscriptionPool);
+            var childRoute = ChildRoute.Resolve(childSnapshot, ChildRoute.SubjectFor(childSnapshot, Info),
+                _subscriptionPool, _providers);
             envOverrides[ChildTurnMarker.EnvKey] = "1";
-            // Блок пула выше мог положить токен подписки (Info.Provider указывает на setup-token запись)
-            envOverrides.Remove("CLAUDE_CODE_OAUTH_TOKEN");
-            // Модель стороннего провайдера (не Claude) ребёнку не положена: ключ пула ей не годится,
-            // а провайдерский ключ сервера — вне детского маршрута. Fail-closed, а не пропуск блока.
-            if (_providers?.ResolveByModel(EffectiveModel) is not null)
-                throw new ChildRouteRefusedException(ChildApiKeyRoute.RefusedText);
-            var childEnv = _providers?.BuildOAuthCliEnv(childSub.Key, "", childSub.ApiKey, EffectiveModel)
-                ?? throw new ChildRouteRefusedException(ChildApiKeyRoute.RefusedText);
-            foreach (var (k, v) in childEnv)
-                envOverrides[k] = v;
+            var modelProvider = _providers?.ResolveByModel(EffectiveModel);
+            if (childRoute.Kind == ChildRouteKind.Pool)
+            {
+                // Ключ пула годится только Anthropic-модели: чужая модель с ним — чужой эндпоинт.
+                if (modelProvider is not null)
+                    throw new ChildRouteRefusedException(ChildRoute.RefusedText);
+                var childEnv = _providers?.BuildOAuthCliEnv(childRoute.Pool!.Key, "", childRoute.Pool.ApiKey, EffectiveModel)
+                    ?? throw new ChildRouteRefusedException(ChildRoute.RefusedText);
+                foreach (var (k, v) in childEnv)
+                    envOverrides[k] = v;
+            }
+            else if (modelProvider is null
+                || !string.Equals(modelProvider.Key, childRoute.Provider!.Key, StringComparison.Ordinal))
+            {
+                // Провайдер модели обязан совпасть с маршрутом предмета. Env провайдера (cliEnv выше) —
+                // BuildCliEnv, как у взрослого.
+                throw new ChildRouteRefusedException(ChildRoute.RefusedText);
+            }
         }
 
         // BareMode (замена --bare, задача 2026-09-15): переменная окружения отключает

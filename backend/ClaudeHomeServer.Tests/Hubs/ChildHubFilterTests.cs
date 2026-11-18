@@ -211,6 +211,31 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
         args[4].Should().Be(false);
     }
 
+    // И6 №4 (К3): путь в каталог материалов предмета (data/child-subjects) хаб не пропускает — даже
+    // если он каким-то образом попал в учёт Session.Attachments: нормализованная форма пути обязана
+    // лежать внутри корня чата (SafePath.Join), а каталог материалов вне корня.
+    [Fact]
+    public async Task SendMessageArgs_ПутьВКаталогМатериаловПредмета_Отфильтрован_ДажеЕслиЗаписанВУчёт()
+    {
+        NoChild();
+        var chatId = await ChatAsync(ChildId, ChildSpaces.Lessons);
+        var root = Sessions.GetChatRoot(chatId, ChildId)!;
+        var dataDir = Path.GetDirectoryName(ChildSubjectMaterialsStore.RootFromConfig(
+            factory.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()))!;
+        var materials = Path.Combine(dataDir, ChildSubjectMaterialsStore.DirName, ChildId, "math", "text", "m_000000000001.txt");
+        var traversal = Path.GetRelativePath(root, materials).Replace('\\', '/');
+        var inRoot = Record(chatId, "ok.txt");
+        var session = Sessions.GetById(chatId)!;
+        (session.Attachments ??= []).Add(traversal);
+        session.Attachments.Add(materials);
+
+        var args = ChildHubFilter.SanitizeSendMessageArgs(
+            [chatId, "t", new List<string> { materials, traversal, "data/child-subjects/" + ChildId + "/math/text/m_000000000001.txt", inRoot }, null, false],
+            Sessions, ChildId);
+
+        args[2].Should().BeEquivalentTo(new List<string> { inRoot }, "ни абсолютный, ни обходной, ни «data/…» путь к материалам не проходит");
+    }
+
     [Fact]
     public async Task SendMessageArgs_NoRecordedPaths_BecomeNull()
     {

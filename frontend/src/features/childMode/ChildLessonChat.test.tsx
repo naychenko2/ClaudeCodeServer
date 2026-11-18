@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { parseHTML } from 'linkedom';
+import type { ChildSubjectView } from './types';
 
 const { window: win, document: doc } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
 Object.assign(win, {
@@ -24,6 +25,9 @@ vi.stubGlobal('navigator', { language: 'ru-RU', onLine: true, userAgent: 'node' 
 vi.stubGlobal('HTMLElement', win.HTMLElement);
 vi.stubGlobal('Node', win.Node);
 vi.stubGlobal('Event', win.Event);
+// cachedToken (аватар репетитора строит URL с токеном) читает localStorage — в тесте пустом
+vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // childApi: uploadAttachment отдаёт управляемый promise — ответ приходит в удобный момент
@@ -50,6 +54,7 @@ vi.mock('./api', () => {
       },
       voice: async () => ({ voiceMode: false, voiceStyle: 'talk' }),
     },
+    tutorAvatarUrl: (id: string) => `/api/personas/${id}/avatar`,
   };
 });
 
@@ -58,14 +63,32 @@ let mockItems: unknown[] = [];
 vi.mock('../../hooks/useSession', () => ({
   useSession: () => ({ items: mockItems, isWaiting: false, isJoined: true, send: vi.fn(), interrupt: vi.fn() }),
 }));
-// Стенд ChatItemView печатает вид и «сырой» технический текст — утечка через него видна в ленте
-vi.mock('../../components/chat/ChatItemView', () => ({
-  ChatItemView: (p: { item: { kind: string; text?: string; subtype?: string; apiErrorStatus?: string } }) =>
-    createElement('div', { 'data-civ': p.item.kind },
-      p.item.kind === 'result' && p.item.subtype !== 'success'
-        ? `ошибка API: ${p.item.apiErrorStatus} проверьте API-ключ ${p.item.subtype}`
-        : (p.item.text ?? p.item.kind)),
+// Настоящий MarkdownContent в стенде ниже — тяжёлые зависимости заглушены, как в его
+// собственном тесте (MarkdownContent.childFeed.test.tsx); сам рендер — настоящий.
+vi.mock('react-syntax-highlighter', () => ({ Prism: () => null }));
+vi.mock('react-syntax-highlighter/dist/esm/styles/prism', () => ({ oneDark: {} }));
+vi.mock('../../components/MermaidDiagram', () => ({ MermaidDiagram: () => null }));
+vi.mock('../../components/chat/MermaidDiagram', () => ({ MermaidDiagram: () => null }));
+vi.mock('../../lib/api', () => ({
+  api: { files: { getContent: () => Promise.resolve({ content: null, isBinary: false, isImage: false }), locate: () => Promise.resolve([]) } },
 }));
+vi.mock('../../lib/useInView', () => ({ useInView: () => [() => {}, false] }));
+// Стенд ChatItemView печатает вид и «сырой» технический текст — утечка через него видна в ленте.
+// Реплики (text/user_message) рендерит НАСТОЯЩИМ MarkdownContent: так тест К8b видит, доходит
+// ли ChildFeedContext до markdown (ссылка → текст без <a>), а не подменяет его своей заглушкой.
+// Вид tool_use несётся атрибутом data-tool: фильтр ленты судит, какой вызов прошёл в ленту.
+vi.mock('../../components/chat/ChatItemView', async () => {
+  const { MarkdownContent } = await import('../../components/chat/MarkdownContent');
+  return {
+    ChatItemView: (p: { item: { kind: string; name?: string; text?: string; subtype?: string; apiErrorStatus?: string } }) =>
+      createElement('div', { 'data-civ': p.item.kind, 'data-tool': p.item.name },
+        p.item.kind === 'result' && p.item.subtype !== 'success'
+          ? `ошибка API: ${p.item.apiErrorStatus} проверьте API-ключ ${p.item.subtype}`
+          : p.item.kind === 'text' || p.item.kind === 'user_message'
+            ? createElement(MarkdownContent, { text: p.item.text ?? '' })
+            : (p.item.text ?? p.item.kind)),
+  };
+});
 vi.mock('../../components/ui/WaitingIndicator', () => ({ WaitingIndicator: () => null }));
 // Стенд композера: кнопка «прикрепить» отдаёт файл хостуChildLessonChat и печатает чипы
 vi.mock('../../components/Composer', () => ({
@@ -87,8 +110,9 @@ const STATUS = {
 
 function renderChat(root: ReturnType<typeof createRoot>, sessionId: string, status = STATUS) {
   act(() => {
+    // subject=null — до-предметный/закрытый чат: эти тесты проверяют ленту и загрузку, не шапку
     root.render(createElement(ChildLessonChat, {
-      sessionId, subjectId: 'math', title: 'Сравнение дробей', status,
+      sessionId, subject: null, title: 'Сравнение дробей', status,
     }));
   });
 }
@@ -213,7 +237,7 @@ describe('ChildLessonChat: сбой хода в ленте', () => {
     { kind: 'model_switched', model: 'a', previousModel: 'b' },
     { kind: 'work_loop_stopped', reason: 'r', text: 'technical' },
     { kind: 'hands_notice', text: 'technical', tone: 'warning' },
-    { kind: 'tool_use', id: '1', name: 'Bash', input: {}, isError: true, result: 'technical' },
+    // tool_use с isError здесь больше нет: сбой отдельного инструмента — без плашки (К8b, см. ниже)
   ])('технический вид $kind — спокойная плашка, подряд идущие сворачиваются в одну', item => {
     mockItems = [item, { kind: 'error', text: 'raw' }];
     const root = createRoot(doc.getElementById('root')!);
@@ -223,4 +247,154 @@ describe('ChildLessonChat: сбой хода в ленте', () => {
     expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(1);
     root.unmount();
   });
+});
+
+// К8b («Знания репетитора», §8 п.4–5): виджет репетитора живёт в ленте на месте своего
+// вызова, сбой отдельного инструмента — без плашки (плашка остаётся только на сбой хода),
+// ChildFeedContext доходит до markdown реплик: ссылка наружу — текст без <a>.
+// routing tool_use → WidgetView делает сам ChatItemView (его строка 1531);
+// здесь проверяется фильтр ленты: что в него проходит и что нет.
+describe('ChildLessonChat: виджет и ошибки инструментов (К8b)', () => {
+  beforeEach(() => { mockItems = []; });
+
+  const civ = (feed: Element) => Array.from(feed.querySelectorAll('[data-civ]'))
+    .map(e => `${e.getAttribute('data-civ')}:${e.getAttribute('data-tool') ?? ''}`);
+
+  it('widget_show без ошибки — в ленте на своём месте; другой tool_use — по-прежнему нет', () => {
+    mockItems = [
+      { kind: 'text', text: 'посмотри схему' },
+      { kind: 'tool_use', id: 'w1', name: 'mcp__widgets__widget_show', input: { html: '<b>схема</b>' } },
+      { kind: 'tool_use', id: 't1', name: 'mcp__tutor__read_material', input: { id: 'm' } },
+    ];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-w');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    // Виджет стоит после реплики, перед следующим местом — порядок вызова сохранён
+    expect(civ(feed)).toEqual(['text:', 'tool_use:mcp__widgets__widget_show']);
+    expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(0);
+    root.unmount();
+  });
+
+  it('виджет с isError — ни карточки, ни плашки', () => {
+    mockItems = [
+      { kind: 'tool_use', id: 'w2', name: 'mcp__widgets__widget_show', input: { html: '<b>схема</b>' }, isError: true, result: 'technical' },
+    ];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-werr');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    // Мутация «убрать && !item.isError» (ChildLessonChat.tsx:89): виджет с ошибкой прошёл бы
+    // в фильтр ленты — первая строка краснеет; плашки при этом всё равно нет.
+    expect(civ(feed)).toEqual([]);
+    expect(feed.querySelectorAll('[data-child-turn-error]').length).toBe(0);
+    root.unmount();
+  });
+
+  it('сбой отдельного инструмента — без плашки; сбой хода целиком — плашка как раньше', () => {
+    mockItems = [
+      { kind: 'tool_use', id: 's1', name: 'mcp__tutor__search_materials', input: {}, isError: true, result: 'technical' },
+      { kind: 'error', text: 'Invalid API key · Fix external API key' },
+    ];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-toolerr');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    expect(civ(feed)).toEqual([]);
+    expect(feed.textContent).not.toMatch(/technical|API|ключ/i);
+    const blocks = feed.querySelectorAll('[data-child-turn-error]');
+    expect(blocks.length).toBe(1);
+    expect(blocks[0].textContent).toContain(CHILD_TURN_ERROR_TEXT);
+    root.unmount();
+  });
+
+  it('ссылка в ответе тьютора — текст без <a>', () => {
+    mockItems = [{ kind: 'text', text: 'прочитай [учебник](https://example.com)' }];
+    const root = createRoot(doc.getElementById('root')!);
+    renderChat(root, 'chat-link');
+    const feed = doc.querySelector('[data-child-feed]')!;
+    // Мутация «убрать ChildFeedContext.Provider» (К8b): здесь появляется <a href=…> — строка краснеет.
+    expect(feed.querySelectorAll('a[href]').length).toBe(0);
+    expect(feed.textContent).toContain('учебник');
+    root.unmount();
+  });
+});
+
+// Т3d: шапка по макету Д1 — аватар и имя репетитора вместо бейджа названия; метка предмета
+// — бейдж с глифом из палитры ключа; closed — спокойная панель вместо композера.
+describe('ChildLessonChat: шапка с репетитором и закрытый предмет', () => {
+  const SUBJECT = {
+    id: 'math', label: 'Математика', glyph: '×÷', color: 'info' as const,
+    tutor: { personaId: 'p1', name: 'Марья Ивановна', hasAvatar: true },
+  };
+  function renderWith(root: ReturnType<typeof createRoot>, props: { subject: ChildSubjectView | null } & Record<string, unknown>) {
+    act(() => {
+      root.render(createElement(ChildLessonChat, { sessionId: 'chat-h', title: 'Дроби', status: STATUS, ...props }));
+    });
+  }
+
+  it('живой предмет: имя репетитора в шапке, аватар — /api/personas/{id}/avatar, метка предмета на месте', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: SUBJECT });
+    expect(doc.querySelector('h1')?.textContent).toBe('Марья Ивановна');
+    expect(doc.querySelector('header img')?.getAttribute('src')).toContain('/api/personas/p1/avatar');
+    expect(doc.querySelector('header')!.textContent).toContain('Математика');
+    root.unmount();
+  });
+
+  it('нет аватара — инициалы имени вместо картинки', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: { ...SUBJECT, tutor: { ...SUBJECT.tutor, hasAvatar: false } } });
+    expect(doc.querySelector('header img')).toBeNull();
+    expect(doc.querySelector('header')!.textContent).toContain('МИ');
+    root.unmount();
+  });
+
+  it('висящий ключ персоны (tutor=null): ни имени, ни аватара — остаётся заголовок чата', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: { ...SUBJECT, tutor: null } });
+    expect(doc.querySelector('header img')).toBeNull();
+    expect(doc.querySelector('h1')?.textContent).toBe('Дроби');
+    expect(doc.querySelector('header')!.textContent).toContain('Математика');
+    root.unmount();
+  });
+
+  it('закрытый предмет: ни композера, ни лесенки — вместо них спокойная панель «Этот предмет закрыт»', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: null, subjectClosed: true });
+    expect(doc.querySelector('[data-child-closed]')?.textContent).toContain('Этот предмет закрыт');
+    expect(doc.querySelector('[data-child-closed]')!.getAttribute('role')).toBe('status');
+    expect(doc.querySelector('[data-mock-attach]')).toBeNull();
+    expect(doc.querySelector('[aria-label="Подсказки"]')).toBeNull();
+    root.unmount();
+  });
+
+  it('закрытый живой предмет: метка «закрыт» в шапке рядом с меткой предмета', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: SUBJECT, subjectClosed: true });
+    const head = doc.querySelector('header')!;
+    expect(head.textContent).toContain('закрыт');
+    expect(head.textContent).toContain('Математика');
+    root.unmount();
+  });
+
+  // Т3e (п.2): ряд бейджей шапки при subject=null. Бейдж предмета — прямой ребёнок ряда
+  // после h1; при null его нет вовсе, пустой заглушки тоже нет: ряд — ровно те бейджи,
+  // что перечислены.
+  const badgeRowTexts = () => Array.from(doc.querySelector('h1')!.nextElementSibling!.children).map(el => el.textContent);
+
+  it('до-предметный чат (subject=null): шапка с названием чата, без метки предмета и без пустого бейджа', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: null });
+    const head = doc.querySelector('header')!;
+    expect(head.querySelector('h1')?.textContent).toBe('Дроби');
+    expect(head.querySelector('img')).toBeNull();
+    expect(badgeRowTexts()).toEqual(['Помощник · программа']);
+    root.unmount();
+  });
+
+  it('закрытый чат без живого предмета (subject=null): метка «закрыт» есть, метки предмета — нет', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    renderWith(root, { subject: null, subjectClosed: true });
+    expect(badgeRowTexts()).toEqual(['закрыт', 'Помощник · программа']);
+    root.unmount();
+  });
+
 });

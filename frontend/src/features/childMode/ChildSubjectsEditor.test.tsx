@@ -3,12 +3,14 @@
 // Полный цикл на каждое действие: клик/ввод → onChange → состояние «родителя» (массив подменён)
 // → повторный рендер с ним → проверка строк в новом порядке. Компонент своих запросов не делает
 // и состояния не держит — это и проверяется: после действия смотрим ПРИШЕДШИЙ массив, а не DOM.
-// Мутации этого прогона (вывод — в отчёте задачи):
+// Мутации этого прогона (копия дерева, вывод — в отчёте задачи):
 // (1) move не менять местами, а вставлять элемент перед целевым (сдвиг, не свап) →
 //     «стрелки меняют местами, порядок остальных сохраняется» краснеет на [b,a,c];
 // (2) id генерировать при каждой правке названия → «правка названия id не меняет» краснеет;
 // (3) при коллизии id не добавлять суффикс (оставляющий первый) → «дубль получает суффикс -2»
 //     краснеет (второй id совпал бы с первым).
+// Т6: (4) в ветке смены модели писать acknowledgeRouteRisk из значения пикера →
+//     «смена модели не поднимает живое согласие в действие» краснеет (флаг=true).
 
 import { describe, it, expect, vi } from 'vitest';
 import { act, createElement } from 'react';
@@ -48,6 +50,11 @@ const routes = (): ChildRoute[] => [
     priced: true, requiresAck: true,
     models: [{ id: 'glm-5', label: 'GLM-5' }],
   },
+  {
+    providerKey: 'strata', kind: 'local', label: 'Strata (локально)',
+    priced: false, requiresAck: true,
+    models: [{ id: 'qwen-a', label: 'Qwen A' }, { id: 'qwen-b', label: 'Qwen B' }],
+  },
 ];
 
 const subject = (id: string, label: string, over: Partial<ChildSubjectAdmin> = {}): ChildSubjectAdmin => ({
@@ -60,7 +67,7 @@ let selectedCalls: string[] = [];
 
 async function mount(
   initial: ChildSubjectAdmin[],
-  opts: { routes?: ChildRoute[]; defaultRoute?: ChildRouteValue } = {},
+  opts: { routes?: ChildRoute[]; defaultRoute?: ChildRouteValue; routesError?: boolean } = {},
 ) {
   let subjects = [...initial];
   const host = doc.createElement('div');
@@ -71,6 +78,7 @@ async function mount(
   const render = () => createElement(ChildSubjectsEditor, {
     subjects,
     routes: opts.routes ?? routes(),
+    routesError: opts.routesError,
     onChange: (next: ChildSubjectAdmin[]) => {
       changes.push(next);
       subjects = next; // «родитель» принял новый массив целиком
@@ -237,5 +245,91 @@ describe('ChildSubjectsEditor', () => {
     expect(newId).toBe('fizika');
     await click(byAria(host, 'Удалить предмет «Английский»'), 'удаление первой строки');
     expect(last().map((s) => s.id)).toEqual([newId]);
+  });
+});
+
+// Т6: согласие на не-Anthropic маршрут проходит через строку в onChange целиком (решает
+// родитель), живое согласие показано галкой и строкой «Разрешено …», смена поставщика
+// снимает и флаг, и дату. Отказ загрузки списка (ревью Т4f) заглушает пикеры строк, не
+// меняя сами предметы.
+describe('ChildSubjectsEditor: согласие и отказ списка маршрутов (Т6)', () => {
+  const ACK_LABEL = 'Понимаю риск и разрешаю этот маршрут';
+  const ackBox = (row: Element) => row.querySelector(`[role="checkbox"][aria-label="${ACK_LABEL}"]`) as HTMLElement | null;
+  const rowSelect = (row: Element, label: string) => {
+    const lbl = Array.from(row.querySelectorAll('label')).find((l) => (l.textContent ?? '').includes(label));
+    return (lbl?.parentElement?.querySelector('select') ?? null) as Element | null;
+  };
+  const changeRow = async (row: Element, label: string, value: string) => {
+    const sel = rowSelect(row, label);
+    expect(sel, `поле «${label}» строки`).not.toBeNull();
+    await act(async () => { reactProps(sel!)?.onChange?.({ target: { value } }); });
+  };
+  const clickAck = async (row: Element) => {
+    const b = ackBox(row);
+    expect(b, 'галка согласия').not.toBeNull();
+    await act(async () => { b!.click(); });
+  };
+
+  // Живое согласие в черновике — дата ответа: серверный флаг родитель не пишет в черновик
+  // (draftOf, ревью Т4a), поэтому и здесьfixture — только дата.
+  it('живое согласие из ответа: галка отмечена, строка «Разрешено …»; нового действия в массиве нет', async () => {
+    const { host } = await mount([subject('geo', 'География', {
+      providerKey: 'glm', model: 'glm-5', routeAcknowledgedAt: '2026-11-10T09:00:00Z',
+    })]);
+    const row = rows(host)[0];
+    expect(ackBox(row)?.getAttribute('aria-checked'), 'согласие стоит — галка отмечена').toBe('true');
+    const line = row.querySelector('[data-testid="subject-ack-at"]');
+    expect(line, 'строка о живом согласии').not.toBeNull();
+    expect(line!.textContent).toContain('Разрешено');
+    expect(line!.textContent).toContain('Сменишь поставщика — согласие сбросится');
+    expect(changes.length, 'никто ничего не делал — нового массива нет').toBe(0);
+  });
+
+  it('смена поставщика: ни флага, ни живой даты в массиве; галка и строка «Разрешено» исчезли', async () => {
+    const { host } = await mount([subject('geo', 'География', {
+      providerKey: 'glm', model: 'glm-5', routeAcknowledgedAt: '2026-11-10T09:00:00Z',
+    })]);
+    await changeRow(rows(host)[0], 'Поставщик', 'strata');
+    const s = last()[0];
+    expect(s.providerKey).toBe('strata');
+    expect(s.model, 'модель — первая из списка нового поставщика').toBe('qwen-a');
+    // Тело без флага: при другом providerKey бэк живое согласие не считает и спросит его заново
+    expect(s.acknowledgeRouteRisk, 'прежнее согласие не едет в тело').toBeUndefined();
+    expect(s.routeAcknowledgedAt, 'живая дата снята — она была о прежнем поставщике').toBeNull();
+    // полный цикл: галка пуста, строки о согласии нет
+    expect(ackBox(rows(host)[0])?.getAttribute('aria-checked')).toBe('false');
+    expect(rows(host)[0].querySelector('[data-testid="subject-ack-at"]')).toBeNull();
+  });
+
+  it('галка ставит acknowledgeRouteRisk=true в массив целиком (решает родитель)', async () => {
+    const { host } = await mount([subject('geo', 'География', { providerKey: 'strata', model: 'qwen-a' })]);
+    expect(ackBox(rows(host)[0])?.getAttribute('aria-checked'), 'без согласия — снята').toBe('false');
+    await clickAck(rows(host)[0]);
+    expect(last()[0].acknowledgeRouteRisk).toBe(true);
+    expect(ackBox(rows(host)[0])?.getAttribute('aria-checked'), 'полный цикл — отмечена').toBe('true');
+  });
+
+  it('смена модели не поднимает живое согласие в действие: флага в массиве нет, дата цела', async () => {
+    const { host } = await mount([subject('geo', 'География', {
+      providerKey: 'strata', model: 'qwen-a', routeAcknowledgedAt: '2026-11-10T09:00:00Z',
+    })]);
+    await changeRow(rows(host)[0], 'Модель', 'qwen-b');
+    const s = last()[0];
+    expect(s.model).toBe('qwen-b');
+    // ревью Т4a: профиль, отправленный как есть, не должен молча согласовать маршрут заново —
+    // живое согласие остаётся датой, флагом действия оно не становится
+    expect(s.acknowledgeRouteRisk, 'флага действия нет').toBeUndefined();
+    expect(s.routeAcknowledgedAt, 'живая дата при том же поставщике цела').toBe('2026-11-10T09:00:00Z');
+  });
+
+  it('отказ загрузки списка: пикера строки нет и он не врёт «пула нет»; предметы правятся', async () => {
+    const { host } = await mount([subject('math', 'Математика')], { routes: [], routesError: true });
+    const row = rows(host)[0];
+    expect(row.querySelector('[data-testid="child-route-picker"]'), 'пикера строки нет').toBeNull();
+    expect((root(host).textContent ?? ''), 'ложного «Нет записей пула с API-ключом» нет').not.toContain('Нет записей пула с API-ключом');
+    expect(row.querySelector('[data-testid="subject-route-off"]'), 'строка о причине').not.toBeNull();
+    // данные предмета не заблокированы: поле живое, массив по нему обычный
+    await typeInto(inputByLabel(row, 'Название'), 'Математика 2', 'поле «Название»');
+    expect(last()[0].label).toBe('Математика 2');
   });
 });

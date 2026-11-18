@@ -22,6 +22,20 @@
 // порядок, что отдаёт GET /api/admin/child-routes). Пустые routes — пустая пара: пикер сам
 // скажет «Нет записей пула с API-ключом» (Т4c), список предметов при этом работает.
 //
+// Отказ загрузки списка (routesError, Т4f): пикеры строк заглушаются так же, как пикер
+// помощника, — пустой список сказал бы «Нет записей пула с API-ключом», чего мы не знаем:
+// поставщики могут быть, мы их просто не получили (ревью Т4f). Предметы при этом правятся
+// и сохраняются как есть — их данные не потерялись.
+//
+// Согласие на не-Anthropic маршрут (Т6, И2′): флаг живёт в черновике предмета и проходит в
+// onChange целиком — решает его родитель. Галка показывает: действие этой сессии
+// (acknowledgeRouteRisk в черновике) или живое согласие (routeAcknowledgedAt — поле ответа,
+// оно держится, пока поставщик не менялся). Смена поставщика снимает и то и другое: ни флага,
+// ни даты не остаётся (бэк живое согласие при другом providerKey не считает, UserStore).
+// Смена модели согласия не касается. Живой флаг из ответа в черновике не появляется — его
+// убирает родитель (draftOf): иначе нетронутый профиль молча согласовал бы свой маршрут
+// заново (ревью Т4a).
+//
 // Клик по строке (её текст) — onSelect(id): карточку репетитора открывает родитель (Т4f);
 // selectedId — отмеченная строка. Строка без id не выбирается: открывать нечего.
 
@@ -84,9 +98,17 @@ interface Props {
   // «Ошибка сохранения по этому предмету: рамка C.danger»). Имя берёт родитель: здесь нет
   // ни текста отказа, ни его кода.
   errorId?: string | null;
+  // Список маршрутов не загрузился (Т4f): пикеры строк заглушены (см. шапку файла) —
+  // пустые routes при этом не показывают ложного «пула нет».
+  routesError?: boolean;
 }
 
-export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, onSelect, defaultRoute, disabled, errorId }: Props) {
+// Дата согласия — только человек и дата, без времени: админу важно «когда это разрешили»,
+// не минута (поле ответа routeAcknowledgedAt).
+const fmtDate = (iso: string): string =>
+  new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+
+export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, onSelect, defaultRoute, disabled, errorId, routesError }: Props) {
   const isMobile = useIsMobile();
 
   const takenIds = new Set(subjects.map((s) => s.id).filter(Boolean));
@@ -292,12 +314,47 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
             </div>
           </div>
 
-          <ChildRoutePicker
-            routes={routes}
-            value={{ providerKey: s.providerKey, model: s.model }}
-            onChange={(v) => patch(i, (prev) => ({ ...prev, providerKey: v.providerKey, model: v.model }))}
-            disabled={disabled}
-          />
+          {routesError ? (
+            <span data-testid="subject-route-off" style={{ fontSize: FS.sm, color: C.textMuted }}>
+              Список моделей не загрузился — выбрать маршрут сейчас нечем.
+            </span>
+          ) : (
+            <>
+              <ChildRoutePicker
+                routes={routes}
+                value={{
+                  providerKey: s.providerKey,
+                  model: s.model,
+                  // Галка: действие этой сессии, иначе живое согласие (дата ответа). Пустой
+                  // черновый флаг — не «false по умолчанию»: живое согласие видно, пока его
+                  // не тронули.
+                  acknowledgeRouteRisk: s.acknowledgeRouteRisk ?? (s.routeAcknowledgedAt != null),
+                }}
+                onChange={(v) => patch(i, (prev) => {
+                  if (v.providerKey !== prev.providerKey) {
+                    // Смена поставщика снимает согласие целиком: ни флага, ни живой даты —
+                    // при другом providerKey бэк живое согласие не считает, и тело без флага
+                    // даст на сохранении route_risk_unacknowledged (так и задумано).
+                    return { ...prev, providerKey: v.providerKey, model: v.model, acknowledgeRouteRisk: undefined, routeAcknowledgedAt: null };
+                  }
+                  if (v.model !== prev.model) {
+                    // Смена модели согласия не касается: флаг из неё в черновик не пишется —
+                    // иначе живое согласие уехало бы в тело как новое действие (ревью Т4a).
+                    return { ...prev, model: v.model };
+                  }
+                  // Та же пара — это галка согласия. Снятие галки гасит и строку «Разрешено …»:
+                  // она про живое согласие, а его админ только что отозвал.
+                  return { ...prev, acknowledgeRouteRisk: v.acknowledgeRouteRisk, ...(v.acknowledgeRouteRisk ? {} : { routeAcknowledgedAt: null }) };
+                })}
+                disabled={disabled}
+              />
+              {s.routeAcknowledgedAt != null && (
+                <span data-testid="subject-ack-at" style={{ fontSize: FS.sm, color: C.textMuted }}>
+                  Разрешено {fmtDate(s.routeAcknowledgedAt)}. Сменишь поставщика — согласие сбросится.
+                </span>
+              )}
+            </>
+          )}
 
           <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
             {isMobile && (

@@ -99,8 +99,11 @@ export interface ChildSubjectAdmin {
   // (ChildProfileValidator.cs:224-226). null — репетитора у предмета ещё нет (провижн — Т2c).
   tutorPersonaId?: string | null;
   knowledge?: ChildSubjectKnowledge | null;
-  // Согласие админа на не-Anthropic маршрут (Т5a, И2′): из тела — только флаг; при смене
-  // providerKey без нового флага прежнее согласие сбрасывается (UsersController.cs:446-451).
+  // Согласие админа на не-Anthropic маршрут (Т5a/Т6, И2′). Только во ВХОДЕ, трёхзначно (Х1,
+  // ревью Т5a): true — «соглашаюсь сейчас» (стор ставит дату и автора); поля нет — живое
+  // согласие того же предмета при том же providerKey (при смене providerKey оно не переживает);
+  // false — отзыв: живое согласие не засчитывается, отказа на сохранении нет — 400 даст
+  // запуск хода (ChildProfileValidator.cs:116-131, UserStore.SetChildProfile).
   acknowledgeRouteRisk?: boolean;
   routeAcknowledgedAt?: string | null; // только в ответе: момент согласия, поле сервера
 }

@@ -11,13 +11,15 @@
   Записка с рекомендацией и текстами интерфейса — kids-settings-window-proposal.md.
   v4 (поправка Андрея 19.11): разделов четыре — Обзор, Предметы, Время и лимиты, Безопасность и согласие;
   раздела «Репетиторы» нет: репетитор — персона проекта-предмета, настраивается штатным экраном персоны.
-  Новый предмет — один шаг (название и класс), проект и репетитор создаются сами. Рекомендация — A (вкладки)
-  с мобильным списком разделов из B; C (мастер) предлагаю снять.
+  Новый предмет — один шаг (название и класс), проект и репетитор создаются сами. Тогда рекомендовалась A;
+  в v5 Андрей выбрал B (см. ниже).
   v2 (задача 5eb76cc9, 19.11): блоки «Знания» и «Доступ к файлам» у репетитора (в B — вкладки карточки
   репетитора) и на экране предмета; окно «Подключить базу» с подтверждением взрослого источника.
   v3 (поправка Андрея 19.11, ADR-041 ред. 5–6): файлы и знания предмета — папка проекта-предмета; в окне —
   только сводка «N файлов · база знаний» и кнопка «Открыть проект предмета». Детская сторона — kids-subject-folder.html.
   Блоки v2–v2.2 свёрнуты до сводки (код помечен «СНЯТО»).
+  v5 (решение Андрея 19.11, задача 8cc32b3f): окно — только две панели (бывший вариант B), он итоговый.
+  Вкладки (A) и мастер (C) убраны из макета; планшет — 768, как у детской стороны.
   v2.1: файлы прямо из окна — загрузка (перетаскиванием и с камеры телефона), список, переименование,
   предпросмотр с распознанным текстом, удаление с подтверждением; общий список «Все файлы Маши».
   Основа: ADR-041 (редакции 2–4: предметы, знания, одно согласие на профиль), прошлые макеты kids-tutors.html.
@@ -380,7 +382,7 @@ textarea.inp{height:auto;min-height:76px;padding:10px 12px;line-height:1.5;resiz
 .todo .num{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;background:var(--c-bg-inset);color:var(--c-text-secondary);flex-shrink:0}
 .todo .num.done{background:var(--c-success-bg);color:var(--c-success-text)}
 
-/* Вариант B: две панели */
+/* Две панели (вариант B, итог) */
 .split{flex:1;min-height:0;display:grid;grid-template-columns:268px 1fr}
 .split.narrow{grid-template-columns:216px 1fr}
 .nav{border-right:1px solid var(--c-border-light);background:var(--c-bg-panel);padding:12px;overflow:auto;display:flex;flex-direction:column;gap:2px}
@@ -401,18 +403,6 @@ textarea.inp{height:auto;min-height:76px;padding:10px 12px;line-height:1.5;resiz
 .m .nav{border-right:none;background:none;padding:8px 12px;gap:4px}
 .m .navitem{background:var(--c-bg-white);border:1px solid var(--c-border-light);min-height:60px}
 .crumb{display:flex;align-items:center;gap:4px;font-size:13px;color:var(--c-text-muted);margin-bottom:12px}
-
-/* Вариант C: мастер */
-.stepper{display:flex;align-items:center;gap:4px;padding:12px 24px;border-bottom:1px solid var(--c-border-light);overflow-x:auto;flex-shrink:0}
-.step{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--c-text-muted);white-space:nowrap;padding:4px 8px 4px 4px;border-radius:999px;border:none;background:none;cursor:pointer;min-height:36px}
-.step .sn{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;background:var(--c-bg-inset);color:var(--c-text-secondary)}
-.step.done .sn{background:var(--c-success-bg);color:var(--c-success-text)}
-.step.cur{background:var(--c-accent-light);color:var(--c-accent)}
-.step.cur .sn{background:var(--c-accent);color:var(--c-on-accent)}
-.stepline{width:16px;height:1px;background:var(--c-divider);flex-shrink:0}
-.mprog{padding:8px 16px 12px;border-bottom:1px solid var(--c-border-light);flex-shrink:0}
-.mprog .mp{display:flex;justify-content:space-between;font-size:12px;color:var(--c-text-muted);margin-bottom:6px}
-.mprog .mp b{color:var(--c-text-heading)}
 
 /* Скелетон / пустые */
 .sk{border-radius:10px;background:var(--c-bg-inset);animation:pl 1.4s ease-in-out infinite}
@@ -556,16 +546,15 @@ const SECS = [
 ];
 
 /* ===== Состояние макета ===== */
-const S = { v:'B', s:'filled', t:'light', w:'desk', sec:'subject', ms:'section', tt:'fd', kn:'full', fl:'list', cur:'yes', ns:'form' };
+const S = { s:'filled', t:'light', w:'desk', sec:'subject', ms:'section', tt:'fd', kn:'full', fl:'list', cur:'yes', ns:'form' };
 (location.hash.slice(1).split('&')).forEach((kv) => { const [k, v] = kv.split('='); if (k && v && k in S) S[k] = decodeURIComponent(v); });
 
 const PULT = [
-  ['v', 'Вариант', [['A','A · Вкладки'],['B','B · Две панели'],['C','C · Мастер']]],
   ['s', 'Состояние', [['empty','Пустой ребёнок'],['filled','Заполненный'],['error','Ошибка загрузки'],['consent','Согласие на риск']]],
   ['sec', 'Раздел', SECS.map(([k, l]) => [k, l]).concat([['subject','Предмет · подробно'], ['newsubj','Новый предмет']])],
   ['ns', 'Новый предмет', [['form','Название и класс'],['creating','Создаём…'],['done','Готово'],['fail','Сбой']]],
-  ['w', 'Ширина', [['desk','Десктоп 1280'],['tab','Планшет 820'],['mob','Телефон 360']]],
-  ['ms', 'B на телефоне', [['list','Список разделов'],['section','Открытый раздел']]],
+  ['w', 'Ширина', [['desk','Десктоп 1280'],['tab','Планшет 768'],['mob','Телефон 360']]],
+  ['ms', 'Телефон', [['list','Список разделов'],['section','Открытый раздел']]],
   ['cur', 'Админ', [['yes','Опекун'],['no','Ещё не опекун']]],
   ['kn', 'Файлы и знания', [['full','Есть'],['empty','Пусто']]],
   ['t', 'Тема', [['light','Светлая'],['dark','Тёмная']]],
@@ -1069,15 +1058,7 @@ function consentDialog() {
     <div class="df"><button class="btn md ghost">Отмена</button><button class="btn md primary">Разрешить</button></div></div></div>`;
 }
 
-/* ===== Вариант A · Вкладки (Modal MODAL_W.wide) ===== */
-function variantA() {
-  if (M()) return variantB();
-  const tabs = `<div class="tabs" style="padding:0 ${M() ? 8 : 24}px">${SECS.map(([k, l]) => `<button class="tab" aria-selected="${activeKey() === k}">${l}${k === 'safety' && waiting().length ? '<span class="dot"></span>' : ''}</button>`).join('')}</div>`;
-  const w = S.w === 'desk' ? 720 : S.w === 'tab' ? 720 : '100%';
-  return `<div class="overlay"><div class="modal" style="width:${typeof w === 'number' ? w + 'px' : w}">${head()}${S.s === 'error' ? '' : tabs}<div class="mbody">${S.s === 'error' ? errorBody() : curSec()}</div>${foot()}${consentDialog()}${kbDialog()}${fileDialog()}</div></div>`;
-}
-
-/* ===== Вариант B · Две панели (Modal size="fullscreen" на десктопе и планшете) ===== */
+/* ===== Две панели — вариант B, итог (Modal size="fullscreen" на десктопе и планшете) ===== */
 function navList() {
   return `<div class="navkid"><span class="pav" style="width:44px;height:44px;background:var(--group-indigo);font-size:16px">М</span><div><div style="font-size:15px;font-weight:600;color:var(--c-text-heading)">${KID.name}</div><div class="muted">${KID.grade} · <span style="color:var(--c-success-text)">режим включён</span></div></div></div>
     ${SECS.map(([k, l, i]) => { const [h, tone] = navHint(k); return `<button class="navitem" ${!M() && activeKey() === k ? 'aria-current="page"' : ''} ${S.s === 'error' ? 'disabled style="opacity:.5"' : ''}><span class="ni">${ic(i, 16)}</span><span class="nt"><span class="n1" style="display:block">${l}</span><span class="n2 ${tone}" style="display:block">${S.s === 'error' ? '—' : h}</span></span>${M() ? ic('right', 18) : ''}</button>`; }).join('')}`;
@@ -1090,18 +1071,6 @@ function variantB() {
       ${listScreen ? `<div class="mbody" style="padding:8px 4px">${navList()}</div>` : `${title}<div class="mbody">${S.s === 'error' ? errorBody() : curSec()}</div>`}${foot()}${consentDialog()}${kbDialog()}${fileDialog()}</div></div>`;
   }
   return `<div class="modal" style="width:100%;border-radius:0;box-shadow:none">${head()}<div class="split${S.w === 'tab' ? ' narrow' : ''}"><nav class="nav" aria-label="Разделы настроек">${navList()}</nav><div class="pane">${S.s === 'error' ? errorBody() : curSec()}</div></div>${foot()}${consentDialog()}${kbDialog()}${fileDialog()}</div>`;
-}
-
-/* ===== Вариант C · Мастер по шагам (Modal MODAL_W.wide) ===== */
-function variantC() {
-  const steps = SECS.filter(([k]) => k !== 'overview').concat([['overview', 'Проверка', 'check']]); // 4 шага
-  const cur = steps.findIndex(([k]) => k === activeKey());
-  const stepper = M()
-    ? `<div class="mprog"><div class="mp"><span>Шаг ${cur + 1} из ${steps.length}</span><b>${steps[cur][1]}</b></div><div class="meter"><i style="width:${(cur + 1) / steps.length * 100}%;background:var(--c-accent)"></i></div></div>`
-    : `<div class="stepper">${steps.map(([k, l], i) => `${i ? '<span class="stepline"></span>' : ''}<button class="step ${i < cur ? 'done' : ''} ${i === cur ? 'cur' : ''}"><span class="sn">${i < cur ? ic('check', 12) : i + 1}</span>${i === cur ? l : `<span style="position:absolute;left:-9999px">${l}</span>`}</button>`).join('')}</div>`;
-  const nav = S.s === 'error' ? '' : `<div class="mfoot">${cur > 0 ? `<button class="btn md ghost">${ic('left', 16)}Назад</button>` : ''}<span class="dirty"></span>${M() ? '' : '<button class="btn md secondary">Сохранить и выйти</button>'}<button class="btn md primary">${cur === steps.length - 1 ? 'Сохранить' : 'Дальше'}${cur === steps.length - 1 ? '' : ic('right', 16)}</button></div>`;
-  const w = M() ? '100%' : '720px';
-  return `<div class="overlay"><div class="modal" style="width:${w}">${head()}${S.s === 'error' ? '' : stepper}<div class="mbody">${S.s === 'error' ? errorBody() : curSec()}</div>${nav}${consentDialog()}${kbDialog()}${fileDialog()}</div></div>`;
 }
 
 /* ===== «Управление пользователями» — строка с галочкой ===== */
@@ -1120,31 +1089,27 @@ function usersPanel() {
 }
 
 /* ===== Записка под рамкой ===== */
-const NOTES = {
-  A: { plus:['Четыре вкладки помещаются в окно 720 — разделы видны все сразу','Карточка, а не полный экран: окно настроек не перекрывает всё приложение','Дешевле всего: Modal + Tabs, как у живых «Персон»','На телефоне — список разделов из B: ничего не уезжает за край'],
-       minus:['На десктопе подсказки состояния короче, чем в навигации B («•» на вкладке вместо «2 ждут согласия»)'] },
-  B: { plus:['Подсказки состояния у каждого раздела','Растёт без перестройки, если разделов снова станет много'],
-       minus:['Полноэкранное окно ради четырёх пунктов — левая колонка почти пустая','Дороже A при той же пользе: свой список и экран «назад»'] },
-  C: { plus:['Ведёт за руку при первой настройке'],
-       minus:['Вести больше некуда: предмет создаётся в один шаг, репетитор и проект — сами','Первую настройку закрывает «Обзор» с тремя шагами «с чего начать»','Плох для правки, а окно почти всегда правят'] },
-};
+const NOTES = [
+  ['Почему две панели', ['Андрей выбрал B 19.11: у каждого раздела видна подсказка состояния («2 ждут согласия», «3 предмета»)','Растёт без перестройки, если разделов снова станет больше','Вкладки (A) и мастер (C) сняты']],
+  ['Ширины', ['1280 — окно на весь экран: слева список разделов 268, справа раздел до 760','768 — список ужат до 216, раздел с полями 20','360 — сначала список разделов карточками, тап открывает раздел с «←» в шапке']],
+  ['Для Киры', ['Modal size="fullscreen" на 1280 и 768, на 360 — тот же Modal во весь экран','Строка раздела — иконка 32 в C.bgInset, у текущего — C.accentLight и C.accent','Подсказка состояния: обычная — C.textMuted, «ждёт» — C.warningText, сбой — C.dangerText']],
+];
 function notesBlock() {
-  return `<div class="notes">${['A', 'B', 'C'].map((v) => `<div class="nb ${v === 'A' ? 'rec' : ''}"><h4>${{ A:'A · Вкладки + список на телефоне — рекомендую', B:'B · Две панели', C:'C · Мастер — предлагаю снять' }[v]}</h4>
-    <b>Плюсы</b><ul>${NOTES[v].plus.map((x) => `<li>${x}</li>`).join('')}</ul><b>Минусы</b><ul>${NOTES[v].minus.map((x) => `<li>${x}</li>`).join('')}</ul></div>`).join('')}</div>`;
+  return `<div class="notes">${NOTES.map(([h, li]) => `<div class="nb"><h4>${h}</h4><ul>${li.map((x) => `<li>${x}</li>`).join('')}</ul></div>`).join('')}</div>`;
 }
 
 /* ===== Сборка ===== */
 function render() {
   document.documentElement.setAttribute('data-theme', S.t);
   renderPult();
-  const W = { desk:1280, tab:820, mob:360 }[S.w];
+  const W = { desk:1280, tab:768, mob:360 }[S.w];
   const cls = `frame${M() ? ' m' : ''}`;
-  const body = { A:variantA, B:variantB, C:variantC }[S.v]();
+  const body = variantB();
   document.getElementById('stage').innerHTML =
     `<div class="cap">Шаг 1 · «Управление пользователями»: только галочка и вход в окно</div>
      <div class="${cls} short" data-theme="${S.t}" style="width:${W}px">${usersPanel()}</div>
-     <div class="cap">Шаг 2 · окно «Настройки детского режима» — вариант ${S.v}</div>
-     <div class="${cls}" data-theme="${S.t}" style="width:${W}px" data-frame="settings-${S.v}">${body}</div>
+     <div class="cap">Шаг 2 · окно «Настройки детского режима» — две панели (вариант B, итог)</div>
+     <div class="${cls}" data-theme="${S.t}" style="width:${W}px" data-frame="settings">${body}</div>
      ${notesBlock()}`;
 }
 render();

@@ -11,6 +11,8 @@
   Записка с рекомендацией и текстами интерфейса — kids-settings-window-proposal.md.
   v2 (задача 5eb76cc9, 19.11): блоки «Знания» и «Доступ к файлам» у репетитора (в B — вкладки карточки
   репетитора) и на экране предмета; окно «Подключить базу» с подтверждением взрослого источника.
+  v3 (поправка Андрея 19.11, ADR-041 ред. 5–6): файлы и знания предмета — папка проекта-предмета, блок
+  «Папка предмета»; схема обеих сторон — kids-subject-folder.html. Блоки v2–v2.2 сняты.
   v2.1: файлы прямо из окна — загрузка (перетаскиванием и с камеры телефона), список, переименование,
   предпросмотр с распознанным текстом, удаление с подтверждением; общий список «Все файлы Маши».
   Основа: ADR-041 (редакции 2–4: предметы, знания, одно согласие на профиль), прошлые макеты kids-tutors.html.
@@ -550,7 +552,7 @@ const SECS = [
 ];
 
 /* ===== Состояние макета ===== */
-const S = { v:'B', s:'filled', t:'light', w:'desk', sec:'tutors', ms:'section', tt:'kn', kn:'full', fl:'list' };
+const S = { v:'B', s:'filled', t:'light', w:'desk', sec:'tutors', ms:'section', tt:'fd', kn:'full', fl:'list', cur:'yes' };
 (location.hash.slice(1).split('&')).forEach((kv) => { const [k, v] = kv.split('='); if (k && v && k in S) S[k] = decodeURIComponent(v); });
 
 const PULT = [
@@ -559,9 +561,8 @@ const PULT = [
   ['sec', 'Раздел', SECS.map(([k, l]) => [k, l]).concat([['subject','Предмет · подробно']])],
   ['w', 'Ширина', [['desk','Десктоп 1280'],['tab','Планшет 820'],['mob','Телефон 360']]],
   ['ms', 'B на телефоне', [['list','Список разделов'],['section','Открытый раздел']]],
-  ['tt', 'Репетитор · вкладка (B)', [['char','Характер'],['kn','Знания'],['fa','Доступ к файлам']]],
-  ['kn', 'Знания', [['full','Подключено'],['empty','Ничего нет'],['pick','Подключить базу…']]],
-  ['fl', 'Файлы', [['list','Список'],['empty','Пусто'],['drag','Перетаскивание'],['upload','Загрузка'],['error','Ошибка'],['rename','Переименование'],['preview','Предпросмотр'],['del','Удаление']]],
+  ['tt', 'Репетитор · вкладка (B)', [['char','Характер'],['fd','Папка и знания']]],
+  ['cur', 'Админ', [['yes','Опекун'],['no','Ещё не опекун']]],
   ['t', 'Тема', [['light','Светлая'],['dark','Тёмная']]],
 ];
 function renderPult() {
@@ -641,14 +642,36 @@ function secSubjects() {
     <p class="muted" style="margin-top:12px">Нажми на предмет, чтобы открыть его: класс, модель, репетитор и материалы.</p>`;
 }
 
+/* ===== v3 · Папка предмета (ADR-041 ред. 5–6, поправка Андрея 19.11) =====
+   Предмет — проект ребёнка со своей папкой; куратор (опекун) работает с ней в общем проекте взрослыми
+   рельсами «Файлы» и «Знания». Окно показывает ту же папку. Подробная схема — kids-subject-folder.html. */
+function folderBlock(detail) {
+  if (S.s === 'empty') return `<div class="lbl">Папка предмета</div><p class="muted">Папка и база знаний появятся вместе с предметом.</p>`;
+  const head = `<div class="lbl">Папка предмета · Математика</div>
+    <p class="muted" style="margin:-4px 0 12px">Это папка проекта «Математика · Маша». Её же видит Маша в рельсе «Файлы» на уроке, а Сова Ульяна читает её на уроках. Знания репетитора — база знаний этой папки.</p>`;
+  if (S.cur === 'no') return head + `<div class="notice warning">${ic('alert', 16)}<div class="tx"><div class="tt">Ты пока не опекун Маши</div>Работать с файлами предмета могут только опекуны. Добавь себя в «Безопасности». Общие проекты должны быть включены на сервере и у тебя.<div class="act"><button class="btn sm primary">К опекунам</button></div></div></div>`;
+  const row = (ind, icn, name, tag, tone) => `<div class="rrow" style="padding-left:${16 + ind * 24}px;min-height:44px"><span style="color:var(--c-text-secondary)">${ic(icn, 16)}</span><div style="flex:1;min-width:0"><div class="rn" style="font-weight:${ind ? 500 : 600}">${name}</div></div>${tag ? `<span class="badge ${tone}">${tag}</span>` : ''}</div>`;
+  return head + `<div class="card" style="overflow:hidden">
+      <div class="kgh" style="white-space:normal">${ic('users', 14)}Маша видит, что ты видишь эту папку. Уроки Маши тебе не видны</div>
+      ${row(0, 'folder', 'Материалы', 'Маша читает', 'success')}${detail ? row(1, 'file', 'Таблица умножения.pdf') : ''}
+      ${row(0, 'folder', 'Для репетитора', 'Маша не видит · ключи ответов', 'warning')}${detail ? row(1, 'file', 'Ответы к задачам.pdf') : ''}
+      ${row(0, 'folder', 'Домашка', 'файлы Маши', 'neutral')}${row(0, 'file', 'Что я не поняла.md', 'файл Маши', 'neutral')}
+      <div class="rrow"><span class="ri adult">${ic('db', 16)}</span><div style="flex:1;min-width:0"><div class="rn">База знаний проекта</div><div class="rm">Вся папка, кроме корзины · обновлена 5 мин назад</div></div></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn md primary">${ic('folder', 16)}Открыть проект «Математика · Маша»</button>${detail ? `<button class="btn md ghost">${ic('upload', 16)}Загрузить в «Материалы»</button>` : ''}</div>
+    <p class="muted" style="margin-top:8px">Загрузка, переименование, удаление и база знаний — в рельсах «Файлы» и «Знания» проекта. Ключи ответов клади в «Для репетитора»: Маша эту папку не видит.</p>`;
+}
+
+/* ===== СНЯТО ADR-041 ред. 6: блоки v2–v2.2 ниже (базы Dify, флаги файла, библиотека) не реализовывать.
+   Код оставлен для истории макета, на экраны он больше не выводится. ===== */
 /* ===== v2 · Знания и доступ к файлам репетитора ===== */
 // Сколько знаний у предмета: файлы + база. Для «Математики» учитывается рычаг «Знания» пульта.
 const filesEmpty = () => S.kn === 'empty' || S.fl === 'empty';
 const subjFiles = (s) => (s.id === 'math' ? (filesEmpty() ? 0 : FILES.length) : s.files);
 const subjKb = (s) => (s.id === 'math' && S.kn === 'empty' ? null : s.kb && KB[s.kb]);
 const knHint = (s) => { const f = subjFiles(s), k = subjKb(s);
-  if (!f && !k) return '<span style="color:var(--c-warning-text)">знаний нет</span>';
-  return [f ? `${f} ${f === 1 ? 'файл' : 'файла'}` : '', k ? 'база' : ''].filter(Boolean).join(' · '); };
+  if (!f) return 'папка пустая';
+  return `в папке ${f || 0} ${f === 1 ? 'файл' : 'файла'}`; };
 const scopeBadge = (k) => { const [l, i] = SCOPE[k.scope]; return `<span class="badge info">${ic(i, 11)}${l}</span>`; };
 
 function knowledgeBlock(s, where, detail) {
@@ -829,10 +852,7 @@ function secSubject() {
              : `<span class="hint">${kindBadge(s.route)} При сбое урок перейдёт на соседнюю модель из цепочки</span>`}</div>
     <div class="lbl">Репетитор</div>
     <div class="card pad" style="display:flex;align-items:center;gap:12px">${ava(s.tutor, 48)}<div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:600;color:var(--c-text-heading)">${t.name}</div><div class="muted">${t.voice} · ${t.modes.length} режима</div></div><button class="btn sm ghost">Настроить${ic('right', 14)}</button></div>
-    ${knowledgeBlock(s, 'subject', S.v === 'B')}
-    <span class="muted" style="display:block;margin-top:8px">Маша видит файлы с включённым «Видно Маше» в рельсе «Материалы» на уроке. Ключи ответов держи скрытыми.</span>
-    ${accessBlock(s, false)}
-    <button class="btn link">Подробнее о доступе — у репетитора${ic('right', 14)}</button>
+    ${folderBlock(S.v === 'B')}
     <div style="margin-top:24px"><button class="btn md danger">${ic('trash', 16)}Удалить предмет</button></div>`;
 }
 
@@ -850,12 +870,12 @@ function secTutors() {
       return `<button class="tcard" aria-pressed="${id === 't1'}">${ava(id, M() ? 44 : 56)}<div style="min-width:0;flex:1"><div class="tn">${x.name}</div><div class="muted" style="display:flex;align-items:center;gap:6px;margin-top:4px">${glyph(s, true)}${s.label}${s.on ? '' : ' · выкл.'}</div><div class="muted" style="display:flex;align-items:center;gap:4px;margin-top:4px">${ic('book', 12)}${knHint(s)}</div></div>${M() ? ic('right', 18) : ''}</button>`;
     }).join('')}</div>
     <div class="lbl">${t.name} · Математика</div>
-    ${S.v === 'B' ? tutorTabs() : tutorChar() + knowledgeBlock(SUBJ[0], 'tutor', false) + accessBlock(SUBJ[0], false)}`;
+    ${S.v === 'B' ? tutorTabs() : tutorChar() + folderBlock(false)}`;
 }
 function tutorTabs() {
-  const tabs = [['char', 'Характер'], ['kn', 'Знания'], ['fa', 'Доступ к файлам']];
-  const bar = `<div class="tabs" role="tablist" style="margin-bottom:4px">${tabs.map(([k, l]) => `<button class="tab" role="tab" aria-selected="${S.tt === k}">${l}${k === 'kn' && S.kn === 'empty' ? '<span class="dot"></span>' : ''}</button>`).join('')}</div>`;
-  const body = S.tt === 'char' ? tutorChar() : S.tt === 'kn' ? knowledgeBlock(SUBJ[0], 'tutor', true) : accessBlock(SUBJ[0], true);
+  const tabs = [['char', 'Характер'], ['fd', 'Папка и знания']];
+  const bar = `<div class="tabs" role="tablist" style="margin-bottom:4px">${tabs.map(([k, l]) => `<button class="tab" role="tab" aria-selected="${S.tt === k}">${l}${k === 'fd' && S.cur === 'no' ? '<span class="dot"></span>' : ''}</button>`).join('')}</div>`;
+  const body = S.tt === 'char' ? tutorChar() : folderBlock(true);
   return bar + body;
 }
 function tutorChar() {
@@ -942,7 +962,7 @@ const curSec = () => SEC_FN[S.sec]();
 const navHint = (k) => {
   if (S.s === 'empty') return { overview:['Начни отсюда',''], subjects:['Нет предметов','w'], tutors:['Появятся с предметами',''], models:['Только API-ключи',''], time:['Весь день, без лимита',''], safety:['Опекунов нет',''] }[k];
   const w = waiting().length;
-  return { overview:[w ? `${w} требуют внимания` : 'Всё в порядке', w ? 'w' : ''], subjects:['3 из 4 включены',''], tutors:[S.kn === 'empty' ? '2 без знаний' : '4 репетитора · 1 без знаний','w'],
+  return { overview:[w ? `${w} требуют внимания` : 'Всё в порядке', w ? 'w' : ''], subjects:['3 из 4 включены',''], tutors:['4 репетитора',''],
     models:[consentOn() ? 'Согласие дано' : `${w} ждут согласия`, consentOn() ? '' : 'w'], time:['45 мин · 2 окна',''], safety:['1 опекун','' ] }[k];
 };
 const activeKey = () => (S.sec === 'subject' ? 'subjects' : S.sec);

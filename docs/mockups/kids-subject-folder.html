@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Детский режим — папка предмета и рельса «Файлы» · схема v1</title>
+<!--
+  СХЕМА, не макет: состав рельсы ещё может поменяться по разрезу Александра (ADR-041, редакции 5–6,
+  черновик 19.11), поэтому здесь раскладка, состав и состояния, без полировки.
+  Эпик 45af8178-8435-4746-8f13-bd3cc781585e, задача 5eb76cc9 (role=design). Записка — kids-subject-folder-proposal.md.
+  Заменяет детскую рельсу «Материалы» (kids-materials-rail.html, отклонена поправкой Андрея 19.11).
+  Детская сторона: взрослая рельса «Файлы» (FileExplorer + FileViewer) по папке проекта-предмета,
+  встроенная в детский экран предмета и урока. Сторона куратора: та же папка в окне настроек
+  (kids-settings-window.html, блок «Папка предмета») и в общем проекте обычными рельсами «Файлы» и «Знания».
+  Только var(--c-*) из theme.css; сырой hex — лишь в блоке темы.
+-->
+<style>
+/* ===== Тема: frontend/src/lib/theme.css ===== */
+:root, [data-theme="light"] {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-on-dark:#FFFFFF;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-track:#D8CFBE; --c-smoke:#B4A899;
+  --c-overlay:rgba(23,19,15,.42); --c-msg-bg:rgba(251,248,242,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-rose:#B0527C; --c-rose-text:#8E3D62;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-peek:0 2px 6px rgba(60,50,35,.14),0 20px 48px rgba(23,19,15,.32);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --canvas-glow:radial-gradient(140% 70% at 50% 0%,rgba(217,119,87,.13),transparent 55%),radial-gradient(120% 60% at 50% 110%,rgba(110,140,120,.10),transparent 60%);
+  /* GROUP_COLORS из design.ts — палитра аватаров-инициалов, от темы не зависит */
+  --group-blue:#3E7CA6; --group-violet:#8E4A82; --group-green:#3F7A4F; --group-orange:#C2693B; --group-indigo:#4B6BB0; --group-khaki:#7A7250;
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-track:#453F37; --c-smoke:#7E7566;
+  --c-overlay:rgba(0,0,0,.62); --c-msg-bg:rgba(46,42,37,.38);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-rose:#D683A6; --c-rose-text:#E7A3C0;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+  --shadow-peek:0 2px 8px rgba(0,0,0,.50),0 24px 56px rgba(0,0,0,.68);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+  --canvas-glow:radial-gradient(140% 70% at 50% 0%,rgba(227,138,106,.11),transparent 55%),radial-gradient(120% 60% at 50% 110%,rgba(110,140,120,.08),transparent 60%);
+}
+
+*{box-sizing:border-box}
+body{margin:0;font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--c-bg-inset);color:var(--c-text-primary)}
+svg.i{display:inline-block;vertical-align:-3px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.pult{position:sticky;top:0;z-index:20;display:flex;gap:12px;align-items:center;padding:8px 16px;background:var(--c-bg-panel);border-bottom:1px solid var(--c-border);font-size:12px;color:var(--c-text-secondary)}
+.pill{display:flex;gap:3px;padding:3px;border-radius:10px;background:var(--c-bg-selected)}
+.pill button{border:none;cursor:pointer;background:transparent;border-radius:7px;padding:4px 9px;font-size:12px;font-weight:600;color:var(--c-text-secondary)}
+.pill button[aria-pressed="true"]{background:var(--c-bg-white);color:var(--c-text-heading)}
+.wrap{max-width:1320px;margin:0 auto;padding:24px 16px 48px;display:flex;flex-direction:column;gap:28px}
+h2{margin:0;font-family:'PT Serif',Georgia,serif;font-size:22px;font-weight:500;color:var(--c-text-heading)}
+.sub{font-size:13px;color:var(--c-text-muted);margin-top:4px;line-height:1.5;max-width:900px}
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.cap{font-size:12px;font-weight:600;color:var(--c-text-heading);margin-bottom:6px}
+.cap span{display:block;font-weight:400;color:var(--c-text-muted);margin-top:2px}
+
+/* Каркасы раскладки */
+.lay{border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-main);overflow:hidden;display:flex;flex-direction:column;font-size:11px;color:var(--c-text-secondary)}
+.lay .hd{height:28px;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid var(--c-border-light);background:var(--c-bg-panel)}
+.lay .bd{flex:1;display:flex;gap:6px;padding:6px;position:relative}
+.blk{border:1.5px dashed var(--c-dashed);border-radius:8px;display:flex;align-items:center;justify-content:center;text-align:center;padding:6px;color:var(--c-text-muted)}
+.blk.rail{border-style:solid;border-color:var(--c-accent);background:var(--c-accent-light);color:var(--c-accent);font-weight:600}
+.scrim{position:absolute;inset:0;background:var(--c-overlay)}
+
+/* Мини-кадр 360 с рельсой */
+.cell{width:340px}
+.fr{width:340px;height:560px;border-radius:14px;overflow:hidden;background:var(--c-bg-panel);border:1px solid var(--c-border-light);box-shadow:var(--shadow-card);display:flex;flex-direction:column;position:relative}
+.fh{min-height:44px;display:flex;align-items:center;gap:6px;padding:4px 6px 4px 12px;border-bottom:1px solid var(--c-border);background:var(--c-bg-main);font-size:14px;font-weight:600;color:var(--c-text-heading)}
+.fh .sp{flex:1}
+.ib{width:36px;height:36px;border-radius:8px;border:none;background:transparent;color:var(--c-text-muted);display:grid;place-items:center;cursor:pointer}
+.fb{flex:1;overflow:hidden;padding:8px;display:flex;flex-direction:column;gap:6px}
+.seen{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:8px;background:var(--c-info-bg);color:var(--c-text-primary);font-size:12px}
+.tb{display:flex;gap:6px}
+.b{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:0 12px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-bg-white);font-size:13px;font-weight:600;color:var(--c-text-secondary)}
+.b.p{background:var(--c-accent);border-color:var(--c-accent);color:var(--c-on-accent)}
+.b.dg{background:var(--c-danger);border-color:var(--c-danger);color:var(--c-on-dark)}
+.b.f{flex:1}
+.tr{display:flex;align-items:center;gap:6px;min-height:36px;padding:0 6px;border-radius:8px;font-size:13px;color:var(--c-text-primary)}
+.tr.in{padding-left:26px}
+.tr.sel{background:var(--c-bg-selected)}
+.tr .n{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tr .lk{color:var(--c-text-muted)}
+.tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:999px;white-space:nowrap}
+.tag.ro{background:var(--c-bg-inset);color:var(--c-text-secondary)}
+.tag.hid{background:var(--c-warning-bg);color:var(--c-warning-text)}
+.tag.kid{background:var(--c-accent-light);color:var(--c-accent)}
+.tag.tut{background:var(--c-info-bg);color:var(--c-info)}
+.menu{position:absolute;right:12px;width:220px;background:var(--c-bg-card);border:1px solid var(--c-border);border-radius:12px;box-shadow:var(--shadow-island);padding:4px;z-index:3}
+.mi{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 10px;border-radius:8px;font-size:13px;color:var(--c-text-primary)}
+.mi.dg{color:var(--c-danger-text)}
+.mi.off{color:var(--c-text-muted)}
+.sep{height:1px;background:var(--c-border-light);margin:4px 0}
+.view{flex:1;border-radius:10px;border:1px solid var(--c-border-light);background:var(--c-bg-white);display:grid;place-items:center;color:var(--c-text-muted);font-size:12px;text-align:center;padding:8px}
+.note{font-size:12px;line-height:1.45;padding:8px;border-radius:8px;border:1px solid}
+.note.info{background:var(--c-info-bg);border-color:var(--c-info)}
+.note.warn{background:var(--c-warning-bg);border-color:var(--c-warning);color:var(--c-warning-text)}
+.dlg{position:absolute;left:0;right:0;bottom:0;background:var(--c-bg-card);border-radius:18px 18px 0 0;padding:14px;display:flex;flex-direction:column;gap:8px;box-shadow:var(--shadow-modal);z-index:4}
+.dlg h3{margin:0;font-family:'PT Serif',Georgia,serif;font-size:18px;font-weight:500;color:var(--c-text-heading)}
+.dlg p{margin:0;font-size:13px;line-height:1.5;color:var(--c-text-secondary)}
+.msg{align-self:flex-end;max-width:85%;background:var(--c-bg-white);border:1px solid var(--c-border-light);border-radius:14px 14px 4px 14px;padding:8px 10px;font-size:14px}
+.att{display:flex;gap:6px;align-items:center;padding:6px;border-radius:8px;background:var(--c-bg-card);border:1px solid var(--c-border-light);font-size:12px;margin-bottom:6px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--c-text-secondary)}
+.tbl{border-collapse:collapse;font-size:13px;background:var(--c-bg-card);border-radius:12px;overflow:hidden;min-width:min(100%,900px)}
+.tbl th,.tbl td{padding:8px 12px;border-bottom:1px solid var(--c-border-light);text-align:left;vertical-align:top}
+.tbl th{background:var(--c-bg-panel);font-size:12px;color:var(--c-text-secondary)}
+</style>
+</head>
+<body>
+<div class="pult"><b style="color:var(--c-text-heading)">Тема</b><div class="pill"><button id="tl" aria-pressed="true" onclick="th('light')">Светлая</button><button id="td" aria-pressed="false" onclick="th('dark')">Тёмная</button></div>
+  <span>Схема для разреза — состав рельсы может поменяться</span></div>
+<div class="wrap" id="root"></div>
+<script>
+const P = {
+  folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/>',
+  file:'<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  lock:'<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  trash:'<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
+  more:'<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+  eye:'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  eyeoff:'<path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6C3.9 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/>',
+  send:'<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+  upload:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+  download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  plus:'<path d="M5 12h14"/><path d="M12 5v14"/>', x:'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  left:'<path d="m15 18-6-6 6-6"/>', down:'<path d="m6 9 6 6 6-6"/>', right:'<path d="m9 18 6-6-6-6"/>',
+  undo:'<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/>',
+  pen:'<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>',
+  search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  db:'<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+};
+const ic = (n, s = 16) => `<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24">${P[n]}</svg>`;
+function th(t) { document.documentElement.setAttribute('data-theme', t); document.getElementById('tl').setAttribute('aria-pressed', t === 'light'); document.getElementById('td').setAttribute('aria-pressed', t === 'dark'); }
+
+/* Дерево папки «Математика» глазами ребёнка: Для репетитора/, .ccs-text/, .ccs-trash/ не показываются */
+const kidTree = (opt = {}) => `
+  <div class="tr">${ic('down', 14)}${ic('folder')}<span class="n"><b>Материалы</b></span><span class="tag ro">${ic('lock', 11)} только чтение</span></div>
+  <div class="tr in">${ic('file')}<span class="n">Таблица умножения.pdf</span><span class="lk">${ic('lock', 14)}</span></div>
+  <div class="tr in">${ic('file')}<span class="n">Меры длины.xlsx</span><span class="lk">${ic('lock', 14)}</span></div>
+  <div class="tr">${ic('down', 14)}${ic('folder')}<span class="n">Домашка</span></div>
+  <div class="tr in ${opt.sel === 'hw' ? 'sel' : ''}">${ic('image')}<span class="n">Домашка 19 ноября.jpg</span>${ic('more', 16)}</div>
+  <div class="tr in">${ic('file')}<span class="n">Задача 3 — решение.md</span>${ic('more', 16)}</div>
+  <div class="tr ${opt.sel === 'note' ? 'sel' : ''}">${ic('file')}<span class="n">Что я не поняла.md</span>${ic('more', 16)}</div>
+  <div class="tr">${ic('file')}<span class="n">Доклад про скорость.pptx</span>${ic('more', 16)}</div>
+  <div class="tr" style="margin-top:4px;border-top:1px solid var(--c-border-light);border-radius:0">${ic('trash')}<span class="n">Корзина</span><span class="tag ro">2</span>${ic('right', 14)}</div>`;
+const railHead = (t = 'Файлы · Математика', back) => `<div class="fh">${back ? `<button class="ib">${ic('left', 18)}</button>` : ic('folder')}<span class="sp">${t}</span><button class="ib">${ic('x', 18)}</button></div>`;
+const seen = `<div class="seen">${ic('eye', 14)}Эту папку видят: ты, Андрей, Ольга</div>`;
+const tools = `<div class="tb"><span class="b f">${ic('upload')}Загрузить</span><span class="b">${ic('plus')}Файл</span><span class="b">${ic('search')}</span></div>`;
+
+const cells = [
+  ['1 · Список', 'Взрослый FileExplorer: дерево папки предмета. «Материалы» под замком, «Для репетитора» не видна вовсе.',
+    `${railHead()}<div class="fb">${seen}${tools}${kidTree()}</div>`],
+  ['2 · Пусто', 'Новая папка предмета: «Материалы» может быть пустой, своих файлов нет.',
+    `${railHead()}<div class="fb">${seen}${tools}<div class="tr">${ic('folder')}<span class="n"><b>Материалы</b></span><span class="tag ro">${ic('lock', 11)} только чтение</span></div>
+      <div class="view" style="flex:0 0 200px">Тут пока пусто.<br>Сфотографируй домашку или создай файл — его сможешь отправить в урок.</div></div>`],
+  ['3 · Меню своего файла', 'Своё: всё, что есть у взрослого, кроме закрытых ручек (diff, revert, git).',
+    `${railHead()}<div class="fb">${seen}${tools}${kidTree({ sel:'hw' })}</div>
+      <div class="menu" style="top:236px">${[['eye','Открыть'],['send','Отправить в урок'],['download','Скачать'],['pen','Переименовать']].map(([i, l]) => `<div class="mi">${ic(i)}${l}</div>`).join('')}<div class="sep"></div><div class="mi dg">${ic('trash')}Удалить в корзину</div></div>`],
+  ['4 · Меню файла из «Материалов»', 'Только чтение: «Переименовать» и «Удалить» нет совсем, а не серые.',
+    `${railHead()}<div class="fb">${seen}${tools}${kidTree()}</div>
+      <div class="menu" style="top:186px">${[['eye','Открыть'],['send','Отправить в урок'],['download','Скачать']].map(([i, l]) => `<div class="mi">${ic(i)}${l}</div>`).join('')}<div class="sep"></div><div class="mi off">${ic('lock')}Это от взрослых — только читать</div></div>`],
+  ['5 · Просмотр: картинка / PDF', 'FileViewer внутри рельсы (stream). Кнопка «Отправить в урок» — в шапке просмотра.',
+    `${railHead('Домашка 19 ноября.jpg', true)}<div class="fb"><div class="view">${ic('image', 40)}<br>картинка или страница PDF<br>листание страниц у PDF</div><div class="tb"><span class="b p f">${ic('send')}Отправить в урок</span><span class="b">${ic('more')}</span></div></div>`],
+  ['6 · Просмотр: офис', 'Текст из .ccs-text, оригинал — скачать.',
+    `${railHead('Доклад про скорость.pptx', true)}<div class="fb"><div class="note info">Показываем только текст. Картинки и оформление — в оригинале.</div><div class="view" style="place-items:start;text-align:left">Слайд 1 · Скорость — это…<br>Слайд 2 · Как измерить…</div><div class="tb"><span class="b p f">${ic('send')}В урок</span><span class="b">${ic('download')}Оригинал</span></div></div>`],
+  ['7 · Правка текста', 'Взрослый редактор текста (PUT content), .md и .txt. «Материалы» открываются только на чтение.',
+    `${railHead('Что я не поняла.md', true)}<div class="fb"><div class="view" style="place-items:start;text-align:left;border-color:var(--c-accent);box-shadow:var(--shadow-focus)">Почему, когда идут навстречу, скорости складывают?|</div><div class="tb"><span class="b f">Сохранить</span><span class="b p f">${ic('send')}В урок</span></div></div>`],
+  ['8 · Удаление — подтверждение', 'Всегда в корзину. Текст говорит, сколько хранится.',
+    `${railHead()}<div class="fb">${seen}${kidTree({ sel:'note' })}</div><div class="scrim"></div>
+      <div class="dlg"><h3>Убрать «Что я не поняла.md» в корзину?</h3><p>30 дней его можно вернуть из корзины. Потом он удалится насовсем.</p><div class="tb"><span class="b f">Оставить</span><span class="b dg f">${ic('trash')}В корзину</span></div></div>`],
+  ['9 · Корзина', 'Своё удалённое и прежние версии файлов, которые переписал репетитор. «Вернуть» — POST restore.',
+    `${railHead('Корзина', true)}<div class="fb"><div class="note warn">Здесь файлы лежат 30 дней, потом удаляются насовсем.</div>
+      ${[['Черновик.md', 'удалён тобой · вчера'], ['Задача 3 — решение.md', 'прежняя версия · до правки репетитора']].map(([n, m]) => `<div class="tr" style="min-height:48px">${ic('file')}<span class="n">${n}<br><span style="font-size:11px;color:var(--c-text-muted)">${m}</span></span><span class="b">${ic('undo')}Вернуть</span></div>`).join('')}</div>`],
+  ['10 · Отправлено в урок', 'Вложение путём проекта (attachedPaths) и слова «Давай разберём».',
+    `<div class="fh">Урок · Сова Ульяна</div><div class="fb" style="background:var(--c-bg-main)"><div class="msg"><div class="att">${ic('image')}Домашка 19 ноября.jpg</div>Давай разберём</div></div>`],
+];
+
+/* Сторона куратора: та же папка в окне настроек */
+const curator = `
+  <div class="tr">${ic('down', 14)}${ic('folder')}<span class="n"><b>Материалы</b></span><span class="tag kid">${ic('eye', 11)} Маша читает</span>${ic('more', 16)}</div>
+  <div class="tr in">${ic('file')}<span class="n">Таблица умножения.pdf</span></div>
+  <div class="tr">${ic('down', 14)}${ic('folder')}<span class="n"><b>Для репетитора</b></span><span class="tag hid">${ic('eyeoff', 11)} Маша не видит · ключи ответов</span>${ic('more', 16)}</div>
+  <div class="tr in">${ic('file')}<span class="n">Ответы к задачам.pdf</span></div>
+  <div class="tr">${ic('right', 14)}${ic('folder')}<span class="n">Домашка</span><span class="tag ro">файлы Маши</span></div>
+  <div class="tr">${ic('file')}<span class="n">Что я не поняла.md</span><span class="tag ro">файл Маши</span></div>
+`;
+
+document.getElementById('root').innerHTML = `
+  <div><h2>Ребёнок · раскладка рельсы «Файлы»</h2><div class="sub">Рельса — взрослая «Файлы» по папке проекта-предмета, встроенная в детскую оболочку на экране предмета и в уроке. Ширина рельсы — как у взрослой (не уже 320).</div></div>
+  <div class="row">
+    <div><div class="cap">1280 · урок<span>рельса островом справа, открыта по умолчанию</span></div>
+      <div class="lay" style="width:520px;height:250px"><div class="hd">Уроки · Ещё 35 мин</div><div class="bd"><div class="blk" style="flex:1">урок с репетитором<br>(лента и поле ввода)</div><div class="blk rail" style="width:150px">Файлы<br>папка «Математика»</div></div></div></div>
+    <div><div class="cap">768 · урок или предмет<span>кнопка «Файлы» в шапке, панель поверх</span></div>
+      <div class="lay" style="width:300px;height:250px"><div class="hd">Уроки · ${ic('folder', 12)}</div><div class="bd"><div class="blk" style="flex:1">урок</div><div class="scrim"></div><div class="blk rail" style="position:absolute;right:6px;top:6px;bottom:6px;width:150px">Файлы</div></div></div></div>
+    <div><div class="cap">360<span>та же кнопка, шторка снизу почти на весь экран</span></div>
+      <div class="lay" style="width:150px;height:250px"><div class="hd">${ic('left', 12)} Сова · ${ic('folder', 12)}</div><div class="bd"><div class="blk" style="flex:1">урок</div><div class="scrim"></div><div class="blk rail" style="position:absolute;left:0;right:0;bottom:0;top:30px;border-radius:12px 12px 0 0">Файлы</div></div></div></div>
+    <div><div class="cap">Экран предмета<span>та же рельса рядом со списком уроков</span></div>
+      <div class="lay" style="width:300px;height:250px"><div class="hd">Уроки</div><div class="bd"><div class="blk" style="flex:1">Математика<br>Новый урок<br>Мои уроки</div><div class="blk rail" style="width:120px">Файлы</div></div></div></div>
+  </div>
+  <div><h2>Ребёнок · состояния рельсы (360)</h2><div class="sub">Кадры — схема состава и поведения. Цвета, отступы и иконки берутся у живых FileExplorer и FileViewer, детская оболочка только даёт кнопку «Отправить в урок» и строку «Эту папку видят».</div></div>
+  <div class="legend"><span><span class="tag ro">${ic('lock', 11)} только чтение</span> — «Материалы»: ни «Переименовать», ни «Удалить»</span><span>${ic('eye', 14)} строка «Эту папку видят» — имена кураторов (решение 64)</span></div>
+  <div class="row">${cells.map(([t, s, h]) => `<div class="cell"><div class="cap">${t}<span>${s}</span></div><div class="fr">${h}</div></div>`).join('')}</div>
+  <div><h2>Куратор · та же папка в окне настроек</h2><div class="sub">В «Настройках детского режима» у предмета блок «Папка предмета» — это папка проекта-предмета, которую куратор видит со своей стороны. Работа с файлами — во взрослых рельсах «Файлы» и «Знания» общего проекта.</div></div>
+  <div class="row">
+    <div class="cell" style="width:420px"><div class="cap">Куратор (опекун)<span>Editor общего проекта: пишет в «Материалы» и «Для репетитора», читает файлы Маши</span></div>
+      <div class="fr" style="width:420px;height:auto"><div class="fh">${ic('folder')}<span class="sp">Папка предмета · Математика</span></div><div class="fb">
+        <div class="seen">${ic('eye', 14)}Маша видит, что ты видишь эту папку. Уроки Маши тебе не видны</div>
+        <div class="tb"><span class="b f">${ic('upload')}Загрузить в «Материалы»</span><span class="b">${ic('upload')}В «Для репетитора»</span></div>
+        ${curator}
+        <div class="seen" style="background:var(--c-bg-inset)">${ic('db', 14)}База знаний проекта: всё, кроме корзины · обновлена 5 мин назад</div>
+        <span class="b p">Открыть проект «Математика · Маша»</span></div></div></div>
+    <div class="cell" style="width:420px"><div class="cap">Админ — ещё не опекун<span>админ куратором автоматически не становится (решение 61)</span></div>
+      <div class="fr" style="width:420px;height:auto"><div class="fh">${ic('folder')}<span class="sp">Папка предмета · Математика</span></div><div class="fb">
+        <div class="note warn">Чтобы работать с файлами предмета, добавь себя в опекуны Маши — в «Безопасности». Общие проекты должны быть включены на сервере и у тебя.</div>
+        <span class="b">К опекунам</span>
+        <div class="view" style="flex:0 0 120px">Файлы появятся здесь,<br>когда ты станешь опекуном</div></div></div></div>
+  </div>
+  <div><h2>Кто что может в папке предмета</h2></div>
+  <table class="tbl"><tr><th>Папка</th><th>Маша (рельса)</th><th>Репетитор (ход)</th><th>Куратор (общий проект)</th></tr>
+    <tr><td>Корень и свои папки</td><td>смотреть, править текст, загружать, переименовывать, удалять в корзину</td><td>Read, Write, Edit (прежняя версия — в корзину)</td><td>читать и писать</td></tr>
+    <tr><td><b>Материалы/</b></td><td>только читать, скачать, отправить в урок</td><td>только читать</td><td>читать и писать</td></tr>
+    <tr><td><b>Для репетитора/</b></td><td>не видна</td><td>читать</td><td>читать и писать</td></tr>
+    <tr><td>Корзина</td><td>смотреть и «Вернуть»</td><td>—</td><td>открытый вопрос к разрезу: <code>.ccs-trash</code> — скрытый каталог</td></tr>
+    <tr><td>Уроки (чаты)</td><td>свои</td><td>—</td><td>не видны (приватные чаты ребёнка)</td></tr>
+  </table>`;
+</script>
+</body>
+</html>

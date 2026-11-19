@@ -342,4 +342,87 @@ public class WikiAutoLinkTests
         res.Added.Should().Be(1);
         res.MissedWordForms.Should().Be(1);
     }
+
+    // ─── доработка A2-1 (вердикт Глеба 2414f4ea): границы фразы, цифры заголовка, CRLF ───
+
+    [Fact]
+    public void МеждуСловамиЦелиТолькоПробелы_ПунктуацияИМаркеры_НеЛинкуются()
+    {
+        // Пункт 1: каждый случай проверяется своим Apply — при одном тексте правило
+        // «одна цель — одна ссылка» замаскировало бы второй и третий. «очередь. Задач»,
+        // «очередь, задач», «**очередь** задач» — не вхождение фразы (между словами цели
+        // не-пробел): текст не трогается, точка и маркеры целы. «очередь  задач» (пробелы)
+        // — линкуется. До правки MatchesOf брал подряд идущие слова без проверки промежутка:
+        // краснеют все три «не линкуются» случая (диапазон замены съедал «. », «, », «**»).
+        var snapshot = new[] { Entry(SectionKey, "Проекты/p1/Очередь-Задач.md", Topic("Очередь Задач")) };
+
+        var dotted = Apply("Сначала очередь. Задач берутся.", snapshot);
+        dotted.Text.Should().Be("Сначала очередь. Задач берутся.");
+        dotted.Added.Should().Be(0);
+
+        var comma = Apply("Потом очередь, задач берутся.", snapshot);
+        comma.Text.Should().Be("Потом очередь, задач берутся.");
+        comma.Added.Should().Be(0);
+
+        var bold = Apply("Далее **очередь** задач стоят.", snapshot);
+        bold.Text.Should().Be("Далее **очередь** задач стоят.");
+        bold.Added.Should().Be(0);
+
+        var spaced = Apply("А очередь  задач линкуется.", snapshot);
+        spaced.Text.Should().Be("А [[Очередь Задач]] линкуется.");
+        spaced.Added.Should().Be(1);
+
+        var second = Apply(spaced.Text, snapshot);
+        second.Text.Should().Be(spaced.Text);
+        second.Added.Should().Be(0);
+    }
+
+    [Fact]
+    public void ЦифраЗаголовка_ЧастьСлова_СословнаяЦельСКифрой_НеЛинкуетОбычноеСлово()
+    {
+        // Пункт 2: токен цели — буквы и цифры. «Версия 2» — двухсловная цель («версия», «2»),
+        // одиночное «версия» её не покрывает; до правки WordsOf брал только буквы и цель
+        // становилась однословной «версия» — линковала любое «версия». «Qwen3 модель» не
+        // матчится на «qwen модель» (цифра — часть слова); чистое «qwen3 модель» — интервал
+        // с цифрой, не линкуется (правило чисел).
+        var snapshot = new[]
+        {
+            Entry(SectionKey, "Проекты/p1/Версия-2.md", Topic("Версия 2")),
+            Entry(SectionKey, "Проекты/p1/Qwen3-Модель.md", Topic("Qwen3 модель")),
+        };
+        var text = "Версия важна. Qwen модель старше. qwen3 модель новее.";
+        var res = Apply(text, snapshot);
+
+        res.Text.Should().Be(text);
+        res.Added.Should().Be(0);
+        res.MissedWordForms.Should().Be(0);
+
+        var second = Apply(res.Text, snapshot);
+        second.Text.Should().Be(res.Text);
+        second.Added.Should().Be(0);
+    }
+
+    [Fact]
+    public void CRLF_БезПравок_ПобайтноВход_СПравкой_СохраняетCR()
+    {
+        // Пункт 3: при Added=0 вывод побайтно равен входу (каждая строка CRLF сохраняла
+        // \r, обработанная без правок теряла — смесь). Строка с правкой меняет только
+        // интервал совпадения, \r на конце остаётся.
+        var snapshot = new[] { Entry(SectionKey, "Проекты/p1/Сборка-Модуля.md", Topic("Сборка Модуля")) };
+        var plain = "Строка без целей.\r\nИ ещё строка.\r\n";
+        var res = Apply(plain, snapshot);
+
+        res.Text.Should().Be(plain);
+        res.Added.Should().Be(0);
+
+        var linked = "Сборка Модуля тут.\r\nСборка Модуля там.\r\n";
+        var res2 = Apply(linked, snapshot);
+
+        res2.Text.Should().Be("[[Сборка Модуля]] тут.\r\nСборка Модуля там.\r\n");
+        res2.Added.Should().Be(1);
+
+        var second = Apply(res2.Text, snapshot);
+        second.Text.Should().Be(res2.Text);
+        second.Added.Should().Be(0);
+    }
 }

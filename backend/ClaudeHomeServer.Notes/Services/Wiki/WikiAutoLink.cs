@@ -14,8 +14,10 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // - Цель — только заголовок (алиасы целью не становятся; их точные вхождения считаются
 //   в MissedWordForms). Не цель: карточки source и chronicle, проекции "_*", своя страница.
 // - Совпадение — последовательность слов заголовка по основам WikiCandidates (NFC, нижний
-//   регистр, ё→е, те же основы) на границах слов: слова — полные буквенные последовательности
-//   строки, между ними — только разделители. Самое длинное совпадение первым: точное совпадение
+//   регистр, ё→е, те же основы) на границах слов: слова — полные последовательности букв и
+//   цифр строки (цифра внутри слова — часть слова, «qwen3» ≠ «qwen»), в промежутке между
+//   словами цели — только пробельные символы («очередь. задачи» — не вхождение фразы).
+//   Самое длинное совпадение первым: точное совпадение
 //   занимает свой интервал, и более короткое внутри него не линкуется. Однословная цель — от
 //   MinSingleWordTitleChars букв и не из стоп-списка (короткие заголовки неотличимы от
 //   обычных слов).
@@ -29,6 +31,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // - Одна цель — одна ссылка на текст (первое вхождение). Строка, где ссылок уже
 //   MaxLinksPerLine (существующих и новых вместе), новых не получает: считались бы только
 //   новые — идемпотентность f(f(x)) == f(x) ломалась бы на строке с четвёртой целью.
+// - CRLF-текст сохраняется: строка без правок выходит побайтно равной входу (с \r),
+//   строка с правкой меняет только интервалы совпадений, \r на конце остаётся.
 public static class WikiAutoLink
 {
     /// <summary>Минимальная длина однословного заголовка, символов.</summary>
@@ -158,7 +162,7 @@ public static class WikiAutoLink
             var lineLinks = CountLinks(line);
             foreach (var target in targets)
             {
-                foreach (var (start, end, kind) in MatchesOf(target, words, wordStems))
+                foreach (var (start, end, kind) in MatchesOf(target, norm, words, wordStems))
                 {
                     var gStart = baseOffset + start;
                     var gEnd = baseOffset + end;
@@ -169,7 +173,8 @@ public static class WikiAutoLink
                     if (OverlapsAny(protectedSpans, gStart, gEnd) || OverlapsAny(claimed, start, end))
                         continue; // внутри существующей ссылки/сноски или более длинного совпадения
                     if (norm.AsSpan(start, end - start).IndexOfAnyInRange('0', '9') >= 0)
-                        continue; // фраза с цифрой не линкуется и не считается
+                        continue; // интервал с цифрой не линкуется и не считается
+                                    // (цифра внутри слова — часть слова, «qwen3» ≠ «qwen»)
                     if (kind != MatchKind.TitleForm)
                         claimed.Add((start, end));
                     if (kind == MatchKind.TitleExact)
@@ -191,7 +196,7 @@ public static class WikiAutoLink
                 }
             }
             lineEdits.Sort((a, b) => a.Start.CompareTo(b.Start));
-            rendered[li] = ApplyEdits(line, lineEdits);
+            rendered[li] = ApplyEdits(rawLine, line, lineEdits);
         }
 
         var missed = 0;
@@ -268,16 +273,19 @@ public static class WikiAutoLink
     // ─── совпадение на строке ───
 
     // Все вхождения цели в строке. Заголовок: слово за словом по основе; слова — подряд
-    // идущие буквенные последовательности строки (каждая — полное слово, между ними только
-    // разделители; цифра между слов — «фраза с цифрой», снимается вызывающим). Точное
+    // идущие последовательности букв и цифр строки (каждая — полное слово; в промежутке
+    // между словами цели — только пробелы: «очередь. задачи» — не вхождение фразы, интервал
+    // замены не должен есть чужую пунктуацию). Точное
     // совпадение всех слов — TitleExact, иначе словоформа. Алиас: только точное вхождение
     // (его в A2 не линкуем, только считаем).
     private static IEnumerable<(int Start, int End, MatchKind Kind)> MatchesOf(
-        Target target, List<(int Start, int End)> words, List<(string Text, string Stem)> wordStems)
+        Target target, string norm, List<(int Start, int End)> words, List<(string Text, string Stem)> wordStems)
     {
         var n = target.Words.Length;
         for (var i = 0; i + n <= words.Count; i++)
         {
+            if (!GapsAreWhitespace(norm, words, i, n))
+                continue; // между словами цели — не-пробел: разные фразы, не вхождение
             var exact = true;
             for (var k = 0; k < n; k++)
             {
@@ -295,6 +303,8 @@ public static class WikiAutoLink
             var m = aw.Length;
             for (var i = 0; i + m <= words.Count; i++)
             {
+                if (!GapsAreWhitespace(norm, words, i, m))
+                    continue; // та же граница фразы, что у заголовка
                 var ok = true;
                 for (var k = 0; k < m; k++)
                 {
@@ -310,13 +320,17 @@ public static class WikiAutoLink
         }
     }
 
+    // Слова строки: полные последовательности букв и цифр (цифра внутри слова — часть
+    // слова: заголовок «Qwen3 модель» не матчится на «qwen модель»; «2026» — слово-токен,
+    // поэтому между словами заголовка не окажется цифра). Промежуток между соседними
+    // словами — непустой по построению (максимальные последовательности).
     private static List<(int Start, int End)> WordSpans(string norm)
     {
         var spans = new List<(int Start, int End)>();
         var start = -1;
         for (var i = 0; i < norm.Length; i++)
         {
-            if (char.IsLetter(norm[i]))
+            if (char.IsLetter(norm[i]) || char.IsDigit(norm[i]))
             {
                 if (start < 0)
                     start = i;
@@ -332,20 +346,40 @@ public static class WikiAutoLink
         return spans;
     }
 
+    // Промежутки между словами кандидата i..i+count-1: только пробельные символы. Пустой
+    // промежуток невозможен (слова максимальны), но и он не считается пробелом.
+    private static bool GapsAreWhitespace(string norm, List<(int Start, int End)> words, int i, int count)
+    {
+        for (var k = 0; k < count - 1; k++)
+        {
+            for (var p = words[i + k].End; p < words[i + k + 1].Start; p++)
+                if (!char.IsWhiteSpace(norm[p]))
+                    return false;
+        }
+        return true;
+    }
+
     // ─── строки и интервалы ───
 
-    private static string ApplyEdits(string line, List<(int Start, int End, string Insert)> edits)
+    // Строка с правками: нормализованная копия (line) до первого правого края, затем
+    // хвост rawLine — с \r на конце (CRLF-текст меняется только там, где стоит ссылка;
+    // при Added=0 вывод побайтно равен входу).
+    private static string ApplyEdits(string rawLine, string line, List<(int Start, int End, string Insert)> edits)
     {
         if (edits.Count == 0)
-            return line;
-        var sb = new StringBuilder(line.Length + 64);
+            return rawLine;
+        var sb = new StringBuilder(rawLine.Length + 64);
         var pos = 0;
         foreach (var (start, end, insert) in edits) // добавлены по возрастанию start
         {
             sb.Append(line, pos, start - pos).Append(insert);
             pos = end;
         }
-        return sb.Append(line, pos, line.Length - pos).ToString();
+        sb.Append(line, pos, line.Length - pos);
+        var tail = rawLine.Length - line.Length; // \r строки CRLF
+        if (tail > 0)
+            sb.Append(rawLine, line.Length, tail);
+        return sb.ToString();
     }
 
     private static bool OverlapsAny(List<(int Start, int End)> spans, int start, int end)

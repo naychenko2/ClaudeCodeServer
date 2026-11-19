@@ -448,8 +448,6 @@ public static class WikiGate
     // при применении плана) и WikiChatIngestService.AppendChronicleAsync (снятие при
     // записи claim в хронику — для раздела дома хроники и его цепочки вверх, Q1-S4b).
 
-    private static readonly Regex ClaimLinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
-
     internal static string StripUnresolvedLinks(
         string claim, string sectionKey, IReadOnlyList<string> upChain,
         IReadOnlyList<(string Section, WikiPage Page, string Path)> snapshot, out int removed)
@@ -457,7 +455,7 @@ public static class WikiGate
         removed = 0;
         var sb = new StringBuilder(claim.Length);
         var pos = 0;
-        foreach (Match m in ClaimLinkRx.Matches(claim))
+        foreach (Match m in WikiPage.LinkRx.Matches(claim))
         {
             var inner = m.Groups[1].Value;
             if (ResolveLink(inner, sectionKey, upChain, snapshot).Outcome == LinkOutcome.Resolved)

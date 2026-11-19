@@ -42,7 +42,11 @@ public sealed class WikiPage
     // Определение сноски: [^id]: <цель> — «цитата». Цель — только [[Карточка]].
     private static readonly Regex FootnoteDefRx = new(@"^\[\^([^]\r\n]+)\]: (.+?) — «(.*)»$", RegexOptions.CultureInvariant);
     private static readonly Regex FootnoteRefRx = new(@"\[\^([^]\r\n]+)\]", RegexOptions.CultureInvariant);
-    private static readonly Regex LinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
+    /// <summary>Единственный образец [[…]]-ссылки вики (хвост 14): группа 1 — всё внутри скобок,
+    /// «]]» и перевод строки внутри цели не встречаются. Им пользуются парсер страницы, гейт,
+    /// хранитель, учёт чисел и проекции; ссылки заметок (NotesService.WikiLink), видимость и
+    /// тексты причин гейта — другая семантика, отдельные образцы.</summary>
+    internal static readonly Regex LinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
     private static readonly Regex SessionRefRx = new(@"^session:([A-Za-z0-9_-]+)#m([0-9]+)-([0-9]+)\z", RegexOptions.CultureInvariant);
 
     /// <summary>Сложить текст в одну строку: формат страницы строчный — строки секций и

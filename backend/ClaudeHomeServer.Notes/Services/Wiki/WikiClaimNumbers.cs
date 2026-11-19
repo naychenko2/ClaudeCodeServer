@@ -121,12 +121,11 @@ internal static class WikiClaimNumbers
         NumberTail + "|(?<![0-9.])(?<![0-9]" + SignGuardSpaceClass + "+)[" + MinusAscii + MinusUnicode + "]" + NumberTail,
         RegexOptions.Compiled);
 
-    // Ссылка в claim — та же [[…]], что читает гейт со страницы (тот же образец, что
-    // ClaimLinkRx валидатора: «]]» внутри цели не встречается). Её текст — не часть
+    // Ссылка в claim — та же [[…]], что читает гейт со страницы (WikiPage.LinkRx:
+    // «]]» внутри цели не встречается). Её текст — не часть
     // утверждения: число в заголовке ссылки не число утверждения, его автор — страница
     // цели. Снятой ссылки здесь уже нет: её текст к этому времени обычный текст
     // утверждения, его числа считаются.
-    private static readonly Regex ClaimLinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.Compiled);
 
     /// <summary>Числа из claim, которых нет ни в одной цитате (пусто — всё
     /// подтверждено). Порядок — по первому вхождению в claim, без дублей; значения
@@ -164,7 +163,7 @@ internal static class WikiClaimNumbers
     // Claim для проверки чисел: текст уцелевших ссылок вырезается пробелом, чтобы
     // числа не склеивались с заголовком («12[[x]]34» — это 12 и 34, не 1234; тот же
     // приём, что у меток выше).
-    private static string WithoutLinkSpans(string claim) => ClaimLinkRx.Replace(claim, " ");
+    private static string WithoutLinkSpans(string claim) => WikiPage.LinkRx.Replace(claim, " ");
 
     // Максимальные вхождения чисел по тексту, нормализованные: сравнение целыми
     // токенами, поэтому «123» не порождает «12» и «12» не подтверждается «123».

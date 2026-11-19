@@ -38,6 +38,7 @@ public sealed class WikiNoteTransfer
         TransferOutcome Outcome, string? Reason, string? Section = null, string? Page = null,
         string? PackageId = null, IReadOnlyList<string>? Violations = null);
 
+    // Отдельный образец: здесь ссылка разбирается на якорь и подпись (WikiPage.LinkRx берёт всё внутри скобок целиком).
     private static readonly Regex LinkRx = new(@"\[\[([^\]\r\n|#]+)(?:#[^\]\r\n|]*)?(?:\|([^\]\r\n]*))?\]\]", RegexOptions.CultureInvariant);
     private static readonly Regex BulletRx = new(@"^(?:#{1,6}\s+|>\s*|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)+", RegexOptions.CultureInvariant);
     private static readonly Regex FootnoteRx = new(@"\[\^[^\]\r\n]+\]", RegexOptions.CultureInvariant);

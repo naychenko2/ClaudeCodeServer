@@ -178,9 +178,8 @@ public sealed class WikiKeeper : IWikiRelink
     /// поднятый лимит новых страниц раздела действует ровно отмеренный срок.</summary>
     public const int PurgeBacklogDays = 14;
 
-    // Та же форма [[…]]-ссылки, что у парсера страницы (WikiPage.LinkRx): ссылка на карточку
-    // — это ссылка, где бы она ни стояла, в определении сноски или в теле.
-    private static readonly Regex PurgeLinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
+    // Ссылка на карточку — это ссылка (WikiPage.LinkRx), где бы она ни стояла: в определении
+    // сноски или в теле.
 
     /// <summary>Чистка ИИ-страниц (ADR-039, решение 10): вики начинается заново — страницы
     /// модели уходят, разбор перезапускается. Разрушающая: сначала предпросмотр (dryRun —
@@ -293,7 +292,7 @@ public sealed class WikiKeeper : IWikiRelink
         {
             if (doomedKeys.Contains(rel)) continue;
             if (models[rel] is { } own && own.Frontmatter.Type == WikiFrontmatter.TypeSource) continue; // карточка — не читатель
-            foreach (Match m in PurgeLinkRx.Matches(texts[rel]))
+            foreach (Match m in WikiPage.LinkRx.Matches(texts[rel]))
             {
                 var target = m.Groups[1].Value;
                 referenced.Add(WikiGate.Norm(target)); // внутри раздела — голым заголовком

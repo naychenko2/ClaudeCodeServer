@@ -22,8 +22,22 @@ public sealed class PersonaAskService(
     public async Task<string> AskAsync(string ownerId, Persona persona, string question,
         string? context, CancellationToken ct, bool callerIsPrivate)
     {
+        // Модель вызова резолвится ДО сборки промпта: дисциплинарная обвязка
+        // (PersonaPromptBuilder.DisciplineFor) берётся по провайдеру модели, а persona.Model
+        // пуст у персон, чья модель задаётся слотами/пресетами, — обвязка всегда выходила
+        // claude-веткой, даже когда вызов шёл на локальной или GLM-модели (дефект ревизии 18.11).
+        // Дисциплина и исполнение обязаны идти от одного значения: runModel — то, что уйдёт в раннер.
+        // Персона без своей модели отвечает своим уровнем, без уровня — моделью места
+        // «чат с персоной» (слоты тиров), как и её обычный чат; прежде такой one-shot
+        // уходил на дефолт CLI мимо настроек. При null от резолвера остаётся fallback на persona.Model.
+        var askModel = assignments?.Resolve(LocalActionCatalog.ChatPersona,
+            assignments.PersonaModel(persona, ownerId,
+                LocalActionCatalog.DefaultTierOf(LocalActionCatalog.ChatPersona)), ownerId)
+            ?? persona.Model;
+        var runModel = oneShot.NormalizeModel(askModel);
+
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine(promptBuilder.Build(persona, persona.Model, greeted: false));
+        sb.AppendLine(promptBuilder.Build(persona, runModel, greeted: false));
 
         // Релевантная память — best-effort: без неё ответ всё равно валиден
         if (persona.MemoryEnabled)
@@ -57,16 +71,9 @@ public sealed class PersonaAskService(
 
         var timeout = TimeSpan.FromMilliseconds(
             int.TryParse(config["Persona:AskTimeoutMs"], out var t) ? t : 120_000);
-        // Персона без своей модели отвечает своим уровнем, без уровня — моделью места
-        // «чат с персоной» (слоты тиров), как и её обычный чат; прежде такой one-shot
-        // уходил на дефолт CLI мимо настроек
-        var askModel = assignments?.Resolve(LocalActionCatalog.ChatPersona,
-            assignments.PersonaModel(persona, ownerId,
-                LocalActionCatalog.DefaultTierOf(LocalActionCatalog.ChatPersona)), ownerId)
-            ?? persona.Model;
         // Только именованные: ownerId и effort — соседние string?, и позиционный effort
         // молча вставал на место владельца — ход уходил в локальную среду мимо песочницы
-        var answer = await oneShot.RunAsync(sb.ToString(), oneShot.NormalizeModel(askModel),
+        var answer = await oneShot.RunAsync(sb.ToString(), runModel,
             timeout: timeout, ct: ct, ownerId: ownerId, effort: persona.Effort);
         if (string.IsNullOrWhiteSpace(answer))
             throw new InvalidOperationException("Персона не ответила (пустой ответ модели)");

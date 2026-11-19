@@ -22,6 +22,8 @@ public class PersonaAskServiceTests
         public string? OwnerId;
         public string? Effort;
         public int Calls;
+        public string? Prompt;
+        public string? Model;
 
         public string? NormalizeModel(string? model) => model;
 
@@ -32,6 +34,8 @@ public class PersonaAskServiceTests
             Calls++;
             OwnerId = ownerId;
             Effort = effort;
+            Prompt = prompt;
+            Model = model;
             return Task.FromResult("ответ персоны");
         }
 
@@ -68,6 +72,72 @@ public class PersonaAskServiceTests
         fake.Calls.Should().Be(1);
         fake.OwnerId.Should().Be("owner-42");
         fake.Effort.Should().Be("high");
+    }
+
+    // Дисциплинарная обвязка промпта (PersonaPromptBuilder.DisciplineFor) берётся по
+    // провайдеру модели — обязана идти с той же модели, что уйдёт в раннер. У бойовых персон
+    // Model пуст (модель задаётся ячейками/пресетами), и раньше обвязка всегда выходила
+    // claude-веткой, даже когда вызов шёл на GLM или локальной модели (дефект ревизии 18.11).
+    [Fact]
+    public async Task ДисциплинаПромпта_ПоРазрешённойМоделиМеста_АНеПоПустомуModelПерсоны()
+    {
+        var fake = new CapturingOneShot();
+        using var factory = new TestWebApplicationFactory
+        {
+            ExtraServices = s =>
+            {
+                s.RemoveAll<IOneShotRunner>();
+                s.AddSingleton<IOneShotRunner>(fake);
+            }
+        };
+        var svc = factory.Services.GetRequiredService<PersonaAskService>();
+        // Модель персоны — ячейка «сильная» (так бойовые персоны и получают модель через
+        // ячейки/пресеты), Model пуст. «Чат с персоной» — место уровня Strong: её ячейка выигрывает.
+        var persona = new Persona
+        {
+            OwnerId = "owner-42", Name = "Глеб", Handle = "gleb-test",
+            MemoryEnabled = false,
+            TierStrong = "glm-4.7", // id из каталога провайдера glm (test-конфиг)
+        };
+
+        await svc.AskAsync("owner-42", persona, "Что думаешь?", context: null,
+            ct: default, callerIsPrivate: false);
+
+        fake.Model.Should().Be("glm-4.7");
+        // GLM-ветка дисциплины (FiveFailures) вместо claude-ветки (LeastChange)
+        fake.Prompt.Should().Contain("## Калибровка", "дисциплина обязана идти по модели исполнения");
+        fake.Prompt.Should().NotContain("## Прагматизм", "claude-обвязка при GLM-модели вызова — этот дефект");
+    }
+
+    // Явная Model персоны — первый шаг резолвера (ModelAssignmentResolver.cs:427): она ведёт
+    // и промпт, и вызов; `?? persona.Model` в AskAsync при этом сохранён — он держит случай
+    // без резолвера (assignments == null), тестить который через хост нечем.
+    [Fact]
+    public async Task ДисциплинаПромпта_ЯвнаяModelПерсоныВедётИПромптИВызов()
+    {
+        var fake = new CapturingOneShot();
+        using var factory = new TestWebApplicationFactory
+        {
+            ExtraServices = s =>
+            {
+                s.RemoveAll<IOneShotRunner>();
+                s.AddSingleton<IOneShotRunner>(fake);
+            }
+        };
+        var svc = factory.Services.GetRequiredService<PersonaAskService>();
+        var persona = new Persona
+        {
+            OwnerId = "owner-42", Name = "Климент", Handle = "kliment-test",
+            MemoryEnabled = false,
+            Model = "glm-4.7",
+        };
+
+        await svc.AskAsync("owner-42", persona, "Что думаешь?", context: null,
+            ct: default, callerIsPrivate: false);
+
+        fake.Model.Should().Be("glm-4.7");
+        fake.Prompt.Should().Contain("## Калибровка");
+        fake.Prompt.Should().NotContain("## Прагматизм");
     }
 
     // --- Сквозная цепочка persona_ask (MCP CallAsync → AskAsync → LearnFromConsultation) ---

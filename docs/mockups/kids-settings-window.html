@@ -327,6 +327,15 @@ textarea.inp{height:auto;min-height:76px;padding:10px 12px;line-height:1.5;resiz
 .pv .pic{aspect-ratio:3/4;border-radius:12px;background:var(--c-bg-inset);display:grid;place-items:center;color:var(--c-text-muted);border:1px solid var(--c-border-light)}
 .m .pv .pic{aspect-ratio:4/3}
 .pv .ocr{font-size:13px;line-height:1.55;color:var(--c-text-primary);white-space:pre-wrap;padding:12px;border-radius:12px;background:var(--c-bg-white);border:1px solid var(--c-border-light);max-height:320px;overflow:auto}
+.fopts{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;margin-top:6px}
+.schip{display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 6px 0 3px;border-radius:999px;background:var(--c-bg-inset);font-size:12px;color:var(--c-text-primary);border:none;cursor:pointer}
+.schip.add{padding:0 8px;color:var(--c-accent);background:transparent;border:1px dashed var(--c-dashed)}
+.m .schip{height:36px}
+.sw{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-secondary);min-height:32px;cursor:pointer;background:none;border:none;padding:0}
+.m .sw{min-height:40px}
+.toggle.sm{width:34px;height:20px;padding:2px}
+.toggle.sm i{width:16px;height:16px}
+.toggle.sm[aria-checked="true"] i{margin-left:14px}
 .fgroup{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--c-bg-panel);font-size:13px;font-weight:600;color:var(--c-text-heading);flex-wrap:wrap}
 .fgroup .muted{font-weight:400;margin-left:auto}
 
@@ -514,12 +523,16 @@ const SUBJ = [
 ];
 /* Файлы предмета «Математика» (ChildSubjectMaterialsStore): kind pdf/docx/text/image, у image — OCR */
 const FILES = [
-  { n:'Учебник, с. 42', ext:'.jpg', kind:'Фото', size:'1,2 МБ', date:'18 нояб.', i:'image', ocr:'ok' },
-  { n:'Таблица умножения', ext:'.pdf', kind:'PDF · 2 стр.', size:'84 КБ', date:'14 нояб.', i:'file' },
-  { n:'Задачи на движение', ext:'.docx', kind:'Word · 6 стр.', size:'31 КБ', date:'12 нояб.', i:'file' },
+  { n:'Учебник, с. 42', ext:'.jpg', kind:'Фото', size:'1,2 МБ', date:'18 нояб.', i:'image', ocr:'ok', subj:['math'], tut:true, kid:true },
+  { n:'Таблица умножения', ext:'.pdf', kind:'PDF · 2 стр.', size:'84 КБ', date:'14 нояб.', i:'file', subj:['math','world'], tut:true, kid:true },
+  { n:'Задачи на движение', ext:'.docx', kind:'Word · 6 стр.', size:'31 КБ', date:'12 нояб.', i:'file', subj:['math'], tut:true, kid:false, old:true },
+  { n:'Ответы к задачам', ext:'.pdf', kind:'PDF · 4 стр.', size:'52 КБ', date:'19 нояб.', i:'file', subj:['math'], tut:true, kid:false, key:true },
+  { n:'Дроби — конспект', ext:'.md', kind:'Заметка', size:'3 КБ', date:'19 нояб.', i:'note', subj:['math'], tut:false, kid:false, origin:'из твоих заметок · снимок 19 нояб.' },
 ];
 /* Файлы других предметов — для общего списка «Все файлы Маши» во вкладке «Доступ к файлам» */
-const OTHER_FILES = { russian:[{ n:'Словарные слова', ext:'.txt', kind:'Текст', size:'4 КБ', date:'10 нояб.', i:'file' }] };
+const OTHER_FILES = [{ n:'Словарные слова', ext:'.txt', kind:'Текст', size:'4 КБ', date:'10 нояб.', i:'file', subj:['russian','english'], tut:true, kid:true }];
+const LIB = () => (filesEmpty() ? [] : FILES).concat(OTHER_FILES);
+const SUBJ_BY = (id) => SUBJ.find((x) => x.id === id);
 const OCR_TEXT = 'Задача 3. Из двух сёл навстречу друг другу вышли два пешехода. Скорость первого — 4 км/ч, второго — 5 км/ч. Через сколько часов они встретятся, если расстояние между сёлами 18 км?\n\nЗадача 4. Велосипедист проехал 36 км за 3 часа. С какой скоростью он ехал?…';
 /* Базы Dify, которые видит админ. ok — проходит KnowledgeAccess.IsTutorAttachable (общая или {admin}:kb:…) */
 const KB = {
@@ -650,8 +663,9 @@ function knowledgeBlock(s, where, detail) {
     ? `<div class="rrow"><span class="ri adult">${ic('db', 16)}</span><div style="flex:1;min-width:0"><div class="rn">${kb.name}</div>
         <div class="who2">${scopeBadge(kb)}<span>${kb.docs} документов · ${kb.who}</span></div>
         ${detail ? '<div class="who2">Подключил Андрей 14 ноября · репетитор только ищет в ней, ничего не меняет</div>' : ''}</div>
-        <span class="ract"><button class="btn sm ghost">Заменить</button><button class="ib" aria-label="Отключить базу">${ic('x', 16)}</button></span></div>`
-    : `<div class="rrow"><span class="ri">${ic('db', 16)}</span><div style="flex:1;min-width:0"><div class="rn" style="font-weight:500">База не подключена</div><div class="rm">Одна база на предмет</div></div>
+        <span class="ract"><button class="ib" aria-label="Отключить базу">${ic('x', 16)}</button></span></div>
+      <div class="rrow"><button class="btn sm ghostAccent">${ic('plus', 14)}Добавить базу</button><span class="rm">ещё до 4 баз — репетитор ищет во всех сразу</span></div>`
+    : `<div class="rrow"><span class="ri">${ic('db', 16)}</span><div style="flex:1;min-width:0"><div class="rn" style="font-weight:500">База не подключена</div><div class="rm">До пяти баз на предмет</div></div>
         <span class="ract"><button class="btn sm ghostAccent">${ic('link', 14)}Подключить базу…</button></span></div>`;
   const locked = detail
     ? `<div class="kgh">${ic('lock', 14)}Нельзя подключить ребёнку</div>
@@ -659,15 +673,15 @@ function knowledgeBlock(s, where, detail) {
          ['folder', 'Папки и файлы проектов', 'Проекты не для детского режима — даже на чтение'],
          ['users', 'Память персон, команд и сфер', 'Там рабочие разговоры взрослых']].map(([i, n, w]) =>
         `<div class="rrow lock"><span class="ri">${ic(i, 16)}</span><div style="flex:1;min-width:0"><div class="rn">${n}</div><div class="rm">${w}</div></div>${ic('lock', 16)}</div>`).join('')}
-      <div class="rrow"><span class="ri kid">${ic('copy', 16)}</span><div style="flex:1;min-width:0"><div class="rn" style="font-weight:500">Нужна заметка или файл из проекта?</div><div class="rm">Скопируй их в материалы предмета: репетитор получит копию, а не доступ. Правки в заметке до него не дойдут.</div></div>
+      <div class="rrow"><span class="ri kid">${ic('copy', 16)}</span><div style="flex:1;min-width:0"><div class="rn" style="font-weight:500">Нужна заметка или файл из проекта?</div><div class="rm">Скопируй их в материалы: репетитор получит снимок на момент копии, а не доступ. Изменилась заметка — нажми «Обновить» у файла. Маше снимок по умолчанию не виден.</div></div>
         <span class="ract"><button class="btn sm ghost">Скопировать в материалы…</button></span></div>`
     : `<div class="rrow lock"><span class="ri">${ic('lock', 16)}</span><div style="flex:1;min-width:0"><div class="rm">Заметки, проекты и память персон репетитору не подключаются</div></div></div>`;
   return `${head}<div class="card" style="overflow:hidden">
-    <div class="kgh">${ic('shield', 14)}Только для Маши<span class="badge success">не видит никто из взрослых персон</span></div>${kidRows}
+    <div class="kgh">${ic('shield', 14)}Библиотека Маши<span class="badge success">не видит никто из взрослых персон</span></div>${kidRows}
     <div class="kgh" style="border-top:1px solid var(--c-border-light)">${ic('users', 14)}Общее со взрослыми<span class="badge info">тот же источник, что у тебя</span></div>${adultRow}
     ${locked.replace('<div class="kgh">', '<div class="kgh" style="border-top:1px solid var(--c-border-light)">')}
   </div>
-  ${detail && kb ? '<p class="muted" style="margin-top:8px">Правки в общей базе репетитор видит сразу. Подключить или заменить базу можно только вручную — окном с подтверждением.</p>' : ''}`;
+  ${detail && kb ? '<p class="muted" style="margin-top:8px">Правки в общей базе репетитор видит сразу. Подключить базу можно только вручную — окном с подтверждением.</p>' : ''}`;
 }
 
 function accessBlock(s, detail) {
@@ -680,6 +694,8 @@ function accessBlock(s, detail) {
       ${kb ? `<div class="tl in">${yes}База «${kb.name}» — только поиск</div>` : ''}
       <div class="sep"></div>
       <div class="tl no">${no}Другие предметы Маши${detail ? ' — ' + others : ''}</div>
+      <div class="tl no">${no}Файлы с выключенным «Репетитор читает»${nf ? ' · 1' : ''}</div>
+      <div class="tl no">${no}Свои файлы Маши — только если она сама отправит файл в урок</div>
       <div class="tl no">${no}Твои проекты, заметки, чаты и персоны</div>
       ${detail ? `<div class="tl no">${no}Файлы компьютера и песочницы</div><div class="tl no">${no}Пути и названия папок — только номер файла из списка</div>` : ''}
     </div>`;
@@ -689,13 +705,16 @@ function accessBlock(s, detail) {
       <div><div style="font-size:12px;font-weight:600;color:var(--c-text-secondary);margin-bottom:8px">Не может</div><ul>
         ${['Загружать, менять и удалять файлы', 'Показать файл Маше или дать на него ссылку', 'Заглянуть за пределы предмета, даже если Маша попросит'].map((x) => `<li><span class="nope">${ic('x', 16)}</span>${x}</li>`).join('')}</ul></div>
     </div>
-    <div class="notice info" style="margin-top:16px"><span class="ic">${ic('info', 16)}</span><div class="tx">Граница жёсткая: у репетитора просто нет инструментов для чужих папок. Мягкая одна — пересказ. Правило запрещает переписывать материал и называть готовые ответы, но надёжно защищает только одно: не клади в предмет ответы к домашке.</div></div>
+    <div class="notice info" style="margin-top:16px"><span class="ic">${ic('info', 16)}</span><div class="tx">Граница жёсткая: у репетитора просто нет инструментов для чужих папок. Ключ ответов держи с выключенным «Видно Маше» — тогда его не покажет ни рельса «Материалы», ни ссылка. Мягкая граница одна — пересказ: правило запрещает репетитору называть готовые ответы.</div></div>
     <p class="muted mono" style="margin-top:8px;font-size:11px">search_materials · list_materials · read_material</p>` : '';
   const all = detail ? `<div class="lbl">Все файлы Маши — кто что читает</div>
-    <div class="flist">${SUBJ.map((x) => { const fl = x.id === 'math' ? (filesEmpty() ? [] : FILES) : (OTHER_FILES[x.id] || []); const tt = TUTORS[x.tutor];
+    <div class="flist">${SUBJ.map((x) => { const fl = LIB().filter((f) => f.subj.includes(x.id)); const tt = TUTORS[x.tutor];
       return `<div class="fgroup">${glyph(x, true)}${x.label}${ava(x.tutor, 22)}<span style="font-weight:500">${tt.name}</span><span class="muted">${fl.length ? fl.length + ' ' + (fl.length === 1 ? 'файл' : 'файла') : 'файлов нет'}${x.on ? '' : ' · предмет выключен, файлы ждут'}</span></div>`
-        + fl.map((f) => fileRow(f)).join(''); }).join('')}</div>
-    <p class="muted" style="margin-top:8px">Файл принадлежит предмету, поэтому его читает только репетитор этого предмета. Переложить файл в другой предмет — «В другой предмет…» в предпросмотре.</p>` : '';
+        + fl.map((f) => fileRow(f)).join(''); }).join('')}
+      <div class="fgroup" style="border-top:1px solid var(--c-border-light)">${ic('lock', 14)}Свои файлы Маши<span class="muted">6 файлов и 2 заметки · 12 МБ из 200 МБ</span></div>
+      <div class="frow"><span class="th">${ic('lock', 18)}</span><div style="flex:1;min-width:0"><div class="fm" style="margin:0;font-size:13px">Что внутри, видит только Маша — как и её переписку. Репетитор получает её файл, только когда Маша сама отправит его в урок.</div></div><span class="fa"><button class="btn sm ghost">Освободить место…</button></span></div>
+    </div>
+    <p class="muted" style="margin-top:8px">Файл лежит в библиотеке Маши и привязан к предметам: его читают репетиторы этих предметов, если включено «Репетитор читает». Один файл может быть в нескольких предметах — привязку меняют чипы.</p>` : '';
   return `<div class="lbl">Доступ к файлам</div>
     <p class="muted" style="margin:-4px 0 12px">Что ${t.name} может открыть. Граница — предмет: всё остальное у Маши и у тебя репетитору не видно.</p>
     <div class="card pad">${tree}${can}</div>${all}`;
@@ -712,9 +731,14 @@ function fileRow(f, opts = {}) {
   if (opts.rename) return `<div class="frow"><span class="th${f.i === 'image' ? ' img' : ''}">${ic(f.i, 18)}</span><div style="flex:1;min-width:0">
       <div class="ren"><div class="inp" style="border-color:var(--c-accent);box-shadow:var(--shadow-focus)">Задача на встречное движение, с. 42</div><span class="ext">${f.ext}</span>
       <button class="btn sm primary">Сохранить</button><button class="btn sm ghost">Отмена</button></div>
-      <div class="fm" style="margin-top:6px">Расширение не меняется. Новое имя увидит только репетитор в списке файлов</div></div></div>`;
+      <div class="fm" style="margin-top:6px">Расширение не меняется. Новое имя увидят репетитор и Маша, если файл ей виден</div></div></div>`;
+  const chips = (f.subj || []).map((id) => { const x = SUBJ_BY(id); return `<span class="schip" title="Читает ${TUTORS[x.tutor].name}">${glyph(x, true)}${x.label}${ava(x.tutor, 16)}</span>`; }).join('');
+  const sw = (on, l) => `<button class="sw" role="switch" aria-checked="${on}"><span class="toggle sm" aria-checked="${on}"><i></i></span>${l}</button>`;
+  const fo = f.subj ? `<div class="fopts">${chips}<button class="schip add">${ic('plus', 12)}предмет</button>${sw(!!f.tut, 'Репетитор читает')}${sw(!!f.kid, 'Видно Маше')}</div>` : '';
+  const tags = `${f.key ? ' <span class="badge warning">ключ ответов — Маше не видно</span>' : ''}${f.old ? ' <span class="badge neutral">загружен до 19.11 — Маше скрыт</span>' : ''}${f.origin ? ` <span class="badge info">${ic('copy', 11)}${f.origin}</span>` : ''}`;
+  const refresh = f.origin && !M() ? `<button class="ib" aria-label="Обновить снимок ${f.n}">${ic('refresh', 16)}</button>` : '';
   return `<div class="frow"><span class="th${f.i === 'image' ? ' img' : ''}">${ic(f.i, 18)}</span><div style="flex:1;min-width:0">
-    <div class="fn">${f.n}<i>${f.ext}</i></div><div class="fm">${meta}${f.ocr ? ' ' + ocrBadge(f.ocr) : ''}</div></div><span class="fa">${acts}</span></div>`;
+    <div class="fn">${f.n}<i>${f.ext}</i></div><div class="fm">${meta}${f.ocr ? ' ' + ocrBadge(f.ocr) : ''}${tags}</div>${fo}</div><span class="fa">${refresh}${acts}</span></div>`;
 }
 function dropZone(s, big) {
   const t = TUTORS[s.tutor], over = S.fl === 'drag';
@@ -743,11 +767,12 @@ function fileManager(s) {
       <div class="fm">На фото не нашлось текста — сфотографируй ближе и при хорошем свете. Файл не сохранён</div></div>
       <span class="fa"><button class="btn sm ghost">Другое фото</button><button class="ib" aria-label="Убрать из списка">${ic('x', 16)}</button></span></div>
     <div class="frow err"><span class="th">${ic('file', 18)}</span><div style="flex:1;min-width:0"><div class="fn">Ответы к тесту<i>.heic</i></div>
-      <div class="fm">Такой файл не подходит: нужен PDF, Word, текст или фото JPG и PNG. Файл не сохранён</div></div>
+      <div class="fm">Такой файл не подходит: нужен PDF, Word, текст или фото JPG, PNG, WEBP. Файл не сохранён</div></div>
       <span class="fa"><button class="ib" aria-label="Убрать из списка">${ic('x', 16)}</button></span></div>` : '';
   const rows = FILES.map((f, i) => fileRow(f, { rename: S.fl === 'rename' && i === 0 })).join('');
-  return `<div class="fmhead"><span>${FILES.length} файла · 1,3 МБ из 200 МБ</span><div class="meter"><i style="width:2%"></i></div><span>Файлы предмета «${s.label}» — читает ${t.name}. Сохраняются сразу, без кнопки «Сохранить»</span></div>
+  return `<div class="fmhead"><span>${FILES.length} файлов · 1,4 МБ из 500 МБ библиотеки Маши</span><div class="meter"><i style="width:1%"></i></div><span>Сохраняются сразу, без кнопки «Сохранить»</span></div>
     ${dropZone(s, false)}
+    <div class="notice warning" style="padding:10px 12px">${ic('alert', 16)}<div class="tx">Новый файл Маша видит в своих «Материалах». <b>Ключ ответов</b> загружай и сразу выключай «Видно Маше» — тогда его читает только репетитор.</div></div>
     <div class="flist">${err}${up}${rows}</div>`;
 }
 function fileDialog() {
@@ -764,12 +789,13 @@ function fileDialog() {
     <div class="dh" id="fpt" style="display:flex;align-items:center;gap:8px"><span style="flex:1;min-width:0">${f.n}${f.ext}</span><button class="ib" aria-label="Закрыть">${ic('x', 18)}</button></div>
     <div class="db">
       <div class="fm" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--c-text-muted)">${f.kind} · ${f.size} · загрузил Андрей ${f.date} ${ocrBadge('ok')}</div>
-      <div class="fgroup" style="border-radius:10px">${glyph(SUBJ[0], true)}Математика ${ava('t1', 22)} Сова Ульяна<span class="muted">файл предмета</span></div>
+      <div class="fopts" style="margin:0">${f.subj.map((id) => { const x = SUBJ_BY(id); return `<span class="schip">${glyph(x, true)}${x.label} · ${TUTORS[x.tutor].name}${ava(x.tutor, 16)}</span>`; }).join('')}<button class="schip add">${ic('plus', 12)}предмет</button>
+        <button class="sw" role="switch" aria-checked="true"><span class="toggle sm" aria-checked="true"><i></i></span>Репетитор читает</button><button class="sw" role="switch" aria-checked="true"><span class="toggle sm" aria-checked="true"><i></i></span>Видно Маше</button></div>
       <div class="pv"><div class="pic">${ic('image', 40)}</div>
         <div><div class="lbl" style="margin-top:0">Как прочтёт репетитор</div><div class="ocr">${OCR_TEXT}</div>
-          <div class="muted" style="margin-top:8px">Распознанный текст — то, что видит репетитор. Если в нём ошибки, пересними страницу.</div></div></div>
+          <div class="muted" style="margin-top:8px">Первые 2 000 символов распознанного текста — то, что видит репетитор. Если в нём ошибки, пересними страницу.</div></div></div>
     </div>
-    <div class="df"><button class="btn md danger" style="margin-right:auto">${ic('trash', 16)}Удалить</button><button class="btn md ghost">${ic('note', 16)}Переименовать</button><button class="btn md ghost">${ic('move', 16)}В другой предмет…</button></div></div></div>`;
+    <div class="df"><button class="btn md danger" style="margin-right:auto">${ic('trash', 16)}Удалить</button><button class="btn md ghost">${ic('note', 16)}Переименовать</button><button class="btn md ghost">${ic('move', 16)}Предметы…</button></div></div></div>`;
 }
 
 function kbDialog() {
@@ -779,8 +805,8 @@ function kbDialog() {
       ? `<button class="pick" role="radio" aria-checked="${checked}"><span class="rd"></span><div style="flex:1;min-width:0"><div class="rn" style="font-size:14px;font-weight:600;color:var(--c-text-heading)">${k.name}</div><div class="who2">${scopeBadge(k)}<span>${k.docs} документов · ${k.who}</span></div></div></button>`
       : `<button class="pick" role="radio" aria-checked="false" disabled><span style="color:var(--c-text-muted)">${ic('lock', 16)}</span><div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:500;color:var(--c-text-secondary)">${k.name}</div><div class="rm" style="font-size:12px;color:var(--c-text-muted)">${k.why}</div></div></button>`; };
   return `<div class="dlgwrap"><div class="dlg" role="dialog" aria-labelledby="kbt">${M() ? '<div class="grab"></div>' : ''}
-    <div class="dh" id="kbt">Подключить базу к «Математике»</div>
-    <div class="db"><div class="muted" style="font-size:13px">Сова Ульяна будет искать в ней ответы на уроках. У предмета одна база — новая заменит прежнюю.</div>
+    <div class="dh" id="kbt">Добавить базу к «Математике»</div>
+    <div class="db"><div class="muted" style="font-size:13px">Сова Ульяна будет искать в ней ответы на уроках. У предмета до пяти баз — эта добавится к подключённым.</div>
       <div><div class="lbl" style="margin-top:0">Можно ребёнку</div><div class="stack" style="gap:8px">${row('school4', false)}${row('animals', true)}${row('eng', false)}</div></div>
       <div><div class="lbl" style="margin-top:0">Нельзя ребёнку</div><div class="stack" style="gap:8px">${row('notes')}${row('proj')}${row('team')}</div></div>
       <div class="notice warning">${ic('alert', 16)}<div class="tx"><div class="tt">Это взрослая база</div>Всё, что в неё положишь потом ты или другие взрослые, сразу станет доступно репетитору Маши.</div></div>
@@ -804,7 +830,7 @@ function secSubject() {
     <div class="lbl">Репетитор</div>
     <div class="card pad" style="display:flex;align-items:center;gap:12px">${ava(s.tutor, 48)}<div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:600;color:var(--c-text-heading)">${t.name}</div><div class="muted">${t.voice} · ${t.modes.length} режима</div></div><button class="btn sm ghost">Настроить${ic('right', 14)}</button></div>
     ${knowledgeBlock(s, 'subject', S.v === 'B')}
-    <span class="muted" style="display:block;margin-top:8px">Файлы читает только репетитор. Маша их не видит — но не клади сюда ответы к домашке: перескажет.</span>
+    <span class="muted" style="display:block;margin-top:8px">Маша видит файлы с включённым «Видно Маше» в рельсе «Материалы» на уроке. Ключи ответов держи скрытыми.</span>
     ${accessBlock(s, false)}
     <button class="btn link">Подробнее о доступе — у репетитора${ic('right', 14)}</button>
     <div style="margin-top:24px"><button class="btn md danger">${ic('trash', 16)}Удалить предмет</button></div>`;

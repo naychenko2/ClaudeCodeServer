@@ -127,8 +127,16 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         lock (_saveLock) datasetId = _store.GetValueOrDefault(persona.Id)?.DatasetId;
         if (string.IsNullOrEmpty(datasetId) || !Available) return;
         var username = _users.GetById(persona.OwnerId)?.Username ?? persona.OwnerId;
-        try { await _knowledge.RenameDatasetAsync(datasetId, $"{username}:persona:{persona.Handle}"); }
+        try { await _knowledge.RenameDatasetAsync(datasetId, DatasetName(username, persona)); }
         catch (Exception ex) { _logger.LogDebug(ex, "Переименование датасета памяти персоны {Persona}", persona.Id); }
+    }
+
+    // Handle уникален лишь внутри проекта, а имя датасета Dify — в пределах инстанса (409 dataset_name_duplicate),
+    // поэтому к имени добавляется короткий префикс id персоны. Уже созданные датасеты не переименовываем.
+    internal static string DatasetName(string username, Persona persona)
+    {
+        var id = persona.Id ?? "";
+        return $"{username}:persona:{persona.Handle}:{(id.Length > 8 ? id[..8] : id)}";
     }
 
     private static double ReadDouble(IConfiguration config, string key, double fallback) =>
@@ -834,7 +842,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
             if (string.IsNullOrEmpty(state.DatasetId))
             {
                 var username = _users.GetById(ownerId)?.Username ?? ownerId;
-                var datasetId = await _knowledge.CreateDatasetAsync($"{username}:persona:{persona.Handle}");
+                var datasetId = await _knowledge.CreateDatasetAsync(DatasetName(username, persona));
                 lock (_saveLock) { state.DatasetId = datasetId; JsonFileStore.Save(_storePath, _store, JsonOpts); }
             }
 

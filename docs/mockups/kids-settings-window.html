@@ -9,6 +9,10 @@
   (role=design). Макетом пользуются будущие шаги фичи: вынос редактора из UserManagementModal в отдельное
   окно (stepRef назначит план) и новые поля профиля (класс предмета, режимы репетитора).
   Записка с рекомендацией и текстами интерфейса — kids-settings-window-proposal.md.
+  v4 (поправка Андрея 19.11): разделов четыре — Обзор, Предметы, Время и лимиты, Безопасность и согласие;
+  раздела «Репетиторы» нет: репетитор — персона проекта-предмета, настраивается штатным экраном персоны.
+  Новый предмет — один шаг (название и класс), проект и репетитор создаются сами. Рекомендация — A (вкладки)
+  с мобильным списком разделов из B; C (мастер) предлагаю снять.
   v2 (задача 5eb76cc9, 19.11): блоки «Знания» и «Доступ к файлам» у репетитора (в B — вкладки карточки
   репетитора) и на экране предмета; окно «Подключить базу» с подтверждением взрослого источника.
   v3 (поправка Андрея 19.11, ADR-041 ред. 5–6): файлы и знания предмета — папка проекта-предмета; в окне —
@@ -548,18 +552,18 @@ const KB = {
 };
 const SCOPE = { global:['общая база','users'], own:['твоя база','key'] };
 const SECS = [
-  ['overview','Обзор','home'], ['subjects','Предметы','book'], ['tutors','Репетиторы','users'],
-  ['models','Модели и согласие','cpu'], ['time','Время и лимиты','clock'], ['safety','Безопасность','shield'],
+  ['overview','Обзор','home'], ['subjects','Предметы','book'], ['time','Время и лимиты','clock'], ['safety','Безопасность и согласие','shield'],
 ];
 
 /* ===== Состояние макета ===== */
-const S = { v:'B', s:'filled', t:'light', w:'desk', sec:'tutors', ms:'section', tt:'fd', kn:'full', fl:'list', cur:'yes' };
+const S = { v:'B', s:'filled', t:'light', w:'desk', sec:'subject', ms:'section', tt:'fd', kn:'full', fl:'list', cur:'yes', ns:'form' };
 (location.hash.slice(1).split('&')).forEach((kv) => { const [k, v] = kv.split('='); if (k && v && k in S) S[k] = decodeURIComponent(v); });
 
 const PULT = [
   ['v', 'Вариант', [['A','A · Вкладки'],['B','B · Две панели'],['C','C · Мастер']]],
   ['s', 'Состояние', [['empty','Пустой ребёнок'],['filled','Заполненный'],['error','Ошибка загрузки'],['consent','Согласие на риск']]],
-  ['sec', 'Раздел', SECS.map(([k, l]) => [k, l]).concat([['subject','Предмет · подробно']])],
+  ['sec', 'Раздел', SECS.map(([k, l]) => [k, l]).concat([['subject','Предмет · подробно'], ['newsubj','Новый предмет']])],
+  ['ns', 'Новый предмет', [['form','Название и класс'],['creating','Создаём…'],['done','Готово'],['fail','Сбой']]],
   ['w', 'Ширина', [['desk','Десктоп 1280'],['tab','Планшет 820'],['mob','Телефон 360']]],
   ['ms', 'B на телефоне', [['list','Список разделов'],['section','Открытый раздел']]],
   ['cur', 'Админ', [['yes','Опекун'],['no','Ещё не опекун']]],
@@ -593,9 +597,9 @@ function secOverview() {
   if (S.s === 'empty') {
     return `${sech('С чего начать', 'Детский режим у Маши включён, но заниматься пока не с кем: нет ни одного предмета. Пройди три шага — и у неё появятся уроки.')}
       <div class="card pad todo">
-        ${[['Добавь предметы', 'Каждому предмету — свой репетитор и своя модель', 'Добавить предметы'],
-           ['Познакомься с репетиторами', 'Имя, голос, аватар и характер появятся сами — поправишь, если захочешь', null],
-           ['Выбери время', 'Когда Маше можно заниматься и сколько минут в день', 'Настроить время']]
+        ${[['Добавь предметы', 'Название и класс — проект с папкой и репетитор появятся сами', 'Добавить предмет'],
+           ['Выбери время', 'Когда Маше можно заниматься и сколько минут в день', 'Настроить время'],
+           ['Реши с согласием и опекунами', 'Какие модели можно Маше и кому приходят стоп-сигналы', 'Открыть']]
           .map(([t, d, a], i) => `<div class="ti"><span class="num">${i + 1}</span><div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600;color:var(--c-text-heading)">${t}</div><div class="muted">${d}</div></div>${a && !M() ? `<button class="btn sm ghost">${a}</button>` : ''}</div>`).join('')}
       </div>
       <div class="lbl">Сейчас у Маши</div>
@@ -840,6 +844,59 @@ function kbDialog() {
     <div class="df"><button class="btn md ghost">Отмена</button><button class="btn md primary" disabled>Подключить</button></div></div></div>`;
 }
 
+/* ===== v4 · Карточка репетитора: персона проекта-предмета, настраивается штатным экраном персоны ===== */
+function tutorCard(s, t, fresh) {
+  const empty = S.kn === 'empty' || fresh;
+  const no = S.cur === 'no';
+  const dis = no ? ' disabled style="opacity:.5"' : '';
+  const btns = `<button class="btn md ghost${M() ? ' full' : ''}"${dis}>${ic('users', 16)}Настроить репетитора${ic('right', 14)}</button>
+    <button class="btn md ghost${M() ? ' full' : ''}"${dis}>${ic('folder', 16)}Открыть проект предмета${ic('right', 14)}</button>`;
+  return `<div class="lbl">Репетитор и проект</div>
+    <div class="card pad stack" style="gap:12px">
+      <div style="display:flex;align-items:center;gap:12px">${t.ava}<div style="flex:1;min-width:0"><div style="font-size:16px;font-weight:600;color:var(--c-text-heading)">${t.name}</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px;font-size:12px;color:var(--c-text-muted)">${ic('folder', 12)}<span>проект «${s.label} · Маша» · ${empty ? 'файлов нет' : '7 файлов'}</span>${empty ? '<span class="badge neutral">база знаний пуста</span>' : '<span class="badge success">база знаний подключена</span>'}</div></div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${btns}</div>
+    </div>
+    <span class="hint" style="display:block;margin-top:6px;font-size:12px;color:${no ? 'var(--c-warning-text)' : 'var(--c-text-muted)'}">${no
+      ? 'Взрослый интерфейс проекта открывается только опекунам Маши. <a class="btn link" style="min-height:0">Добавить себя в опекуны</a>'
+      : 'Обе кнопки ведут во взрослый интерфейс: репетитор — обычная персона проекта, файлы и знания — его рельсы. Уроки Маши там не видны.'}</span>`;
+}
+const tutorOf = (s) => ({ name:TUTORS[s.tutor].name, ava:ava(s.tutor, 48) });
+
+/* ===== v4 · Новый предмет: один шаг — название и класс; проект и репетитор создаются сами ===== */
+const NEW = { label:'Музыка', glyph:'♪', color:'accent', grade:'4 класс' };
+function newSubjDialog() {
+  return `<div class="dlgwrap"><div class="dlg" role="dialog" aria-labelledby="nst" style="width:440px">${M() ? '<div class="grab"></div>' : ''}
+    <div class="dh" id="nst">Новый предмет</div>
+    <div class="db"><div class="field"><label>Название</label><div class="inp" style="border-color:var(--c-accent);box-shadow:var(--shadow-focus)">Музыка</div></div>
+      <div class="field"><label>Класс</label>${sel('4 класс')}<span class="hint">Под него репетитор подбирает объяснения</span></div>
+      <div class="notice info"><span class="ic">${ic('sparkles', 16)}</span><div class="tx">Остальное появится само: проект «Музыка · Маша» с папкой и репетитор с именем, голосом и аватаром. Модель — как у помощника правил, сменишь на экране предмета.</div></div></div>
+    <div class="df"><button class="btn md ghost">Отмена</button><button class="btn md primary">Создать</button></div></div></div>`;
+}
+function secNewSubj() {
+  if (S.ns === 'form') return secSubjects() + newSubjDialog();
+  if (S.ns === 'done') {
+    const t = { name:'Нота Ля', ava:'<span class="pav" style="width:48px;height:48px;background:var(--group-violet);font-size:17px">НЛ</span>' };
+    return `<div class="crumb">${ic('left', 14)}Предметы</div>
+      <div class="notice success" style="margin-bottom:16px;background:var(--c-success-bg);border-color:var(--c-success);color:var(--c-success-text)">${ic('check', 16)}<div class="tx"><div class="tt">Предмет готов</div>Создали проект «Музыка · Маша» с папкой и репетитора Ноту Ля. Плитка уже у Маши на главной.</div></div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px"><span class="glyph pal-accent">♪</span><div style="flex:1"><div class="serif" style="font-size:20px;color:var(--c-text-heading)">Музыка</div><div class="muted">Плитка у Маши · включён</div></div>${tg(true)}</div>
+      <div class="row2"><div class="field"><label>Название</label><div class="inp">Музыка</div></div><div class="field"><label>Класс</label>${sel('4 класс')}</div></div>
+      <div class="lbl">Модель</div><div class="field"><label>Кто отвечает на уроке</label>${sel(routeLine('apikey'))}<span class="hint">${kindBadge('apikey')} Взяли модель помощника правил</span></div>
+      ${tutorCard({ label:'Музыка' }, t, true)}`;
+  }
+  const steps = S.ns === 'fail'
+    ? [['ok','Предмет «Музыка»'],['ok','Проект с папкой'],['err','Репетитор не создался — сервер не ответил']]
+    : [['ok','Предмет «Музыка»'],['run','Проект с папкой'],['wait','Репетитор: имя, голос, аватар']];
+  const mark = { ok:`<span style="color:var(--c-success-text)">${ic('check', 16)}</span>`, run:'<span class="sk" style="width:16px;height:16px;border-radius:50%"></span>',
+    wait:'<span style="width:16px;height:16px;border-radius:50%;border:1.5px solid var(--c-border);display:inline-block"></span>', err:`<span style="color:var(--c-danger-text)">${ic('alert', 16)}</span>` };
+  return `${sech('Предметы', 'Порядок здесь — порядок плиток у Маши.')}
+    <div class="card"><div class="subj" style="background:var(--c-bg-selected)">${glyph(NEW)}<div style="flex:1;min-width:0"><div class="nm">Музыка</div>
+      <div class="meta">${S.ns === 'fail' ? '<span class="badge danger">не готов</span>' : '<span class="badge info">создаём…</span>'} 4 класс</div>
+      <div class="stack" style="gap:4px;margin-top:8px">${steps.map(([k, l]) => `<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:${k === 'err' ? 'var(--c-danger-text)' : k === 'wait' ? 'var(--c-text-muted)' : 'var(--c-text-primary)'}">${mark[k]}${l}</div>`).join('')}</div>
+      ${S.ns === 'fail' ? `<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn sm primary">${ic('refresh', 14)}Повторить</button><span class="muted" style="align-self:center">Предмет и проект сохранены, Маша плитку пока не видит</span></div>` : '<div class="muted" style="margin-top:6px">Обычно несколько секунд. Окно можно закрыть — создание продолжится.</div>'}</div></div>
+      ${SUBJ.map((x) => subjRow(x)).join('')}</div>`;
+}
+
 function secSubject() {
   const s = SUBJ[0], t = TUTORS[s.tutor];
   const wait = needsAck(s.route) && !consentOn();
@@ -853,9 +910,7 @@ function secSubject() {
     <div class="field"><label>Кто отвечает на уроке</label>${sel(`${routeLine(s.route)}`, wait)}
       ${wait ? `<span class="hint" style="color:var(--c-warning-text)">Подписке нужно согласие — урок не откроется, пока его нет. <a class="btn link" style="min-height:0">Дать согласие</a></span>`
              : `<span class="hint">${kindBadge(s.route)} При сбое урок перейдёт на соседнюю модель из цепочки</span>`}</div>
-    <div class="lbl">Репетитор</div>
-    <div class="card pad" style="display:flex;align-items:center;gap:12px">${ava(s.tutor, 48)}<div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:600;color:var(--c-text-heading)">${t.name}</div><div class="muted">${t.voice} · ${t.modes.length} режима</div></div><button class="btn sm ghost">Настроить${ic('right', 14)}</button></div>
-    ${folderBlock(S.v === 'B')}
+    ${tutorCard(s, tutorOf(s), false)}
     <div style="margin-top:24px"><button class="btn md danger">${ic('trash', 16)}Удалить предмет</button></div>`;
 }
 
@@ -946,29 +1001,40 @@ function secTime() {
     </div>`;
 }
 
+function consentBlock() {
+  const on = consentOn();
+  const card = on
+    ? `<div class="consent on"><span class="ci">${ic('check', 20)}</span><div style="flex:1"><div class="ct">Маше можно любые модели</div><div class="cd">Согласие дал Андрей 18 ноября. Подписки, облачные и локальные модели доступны во всех предметах. При сбое урок сам перейдёт на соседнюю модель из цепочки.</div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm ghost">Перечитать риски</button><button class="btn sm danger">Отозвать согласие</button></div></div></div>`
+    : `<div class="consent off"><span class="ci">${ic('key', 20)}</span><div style="flex:1"><div class="ct">Сейчас — только API-ключи</div><div class="cd">Уроки идут строго по выбранной модели с API-ключом, без подмен. Чтобы назначить подписку, облачную или локальную модель, нужно твоё согласие — одно на все предметы Маши.</div>
+        <div style="margin-top:12px"><button class="btn sm primary">Разрешить любые модели…</button></div></div></div>`;
+  return `<div class="lbl">Согласие на модели</div>${card}
+    <div class="field" style="margin-top:12px"><label>Модель помощника правил</label>${sel(routeLine('apikey'))}<span class="hint">С ним Маша договаривается о правилах. Новые предметы берут эту модель по умолчанию. Отдельных ключей для детей нет: Маша тратит те же лимиты, что и взрослые</span></div>`;
+}
 function secSafety() {
   const empty = S.s === 'empty';
-  return `${sech('Безопасность', 'Что происходит, если Маше стало неприятно, и кто об этом узнаёт.')}
+  return `${sech('Безопасность и согласие', 'Что можно Маше, что происходит, если ей стало неприятно, и кто об этом узнаёт.')}
+    ${consentBlock()}<div class="lbl">Стоп-сигнал</div>
     <div class="card pad" style="display:flex;gap:12px;align-items:flex-start"><span class="ci" style="width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--c-danger-bg);color:var(--c-danger-text);flex-shrink:0">${ic('stop', 20)}</span>
       <div><div style="font-size:15px;font-weight:600;color:var(--c-text-heading)">Стоп-сигнал</div><div class="muted" style="margin-top:4px;font-size:13px">Кнопка «Мне неприятно» у Маши и сигнал от репетитора присылают уведомление тебе и опекунам: кто, когда и в каком предмете. Текста переписки в уведомлении нет.</div></div></div>
     <div class="lbl">Опекуны</div>
-    <div class="field"><label>Кому ещё приходят стоп-сигналы</label>
+    <div class="field"><label>Кому ещё приходят стоп-сигналы и кто работает с проектами предметов</label>
       <div class="chips">${empty ? '' : '<span class="chip" aria-pressed="true">Ольга ' + ic('x', 12) + '</span>'}<button class="chip">${ic('plus', 14)}Добавить из пользователей</button></div>
-      <span class="hint">Опекун получает уведомления, но не видит переписку</span></div>
+      <span class="hint">Опекун получает уведомления и открывает проекты предметов (файлы, знания, репетиторы), но не видит уроков Маши</span></div>
     <div class="lbl">Правила</div>
     <div class="card pad" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><div style="font-size:14px;font-weight:600;color:var(--c-text-heading)">${empty ? 'Маша ещё не договорилась о правилах' : 'Маша договорилась о правилах 12 ноября'}</div><div class="muted">${empty ? 'При первом входе помощник правил обсудит их с ней' : 'При следующем входе помощник снова обсудит их с ней'}</div></div>
       ${empty ? '' : cb(false, 'Договориться заново')}</div>`;
 }
 
-const SEC_FN = { overview:secOverview, subjects:secSubjects, subject:secSubject, tutors:secTutors, models:secModels, time:secTime, safety:secSafety };
+const SEC_FN = { overview:secOverview, subjects:secSubjects, subject:secSubject, newsubj:secNewSubj, time:secTime, safety:secSafety };
 const curSec = () => SEC_FN[S.sec]();
 const navHint = (k) => {
-  if (S.s === 'empty') return { overview:['Начни отсюда',''], subjects:['Нет предметов','w'], tutors:['Появятся с предметами',''], models:['Только API-ключи',''], time:['Весь день, без лимита',''], safety:['Опекунов нет',''] }[k];
+  if (S.s === 'empty') return { overview:['Начни отсюда',''], subjects:['Нет предметов','w'], time:['Весь день, без лимита',''], safety:['Только API-ключи · опекунов нет',''] }[k];
   const w = waiting().length;
-  return { overview:[w ? `${w} требуют внимания` : 'Всё в порядке', w ? 'w' : ''], subjects:['3 из 4 включены',''], tutors:['4 репетитора',''],
-    models:[consentOn() ? 'Согласие дано' : `${w} ждут согласия`, consentOn() ? '' : 'w'], time:['45 мин · 2 окна',''], safety:['1 опекун','' ] }[k];
+  return { overview:[w ? `${w} требуют внимания` : 'Всё в порядке', w ? 'w' : ''], subjects:['3 из 4 включены',''], time:['45 мин · 2 окна',''],
+    safety:[consentOn() ? 'Согласие дано · 1 опекун' : `${w} ждут согласия · 1 опекун`, consentOn() ? '' : 'w'] }[k];
 };
-const activeKey = () => (S.sec === 'subject' ? 'subjects' : S.sec);
+const activeKey = () => (['subject', 'newsubj'].includes(S.sec) ? 'subjects' : S.sec);
 
 /* ===== Шапка, подвал, ошибка, согласие ===== */
 function head(extra = '') {
@@ -1005,7 +1071,8 @@ function consentDialog() {
 
 /* ===== Вариант A · Вкладки (Modal MODAL_W.wide) ===== */
 function variantA() {
-  const tabs = `<div class="tabs" style="padding:0 ${M() ? 8 : 24}px">${SECS.map(([k, l]) => `<button class="tab" aria-selected="${activeKey() === k}">${l}${k === 'models' && waiting().length ? '<span class="dot"></span>' : ''}</button>`).join('')}</div>`;
+  if (M()) return variantB();
+  const tabs = `<div class="tabs" style="padding:0 ${M() ? 8 : 24}px">${SECS.map(([k, l]) => `<button class="tab" aria-selected="${activeKey() === k}">${l}${k === 'safety' && waiting().length ? '<span class="dot"></span>' : ''}</button>`).join('')}</div>`;
   const w = S.w === 'desk' ? 720 : S.w === 'tab' ? 720 : '100%';
   return `<div class="overlay"><div class="modal" style="width:${typeof w === 'number' ? w + 'px' : w}">${head()}${S.s === 'error' ? '' : tabs}<div class="mbody">${S.s === 'error' ? errorBody() : curSec()}</div>${foot()}${consentDialog()}${kbDialog()}${fileDialog()}</div></div>`;
 }
@@ -1027,7 +1094,7 @@ function variantB() {
 
 /* ===== Вариант C · Мастер по шагам (Modal MODAL_W.wide) ===== */
 function variantC() {
-  const steps = SECS.filter(([k]) => k !== 'overview').concat([['overview', 'Проверка', 'check']]);
+  const steps = SECS.filter(([k]) => k !== 'overview').concat([['overview', 'Проверка', 'check']]); // 4 шага
   const cur = steps.findIndex(([k]) => k === activeKey());
   const stepper = M()
     ? `<div class="mprog"><div class="mp"><span>Шаг ${cur + 1} из ${steps.length}</span><b>${steps[cur][1]}</b></div><div class="meter"><i style="width:${(cur + 1) / steps.length * 100}%;background:var(--c-accent)"></i></div></div>`
@@ -1054,15 +1121,15 @@ function usersPanel() {
 
 /* ===== Записка под рамкой ===== */
 const NOTES = {
-  A: { plus:['Знакомо: так же устроен живой ChildProfileEditor и «Персоны»','Одно окно 720 — дешевле всего в реализации','Всё видно на десктопе в два клика'],
-       minus:['Шесть вкладок не влезают в 360 — половина уезжает за край, «Безопасность» не найти','Предмет и его репетитор — в разных вкладках, связь теряется (ровно то, на что жаловался Андрей)','Подробный предмет внутри вкладки — третий уровень вложенности'] },
-  B: { plus:['Разделы видны все сразу, с живой подсказкой: «2 ждут согласия», «45 мин · 2 окна»','На телефоне — привычный список настроек: раздел → назад; ничего не прячется за краем','Репетиторы — отдельный раздел первого уровня: найти их можно не зная, что они «внутри предмета»','Растёт без перестройки: «Студия» волны 2 — ещё одна строка'],
-       minus:['На десктопе — полноэкранное окно (size="fullscreen"), а не карточка','Чуть дороже A: свой список разделов и экран «назад» на мобиле','Один «Сохранить» на всё окно — нужна склейка PUT профиля и PUT репетиторов'] },
-  C: { plus:['Идеален для первой настройки: ведёт за руку, ничего не пропустишь','Шаг «Проверка» — сводка перед сохранением'],
-       minus:['Плох для правки: чтобы сменить лимит, листаешь шаги','Нельзя сохранить «половину» — или выход с потерей, или «Сохранить и выйти» на каждом шаге','Две трети времени Андрей будет править, а не настраивать с нуля'] },
+  A: { plus:['Четыре вкладки помещаются в окно 720 — разделы видны все сразу','Карточка, а не полный экран: окно настроек не перекрывает всё приложение','Дешевле всего: Modal + Tabs, как у живых «Персон»','На телефоне — список разделов из B: ничего не уезжает за край'],
+       minus:['На десктопе подсказки состояния короче, чем в навигации B («•» на вкладке вместо «2 ждут согласия»)'] },
+  B: { plus:['Подсказки состояния у каждого раздела','Растёт без перестройки, если разделов снова станет много'],
+       minus:['Полноэкранное окно ради четырёх пунктов — левая колонка почти пустая','Дороже A при той же пользе: свой список и экран «назад»'] },
+  C: { plus:['Ведёт за руку при первой настройке'],
+       minus:['Вести больше некуда: предмет создаётся в один шаг, репетитор и проект — сами','Первую настройку закрывает «Обзор» с тремя шагами «с чего начать»','Плох для правки, а окно почти всегда правят'] },
 };
 function notesBlock() {
-  return `<div class="notes">${['A', 'B', 'C'].map((v) => `<div class="nb ${v === 'B' ? 'rec' : ''}"><h4>${{ A:'A · Вкладки', B:'B · Две панели — рекомендую', C:'C · Мастер' }[v]}</h4>
+  return `<div class="notes">${['A', 'B', 'C'].map((v) => `<div class="nb ${v === 'A' ? 'rec' : ''}"><h4>${{ A:'A · Вкладки + список на телефоне — рекомендую', B:'B · Две панели', C:'C · Мастер — предлагаю снять' }[v]}</h4>
     <b>Плюсы</b><ul>${NOTES[v].plus.map((x) => `<li>${x}</li>`).join('')}</ul><b>Минусы</b><ul>${NOTES[v].minus.map((x) => `<li>${x}</li>`).join('')}</ul></div>`).join('')}</div>`;
 }
 

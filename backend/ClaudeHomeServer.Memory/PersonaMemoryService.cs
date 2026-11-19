@@ -822,6 +822,35 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         _debounce.Schedule(personaId, () => RunSyncSafe(ownerId, personaId));
     }
 
+    // Разовый проход после старта: персоны с подтверждёнными записями, но без датасета
+    // (раньше упёрлись в 409 имени), ставятся на синхронизацию тем же путём, что и запись памяти.
+    // Идемпотентен: у кого DatasetId уже есть — не трогает. Возвращает число поставленных персон.
+    internal int BackfillMissingDatasets()
+    {
+        if (!Available) return 0;
+        List<string> candidates;
+        lock (_saveLock)
+            candidates = _store
+                .Where(kv => string.IsNullOrEmpty(kv.Value.DatasetId) && kv.Value.Entries.Any(e => !e.Pending))
+                .Select(kv => kv.Key)
+                .ToList();
+
+        var queued = 0;
+        foreach (var personaId in candidates)
+        {
+            try
+            {
+                var persona = _personaLookup.GetByIdInternal(personaId);
+                if (persona is null || string.IsNullOrEmpty(persona.OwnerId)) continue;
+                QueueSync(persona.OwnerId, personaId);
+                queued++;
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "Догон датасета памяти персоны {Persona}", personaId); }
+        }
+        if (queued > 0) _logger.LogInformation("Догон датасетов памяти: поставлено на синхронизацию {Count} персон", queued);
+        return queued;
+    }
+
     private void RunSyncSafe(string ownerId, string personaId) =>
         _ = Task.Run(async () =>
         {

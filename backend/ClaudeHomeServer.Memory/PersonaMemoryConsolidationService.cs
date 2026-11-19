@@ -16,6 +16,8 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
     // Как часто проверяем заявки (сама полная проходка — раз в ConsolidateIntervalHours)
     private static readonly TimeSpan PendingTick = TimeSpan.FromMinutes(5);
 
+    private static readonly TimeSpan BackfillDelay = TimeSpan.FromMinutes(1);
+
     private readonly PersonaMemoryService _memory;
     private readonly IPersonaResolver _personas;
     private readonly IPersonaLookup _personaLookup;
@@ -53,6 +55,16 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         var lastFullPass = DateTime.UtcNow;   // не гоняем полную проходку сразу на старте
+
+        // Догон недостающих датасетов памяти: один проход через минуту после старта, ошибки не валят сервис
+        try
+        {
+            await Task.Delay(BackfillDelay, ct);
+            _memory.BackfillMissingDatasets();
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex) { _log.LogWarning(ex, "Догон датасетов памяти персон"); }
+
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(PendingTick, ct); }

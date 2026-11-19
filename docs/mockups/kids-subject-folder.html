@@ -227,20 +227,19 @@ document.getElementById('root').innerHTML = `
   <div><h2>Ребёнок · состояния рельсы (360)</h2><div class="sub">Кадры — схема состава и поведения. Цвета, отступы и иконки берутся у живых FileExplorer и FileViewer, детская оболочка только даёт кнопку «Отправить в урок» и строку «Эту папку видят».</div></div>
   <div class="legend"><span><span class="tag ro">${ic('lock', 11)} только чтение</span> — «Материалы»: ни «Переименовать», ни «Удалить»</span><span>${ic('eye', 14)} строка «Эту папку видят» — имена кураторов (решение 64)</span></div>
   <div class="row">${cells.map(([t, s, h]) => `<div class="cell"><div class="cap">${t}<span>${s}</span></div><div class="fr">${h}</div></div>`).join('')}</div>
-  <div><h2>Куратор · та же папка в окне настроек</h2><div class="sub">В «Настройках детского режима» у предмета блок «Папка предмета» — это папка проекта-предмета, которую куратор видит со своей стороны. Работа с файлами — во взрослых рельсах «Файлы» и «Знания» общего проекта.</div></div>
+  <div><h2>Куратор · папка во взрослом проекте</h2><div class="sub">В «Настройках детского режима» у предмета и репетитора только сводка «N файлов · база знаний подключена / пуста» и кнопка «Открыть проект предмета» (kids-settings-window.html). Кнопка ведёт во взрослый интерфейс общего проекта; ниже — его рельса «Файлы» глазами куратора.</div></div>
   <div class="row">
     <div class="cell" style="width:420px"><div class="cap">Куратор (опекун)<span>Editor общего проекта: пишет в «Материалы» и «Для репетитора», читает файлы Маши</span></div>
-      <div class="fr" style="width:420px;height:auto"><div class="fh">${ic('folder')}<span class="sp">Папка предмета · Математика</span></div><div class="fb">
+      <div class="fr" style="width:420px;height:auto"><div class="fh">${ic('folder')}<span class="sp">Файлы · проект «Математика · Маша»</span></div><div class="fb">
         <div class="seen">${ic('eye', 14)}Маша видит, что ты видишь эту папку. Уроки Маши тебе не видны</div>
         <div class="tb"><span class="b f">${ic('upload')}Загрузить в «Материалы»</span><span class="b">${ic('upload')}В «Для репетитора»</span></div>
         ${curator}
         <div class="seen" style="background:var(--c-bg-inset)">${ic('db', 14)}База знаний проекта: всё, кроме корзины · обновлена 5 мин назад</div>
-        <span class="b p">Открыть проект «Математика · Маша»</span></div></div></div>
-    <div class="cell" style="width:420px"><div class="cap">Админ — ещё не опекун<span>админ куратором автоматически не становится (решение 61)</span></div>
-      <div class="fr" style="width:420px;height:auto"><div class="fh">${ic('folder')}<span class="sp">Папка предмета · Математика</span></div><div class="fb">
-        <div class="note warn">Чтобы работать с файлами предмета, добавь себя в опекуны Маши — в «Безопасности». Общие проекты должны быть включены на сервере и у тебя.</div>
-        <span class="b">К опекунам</span>
-        <div class="view" style="flex:0 0 120px">Файлы появятся здесь,<br>когда ты станешь опекуном</div></div></div></div>
+        <span class="muted" style="font-size:12px;color:var(--c-text-muted)">Рядом — взрослая рельса «Знания» этого проекта</span></div></div></div>
+    <div class="cell" style="width:420px"><div class="cap">Окно настроек · сводка<span>у админа-не опекуна кнопка неактивна и есть ссылка «Добавить себя в опекуны» (решение 61)</span></div>
+      <div class="fr" style="width:420px;height:auto"><div class="fh">${ic('folder')}<span class="sp">Файлы и знания</span></div><div class="fb">
+        <div class="tr" style="min-height:48px">${ic('folder')}<span class="n"><b>7 файлов</b><br><span class="tag kid">база знаний подключена</span></span><span class="b p">Открыть проект предмета</span></div>
+        <div class="note warn">Не опекун: «Проект открывается только опекунам Маши. Добавить себя в опекуны»</div></div></div></div>
   </div>
   <div><h2>Кто что может в папке предмета</h2></div>
   <table class="tbl"><tr><th>Папка</th><th>Маша (рельса)</th><th>Репетитор (ход)</th><th>Куратор (общий проект)</th></tr>

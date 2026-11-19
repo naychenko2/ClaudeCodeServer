@@ -11,8 +11,9 @@
   Записка с рекомендацией и текстами интерфейса — kids-settings-window-proposal.md.
   v2 (задача 5eb76cc9, 19.11): блоки «Знания» и «Доступ к файлам» у репетитора (в B — вкладки карточки
   репетитора) и на экране предмета; окно «Подключить базу» с подтверждением взрослого источника.
-  v3 (поправка Андрея 19.11, ADR-041 ред. 5–6): файлы и знания предмета — папка проекта-предмета, блок
-  «Папка предмета»; схема обеих сторон — kids-subject-folder.html. Блоки v2–v2.2 сняты.
+  v3 (поправка Андрея 19.11, ADR-041 ред. 5–6): файлы и знания предмета — папка проекта-предмета; в окне —
+  только сводка «N файлов · база знаний» и кнопка «Открыть проект предмета». Детская сторона — kids-subject-folder.html.
+  Блоки v2–v2.2 свёрнуты до сводки (код помечен «СНЯТО»).
   v2.1: файлы прямо из окна — загрузка (перетаскиванием и с камеры телефона), список, переименование,
   предпросмотр с распознанным текстом, удаление с подтверждением; общий список «Все файлы Маши».
   Основа: ADR-041 (редакции 2–4: предметы, знания, одно согласие на профиль), прошлые макеты kids-tutors.html.
@@ -561,8 +562,8 @@ const PULT = [
   ['sec', 'Раздел', SECS.map(([k, l]) => [k, l]).concat([['subject','Предмет · подробно']])],
   ['w', 'Ширина', [['desk','Десктоп 1280'],['tab','Планшет 820'],['mob','Телефон 360']]],
   ['ms', 'B на телефоне', [['list','Список разделов'],['section','Открытый раздел']]],
-  ['tt', 'Репетитор · вкладка (B)', [['char','Характер'],['fd','Папка и знания']]],
   ['cur', 'Админ', [['yes','Опекун'],['no','Ещё не опекун']]],
+  ['kn', 'Файлы и знания', [['full','Есть'],['empty','Пусто']]],
   ['t', 'Тема', [['light','Светлая'],['dark','Тёмная']]],
 ];
 function renderPult() {
@@ -646,20 +647,22 @@ function secSubjects() {
    Предмет — проект ребёнка со своей папкой; куратор (опекун) работает с ней в общем проекте взрослыми
    рельсами «Файлы» и «Знания». Окно показывает ту же папку. Подробная схема — kids-subject-folder.html. */
 function folderBlock(detail) {
-  if (S.s === 'empty') return `<div class="lbl">Папка предмета</div><p class="muted">Папка и база знаний появятся вместе с предметом.</p>`;
-  const head = `<div class="lbl">Папка предмета · Математика</div>
-    <p class="muted" style="margin:-4px 0 12px">Это папка проекта «Математика · Маша». Её же видит Маша в рельсе «Файлы» на уроке, а Сова Ульяна читает её на уроках. Знания репетитора — база знаний этой папки.</p>`;
-  if (S.cur === 'no') return head + `<div class="notice warning">${ic('alert', 16)}<div class="tx"><div class="tt">Ты пока не опекун Маши</div>Работать с файлами предмета могут только опекуны. Добавь себя в «Безопасности». Общие проекты должны быть включены на сервере и у тебя.<div class="act"><button class="btn sm primary">К опекунам</button></div></div></div>`;
-  const row = (ind, icn, name, tag, tone) => `<div class="rrow" style="padding-left:${16 + ind * 24}px;min-height:44px"><span style="color:var(--c-text-secondary)">${ic(icn, 16)}</span><div style="flex:1;min-width:0"><div class="rn" style="font-weight:${ind ? 500 : 600}">${name}</div></div>${tag ? `<span class="badge ${tone}">${tag}</span>` : ''}</div>`;
-  return head + `<div class="card" style="overflow:hidden">
-      <div class="kgh" style="white-space:normal">${ic('users', 14)}Маша видит, что ты видишь эту папку. Уроки Маши тебе не видны</div>
-      ${row(0, 'folder', 'Материалы', 'Маша читает', 'success')}${detail ? row(1, 'file', 'Таблица умножения.pdf') : ''}
-      ${row(0, 'folder', 'Для репетитора', 'Маша не видит · ключи ответов', 'warning')}${detail ? row(1, 'file', 'Ответы к задачам.pdf') : ''}
-      ${row(0, 'folder', 'Домашка', 'файлы Маши', 'neutral')}${row(0, 'file', 'Что я не поняла.md', 'файл Маши', 'neutral')}
-      <div class="rrow"><span class="ri adult">${ic('db', 16)}</span><div style="flex:1;min-width:0"><div class="rn">База знаний проекта</div><div class="rm">Вся папка, кроме корзины · обновлена 5 мин назад</div></div></div>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn md primary">${ic('folder', 16)}Открыть проект «Математика · Маша»</button>${detail ? `<button class="btn md ghost">${ic('upload', 16)}Загрузить в «Материалы»</button>` : ''}</div>
-    <p class="muted" style="margin-top:8px">Загрузка, переименование, удаление и база знаний — в рельсах «Файлы» и «Знания» проекта. Ключи ответов клади в «Для репетитора»: Маша эту папку не видит.</p>`;
+  // Поправка Андрея 19.11: вместо блоков «Знания» и «Доступ к файлам» — сводка и вход во взрослый проект.
+  // Управление файлами и знаниями — во взрослых рельсах «Файлы» и «Знания» общего проекта-предмета.
+  const empty = S.s === 'empty' || S.kn === 'empty';
+  const files = empty ? 'Файлов нет' : '7 файлов';
+  const kb = empty ? '<span class="badge neutral">база знаний пуста</span>' : '<span class="badge success">база знаний подключена</span>';
+  const btn = `<button class="btn md ${S.cur === 'no' ? 'ghost' : 'primary'}"${S.cur === 'no' ? ' disabled style="opacity:.5"' : ''}>${ic('folder', 16)}Открыть проект предмета${ic('right', 14)}</button>`;
+  const hint = S.cur === 'no'
+    ? `<span class="hint" style="color:var(--c-warning-text)">Проект открывается только опекунам Маши. <a class="btn link" style="min-height:0">Добавить себя в опекуны</a></span>`
+    : `<span class="hint">Файлы и знания — во взрослом интерфейсе проекта «Математика · Маша». Уроки Маши там не видны.</span>`;
+  return `<div class="lbl">Файлы и знания</div>
+    <div class="card pad" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="ri kid" style="width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--c-success-bg);color:var(--c-success-text)">${ic('folder', 18)}</span>
+      <div style="flex:1;min-width:180px"><div style="font-size:14px;font-weight:600;color:var(--c-text-heading)">${files}</div><div class="who2">${kb}</div></div>
+      ${M() ? '' : btn}</div>
+    ${M() ? `<div style="margin-top:8px">${btn.replace('btn md', 'btn md full')}</div>` : ''}
+    <div class="field" style="margin-top:4px">${hint}</div>`;
 }
 
 /* ===== СНЯТО ADR-041 ред. 6: блоки v2–v2.2 ниже (базы Dify, флаги файла, библиотека) не реализовывать.
@@ -870,10 +873,10 @@ function secTutors() {
       return `<button class="tcard" aria-pressed="${id === 't1'}">${ava(id, M() ? 44 : 56)}<div style="min-width:0;flex:1"><div class="tn">${x.name}</div><div class="muted" style="display:flex;align-items:center;gap:6px;margin-top:4px">${glyph(s, true)}${s.label}${s.on ? '' : ' · выкл.'}</div><div class="muted" style="display:flex;align-items:center;gap:4px;margin-top:4px">${ic('book', 12)}${knHint(s)}</div></div>${M() ? ic('right', 18) : ''}</button>`;
     }).join('')}</div>
     <div class="lbl">${t.name} · Математика</div>
-    ${S.v === 'B' ? tutorTabs() : tutorChar() + folderBlock(false)}`;
+    ${tutorChar() + folderBlock(false)}`;
 }
 function tutorTabs() {
-  const tabs = [['char', 'Характер'], ['fd', 'Папка и знания']];
+  const tabs = [['char', 'Характер'], ['fd', 'Файлы и знания']];
   const bar = `<div class="tabs" role="tablist" style="margin-bottom:4px">${tabs.map(([k, l]) => `<button class="tab" role="tab" aria-selected="${S.tt === k}">${l}${k === 'fd' && S.cur === 'no' ? '<span class="dot"></span>' : ''}</button>`).join('')}</div>`;
   const body = S.tt === 'char' ? tutorChar() : folderBlock(true);
   return bar + body;

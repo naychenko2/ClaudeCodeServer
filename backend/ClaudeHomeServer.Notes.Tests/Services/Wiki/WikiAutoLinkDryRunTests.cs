@@ -26,15 +26,17 @@ public sealed class DryRunFactAttribute : FactAttribute
 // A0 (очередь 2, волна A): сухой прогон автосвязывателя на КОПИИ боевой вики — только чтение.
 // Каталог копии — переменная окружения WIKI_DRYRUN_DIR (ожидается <корень>/data, внутри
 // pages/ и keeper/); без неё прогон пропускается: обычный прогон CI/гейта не должен ходить
-// в боевые данные. Артефакт — JSON в WIKI_DRYRUN_OUT (по умолчанию <каталог копии>/../metrics.json).
+// в боевые данные. Артефакт — JSON в WIKI_DRYRUN_OUT; по умолчанию путь ВНУТРИ каталога
+// копии (dryrun-metrics.json): рядом с боевым каталогом ничего не пишется.
 //
 // Что считает:
 // - для каждой страницы знаний — WikiAutoLink.Apply к её тексту (снимок раздела и цепочки
 //   вверх), число поставленных ссылок и число несточных совпадений (MissedWordForms);
 // - степень страницы ДО и ПОСЛЕ — той же формулой, что у замера Q1-QA4:
 //   |mentions| + |mentionedHere| + |backlinks| без потолка GroupLimit (WikiConnectivity);
-// - три среза: все страницы знаний; страницы ночи 18.11 (applied create/append пакетов с
-//   createdAt 2026-11-18); 76 мелких (страницы знаний разделов ночи 19.11 со сводкой
+// - срезы: все страницы знаний; страницы ночи 19.11 (applied create/append пакетов с
+//   createdAt 2026-11-19); «ночь 19.11, все страницы» — для сверки с боевым замером Q1-QA4
+//   (группа A+B, 57 страниц); 76 мелких (страницы знаний разделов ночи 19.11 со сводкой
 //   < 400 символов и ≤ 1 сноской — тот же признак «мелких», что в отчёте Q1-QA4);
 // - прогноз «со словоформами и алиасами»: несточные совпадения страницы прибавляются к её
 //   степени как исходящие связи, обратные не считаются (консервативно).
@@ -130,24 +132,27 @@ public class WikiAutoLinkDryRunTests
             .ToList();
 
         // ─── срезы ───
-        var night18 = NightPages(dir, "2026-11-18");
+        // Срез «ночь» — по дате 19.11: именно эту ночь мерила Q1-QA4 (29 пакетов, создано 47,
+        // тронуто 57). Прежний срез «ночь 18.11» к боевому замеру отношения не имеет.
         var night19 = NightPages(dir, "2026-11-19");
         var night19Sections = NightSections(dir, "2026-11-19");
 
         var knowledge = pages.Where(IsKnowledge).ToList();
         var sliceAll = knowledge.Select(p => p.Path).ToList();
-        var sliceNight18 = knowledge.Where(p => night18.Touched.Contains(p.Path)).Select(p => p.Path).ToList();
-        var sliceNight18Created = knowledge.Where(p => night18.Created.Contains(p.Path)).Select(p => p.Path).ToList();
+        var sliceNight19 = knowledge.Where(p => night19.Touched.Contains(p.Path)).Select(p => p.Path).ToList();
+        var sliceNight19Created = knowledge.Where(p => night19.Created.Contains(p.Path)).Select(p => p.Path).ToList();
         var small = knowledge
             .Where(p => p.Model is not null && night19Sections.Contains(p.Section!))
             .Where(IsSmall)
             .ToList();
         var sliceSmall = small.Select(p => p.Path).ToList();
-        // Срез в формате Q1-QA4: там в степень входят и карточки источников (их связь —
-        // обратные ссылки со сносок). Автолинковка по карточкам не ходит, но для
-        // сопоставимости чисел с отчётом Q1-QA4 срез нужен.
-        var sliceNight18All = pages
-            .Where(p => night18.Touched.Contains(p.Path) && p.Model is not null
+        // Срез «ночь 19.11, все страницы» — для прямой сверки с боевым замером Q1-QA4
+        // (группа A+B «тронутые ночью»: 57 страниц, средняя 0,281, доля 14 %). Там в выборку
+        // входили и карточки источников, поэтому берём ВСЕ тронутые страницы, а не только
+        // знания. Прежний «ночной» срез с карточками брал только night.Touched — карточек
+        // там нет, и срез был пустышкой; этот срез считает по-настоящему.
+        var sliceNight19All = pages
+            .Where(p => night19.Touched.Contains(p.Path) && p.Model is not null
                 && !p.Path.Split('/')[^1].StartsWith('_'))
             .Select(p => p.Path)
             .ToList();
@@ -158,24 +163,38 @@ public class WikiAutoLinkDryRunTests
 
         var slices = new List<SliceOut>();
         slices.Add(Measure("все страницы знаний", sliceAll, draftsBefore, draftsAfter, addedByPath, missedByPath));
-        slices.Add(Measure("ночь 18.11 (тронутые знания)", sliceNight18, draftsBefore, draftsAfter, addedByPath, missedByPath));
-        slices.Add(Measure("ночь 18.11 (созданные знания)", sliceNight18Created, draftsBefore, draftsAfter, addedByPath, missedByPath));
-        slices.Add(Measure("ночь 18.11 (тронутые, с карточками источников)", sliceNight18All, draftsBefore, draftsAfter, addedByPath, missedByPath));
+        slices.Add(Measure("ночь 19.11 (тронутые знания)", sliceNight19, draftsBefore, draftsAfter, addedByPath, missedByPath));
+        slices.Add(Measure("ночь 19.11 (созданные знания)", sliceNight19Created, draftsBefore, draftsAfter, addedByPath, missedByPath));
+        var nightAllSlice = Measure("ночь 19.11 (тронутые, все страницы — сверка с Q1-QA4)", sliceNight19All, draftsBefore, draftsAfter, addedByPath, missedByPath);
+        slices.Add(nightAllSlice);
         slices.Add(Measure("все страницы (с карточками источников)", sliceAllPages, draftsBefore, draftsAfter, addedByPath, missedByPath));
         slices.Add(Measure("76 мелких (разделы ночи 19.11)", sliceSmall, draftsBefore, draftsAfter, addedByPath, missedByPath));
+
+        // Срез закреплён на ночь 19.11 — той самой, что мерила Q1-QA4. Числа — сверка с боевым
+        // замером (29 пакетов, создано 47, тронуто 57; группа A+B: средняя 0,281, доля 14,0 %).
+        // Без этого пина прогон молча считал бы чужую ночь (18.11: 52 страницы, степень 0,000) —
+        // расхождение срезов с боевым замером и было замечанием ревью.
+        night19.Touched.Count.Should().Be(57, "ночь 19.11: тронуто 57 страниц (Q1-QA4, группа A+B)");
+        night19.Created.Count.Should().Be(47, "ночь 19.11: создано 47 страниц (Q1-QA4, группа A)");
+        sliceNight19All.Should().HaveCount(57, "срез ночи 19.11 (все страницы) — 57 страниц, как у Q1-QA4");
+        nightAllSlice.AvgBefore.Should().BeApproximately(0.281, 0.005, "средняя степень среза ночи 19.11 — как у Q1-QA4");
+        nightAllSlice.ShareBefore.Should().BeApproximately(0.140, 0.005, "доля страниц со степенью ≥1 в срезе ночи 19.11 — как у Q1-QA4");
 
         // ─── диагностика: кандидаты в ссылку (то + словоформы) ───
         var candidates = Candidates(pages, knowledge);
 
 
+        // Артефакт: явный путь WIKI_DRYRUN_OUT. По умолчанию — ВНУТРИ каталога копии:
+        // рядом с боевым каталогом (или его родителем) ничего не пишется.
         var outPath = Environment.GetEnvironmentVariable("WIKI_DRYRUN_OUT");
         if (string.IsNullOrWhiteSpace(outPath))
-            outPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dir))!, "metrics.json");
+            outPath = Path.Combine(Path.GetFullPath(dir), "dryrun-metrics.json");
 
         var payload = new
         {
             generatedAt = DateTime.UtcNow.ToString("o"),
             copyDir = Path.GetFullPath(dir),
+            outPath = Path.GetFullPath(outPath),
             pagesTotal = pages.Count,
             pagesParsed = pages.Count(p => p.Model is not null),
             pagesUnparsed = pages.Count(p => p.Model is null),
@@ -185,9 +204,10 @@ public class WikiAutoLinkDryRunTests
             linksAddedTotal = addedByPath.Values.Sum(),
             pagesWithAdded = addedByPath.Count(kv => kv.Value > 0),
             missedTotal = missedByPath.Values.Sum(),
-            night18Touched = night18.Touched.Count,
-            night18Created = night18.Created.Count,
+            night19Touched = night19.Touched.Count,
+            night19Created = night19.Created.Count,
             night19Sections,
+            night19TouchedAllPages = sliceNight19All.Count,
             smallCount = small.Count,
             smallPaths = sliceSmall,
             slices,

@@ -11,6 +11,8 @@
   Записка с рекомендацией и текстами интерфейса — kids-settings-window-proposal.md.
   v2 (задача 5eb76cc9, 19.11): блоки «Знания» и «Доступ к файлам» у репетитора (в B — вкладки карточки
   репетитора) и на экране предмета; окно «Подключить базу» с подтверждением взрослого источника.
+  v2.1: файлы прямо из окна — загрузка (перетаскиванием и с камеры телефона), список, переименование,
+  предпросмотр с распознанным текстом, удаление с подтверждением; общий список «Все файлы Маши».
   Основа: ADR-041 (редакции 2–4: предметы, знания, одно согласие на профиль), прошлые макеты kids-tutors.html.
 
   Устройство файла — как у kids-tutors.html:
@@ -288,6 +290,46 @@ textarea.inp{height:auto;min-height:76px;padding:10px 12px;line-height:1.5;resiz
 .pick[aria-checked="true"] .rd{border-color:var(--c-accent)}
 .pick[aria-checked="true"] .rd::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--c-accent)}
 
+/* Файлы предмета (v2.1): зона загрузки, строки файлов, прогресс, предпросмотр */
+.fmwrap{padding:12px 16px 16px;display:flex;flex-direction:column;gap:12px}
+.m .fmwrap{padding:12px}
+.fmhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--c-text-muted)}
+.fmhead .meter{flex:1;min-width:120px;max-width:220px;margin:0}
+.drop{display:flex;align-items:center;gap:16px;padding:16px;border:1.5px dashed var(--c-dashed);border-radius:14px;background:var(--c-bg-card)}
+.drop.big{flex-direction:column;text-align:center;padding:32px 16px;gap:8px}
+.drop.over{border-color:var(--c-accent);background:var(--c-accent-light)}
+.drop .dg{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:var(--c-accent-light);color:var(--c-accent);flex-shrink:0}
+.drop.over .dg{background:var(--c-accent);color:var(--c-on-accent)}
+.drop .dt{font-size:14px;font-weight:600;color:var(--c-text-heading)}
+.m .drop{flex-direction:column;align-items:stretch;text-align:center}
+.flist{border:1px solid var(--c-border-light);border-radius:12px;overflow:hidden;background:var(--c-bg-white)}
+.frow{display:flex;align-items:center;gap:12px;padding:10px 8px 10px 12px;min-height:60px}
+.frow+.frow{border-top:1px solid var(--c-border-light)}
+.frow .th{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;flex-shrink:0;background:var(--c-bg-inset);color:var(--c-text-secondary)}
+.frow .th.img{background:var(--c-info-bg);color:var(--c-info)}
+.frow .fn{font-size:14px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frow .fn i{font-style:normal;color:var(--c-text-muted);font-weight:500}
+.frow .fm{font-size:12px;color:var(--c-text-muted);margin-top:2px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.frow .fa{display:flex;gap:2px;flex-shrink:0}
+.frow.err{background:var(--c-danger-bg)}
+.frow.err .fm{color:var(--c-danger-text)}
+.m .frow.err{flex-wrap:wrap}
+.m .frow.err .fa{flex-basis:100%;padding-left:52px;gap:8px}
+.frow.up .meter{margin-top:6px;max-width:260px}
+.meter i.acc{background:var(--c-accent)}
+.meter.ind i{width:35%;background:var(--c-info);animation:ind 1.2s ease-in-out infinite}
+@keyframes ind{0%{margin-left:-35%}100%{margin-left:100%}}
+.ren{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ren .inp{flex:1;min-width:140px}
+.ren .ext{font-size:13px;color:var(--c-text-muted)}
+.pv{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.m .pv{grid-template-columns:1fr}
+.pv .pic{aspect-ratio:3/4;border-radius:12px;background:var(--c-bg-inset);display:grid;place-items:center;color:var(--c-text-muted);border:1px solid var(--c-border-light)}
+.m .pv .pic{aspect-ratio:4/3}
+.pv .ocr{font-size:13px;line-height:1.55;color:var(--c-text-primary);white-space:pre-wrap;padding:12px;border-radius:12px;background:var(--c-bg-white);border:1px solid var(--c-border-light);max-height:320px;overflow:auto}
+.fgroup{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--c-bg-panel);font-size:13px;font-weight:600;color:var(--c-text-heading);flex-wrap:wrap}
+.fgroup .muted{font-weight:400;margin-left:auto}
+
 /* Неделя: 7 полос × 24 часа */
 .week{display:flex;flex-direction:column;gap:6px}
 .wd{display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:center;font-size:12px;color:var(--c-text-secondary);font-weight:600}
@@ -430,6 +472,11 @@ const P = {
   note:'<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>',
   scan:'<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/>',
   link:'<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  eye:'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  more:'<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+  camera:'<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/>',
+  image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  move:'<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
   copy:'<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
 };
 const ic = (n, s = 16) => `<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24">${P[n]}</svg>`;
@@ -467,10 +514,13 @@ const SUBJ = [
 ];
 /* Файлы предмета «Математика» (ChildSubjectMaterialsStore): kind pdf/docx/text/image, у image — OCR */
 const FILES = [
-  { n:'Таблица умножения.pdf', m:'PDF · 2 стр. · 84 КБ', i:'file' },
-  { n:'Задачи на движение.docx', m:'Word · 6 стр. · 31 КБ', i:'file' },
-  { n:'Учебник, с. 42.jpg', m:'Фото страницы · распознано · 1,2 МБ', i:'scan' },
+  { n:'Учебник, с. 42', ext:'.jpg', kind:'Фото', size:'1,2 МБ', date:'18 нояб.', i:'image', ocr:'ok' },
+  { n:'Таблица умножения', ext:'.pdf', kind:'PDF · 2 стр.', size:'84 КБ', date:'14 нояб.', i:'file' },
+  { n:'Задачи на движение', ext:'.docx', kind:'Word · 6 стр.', size:'31 КБ', date:'12 нояб.', i:'file' },
 ];
+/* Файлы других предметов — для общего списка «Все файлы Маши» во вкладке «Доступ к файлам» */
+const OTHER_FILES = { russian:[{ n:'Словарные слова', ext:'.txt', kind:'Текст', size:'4 КБ', date:'10 нояб.', i:'file' }] };
+const OCR_TEXT = 'Задача 3. Из двух сёл навстречу друг другу вышли два пешехода. Скорость первого — 4 км/ч, второго — 5 км/ч. Через сколько часов они встретятся, если расстояние между сёлами 18 км?\n\nЗадача 4. Велосипедист проехал 36 км за 3 часа. С какой скоростью он ехал?…';
 /* Базы Dify, которые видит админ. ok — проходит KnowledgeAccess.IsTutorAttachable (общая или {admin}:kb:…) */
 const KB = {
   school4: { name:'Школьная программа · 4 класс', scope:'global', ok:true, docs:128, who:'общая база сервера — её видят все взрослые' },
@@ -487,7 +537,7 @@ const SECS = [
 ];
 
 /* ===== Состояние макета ===== */
-const S = { v:'B', s:'filled', t:'light', w:'desk', sec:'tutors', ms:'section', tt:'kn', kn:'full' };
+const S = { v:'B', s:'filled', t:'light', w:'desk', sec:'tutors', ms:'section', tt:'kn', kn:'full', fl:'list' };
 (location.hash.slice(1).split('&')).forEach((kv) => { const [k, v] = kv.split('='); if (k && v && k in S) S[k] = decodeURIComponent(v); });
 
 const PULT = [
@@ -498,6 +548,7 @@ const PULT = [
   ['ms', 'B на телефоне', [['list','Список разделов'],['section','Открытый раздел']]],
   ['tt', 'Репетитор · вкладка (B)', [['char','Характер'],['kn','Знания'],['fa','Доступ к файлам']]],
   ['kn', 'Знания', [['full','Подключено'],['empty','Ничего нет'],['pick','Подключить базу…']]],
+  ['fl', 'Файлы', [['list','Список'],['empty','Пусто'],['drag','Перетаскивание'],['upload','Загрузка'],['error','Ошибка'],['rename','Переименование'],['preview','Предпросмотр'],['del','Удаление']]],
   ['t', 'Тема', [['light','Светлая'],['dark','Тёмная']]],
 ];
 function renderPult() {
@@ -579,34 +630,22 @@ function secSubjects() {
 
 /* ===== v2 · Знания и доступ к файлам репетитора ===== */
 // Сколько знаний у предмета: файлы + база. Для «Математики» учитывается рычаг «Знания» пульта.
-const subjFiles = (s) => (s.id === 'math' ? (S.kn === 'empty' ? 0 : FILES.length) : s.files);
+const filesEmpty = () => S.kn === 'empty' || S.fl === 'empty';
+const subjFiles = (s) => (s.id === 'math' ? (filesEmpty() ? 0 : FILES.length) : s.files);
 const subjKb = (s) => (s.id === 'math' && S.kn === 'empty' ? null : s.kb && KB[s.kb]);
 const knHint = (s) => { const f = subjFiles(s), k = subjKb(s);
   if (!f && !k) return '<span style="color:var(--c-warning-text)">знаний нет</span>';
   return [f ? `${f} ${f === 1 ? 'файл' : 'файла'}` : '', k ? 'база' : ''].filter(Boolean).join(' · '); };
 const scopeBadge = (k) => { const [l, i] = SCOPE[k.scope]; return `<span class="badge info">${ic(i, 11)}${l}</span>`; };
 
-function knEmpty(s, where) {
-  const t = TUTORS[s.tutor];
-  return `<div class="empty" style="padding:24px 16px"><span class="eg">${ic('book', 26)}</span>
-    <div class="et">${t.name} пока знает только то, что знает модель</div>
-    <div class="ed">Загрузи фото страниц учебника или файлы — они будут только у Маши. Или подключи базу знаний, которая уже есть у тебя.</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:8px">
-      <button class="btn md primary">${ic('upload', 16)}${where === 'tutor' ? 'Загрузить в «' + s.label + '»' : 'Загрузить материалы'}</button>
-      <button class="btn md ghost">${ic('db', 16)}Подключить базу…</button></div>
-    <div class="muted" style="margin-top:4px">PDF, Word, текст и фото страниц — фото распознаем сами</div></div>`;
-}
-
 function knowledgeBlock(s, where, detail) {
   const t = TUTORS[s.tutor], kb = subjKb(s), nf = subjFiles(s);
   const head = `<div class="lbl">Знания</div>
     <p class="muted" style="margin:-4px 0 12px">Откуда ${t.name} берёт материал для «${s.label}». Источник работает только в уроках этого предмета.</p>`;
-  if (!nf && !kb) return head + knEmpty(s, where);
-  const kidRows = where === 'subject'
-    ? FILES.map((f) => `<div class="rrow"><span class="ri kid">${ic(f.i, 16)}</span><div style="flex:1;min-width:0"><div class="rn" style="font-weight:500">${f.n}</div><div class="rm">${f.m}</div></div><button class="ib" aria-label="Удалить ${f.n}">${ic('trash', 16)}</button></div>`).join('')
-      + `<div class="rrow"><button class="btn md dashed full">${ic('upload', 16)}Загрузить файлы или фото страниц</button></div>`
-    : `<div class="rrow"><span class="ri kid">${ic('folder', 16)}</span><div style="flex:1;min-width:0"><div class="rn">Материалы предмета</div><div class="rm">${nf} файла · одно фото страницы распознано</div></div>
-        <span class="ract"><button class="btn sm ghost">Открыть${ic('right', 14)}</button></span></div>`;
+  const kidRows = where === 'subject' || detail
+    ? `<div class="fmwrap">${fileManager(s)}</div>`
+    : `<div class="rrow"><span class="ri kid">${ic('folder', 16)}</span><div style="flex:1;min-width:0"><div class="rn">Материалы предмета</div><div class="rm">${nf ? nf + ' файла · одно фото страницы распознано' : 'Файлов пока нет'}</div></div>
+        <span class="ract"><button class="btn sm ghost">${nf ? 'Открыть' : 'Загрузить'}${ic('right', 14)}</button></span></div>`;
   const adultRow = kb
     ? `<div class="rrow"><span class="ri adult">${ic('db', 16)}</span><div style="flex:1;min-width:0"><div class="rn">${kb.name}</div>
         <div class="who2">${scopeBadge(kb)}<span>${kb.docs} документов · ${kb.who}</span></div>
@@ -652,9 +691,85 @@ function accessBlock(s, detail) {
     </div>
     <div class="notice info" style="margin-top:16px"><span class="ic">${ic('info', 16)}</span><div class="tx">Граница жёсткая: у репетитора просто нет инструментов для чужих папок. Мягкая одна — пересказ. Правило запрещает переписывать материал и называть готовые ответы, но надёжно защищает только одно: не клади в предмет ответы к домашке.</div></div>
     <p class="muted mono" style="margin-top:8px;font-size:11px">search_materials · list_materials · read_material</p>` : '';
+  const all = detail ? `<div class="lbl">Все файлы Маши — кто что читает</div>
+    <div class="flist">${SUBJ.map((x) => { const fl = x.id === 'math' ? (filesEmpty() ? [] : FILES) : (OTHER_FILES[x.id] || []); const tt = TUTORS[x.tutor];
+      return `<div class="fgroup">${glyph(x, true)}${x.label}${ava(x.tutor, 22)}<span style="font-weight:500">${tt.name}</span><span class="muted">${fl.length ? fl.length + ' ' + (fl.length === 1 ? 'файл' : 'файла') : 'файлов нет'}${x.on ? '' : ' · предмет выключен, файлы ждут'}</span></div>`
+        + fl.map((f) => fileRow(f)).join(''); }).join('')}</div>
+    <p class="muted" style="margin-top:8px">Файл принадлежит предмету, поэтому его читает только репетитор этого предмета. Переложить файл в другой предмет — «В другой предмет…» в предпросмотре.</p>` : '';
   return `<div class="lbl">Доступ к файлам</div>
     <p class="muted" style="margin:-4px 0 12px">Что ${t.name} может открыть. Граница — предмет: всё остальное у Маши и у тебя репетитору не видно.</p>
-    <div class="card pad">${tree}${can}</div>`;
+    <div class="card pad">${tree}${can}</div>${all}`;
+}
+
+/* ===== v2.1 · Файлы предмета: загрузка, список, переименование, предпросмотр, удаление ===== */
+const ocrBadge = (st) => ({ ok:`<span class="badge success">${ic('check', 11)}текст распознан</span>`,
+  run:`<span class="badge info">распознаём текст…</span>`, fail:`<span class="badge danger">текст не найден</span>` }[st] || '');
+function fileRow(f, opts = {}) {
+  const meta = `${f.kind} · ${f.size} · ${f.date}${opts.who ? ' · читает ' + opts.who : ''}`;
+  const acts = M()
+    ? `<button class="ib" aria-label="Действия с файлом ${f.n}${f.ext}">${ic('more', 18)}</button>`
+    : `<button class="ib" aria-label="Открыть ${f.n}${f.ext}">${ic('eye', 16)}</button><button class="ib" aria-label="Переименовать ${f.n}${f.ext}">${ic('note', 16)}</button><button class="ib" aria-label="Удалить ${f.n}${f.ext}">${ic('trash', 16)}</button>`;
+  if (opts.rename) return `<div class="frow"><span class="th${f.i === 'image' ? ' img' : ''}">${ic(f.i, 18)}</span><div style="flex:1;min-width:0">
+      <div class="ren"><div class="inp" style="border-color:var(--c-accent);box-shadow:var(--shadow-focus)">Задача на встречное движение, с. 42</div><span class="ext">${f.ext}</span>
+      <button class="btn sm primary">Сохранить</button><button class="btn sm ghost">Отмена</button></div>
+      <div class="fm" style="margin-top:6px">Расширение не меняется. Новое имя увидит только репетитор в списке файлов</div></div></div>`;
+  return `<div class="frow"><span class="th${f.i === 'image' ? ' img' : ''}">${ic(f.i, 18)}</span><div style="flex:1;min-width:0">
+    <div class="fn">${f.n}<i>${f.ext}</i></div><div class="fm">${meta}${f.ocr ? ' ' + ocrBadge(f.ocr) : ''}</div></div><span class="fa">${acts}</span></div>`;
+}
+function dropZone(s, big) {
+  const t = TUTORS[s.tutor], over = S.fl === 'drag';
+  const types = 'PDF, Word, текст или фото · до 20 МБ за файл';
+  if (M()) return `<div class="drop${big ? ' big' : ''}">${big ? `<span class="dg" style="margin:0 auto">${ic('upload', 22)}</span><div class="dt">Файлов пока нет</div><div class="muted">Сфотографируй страницу учебника или выбери файл — их прочтёт ${t.name}</div>` : ''}
+      <button class="btn md primary full">${ic('camera', 16)}Сфотографировать страницу</button><button class="btn md ghost full">${ic('file', 16)}Выбрать файл</button>
+      <span class="muted">${types}</span></div>`;
+  if (big) return `<div class="drop big${over ? ' over' : ''}"><span class="dg">${ic('upload', 22)}</span>
+      <div class="dt">${over ? 'Отпусти — файлы попадут в «' + s.label + '»' : 'Файлов пока нет'}</div>
+      <div class="muted" style="max-width:420px">${over ? 'Прочтёт их только ' + t.name : 'Перетащи сюда фото страниц учебника, PDF или Word. Их прочтёт только ' + t.name + ', Маша их не увидит.'}</div>
+      ${over ? '' : `<button class="btn md primary" style="margin-top:4px">${ic('upload', 16)}Выбрать файлы</button>`}<span class="muted">${types}</span></div>`;
+  return `<div class="drop${over ? ' over' : ''}"><span class="dg">${ic('upload', 20)}</span><div style="flex:1;min-width:0">
+      <div class="dt">${over ? 'Отпусти — 2 файла попадут в «' + s.label + '»' : 'Перетащи файлы сюда'}</div><div class="muted">${types}. Фото распознаем сами</div></div>
+      ${over ? '' : '<button class="btn sm ghost">Выбрать файлы</button>'}</div>`;
+}
+function fileManager(s) {
+  const t = TUTORS[s.tutor];
+  if (filesEmpty()) return dropZone(s, true);
+  const up = S.fl === 'upload' ? `
+    <div class="frow up"><span class="th img">${ic('image', 18)}</span><div style="flex:1;min-width:0"><div class="fn">Учебник, с. 43<i>.jpg</i></div>
+      <div class="fm">Загружается · 0,8 из 1,3 МБ</div><div class="meter"><i class="acc" style="width:62%"></i></div></div><span class="fa"><button class="ib" aria-label="Отменить загрузку">${ic('x', 16)}</button></span></div>
+    <div class="frow up"><span class="th img">${ic('image', 18)}</span><div style="flex:1;min-width:0"><div class="fn">Учебник, с. 44<i>.jpg</i></div>
+      <div class="fm">${ocrBadge('run')} обычно до минуты — не закрывай окно, иначе распознавание прервётся</div><div class="meter ind"><i></i></div></div><span class="fa"><button class="ib" aria-label="Отменить распознавание">${ic('x', 16)}</button></span></div>` : '';
+  const err = S.fl === 'error' ? `
+    <div class="frow err"><span class="th">${ic('image', 18)}</span><div style="flex:1;min-width:0"><div class="fn">Страница 12<i>.jpg</i></div>
+      <div class="fm">На фото не нашлось текста — сфотографируй ближе и при хорошем свете. Файл не сохранён</div></div>
+      <span class="fa"><button class="btn sm ghost">Другое фото</button><button class="ib" aria-label="Убрать из списка">${ic('x', 16)}</button></span></div>
+    <div class="frow err"><span class="th">${ic('file', 18)}</span><div style="flex:1;min-width:0"><div class="fn">Ответы к тесту<i>.heic</i></div>
+      <div class="fm">Такой файл не подходит: нужен PDF, Word, текст или фото JPG и PNG. Файл не сохранён</div></div>
+      <span class="fa"><button class="ib" aria-label="Убрать из списка">${ic('x', 16)}</button></span></div>` : '';
+  const rows = FILES.map((f, i) => fileRow(f, { rename: S.fl === 'rename' && i === 0 })).join('');
+  return `<div class="fmhead"><span>${FILES.length} файла · 1,3 МБ из 200 МБ</span><div class="meter"><i style="width:2%"></i></div><span>Файлы предмета «${s.label}» — читает ${t.name}. Сохраняются сразу, без кнопки «Сохранить»</span></div>
+    ${dropZone(s, false)}
+    <div class="flist">${err}${up}${rows}</div>`;
+}
+function fileDialog() {
+  if (!['del', 'preview'].includes(S.fl) || filesEmpty() || S.s === 'error' || S.s === 'empty' || !['tutors', 'subject'].includes(S.sec)) return '';
+  if (S.fl === 'del') {
+    const f = FILES[2];
+    return `<div class="dlgwrap"><div class="dlg" role="alertdialog" aria-labelledby="fdt" style="width:440px">${M() ? '<div class="grab"></div>' : ''}
+      <div class="dh" id="fdt">Удалить «${f.n}${f.ext}»?</div>
+      <div class="db"><div style="font-size:13px;line-height:1.5;color:var(--c-text-secondary)">Сова Ульяна перестанет его видеть с этого урока. Старые уроки, где она на него опиралась, останутся как были. Вернуть файл нельзя — только загрузить заново.</div></div>
+      <div class="df"><button class="btn md ghost">Отмена</button><button class="btn md danger">${ic('trash', 16)}Удалить</button></div></div></div>`;
+  }
+  const f = FILES[0];
+  return `<div class="dlgwrap"><div class="dlg" role="dialog" aria-labelledby="fpt" style="width:${M() ? '100%' : '760px'}">${M() ? '<div class="grab"></div>' : ''}
+    <div class="dh" id="fpt" style="display:flex;align-items:center;gap:8px"><span style="flex:1;min-width:0">${f.n}${f.ext}</span><button class="ib" aria-label="Закрыть">${ic('x', 18)}</button></div>
+    <div class="db">
+      <div class="fm" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--c-text-muted)">${f.kind} · ${f.size} · загрузил Андрей ${f.date} ${ocrBadge('ok')}</div>
+      <div class="fgroup" style="border-radius:10px">${glyph(SUBJ[0], true)}Математика ${ava('t1', 22)} Сова Ульяна<span class="muted">файл предмета</span></div>
+      <div class="pv"><div class="pic">${ic('image', 40)}</div>
+        <div><div class="lbl" style="margin-top:0">Как прочтёт репетитор</div><div class="ocr">${OCR_TEXT}</div>
+          <div class="muted" style="margin-top:8px">Распознанный текст — то, что видит репетитор. Если в нём ошибки, пересними страницу.</div></div></div>
+    </div>
+    <div class="df"><button class="btn md danger" style="margin-right:auto">${ic('trash', 16)}Удалить</button><button class="btn md ghost">${ic('note', 16)}Переименовать</button><button class="btn md ghost">${ic('move', 16)}В другой предмет…</button></div></div></div>`;
 }
 
 function kbDialog() {
@@ -843,7 +958,7 @@ function consentDialog() {
 function variantA() {
   const tabs = `<div class="tabs" style="padding:0 ${M() ? 8 : 24}px">${SECS.map(([k, l]) => `<button class="tab" aria-selected="${activeKey() === k}">${l}${k === 'models' && waiting().length ? '<span class="dot"></span>' : ''}</button>`).join('')}</div>`;
   const w = S.w === 'desk' ? 720 : S.w === 'tab' ? 720 : '100%';
-  return `<div class="overlay"><div class="modal" style="width:${typeof w === 'number' ? w + 'px' : w}">${head()}${S.s === 'error' ? '' : tabs}<div class="mbody">${S.s === 'error' ? errorBody() : curSec()}</div>${foot()}${consentDialog()}${kbDialog()}</div></div>`;
+  return `<div class="overlay"><div class="modal" style="width:${typeof w === 'number' ? w + 'px' : w}">${head()}${S.s === 'error' ? '' : tabs}<div class="mbody">${S.s === 'error' ? errorBody() : curSec()}</div>${foot()}${consentDialog()}${kbDialog()}${fileDialog()}</div></div>`;
 }
 
 /* ===== Вариант B · Две панели (Modal size="fullscreen" на десктопе и планшете) ===== */
@@ -856,9 +971,9 @@ function variantB() {
     const listScreen = S.ms === 'list';
     const title = listScreen ? '' : `<div style="display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid var(--c-border-light)"><button class="ib" aria-label="Назад к разделам">${ic('left', 20)}</button><span style="font-size:15px;font-weight:600;color:var(--c-text-heading)">${(SECS.find(([k]) => k === activeKey()) || [])[1]}</span></div>`;
     return `<div class="overlay" style="padding:0"><div class="modal" style="width:100%;border-radius:0">${listScreen ? head() : head().replace('<div class="grab"></div>', '')}
-      ${listScreen ? `<div class="mbody" style="padding:8px 4px">${navList()}</div>` : `${title}<div class="mbody">${S.s === 'error' ? errorBody() : curSec()}</div>`}${foot()}${consentDialog()}${kbDialog()}</div></div>`;
+      ${listScreen ? `<div class="mbody" style="padding:8px 4px">${navList()}</div>` : `${title}<div class="mbody">${S.s === 'error' ? errorBody() : curSec()}</div>`}${foot()}${consentDialog()}${kbDialog()}${fileDialog()}</div></div>`;
   }
-  return `<div class="modal" style="width:100%;border-radius:0;box-shadow:none">${head()}<div class="split${S.w === 'tab' ? ' narrow' : ''}"><nav class="nav" aria-label="Разделы настроек">${navList()}</nav><div class="pane">${S.s === 'error' ? errorBody() : curSec()}</div></div>${foot()}${consentDialog()}${kbDialog()}</div>`;
+  return `<div class="modal" style="width:100%;border-radius:0;box-shadow:none">${head()}<div class="split${S.w === 'tab' ? ' narrow' : ''}"><nav class="nav" aria-label="Разделы настроек">${navList()}</nav><div class="pane">${S.s === 'error' ? errorBody() : curSec()}</div></div>${foot()}${consentDialog()}${kbDialog()}${fileDialog()}</div>`;
 }
 
 /* ===== Вариант C · Мастер по шагам (Modal MODAL_W.wide) ===== */
@@ -870,7 +985,7 @@ function variantC() {
     : `<div class="stepper">${steps.map(([k, l], i) => `${i ? '<span class="stepline"></span>' : ''}<button class="step ${i < cur ? 'done' : ''} ${i === cur ? 'cur' : ''}"><span class="sn">${i < cur ? ic('check', 12) : i + 1}</span>${i === cur ? l : `<span style="position:absolute;left:-9999px">${l}</span>`}</button>`).join('')}</div>`;
   const nav = S.s === 'error' ? '' : `<div class="mfoot">${cur > 0 ? `<button class="btn md ghost">${ic('left', 16)}Назад</button>` : ''}<span class="dirty"></span>${M() ? '' : '<button class="btn md secondary">Сохранить и выйти</button>'}<button class="btn md primary">${cur === steps.length - 1 ? 'Сохранить' : 'Дальше'}${cur === steps.length - 1 ? '' : ic('right', 16)}</button></div>`;
   const w = M() ? '100%' : '720px';
-  return `<div class="overlay"><div class="modal" style="width:${w}">${head()}${S.s === 'error' ? '' : stepper}<div class="mbody">${S.s === 'error' ? errorBody() : curSec()}</div>${nav}${consentDialog()}${kbDialog()}</div></div>`;
+  return `<div class="overlay"><div class="modal" style="width:${w}">${head()}${S.s === 'error' ? '' : stepper}<div class="mbody">${S.s === 'error' ? errorBody() : curSec()}</div>${nav}${consentDialog()}${kbDialog()}${fileDialog()}</div></div>`;
 }
 
 /* ===== «Управление пользователями» — строка с галочкой ===== */

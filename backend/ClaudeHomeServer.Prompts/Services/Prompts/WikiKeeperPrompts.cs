@@ -164,12 +164,7 @@ public static class WikiKeeperPrompts
             - "link" — connect two pages (within the section or upward only); "target" is the
               other page, exactly as the catalog names it.
             Name an existing page exactly as the catalog names it; never invent a path for a
-            page the catalog already names. If the claim names the subject of a catalog page,
-            write it as [[Title]] exactly as the catalog names it:
-            no "— type" tail, no section prefix, no alias after "|". Example: a claim about the
-            build pipeline is linked as [[Конвейер сборки]]. A link the
-            code cannot resolve is stripped to plain text: an aliased or prefixed link is a
-            link lost. Entries marked "— source" are source
+            page the catalog already names. Entries marked "— source" are source
             cards: they only receive footnotes; never append/conflict/link into them. An
             empty section is a normal case: then use "create". An operation without its
             target ("conflict", "link") is rejected by the code. Never output a date field:

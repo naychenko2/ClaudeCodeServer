@@ -38,20 +38,25 @@ public static class WikiRelated
     /// <summary>Проекция «Связанные» для одной страницы. page — сама страница (путь под pages/
     /// и текст); pages — снимок страниц её раздела и цепочки вверх (тот же набор, что state
     /// гейта для allowed-разделов): своя страница, неразобранный путь, проекция и неразобранная
-    /// страница из него выпадают — та же мера, что у гейта (WikiGate.cs:101-137).</summary>
-    public static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages) =>
-        Build(page, pages, null);
+    /// страница из него выпадают — та же мера, что у гейта (WikiGate.cs:101-137).
+    /// limit — потолок группы: по умолчанию прежний GroupLimit (вызовы без него ведут себя как
+    /// раньше); null — без потолка (A5: степени WikiConnectivity не должны срезаться —
+    /// страница с 10 обратными ссылками даёт степень 10, а не 8).</summary>
+    public static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages,
+        int? limit = GroupLimit) =>
+        Build(page, pages, limit, null);
 
     /// <summary>Тестовый срез (c3 вердикта 141df4ac): сколько вызовов WikiGate.Norm делает
     /// полный Build на этом снимке — сторож O(N+L) резолва вместо прежнего O(N·L·N).</summary>
     internal static int CountNormCalls(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages)
     {
         var counter = new NormCounter();
-        Build(page, pages, counter);
+        Build(page, pages, GroupLimit, counter);
         return counter.Calls;
     }
 
-    private static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages, NormCounter? counter)
+    private static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages,
+        int? limit, NormCounter? counter)
     {
         var targetSection = WikiSections.Parse(page.Path);
         if (targetSection is null || WikiPaths.IsProjection(page.Path))
@@ -163,7 +168,7 @@ public static class WikiRelated
             .Where(kind => groups.TryGetValue(kind, out var g) && g.Count > 0)
             .Select(kind => new WikiRelatedGroup(kind, [.. groups[kind]
                 .OrderBy(c => c.Path, StringComparer.Ordinal)
-                .Take(GroupLimit)
+                .Take(limit ?? int.MaxValue) // null — без потолка (A5); срез — только вывод группы
                 .Select(c => new WikiRelatedItem(c.Path, c.Page.Title, c.Page.Frontmatter.Type))]))];
     }
 

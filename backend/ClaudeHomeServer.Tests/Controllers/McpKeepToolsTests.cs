@@ -91,8 +91,8 @@ public class McpKeepToolsTests : IClassFixture<McpKeepToolsTests.Hosts>
                     [$"LlmProviders:keeptools-unknown:KeepMcpTools:{Server}:0"] = "demo_read",
                     [$"LlmProviders:keeptools-unknown:KeepMcpTools:{Server}:1"] = "demo_такого_нет",
 
-                    // Локальный провайдер со своим профилем: опция персоны решает, пока модель
-                    // выбрал человек, а на подмене фолбэком профиль включается принудительно
+                    // Локальный провайдер со своим профилем: профиль применяется ВСЕГДА (решение
+                    // 19.11.2026), флаг персоны на локальной модели не действует
                     ["LlmProviders:keeptools-local:AnthropicBaseUrl"] = "http://127.0.0.1:18999",
                     ["LlmProviders:keeptools-local:IsLocal"] = "true",
                     ["LlmProviders:keeptools-local:Models:0:Id"] = LocalModel,
@@ -162,26 +162,19 @@ public class McpKeepToolsTests : IClassFixture<McpKeepToolsTests.Hosts>
     }
 
     /// <summary>
-    /// Подмена фолбэком на локальную модель видна и фильтру, а не только составу серверов в
-    /// ClaudeSession: признак берётся с живой сессии. Без него на подмене серверы были бы урезаны,
-    /// а инструменты внутри оставленных — нет (tasks_delete доступен локальной модели).
+    /// Локальная модель со своим профилем урезается и фильтром, и составом серверов в
+    /// ClaudeSession — при любом значении флага персоны (решение 19.11.2026): полный контекст
+    /// в окно локальной модели не влезает, а модель хода уезжает на неё мимо воли человека
+    /// (фолбэк, смена модели чата, слот). Фильтр обязан сработать вместе с составом серверов,
+    /// иначе локальная модель видит tasks_delete.
     /// </summary>
     [Fact]
-    public async Task ЛокальнаяМодель_ОпцияВыкл_ФильтрТолькоНаПодменеФолбэком()
+    public async Task ЛокальнаяМодель_ОпцияВыкл_ПрофильПрименяетсяВсегда()
     {
-        var (client, chatId) = await CallerWithChatAsync(LocalModel, lightContext: false);
+        var (client, _) = await CallerWithChatAsync(LocalModel, lightContext: false);
 
-        (await ToolsAsync(client)).Should().BeEquivalentTo(new[] { "demo_read", "demo_write", "demo_delete" },
-            "модель выбрана человеком, опция персоны выключена — сервер целиком");
-
-        var session = _factory.Services.GetRequiredService<SessionManager>().GetById(chatId)!;
-        session.FallbackSubstitution = true;
-        try
-        {
-            (await ToolsAsync(client)).Should().Equal(new[] { "demo_read" },
-                "ход на локальную модель увёл фолбэк — её профиль принудительно, вместе с фильтром");
-        }
-        finally { session.FallbackSubstitution = false; }
+        (await ToolsAsync(client)).Should().Equal(new[] { "demo_read" },
+            "локальная модель со своим профилем: флаг персоны не действует, профиль режет инструменты");
     }
 
     [Fact]

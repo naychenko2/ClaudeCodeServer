@@ -89,10 +89,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Профиль облегчённого контекста сессии (единая точка — LlmProviderRegistry.LightProfileFor):
     // модель и персона — свойства СЕССИИ, не хода, поэтому состав MCP и сигнатура запуска
-    // стабильны. Тот же резолв в McpToolWhitelist (фильтр tools/list и tools/call). Признак
-    // подмены фолбэком адаптер ставит вместе с подменённой Info.Model (см. LightProfileFor).
+    // стабильны. Тот же резолв в McpToolWhitelist (фильтр tools/list и tools/call).
     private LightProfile? LightProfile =>
-        _providers?.LightProfileFor(EffectiveModel, _personaProvider?.Invoke(), Info.FallbackSubstitution);
+        _providers?.LightProfileFor(EffectiveModel, _personaProvider?.Invoke());
 
     // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
     // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;
@@ -4027,9 +4026,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // побайтово неизменным, иначе prefix cache движка рвёт кэш всей истории), а
         // копятся здесь и уезжают хвостом — вклейкой в текст хода. Признак берём от
         // провайдера СЕССИИ, как BareMode: сигнатура запуска остаётся стабильной.
-        // Ручка провайдера действует и БЕЗ облегчённого контекста (персона с выключенным
-        // LightContext на local-qwen: профиль null, а кэш движка рвётся так же —
-        // LlmProviderRegistry.RecallInTurnTextFor).
+        // Ручка провайдера действует и БЕЗ облегчённого контекста (модель без профиля:
+        // LightProfile null, а кэш движка рвётся так же — LlmProviderRegistry.RecallInTurnTextFor).
         // Общий проект — то же при любой ручке провайдера (S2a-4): подборка собирается на ход
         // и на участника, а same-process ход системный промпт живого процесса НЕ обновляет
         // (ниже по файлу) — в системном блоке замерла бы подборка того хода, что поднял

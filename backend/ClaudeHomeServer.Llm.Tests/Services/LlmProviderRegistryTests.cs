@@ -1714,6 +1714,39 @@ public class LlmProviderRegistryTests
         narrow.KeepMcpTools["tasks"].Should().NotContain("tasks_run_executor");
     }
 
+    // Локальная модель со своим профилем: профиль включается ВСЕГДА, флаг персоны не решает
+    // (решение 19.11.2026). Модель без своего профиля — по флагу персоны, как прежде.
+    [Fact]
+    public void LightProfileFor_ЛокальнаяМодель_ПрофильВсегда_ФлагПерсоныНеРешает()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:DisplayName"] = "Qwen",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:TrimMcpServers"] = "true",
+            ["LlmProviders:local-qwen:KeepMcpServers:0"] = "tasks",
+            ["LlmProviders:local-qwen:Models:0:Id"] = "qwen3.8-27b",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro",
+        };
+        var registry = CreateWithLocal(settings, new FakeLocalProbe(knownWindow: 0));
+        var persona = new ClaudeHomeServer.Models.Persona { OwnerId = "u", Name = "Р", LightContext = false };
+
+        registry.LightProfileFor("qwen3.8-27b", persona)!.Source.Should().Be("local-qwen",
+            "полный контекст в окно локальной модели не влезает — флаг персоны тут не решает");
+        registry.LightProfileFor("qwen3.8-27b",
+            new ClaudeHomeServer.Models.Persona { OwnerId = "u", Name = "Р", LightContext = null })!.Source
+            .Should().Be("local-qwen", "непринятое решение — тоже профиль");
+        registry.LightProfileFor("qwen3.8-27b",
+            new ClaudeHomeServer.Models.Persona { OwnerId = "u", Name = "Р", LightContext = true })!.Source
+            .Should().Be("local-qwen");
+
+        registry.LightProfileFor("deepseek-v4-pro", persona).Should().BeNull(
+            "облачная модель без своего профиля: флаг персоны решает, выкл → полный контекст");
+    }
+
     // Проба не успела опросить стенд (knownWindow=0) — fail-open на каталог.
     [Fact]
     public void BuildCliEnv_ЛокальныйПровайдер_ПробаНеЗнает_ФолалноНаКаталог()

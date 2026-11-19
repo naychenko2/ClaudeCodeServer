@@ -55,9 +55,7 @@ public sealed class McpToolWhitelist(
         // персона сессии. Своя логика здесь дала бы рассинхрон состава MCP и фильтра
         // («No such tool available»). Персона — так же, как у BuildPersonaProvider в SessionManager.
         var persona = session.PersonaId is { } pid ? personas.Get(pid, context.OwnerId) : null;
-        // Признак подмены фолбэком — с живой сессии, тот же, что читает ClaudeSession: на подмене
-        // на локальную модель серверы урезаны её профилем, и фильтр обязан сработать вместе с ними
-        var provider = providers.LightProfileFor(model, persona, session.FallbackSubstitution);
+        var provider = providers.LightProfileFor(model, persona);
         if (provider is null || provider.KeepMcpTools.Count == 0) return null;
 
         // Ключи словаря приходят из конфига и регистр не гарантируют — ищем как KeepMcpServers,

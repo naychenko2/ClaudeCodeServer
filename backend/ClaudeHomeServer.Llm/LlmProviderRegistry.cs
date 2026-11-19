@@ -282,25 +282,26 @@ public class LlmProviderRegistry
     // идут ВСЕ потребители — состав MCP, обрезка серверов, карта и BareTools, хвостовой recall
     // (ClaudeSession) и фильтр инструментов McpToolWhitelist; рассинхрон между ними даёт
     // «No such tool available», поэтому своей копии этой логики не заводить.
-    //  • ход на локальную модель (IsLocal) со своим профилем увела подмена фолбэка
-    //    (forcedBySubstitution = Session.FallbackSubstitution) — её профиль принудительно: модель
-    //    сменили без ведома человека, и полный контекст на ней он не выбирал;
+    //  • локальная модель (IsLocal) со своим профилем — её профиль ВСЕГДА, флаг персоны не решает
+    //    (решение Андрея 19.11.2026): полный контекст в окно локальной модели не влезает, а
+    //    модель хода уезжает на неё мимо воли человека (фолбэк по цепочке, смена модели чата,
+    //    слот weak, шаблоны персон) — 22 из 84 сессий 19.11 шли с 532 инструментами и 135 тыс.
+    //    токенов промпта, 46 таких чтений за день съели 5,1 млн токенов (~7 % времени прода).
+    //    Флаг персоны на локальной модели не действует — это видно и в её карточке;
     //  • чат без персоны — как раньше, решает провайдер модели: у него свой профиль
     //    (BareMode/Trim/KeepMcpTools/RecallInTurnText) или его нет;
     //  • RecallInTurnText при этом читается и отдельно, мимо профиля — RecallInTurnTextFor;
-    //  • иначе в чате с персоной решает Persona.LightContext, в том числе на локальной модели,
-    //    выбранной человеком (модель чата, персоны, слот): выкл → null; вкл → профиль провайдера
+    //  • иначе в чате с персоной решает Persona.LightContext: выкл → null; вкл → профиль провайдера
     //    модели, а у модели без своего профиля (Opus/Sonnet) — общая секция LightProfile.
-    // Входы — свойства СЕССИИ (модель, персона, признак подмены), не хода: состав tools/list
-    // стабилен в пределах прогона CLI. Признак подмены меняется только вместе с моделью, а смена
-    // модели и так пересобирает процесс попытки — лишнего перезапуска он не добавляет.
-    public LightProfile? LightProfileFor(string? model, Persona? persona, bool forcedBySubstitution = false)
+    // Входы — свойства СЕССИИ (модель, персона), не хода: состав tools/list стабилен в пределах
+    // прогона CLI.
+    public LightProfile? LightProfileFor(string? model, Persona? persona)
     {
         var provider = ResolveByModel(model);
         var own = provider is { BareMode: true } or { TrimMcpServers: true } or { RecallInTurnText: true }
             or { KeepMcpTools.Count: > 0 }
             ? LightProfile.FromProvider(provider!, provider!.FindModel(model)) : null;
-        if (forcedBySubstitution && own is not null && provider!.IsLocal) return own;
+        if (own is not null && provider!.IsLocal) return own;
         if (persona is null) return own;
         return persona.LightContext == true ? own ?? _lightProfile : null;
     }
@@ -308,8 +309,8 @@ public class LlmProviderRegistry
     // Хвостовой recall (RecallInTurnText) — свойство ПРОВАЙДЕРА модели, а не облегчённого
     // контекста: ручка про механику prefix cache движка (нестабильные секции рвут кэш в
     // середине системного блока), и рвут они его одинаково при полном и облегчённом контексте.
-    // Поэтому её читают мимо LightProfileFor: у персоны с выключенным LightContext на
-    // local-qwen профиль null, а recall всё равно обязан ехать хвостом (замер 2026-10-09:
+    // Поэтому её читают мимо LightProfileFor: у модели без профиля профиль null, а recall
+    // всё равно обязан ехать хвостом (замер 2026-10-09:
     // смена рабочего фокуса/recall персоны между чатами — 50 с первого входа вместо 1 с).
     public bool RecallInTurnTextFor(string? model) => ResolveByModel(model)?.RecallInTurnText == true;
 

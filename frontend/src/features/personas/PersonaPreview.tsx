@@ -6,7 +6,7 @@ import type { Persona, PersonaBinding, PersonaMemoryEntry, Session, TtsVoiceInfo
 import { api } from '../../lib/api';
 import { previewVoice, isSpeaking, VoicePreviewError } from '../../lib/tts';
 import { C, FONT, FS, R, SP, TB } from '../../lib/design';
-import { useModelLabel } from '../../lib/models';
+import { modelProvider, useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { ensureTasksLoaded, useTasks } from '../../lib/tasks';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
@@ -83,6 +83,10 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
   isMobile?: boolean;
 }) {
   const modelName = useModelLabel(persona.model);
+  // Явно заданные модели персоны на локальном провайдере: там флаг «Облегчённый контекст»
+  // не действует (ADR-042) — профиль применяется всегда
+  const personaLocalModel = [persona.model, persona.tierStrong, persona.tierMedium, persona.tierWeak]
+    .some(m => !!m && modelProvider(m).startsWith('local'));
 
   // Лента «Активность» — та же, что в хабе персон, но для одной этой персоны;
   // справа на десктопе (см. PersonasHub). На мобиле не грузим (пустой массив —
@@ -265,7 +269,9 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
   // === Настройки: факты, у которых нет своей вкладки (остальное — в навигаторе) ===
   const facts: { label: string; value: string; title?: string }[] = [
     { label: 'Модель', value: persona.effort ? `${modelName} · ${effortLabel(persona.effort)}` : modelName },
-    { label: 'Облегчённый контекст', value: persona.lightContext ? 'вкл' : 'выкл' },
+    // На локальной модели облегчённый контекст включается всегда, флаг не действует (ADR-042) —
+    // подпись говорит об этом, чтобы «выкл» не читалось как «полный контекст»
+    { label: 'Облегчённый контекст', value: personaLocalModel ? 'вкл (на локальной модели)' : persona.lightContext ? 'вкл' : 'выкл', title: personaLocalModel ? 'На локальной модели включается всегда, независимо от переключателя' : undefined },
     { label: 'Доступ', value: accessText },
     { label: 'Возможности', value: toolsText },
     { label: 'Зона', value: zoneLabel ?? (isGlobalPersona(persona) ? 'Глобальная' : personaZoneLabel(persona, {}, true)) },

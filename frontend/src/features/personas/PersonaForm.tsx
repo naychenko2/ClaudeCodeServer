@@ -282,10 +282,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [gender, setGender] = useState<PersonaGender>(persona?.gender ?? 'unspecified');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Локальный провайдер среди явно заданных моделей персоны (ключ провайдера local-*): с выключенным
-  // переключателем предупреждение становится жёлтым. Модель чата и слот владельца здесь не видны —
-  // для них то же предупреждение звучит условно. Принудительно облегчение включается только на
-  // подмене фолбэком (сервер, LlmProviderRegistry.LightProfileFor)
+  // Локальный провайдер среди явно заданных моделей персоны (ключ провайдера local-*): там
+  // облегчённый контекст включается ВСЕГДА, переключатель не действует (ADR-042), и подпись
+  // об этом говорит прямо. Модель чата и слот владельца здесь не видны — для них то же
+  // предупреждение звучит условно.
   const usesLocalModel = [model, tierStrong, tierMedium, tierWeak]
     .some(m => !!m && modelProvider(m).startsWith('local'));
 
@@ -1490,17 +1490,20 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               заметки, базу знаний, других персон и генерацию медиа. Модель та же — урезается то, что
               ей подаётся.
             </div>
-            {!lightContext && (
-              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: usesLocalModel ? C.warning : C.textMuted, lineHeight: 1.45 }}>
+            {!lightContext && !usesLocalModel && (
+              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
                 Если персона работает на локальной модели (своей, модели чата или слота), с выключенным
-                переключателем она получает полный CLAUDE.md и все MCP-серверы — ход станет заметно
-                медленнее. Для локальной модели облегчённый контекст лучше включить.
+                переключателем она всё равно получит полный CLAUDE.md и все MCP-серверы — ход станет
+                заметно медленнее. Для локальной модели облегчённый контекст лучше включить.
               </div>
             )}
-            <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
-              Если ход на локальную модель уведёт подмена при сбое основной модели, облегчённый
-              контекст включится сам, независимо от переключателя.
-            </div>
+            {usesLocalModel && (
+              <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+                На локальной модели облегчённый контекст включён всегда, независимо от переключателя:
+                полный CLAUDE.md в её окно не влезает, а ход может увести на неё подмена при сбое
+                основной модели. Переключатель влияет только на облачные ходы этой персоны.
+              </div>
+            )}
             {isEdit && lightContext !== (persona?.lightContext ?? false) && (
               <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
                 После сохранения открытые чаты персоны перезапустятся.

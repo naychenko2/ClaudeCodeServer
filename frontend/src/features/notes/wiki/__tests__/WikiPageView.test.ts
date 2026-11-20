@@ -1287,6 +1287,57 @@ describe('«Связанные» (2Б, Q1-S7)', () => {
     expect(has(c, 'Связанные')).toBe(false);
   });
 
+  // «По теме» (очередь 2, T2): та же группа под тем же заголовком, строка — тот же RelatedRow;
+  // kind 'topic' бэк отдаёт как есть (WikiRelated.cs:35), порядок — бэковый
+  it('группа «По теме»: подпись есть, порядок групп — бэковый', async () => {
+    await seedPage({
+      pageKey: PAGE_KEY,
+      content: PAGE_PLAIN,
+      related: [
+        { kind: 'topic', items: [{ pageKey: 'Проекты/p1/Решения/р1.md', title: 'Ревюить звук до пятницы', type: 'rule' }] },
+        { kind: 'backlinks', items: [{ pageKey: 'Общее/Термины/звук.md', title: 'Ревью звука', type: null }] },
+      ],
+    });
+    const c = renderPage();
+    await settle();
+    expect(relatedGroupKinds(c)).toEqual(['topic', 'backlinks']);
+    expect(has(c, 'По теме')).toBe(true);
+    expect(has(c, 'Ссылаются сюда')).toBe(true);
+    // строка пункта — та же, что у прочих групп: заголовок соседа и его вид
+    const rows = relatedRows(c);
+    expect(rows).toHaveLength(2);
+    const rowText = (n: AnyNode) => textNodes(n).map(t => t.trim()).join(' ');
+    expect(rowText(rows[0])).toContain('Ревюить звук до пятницы');
+    expect(rowText(rows[0])).toContain('Правило');
+  });
+
+  // мутация «убрать пропуск по RELATED_LABELS» краснит ровно этот кейс (обе загрузки)
+  it('неизвестный фронту kind (новый бэндл бэка): группа не рисуется; из одних неизвестных — блока нет', async () => {
+    // на проводе kind — строка; тест моделирует новый бэндл вне известного контракта
+    const unknownGroup = {
+      kind: 'graphNeighbours',
+      items: [{ pageKey: 'Проекты/p1/Решения/р1.md', title: 'Ревюить звук до пятницы', type: 'rule' }],
+    } as unknown as WikiRelatedGroupDto;
+    await seedPage({
+      pageKey: PAGE_KEY,
+      content: PAGE_PLAIN,
+      related: [unknownGroup, { kind: 'source', items: [{ pageKey: 'Проекты/p1/Источники/Чат.md', title: 'Чат «Ревью фронта»', type: 'source' }] }],
+    });
+    const c = renderPage();
+    await settle();
+    expect(relatedGroupKinds(c)).toEqual(['source']);
+    expect(relatedRows(c)).toHaveLength(1);
+    // ни «undefined» в заголовке, ни исключения: чужой группы на экране нет вовсе
+    expect(has(c, 'undefined')).toBe(false);
+    expect(has(c, 'graphNeighbours')).toBe(false);
+    // из одних неизвестных групп — блока нет вовсе (тот же приём, что у одних пустых)
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN, related: [unknownGroup] });
+    const c2 = renderPage();
+    await settle();
+    expect(findNodeByAttr(c2, 'data-testid', 'wiki-related')).toBeNull();
+    expect(has(c2, 'Связанные')).toBe(false);
+  });
+
   it('на телефоне тач-цель пункта ≥ 40 px', async () => {
     mobileFlag.v = true;
     await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN, related: RELATED_TWO });

@@ -68,7 +68,10 @@ export interface WikiCatalogDto { key: string; name: string | null; orphan: bool
 // бэк не отдаёт; отсутствие поля и пустой список — одно «связанных нет» (старый бэк без поля
 // читается как есть — тот же приём, что отсутствующий lastNight). pageKey — путь под pages/
 // (та же форма, что у каталога), type — вид шапки соседа (для карточек источника — 'source').
-export type WikiRelatedKind = 'source' | 'chronicle' | 'mentions' | 'mentionedHere' | 'backlinks';
+// topic — «По теме» (очередь 2, T2): бэковый WikiRelated.KindTopic (WikiRelated.cs:35).
+// Неизвестный фронту kind бэк может прислать и раньше фронта (новый бэндл на старом фронте) —
+// экран такую группу пропускает (WikiPageView), тип не расширяем «на всякий случай».
+export type WikiRelatedKind = 'source' | 'chronicle' | 'mentions' | 'mentionedHere' | 'backlinks' | 'topic';
 export interface WikiRelatedItemDto { pageKey: string; title: string; type: string | null }
 export interface WikiRelatedGroupDto { kind: WikiRelatedKind; items: WikiRelatedItemDto[] }
 

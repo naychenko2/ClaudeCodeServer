@@ -317,6 +317,7 @@ const RELATED_LABELS: Record<WikiRelatedKind, string> = {
   mentions: 'Упоминают эту страницу',
   mentionedHere: 'Упомянуты здесь',
   backlinks: 'Ссылаются сюда',
+  topic: 'По теме',
 };
 
 // Тач-цель пункта на телефоне — та же, что у строк каталога и дерева (WikiTab ROW_H_TOUCH,
@@ -407,8 +408,10 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   const drift = dto?.drift === true;
   const quotes = new Map(page.footnotes.map(f => [f.id, f.quote]));
   // «Связанные» — поле того же ответа GET /wiki/page (2Б): своего запроса нет, порядок групп
-  // остаётся бэковым. Пустая группа не рисуется; без поля или из одних пустых групп — блока нет
-  const relatedGroups = (dto?.related ?? []).filter(g => g.items.length > 0);
+  // остаётся бэковым. Пустая группа не рисуется; без поля или из одних пустых групп — блока нет.
+  // Группа с неизвестным фронту kind (новый бэндл бэка на этом фронте) тоже не рисуется:
+  // без подписи в RELATED_LABELS нет строки — не «undefined» в заголовке и не исключение
+  const relatedGroups = (dto?.related ?? []).filter(g => g.items.length > 0 && g.kind in RELATED_LABELS);
 
   // Сноски с происхождением (footnotes[] страницы, B7); нет поля — прежний вид
   const authored = dto as WikiPageOverriddenDto | null;

@@ -333,7 +333,7 @@ public class WikiRelatedTests
 
     // ─── «По теме» (topic) ──────────────────────────────────────────────────────
 
-    private const string Gems = "аметист бирюза гранат хризолит";
+    private const string Gems = "аметист бирюза гранат хризолит яшма малахит";
 
     // Фон: страницы без общих слов, чтобы df редких основ был малым долей снимка.
     private static Fixture TopicFixture(string title = "Порядок работ")

@@ -33,8 +33,12 @@ public class WikiJudgeMergeTests : IDisposable
     private const string CardPath = "Общее/Карточка-чата.md";
     private const string PageAPath = "Общее/Сущность-A.md";
     private const string PageBPath = "Общее/Сущность-B.md";
+    private const string PageB1Path = "Общее/Сущность-B1.md";
+    private const string PageB2Path = "Общее/Сущность-B2.md";
     private const string MarkerA = "МЕРИТЕЛЬ-А-ТЕКСТ";
     private const string MarkerB = "ЦЕЛЬ-B-ТЕКСТ";
+    private const string MarkerB1 = "ЦЕЛЬ-B1-ТЕКСТ";
+    private const string MarkerB2 = "ЦЕЛЬ-B2-ТЕКСТ";
     private const string SourceRef = "session:chat-A";
     private const string MergeClass = "session×merge";
     private const string AppendClass = "session×append";
@@ -89,6 +93,27 @@ public class WikiJudgeMergeTests : IDisposable
 
         ## Сводка
         {{MarkerB}}: вторая страница, куда сливают.
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+        """;
+
+    private static string PageWithMarker(string title, string marker) => $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {{title}}
+
+        ## Сводка
+        {{marker}}: страница-цель слияния.
 
         ## Хронология
 
@@ -161,16 +186,58 @@ public class WikiJudgeMergeTests : IDisposable
         var textB = string.Concat(Enumerable.Range(0, 3 * WikiJudgeSweep.MaxPageChars / unitLen)
             .Select(i => $"B{i:D6} "));
 
-        var input = WikiJudgeSweep.BuildGroupInput([(MergeOp(), 0)], textA, [textB]);
+        var input = WikiJudgeSweep.BuildGroupInput([(MergeOp(), 0)], textA, [(PageBPath, textB)]);
 
-        input.Should().Contain(WikiJudgeSweep.MergeTargetLabel, "вход называет вторую страницу целью слияния");
+        // B обрезана (textB втрое длиннее потолка) — пометка в заголовке видна судье (п. 4);
+        // путь B в заголовке и merge_into в блоке операции — привязка блока к index (п. 2).
+        input.Should().Contain(WikiJudgeSweep.MergeTargetLabel(PageBPath, truncated: true),
+            "вход называет вторую страницу целью слияния — с её путём и пометкой об обрезке");
+        input.Should().Contain("ОБРЕЗАНО", "обрезка B не молчит");
         input.Should().Contain(textA, "текст A (Page) — входе");
+        input.Should().Contain("ТЕКСТ СТРАНИЦЫ A — СЛИВАЕМОЙ СТРАНИЦЫ",
+            "A названа сливаемой страницей, а не 'целевой' (вердикт C5, п. 2)");
+        input.Should().Contain("merge_from: " + PageAPath, "блок операции называет A (сливаемую)");
+        input.Should().Contain("merge_into: " + PageBPath, "блок операции называет B (цель)");
         input.Should().Contain("B000000", "текст B (Target) начинается во входе");
         input.Should().Contain($"B{lastIncluded:D6}", "первые MaxPageChars символов B — входе целиком");
         input.Should().NotContain($"B{lastIncluded + 1:D6}", "часть B во входе не длиннее MaxPageChars");
         input.IndexOf(textA, StringComparison.Ordinal)
             .Should().BeLessThan(input.IndexOf("B000000", StringComparison.Ordinal),
                 "A раньше B во входе судьи (контракт порядка C5)");
+    }
+
+    [Fact]
+    public async Task MergeДваСОбщимA_БлокиBПривязаныКПути_ОдинВызов()
+    {
+        // Вердикт C5, п. 2: при нескольких merge с общим A блоки B шли без привязки к
+        // index. Теперь путь B стоит в заголовке её блока и в merge_into блока операции:
+        // судья видит, какой текст какой операции принадлежит.
+        await WriteViaKeeper(PageB1Path, PageWithMarker("Сущность-B1", MarkerB1));
+        await WriteViaKeeper(PageB2Path, PageWithMarker("Сущность-B2", MarkerB2));
+        var id = NewPackage([MergeOp(PageB1Path), MergeOp(PageB2Path)]);
+        var llm = new FakeJudge(VerdictsJson(
+            (0, false, "B1 — другой предмет"),
+            (1, false, "B2 — другой предмет")));
+
+        var res = await Sut(llm).RunAsync(User, Root());
+
+        res.Calls.Should().Be(1, "общая страница A — одна группа, один вызов");
+        var prompt = llm.Calls[0].Prompt;
+        prompt.Should().Contain("merge_into: " + PageB1Path);
+        prompt.Should().Contain("merge_into: " + PageB2Path);
+        prompt.Should().Contain(WikiJudgeSweep.MergeTargetLabel(PageB1Path, truncated: false));
+        prompt.Should().Contain(WikiJudgeSweep.MergeTargetLabel(PageB2Path, truncated: false));
+        // Привязка: текст B1 лежит в блоке с заголовком B1 (между его заголовком и
+        // заголовком B2), а не где-то ещё.
+        var h1 = prompt.IndexOf(WikiJudgeSweep.MergeTargetLabel(PageB1Path, truncated: false), StringComparison.Ordinal);
+        var h2 = prompt.IndexOf(WikiJudgeSweep.MergeTargetLabel(PageB2Path, truncated: false), StringComparison.Ordinal);
+        var m1 = prompt.IndexOf(MarkerB1, StringComparison.Ordinal);
+        h1.Should().BeGreaterThanOrEqualTo(0);
+        h2.Should().BeGreaterThan(h1, "блоки B идут в порядке их операций");
+        m1.Should().BeGreaterThan(h1).And.BeLessThan(h2, "текст B1 — в своём блоке");
+        res.Rejected.Should().Be(2);
+        res.FirstFailure.Should().BeNull();
+        Read(id).Status.Should().Be(WikiPackage.StatusRejected);
     }
 
     [Fact]
@@ -196,6 +263,32 @@ public class WikiJudgeMergeTests : IDisposable
         var pkg = Read(id);
         pkg.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanRejected);
         pkg.Status.Should().Be(WikiPackage.StatusRejected, "единственная спорная отклонена судьёй");
+    }
+
+    [Fact]
+    public async Task MergeBОтсутствует_МодельНеЗовётся_ОтказКодаСПричиной()
+    {
+        // C5 доработка (вердикт Глеба, п. 1): B (Target) нет на диске — её блок молча
+        // пропускался, и судья одобряла merge вслепую. Инвариант: merge не доходит до
+        // модели без обоих текстов — отказ выносит код, модель не звалась (тот же путь,
+        // что у отказа по коду, И4′). B здесь не пишется вовсе.
+        var id = NewPackage([MergeOp()]);
+        var llm = new FakeJudge(VerdictsJson((0, true, "дубли, сливать можно")));
+
+        var res = await Sut(llm).RunAsync(User, Root());
+
+        res.Calls.Should().Be(0, "без текста B вызова нет: вслепую merge не одобряют");
+        llm.Calls.Should().BeEmpty();
+        res.CodeRejected.Should().Be(1, "отказ вынесен кодом, не моделью");
+        res.Rejected.Should().Be(0, "отказ кода — не отказ судьи");
+        res.Deferred.Should().Be(0, "попытка не карается: решение вынесено сразу");
+        res.FirstFailure.Should().BeNull();
+
+        var pkg = Read(id);
+        pkg.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanRejected);
+        pkg.Operations[0].JudgeReason.Should().Contain("страница B недоступна");
+        pkg.Operations[0].JudgeModel.Should().Be(WikiPackage.JudgeModelCode);
+        pkg.Status.Should().Be(WikiPackage.StatusRejected, "единственная спорная отклонена");
     }
 
     [Fact]
@@ -261,11 +354,11 @@ public class WikiJudgeMergeTests : IDisposable
 
     /// <summary>merge-операция по контракту C2: Page=A, Target=B, Text=null. Строится
     /// напрямую — без валидации пакета (её расширяет C2).</summary>
-    private static WikiPackage.Operation MergeOp() => new()
+    private static WikiPackage.Operation MergeOp(string target = PageBPath) => new()
     {
         Op = WikiPackage.OpMerge,
         Page = PageAPath,
-        Target = PageBPath,
+        Target = target,
         Class = WikiPackage.ClassKey("session", WikiPackage.OpMerge),
         Decision = WikiPackage.DecisionInbox,
         Reason = "предложение слить страницы: A и B говорят об одном",

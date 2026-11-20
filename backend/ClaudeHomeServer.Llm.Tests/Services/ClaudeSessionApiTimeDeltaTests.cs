@@ -156,4 +156,27 @@ public class ClaudeSessionApiTimeDeltaTests : IDisposable
         results[0].DurationApiMs.Should().Be(20_000);
         results[1].DurationApiMs.Should().Be(5_000, "новый процесс начинает с нуля — его снимок и есть время хода");
     }
+
+    // 7. Минор ревью 3b85ad09: итог без поля (сторонний поток, 0) не двигает базу процесса. Иначе
+    //    после него следующий снимок давал бы приращение, равное всему накопленному счётчику:
+    //    15000 вместо честных 15000−10000 = 5000. Мутация (писать 0 в базу безусловно) краснит
+    //    третью строку.
+    [Fact]
+    public async Task ИтогБезПоля_БазуНеДвигает_СледующийИтогЧестный()
+    {
+        var (session, sent) = NewSession();
+        var run = NewRun();
+
+        await DriveLine(session, run, ResultLine(10_000));
+        SubmitNextTurn(run);
+        await DriveLine(session, run, ResultLine(0));
+        SubmitNextTurn(run);
+        await DriveLine(session, run, ResultLine(15_000));
+
+        var results = Results(sent);
+        results.Should().HaveCount(3);
+        results[0].DurationApiMs.Should().Be(10_000);
+        results[1].DurationApiMs.Should().BeNull("поля нет — времени хода нет");
+        results[2].DurationApiMs.Should().Be(5_000, "база осталась 10000: приращение 15000−10000, а не весь счётчик");
+    }
 }

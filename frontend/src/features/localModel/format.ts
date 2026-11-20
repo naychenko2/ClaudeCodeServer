@@ -25,6 +25,14 @@ export function formatTps(v?: number | null): string {
   return `${Math.round(v)} ток/с`;
 }
 
+// Секунды с одним знаком: «6,4 с» (время до первого токена). Ровно один знак —
+// величина измеренная, «6» и «6,0» для глаза одно, а «6,043» — ложная точность.
+// Без значения — «—» (null — нет данных, не ноль: «0,0 с» было бы выдуманным ответом).
+export function formatSec(v?: number | null): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  return `${v.toFixed(1).replace('.', ',')} с`;
+}
+
 // Долю 0..1 зажать в диапазон: бэк обещает 0..1, но выброс (сбой датчика)
 // не должен растягивать полосу или процент
 export function clamp01(v: number): number {
@@ -77,6 +85,35 @@ export function formatUpdatedAt(history?: { t: number }[] | null): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `обновлено ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
+
+// === «Скорость ответа»: подписи окон и подсказки к числам ===
+// (фича llm-answer-speed, docs/features/llm-answer-speed-spec.md: сравнение с
+// Artificial Analysis «Output Speed» и OpenRouter «throughput» — оба сквозные).
+
+// Подпись окна из ответа ('5m' / '1h'). Неизвестный ключ остаётся как есть:
+// выдуманного окна придумывать нечем.
+const ANSWER_SPEED_WINDOW_LABEL: Record<string, string> = { '5m': 'за 5 минут', '1h': 'за час' };
+export function answerSpeedWindowLabel(key: string): string {
+  return ANSWER_SPEED_WINDOW_LABEL[key] ?? key;
+}
+
+// Подсказки к числам карточки: что это, с чем сравнивать, и порог медианы.
+// Порог берётся из ответа (minTokensForMedian); его нет — про порог молчим,
+// выдуманную границу в подсказку не ставим.
+export function answerSpeedTpsHint(winLabel: string): string {
+  return `сквозная скорость ответа ${winLabel}: все выходные токены делить на всё время запроса, от отправки до последнего токена. Так же считают Artificial Analysis и OpenRouter — сравнивать надо это число.`;
+}
+export function answerSpeedMedianHint(winLabel: string, minTokens?: number | null): string {
+  const base = `медиана скорости по отдельным запросам ${winLabel}: половина запросов быстрее, половина медленнее`;
+  if (minTokens == null || !Number.isFinite(minTokens)) return base;
+  return `${base}. В медиану входят только ответы не короче ${minTokens} токенов — короткие сильно занижают её.`;
+}
+export const TTFT_MEDIAN_HINT = 'время до первого токена: половина запросов отвечает быстрее, половина медленнее';
+export const TTFT_P90_HINT = 'время до первого токена, 90-й перцентиль: девять запросов из десяти отвечают быстрее этого';
+
+// Подсказка KPI «скорость генерации (пока пишет)»: это число — НЕ то, с чем сверяют
+// облачные оценки (для них есть «Скорость ответа»).
+export const GEN_SPEED_HINT = 'скорость генерации, пока модель пишет: токены делить только на время генерации. С цифрами Artificial Analysis и OpenRouter сравнивается «Скорость ответа», а не это число.';
 
 // === Подписи видеокарт ===
 
@@ -278,6 +315,10 @@ export function triggerTitleFor(data: LocalModelStats | null): string {
 }
 
 // === Строки «Кто сейчас на модели» ===
+
+// Подсказка к значению скорости в строке чата: формула прежняя (её считает бэк),
+// подсказка называет, что в неё входит — ожидание слота и чтение промпта.
+export const WHO_SPEED_HINT = 'сквозная скорость ответа чата: токены делить на всё время запроса, включая ожидание слота и чтение промпта';
 
 // Строка списка: чат со скоростью. Чужой чат — «Чат другого пользователя»
 // БЕЗ названия и перехода (правило: даже админ не видит чужие названия);

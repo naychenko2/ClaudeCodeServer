@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
@@ -330,12 +331,15 @@ public class WikiJudgeMergeTests : IDisposable
 
         input.Should().Contain("ТЕКСТ СТРАНИЦЫ A — СЛИВАЕМОЙ СТРАНИЦЫ merge, ОБРЕЗАНО (данные):",
             "обрезка A названа судье тем же способом, что и B");
-        // Текст A может отсутствовать (страница ещё не создана) — промпт не обещает
-        // безусловно «текст каждой из них»: он называет возможность отсутствия A.
-        WikiJudgePrompts.System.Should().NotContain("и текст каждой из них",
-            "промпт не обещает текст обеих страниц: A может отсутствовать");
+        // Текст A может отсутствовать (страница ещё не создана) — промпт называет это явно.
         WikiJudgePrompts.System.Should().Contain("текст A может отсутствовать",
             "промпт называет отсутствие A — как и отсутствие целевой страницы выше");
+        // Общее: обещания текста A без оговорки нигде нет — каждое упоминание текста A
+        // в промпте стоит рядом с оговоркой об его отсутствии. Проверяется форма обещания,
+        // а не конкретная фраза (хвост R-C5): прежняя «текст каждой из них» здесь не подстрока.
+        foreach (Match m in Regex.Matches(WikiJudgePrompts.System, @"текст[ау]?\s+A\b"))
+            WikiJudgePrompts.System[m.Index..Math.Min(m.Index + 120, WikiJudgePrompts.System.Length)]
+                .Should().Contain("отсутствовать", $"упоминание текста A на {m.Index} — без оговорки об отсутствии");
     }
 
     [Fact]

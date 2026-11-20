@@ -336,11 +336,17 @@ public class WikiRelatedTests
     private const string Gems = "аметист бирюза гранат хризолит яшма малахит";
 
     // Фон: страницы без общих слов, чтобы df редких основ был малым долей снимка.
-    private static Fixture TopicFixture(string title = "Порядок работ")
+    // bg — короткий фон (токены короче MinWordLength, WikiCandidates.cs:25: основ не дают):
+    // поднимает N снимка, не касаясь df редких основ. Нужен там, где сумма весов стоит
+    // впритык к порогу MinScore (ПотолокПять): запас по N не должен зависеть от состава
+    // обычного фона.
+    private static Fixture TopicFixture(string title = "Порядок работ", int bg = 0)
     {
         var f = new Fixture().Target(title: title, text: Gems);
         for (var i = 0; i < 60; i++)
             f.Page($"Проекты/p1/Фон{i}.md", $"Фон{i}", text: $"уникальное{i}слово{i}");
+        for (var i = 0; i < bg; i++)
+            f.Page($"Проекты/p1/Краткий{i}.md", $"К{i}", text: $"bg{i}");
         return f;
     }
 
@@ -363,7 +369,11 @@ public class WikiRelatedTests
     [Fact]
     public void ГруппаTopic_ПотолокПять_ДействуетИПриLimitNull()
     {
-        var f = TopicFixture();
+        // Короткий фон (bg) снимает завись от состава обычного фона (хвост R-T1b, п. 2):
+        // N = 105, df каждой gem-основы = 9 (цель + 8 «Тем») → вес ln(105/9) ≈ 2,46,
+        // сумма шести ≈ 14,7 против порога 11 — запас, а не «впритык» (на 69 страницах
+        // было ≈ 12,2: смена фона или состава Gems роняла её под порог).
+        var f = TopicFixture(bg: 36);
         for (var i = 0; i < 8; i++)
             f.Page($"Проекты/p1/Тема{i}.md", $"Тема{i}", text: Gems);
 

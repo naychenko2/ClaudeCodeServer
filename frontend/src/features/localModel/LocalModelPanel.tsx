@@ -43,6 +43,7 @@ import { useLocalModelMedia } from './useLocalModelMedia';
 import { useLocalModelEngines } from './useLocalModelEngines';
 import { useLocalModelHardware, useLocalModelFarm, DEFAULT_HARDWARE_WINDOW, type HardwareWindow } from './useLocalModelHardware';
 import { useTranscription } from './useTranscription';
+import { useCloudAnswerSpeed } from './useCloudAnswerSpeed';
 import type { TranscriptionSnapshot } from './types';
 import { farmPickNode } from './hardwareFormat';
 import { TextTab } from './TextTab';
@@ -172,6 +173,9 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // точку тревоги на вкладке, а она обязана быть видна с любой вкладки.
   const { data: textData, loading: textLoading, error: textError, refetch: textRefetch } = useLocalModelStats(visible && tab === 'text', window, engine);
   const { data: mediaData, loading: mediaLoading, refetch: mediaRefetch } = useLocalModelMedia(visible && tab === 'media');
+  // «Облачные модели: скорость ответа» — свой опрос раз в минуту (не 2 с) и только
+  // у админа: эндпоинт админский, а не-админу карточка и не положена.
+  const cloudSpeed = useCloudAnswerSpeed(visible && tab === 'text' && isAdmin);
   // Опрос снимка конвейера (5 с) — пока панель смонтирована и пользователь админ
   // (эндпоинт админский): точка тревоги на «Встречах» обязана быть видна с любой
   // вкладки, опрос прекращается при закрытии ПАНЕЛИ, а не при уходе с вкладки
@@ -229,7 +233,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const body = (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: SP.md, padding: SP.md }}>
       {tab === 'text'
-        ? <TextTab data={textData} loading={textLoading} error={textError} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} onOpenHardware={() => changeTab('hardware')} onOpenMedia={() => changeTab('media')} window={window} onWindowChange={setWindow} engines={engines} engine={engine} onEngineChange={setEngine} />
+        ? <TextTab data={textData} loading={textLoading} error={textError} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} onOpenHardware={() => changeTab('hardware')} onOpenMedia={() => changeTab('media')} window={window} onWindowChange={setWindow} engines={engines} engine={engine} onEngineChange={setEngine} cloudSpeed={isAdmin ? cloudSpeed : undefined} />
         : tab === 'hardware'
           ? <HardwareTab farm={farm} farmLoading={farmLoading} selected={nodeKey} onSelect={setChosenNode} report={hwData} loading={hwLoading} stats={nodeStats} media={nodeMedia} isMobile={ctx.isMobile} window={hwWindow} onWindowChange={setHwWindow} />
           : tab === 'transcription'

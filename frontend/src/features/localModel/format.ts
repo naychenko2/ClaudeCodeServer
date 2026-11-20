@@ -431,3 +431,65 @@ export function whoRows(
   if ((othersCount ?? 0) > 0) rows.push({ kind: 'others', count: othersCount!, key: 'others' });
   return rows;
 }
+
+// === «Облачные модели: скорость ответа» ===
+// Числа облака — сессионная скорость по нашей нагрузке за сутки: токены ходов ÷
+// суммарное время запросов к API (duration_api_ms), без времени работы инструментов.
+// Это НЕ то же определение, что у локальной карточки «Скорость ответа» (там —
+// один запрос, от отправки до последнего токена): путать их нельзя.
+
+// Окно, за которое посчитан снимок.
+export const CLOUD_SPEED_WINDOW_LABEL = 'за сутки';
+
+// Определение — честно, в одну фразу: с чем сравнимо и с чем нет.
+export const CLOUD_SPEED_DEFINITION_HINT =
+  'сквозная скорость облачной модели за сутки: все выходные токены ходов этой модели делить на суммарное время запросов к API (duration_api_ms) — без времени работы инструментов. Определение сессионное: так же считают для многошаговой сессии в Artificial Analysis. С локальной карточкой «Скорость ответа» это число не сравнимо — там скорость одного запроса, от отправки до последнего токена.';
+
+// Время до первого токена у облака CCS не меряет — отдельной фразой, а не прочерком.
+export const CLOUD_SPEED_NO_TTFT_HINT =
+  'время до первого токена у облачных моделей CCS не меряет: у него нет времени первого токена провайдера, поэтому в этой карточке его нет вовсе';
+
+// Подсказка карточки: определение + честное «про TTFT».
+export function cloudSpeedCardHint(): string {
+  return `${CLOUD_SPEED_DEFINITION_HINT} ${CLOUD_SPEED_NO_TTFT_HINT}`;
+}
+
+// Медиана по ходам: половина ходов быстрее, половина медленнее; порог — из ответа.
+export function cloudSpeedMedianHint(minTokens?: number | null): string {
+  const base = 'медиана скорости по отдельным ходам этой модели за сутки: половина ходов быстрее, половина медленнее';
+  if (minTokens == null || !Number.isFinite(minTokens)) return base;
+  return `${base}. В медиану входят только ходы с ответом не короче ${minTokens} токенов — короткие сильно занижают её.`;
+}
+
+// Число ходов — по нему видно, насколько оценка опорная.
+export const CLOUD_SPEED_REQUESTS_HINT =
+  'сколько ходов этой модели было за сутки: по этому числу видно, насколько оценка опорная';
+
+// Подсказка числа «сквозная скорость» — то же определение, что и у карточки.
+export function cloudSpeedTpsHint(): string {
+  return CLOUD_SPEED_DEFINITION_HINT;
+}
+
+// Даты окна запроса (YYYY-MM-DD): вчера и сегодня по локальному времени.
+export function cloudSpeedWindowDates(now: Date): { from: string; to: string } {
+  const from = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  return { from: isoDay(from), to: isoDay(now) };
+}
+function isoDay(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// Подпись окна из ответа: «за 19.11 — 20.11».
+export function cloudSpeedWindowCaption(from?: string | null, to?: string | null): string {
+  const f = shortDay(from);
+  const t = shortDay(to);
+  if (f && t) return `за ${f} — ${t}`;
+  return CLOUD_SPEED_WINDOW_LABEL;
+}
+function shortDay(v?: string | null): string | null {
+  if (!v) return null;
+  // Группы регулярки: год, месяц, день. Подпись — «день.месяц» (19.11), а не «месяц.день».
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  return m ? `${m[3]}.${m[2]}` : null;
+}

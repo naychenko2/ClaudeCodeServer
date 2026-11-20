@@ -7,6 +7,7 @@
 
 import { request } from '../../lib/offline';
 import type {
+  CloudAnswerSpeedResponse,
   LocalModelEngine,
   LocalModelEngineName,
   LocalModelMedia,
@@ -186,3 +187,13 @@ export function fetchMediaHistory(q?: MediaHistoryQuery): Promise<MediaHistoryPa
 }
 
 export type { MediaHistoryRecord, MediaHistoryPage, MediaHistoryQuery };
+
+// «Облачные модели: скорость ответа» — GET /api/spend/answer-speed (админский).
+// Отдельная функция, а не метод localModelApi: эндпоинт живёт в разделе расхода,
+// и подмешивать его в api.localModel значило бы перекрыть api.spend из features/spend.
+// live: true — это живой снимок за сутки; из офлайн-кэша его подставлять нельзя:
+// подсказки чисел опираются на свежий журнал расхода.
+export function fetchCloudAnswerSpeed(from: string, to: string): Promise<CloudAnswerSpeedResponse> {
+  const qs = new URLSearchParams({ from, to });
+  return request<CloudAnswerSpeedResponse>(`/spend/answer-speed?${qs.toString()}`, { live: true });
+}

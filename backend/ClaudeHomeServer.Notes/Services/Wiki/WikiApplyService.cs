@@ -960,9 +960,11 @@ public sealed class WikiApplyService
     /// чья цитата (или текст) уже стоит на B, не дублируется (WikiDedup); сноски перенумеровывает код
     /// (новые идут после сносок B, совпавшая пара «карточка + цитата» берёт номер имеющейся);
     /// заголовок и алиасы A становятся алиасами B (по ним резолвится ссылка на A: WikiGate.FindPage).
+    /// Секция A, из которой переносить нечего (пустая или целиком уже стоящая на B), — не отказ и
+    /// не новая секция B: та же мера 2, что для строки (хвост R-C2, минор 1).
     /// Предусловия проверяются здесь заново — даже если их проверил подбор. Возвращает новую B;
     /// удаление A — за вызывающим (Deleted).</summary>
-    private MergeOutcome MergeInto(string root, WikiPackage package, WikiPackage.Operation op,
+    private static MergeOutcome MergeInto(string root, WikiPackage package, WikiPackage.Operation op,
         List<WikiGate.Draft> working, IReadOnlyList<string> upChain)
     {
         MergeOutcome Refuse(string reason) => new(null, reason, false);
@@ -1022,9 +1024,9 @@ public sealed class WikiApplyService
             .ToList();
         foreach (var sectionA in pageA.Sections)
         {
-            var idx = sections.FindIndex(s => s.Name == sectionA.Name);
-            if (idx < 0)
-                return Refuse($"merge: у «{b}» нет секции «{sectionA.Name}», в которую переходят строки «{a}»");
+            // Сначала — что из секции действительно переносится; переносить нечего (пустая или
+            // всё уже на B) → секцию пропускаем: отказа нет и пустой секции B не заводим.
+            var moved = new List<string>();
             foreach (var line in sectionA.Lines)
             {
                 var refs = MergeRefRx.Matches(line);
@@ -1038,7 +1040,7 @@ public sealed class WikiApplyService
                 if (citations.Any(fn => fn.Target.IsLink && WikiDedup.IsDuplicateStatement(pageB, fn.Target.Text, text, fn.Quote))
                     || (citations.Count == 0 && WikiDedup.IsDuplicateStatement(pageB, "", text, "")))
                     continue;
-                var moved = MergeRefRx.Replace(line, m =>
+                moved.Add(MergeRefRx.Replace(line, m =>
                 {
                     var n = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
                     if (n < 1 || n > pageA.Footnotes.Count)
@@ -1052,9 +1054,14 @@ public sealed class WikiApplyService
                         at = footnotes.Count - 1;
                     }
                     return $"[^s{at + 1}]";
-                });
-                sections[idx].Lines.Add(moved);
+                }));
             }
+            if (moved.Count == 0)
+                continue;
+            var idx = sections.FindIndex(s => s.Name == sectionA.Name);
+            if (idx < 0)
+                return Refuse($"merge: у «{b}» нет секции «{sectionA.Name}», в которую переходят строки «{a}»");
+            sections[idx].Lines.AddRange(moved);
         }
 
         // Заголовок и алиасы A → алиасы B: по ним резолвится ссылка на A (после удаления файла).

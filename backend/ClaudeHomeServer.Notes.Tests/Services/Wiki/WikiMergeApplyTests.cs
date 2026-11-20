@@ -455,4 +455,152 @@ public class WikiMergeApplyTests : IDisposable
         r.Code.Should().Be(WikiApplyService.CodeDrift);
         File.ReadAllBytes(PageFull(APath)).Should().Equal(aBytes, "A не удалена: сверка базы — до первой записи");
     }
+
+    // ─── c5: форма секций при переносе (хвост R-C2, минор 1) ───
+
+    // Пустая секция A (и секция, чьи строки целиком уже стоят на B) — не отказ и не новая секция B:
+    // переносить нечего. Отказ по ИМЕНИ секции сегодня наступить негде: MergeInto разбирает обе
+    // стороны тем же парсером (WikiApplyService.cs:985-988), а он требует полного канонического
+    // набора (WikiPage.cs:198-199) — имена A и B всегда совпадают. Ветка была defensive
+    // (находка шага). Ниже — поведение на достаточных формах: пустая секция ничего не добавляет,
+    // полностью дублирующаяся — тоже.
+
+    [Fact]
+    public async Task Merge_EmptySectionOfA_AddsNothingAndDoesNotRefuse()
+    {
+        // A: строки в «Сводке» и «Истории»; «Хронология» и «Противоречия» пустые. B — своей формы.
+        SeedBase(Page("Сущность-А",
+            ["Контенер собран на второй машине [^s1]"], ["Решение: перенести сборку на Linux [^s2]"],
+            [(CardTitle, Q2), (CardTitle, Q3)]));
+
+        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()), Ctx);
+
+        r.Applied.Should().BeTrue(r.Reason);
+        var b = Parsed(File.ReadAllText(PageFull(BPath)));
+        b.Sections.Single(s => s.Name == "Хронология").Lines.Should().BeEmpty("пустая секция A ничего не переносит");
+        b.Sections.Single(s => s.Name == "Противоречия").Lines.Should().BeEmpty();
+        b.Sections.Single(s => s.Name == "История").Lines.Should().ContainSingle().Which.Should().StartWith("Решение:");
+        // Имена секций B — её собственные: пустая секция A не добавила в страницу ничего.
+        b.Sections.Select(s => s.Name).Should().Equal("Сводка", "Хронология", "Противоречия", "История");
+    }
+
+    [Fact]
+    public async Task Merge_SectionWhoseLinesAllDuplicateOnB_AddsNothing()
+    {
+        // «Хронология» A целиком уже стоит на B (та же пара «карточка + цитата»): секция пропускается,
+        // переносится только то, чего на B нет.
+        SeedBase(Page("Сущность-А",
+            ["Контенер собран на второй машине [^s1]"], ["Каменный кабинет хранит план остаться на Windows [^s2]"],
+            [(CardTitle, Q2), (CardTitle, Q1)]));
+
+        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()), Ctx);
+
+        r.Applied.Should().BeTrue(r.Reason);
+        var b = Parsed(File.ReadAllText(PageFull(BPath)));
+        b.Sections.Single(s => s.Name == "Хронология").Lines.Should().BeEmpty("дублирующаяся секция ничего не добавляет");
+        b.Sections.Single(s => s.Name == "Сводка").Lines.Should().HaveCount(2);
+    }
+
+    // ─── c6: цикл A→B→A, тип цели, повторное применение (хвост R-C2, минор 2) ───
+
+    [Fact]
+    public async Task Merge_CycleAfterApply_SecondPackageIsStale()
+    {
+        SeedBase();
+        var aHash = ManifestHash(APath);
+        var bHash = ManifestHash(BPath);
+        var forward = CreateAccepted(MergeOp());
+        (await _sut.ApplyAsync(User, forward, Ctx)).Applied.Should().BeTrue();
+        File.Exists(PageFull(APath)).Should().BeFalse();
+        var bAfterMerge = File.ReadAllBytes(PageFull(BPath));
+
+        // Пакет B → A после применения A → B: A больше нет на диске — база намерения исчезла.
+        var back = CreateAccepted(new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpMerge, Page = BPath, Target = APath, Text = null,
+            Class = WikiPackage.ClassKey("session", WikiPackage.OpMerge), Decision = WikiPackage.DecisionAuto,
+            BaseHashes = new Dictionary<string, string> { [BPath] = bHash, [APath] = aHash },
+        });
+
+        var r = await _sut.ApplyAsync(User, back, Ctx);
+
+        r.Applied.Should().BeFalse();
+        r.Code.Should().Be(WikiApplyService.CodeStale);
+        // Обе стороны цикла — база, которой больше нет в том виде, на котором строился перенос
+        // (B переписана первым merge, A удалена): любая из проверок базы даёт тот же исход.
+        r.Reason.Should().Contain("требует нового разбора");
+        StatusOf(back.Id).Should().Be(WikiPackage.StatusStale, "цикл не порча: пакет требует нового разбора");
+        File.ReadAllBytes(PageFull(BPath)).Should().Equal(bAfterMerge, "B не тронута повторным разбором");
+    }
+
+    // merge-операция с другой целью: база — хэши A и ЭТОЙ цели (сверка базы идёт до MergeInto,
+    // WikiApplyService.cs:741-750), иначе пакет снялся бы как stale и типа цели не видно.
+    private WikiPackage.Operation MergeTargetOf(string target) => MergeOp(new Dictionary<string, string>
+    {
+        [APath] = ManifestHash(APath),
+        [target] = ManifestHash(target),
+    }) with { Target = target };
+
+    [Fact]
+    public async Task Merge_TargetOfSourceOrChronicleType_Refused()
+    {
+        SeedBase();
+        const string chronicleKey = "Общее/Хроники/s1.md";
+        PutRaw(chronicleKey, Chronicle());
+
+        await AssertRefusedUntouched(CreateAccepted(MergeTargetOf(chronicleKey)), "хроники не сливаются");
+
+        // Цель — карточка источника: та же граница.
+        await AssertRefusedUntouched(CreateAccepted(MergeTargetOf(CardPath)), "не сливаются");
+    }
+
+    [Fact]
+    public async Task Merge_ReapplyOfAppliedPackage_RefusedByIdempotent()
+    {
+        SeedBase();
+        var pkg = CreateAccepted(MergeOp());
+        (await _sut.ApplyAsync(User, pkg, Ctx)).Applied.Should().BeTrue();
+        var after = Snapshot();
+
+        // Тот же пакет ещё раз: «applied» — конечный, второго применения нет; файлы как после первого.
+        var again = await _sut.ApplyAsync(User, WikiPackageStore.TryRead(Root, pkg.Id).Package!, Ctx);
+
+        again.Applied.Should().BeFalse();
+        again.Code.Should().Be(WikiApplyService.CodeStatus);
+        again.Reason.Should().Contain("дважды");
+        StatusOf(pkg.Id).Should().Be(WikiPackage.StatusApplied);
+        Snapshot().Should().Equal(after, "повторный вызов не трогает состояние");
+    }
+
+    // ─── c7: самоссылка [[A]] на B после merge (хвост R-C2, минор 3) — фиксация ───
+
+    // Строка самой B, ссылавшаяся на A, после merge остаётся [[A]]: она не «переносится», и
+    // править её merge не вправе (на B могут стоять строки человека). Ссылка живая: A — алиас B,
+    // резолв ведёт в саму B; в группы «Связанных» самоссылка не попадает (WikiRelated.cs:118).
+    [Fact]
+    public async Task Merge_SelfLinkOnB_RemainsAndResolvesToB()
+    {
+        SeedBase();
+        PutRaw(ThirdPath, Third());
+        PutRaw(BPath, Page("Сущность-Б",
+            ["Каменный кабинет хранит план остаться на Windows [^s1]", "См. [[Сущность-А]] про прежний план [^s1]"],
+            [], [(CardTitle, Q1)]));
+
+        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()), Ctx);
+
+        r.Applied.Should().BeTrue(r.Reason);
+        var b = Parsed(File.ReadAllText(PageFull(BPath)));
+        b.OutboundLinks().Select(l => l.Text).Should().Contain("Сущность-А",
+            "самоссылка осталась как была: merge её не переписывает");
+        var drafts = AllDrafts();
+        var res = WikiGate.ResolveLink("Сущность-А", Section, [],
+            drafts.Select(d => (WikiSections.Parse(d.Path)!, Parsed(d.Content), d.Path)).ToList());
+        res.Outcome.Should().Be(WikiGate.LinkOutcome.Resolved);
+        res.Path.Should().Be(BPath, "по алиасу A ссылка ведёт в саму B");
+        // Группы, которые строятся по ссылкам (упоминают / упомянуты здесь / обратные), саму B не
+        // показывают: самоссылка отсечена в резолве (WikiRelated.cs:118) — видимого дефекта нет.
+        WikiRelated.Build(drafts.Single(d => d.Path == BPath), drafts)
+            .Where(g => g.Kind is WikiRelated.KindMentions or WikiRelated.KindMentionedHere or WikiRelated.KindBacklinks)
+            .SelectMany(g => g.Items).Select(i => i.PageKey).Should().NotContain(BPath);
+    }
 }

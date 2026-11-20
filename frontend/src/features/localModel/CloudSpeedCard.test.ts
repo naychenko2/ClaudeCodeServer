@@ -28,16 +28,16 @@ const { act, createElement } = await import('react');
 const { createRoot } = await import('react-dom/client');
 const { TextTab } = await import('./TextTab');
 const { mockLocalModelStats } = await import('./localModel.fixtures');
-const { cloudSpeedWindowDates, cloudSpeedWindowCaption } = await import('./format');
 
 const TAB_DEFAULTS = {
   isMobile: false, onOpenChat: () => {}, onRefetch: () => {}, onOpenHardware: () => {}, onOpenMedia: () => {},
   window: '5m', onWindowChange: () => {},
 };
 
+// from/to — фактическое окно снимка (ISO UTC), его задал бэкенд (хвост ревью aa8af844, п.1)
 const CLOUD = {
-  from: '2026-11-19',
-  to: '2026-11-20',
+  from: '2026-11-19T18:51:00Z',
+  to: '2026-11-20T18:51:00Z',
   minTokensForMedian: 32,
   models: [
     { provider: 'claude', model: 'claude-sonnet-5-5', endToEndTps: 38.2, medianTps: 41.0, requests: 57, outputTokens: 412000, apiMs: 10785000 },
@@ -85,9 +85,32 @@ describe('карточка «Облачные модели: скорость о�
     expect(html).toContain('ходов за сутки');
   });
 
-  it('окно суток подписано датами из ответа', () => {
-    const html = renderTab({ data, cloudSpeed: cloudState() });
-    expect(html).toContain('за 19.11 — 20.11');
+  // Хвост ревью aa8af844, п.1: окно — последние 24 часа, их считает бэкенд. Дата-пара
+  // «за 19.11 — 20.11» обещала календарные сутки, которых никто не считал, — её нет.
+  it('окно подписано честно: «за сутки», без даты-пары из ответа', () => {
+    const html = cloudCardHtml({ data, cloudSpeed: cloudState() });
+    expect(html).toContain('за сутки');
+    expect(html).not.toContain('за 19.11 — 20.11');
+  });
+
+  // Хвост ревью aa8af844, п.4: бесплатный не-локальный поставщик остаётся в карточке,
+  // но строка подписана поставщиком и моделью: одна модель у двух поставщиков — две
+  // строки, а не одна усреднённая.
+  it('одна модель у двух поставщиков — две строки, каждая со своим поставщиком', () => {
+    const html = cloudCardHtml({
+      data,
+      cloudSpeed: cloudState({
+        data: { ...CLOUD, models: [
+          { provider: 'minimax', model: 'qwen3-coder', endToEndTps: 400, medianTps: 400, requests: 4, outputTokens: 4000, apiMs: 10000 },
+          { provider: 'freellmapi', model: 'qwen3-coder', endToEndTps: 100, medianTps: 100, requests: 2, outputTokens: 1000, apiMs: 10000 },
+        ] },
+      }),
+    });
+    expect(html).toContain('>qwen3-coder</div>');
+    expect(html).toContain('>minimax</div>');
+    expect(html).toContain('>freellmapi</div>');
+    expect(html).toContain('400 ток/с');
+    expect(html).toContain('100 ток/с');
   });
 
   it('нет моделей — спокойная строка, не нули', () => {
@@ -129,18 +152,5 @@ describe('карточка «Облачные модели: скорость о�
     expect(html).toContain('не сравнимо');
     expect(html).toContain('время до первого токена у облачных моделей CCS не меряет');
     expect(html).toContain('не короче 32 токенов');
-  });
-});
-
-describe('окно запроса облачной скорости', () => {
-  it('даты окна: вчера и сегодня по локальному времени', () => {
-    const { from, to } = cloudSpeedWindowDates(new Date(2026, 10, 20, 12, 0, 0));
-    expect(from).toBe('2026-11-19');
-    expect(to).toBe('2026-11-20');
-  });
-
-  it('подпись окна из ответа; без дат — «за сутки»', () => {
-    expect(cloudSpeedWindowCaption('2026-11-19', '2026-11-20')).toBe('за 19.11 — 20.11');
-    expect(cloudSpeedWindowCaption(null, null)).toBe('за сутки');
   });
 });

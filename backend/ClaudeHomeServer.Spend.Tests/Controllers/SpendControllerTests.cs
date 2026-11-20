@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
@@ -577,8 +578,10 @@ public class SpendControllerTests : IDisposable
     {
         var store = NewStore("speed_ok");
         var now = DateTime.UtcNow;
-        store.Record(SpeedRec(now.AddDays(-1)));
-        store.Record(SpeedRec(now));
+        // Обе записи строго внутри окна [now-24h, now): граница half-open,
+        // запись ровно на начале окна относилась бы следующему снимку
+        store.Record(SpeedRec(now.AddHours(-23)));
+        store.Record(SpeedRec(now.AddHours(-1)));
         var ctl = NewController(store, "u1", admin: true);
 
         var result = ctl.AnswerSpeed();
@@ -586,9 +589,14 @@ public class SpendControllerTests : IDisposable
         var dto = result.Should().BeOfType<OkObjectResult>().Which.Value
             .Should().BeOfType<SpendAnswerSpeedDto>().Subject;
         dto.MinTokensForMedian.Should().Be(32);
-        // Дефолт окна — последние сутки; начало клампится к самой ранней записи стора
-        dto.From.Should().Be(DateOnly.FromDateTime(now).AddDays(-1).ToString("yyyy-MM-dd"));
-        dto.To.Should().Be(DateOnly.FromDateTime(now).ToString("yyyy-MM-dd"));
+        // Окно по времени: последние 24 часа от текущего момента (хвост ревью aa8af844, п.1);
+        // ответ называет фактическое окно в ISO UTC
+        var to = DateTime.Parse(dto.To, CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+        var from = DateTime.Parse(dto.From, CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+        (to - from).Should().Be(TimeSpan.FromHours(24));
+        to.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(30));
         var row = dto.Models.Should().ContainSingle().Subject;
         row.Provider.Should().Be("claude");
         row.Model.Should().Be("opus");

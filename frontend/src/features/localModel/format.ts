@@ -438,7 +438,11 @@ export function whoRows(
 // Это НЕ то же определение, что у локальной карточки «Скорость ответа» (там —
 // один запрос, от отправки до последнего токена): путать их нельзя.
 
-// Окно, за которое посчитан снимок.
+// Окно снимка: последние 24 часа от момента запроса, его считает бэкенд
+// (SpendAnswerSpeedService.AnswerSpeed) и называет в ответе (from/to — ISO UTC).
+// Фронт окно не вычисляет: прежняя дата-пара «вчера—сегодня» по местному времени
+// давала 24–48 часов (хвост ревью aa8af844, п.1). Подпись честна: «за сутки» —
+// ровно те 24 часа, которые считает бэкенд.
 export const CLOUD_SPEED_WINDOW_LABEL = 'за сутки';
 
 // Определение — честно, в одну фразу: с чем сравнимо и с чем нет.
@@ -470,26 +474,3 @@ export function cloudSpeedTpsHint(): string {
   return CLOUD_SPEED_DEFINITION_HINT;
 }
 
-// Даты окна запроса (YYYY-MM-DD): вчера и сегодня по локальному времени.
-export function cloudSpeedWindowDates(now: Date): { from: string; to: string } {
-  const from = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  return { from: isoDay(from), to: isoDay(now) };
-}
-function isoDay(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-// Подпись окна из ответа: «за 19.11 — 20.11».
-export function cloudSpeedWindowCaption(from?: string | null, to?: string | null): string {
-  const f = shortDay(from);
-  const t = shortDay(to);
-  if (f && t) return `за ${f} — ${t}`;
-  return CLOUD_SPEED_WINDOW_LABEL;
-}
-function shortDay(v?: string | null): string | null {
-  if (!v) return null;
-  // Группы регулярки: год, месяц, день. Подпись — «день.месяц» (19.11), а не «месяц.день».
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  return m ? `${m[3]}.${m[2]}` : null;
-}

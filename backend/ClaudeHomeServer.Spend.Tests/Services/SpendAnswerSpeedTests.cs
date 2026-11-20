@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Spend;
@@ -45,11 +47,11 @@ public class SpendAnswerSpeedTests : IDisposable
         };
 
     private static SpendAnswerSpeedDto Speed(SpendStore store, Mock<IModelResolver> llm,
-        DateOnly? from = null, DateOnly? to = null)
+        DateTime? from = null, DateTime? to = null)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var now = DateTime.UtcNow;
         return new SpendAnswerSpeedService(store, llm.Object)
-            .AnswerSpeed(from ?? today.AddDays(-1), to ?? today);
+            .AnswerSpeed(from ?? now.AddDays(-1), to ?? now);
     }
 
     [Fact]
@@ -147,6 +149,94 @@ public class SpendAnswerSpeedTests : IDisposable
 
         row.Requests.Should().Be(1);
         row.ApiMs.Should().Be(1000);
+    }
+
+    // Хвост ревью aa8af844, п.1: окно по времени, half-open [from, to). Запись ровно на начале
+    // границы входит, ровно на конце — нет (её возьмёт следующий снимок). Ответ называет
+    // фактическое окно в ISO UTC, а не «дату запроса».
+    [Fact]
+    public void ГраницаОкна_НачалоВходит_КонецНет_ОкноВОтветеISO()
+    {
+        var store = NewStore();
+        var llm = NewResolver();
+        var from = new DateTime(2026, 11, 19, 18, 0, 0, DateTimeKind.Utc);
+        store.Record(Rec(from, output: 100, apiMs: 1000));               // начало — входит
+        store.Record(Rec(from.AddHours(12), output: 100, apiMs: 1000)); // середина — входит
+        store.Record(Rec(from.AddHours(24), output: 100, apiMs: 1000)); // конец [from, to) — нет
+
+        var dto = new SpendAnswerSpeedService(store, llm.Object).AnswerSpeed(from, from.AddHours(24));
+
+        var row = Assert.Single(dto.Models);
+        row.Requests.Should().Be(2, "запись ровно на конце окна относится следующему снимку");
+        row.ApiMs.Should().Be(2000);
+        dto.From.Should().Be("2026-11-19T18:00:00Z");
+        dto.To.Should().Be("2026-11-20T18:00:00Z");
+    }
+
+    // Хвост ревью aa8af844, п.3: строка из старого turns-*.jsonl — записанная до появления поля
+    // DurationApiMs. Читается штатно: поле null, и такой ход в скорость не идёт (знаменатель
+    // не выдумывается) — рядом с записью с полем строка остаётся одна.
+    [Fact]
+    public void СтараяСтрокаБезПоля_ЧитаетсяNullом_ВСкоростьНеИдёт()
+    {
+        var date = DateOnly.FromDateTime(DateTime.UtcNow);
+        Directory.CreateDirectory(_dir);
+        // Форма старой строки: то же сериализование стора (camelCase, null-поля опущены),
+        // поле DurationApiMs в записи нет — в строке его нет вовсе.
+        var legacy = JsonSerializer.Serialize(
+            new SpendRecord
+            {
+                Timestamp = DateTime.UtcNow,
+                OwnerId = "u1",
+                Provider = "claude",
+                Model = "opus",
+                Source = SpendSources.ChatTurn,
+                InputTokens = 10,
+                OutputTokens = 100,
+                DurationMs = 1000,
+            },
+            new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            });
+        legacy.Should().NotContain("durationApiMs", "фикстура — строка без поля");
+        File.WriteAllText(Path.Combine(_dir, $"turns-{date:yyyy-MM-dd}.jsonl"), legacy + Environment.NewLine);
+
+        var store = new SpendStore(_dir, detailDays: 30);
+        var rec = Assert.Single(store.DetailsBetween(date, date));
+        rec.DurationApiMs.Should().BeNull();
+
+        // В агрегат она не попадает: рядом запись с полем — строка и метрики только про неё.
+        store.Record(Rec(DateTime.UtcNow, output: 100, apiMs: 1000));
+        var row = Assert.Single(Speed(store, NewResolver()).Models);
+        row.Requests.Should().Be(1, "ход без времени API в скорость не идёт");
+        row.ApiMs.Should().Be(1000);
+        row.OutputTokens.Should().Be(100);
+    }
+
+    // Хвост ревью aa8af844, п.4: бесплатный не-локальный поставщик (free-подписка через CLI)
+    // остаётся в карточке облачных, но группа — по паре (поставщик, модель): строка
+    // «qwen3-coder» от freellmapi и от minimax — две строки, а не одна усреднённая.
+    [Fact]
+    public void БесплатныйПоставщик_ВКарточке_НоГруппаПоПареПоставщикМодель()
+    {
+        var store = NewStore();
+        var llm = NewResolver();
+        var ts = DateTime.UtcNow;
+        store.Record(Rec(ts, provider: "freellmapi", model: "qwen3-coder", source: SpendSources.Free,
+            output: 100, apiMs: 1000));  // 100 ток/с — бесплатный
+        store.Record(Rec(ts, provider: "minimax", model: "qwen3-coder", output: 400, apiMs: 1000)); // 400 ток/с — платный
+
+        var models = Speed(store, NewResolver()).Models;
+
+        models.Should().HaveCount(2, "один ключ группы — поставщик и модель, не модель");
+        models[0].Provider.Should().Be("minimax");
+        models[0].Model.Should().Be("qwen3-coder");
+        models[0].EndToEndTps.Should().Be(400);
+        models[1].Provider.Should().Be("freellmapi");
+        models[1].Model.Should().Be("qwen3-coder");
+        models[1].EndToEndTps.Should().Be(100);
     }
 
     [Fact]

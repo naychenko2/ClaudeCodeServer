@@ -37,9 +37,11 @@ public class SpendMappingTests
         new() { Id = "s-1", ProjectId = "p-1", Provider = provider, Model = model };
 
     private static ResultMessage Result(
-        string? usageModel = null, string? upstreamProvider = null, string? upstreamModel = null) =>
+        string? usageModel = null, string? upstreamProvider = null, string? upstreamModel = null,
+        long? apiMs = null) =>
         new("success", 100, 1, new UsageInfo(1000, 200, 0, 0), 0.01,
-            UsageModel: usageModel, UpstreamProvider: upstreamProvider, UpstreamModel: upstreamModel);
+            UsageModel: usageModel, UpstreamProvider: upstreamProvider, UpstreamModel: upstreamModel,
+            DurationApiMs: apiMs);
 
     private static SpendRecord RecordTurn(Session s, ResultMessage m)
     {
@@ -177,6 +179,23 @@ public class SpendMappingTests
         r.Model.Should().Be("claude-opus-5-5");
         r.Source.Should().Be(SpendSources.ChatTurn);
         SpendCostTiers.Of(r.Source, r.Provider, r.Model).Should().Be(SpendCostTiers.Expensive);
+    }
+
+    // Хвост ревью aa8af844, п.2: DurationApiMs — знаменатель сессионной скорости ответа
+    // (SpendAnswerSpeedService): без строки в SpendMapping скорость на проде пропадает молча,
+    // тесты зелёные. Запись обязана нести поле.
+    [Fact]
+    public void RecordTurnSpend_ВремяApi_ПишетсяВЗапись()
+    {
+        RecordTurn(Chat("claude", "opus"), Result(apiMs: 4200)).DurationApiMs.Should().Be(4200);
+    }
+
+    // Обратная сторона того же поля: CLI не прислал (сторонний поток) — запись без поля,
+    // и в скорость такой ход не идёт (знаменатель не выдумывается — SpendAnswerSpeedTests).
+    [Fact]
+    public void RecordTurnSpend_ВремениApiНет_ЗаписьБезПоля()
+    {
+        RecordTurn(Chat("claude", "opus"), Result()).DurationApiMs.Should().BeNull();
     }
 
     // Подписка через шлюз (доработка SP2, блокер c6785c27): UpstreamOfRun отдаёт модель маршрута

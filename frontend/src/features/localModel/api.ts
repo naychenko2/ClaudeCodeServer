@@ -193,7 +193,9 @@ export type { MediaHistoryRecord, MediaHistoryPage, MediaHistoryQuery };
 // и подмешивать его в api.localModel значило бы перекрыть api.spend из features/spend.
 // live: true — это живой снимок за сутки; из офлайн-кэша его подставлять нельзя:
 // подсказки чисел опираются на свежий журнал расхода.
-export function fetchCloudAnswerSpeed(from: string, to: string): Promise<CloudAnswerSpeedResponse> {
-  const qs = new URLSearchParams({ from, to });
-  return request<CloudAnswerSpeedResponse>(`/spend/answer-speed?${qs.toString()}`, { live: true });
+// Окно не передаётся намеренно: его считает бэкенд (последние 24 часа от момента запроса)
+// и называет в ответе (from/to — ISO UTC) — фронт не вычисляет «свои сутки» по местному
+// времени: прежняя дата-пара «вчера—сегодня» давала 24–48 часов (хвост ревью aa8af844, п.1).
+export function fetchCloudAnswerSpeed(): Promise<CloudAnswerSpeedResponse> {
+  return request<CloudAnswerSpeedResponse>('/spend/answer-speed', { live: true });
 }

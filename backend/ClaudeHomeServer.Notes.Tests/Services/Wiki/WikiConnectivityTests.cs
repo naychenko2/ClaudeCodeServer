@@ -118,20 +118,72 @@ public class WikiConnectivityTests
     }
 
     [Fact]
-    public void Measure_ИндексПоТемеОдинРазНаЗамер_SignificantWordsНеБолее2N()
+    public void Measure_ИндексПоТемеОдинРазНаНаборAllowed_ПостроенийНеБольшеЧислаНаборов()
     {
         // Сторож цены. Мутация: передать в Build null вместо topicIndex — индекс строится на каждую
-        // страницу, вызовов порядка N², тест красный.
+        // страницу, вызовов порядка N², тест красный. Два раздела проектов = два набора allowed
+        // ({pN, common}); глобальный индекс (один на снимок) здесь запрещён отдельным тестом ниже.
         var f = WithBackground(new Fixture().Page(TopicA, TopicTitleA).Page(TopicB, TopicTitleB));
         f.Page("Проекты/p1/Ссылка.md", "Ссылающаяся страница", text: "См. [[Квантовая телепортация фотонов]].");
+        for (var i = 0; i < 20; i++)
+            f.Page($"Проекты/p2/Другое-{i}.md", $"Страница второго проекта номер {i}");
         var n = f.Snapshot.Count;
-        n.Should().BeGreaterThanOrEqualTo(50);
+        n.Should().BeGreaterThanOrEqualTo(80);
         var counter = new WikiRelated.NormCounter();
+        var cache = new WikiRelated.TopicIndexCache(f.Snapshot, counter);
 
-        WikiConnectivity.Measure(f.Snapshot, [.. f.Snapshot.Select(d => d.Path)], counter);
+        WikiConnectivity.MeasurePages(f.Snapshot, [.. f.Snapshot.Select(d => d.Path)], counter, cache);
 
-        counter.WordsCalls.Should().BeLessThanOrEqualTo(2 * n,
-            "индекс — N вызовов, заголовочные основы лениво — не более N; на каждую страницу индекс не строится");
+        cache.Built.Should().Be(2, "два разных набора видимых разделов — два индекса, не по индексу на страницу");
+        counter.WordsCalls.Should().BeLessThanOrEqualTo(4 * n,
+            "индексы — по числу видимых страниц набора, заголовочные основы лениво; на страницу индекс не строится");
+    }
+
+    [Fact]
+    public void K1_ИндексПоВидимымРазделам_ОбщаяОсноваЧастаяВРазделеНеДаётРебра()
+    {
+        // Основа редкая в корпусе (60 страниц, df = 2), но частая в своём разделе (p1: 6 страниц,
+        // df = 2 > MaxDfShare·6): при показе «По теме» этих двух страниц нет. Измерение обязано
+        // видеть то же. Мутация: вернуть глобальный индекс по снимку (индекс для всех страниц
+        // из всего снимка) — K1 по полному снимку станет 1, тест красный.
+        var f = new Fixture().Page(TopicA, TopicTitleA).Page(TopicB, TopicTitleB);
+        for (var i = 0; i < 4; i++)
+            f.Page($"Проекты/p1/Фон-{i}.md", $"Пустая страница номер {i}");
+        for (var i = 0; i < 54; i++)
+            f.Page($"Проекты/p2/Фон-{i}.md", $"Пустая страница номер {i}");
+        var full = f.Snapshot;
+        var p1Slice = (IReadOnlyList<WikiGate.Draft>)[.. full.Where(d => d.Path.StartsWith("Проекты/p1/", StringComparison.Ordinal))];
+        p1Slice.Count.Should().Be(6);
+
+        WikiRelated.Build(full.Single(d => d.Path == TopicA), p1Slice)
+            .Should().NotContain(g => g.Kind == WikiRelated.KindTopic, "в срезе раздела основа частая — «По теме» нет");
+
+        var byFull = WikiConnectivity.Measure(full, [TopicA, TopicB]);
+        var bySlice = WikiConnectivity.Measure(p1Slice, [TopicA, TopicB]);
+
+        bySlice.K1.Should().Be(0);
+        byFull.K1.Should().Be(bySlice.K1, "индекс — по видимым разделам: чужой раздел не меняет df и N");
+    }
+
+    [Fact]
+    public void MeasureConnectivity_ОдинЗамерРаскладываетсяНаДваСреза_РавноДвумОтдельнымЗамерам()
+    {
+        // Ночь меряет один раз по объединению срезов: «новые» и «тронутого раздела» обязаны
+        // совпасть с тем, что дали бы два отдельных Measure по тем же путям.
+        var f = WithBackground(new Fixture().Page(TopicA, TopicTitleA));
+        var before = f.Snapshot.ToDictionary(d => d.Path, d => d.Content, StringComparer.Ordinal);
+        f.Page(TopicB, TopicTitleB);
+        var after = f.Snapshot.ToDictionary(d => d.Path, d => d.Content, StringComparer.Ordinal);
+
+        var (stNew, stSection) = WikiNightlyService.MeasureConnectivity(before, after);
+
+        var sectionPaths = f.Snapshot.Select(d => d.Path).ToList(); // раздел p1 тронут целиком
+        var direct = WikiConnectivity.Measure(f.Snapshot, [TopicB]);
+        var directSection = WikiConnectivity.Measure(f.Snapshot, sectionPaths);
+        stNew.Should().BeEquivalentTo(new WikiNightlyService.ConnectivityStat(1, direct.K0, direct.K1, direct.K2));
+        stSection.Should().BeEquivalentTo(new WikiNightlyService.ConnectivityStat(
+            directSection.Count, directSection.K0, directSection.K1, directSection.K2));
+        stNew!.K1.Should().Be(1.0, "новая страница связана «По теме» со старой");
     }
 
     [Fact]

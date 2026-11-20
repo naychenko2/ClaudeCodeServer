@@ -690,7 +690,6 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         currentModel = stepModel;
                         currentKey = stepKey;
                         Info.Model = currentModel;
-                        Info.FallbackSubstitution = true;
                         Info.Provider = currentKey;
                         _profileRoot = stepRoot;
                         appliedModel = currentModel;
@@ -772,7 +771,6 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 currentModel = winModel;
                 currentKey = winKey!;
                 Info.Model = currentModel;
-                Info.FallbackSubstitution = true;
                 Info.Provider = currentKey;
                 _profileRoot = winRoot;
                 appliedModel = currentModel;
@@ -1257,9 +1255,6 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             //     сменила подписку — именно там лежит свежий ответ).
             var modelRestored = false;
             var providerRestored = false;
-            // Признак подмены живёт только на время хода — снимаем безусловно, даже если CAS
-            // модели ниже не сработает (человек сменил модель посреди хода — это уже его выбор)
-            Info.FallbackSubstitution = false;
             if (Info.Model == appliedModel) { Info.Model = origModel; modelRestored = true; }
             if (anyProviderSwitch)
             {
@@ -1811,10 +1806,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // оверрайды подписки читаются из Info.Provider, модель — из Info.Model на каждый ход
     private void ApplyTarget(FallbackTarget next)
     {
-        // Признак подмены — вместе с моделью: по нему LightProfileFor включает облегчённый профиль
-        // локальной модели принудительно (модель сменили без ведома человека). Тихая ротация
-        // подписки модель не трогает и признак не ставит.
-        if (next.IsProviderSwitch) { Info.Model = next.Model; Info.FallbackSubstitution = true; }
+        // Смена провайдера двигает и модель (эквивалент по слоту). Тихая ротация подписки модель
+        // не трогает.
+        if (next.IsProviderSwitch) { Info.Model = next.Model; }
         Info.Provider = next.Key;
         Info.UpdatedAt = DateTime.UtcNow;
         _profileRoot = next.ProfileRoot;

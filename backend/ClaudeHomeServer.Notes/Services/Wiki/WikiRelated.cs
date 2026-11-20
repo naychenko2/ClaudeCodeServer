@@ -71,23 +71,59 @@ public static class WikiRelated
     }
 
     /// <summary>Внутренний вариант для замера связности (A6): индекс «По теме» готов заранее —
-    /// WikiConnectivity.Measure строит его один раз на весь замер, а не на каждую страницу.
+    /// WikiConnectivity.Measure берёт его из TopicIndexCache по видимым разделам страницы.
     /// Остальное — как у Build(limit: null).</summary>
     internal static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages,
         WikiTopicScore.Index topicIndex, int? limit = null, NormCounter? counter = null) =>
         Build(page, pages, limit, counter, topicIndex);
 
-    /// <summary>Индекс «По теме» по снимку: те же страницы и тот же текст оценки (заголовок и
-    /// сводка), что собирает Build сам; проекции и неразобранные страницы не входят.</summary>
-    internal static WikiTopicScore.Index BuildTopicIndex(IReadOnlyList<WikiGate.Draft> pages,
-        NormCounter? counter = null) =>
-        WikiTopicScore.BuildIndex(pages
-            .Where(d => WikiSections.Parse(d.Path) is not null && !WikiPaths.IsProjection(d.Path))
-            .Select(d => (d.Path, Model: WikiPage.Parse(d.Content).Model, d.Content))
-            .Where(x => x.Model is not null)
-            .Select(x => new WikiTopicScore.Entry(x.Path, x.Model!.Title,
-                WikiProjections.SummaryOf(x.Model.Frontmatter, x.Content))),
+    /// <summary>Единственное место сборки индекса «По теме» (A6, доработка 1): страницы РАЗДЕЛОВ
+    /// allowed (видимых странице) вместе с ней самой — тот же состав, что видит человек при
+    /// показе. Глобальный индекс по всему снимку запрещён: df и N другого корпуса дают другие
+    /// рёбра, чем на экране. pool обязан содержать и саму страницу.</summary>
+    private static WikiTopicScore.Index BuildAllowedTopicIndex(IEnumerable<Cand> pool, HashSet<string> allowed,
+        NormCounter? counter) =>
+        WikiTopicScore.BuildIndex(
+            pool.Where(c => allowed.Contains(c.Section))
+                .Select(c => new WikiTopicScore.Entry(c.Path, c.Page.Title,
+                    WikiProjections.SummaryOf(c.Page.Frontmatter, c.Content))),
             counter is null ? null : counter.CountWords);
+
+    /// <summary>Кеш индексов «По теме» для замера связности: снимок разбирается один раз, индекс —
+    /// один на каждый набор видимых разделов (ключ — сам набор allowed), а не на страницу и не
+    /// один на весь снимок.</summary>
+    internal sealed class TopicIndexCache(IReadOnlyList<WikiGate.Draft> pages, NormCounter? counter = null)
+    {
+        private readonly List<Cand> _all = ParseSnapshot(pages);
+        private readonly Dictionary<string, WikiTopicScore.Index> _byAllowed = new(StringComparer.Ordinal);
+
+        /// <summary>Сколько разных индексов построено (тестовый срез: ≤ числа разных наборов allowed).</summary>
+        public int Built => _byAllowed.Count;
+
+        /// <summary>Индекс для страницы с разделом section; страница обязана быть в снимке.</summary>
+        public WikiTopicScore.Index For(string section)
+        {
+            var allowed = AllowedSections(section, _all);
+            var key = string.Join('\u001f', allowed.OrderBy(s => s, StringComparer.Ordinal));
+            if (!_byAllowed.TryGetValue(key, out var index))
+                _byAllowed[key] = index = BuildAllowedTopicIndex(_all, allowed, counter);
+            return index;
+        }
+
+        private static List<Cand> ParseSnapshot(IReadOnlyList<WikiGate.Draft> pages)
+        {
+            var list = new List<Cand>();
+            foreach (var d in pages)
+            {
+                var section = WikiSections.Parse(d.Path);
+                if (section is null || WikiPaths.IsProjection(d.Path))
+                    continue;
+                if (WikiPage.Parse(d.Content).Model is { } model)
+                    list.Add(new Cand(d.Path, section, d.Content, model));
+            }
+            return list;
+        }
+    }
 
     /// <summary>Резолвится ли хоть одна [[…]] страницы тела на страницу знаний (не карточку
     /// источника и не хронику) — K2 замера связности. Резолв и область видимости те же, что у
@@ -231,12 +267,8 @@ public static class WikiRelated
         // 6. topic — по редким общим основам. Индекс (df) — по всему снимку видимых разделов
         // вместе с целью, один раз на Build. Кандидаты — как у остальных групп, но без хроник и
         // без уже занятых старшими группами; порядок — по оценке, он же и остаётся в выводе.
-        var topicIndex = prebuiltTopicIndex ?? WikiTopicScore.BuildIndex(
-            candidates.Where(c => allowed.Contains(c.Section))
-                .Append(new Cand(page.Path, targetSection, page.Content, target))
-                .Select(c => new WikiTopicScore.Entry(c.Path, c.Page.Title,
-                    WikiProjections.SummaryOf(c.Page.Frontmatter, c.Content))),
-            counter is null ? null : counter.CountWords);
+        var topicIndex = prebuiltTopicIndex ?? BuildAllowedTopicIndex(
+            candidates.Append(new Cand(page.Path, targetSection, page.Content, target)), allowed, counter);
         var byPath = candidates.ToDictionary(c => c.Path, StringComparer.Ordinal);
         var topicPool = Navigable(candidates, allowed)
             .Where(c => c.Page.Frontmatter.Type != WikiFrontmatter.TypeChronicle && !taken.Contains(c.Path))

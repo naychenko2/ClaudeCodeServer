@@ -73,6 +73,21 @@ public class ClaudeSessionPromptSectionsHintsTests : ClaudeSessionPromptSections
             $"{why}: подсказка звала бы инструмент, которого у хода нет");
     }
 
+    // Облегчённый профиль оставляет у dev только build: абзац про дев-стенд звал бы снятый
+    // start_stand — Strata отдаёт такой вызов текстом, и ход обрывается молча
+    [Fact]
+    public async Task BuildHint_СтендСнятБелымСписком_ТолькоСборка()
+    {
+        var (systemPrompt, _) = await RunTailTurnAsync(false, "МАРКЕР_СОСТОЯНИЯ",
+            bus => PromptSectionContributorsRegistration.RegisterAll(bus,
+                [new ClaudeHomeServer.Services.TestRuns.BuildHintContributor()]),
+            ProjectChat(), c => c with { TestsMcp = TestsMcp },
+            new Dictionary<string, string?> { ["LlmProviders:test-local:KeepMcpTools:dev:0"] = "build" });
+
+        systemPrompt.Should().Contain(ClaudeHomeServer.Services.TestRuns.BuildHintContributor.BuildText);
+        systemPrompt.Should().NotContain("start_stand", "start_stand снят белым списком профиля");
+    }
+
     private static readonly TestsMcpContext TestsMcp = new("http://127.0.0.1:5000", () => "tok", UseHttp: true);
 
     [Theory]

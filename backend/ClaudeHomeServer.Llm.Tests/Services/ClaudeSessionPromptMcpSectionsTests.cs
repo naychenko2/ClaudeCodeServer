@@ -108,7 +108,12 @@ public class ClaudeSessionPromptMcpSectionsTests : IDisposable
 
     // Реестр провайдеров: local-qwen с заданными урезанием/BareMode + облачный сосед
     // (на нём урезания нет — регрессия «правка не задевает чужого провайдера»).
-    private LlmProviderRegistry Providers(bool trimMcp, bool bareMode, params string[] keep)
+    private LlmProviderRegistry Providers(bool trimMcp, bool bareMode, params string[] keep) =>
+        Providers(trimMcp, bareMode, keepTools: null, keep);
+
+    // keepTools — белый список инструментов внутри оставленных серверов (KeepMcpTools)
+    private LlmProviderRegistry Providers(bool trimMcp, bool bareMode,
+        Dictionary<string, string[]>? keepTools, params string[] keep)
     {
         var cfg = new Dictionary<string, string?>
         {
@@ -121,6 +126,9 @@ public class ClaudeSessionPromptMcpSectionsTests : IDisposable
         };
         for (var i = 0; i < keep.Length; i++)
             cfg[$"LlmProviders:local-qwen:KeepMcpServers:{i}"] = keep[i];
+        foreach (var (server, tools) in keepTools ?? [])
+            for (var i = 0; i < tools.Length; i++)
+                cfg[$"LlmProviders:local-qwen:KeepMcpTools:{server}:{i}"] = tools[i];
         return new LlmProviderRegistry(Helpers.TestConfig.Build(cfg));
     }
 
@@ -153,7 +161,10 @@ public class ClaudeSessionPromptMcpSectionsTests : IDisposable
         ContentRootPath: _serverRoot);
 
     // Прогон одного хода: возвращает ключи секций промпта из снимка.
-    private async Task<IReadOnlyList<string>> SectionKeysAsync(LlmProviderRegistry providers)
+    private async Task<IReadOnlyList<string>> SectionKeysAsync(LlmProviderRegistry providers) =>
+        [.. (await SectionsAsync(providers)).Select(s => s.Key)];
+
+    private async Task<IReadOnlyList<PromptSectionDto>> SectionsAsync(LlmProviderRegistry providers)
     {
         var bus = new TurnEventBus();
         var captured = new TaskCompletionSource<IReadOnlyList<PromptSectionDto>>(
@@ -180,7 +191,7 @@ public class ClaudeSessionPromptMcpSectionsTests : IDisposable
             var idx = args.ToList().IndexOf("--mcp-config");
             if (idx >= 0 && idx + 1 < args.Count) _tempConfigs.Add(args[idx + 1]);
         }
-        return [.. (await captured.Task).Select(s => s.Key)];
+        return await captured.Task;
     }
 
     /// <summary>
@@ -265,5 +276,50 @@ public class ClaudeSessionPromptMcpSectionsTests : IDisposable
         keys.Where(k => k.StartsWith("mcp-", StringComparison.Ordinal)).Should().BeEmpty(
             "ни один продуктовый сервер до хода не доехал — руководств к ним в промпте быть не может");
         keys.Should().NotContain("persona-mentions", "сервер personas погашен вместе со всеми");
+    }
+
+    // Белый список облегчённого профиля, как у боевого local-qwen на 2026-11-20
+    private static readonly Dictionary<string, string[]> LightKeepTools = new()
+    {
+        ["tasks"] = ["tasks_get", "tasks_update", "tasks_complete", "tasks_add_subtask",
+                     "tasks_toggle_subtask", "tasks_create", "tasks_search", "tasks_list"],
+        ["memory"] = ["memory_recall", "memory_search", "memory_remember", "team_memory_search"],
+    };
+
+    /// <summary>
+    /// Секции называют только ВЫДАННЫЕ инструменты. Снятый белым списком инструмент модель
+    /// зовёт вслепую, Strata отдаёт такой вызов текстом — ход обрывается молча (117 случаев
+    /// за 17–20.11.2026: team_memory_remember, memory_rethink, tasks_* сверх списка).
+    /// </summary>
+    [Fact]
+    public async Task БелыйСписокИнструментов_СекцииНеНазываютСнятых()
+    {
+        var sections = await SectionsAsync(Providers(trimMcp: true, bareMode: false, LightKeepTools,
+            "tasks", "memory"));
+
+        var tasks = sections.Single(s => s.Key == "mcp-tasks").Text;
+        tasks.Should().Contain("tasks_search").And.Contain("tasks_list").And.Contain("tasks_complete");
+        foreach (var removed in new[] { "tasks_delete", "tasks_board_columns", "tasks_run_executor", "tasks_list_projects" })
+            tasks.Should().NotContain(removed, $"{removed} снят белым списком — вызов оборвал бы ход");
+
+        var memory = sections.Single(s => s.Key == "mcp-memory").Text;
+        memory.Should().Contain("memory_remember").And.Contain("team_memory_search");
+        foreach (var removed in new[] { "memory_rethink", "memory_forget", "memory_list",
+                                        "team_memory_remember", "team_memory_update", "team_memory_forget" })
+            memory.Should().NotContain(removed, $"{removed} снят белым списком — вызов оборвал бы ход");
+    }
+
+    /// <summary>
+    /// Без белого списка инструментов секции прежние: полный перечень, правка и командная запись.
+    /// </summary>
+    [Fact]
+    public async Task БезБелогоСпискаИнструментов_ПолныйПеречень()
+    {
+        var sections = await SectionsAsync(Providers(trimMcp: false, bareMode: false));
+
+        var tasks = sections.Single(s => s.Key == "mcp-tasks").Text;
+        tasks.Should().Contain("tasks_delete").And.Contain("tasks_board_columns").And.Contain("tasks_run_executor");
+        var memory = sections.Single(s => s.Key == "mcp-memory").Text;
+        memory.Should().Contain("memory_rethink").And.Contain("team_memory_remember");
     }
 }

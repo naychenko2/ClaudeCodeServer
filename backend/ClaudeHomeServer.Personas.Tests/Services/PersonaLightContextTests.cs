@@ -64,43 +64,35 @@ public class PersonaLightContextTests : IDisposable
     }
 
     [Fact]
-    public void ЛокальнаяМодельВыбранаЧеловеком_РешаетОпцияПерсоны()
+    public void ЛокальнаяМодель_ОпцияПерсоныНеДействует_ПрофильВсегда()
     {
-        // Модель qwen выбрал человек (модель чата, персоны, слот) — переключатель персоны решает
-        // и здесь: выключенная опция = полный контекст со всеми серверами
+        // Решение Андрея 19.11.2026: на локальной модели облегчённый контекст включается ВСЕГДА.
+        // Флаг персоны тут не решает: полный контекст в окно локальной модели не влезает, а ход
+        // уезжает на неё мимо воли человека (фолбэк, смена модели чата, слот weak).
+        // Замер 19.11: 22 из 84 сессий шли с 532 инструментами и 135 тыс. токенов промпта.
         var registry = Registry();
 
-        registry.LightProfileFor("qwen3.8-27b", Persona(false)).Should().BeNull(
-            "опция выключена, а модель выбрана человеком, не подменена фолбэком");
-        registry.LightProfileFor("qwen3.8-27b", Persona(null)).Should().BeNull();
+        registry.LightProfileFor("qwen3.8-27b", Persona(false))!.Source.Should().Be("local-qwen");
+        registry.LightProfileFor("qwen3.8-27b", Persona(null))!.Source.Should().Be("local-qwen");
         registry.LightProfileFor("qwen3.8-27b", Persona(true))!.Source.Should().Be("local-qwen");
     }
 
     [Fact]
-    public void ПодменаФолбэкомOpusНаQwen_ПриВыключеннойОпции_ДаётЛокальныйПрофиль()
+    public void ЛокальнаяМодель_ПерсонаБезРешения_ТожеПолучаетПрофиль()
     {
-        // Фолбэк увёл ход на локальную модель без ведома человека — её облегчённый профиль
-        // включается принудительно, опция персоны тут не решает
-        var registry = Registry();
-        var persona = Persona(false);
-
-        registry.LightProfileFor("opus", persona).Should().BeNull();
-        registry.LightProfileFor("qwen3.8-27b", persona, forcedBySubstitution: true)!.Source
-            .Should().Be("local-qwen");
-        registry.LightProfileFor("qwen3.8-27b", Persona(null), forcedBySubstitution: true)!.Source
-            .Should().Be("local-qwen");
+        // null = решение не принято: на локальной модели это не мешает — профиль всё равно нужен
+        Registry().LightProfileFor("qwen3.8-27b", Persona(null))!.Source.Should().Be("local-qwen");
     }
 
     [Fact]
-    public void ПодменаНаНелокальнуюМодель_ОпциюНеПереопределяет()
+    public void ОблачнаяМодель_ОпцияПерсоныРешает_КакПрежде()
     {
-        // Принудительно — только профиль ЛОКАЛЬНОГО провайдера: подмена на сторонний облачный
-        // с профилем или на Opus по-прежнему слушается опции
+        // Вне локальной модели флаг по-прежнему решает: выкл → полный контекст, вкл → профиль
         var registry = Registry();
 
-        registry.LightProfileFor("remote-bare-model", Persona(false), forcedBySubstitution: true)
-            .Should().BeNull();
-        registry.LightProfileFor("opus", Persona(false), forcedBySubstitution: true).Should().BeNull();
+        registry.LightProfileFor("opus", Persona(false)).Should().BeNull();
+        registry.LightProfileFor("opus", Persona(true))!.Source.Should().Be("light");
+        registry.LightProfileFor("deepseek-v4-pro", Persona(false)).Should().BeNull();
     }
 
     [Fact]
@@ -122,6 +114,61 @@ public class PersonaLightContextTests : IDisposable
         profile.KeepMcpServers.Should().Equal("memory");
         profile.ServerMapFallback.Should().BeFalse("серверная карта — про наш репозиторий");
         Registry().LightProfileFor("opus", Persona(false)).Should().BeNull();
+    }
+
+    // Замер набора по-настоящему конфигу: локальная модель 512K (профиль «ведения фич и долгих
+    // бесед») отдаёт свой набор при любом значении флага, а та же персона на облачной модели —
+    // полный контекст (профиля нет). Это тот же замер, что в задаче: число инструментов профиля
+    // против полного набора.
+    [Fact]
+    public void ЛокальнаяМодель512K_НаборПрофиля_ОдинаковПриЛюбомФлаге()
+    {
+        var registry = RealRegistry();
+        var off = Persona(false);
+
+        var localOff = registry.LightProfileFor("qwen3.8-flash-500k", off);
+        var localOn = registry.LightProfileFor("qwen3.8-flash-500k", Persona(true));
+        localOff.Should().NotBeNull("локальная модель со своим профилем: профиль всегда");
+        localOn!.Source.Should().Be(localOff!.Source);
+        localOff.KeepMcpServers.Should().BeEquivalentTo(localOn.KeepMcpServers);
+        localOff.KeepMcpTools.Should().BeEquivalentTo(localOn.KeepMcpTools);
+
+        // Облачная модель без своего профиля: выключенный флаг = полный контекст, как раньше
+        registry.LightProfileFor("opus", off).Should().BeNull();
+        registry.LightProfileFor("deepseek-v4-pro", off).Should().BeNull();
+
+        // Счёт инструментов профиля: белые списки + серверы без фильтра + встроенные BareTools
+        var tools = new List<string>(localOff.BareTools);
+        foreach (var (server, list) in localOff.KeepMcpTools)
+            tools.AddRange(list.Select(t => $"{server}__{t}"));
+        foreach (var server in localOff.KeepMcpServers.Where(s => !localOff.KeepMcpTools.ContainsKey(s)))
+            tools.AddRange(ServerTools(server).Select(t => $"{server}__{t}"));
+
+        // Профиль 512K по настоящему конфигу: 37 инструментов по белым спискам + websearch (2)
+        // + watch (3) + семь встроенных BareTools = 49. Замер 19.11 у Игоря после включения
+        // флага: 49 инструментов.
+        tools.Count.Should().Be(49, "профиль 512K: 37 по белым спискам + websearch 2 + watch 3 + 7 BareTools");
+    }
+
+    // Полный состав сервера — как его отдаёт сам тулсет (для серверов без белого списка)
+    private static IReadOnlyList<string> ServerTools(string server) => server switch
+    {
+        "websearch" => WebSearchToolset.Tools.Select(t => t.Name).ToArray(),
+        "watch" => WatchToolset.Tools.Select(t => t.Name).ToArray(),
+        _ => []
+    };
+
+    private static LlmProviderRegistry RealRegistry()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? path = null;
+        for (; dir is not null; dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, "ClaudeHomeServer", "appsettings.json");
+            if (File.Exists(candidate)) { path = candidate; break; }
+        }
+        path.Should().NotBeNull("не найден appsettings.json сервера");
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddJsonFile(path!).Build());
     }
 
     [Fact]

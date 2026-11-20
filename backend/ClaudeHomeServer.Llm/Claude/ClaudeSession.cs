@@ -89,10 +89,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Профиль облегчённого контекста сессии (единая точка — LlmProviderRegistry.LightProfileFor):
     // модель и персона — свойства СЕССИИ, не хода, поэтому состав MCP и сигнатура запуска
-    // стабильны. Тот же резолв в McpToolWhitelist (фильтр tools/list и tools/call). Признак
-    // подмены фолбэком адаптер ставит вместе с подменённой Info.Model (см. LightProfileFor).
+    // стабильны. Тот же резолв в McpToolWhitelist (фильтр tools/list и tools/call).
     private LightProfile? LightProfile =>
-        _providers?.LightProfileFor(EffectiveModel, _personaProvider?.Invoke(), Info.FallbackSubstitution);
+        _providers?.LightProfileFor(EffectiveModel, _personaProvider?.Invoke());
 
     // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
     // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;
@@ -3912,6 +3911,22 @@ public class ClaudeSession : ILlmSessionAdapter
         // Флаг, посчитанный до этих возвратов, разошёлся бы с фактом.
         var deliveredMcp = new HashSet<string>(mcpServerNames, StringComparer.OrdinalIgnoreCase);
         bool McpDelivered(string key) => deliveredMcp.Contains(key);
+        // Инструмент выдан модели: сервер доехал и белый список профиля (KeepMcpTools, тот же
+        // резолв, что у фильтра McpToolWhitelist) его не снял. Секция, назвавшая снятый
+        // инструмент, учит вызову, которого нет: Strata отдаёт такой вызов текстом, и ход
+        // обрывается молча (117 случаев за 17–20.11.2026).
+        var keepTools = LightProfile?.KeepMcpTools;
+        bool ToolOffered(string server, string tool)
+        {
+            if (!McpDelivered(server)) return false;
+            if (keepTools is null) return true;
+            foreach (var (key, value) in keepTools)
+                if (string.Equals(key, server, StringComparison.OrdinalIgnoreCase))
+                    return value is not { Length: > 0 } || value.Contains(tool, StringComparer.OrdinalIgnoreCase);
+            return true;
+        }
+        string OfferedList(string server, params string[] tools) =>
+            string.Join(", ", tools.Where(t => ToolOffered(server, t)));
         // Встроенный Task (сабагенты): под --bare CLI отдаёт только Bash/Edit/PowerShell/Read
         // (замер 2026-09-05, см. LlmProviderConfig.BareTools) — подсказки про
         // Task(subagent_type=…) учат инструменту, которого у хода нет. _lastBareModeApplied
@@ -4027,9 +4042,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // побайтово неизменным, иначе prefix cache движка рвёт кэш всей истории), а
         // копятся здесь и уезжают хвостом — вклейкой в текст хода. Признак берём от
         // провайдера СЕССИИ, как BareMode: сигнатура запуска остаётся стабильной.
-        // Ручка провайдера действует и БЕЗ облегчённого контекста (персона с выключенным
-        // LightContext на local-qwen: профиль null, а кэш движка рвётся так же —
-        // LlmProviderRegistry.RecallInTurnTextFor).
+        // Ручка провайдера действует и БЕЗ облегчённого контекста (модель без профиля:
+        // LightProfile null, а кэш движка рвётся так же — LlmProviderRegistry.RecallInTurnTextFor).
         // Общий проект — то же при любой ручке провайдера (S2a-4): подборка собирается на ход
         // и на участника, а same-process ход системный промпт живого процесса НЕ обновляет
         // (ниже по файлу) — в системном блоке замерла бы подборка того хода, что поднял
@@ -4119,6 +4133,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasImageEditorMcp: _imageEditorMcp is not null && McpDelivered(McpEndpoints.ImageEditorName),
                     HasTestsMcp: _testsMcp is not null && McpDelivered(McpEndpoints.TestsName),
                     HasDevMcp: _testsMcp is not null && McpDelivered(McpEndpoints.DevName),
+                    HasDevStandTools: ToolOffered(McpEndpoints.DevName, "start_stand"),
                     HasAudioEditorMcp: _audioEditorMcp is not null && McpDelivered(McpEndpoints.AudioEditorName),
                     HasVideoEditorMcp: _videoEditorMcp is not null && McpDelivered(McpEndpoints.VideoEditorName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth),
@@ -4221,22 +4236,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 var scope = _tasksMcp.ProjectId is not null
                     ? "Текущий контекст — задачи этого проекта."
                     : "Текущий контекст — личные задачи пользователя (вне проектов).";
-                var columnsHint = _tasksMcp.ProjectId is not null
+                var columnsHint = _tasksMcp.ProjectId is not null && ToolOffered("tasks", "tasks_board_columns")
                     ? " У проекта может быть Kanban-доска с кастомными колонками: получи их через tasks_board_columns и клади задачу в нужную колонку, передавая columnId в tasks_create/tasks_update (статус выставится по категории колонки)."
                     : "";
                 // tasks_run_executor подключён ВСЕГДА (состав инструментов не зависит от хода);
                 // на делегированном ходу бэкенд ответит отказом — предупреждаем заранее,
                 // чтобы модель не тратила ход на заведомо запрещённый вызов. Глубина запуска
                 // решается той же константой, что гейт (McpEndpoints.RunExecutorAllowedDepth):
-                // на глубине 1 запуск разрешён, на 2+ — отказ.
-                var executeHint = _currentTurnAgentDepth <= McpEndpoints.RunExecutorAllowedDepth
+                // на глубине 1 запуск разрешён, на 2+ — отказ. Снят белым списком профиля —
+                // ни подсказки, ни призыва делегировать.
+                var canRunExecutor = ToolOffered("tasks", "tasks_run_executor");
+                var executeHint = !canRunExecutor ? ""
+                    : _currentTurnAgentDepth <= McpEndpoints.RunExecutorAllowedDepth
                     ? " tasks_run_executor запускает Claude-исполнителя задачи (отдельная сессия, работает в фоне)."
                     : " tasks_run_executor на этом ходу вернёт отказ: ход инициирован другим чатом, "
                       + "и цепочка делегирования дальше не идёт — верни результат тому, кто тебя позвал.";
                 // На неделегированном ходу делегирование — штатный инструмент, а не действие,
                 // требующее отдельного согласия. На делегированном ходу разрешение противоречило
                 // бы тексту executeHint про отказ — там цепочка намеренно обрывается
-                var delegateHint = _currentTurnAgentDepth <= McpEndpoints.RunExecutorAllowedDepth
+                var delegateHint = canRunExecutor && _currentTurnAgentDepth <= McpEndpoints.RunExecutorAllowedDepth
                     ? " Делегирование — штатный рабочий инструмент, а не действие, требующее отдельного согласия. " +
                       "Если работа уже обсуждена и понятно, кому её поручить, — создавай задачу и запускай исполнителя сам, " +
                       "не спрашивая разрешения. Вместо вопроса дай короткий доклад по факту: кому поручил, что именно, где смотреть ход. " +
@@ -4252,20 +4270,23 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? " Завершая задачу через tasks_complete, прикрепляй итог: resultMarkdown — короткое описание сделанного, linkedFiles — пути затронутых файлов проекта (от корня, через /)."
                     : " Завершая задачу через tasks_complete, прикрепляй итог: resultMarkdown — короткое описание сделанного.";
                 // Кросс-проектные ProjectTasks-привязки: тебе доступны задачи ещё каких-то проектов
-                var crossProjectHint = _tasksMcp.ExtraProjectIds is { Count: > 0 }
+                var crossProjectHint = _tasksMcp.ExtraProjectIds is { Count: > 0 } && ToolOffered("tasks", "tasks_list_projects")
                     ? " Тебе также доступны задачи ДРУГИХ проектов владельца (кросс-проектная привязка) — " +
                       "список и доступность (полный/только чтение) — tasks_list_projects; в tasks_create/tasks_list " +
                       "передай их projectId явно, чтобы адресовать задачу туда."
                     : "";
                 var tasksHint =
                     "У пользователя есть встроенная система задач (вкладка «Задачи» в проекте и раздел «Календарь»). " +
-                    "Управляй ею через MCP-инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, " +
-                    "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
+                    "Управляй ею через MCP-инструменты mcp__tasks__* (" +
+                    OfferedList("tasks", "tasks_list", "tasks_search", "tasks_get", "tasks_create", "tasks_update",
+                        "tasks_complete", "tasks_delete", "tasks_add_subtask", "tasks_toggle_subtask", "tasks_board_columns") +
+                    "). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
                     "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM. " +
                     "Не жди явной просьбы: если в разговоре появился срок, дата или обязательство („завтра“, „в пятницу“, „не забыть“, „надо будет“) — " +
                     "предложи поставить задачу-напоминание в один-два клика (dueDate/dueTime + reminderMinutes); напоминание пользователю — " +
-                    "assignee „me“, поручение себе — assignee „claude“. Часто мелькнул вопрос про планы — загляни в tasks_list, прежде чем отвечать «ничего не запланировано». " +
+                    "assignee „me“, поручение себе — assignee „claude“. " +
+                    (ToolOffered("tasks", "tasks_list") ? "Часто мелькнул вопрос про планы — загляни в tasks_list, прежде чем отвечать «ничего не запланировано». " : "") +
                     "Не путай их со встроенными TaskCreate/TaskUpdate: те ведут план ТЕКУЩЕГО хода " +
                     "(шаги работы, видны пользователю чек-листом в ленте) и в систему задач не попадают. " +
                     "Задача пользователя — только mcp__tasks__*." + columnsHint + executeHint + delegateHint + personaExecHint + resultHint + crossProjectHint;
@@ -4478,16 +4499,31 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 var hasPersonal = !string.IsNullOrEmpty(_memoryMcp.PersonaId);
                 var hasTeam = !string.IsNullOrEmpty(_memoryMcp.ProjectId);
+                // Названия инструментов — только выданных (ToolOffered): облегчённый профиль
+                // оставляет запись и поиск, но снимает правку и удаление
                 string? memoryHint = hasPersonal
                     ? "У тебя есть долгая память между разговорами — управляй ей через MCP-инструменты mcp__memory__* " +
-                      "(memory_remember, memory_search, memory_list, memory_rethink, memory_forget). Типы: semantic — устойчивые факты и " +
+                      "(" + OfferedList("memory", "memory_remember", "memory_search", "memory_list", "memory_rethink", "memory_forget") +
+                      "). Типы: semantic — устойчивые факты и " +
                       "предпочтения пользователя; episodic — что было/обсуждалось в прошлых разговорах; procedural — выученные " +
                       "приёмы и правила. Когда узнаёшь что-то важное о пользователе или договариваешься о чём-то на будущее — " +
-                      "запоминай это (memory_remember). Когда нужно вспомнить контекст — ищи в памяти (memory_search). Записи можно " +
-                      "не только добавлять и забывать: если факт изменился — не плоди дубль, а УТОЧНИ существующую запись по id " +
-                      "через memory_rethink (перезапись текста)."
+                      "запоминай это (memory_remember). Когда нужно вспомнить контекст — ищи в памяти (memory_search)." +
+                      (ToolOffered("memory", "memory_rethink")
+                          ? " Записи можно " +
+                            "не только добавлять и забывать: если факт изменился — не плоди дубль, а УТОЧНИ существующую запись по id " +
+                            "через memory_rethink (перезапись текста)."
+                          : "")
                     : null;
-                if (hasTeam)
+                // Запись в память команды снята (облегчённый профиль оставляет только поиск) —
+                // секция говорит лишь о чтении: призыв «пиши туда» учил бы вызову, которого нет
+                if (hasTeam && !ToolOffered("memory", "team_memory_remember") && ToolOffered("memory", "team_memory_search"))
+                {
+                    var readHint = (hasPersonal ? " " : "") +
+                        "Общую память КОМАНДЫ проекта (факты и решения, которые видят все персоны) читай через " +
+                        "mcp__memory__team_memory_search; писать в неё в этом режиме нельзя — общий вывод оставь в своём итоге.";
+                    memoryHint = memoryHint is null ? readHint.TrimStart() : memoryHint + readHint;
+                }
+                else if (hasTeam && ToolOffered("memory", "team_memory_remember"))
                 {
                     var teamHint = hasPersonal
                         ? " Кроме личной памяти у тебя есть память КОМАНДЫ проекта — общие факты и договорённости, " +

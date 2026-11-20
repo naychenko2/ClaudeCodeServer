@@ -1281,7 +1281,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         var persona = session.PersonaId is { } pid && session.OwnerId is { } oid ? _personas.Get(pid, oid) : null;
         var model = _assignments?.Resolve(Llm.LocalActionCatalog.TasksExecutor, session.Model, session.OwnerId)
             ?? session.Model;
-        return _providers.LightProfileFor(model, persona, session.FallbackSubstitution);
+        return _providers.LightProfileFor(model, persona);
     }
 
     // Судьба утечек вызова в тексте только что закончившегося хода. По аналогии с

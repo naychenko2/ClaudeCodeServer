@@ -162,6 +162,7 @@ MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.
 [ADR-031](adr/ADR-031-feature-as-dimension.md) (фича как сквозное измерение чатов: членство «чат → фича» вычисляется индексом `features/index`, `Session` не расширяется, ключевой чат — цепочкой, «одна строка — одна группа»; за флагом `features-overview`),
 [ADR-033](adr/ADR-033-turn-auto-resume.md) (авто-возобновление ходов после рестарта сервера: фоновый `TurnAutoResumeService` с прогревом, снимок кандидатов из `Working` в `LoadSessions`, сторож crash-loop, фронт-ветка `server_restart` в `ChatItemView`; за флагом `turn-auto-resume`),
 [ADR-041](adr/ADR-041-child-mode.md) (детский режим: ребёнок = `user` с профилем `ChildMode`, allow-list с отказом по умолчанию по эндпоинтам, хабу и MCP, лимиты и бюджет на запуске хода, «Уроки» только по API-ключу; таблицы путей И1/И2 и контракт `/api/child/*`),
+[ADR-042](adr/ADR-042-local-model-light-profile-always.md) (на локальной модели облегчённый контекст включается всегда, флаг персоны на ней не действует; потери профиля и их компенсации),
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение
@@ -219,7 +220,10 @@ ADR-016: задачи с владением файлами, сторожа, ра
 [kids-mode-tutor-knowledge-cut-2026-11.md](research/kids-mode-tutor-knowledge-cut-2026-11.md)
 (разрез «Знания репетитора»: тулсет `tutor` на чтение, файлы предмета вне дерева ребёнка,
 вырезка результатов инструментов, «Обязательно / Никогда», инвариант И6 под редакцию 3
-ADR-041). Читать как «так было тогда».
+ADR-041),
+[wiki-topic-t0-2026-11.md](research/wiki-topic-t0-2026-11.md) (замер «По теме» LLM-wiki:
+`MinScore` по точности, `MaxDfShare`, K1 корпуса — обоснование констант ADR-039, решение 13).
+Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

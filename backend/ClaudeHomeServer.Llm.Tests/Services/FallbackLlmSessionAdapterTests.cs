@@ -32,8 +32,6 @@ public class FallbackLlmSessionAdapterTests
         public Queue<Action> Scripts { get; } = new();
         // (Provider, Model) на момент запуска каждой попытки
         public List<(string Provider, string? Model)> Attempts { get; } = [];
-        // Признак подмены фолбэком (Session.FallbackSubstitution) на момент каждой попытки
-        public List<bool> SubstitutionFlags { get; } = [];
         public int Interrupts;
 
         public LlmCapabilities Capabilities => LlmCapabilitiesCatalog.Claude;
@@ -56,7 +54,6 @@ public class FallbackLlmSessionAdapterTests
         {
             SubmittedTurnSeq++;
             Attempts.Add((Info.Provider ?? "", Info.Model));
-            SubstitutionFlags.Add(Info.FallbackSubstitution);
             if (Scripts.Count > 0) Scripts.Dequeue()();
             return Task.CompletedTask;
         }
@@ -1332,11 +1329,11 @@ public class FallbackLlmSessionAdapterTests
         inner.Attempts.Should().HaveCount(3);
     }
 
-    // Признак подмены (Session.FallbackSubstitution) стоит ровно на подменной попытке: по нему
-    // LightProfileFor включает облегчённый профиль локальной модели принудительно. На попытке с
-    // моделью, выбранной человеком, и после хода его нет — иначе опция персоны перестала бы решать.
+    // Подмена фолбэком меняет модель хода на локальную — облегчённый профиль локальной модели
+    // и так включается по правилу провайдера (решение 19.11.2026), признак подмены для этого
+    // больше не нужен. Проверяем, что подмена снимается: после хода модель чата восстановлена.
     [Fact]
-    public async Task ПризнакПодмены_ТолькоНаПодменнойПопытке_СнимаетсяПослеХода()
+    public async Task ПодменаФолбэком_МеняетМодельПопытки_ИСнимаетсяПослеХода()
     {
         var dict = new Dictionary<string, string?>
         {
@@ -1355,9 +1352,8 @@ public class FallbackLlmSessionAdapterTests
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
         await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации (restore в finally)");
 
-        inner.SubstitutionFlags.Should().Equal(new[] { false, true },
+        inner.Attempts.Select(a => a.Model).Should().Equal(new string?[] { "sonnet", "deepseek-chat" },
             "первая попытка — на модели человека, вторая — подмена фолбэком");
-        inner.Info.FallbackSubstitution.Should().BeFalse("признак живёт только на время хода");
     }
 
     // Волна 2: подмена не переписывает модель чата навсегда. После хода с переходом по цепочке

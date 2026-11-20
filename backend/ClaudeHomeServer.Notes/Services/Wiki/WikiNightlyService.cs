@@ -192,7 +192,8 @@ public sealed partial class WikiNightlyService : BackgroundService
     public sealed record ConnectivityStat(int Pages, double K0, double K1, double K2);
 
     /// <summary>K1 корпуса при выбранном MinScore = 11 (отчёт T0, .cc-attachments/wiki-q2-topic/
-    /// report.md, §3: «вся вики (337)» 0,404). ConnectivityOk — K1 новых страниц ночи не ниже
+    /// report.md, §3: «вся вики (337)» 0,404; индекс «По теме» — по видимым разделам, как при
+    /// показе: так считал T0 и так считает Measure). ConnectivityOk — K1 новых страниц ночи не ниже
     /// этой линии минус BaselineK1Slack (новые страницы не должны быть изолированнее корпуса).
     /// При смене MinScore или состава корпуса константу перемерить (шаг T0).</summary>
     public const double BaselineK1 = 0.404;

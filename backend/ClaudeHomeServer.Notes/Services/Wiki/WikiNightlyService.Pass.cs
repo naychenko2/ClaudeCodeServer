@@ -786,7 +786,7 @@ public sealed partial class WikiNightlyService
     // Связность новых страниц знаний ночи (появились между снимками) и всех страниц знаний
     // тронутых разделов (раздел новой или изменённой страницы). Страницы знаний — не карточки
     // источника и не хроники. Новых страниц нет — NewConnectivity null (ConnectivityOk тогда null).
-    private static (ConnectivityStat? New, ConnectivityStat? Section) MeasureConnectivity(
+    internal static (ConnectivityStat? New, ConnectivityStat? Section) MeasureConnectivity(
         IReadOnlyDictionary<string, string> before, IReadOnlyDictionary<string, string> after)
     {
         var drafts = after.OrderBy(kv => kv.Key, StringComparer.Ordinal)
@@ -800,11 +800,14 @@ public sealed partial class WikiNightlyService
             .ToHashSet(StringComparer.Ordinal);
         var sectionPaths = knowledge.Where(d => touched.Contains(WikiSections.Parse(d.Path))).Select(d => d.Path).ToList();
 
+        // Один замер по объединению срезов (новые страницы входят в тронутые разделы), результат
+        // раскладывается по двум срезам: memo групп общий, второй проход не нужен.
+        var stats = WikiConnectivity.MeasurePages(drafts, [.. newPaths.Union(sectionPaths, StringComparer.Ordinal)]);
         ConnectivityStat? Stat(List<string> paths)
         {
             if (paths.Count == 0)
                 return null;
-            var m = WikiConnectivity.Measure(drafts, paths);
+            var m = WikiConnectivity.Aggregate(paths.Where(stats.ContainsKey).Select(p => stats[p]));
             return m.Count == 0 ? null : new ConnectivityStat(m.Count, m.K0, m.K1, m.K2);
         }
         return (Stat(newPaths), Stat(sectionPaths));

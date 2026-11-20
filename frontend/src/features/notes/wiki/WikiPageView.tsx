@@ -32,11 +32,10 @@ import { useMemo, useState } from 'react';
 import type { MouseEvent, KeyboardEvent } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, Lock, Pencil, Quote, ScrollText, Sparkles, Undo2 } from 'lucide-react';
-import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, requestOpenWikiPage, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, normWikiStatement, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiRelatedGroupDto, type WikiRelatedItemDto, type WikiRelatedKind, type WikiSectionDto } from 'aihome_shell/kit';
-// Тип записи ссылки — из модуля стора напрямую: кит ре-экспортирует его значения (чтобы был
-// один экземпляр стора), а type-import ничего не поднимает в рантайме — второго экземпляра
-// он не создаёт.
-import type { WikiPageLinkDto } from '../../../lib/wiki';
+import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, requestOpenWikiPage, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, normWikiStatement, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiRelatedGroupDto, type WikiRelatedItemDto, type WikiRelatedKind, type WikiSectionDto, type WikiPageLinkDto } from 'aihome_shell/kit';
+// Тип записи ссылки — из кита хоста: прямой импорт из lib/wiki запрещён границей модуля
+// «Заметки» (барьер сборки рубит даже type-import — src/lib/wiki в запрещённых).
+
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Notice } from '../../../components/ui/Notice';

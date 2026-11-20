@@ -102,6 +102,9 @@ public sealed class WikiApplyService
     // новый разбор предложил бы тот же create снова). Отказ применения с причиной, не молчание.
     public const string CodeDependency = "wiki_apply_dependency";
     public const string CodeGate = "wiki_apply_gate";
+    // merge A → B: предусловие не выполнено (A не ai, приёмыш, с «Заметками», не того раздела,
+    // на A/B есть другой открытый пакет). Отказ после заявки: файлы не тронуты, «apply_failed».
+    public const string CodeMerge = "wiki_apply_merge";
     // Внутренний сбой проверки (ФС, чтение файла, неожиданный вход): пакет ведётся в
     // «apply_failed» с текстом сбоя — исключение наружу не выходит (ревью S4b-1, MAJOR 2).
     public const string CodeInternal = "wiki_apply_internal";
@@ -159,6 +162,10 @@ public sealed class WikiApplyService
         /// сверяет с этим снимком байты диска и запись манифеста: рендер построен на том,
         /// что на диске сейчас, — иначе запись остановлена, а не наложена поверх чужого.</summary>
         public IReadOnlyDictionary<string, string?>? BaseSnapshot { get; init; }
+
+        /// <summary>Страницы, которые пакет удаляет (merge: файл A): пишутся не из Rendered, а
+        /// снимаются шагом записи после прообраза. Их базовый хэш — тоже в BaseSnapshot.</summary>
+        public IReadOnlyList<string>? Deleted { get; init; }
     }
 
     /// <summary>Итог применения целиком (шаги 1–6). Applied — страницы записаны, манифест и
@@ -421,11 +428,32 @@ public sealed class WikiApplyService
             written.Add(draft.Path);
         }
 
+        // merge: страница A снимается ПОСЛЕ записи B — сбой на любом шаге откатывает обе по прообразам.
+        // Прообраз — байты A (как у любой записи), плюс основа в WikiBaselines: версию из манифеста
+        // знает «Принять как мою правку» и откат (срок хранения тот же, 90 дней).
+        var deleted = prepared.Deleted ?? [];
+        foreach (var del in deleted)
+        {
+            var full = SafePath.JoinBelowRoot(root, "pages/" + del);
+            var diskNow = File.Exists(full) ? File.ReadAllBytes(full) : null;
+            var baseHash = snapshot.TryGetValue(del, out var b) ? b : null;
+            var recorded = manifest.Manifest.TryGetValue(del, out var cur) ? cur : null;
+            if (diskNow is null || Sha256OfBytes(diskNow) != baseHash || recorded != baseHash)
+                return FailAfterWrite(root, packageId, section, snapshot, written, CodeDrift,
+                    $"базовое состояние «{del}» изменилось после проверки (правка мимо Хранителя или чужое применение): запись остановлена, чужая правка не тронута");
+            WriteBytesAtomic(root, PreimageRel(packageId, del), diskNow);
+            WikiBaselines.Save(root, diskNow);
+            File.Delete(full);
+            written.Add(del);
+        }
+
         // Шаг 6, манифест: хэши байтов, прочитанных с диска, а не из строки рендера (та же
         // форма, что у Хранителя): следующая сверка сравнивает то, что реально лежит в файле.
         var applied = new Dictionary<string, string>(written.Count, StringComparer.Ordinal);
         foreach (var p in written)
         {
+            if (deleted.Contains(p))
+                continue;
             var bytes = File.ReadAllBytes(SafePath.JoinBelowRoot(root, "pages/" + p));
             // Основа версии — для «Принять как мою правку», если поверх неё правят мимо веб-морды.
             applied[p] = WikiBaselines.Save(root, bytes);
@@ -437,6 +465,9 @@ public sealed class WikiApplyService
         WriteBytesAtomic(root, AppliedRecordRel(packageId), AppliedRecordBytes(applied));
 
         WikiManifest.RecordApplied(root, section, applied);
+        if (deleted.Count > 0)
+            WikiManifest.RollbackTo(root, section,
+                deleted.ToDictionary(d => d, _ => (string?)null, StringComparer.Ordinal));
 
         // Строка журнала (мера 6): политика пакета, его источник, изменённые страницы и автор
         // решения (actor). Политика — «inbox», если хоть одна применённая операция пришла из
@@ -704,6 +735,19 @@ public sealed class WikiApplyService
         // исчезла (stale, авто-rebase нет). Изменённая, но целая база — не отказ: что именно
         // сломалось, решает рендер (ниже), а не сам факт смены хэша.
         foreach (var op in package.Operations)
+        {
+            // merge: база — хэши ОБЕИХ страниц, A и B. Изменилась любая (чужой append в B, правка A)
+            // — «требует нового разбора»: перенос строк по устаревшему видению B был бы порчей.
+            if (op.Op == WikiPackage.OpMerge && Applies(op))
+                foreach (var side in new[] { op.Page, op.Target! })
+                {
+                    if (!manifest.TryGetValue(side, out var now))
+                        return StaleResult(root, package.Id,
+                            $"страница «{side}» — сторона merge — исчезла из раздела: пакет требует нового разбора");
+                    if (!op.BaseHashes.TryGetValue(side, out var was) || !string.Equals(was, now, StringComparison.Ordinal))
+                        return StaleResult(root, package.Id,
+                            $"страница «{side}» изменилась после разбора (или её базы нет в пакете): merge требует нового разбора");
+                }
             foreach (var (page, baseHash) in op.BaseHashes)
             {
                 if (!manifest.TryGetValue(page, out var current))
@@ -712,6 +756,7 @@ public sealed class WikiApplyService
                 // Совпала — база цела; изменилась — продолжение проверки в рендере: намерение
                 // живо, пока цела его цель (чужой append той же страницы — проверка проходит).
             }
+        }
 
         // Пакет human (ADR-038): правку человека рендерит WikiHumanRender — карточку правки он
         // строит сам, источника «с диска или от вызывающего» у него нет.
@@ -773,6 +818,7 @@ public sealed class WikiApplyService
         var working = new List<WikiGate.Draft>(state);
         var renderedOrder = new List<string>(); // страницы раздела в порядке первой правки
         var unconfirmed = new List<string>();
+        var deleted = new List<string>(); // merge: страницы A, которые пакет снимает
 
         foreach (var op in package.Operations)
         {
@@ -792,6 +838,24 @@ public sealed class WikiApplyService
                         $"авто-операция «{op.Op}» на «{op.Page}»: create этой страницы отклонён решением по спорному — применять нечего");
                 return StaleResult(root, package.Id,
                     $"страница «{op.Page}» не в состоянии раздела: база операции «{op.Op}» исчезла, пакет требует нового разбора");
+            }
+
+            // merge A → B: строки A уже проверены при своём применении — перенос кодом, без текста
+            // модели и без вывода цитат из источника; свои предусловия и своё удаление A.
+            if (op.Op == WikiPackage.OpMerge)
+            {
+                var merged = MergeInto(root, package, op, working, upChain);
+                if (merged.Refusal is not null)
+                    return merged.Stale
+                        ? StaleResult(root, package.Id, merged.Refusal)
+                        : FailApply(root, package.Id, CodeMerge, merged.Refusal);
+                working.RemoveAll(d => d.Path == op.Page || d.Path == op.Target);
+                working.Add(merged.Draft!.Value);
+                renderedOrder.Remove(op.Page);
+                if (!renderedOrder.Contains(op.Target!))
+                    renderedOrder.Add(op.Target!);
+                deleted.Add(op.Page);
+                continue;
             }
 
             // Цитата заново выводится из текста источника: утверждение может быть своей
@@ -877,9 +941,175 @@ public sealed class WikiApplyService
             rendered.Add(working.First(d => d.Path == path));
             snapshot[path] = manifest.TryGetValue(path, out var h) ? h : null;
         }
+        foreach (var path in deleted)
+            snapshot[path] = manifest.TryGetValue(path, out var h) ? h : null;
         // Готово к записи: пакет остаётся в «applying» — его заявка держит повторное
         // применение до конца цикла (до status «applied» или «apply_failed»).
-        return new PrepareResult(true, null, null, [], rendered) { Section = section, BaseSnapshot = snapshot };
+        return new PrepareResult(true, null, null, [], rendered)
+            { Section = section, BaseSnapshot = snapshot, Deleted = deleted };
+    }
+
+    // ─── merge A → B (очередь 2, волна C) ───────────────────────────────────────
+
+    private readonly record struct MergeOutcome(WikiGate.Draft? Draft, string? Refusal, bool Stale);
+
+    private static readonly System.Text.RegularExpressions.Regex MergeRefRx =
+        new(@"\[\^s(\d+)\]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>Перенос страницы A в B: строки секций A со сносками — в ТЕ ЖЕ секции B; строка,
+    /// чья цитата (или текст) уже стоит на B, не дублируется (WikiDedup); сноски перенумеровывает код
+    /// (новые идут после сносок B, совпавшая пара «карточка + цитата» берёт номер имеющейся);
+    /// заголовок и алиасы A становятся алиасами B (по ним резолвится ссылка на A: WikiGate.FindPage).
+    /// Предусловия проверяются здесь заново — даже если их проверил подбор. Возвращает новую B;
+    /// удаление A — за вызывающим (Deleted).</summary>
+    private MergeOutcome MergeInto(string root, WikiPackage package, WikiPackage.Operation op,
+        List<WikiGate.Draft> working, IReadOnlyList<string> upChain)
+    {
+        MergeOutcome Refuse(string reason) => new(null, reason, false);
+        var a = op.Page;
+        var b = op.Target!;
+
+        if (package.Author != WikiPackage.AuthorAi)
+            return Refuse("merge: пакет не автора ai");
+        if (string.IsNullOrWhiteSpace(b) || a == b)
+            return Refuse("merge: страницы A и B не заданы или совпадают");
+        if (WikiSections.Parse(a) != package.Section || WikiSections.Parse(b) != package.Section)
+            return Refuse($"merge: «{a}» и «{b}» должны лежать в одном разделе «{package.Section}»");
+
+        var aDraft = working.FirstOrDefault(d => d.Path == a);
+        var bDraft = working.FirstOrDefault(d => d.Path == b);
+        if (aDraft.Path != a || bDraft.Path != b)
+            return new(null, $"страница «{(aDraft.Path != a ? a : b)}» — сторона merge — не в состоянии раздела: пакет требует нового разбора", true);
+        var pageA = WikiPage.Parse(aDraft.Content).Model;
+        var pageB = WikiPage.Parse(bDraft.Content).Model;
+        if (pageA is null || pageB is null)
+            return Refuse("merge: страница A или B не разбирается");
+        static bool Plain(WikiPage p) => p.Frontmatter.Type is not (WikiFrontmatter.TypeSource or WikiFrontmatter.TypeChronicle);
+        if (!Plain(pageA) || !Plain(pageB))
+            return Refuse("merge: карточки источников и хроники не сливаются");
+        if (pageA.Notes is not null)
+            return Refuse($"merge: на «{a}» есть секция «{WikiPage.NotesSectionName}» человека — сливать нельзя");
+        if (IsAdopted(root, a))
+            return Refuse($"merge: «{a}» принята человеком (adopt) — сливать нельзя");
+
+        // Строка human: сноска A на карточку origin: human. Карточка ищется тем же резолвом, что у гейта.
+        var snapshot = working
+            .Select(d => (Section: WikiSections.Parse(d.Path), Page: WikiPage.Parse(d.Content).Model, d.Path))
+            .Where(x => x.Section is not null && x.Page is not null)
+            .Select(x => (x.Section!, x.Page!, x.Path))
+            .ToList();
+        foreach (var fn in pageA.Footnotes)
+        {
+            var res = WikiGate.ResolveLink(fn.Target.Text, package.Section, upChain, snapshot);
+            var card = res.Path is null ? null : snapshot.FirstOrDefault(x => x.Path == res.Path).Item2;
+            if (card?.Frontmatter.Origin == WikiGate.OriginHuman)
+                return Refuse($"merge: на «{a}» есть строка человека (сноска на карточку origin: human) — сливать нельзя");
+        }
+
+        // Другой открытый пакет на A или B: его намерение построено на странице, которой мы меняем лицо.
+        foreach (var other in WikiPackageStore.List(root).Packages)
+        {
+            if (other.Id == package.Id || !WikiPackage.IsOpen(other.Status))
+                continue;
+            if (other.Operations.Any(o => o.Page == a || o.Page == b
+                    || (o.Op == WikiPackage.OpMerge && (o.Target == a || o.Target == b))))
+                return Refuse($"merge: на «{a}» или «{b}» есть другой открытый пакет {other.Id}");
+        }
+
+        var footnotes = pageB.Footnotes.ToList();
+        var sections = pageB.Sections
+            .Select(s => (s.Name, Lines: s.Lines.ToList()))
+            .ToList();
+        foreach (var sectionA in pageA.Sections)
+        {
+            var idx = sections.FindIndex(s => s.Name == sectionA.Name);
+            if (idx < 0)
+                return Refuse($"merge: у «{b}» нет секции «{sectionA.Name}», в которую переходят строки «{a}»");
+            foreach (var line in sectionA.Lines)
+            {
+                var refs = MergeRefRx.Matches(line);
+                var text = MergeRefRx.Replace(line, "").Trim();
+                var citations = refs
+                    .Select(m => int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))
+                    .Where(n => n >= 1 && n <= pageA.Footnotes.Count)
+                    .Select(n => pageA.Footnotes[n - 1])
+                    .ToList();
+                // Повтор на B — молча (мера 2): цитата или текст уже стоят на странице.
+                if (citations.Any(fn => fn.Target.IsLink && WikiDedup.IsDuplicateStatement(pageB, fn.Target.Text, text, fn.Quote))
+                    || (citations.Count == 0 && WikiDedup.IsDuplicateStatement(pageB, "", text, "")))
+                    continue;
+                var moved = MergeRefRx.Replace(line, m =>
+                {
+                    var n = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                    if (n < 1 || n > pageA.Footnotes.Count)
+                        return m.Value;
+                    var fn = pageA.Footnotes[n - 1];
+                    var normQuote = QuoteMatcher.NormalizeQuote(fn.Quote);
+                    var at = footnotes.FindIndex(x => x.Target == fn.Target && QuoteMatcher.NormalizeQuote(x.Quote) == normQuote);
+                    if (at < 0)
+                    {
+                        footnotes.Add(fn);
+                        at = footnotes.Count - 1;
+                    }
+                    return $"[^s{at + 1}]";
+                });
+                sections[idx].Lines.Add(moved);
+            }
+        }
+
+        // Заголовок и алиасы A → алиасы B: по ним резолвится ссылка на A (после удаления файла).
+        var aliases = pageB.Frontmatter.Aliases.ToList();
+        var taken = new HashSet<string>(aliases.Select(WikiGate.Norm), StringComparer.Ordinal) { WikiGate.Norm(pageB.Title) };
+        foreach (var name in new[] { pageA.Title }.Concat(pageA.Frontmatter.Aliases))
+            if (WikiGate.Norm(name).Length > 0 && taken.Add(WikiGate.Norm(name)))
+                aliases.Add(name);
+        var fm = pageB.Frontmatter;
+        var merged = new WikiFrontmatter
+        {
+            Type = fm.Type, Kind = fm.Kind, Summary = fm.Summary, AsOf = fm.AsOf,
+            Aliases = aliases, Owns = fm.Owns,
+            Sources = fm.Sources.Concat(pageA.Frontmatter.Sources).Distinct(StringComparer.Ordinal).ToList(),
+            Updated = fm.Updated, Status = fm.Status,
+        };
+        var draft = new WikiGate.Draft(b, new WikiPage
+        {
+            Title = pageB.Title,
+            Frontmatter = merged,
+            Sections = sections.Select(s => new WikiPage.Section { Name = s.Name, Lines = s.Lines }).ToList(),
+            Footnotes = footnotes,
+        }.Render());
+        return new(draft, null, false);
+    }
+
+    /// <summary>Страница в журнале как «принятая» (op=adopt): её байты человек принял как есть или
+    /// как свою правку — сливать её нельзя. Нечитаемый журнал — «принятой» (fail-closed).</summary>
+    private static bool IsAdopted(string root, string pageKey)
+    {
+        string[] lines;
+        try
+        {
+            var full = SafePath.Join(root, "keeper/log.jsonl");
+            lines = File.Exists(full) ? File.ReadAllLines(full, System.Text.Encoding.UTF8) : [];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
+        foreach (var line in lines)
+        {
+            if (line.Length == 0)
+                continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var obj = doc.RootElement;
+                if (obj.ValueKind != JsonValueKind.Object
+                    || !obj.TryGetProperty("op", out var op) || op.GetString() != WikiPackage.ActionAdopt
+                    || !obj.TryGetProperty("pages", out var pages) || pages.ValueKind != JsonValueKind.Array)
+                    continue;
+                if (pages.EnumerateArray().Any(p => p.ValueKind == JsonValueKind.String && p.GetString() == pageKey))
+                    return true;
+            }
+            catch (JsonException) { /* оборванная строка — не строка */ }
+        }
+        return false;
     }
 
     // ─── Правка человека (ADR-038, B3b) ─────────────────────────────────────────

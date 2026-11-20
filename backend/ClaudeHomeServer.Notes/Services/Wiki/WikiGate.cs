@@ -445,6 +445,10 @@ public static class WikiGate
         foreach (var entry in allSections)
             if (wanted.Contains(entry.Section) && Norm(entry.Page.Title) == norm)
                 return entry;
+        // Алиас — то же пространство имён, что заголовок (CheckUniqueness): после заголовка.
+        foreach (var entry in allSections)
+            if (wanted.Contains(entry.Section) && entry.Page.Frontmatter.Aliases.Any(a => Norm(a) == norm))
+                return entry;
         return null;
     }
 

@@ -557,7 +557,7 @@ public class SpendControllerTests : IDisposable
             Source = SpendSources.ChatTurn,
             InputTokens = 10,
             OutputTokens = output,
-            DurationApiMs = apiMs,
+            TurnApiMs = apiMs,
         };
 
     [Fact]

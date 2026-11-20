@@ -1,5 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Spend;
@@ -43,7 +41,7 @@ public class SpendAnswerSpeedTests : IDisposable
             InputTokens = 10,
             OutputTokens = output,
             DurationMs = apiMs ?? 0,
-            DurationApiMs = apiMs,
+            TurnApiMs = apiMs,
         };
 
     private static SpendAnswerSpeedDto Speed(SpendStore store, Mock<IModelResolver> llm,
@@ -173,44 +171,32 @@ public class SpendAnswerSpeedTests : IDisposable
         dto.To.Should().Be("2026-11-20T18:00:00Z");
     }
 
-    // Хвост ревью aa8af844, п.3: строка из старого turns-*.jsonl — записанная до появления поля
-    // DurationApiMs. Читается штатно: поле null, и такой ход в скорость не идёт (знаменатель
-    // не выдумывается) — рядом с записью с полем строка остаётся одна.
+    // Хвост ревью aa8af844, п.3 + задача 654c083c: прода-строка 20.11 (до фикса приращения) —
+    // несёт НАКОПИТЕЛЬНЫЙ счётчик процесса CLI под прежним именем durationApiMs (466637 → 513390 → …),
+    // а не время хода. Знаменатель переехал под имя TurnApiMs: старое имя из модели снято, строка
+    // читается штатно (запись остаётся в сторе), но поле null — и в скорость ход не идёт:
+    // делить токены одного хода на время всей сессии нельзя.
     [Fact]
-    public void СтараяСтрокаБезПоля_ЧитаетсяNullом_ВСкоростьНеИдёт()
+    public void СтараяСтрокаСНакопительнымПолем_НеЧитается_ВСкоростьНеИдёт()
     {
         var date = DateOnly.FromDateTime(DateTime.UtcNow);
         Directory.CreateDirectory(_dir);
-        // Форма старой строки: то же сериализование стора (camelCase, null-поля опущены),
-        // поле DurationApiMs в записи нет — в строке его нет вовсе.
-        var legacy = JsonSerializer.Serialize(
-            new SpendRecord
-            {
-                Timestamp = DateTime.UtcNow,
-                OwnerId = "u1",
-                Provider = "claude",
-                Model = "opus",
-                Source = SpendSources.ChatTurn,
-                InputTokens = 10,
-                OutputTokens = 100,
-                DurationMs = 1000,
-            },
-            new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            });
-        legacy.Should().NotContain("durationApiMs", "фикстура — строка без поля");
+        // Форма прода-строки 20.11: то же сериализование стора (camelCase, null-поля опущены),
+        // знаменатель — под старым именем и со значением накопительного счётчика.
+        var legacy = "{\"timestamp\":\"" + DateTime.UtcNow.ToString("O") + "\",\"ownerId\":\"u1\","
+            + "\"provider\":\"claude\",\"model\":\"opus\",\"source\":\"chat-turn\","
+            + "\"inputTokens\":10,\"outputTokens\":100,\"durationMs\":1000,\"durationApiMs\":513390}";
+        legacy.Should().Contain("durationApiMs", "фикстура — прода-строка до фикса приращения");
         File.WriteAllText(Path.Combine(_dir, $"turns-{date:yyyy-MM-dd}.jsonl"), legacy + Environment.NewLine);
 
         var store = new SpendStore(_dir, detailDays: 30);
         var rec = Assert.Single(store.DetailsBetween(date, date));
-        rec.DurationApiMs.Should().BeNull();
+        rec.TurnApiMs.Should().BeNull();
 
-        // В агрегат она не попадает: рядом запись с полем — строка и метрики только про неё.
+        // В агрегат она не попадает: рядом запись нового формата — строка и метрики только про неё.
         store.Record(Rec(DateTime.UtcNow, output: 100, apiMs: 1000));
         var row = Assert.Single(Speed(store, NewResolver()).Models);
-        row.Requests.Should().Be(1, "ход без времени API в скорость не идёт");
+        row.Requests.Should().Be(1, "ход без поля-знаменателя в скорость не идёт");
         row.ApiMs.Should().Be(1000);
         row.OutputTokens.Should().Be(100);
     }

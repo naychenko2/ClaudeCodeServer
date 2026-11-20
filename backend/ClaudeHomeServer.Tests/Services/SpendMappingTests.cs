@@ -181,21 +181,24 @@ public class SpendMappingTests
         SpendCostTiers.Of(r.Source, r.Provider, r.Model).Should().Be(SpendCostTiers.Expensive);
     }
 
-    // Хвост ревью aa8af844, п.2: DurationApiMs — знаменатель сессионной скорости ответа
-    // (SpendAnswerSpeedService): без строки в SpendMapping скорость на проде пропадает молча,
-    // тесты зелёные. Запись обязана нести поле.
+    // Хвост ревью aa8af844, п.2 (переписан под приращение, задача 654c083c): запись обязана нести
+    // время хода TurnApiMs — знаменатель сессионной скорости ответа (SpendAnswerSpeedService).
+    // Значение — приращение накопительного счётчика CLI, посчитанное в ClaudeSession.TurnApiDelta;
+    // маппинг отдаёт его в запись как есть: процесса он не видит, дельта — не его место.
+    // Без строки в SpendMapping скорость на проде пропадает молча, тесты зелёные.
     [Fact]
     public void RecordTurnSpend_ВремяApi_ПишетсяВЗапись()
     {
-        RecordTurn(Chat("claude", "opus"), Result(apiMs: 4200)).DurationApiMs.Should().Be(4200);
+        RecordTurn(Chat("claude", "opus"), Result(apiMs: 4200)).TurnApiMs.Should().Be(4200);
     }
 
-    // Обратная сторона того же поля: CLI не прислал (сторонний поток) — запись без поля,
-    // и в скорость такой ход не идёт (знаменатель не выдумывается — SpendAnswerSpeedTests).
+    // Обратная сторона того же поля: приращение не пришло (сторонний поток) или нулевое —
+    // запись без поля, и в скорость такой ход не идёт (знаменатель не выдумывается —
+    // SpendAnswerSpeedTests).
     [Fact]
     public void RecordTurnSpend_ВремениApiНет_ЗаписьБезПоля()
     {
-        RecordTurn(Chat("claude", "opus"), Result()).DurationApiMs.Should().BeNull();
+        RecordTurn(Chat("claude", "opus"), Result()).TurnApiMs.Should().BeNull();
     }
 
     // Подписка через шлюз (доработка SP2, блокер c6785c27): UpstreamOfRun отдаёт модель маршрута

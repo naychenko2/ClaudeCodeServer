@@ -546,6 +546,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // наружу в ExitedMessage: по ней фолбэк отличает смерть своего прогона от чужой.
         // Пишет поток хода, читает reader — доступ через Interlocked.
         public long LastTurnSeq;
+        // Последний накопленный duration_api_ms этого процесса (сырой value из его result-строк).
+        // Счётчик накопительный за жизнь процесса (как total_cost_usd), но в транскрипт не пишется
+        // и на --resume не восстанавливается: новый процесс начинает с нуля, поэтому база живёт
+        // ровно с процессом — на CliRun, а не на Session (ср. LastCostState, который CLI
+        // восстанавливает). Пишет и читает только reader (один stdout на прогон). См. TurnApiDelta.
+        public long? LastApiMs;
 
         public bool HasPendingBg
         {
@@ -6950,9 +6956,11 @@ public class ClaudeSession : ILlmSessionAdapter
                 // эти поля как JSON null (Anthropic — всегда число), а прямой GetInt64/GetDouble
                 // на null кидает и роняет весь цикл чтения прогона (ход виснет без ответа).
                 var durationMs = LongProp(root, "duration_ms");
-                // Время в API за ход: по нему фронт считает скорость генерации. Ноль трактуем
-                // как «поле не пришло» (сторонний поток его не шлёт) — фолбэк на duration_ms
-                var durationApiMs = LongProp(root, "duration_api_ms") is > 0 and var apiMs ? apiMs : (long?)null;
+                // Время в API: НАКОПИТЕЛЬНЫЙ счётчик за жизнь процесса CLI (как total_cost_usd),
+                // а не время хода — здесь читаем сырой снимок, приращение хода считается ниже,
+                // рядом с дельтой стоимости (см. TurnApiDelta). Ноль — «поле не пришло»
+                // (сторонний поток его не шлёт).
+                var apiMsRaw = LongProp(root, "duration_api_ms");
                 var numTurns = IntProp(root, "num_turns");
                 var apiErr = StatusProp(root, "api_error_status");
                 List<string>? denials = null;
@@ -7010,6 +7018,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 // не меняется — накопленного итога в таком result нет.
                 if (currentCostState.Models.Count > 0)
                     Info.LastCostState = currentCostState;
+                // Время API хода = приращение накопительного счётчика (то же правило, что у дельты
+                // стоимости): база живёт только с этим процессом (в транскрипт не пишется, на
+                // --resume не восстанавливается). Сырой снимок становится базой только после
+                // no-op-фильтра: микро-ход без вызова модели базу не двигает (как LastCostState выше).
+                var turnApiMs = TurnApiDelta(apiMsRaw, run.LastApiMs);
+                run.LastApiMs = apiMsRaw;
                 // На стороннем эндпоинте CLI считает total_cost_usd по ценам Anthropic —
                 // пересчитываем по ценам конфига модели (от дельты хода, не от накопленного
                 // итога; нет цен → стоимость не показываем)
@@ -7047,7 +7061,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // upstreamProvider/upstreamModel — фактический апстрим хода («учётка хода», SP1):
                 // прямой прогон — ключ из стартового расчёта, шлюзовой — текущий маршрут токена
                 var (upstreamProvider, upstreamModel) = UpstreamOfRun(run);
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, usageModel, durationApiMs,
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, usageModel, turnApiMs,
                     promptCache, upstreamProvider, upstreamModel));
                 // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
                 // и счётчик ошибок. Оба признака отказа сводит IsTurnFailure: без is_error
@@ -8401,6 +8415,23 @@ public class ClaudeSession : ILlmSessionAdapter
             Models = new Dictionary<string, ModelUsageSnapshot>(prev.Models),
             TotalCostUsd = prev.TotalCostUsd,
         };
+    }
+
+    // Время API хода = приращение накопительного duration_api_ms (тот же принцип, что у
+    // ComputeTurnDelta для стоимости). Отличие от стоимости одно: счётчик не пишется в транскрипт
+    // и на --resume не восстанавливается — новый процесс CLI начинает с нуля, поэтому база
+    // (CliRun.LastApiMs) живёт ровно с процессом, а не с чатом.
+    //   * поле не пришло (0 — сторонний поток его не шлёт) → null;
+    //   * новый процесс (базы нет, или счётчик меньше прежнего) → сам снимок (итог с нуля);
+    //   * тот же процесс → разница; нулевая разница (продолжение или микро-ход без вызова
+    //     модели: счётчик не двигался) → null — знаменатель скорости ответа не выдумывается.
+    // Чистая функция — её же используют тесты.
+    internal static long? TurnApiDelta(long current, long? prev)
+    {
+        if (current <= 0) return null;
+        if (prev is null || current < prev) return current;
+        var d = current - prev;
+        return d > 0 ? d : null;
     }
 
     // Безопасное чтение числовых полей stream-json. TryGetProperty возвращает true и для JSON

@@ -265,9 +265,11 @@ public class WikiController : ControllerBase
         // (RecordMany выше — только эта страница), ни под замок раздела (ADR-039 §7): возможен
         // устаревший снимок — это проекция, не ошибка. Нечитаемый или неразобранный сосед
         // выпадает на уровне сборки: ответ остаётся 200.
-        var related = WikiRelated.Build(
-            new WikiGate.Draft(page!, content),
-            RelatedSnapshot(root, WikiPaths.Pages(_dataDir, userId), key!, userId, page!));
+        var snapshot = RelatedSnapshot(root, WikiPaths.Pages(_dataDir, userId), key!, userId, page!);
+        var related = WikiRelated.Build(new WikiGate.Draft(page!, content), snapshot);
+        // «Ссылки страницы» (B3): резолв [[…]] текста — только на бэке, фронт не заводит
+        // третью копию правил. Тот же снимок, что у «Связанных», — второй обход диска не нужен.
+        var links = PageLinks(content, key!, page!, userId, snapshot);
         return Ok(new
         {
             pageKey = page,
@@ -276,6 +278,7 @@ public class WikiController : ControllerBase
             footnotes,
             overrides,
             related,
+            links,
             // sha256 байтов страницы — baseHash редактора (B3b): сохранение сверяет его под замком раздела.
             hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.IO.File.ReadAllBytes(full))).ToLowerInvariant(),
             drift = IsDrifted(root, page!, manifest),
@@ -321,6 +324,36 @@ public class WikiController : ControllerBase
             }
         }
         return drafts;
+    }
+
+    // «Ссылки страницы» (B3): по одной записи на каждую [[…]] текста — в порядке появления
+    // (OutboundLinks, WikiPage.cs:272). text — внутренность скобок как написана, вместе с
+    // «|подписью»: фронт сопоставляет по ней; своей разбора «|» ни здесь, ни на фронте нет
+    // (WikiPage.LinkTarget). path — путь цели, если резолв гейта (WikiGate.ResolveLink —
+    // единственные правила, WikiGate.cs:389) дошёл до Resolved, иначе null: «вбок» и «нет
+    // такой» для показа одинаковы — мёртвая ссылка остаётся текстом. Снимок — видимая область
+    // страницы, та же, что у «Связанных» (её раздел и цепочка вверх), плюс сама страница:
+    // ссылка на себя — тоже ссылка. Неразобранный сосед выпадает той же мерой, что там;
+    // неразобранная страница — без ссылок: показывать нечего.
+    private List<WikiPageLinkDto> PageLinks(string content, string sectionKey, string pageKey,
+        string ownerId, List<WikiGate.Draft> snapshot)
+    {
+        if (WikiPage.Parse(content).Model is not { } model)
+            return [];
+        var pages = new List<(string Section, WikiPage Page, string Path)> { (sectionKey, model, pageKey) };
+        foreach (var draft in snapshot)
+        {
+            if (WikiSections.Parse(draft.Path) is not { } section || WikiPaths.IsProjection(draft.Path))
+                continue;
+            if (WikiPage.Parse(draft.Content).Model is not { } other)
+                continue;
+            pages.Add((section, other, draft.Path));
+        }
+        var upChain = WikiSections.UpChain(sectionKey, ownerId, _spheres);
+        return [.. model.OutboundLinks().Select(link => WikiGate.ResolveLink(link.Text, sectionKey, upChain, pages)
+            is { Outcome: WikiGate.LinkOutcome.Resolved } res
+            ? new WikiPageLinkDto(link.Text, res.Path)
+            : new WikiPageLinkDto(link.Text, null))];
     }
 
     // «Вернуть мою» принимает формулировку из «Истории» страницы, а не цитату цели модели: цель
@@ -922,6 +955,12 @@ public sealed record WikiPageInfoDto(
 /// <summary>Сноска страницы в GET page: label — s1…sN, card — заголовок карточки, origin и
 /// captured — из шапки карточки (null, когда карточки нет).</summary>
 public sealed record WikiFootnoteDto(string Label, string Card, string? Origin, string? Captured, string? CardPage);
+
+/// <summary>Ссылка [[…]] текста страницы в GET page (B3): text — внутренность скобок как
+/// написана, вместе с «|подписью» (фронт сопоставляет по ней); path — путь разрешённой цели
+/// или null (неразрешимая — мёртвая ссылка, её рисуют текстом). Порядок — порядок появления
+/// в тексте. Резолв — только WikiGate.ResolveLink: на бэке одна копия правил, на фронте — ни одной.</summary>
+public sealed record WikiPageLinkDto(string Text, string? Path);
 
 /// <summary>Что ИИ сам сделал с утверждением человека на странице за последние 14 дней
 /// (GET page, overrides): op — supersede | conflict, statement — текст ИИ без сносок, previous —

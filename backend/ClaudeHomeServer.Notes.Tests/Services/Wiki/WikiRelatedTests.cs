@@ -27,7 +27,7 @@ public class WikiRelatedTests
 
         var groups = f.Build();
 
-        Group(groups, WikiRelated.KindSource).Items.Should().Equal(new[] { new WikiRelatedItem(Card, "Источник работ", "source") });
+        Group(groups, WikiRelated.KindSource).Items.Should().Equal(new[] { new WikiRelatedItem(Card, "Источник работ", "source", "projects/p1") });
         groups.Should().HaveCount(1, "ссылка на не-карточку — не источник: группы для неё нет");
     }
 
@@ -42,7 +42,7 @@ public class WikiRelatedTests
             .Page(chronicle, "Источник чата 2026-11-01", type: WikiFrontmatter.TypeChronicle);
 
         Group(f.Build(), WikiRelated.KindChronicle).Items
-            .Should().Equal(new[] { new WikiRelatedItem(chronicle, "Источник чата 2026-11-01", "chronicle") });
+            .Should().Equal(new[] { new WikiRelatedItem(chronicle, "Источник чата 2026-11-01", "chronicle", "projects/p1") });
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class WikiRelatedTests
             .Page(other, "Порядок встреч", text: "Обсудили Порядок работ и записали решение.");
 
         var groups = f.Build();
-        Group(groups, WikiRelated.KindMentions).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic") });
+        Group(groups, WikiRelated.KindMentions).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic", "projects/p1") });
         groups.Should().HaveCount(1);
     }
 
@@ -126,7 +126,7 @@ public class WikiRelatedTests
             .Page(other, "Порядок встреч");
 
         var groups = f.Build();
-        Group(groups, WikiRelated.KindMentionedHere).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic") });
+        Group(groups, WikiRelated.KindMentionedHere).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic", "projects/p1") });
         groups.Should().HaveCount(1);
     }
 
@@ -159,7 +159,7 @@ public class WikiRelatedTests
             .Page(other, "Порядок встреч", text: "См. [[Порядок работ]].");
 
         var groups = f.Build();
-        Group(groups, WikiRelated.KindBacklinks).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic") });
+        Group(groups, WikiRelated.KindBacklinks).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic", "projects/p1") });
         groups.Should().HaveCount(1);
     }
 
@@ -291,14 +291,16 @@ public class WikiRelatedTests
     // ─── c3: JSON-контракт Q1-S7 ────────────────────────────────────────────────
 
     [Fact]
-    public void СериализацияWebНастройками_РовноКлючиKindItemsPageKeyTitleType()
+    public void СериализацияWebНастройками_РовноКлючиKindItemsPageKeyTitleTypeSection()
     {
         var f = new Fixture()
             .Target()
             .Page("Проекты/p1/Порядок-встреч.md", "Порядок встреч", text: "Обсудили Порядок работ.");
 
+        // B3: к ключам добавился section — ключ раздела цели (тот же Parse, что отбирает
+        // кандидатов): порядок ключей — порядок полей record.
         Json(f.Build()).Should().Be(
-            """[{"kind":"mentions","items":[{"pageKey":"Проекты/p1/Порядок-встреч.md","title":"Порядок встреч","type":"topic"}]}]""");
+            """[{"kind":"mentions","items":[{"pageKey":"Проекты/p1/Порядок-встреч.md","title":"Порядок встреч","type":"topic","section":"projects/p1"}]}]""");
     }
 
     // ─── c3 вердикта 141df4ac: резолв по словарю, а не FirstOrDefault с нормализацией ─
@@ -320,7 +322,7 @@ public class WikiRelatedTests
 
         var groups = f.Build();
         Group(groups, WikiRelated.KindBacklinks).Items
-            .Should().Equal(new[] { new WikiRelatedItem(linked, "Фикстура 300", "topic") });
+            .Should().Equal(new[] { new WikiRelatedItem(linked, "Фикстура 300", "topic", "projects/p1") });
         groups.Should().HaveCount(1);
 
         var calls = f.NormCalls();

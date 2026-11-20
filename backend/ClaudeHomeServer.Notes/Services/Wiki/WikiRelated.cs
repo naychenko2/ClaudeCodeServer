@@ -201,7 +201,7 @@ public static class WikiRelated
                     ? groups[kind] // порядок «По теме» — оценка, а не путь
                     : groups[kind].OrderBy(c => c.Path, StringComparer.Ordinal).ToList())
                 .Take(limit ?? int.MaxValue) // null — без потолка (A5); срез — только вывод группы
-                .Select(c => new WikiRelatedItem(c.Path, c.Page.Title, c.Page.Frontmatter.Type))]))];
+                .Select(c => new WikiRelatedItem(c.Path, c.Page.Title, c.Page.Frontmatter.Type, c.Section))]))];
     }
 
     /// <summary>Общий матчер упоминаний: вынесен из WikiLint.UnlinkedMentions (тот же смысл,
@@ -329,5 +329,7 @@ public static class WikiRelated
 public sealed record WikiRelatedGroup(string Kind, IReadOnlyList<WikiRelatedItem> Items);
 
 /// <summary>Один элемент группы: pageKey — путь под pages/, title — заголовок страницы,
-/// type — значение type её шапки (для карточек источника — «source»).</summary>
-public sealed record WikiRelatedItem(string PageKey, string Title, string? Type);
+/// type — значение type её шапки (для карточек источника — «source»), section — ключ раздела
+/// цели (тот же WikiSections.Parse, которым кандидат отобран в снимок): в выдаче пути —
+/// ключи разделов, а не папки, второго разбора пути на фронте нет.</summary>
+public sealed record WikiRelatedItem(string PageKey, string Title, string? Type, string Section);

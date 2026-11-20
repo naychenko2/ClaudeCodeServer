@@ -71,7 +71,8 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer/Controllers/ChildRoutesController.cs"] = (4, "IsLocal поставщика LLM, не проекта"),
         // Шлюз: наблюдатель метрик создаётся, когда маршрут — локальный LLM-провайдер
         // (LlmProviderConfig.IsLocal), не «локальный проект» — чужой смысл того же слова.
-        ["backend/ClaudeHomeServer.Llm/Gateway/LlmGatewayEndpoints.cs"] = (2, "LLM-провайдер"),
+        // Три вхождения: два в коде (наблюдатель метрик и сборщик скорости ответа) и комментарий.
+        ["backend/ClaudeHomeServer.Llm/Gateway/LlmGatewayEndpoints.cs"] = (3, "LLM-провайдер"),
         // Поллер: источник метрик выбирается по провайдеру, помеченному IsLocal (LLM-провайдер).
         // Три вхождения: код (p.IsLocal) плюс два упоминания в комментариях о выборе провайдера
         // (комментарий 01.11.2026 добавил третье) — все про локальность провайдера, не проекта.

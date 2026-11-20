@@ -328,6 +328,14 @@ describe('подпись «Скорость» (макет §3)', () => {
     const html = renderTab({ data: mockLocalModelStats('working') });
     expect(html).toContain('чтение промпта с ожиданием');
   });
+  // llm-F2 (docs/features/llm-answer-speed-frontend.md, §3): KPI «на запрос» переименован
+  // в «пока пишет» и подсказан — с облачными оценками сверяют «Скорость ответа», не это.
+  it('KPI генерации — «скорость генерации (пока пишет)» с подсказкой, прежнего имени нет', () => {
+    const html = renderTab({ data: mockLocalModelStats('working') });
+    expect(html).toContain('скорость генерации (пока пишет), ток/с, за последнюю минуту');
+    expect(html).not.toContain('генерация на запрос');
+    expect(html).toContain('OpenRouter сравнивается');
+  });
   it('второй движок llama-server — без «с ожиданием» (у llama-server это чистое время чтения)', () => {
     const html = renderTab({ data: mockEngineStats('ready'), engine: 'gemma' });
     expect(html).toContain('чтение промпта, ток/с');
@@ -565,5 +573,150 @@ describe('переключатель над состоянием без данн
     expect(html).toContain('Gemma 4'); // сам переключатель есть
     expect(html).not.toContain('width:6px');
     expect(html).not.toContain('Gemma 4 —');
+  });
+});
+
+// llm-F2 (docs/features/llm-answer-speed-frontend.md): карточка «Скорость ответа» —
+// сквозная скорость, медианы по запросам и время до первого токена по окнам 5m/1h из
+// блока answerSpeed (контракт — docs/features/llm-answer-speed-spec.md). Окна берутся
+// по КЛЮЧУ ответа, а не по индексу; нет данных — «нет данных», а не нули.
+// Мутации: «взять windows[0]/[1] по индексу» краснит «окна — по ключу»; «0 вместо null» —
+// «нет значений» и «нет поля»; «не группировать TTFT по окнам» — «TTFT сгруппирован».
+describe('карточка «Скорость ответа» (llm-F2)', () => {
+  const ANSWER_SPEED = {
+    windows: [
+      { window: '5m', endToEndTps: 42.1, medianTps: 46.0, medianTtftSec: 6.4, p90TtftSec: 14.2, requests: 402 },
+      { window: '1h', endToEndTps: 41.3, medianTps: 45.1, medianTtftSec: 6.2, p90TtftSec: 13.8, requests: 4804 },
+    ],
+    minTokensForMedian: 32,
+  };
+  const withAnswer = () => ({ ...mockLocalModelStats('working'), answerSpeed: ANSWER_SPEED });
+  const pos = (html: string, s: string) => html.indexOf(s);
+
+  it('числа из ответа: сквозная, медианы и TTFT по обоим окнам, с подписями окон', () => {
+    const html = renderTab({ data: withAnswer() });
+    expect(html).toContain('>Скорость ответа</h3>');
+    expect(html).toContain('42 ток/с');
+    expect(html).toContain('41 ток/с');
+    expect(html).toContain('46 ток/с');
+    expect(html).toContain('45 ток/с');
+    expect(html).toContain('6,4 с');
+    expect(html).toContain('14,2 с');
+    expect(html).toContain('6,2 с');
+    expect(html).toContain('13,8 с');
+    expect(html).toContain('за 5 минут');
+    expect(html).toContain('за час');
+    expect(html).toContain('запросов в окне: 402');
+    expect(html).toContain('запросов в окне: 4804');
+    expect(html).toContain('Время до первого токена');
+  });
+
+  it('карточка — сразу после «Скорости», до графика', () => {
+    const html = renderTab({ data: withAnswer() });
+    expect(pos(html, '>Скорость</h3>')).toBeLessThan(pos(html, '>Скорость ответа</h3>'));
+    expect(pos(html, '>Скорость ответа</h3>')).toBeLessThan(pos(html, '>Нагрузка и кэш</h3>'));
+  });
+
+  it('окна — по ключу ответа, а не по порядку в нём: 5m остаётся заглавным', () => {
+    const reversed = { ...ANSWER_SPEED, windows: [ANSWER_SPEED.windows[1], ANSWER_SPEED.windows[0]] };
+    const html = renderTab({ data: { ...mockLocalModelStats('working'), answerSpeed: reversed } });
+    expect(pos(html, '42 ток/с')).toBeLessThan(pos(html, '41 ток/с'));
+    expect(pos(html, 'за 5 минут')).toBeLessThan(pos(html, 'за час'));
+  });
+
+  it('TTFT сгруппирован по окнам: числа одного окна идут подряд, 5m раньше 1h', () => {
+    const html = renderTab({ data: withAnswer() });
+    expect(pos(html, '6,4 с')).toBeLessThan(pos(html, '14,2 с'));
+    expect(pos(html, '14,2 с')).toBeLessThan(pos(html, '6,2 с'));
+    expect(pos(html, '6,2 с')).toBeLessThan(pos(html, '13,8 с'));
+  });
+
+  it('подсказки у чисел: что это, с чем сравнивать, порог медианы из ответа', () => {
+    const html = renderTab({ data: withAnswer() });
+    expect(html).toContain('title="сквозная скорость ответа');
+    expect(html).toContain('Так же считают Artificial Analysis и OpenRouter');
+    expect(html).toContain('не короче 32 токенов');
+    expect(html).toContain('90-й перцентиль');
+    // хвост ревью 9a059b29 + поправка Артёма (5987bf81): точка отсчёта названа прямо —
+    // сборщик шлюза снимает начало до SendAsync (LlmGatewayEndpoints.cs:229–241).
+    expect(html).toContain('от отправки запроса шлюзом CCS до последнего токена');
+  });
+
+  it('нет поля answerSpeed (старый бэкенд) — спокойная «нет данных», не нули', () => {
+    const html = renderTab({ data: mockLocalModelStats('working') });
+    expect(html).toContain('>Скорость ответа</h3>');
+    expect(html).toContain('Нет данных: сквозной скорости ещё не измерено.');
+    // нулей нет ('>0' — начало числа: «1240 ток/с» из фикстуры под это не попадает)
+    expect(html).not.toContain('>0 ток/с');
+    expect(html).not.toContain('>0,0 с');
+  });
+
+  it('часть значений null — «нет данных» в своей ячейке, а не 0', () => {
+    const d = {
+      ...mockLocalModelStats('working'),
+      answerSpeed: {
+        windows: [
+          { window: '5m', endToEndTps: 42.1, medianTps: null, medianTtftSec: null, p90TtftSec: null },
+          { window: '1h', endToEndTps: null, medianTps: null, medianTtftSec: null, p90TtftSec: null },
+        ],
+      },
+    };
+    const html = renderTab({ data: d });
+    expect(html).toContain('42 ток/с');
+    expect(html).toContain('нет данных');
+    expect(html).not.toContain('>0 ток/с');
+    expect(html).not.toContain('>0,0 с');
+  });
+
+  // Хвосты ревью eb3bc6ec: подпись числа запросов не должна разъезжаться по склонению
+  // («1 запросов», «21 запросов»). Форма нейтральная: число после двоеточия — одна на любой N.
+  it('число запросов — одна нейтральная подпись при любом N (1, 21)', () => {
+    const at = (n: number) => renderTab({
+      data: {
+        ...mockLocalModelStats('working'),
+        answerSpeed: {
+          windows: [
+            { window: '5m', endToEndTps: 42.1, medianTps: null, medianTtftSec: null, p90TtftSec: null, requests: n },
+            { window: '1h', endToEndTps: null, medianTps: null, medianTtftSec: null, p90TtftSec: null, requests: null },
+          ],
+        },
+      },
+    });
+    expect(at(1)).toContain('запросов в окне: 1');
+    expect(at(21)).toContain('запросов в окне: 21');
+    expect(at(1)).not.toContain('1 запросов');
+    expect(at(21)).not.toContain('21 запросов');
+  });
+
+  it('выгруженная модель — «нет данных» в том же спокойном тоне, что «Скорость»', () => {
+    const d = { ...mockEngineStats('yielded'), answerSpeed: ANSWER_SPEED };
+    const html = renderTab({ data: d, engine: 'gemma' });
+    expect(html).toContain('>Скорость ответа</h3>');
+    expect(html).toContain('Нет данных, пока модель выгружена.');
+    expect(html).not.toContain('42 ток/с');
+  });
+});
+
+// llm-F2 §4: формулу скорости в строке «Кто сейчас» не меняем — подсказка обязана
+// называть и то, что в неё входит, и её область: ActiveChats отдаёт среднее по
+// завершённым запросам текущего хода (LocalModelTurnMeter.cs:388, 465–472).
+// Мутация «убрать title у числа» краснит первый тест; «сквозная скорость запроса»
+// вместо среднего по ходу — тоже первый тест.
+describe('подсказка скорости в строке «Кто сейчас на модели» (llm-F2)', () => {
+  const HINT_PREFIX = 'title="средняя сквозная скорость по завершённым запросам этого хода';
+  it('число генерации — с подсказкой про среднюю сквозную скорость по ходу', () => {
+    const html = renderTab({ data: mockLocalModelStats('working') });
+    expect(html).toContain(HINT_PREFIX);
+    // Текст подсказки — по формуле бэка (SseUsageObserver.cs:167–178): от начала ответа
+    // движка до последнего токена. Strata шлёт заголовки до ожидания слота и чтения
+    // промпта — они в интервале; вне его только очередь CCS до отправки (Артём, 02a99fe4).
+    expect(html).toContain('от начала ответа движка до последнего токена');
+    expect(html).toContain('с ожиданием слота в движке и чтением промпта');
+    expect(html).toContain('очередь CCS до отправки запроса не входит');
+  });
+  it('«читает» и «ждёт» — без числовой подсказки', () => {
+    const d = { ...mockLocalModelStats('working'), chats: [{ own: true, sessionId: 's-1', title: 'Чат', phase: 'reading' as const }] };
+    const html = renderTab({ data: d });
+    expect(html).not.toContain(HINT_PREFIX);
   });
 });

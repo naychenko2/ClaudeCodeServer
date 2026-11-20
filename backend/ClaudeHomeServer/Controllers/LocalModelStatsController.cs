@@ -50,6 +50,9 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     private readonly NamedLocalEngines? _namedEngines = services.GetService<NamedLocalEngines>();
     private readonly IEngineArbiterStateReader? _arbiter = services.GetService<IEngineArbiterStateReader>();
     private readonly EngineCallLedger? _callLedger = services.GetService<EngineCallLedger>();
+    // Сборщик скорости ответа (фича «Скорость ответа»): агрегаты по запросам шлюза к стенду.
+    // `?` — тот же стиль опциональных швов: без сборщика блока answerSpeed в ответе нет вовсе.
+    private readonly ILocalModelAnswerSpeed? _answerSpeed = services.GetService<ILocalModelAnswerSpeed>();
     // Подписи основного стенда (Stats:Model/EngineLabel/Topology локального провайдера) — только показ.
     private readonly LlmProviderRegistry? _providers = services.GetService<LlmProviderRegistry>();
     // Рубильник «медиа для обычных пользователей» (ADR-030, 2026-10-18): единственная точка
@@ -146,6 +149,9 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
                 PrefillPerStream = current.Kv?.PrefillPerStream,
                 SpeculativeSpeedup = current.SpeculativeSpeedup,
             },
+            // «Скорость ответа» по собственному учёту шлюза (не из адаптера метрик движка):
+            // агрегаты дорожки main.
+            AnswerSpeed = MapAnswerSpeed(LocalModelStatsPoller.MainTrackName),
             Kv = new KvDto
             {
                 UsagePerc = current.Kv?.UsagePerc,
@@ -228,6 +234,29 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     private static string? Label(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    // Блок «Скорость ответа» (фича «Скорость ответа», контракт — docs/features/llm-answer-speed-spec.md):
+    // агрегаты сборщика по ДОРОЖКЕ этого стенда (main — основной, именованный — своё имя).
+    // Нет сборщика в DI — null, и поля нет в ответе (WhenWritingNull). Нет запросов в окне —
+    // окна с null-метриками и requests 0: «нет данных» отличается от «ноль скорости».
+    private AnswerSpeedDto? MapAnswerSpeed(string track)
+    {
+        if (_answerSpeed is null) return null;
+        var snap = _answerSpeed.SnapshotOf(track);
+        return new AnswerSpeedDto
+        {
+            MinTokensForMedian = snap.MinTokensForMedian,
+            Windows = [.. snap.Windows.Select(w => new AnswerSpeedWindowDto
+            {
+                Window = w.Window,
+                EndToEndTps = w.EndToEndTps,
+                MedianTps = w.MedianTps,
+                MedianTtftSec = w.MedianTtftSec,
+                P90TtftSec = w.P90TtftSec,
+                Requests = w.Requests,
+            })],
+        };
+    }
+
     // GET /api/local-model/stats?engine=<имя> — стенд именованного движка (B3c): тот же
     // LocalModelStatsResponse плюс блок «Дежурство» (duty). Без engine или с engine=main —
     // основной стенд выше, его ответ побайтно не меняется.
@@ -288,6 +317,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
                 PrefillPerStream = current.Kv?.PrefillPerStream,
                 SpeculativeSpeedup = current.SpeculativeSpeedup,
             },
+            // Тот же блок для именованного стенда — по его дорожке (имя движка).
+            AnswerSpeed = MapAnswerSpeed(name),
             Kv = new KvDto
             {
                 UsagePerc = current.Kv?.UsagePerc,
@@ -756,6 +787,11 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // null — данных ещё нет (клиент показывает долю «генерирует» без разделения).
         public double? CleanStepMs { get; init; }
 
+        // Блок «Скорость ответа» (фича «Скорость ответа»): окна 5m и 1h по собственному учёту
+        // шлюза по этому стенду. Нет сборщика в DI — поля нет вовсе (WhenWritingNull, как у Duty).
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public AnswerSpeedDto? AnswerSpeed { get; init; }
+
         public KvDto Kv { get; init; } = new();
 
         // Видеокарты; null — нет nvidia-smi (блок не показывать).
@@ -796,6 +832,39 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // «Ускорение угадыванием» (ADR-029, v2.3): Δgeneration_tokens/Δinter_token_latency_count за окно
         // ~60 с — во сколько раз спекулятивный декод ускоряет генерацию против выдачи по одному токену.
         public double? SpeculativeSpeedup { get; init; }
+    }
+
+    // «Скорость ответа» (фича «Скорость ответа», контракт — docs/features/llm-answer-speed-spec.md):
+    // сквозное определение, как публикуют Artificial Analysis и OpenRouter: Σ выходных токенов ÷
+    // Σ ПОЛНОГО времени запросов (от отправки до последнего токена). Отдельно — время до первого
+    // токена. Метрики nullable: нет данных — null, не 0.
+    public sealed record AnswerSpeedDto
+    {
+        // Окна: 5m и 1h, в этом порядке.
+        public required IReadOnlyList<AnswerSpeedWindowDto> Windows { get; init; }
+
+        // Порог выходных токенов, которым пользовалась медиана скорости (короткие ответы её
+        // занижают). Фронт подписывает им число в подсказке.
+        public int MinTokensForMedian { get; init; }
+    }
+
+    public sealed record AnswerSpeedWindowDto
+    {
+        // Имя окна: "5m" | "1h".
+        public required string Window { get; init; }
+
+        // Сквозная скорость, ток/с.
+        public double? EndToEndTps { get; init; }
+
+        // Медиана tokens/duration по запросам от MinTokensForMedian.
+        public double? MedianTps { get; init; }
+
+        // Время до первого токена, с.
+        public double? MedianTtftSec { get; init; }
+        public double? P90TtftSec { get; init; }
+
+        // Число запросов, завершённых в окне.
+        public int Requests { get; init; }
     }
 
     // Блок KV-кэша: доли 0..1 и вытеснения за 15 мин.

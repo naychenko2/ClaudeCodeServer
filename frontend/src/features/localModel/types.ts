@@ -31,6 +31,26 @@ export interface LocalModelStats {
   // Раньше база считалась на фронте по окну — величина прыгала при сдвиге окна.
   // null/отсутствует — базы нет: «ждёт соседа» не выделяется (доля «—», не ноль).
   cleanStepMs?: number | null;
+  // «Скорость ответа» (фича llm-answer-speed, спека docs/features/llm-answer-speed-spec.md):
+  // сквозное определение — Σ выходных токенов ÷ Σ полного времени запросов, завершённых
+  // в окне; окна — строки '5m' и '1h' (их порядок в ответе не значим, фронт берёт по ключу).
+  // endToEndTps — сквозная скорость, ток/с; medianTps — медиана по отдельным запросам,
+  // в неё входят только ответы не короче minTokensForMedian (короткие сильно занижают её);
+  // medianTtftSec / p90TtftSec — время до первого токена, секунды; requests — число
+  // завершённых запросов в окне. Нет данных — null, не 0.
+  // Нет поля или null — блок не рисуется (старый бэкенд, учёт ещё не набрал запросов):
+  // карточка говорит «нет данных», а не нули.
+  answerSpeed?: {
+    windows: {
+      window: string;
+      endToEndTps?: number | null;
+      medianTps?: number | null;
+      medianTtftSec?: number | null;
+      p90TtftSec?: number | null;
+      requests?: number;
+    }[];
+    minTokensForMedian?: number;
+  } | null;
   // kv: ВСЕ доли 0..1 (не проценты и не ГиБ): usagePerc — занято блоками KV-кэша
   // (это НЕ «память заполнена»); ramTierPerc — занятость тира в RAM;
   // prefixHitPerc — попадания в кэш; ramTierHitPerc — попадания в RAM-тир;

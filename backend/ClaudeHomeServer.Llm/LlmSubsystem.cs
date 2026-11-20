@@ -467,6 +467,11 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<ILocalModelTurnMeter>(sp => sp.GetRequiredService<LocalModelTurnMeter>());
         // Шов утечки вызова в текст: ClaudeSession (Llm) сообщает о детекте, счётчик хода копит.
         services.AddSingleton<IToolCallLeakSink>(sp => sp.GetRequiredService<LocalModelTurnMeter>());
+        // Сборщик скорости ответа (фича «Скорость ответа»): отдельный singleton, НЕ часть счётчика
+        // хода: его метрики живут по дорожкам и переживают конец хода, а LocalModelTurnMeter
+        // выгружает сессию по idle-таймауту. Шлюз зовёт его теми же моментами запроса, что и
+        // приёмник хода; панель читает агрегаты через ILocalModelAnswerSpeed.
+        services.AddSingleton<ILocalModelAnswerSpeed, LocalModelAnswerSpeed>();
         // Шлюз MCP ходит в свой же Kestrel: без прокси (адрес локальный) и без таймаута —
         // streamable HTTP и долгие инструменты живут столько, сколько запрос клиента.
         // Логгеры HttpClient сняты: каждый вызов инструмента печатался бы строкой Information.

@@ -1186,6 +1186,8 @@ public sealed class WikiRetractService
             return "источник не формы «{origin}:…» из закрытого перечня";
         if (IdPartOf(sourceRef).Length == 0)
             return "источник без карточки";
+        if (IdPartOf(sourceRef).StartsWith(WikiPackage.MergeSourcePrefix, StringComparison.Ordinal))
+            return "это маркер слияния, а не источник — откатывайте пакет";
         return null;
     }
 

@@ -780,7 +780,18 @@ public sealed class WikiApplyService
         WikiGate.Draft? card;
         string cardTitle;
         Dictionary<string, string> sourceTexts;
-        if (context is null)
+        // Пакет из одних merge карточку источника не ищет: новых утверждений он не создаёт, строки A
+        // переезжают в B вместе со своими уже проверенными сносками (MergeInto), рендера с цитатой нет.
+        // Условие — по op, а не по ref-маркеру «merge:{A}»: форма пакета (WikiPackage.Validate) не даёт
+        // спрятать рядом с merge другую операцию.
+        var mergeOnly = package.Operations.Any(Applies) && package.Operations.Where(Applies).All(o => o.Op == WikiPackage.OpMerge);
+        if (mergeOnly)
+        {
+            card = null;
+            cardTitle = "";
+            sourceTexts = new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+        else if (context is null)
         {
             var matches = FindSourceCards(state, section, package.Sources);
             if (matches.Count == 0)

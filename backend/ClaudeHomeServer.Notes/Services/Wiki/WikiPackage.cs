@@ -34,6 +34,11 @@ public sealed record WikiPackage
     // проверенные строки A, модель текста не пишет. Применение — WikiApplyService.
     public const string OpMerge = "merge";
 
+    /// <summary>Префикс ref источника пакета merge из ночи: «session:merge:{A}». Маркер пары, а не
+    /// карточка источника: применение merge-пакета карточку не ищет (строки A уже проверены и
+    /// переезжают со своими сносками), откат по такому «источнику» запрещён — откатывают пакет.</summary>
+    public const string MergeSourcePrefix = "merge:";
+
     public static readonly IReadOnlyList<string> OpValues =
         [OpCreate, OpAppend, OpSupersede, OpConflict, OpLink, OpMerge];
 
@@ -354,6 +359,11 @@ public sealed record WikiPackage
         {
             if (p.Operations.Count == 0)
                 errors.Add("пакет без операций");
+            // Применение пакета из одних merge карточку источника не ищет (WikiApplyService): без
+            // этого правила create без карточки обошёл бы проверку, спрятавшись рядом с merge.
+            if (p.Operations.Any(o => o is not null && o.Op == OpMerge)
+                && p.Operations.Any(o => o is not null && o.Op != OpMerge))
+                errors.Add("пакет с операцией «merge» содержит только merge: остальные операции идут своим пакетом с карточкой источника");
             foreach (var op in p.Operations)
             {
                 if (op is null)

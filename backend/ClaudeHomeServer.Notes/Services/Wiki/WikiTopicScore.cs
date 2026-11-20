@@ -143,4 +143,27 @@ public static class WikiTopicScore
                 return false;
         return true;
     }
+
+    private static readonly System.Text.RegularExpressions.Regex DateToken = new(
+        @"\b(?:\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[-./]\d{1,2}[-./]\d{2,4})\b",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Заголовки различаются только токеном даты («Отчёт 2026-11-05» и «Отчёт 2026-11-12»):
+    /// после снятия дат (ГГГГ-ММ-ДД, ДД.ММ.ГГГГ) и схлопывания пробелов они равны без учёта регистра,
+    /// а исходные — нет, и непустой остаток есть. Страницы-версии одного предмета: слияние схлопнуло
+    /// бы снимки в алиасы, поэтому подбор merge такие пары не берёт. Предикат рядом с TitleSubset, но
+    /// отдельный: TitleSubset не меняется — на нём откалиброваны константы замера T0.</summary>
+    public static bool DateVersionsOnly(string titleA, string titleB)
+    {
+        if (string.IsNullOrWhiteSpace(titleA) || string.IsNullOrWhiteSpace(titleB))
+            return false;
+        if (string.Equals(titleA.Trim(), titleB.Trim(), StringComparison.OrdinalIgnoreCase))
+            return false;
+        var a = StripDates(titleA);
+        var b = StripDates(titleB);
+        return a.Length > 0 && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string StripDates(string title) =>
+        string.Join(' ', DateToken.Replace(title, " ").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

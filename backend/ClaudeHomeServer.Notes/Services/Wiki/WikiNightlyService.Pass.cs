@@ -878,30 +878,7 @@ public sealed partial class WikiNightlyService
                 continue;
             if (!TryHash(root, a, out var hashA) || !TryHash(root, b, out var hashB))
                 continue; // страница пропала между снимком и созданием — пара не предлагается
-            var package = new WikiPackage
-            {
-                Id = WikiPackageStore.NewId(),
-                Author = WikiPackage.AuthorAi,
-                Section = section,
-                // Источник — сама пара: ref не разбирается как сессия, поэтому гашение «того же окна»
-                // (SupersedeUnappliedOfSameSources) к предложениям merge не применяется.
-                Sources = [new WikiPackage.SourceRef(WikiGate.OriginSession, "merge:" + a)],
-                Operations =
-                [
-                    new WikiPackage.Operation
-                    {
-                        Op = WikiPackage.OpMerge,
-                        Page = a,
-                        Target = b,
-                        Class = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpMerge),
-                        Decision = WikiPackage.DecisionInbox,
-                        Reason = $"предложение слить «{a}» в «{b}»: дубль по заголовкам или мелкая страница по теме",
-                        ReasonCode = WikiApplyPolicy.CodeMergeProposal,
-                        BaseHashes = new Dictionary<string, string> { [a] = hashA!, [b] = hashB! },
-                    },
-                ],
-                Status = WikiPackage.StatusChecking,
-            };
+            var package = NewMergePackage(section, a, b, hashA!, hashB!);
             var res = WikiPackageStore.Create(root, package);
             if (!res.Ok)
             {
@@ -916,6 +893,34 @@ public sealed partial class WikiNightlyService
         }
         return created;
     }
+
+    /// <summary>Пакет merge A → B: op merge, решение inbox, код merge_proposal, источник-маркер пары
+    /// «session:merge:{A}» (WikiPackage.MergeSourcePrefix). Единственная сборка: её зовут ночь и тесты,
+    /// чтобы форма пакета не расходилась с боевой.</summary>
+    internal static WikiPackage NewMergePackage(string section, string a, string b, string hashA, string hashB) => new()
+    {
+        Id = WikiPackageStore.NewId(),
+        Author = WikiPackage.AuthorAi,
+        Section = section,
+        // Источник — сама пара: ref не разбирается как сессия, поэтому гашение «того же окна»
+        // (SupersedeUnappliedOfSameSources) к предложениям merge не применяется.
+        Sources = [new WikiPackage.SourceRef(WikiGate.OriginSession, WikiPackage.MergeSourcePrefix + a)],
+        Operations =
+        [
+            new WikiPackage.Operation
+            {
+                Op = WikiPackage.OpMerge,
+                Page = a,
+                Target = b,
+                Class = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpMerge),
+                Decision = WikiPackage.DecisionInbox,
+                Reason = $"предложение слить «{a}» в «{b}»: дубль по заголовкам или мелкая страница по теме",
+                ReasonCode = WikiApplyPolicy.CodeMergeProposal,
+                BaseHashes = new Dictionary<string, string> { [a] = hashA, [b] = hashB },
+            },
+        ],
+        Status = WikiPackage.StatusChecking,
+    };
 
     private static bool TryHash(string root, string page, out string? hash)
     {

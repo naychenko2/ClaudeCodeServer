@@ -98,7 +98,8 @@ public static class WikiMergeCandidates
             {
                 var p = group[x];
                 var q = group[y];
-                if (!WikiTopicScore.TitleSubset(p.Model.Title, q.Model.Title))
+                if (!WikiTopicScore.TitleSubset(p.Model.Title, q.Model.Title)
+                    || WikiTopicScore.DateVersionsOnly(p.Model.Title, q.Model.Title))
                     continue;
                 var (a, b) = Direction(p, q);
                 if (usedA.Contains(a.Path) || !CanMergeInto(a, openPackagePaths, quarantinedPaths, authorship))
@@ -119,7 +120,9 @@ public static class WikiMergeCandidates
                     continue;
                 if (!IsSmall(a))
                     continue;
-                var best = WikiTopicScore.Rank(index, a.Path, pool.Where(p => p != a.Path)).FirstOrDefault();
+                // Страницы-версии («… 2026-11-05» / «… 2026-11-12») в B не берутся, как и в ветке «дубль».
+                var best = WikiTopicScore.Rank(index, a.Path, pool.Where(p => p != a.Path
+                    && !DateVersions(a.Path, p, group))).FirstOrDefault();
                 if (best.Path is null)
                     continue;
                 usedA.Add(a.Path);
@@ -132,6 +135,13 @@ public static class WikiMergeCandidates
         }
 
         return [.. result.Take(maxTotal)];
+    }
+
+    private static bool DateVersions(string aPath, string bPath, IReadOnlyList<Cand> group)
+    {
+        var a = group.FirstOrDefault(c => c.Path == aPath);
+        var b = group.FirstOrDefault(c => c.Path == bPath);
+        return a is not null && b is not null && WikiTopicScore.DateVersionsOnly(a.Model.Title, b.Model.Title);
     }
 
     private sealed record Cand(string Path, string Section, string Content, WikiPage Model);

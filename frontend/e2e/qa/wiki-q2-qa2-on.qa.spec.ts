@@ -1,5 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { login, api } from './helpers';
 
 // QA-2 · выкат 2 фичи «LLM-wiki: связи и укрупнение страниц (очередь 2)» — слияние страниц.
@@ -30,6 +30,7 @@ type PkgDto = {
   id: string;
   section: string;
   status: string;
+  createdAt: string;
   operations: MergeOp[];
 };
 
@@ -128,7 +129,6 @@ test('ночь с тумблером ВКЛ предлагает merge: паке
   expect(night.mergeProposed, 'число предложений merge в итоге ночи равно числу новых merge-пакетов').toBe(freshMerge);
 
   // Лимиты: ≤10 за ночь, ≤3 на раздел; обе страницы — в одном разделе; A ≠ B
-  const bySection = new Map<string, number>();
   for (const m of merges) {
     const idA = m.op.page.split('/')[1];
     const idB = m.op.target!.split('/')[1];
@@ -255,7 +255,6 @@ test('применение merge: пакет уходит в apply_failed с н�
 });
 
 test('откат пакета, который не применён: отказ (пакет не применён)', async () => {
-  const c = client();
   const pkgs = await inboxPackages();
   const failed = mergeOps(pkgs).find(m => m.pkg.status === 'apply_failed');
   test.skip(!failed, 'нет пакета в apply_failed');

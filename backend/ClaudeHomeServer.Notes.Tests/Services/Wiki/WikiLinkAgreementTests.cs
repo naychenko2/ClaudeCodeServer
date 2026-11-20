@@ -36,6 +36,8 @@ public class WikiLinkAgreementTests
         { "Цель|", "Проекты/p1/Цель.md", "пустая подпись (хвост 15)" },
         { "Цель | подпись", "Проекты/p1/Цель.md", "пробелы вокруг цели обрезаны" },
         { "Проекты/p1/Цель|подпись", "Проекты/p1/Цель.md", "префикс своего раздела с подписью" },
+        // R-B0: LinkTarget обрезает цель и по краям — префикс с краевыми пробелами резолвится.
+        { " Проекты/p1/Цель ", "Проекты/p1/Цель.md", "префикс с краевыми пробелами: цель обрезана, Resolved" },
         { "Общее/Общий|подпись", "Общее/Общий.md", "префикс раздела вверх с подписью" },
         { "Общий |подпись", "Общее/Общий.md", "голая вверх по цепочке с подписью" },
         { "|подпись", null, "пустая цель: резолвить нечего" },
@@ -73,9 +75,12 @@ public class WikiLinkAgreementTests
     }
 
     // B0: цель берёт WikiPage.LinkTarget — одна на обе стороны, своей копии разбора «|» в
-    // резолвах нет. Якорь «#» — часть цели, он не режется.
+    // резолвах нет. Якорь «#» — часть цели, он не режется. R-B0: LinkTarget additionally
+    // trims the edge spaces of the target: a link with spaces [[ Проект… ]] for a prefixed
+    // target is Resolved, not BadPrefix as before Trim.
     [Theory]
     [InlineData("Цель|подпись", "Resolved")]
+    [InlineData(" Проекты/p1/Цель ", "Resolved")]
     [InlineData("Цель|", "Resolved")]
     [InlineData("Цель | подпись", "Resolved")]
     [InlineData("Проекты/p1/Цель|подпись", "Resolved")]
@@ -95,11 +100,14 @@ public class WikiLinkAgreementTests
     [Fact]
     public void СнятиеОставляетРезолвимуюСсылку_НеразрешимуюСнимаетВПодпись()
     {
-        var claim = "См. [[Цель|подпись]] и [[Неизвестная|текст]].";
+        var claim = "См. [[Цель|подпись]] и [[Неизвестная|текст]] и [[ Проекты/p1/Цель ]].";
         var snapshot = Snapshot(claim);
         var stripped = WikiGate.StripUnresolvedLinks(claim, LinkerSection, ["common"], snapshot, out var removed);
-        stripped.Should().Be("См. [[Цель|подпись]] и текст.",
-            "резолвимая ссылка остаётся байт-в-байт; неразрешимая — как прежде, в алиас (PlainLinkText не тронут)");
+        stripped.Should().Be("См. [[Цель|подпись]] и текст и [[ Проекты/p1/Цель ]].",
+            "резолвимая ссылка остаётся как написана — байт-в-байт по внутренности скобок, "
+            + "краевые пробелы не трогает (R-B0: третья резолвится, потому что цель для резолва "
+            + "обрезает LinkTarget, а не StripUnresolvedLinks); неразрешимая — как прежде, "
+            + "в алиас (PlainLinkText не тронут)");
         removed.Should().Be(1);
     }
 

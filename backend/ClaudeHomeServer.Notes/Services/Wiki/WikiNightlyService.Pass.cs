@@ -115,8 +115,8 @@ public sealed partial class WikiNightlyService
         var strippedLinks = 0;
         ConnectivityStat? newConn = null, sectionConn = null;
         bool? connOk = null;
-        // Предложенные merge (C6): null — тумблер выключен или подбор не состоялся.
-        int? mergeProposed = null;
+        // Предложенные merge (C6): 0 — тумблер выключен или предлагать нечего; null — подбор упал.
+        int? mergeProposed = 0;
         // Снимок страниц до прохода — основа для «новые страницы / тронутые разделы» (A6).
         var pagesBefore = ReadPageSnapshot(root);
         // Отказы ступени 2 (хвост ревью R-J-W0): раньше их не было ни в журнале, ни в итоге.
@@ -407,9 +407,11 @@ public sealed partial class WikiNightlyService
             try
             {
                 mergeProposed = await Task.Run(() => ProposeMergesForRoot(root), ct).ConfigureAwait(false);
+                LogInfoSafe("Ночной разбор {Owner}: предложения merge — создано {Count}", ownerId, mergeProposed);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                mergeProposed = null;
                 LogWarnSafe("Ночной разбор {Owner}: предложения merge не созданы: {Reason}", ownerId, ex.Message);
             }
         }

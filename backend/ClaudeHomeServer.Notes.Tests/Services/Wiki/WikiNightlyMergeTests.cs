@@ -131,7 +131,7 @@ public class WikiNightlyMergeTests : IDisposable
         await Sut().RunNightTickAsync(_now);
 
         MergePackages().Should().BeEmpty();
-        Last().MergeProposed.Should().BeNull("тумблер выключен — «не измерено»");
+        Last().MergeProposed.Should().Be(0, "тумблер выключен");
     }
 
     [Fact]
@@ -162,6 +162,34 @@ public class WikiNightlyMergeTests : IDisposable
         op.BaseHashes.Keys.Should().BeEquivalentTo(PageA, PageB);
         Last().MergeProposed.Should().Be(1);
         log.Rows.Select(x => x.Message).Should().Contain(m => m.Contains("предложено merge 1"));
+    }
+
+    [Fact]
+    public async Task ДвенадцатьСтраницОдногоРаздела_ТриПакета_СтрокаДоСудьи()
+    {
+        // 6 пар «дубль» (A — 1 утверждение, B — 2): Pick берёт ≤ 3 на раздел.
+        string[] stems = ["замок вишневый", "река мутная", "поле зелёное", "город старый", "лес тёмный", "гора высокая"];
+        for (var i = 0; i < stems.Length; i++)
+        {
+            WritePage($"Общее/П{i}-а.md", stems[i], 1);
+            WritePage($"Общее/П{i}-б.md", "Большой " + stems[i], 2);
+        }
+        EnableMerge();
+        var log = new RecordingLog();
+        var sut = Sut(log, judge: (o, root, ct) => Task.FromResult(
+            new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, "судья-сбой-для-порядка")));
+
+        await sut.RunNightTickAsync(_now);
+
+        var packages = MergePackages();
+        packages.Should().HaveCount(3);
+        packages.Select(p => p.Operations.Single().ReasonCode).Should().AllBe(WikiApplyPolicy.CodeMergeProposal);
+        Last().MergeProposed.Should().Be(3);
+        var messages = log.Rows.Select(x => x.Message).ToList();
+        var merge = messages.FindIndex(m => m.Contains("предложения merge — создано 3"));
+        var judge = messages.FindIndex(m => m.Contains("проход судьи не доведён"));
+        merge.Should().BeGreaterThanOrEqualTo(0);
+        judge.Should().BeGreaterThan(merge, "строка merge-предложений раньше строки судьи");
     }
 
     [Fact]

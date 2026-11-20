@@ -1,6 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { api, login, seed } from './helpers';
+import path from 'node:path';
+
 const PREFIX = 'qa-llmspeed-ui-';
+// Корень проекта от файла спека: frontend/e2e/qa → корень (как в соседних qa-спеках).
+const ROOT = path.resolve(new URL('../../..', import.meta.url).pathname);
 let request: any; let token: string; let client: any; let seeded: any; let projectId: string; let projectName: string;
 
 test.describe.configure({ mode: 'serial' });
@@ -56,7 +60,8 @@ test('«Кто сейчас на модели»: подсказка о скво�
   const chatName = `${PREFIX}who-${Date.now()}`;
   await client.post(`/api/projects/${projectId}/sessions`, { name: chatName, model: 'qwen3.8-27b' });
   const { execFileSync } = await import('node:child_process');
-  const gen = '/home/an/Sources/ClaudeCodeServer-wt/llm-answer-speed/.cc-attachments/qa-llm-speed/gen.mjs';
+  // Генератор ходов — фикстура за пределами git (.cc-attachments), путь от корня репозитория
+  const gen = path.join(ROOT, '.cc-attachments', 'qa-llm-speed', 'gen.mjs');
   execFileSync('node', [gen], {
     env: { ...process.env, QA_PROJECT: projectName, QA_CHAT: chatName, QA_COUNT: '1', QA_SLOW: '1' },
     stdio: 'ignore',

@@ -95,6 +95,13 @@ public sealed class SpendRecord
     // тарифицируется ЗА ЗАПРОС, так что это ровно единицы тарификации); у остальных 0
     public int Generations { get; init; }
     public long DurationMs { get; init; }
+    // Суммарное время запросов к API за ход (duration_api_ms от CLI), без работы инструментов.
+    // Это знаменатель сессионной скорости ответа: токены сессии ÷ время ответов модели.
+    // DurationMs для этого не годится — там полное время хода, включая работу инструментов.
+    // null — поле не пришло (сторонние потоки его не шлют) или запись до этого поля: такой
+    // ход в скорость не идёт, знаменатель не выдумывается. Аддитивное nullable-поле: старые
+    // turns-*.jsonl читаются штатно, BackupSchema.Version не двигается.
+    public long? DurationApiMs { get; init; }
     // Подпись операции: ключ фонового действия (changelog, notes.tags…) или endpoint fal
     public string? Label { get; init; }
     // Кто запустил платную генерацию: SpendInitiators.*. Носители значения: ходы чата —

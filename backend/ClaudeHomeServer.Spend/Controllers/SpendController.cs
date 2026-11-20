@@ -21,7 +21,7 @@ namespace ClaudeHomeServer.Services.Spend.Controllers;
 [Authorize]
 public class SpendController(SpendAnalyticsService analytics, ISessionDirectory sessions,
     ITaskLookup tasks, TaskPromptMetricsStore promptMetrics,
-    IProjectAccess access) : ControllerBase
+    IProjectAccess access, SpendAnswerSpeedService answerSpeed) : ControllerBase
 {
     private string CurrentUserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? "";
     private bool IsAdmin => User.IsInRole("admin");
@@ -112,6 +112,21 @@ public class SpendController(SpendAnalyticsService analytics, ISessionDirectory 
         return Ok(analytics.Badge(sessionId));
     }
 
+    // Скорость ответа облачных ходов по моделям: сессионная (токены ÷ время ответов модели).
+    // Только админ: агрегат по всем владельцам, сравнение скоростей разных моделей между
+    // собой — служебная вещь админа (как /api/local-model/stats).
+    [HttpGet("answer-speed")]
+    [Authorize(Roles = "admin")]
+    public IActionResult AnswerSpeed(string? from = null, string? to = null)
+    {
+        // Рантайм-проверка рядом с атрибутом: атрибут защищает маршрут, а проверка — сам
+        // контроллер (его зовут и в обход конвейера).
+        if (!IsAdmin) return Forbidden("Скорость ответа по моделям доступна только администратору");
+        // Дефолт окна — последние сутки (сегодня минус день, сегодня)
+        var (f, t) = ClampPeriod(from, to, analytics.Store.EarliestDate, defaultDays: 1);
+        return Ok(answerSpeed.AnswerSpeed(f, t));
+    }
+
     // Максимальная длина периода запроса: byDay обзора строится по каждому дню, и без клампа
     // from=0001-01-01 раздул бы ответ на сотни тысяч дней (ревью Глеба, minor-1)
     internal const int MaxPeriodDays = 366;
@@ -121,11 +136,14 @@ public class SpendController(SpendAnalyticsService analytics, ISessionDirectory 
 
     // Период запроса: дефолт — последние 30 дней по UTC. Кламп: раньше самой ранней записи
     // стора не ходим (earliest) и длиннее MaxPeriodDays не отдаём
-    internal static (DateOnly From, DateOnly To) ClampPeriod(string? from, string? to, DateOnly? earliest)
+    // defaultDays — сколько дней назад от «to» берётся начало окна, если from не задан
+    // (дефолт 29 — окно в 30 дней включительно; у скорости ответа дефолт 1 — последние сутки).
+    internal static (DateOnly From, DateOnly To) ClampPeriod(string? from, string? to, DateOnly? earliest,
+        int defaultDays = 29)
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var t = DateOnly.TryParse(to, out var pt) ? pt : today;
-        var f = DateOnly.TryParse(from, out var pf) ? pf : t.AddDays(-29);
+        var f = DateOnly.TryParse(from, out var pf) ? pf : t.AddDays(-defaultDays);
         if (f > t) return (t, t);
         if (earliest is { } e && f < e) f = e;
         if (t.DayNumber - f.DayNumber >= MaxPeriodDays) f = t.AddDays(-(MaxPeriodDays - 1));

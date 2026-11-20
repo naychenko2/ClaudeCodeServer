@@ -372,6 +372,37 @@ public class WikiPackagesControllerTests : IDisposable
         field.ValueKind.Should().Be(JsonValueKind.Null, "«reasonCode» — null, а не отсутствие поля");
     }
 
+    [Fact]
+    public void СписокПакетов_ОтдаётJudgeAdmitted_ПоКодуПричины()
+    {
+        // D2 (QA-2): допуск к судье — одна точка правды на бэке (WikiApplyPolicy.JudgeAdmitted),
+        // фронт зеркала перечня кодов не держит. merge_proposal допущен; код отказа и «без кода» — нет.
+        // Мутация «judgeAdmitted всегда false» краснит первую проверку.
+        WikiPackage.Operation Coded(string? code) => new()
+        {
+            Op = WikiPackage.OpSupersede,
+            Page = Page,
+            Text = Claim,
+            Target = OldClaim,
+            Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede),
+            Decision = WikiPackage.DecisionInbox,
+            Reason = "спорное",
+            ReasonCode = code,
+            BaseHashes = new Dictionary<string, string> { [Page] = Hash },
+        };
+        var admittedId = NewPackage(WikiPackage.StatusProposed, "common", Coded(WikiApplyPolicy.CodeMergeProposal));
+        var deniedId = NewPackage(WikiPackage.StatusProposed, "common", Coded(WikiApplyPolicy.CodeOriginUrl));
+        var noCodeId = NewPackage(WikiPackage.StatusProposed, "common", Coded(null));
+
+        var dto = ((OkObjectResult)Controller().List(true)).Value
+            .Should().BeAssignableTo<WikiPackagesDto>().Which;
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(dto, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        OperationOf(doc, admittedId).GetProperty("judgeAdmitted").GetBoolean().Should().BeTrue("merge_proposal допущен судье");
+        OperationOf(doc, deniedId).GetProperty("judgeAdmitted").GetBoolean().Should().BeFalse("код отказа судье не отдаётся");
+        OperationOf(doc, noCodeId).GetProperty("judgeAdmitted").GetBoolean().Should().BeFalse("операция без кода — вне допуска");
+    }
+
     // ─── 5. Нет пакета и нечитаемый файл — разные исходы ────────────────────
 
     [Fact]

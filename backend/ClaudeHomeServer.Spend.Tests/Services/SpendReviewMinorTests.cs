@@ -49,6 +49,19 @@ public class SpendReviewMinorTests : IDisposable
         Assert.Equal(new DateOnly(2026, 6, 30), t);
     }
 
+    // Дефолт без from: окно — 30 дней включительно, то есть f = t − DefaultPeriodDays. При выносе
+    // константы в fix/llm-cloud-speed-tails минус был потерян (t.AddDays(+29)): начало уходило на
+    // 29 дней вперёд, кламп «f > t» схлопывал период в один день, и все ручки обзора расхода
+    // без дат показывали один день вместо тридцати (ревью 3b85ad09, major).
+    [Fact]
+    public void ClampPeriod_БезFrom_ОкноТридцатьДнейДоTo()
+    {
+        var (f, t) = SpendController.ClampPeriod(null, "2026-06-30", earliest: null);
+        Assert.Equal(new DateOnly(2026, 6, 30), t);
+        Assert.Equal(new DateOnly(2026, 6, 1), f);
+        Assert.Equal(SpendController.DefaultPeriodDays, t.DayNumber - f.DayNumber);
+    }
+
     [Fact]
     public void ClampPeriod_FromПозжеTo_СхлопываетсяВОдинДень()
     {

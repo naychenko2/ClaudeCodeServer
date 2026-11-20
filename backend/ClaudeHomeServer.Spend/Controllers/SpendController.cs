@@ -146,7 +146,7 @@ public class SpendController(SpendAnalyticsService analytics, ISessionDirectory 
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var t = DateOnly.TryParse(to, out var pt) ? pt : today;
-        var f = DateOnly.TryParse(from, out var pf) ? pf : t.AddDays(DefaultPeriodDays);
+        var f = DateOnly.TryParse(from, out var pf) ? pf : t.AddDays(-DefaultPeriodDays);
         if (f > t) return (t, t);
         if (earliest is { } e && f < e) f = e;
         if (t.DayNumber - f.DayNumber >= MaxPeriodDays) f = t.AddDays(-(MaxPeriodDays - 1));

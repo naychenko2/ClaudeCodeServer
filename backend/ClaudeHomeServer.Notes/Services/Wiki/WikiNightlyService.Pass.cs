@@ -765,7 +765,7 @@ public sealed partial class WikiNightlyService
     // Связность новых страниц знаний ночи (появились между снимками) и всех страниц знаний
     // тронутых разделов (раздел новой или изменённой страницы). Страницы знаний — не карточки
     // источника и не хроники. Новых страниц нет — NewConnectivity null (ConnectivityOk тогда null).
-    private static (ConnectivityStat? New, ConnectivityStat? Section) MeasureConnectivity(
+    internal static (ConnectivityStat? New, ConnectivityStat? Section) MeasureConnectivity(
         IReadOnlyDictionary<string, string> before, IReadOnlyDictionary<string, string> after)
     {
         var drafts = after.OrderBy(kv => kv.Key, StringComparer.Ordinal)

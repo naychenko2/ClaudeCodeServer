@@ -166,6 +166,27 @@ public class WikiConnectivityTests
     }
 
     [Fact]
+    public void MeasureConnectivity_ОдинЗамерРаскладываетсяНаДваСреза_РавноДвумОтдельнымЗамерам()
+    {
+        // Ночь меряет один раз по объединению срезов: «новые» и «тронутого раздела» обязаны
+        // совпасть с тем, что дали бы два отдельных Measure по тем же путям.
+        var f = WithBackground(new Fixture().Page(TopicA, TopicTitleA));
+        var before = f.Snapshot.ToDictionary(d => d.Path, d => d.Content, StringComparer.Ordinal);
+        f.Page(TopicB, TopicTitleB);
+        var after = f.Snapshot.ToDictionary(d => d.Path, d => d.Content, StringComparer.Ordinal);
+
+        var (stNew, stSection) = WikiNightlyService.MeasureConnectivity(before, after);
+
+        var sectionPaths = f.Snapshot.Select(d => d.Path).ToList(); // раздел p1 тронут целиком
+        var direct = WikiConnectivity.Measure(f.Snapshot, [TopicB]);
+        var directSection = WikiConnectivity.Measure(f.Snapshot, sectionPaths);
+        stNew.Should().BeEquivalentTo(new WikiNightlyService.ConnectivityStat(1, direct.K0, direct.K1, direct.K2));
+        stSection.Should().BeEquivalentTo(new WikiNightlyService.ConnectivityStat(
+            directSection.Count, directSection.K0, directSection.K1, directSection.K2));
+        stNew!.K1.Should().Be(1.0, "новая страница связана «По теме» со старой");
+    }
+
+    [Fact]
     public void K2_СсылкаНаСтраницуЗнанийДаёт_СсылкаНаКарточкуНет()
     {
         var card = "Проекты/p1/Источники/Источник-работ.md";

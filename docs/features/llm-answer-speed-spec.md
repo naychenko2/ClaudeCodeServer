@@ -87,3 +87,99 @@ answerSpeed?: {
   minTokensForMedian?: number;
 } | null;
 ```
+
+## Шаг 4: облачные модели — та же скорость по нашей нагрузке
+
+### Что выяснено 20.11 (разведка по коду)
+
+- **Облачные ходы CCS идут мимо шлюза.** Шлюз `/gw/t/{turnId}/llm` — не общий путь, а
+  исключение: `ClaudeSession.UseServerGateway()` (backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs:1225-1247)
+  ведёт ход через шлюз только когда у провайдера включён `NormalizeToolInputArrays`
+  (в бою — minimax) либо провайдер локальный и включена статистика. Родной Claude по
+  подписке (Sonnet/Opus) и сторонние DeepSeek/GLM/Kimi/OpenRouter ходят из процесса CLI
+  напрямую в провайдера (`LlmProviderRegistry.BuildCliEnv`, :578-622). Через шлюз облако
+  идёт только в локальных проектах (ADR-016: устройство → сайдкар → шлюз).
+- **Per-request учёта для облака нет.** Usage в CCS агрегирован на ход: `result.modelUsage`
+  — накопленный итог, CCS берёт дельту к предыдущему снимку (ClaudeSession.cs:6952-6986,
+  :6977-6980); отдельные ответы модели в потоке CLI границы имеют, но их usage CCS не
+  сохраняет. Время API — тоже агрегат: `duration_api_ms` (ClaudeSession.cs:6955).
+- **TTFT для облака не меряется нигде.** `TurnRunPassport.FirstContentMs` — от
+  system/init CLI до первого содержимого, это фаза CLI, не метрика провайдера;
+  `SpawnToFirstByteMs` — от спавна процесса. Меток времени от провайдера CCS не читает
+  вообще (в потоке разбирается только `uuid`).
+- В `SpendRecord` (backend/ClaudeHomeServer.Core/Models/SpendRecord.cs) лежат Provider,
+  Model, токены и `DurationMs` — полное время хода; поля `DurationApiMs` и TTFT там нет.
+
+### Что показываем
+
+Сравнение по моделям за сутки по **нашей** нагрузке, в сессионном определении
+Artificial Analysis: «токены сессии, делённые на время ответов модели, без времени
+инструментов». У нас это ровно `usage.outputTokens ÷ duration_api_ms` на ход
+(ClaudeSession.cs:6955 разбирает `duration_api_ms`; фронт уже считает по нему «скорость
+генерации» — frontend/src/components/chat/ChatItemView.tsx:1677-1683).
+
+1. **Скорость ответа по модели, за сутки** — `Σ output_tokens ÷ Σ duration_api_ms` по всем
+   ходам модели в окне; рядом медиана по ходам (в медиану — ходы с `output_tokens ≥ 32`,
+   тот же порог, что и у локальной скорости) и число ходов.
+2. Время до первого токена для облака **не показываем** — данных нет (см. выше). Вместо
+   молчаливого прочерка в подсказке говорим прямо, что TTFT провайдера CCS не измеряет.
+3. Сравнение с локальной моделью — на одной вкладке, оба числа в одном определении:
+   локальная «Скорость ответа» (per-request, сквозная) и облачная (сессионная, за сутки).
+   Разница в определении подписана прямо, чтобы числа не выдавали друг за друга.
+
+### Контракт REST (заморожен)
+
+Новая ручка в вертикали расхода `GET /api/spend/answer-speed?from=&to=` (admin-only,
+`[Authorize]` как у соседних ручек SpendController):
+
+```json
+{
+  "from": "2026-11-19",
+  "to": "2026-11-20",
+  "minTokensForMedian": 32,
+  "models": [
+    { "provider": "claude", "model": "claude-sonnet-5-5",
+      "endToEndTps": 38.2, "medianTps": 41.0, "requests": 57,
+      "outputTokens": 412000, "apiMs": 10785000 }
+  ]
+}
+```
+
+- `endToEndTps` — сессионная скорость: `Σ output_tokens ÷ Σ duration_api_ms` по ходам модели
+  в окне, ток/с. null — данных нет.
+- `medianTps` — медиана `output_tokens ÷ duration_api_ms` по ходам с `output_tokens ≥
+  minTokensForMedian`; null — таких ходов нет.
+- `requests` — число ходов модели в окне; `outputTokens` и `apiMs` — сырые суммы (из них
+  проверяем сходимость руками).
+- Локальные провайдеры (`IsLocal`) и источники без токенов (`SpendSources.IsTokenless`)
+  в ответ не попадают — сравниваем облако с облаком.
+- Окно по умолчанию — последние сутки (`from = to − 1`).
+
+Тип на фронте (frontend/src/features/localModel/types.ts):
+
+```ts
+cloudAnswerSpeed?: {
+  from?: string;
+  to?: string;
+  minTokensForMedian?: number;
+  models: {
+    provider: string;
+    model: string;
+    endToEndTps?: number | null;
+    medianTps?: number | null;
+    requests?: number;
+    outputTokens?: number;
+    apiMs?: number;
+  }[];
+} | null;
+```
+
+### Чего в этом шаге нет (и почему)
+
+- **TTFT для облака** — не измеряем: у CCS нет времени первого токена провайдера. Отдельная
+  задача: завести учёт времени первого токена в `ClaudeSession` (разбор `assistant`-строк
+  потока CLI по `message.id` + свои метки времени) — это отдельная работа с риском для
+  основного хода, в этот шаг она не входит.
+- **Per-request сквозная скорость облака** — не измеряем: usage и время агрегированы на
+  ход, а не на запрос к модели. То же определение, что у Artificial Analysis для
+  многошаговой сессии, даёт сопоставимость; «по запросу» (как OpenRouter) — нет.

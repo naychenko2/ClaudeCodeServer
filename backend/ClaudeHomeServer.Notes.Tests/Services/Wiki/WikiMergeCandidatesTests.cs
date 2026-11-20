@@ -212,6 +212,40 @@ public class WikiMergeCandidatesTests
         pairs.Should().Equal(new[] { ("Общее/Каталог Исходники.md", "Общее/Содержимое каталога Исходники.md") });
     }
 
+    [Fact]
+    public void ДубльСоСтрокойЧеловека_ПарНет()
+    {
+        var pages = DuplicateSnapshot();
+        var a = pages.Single(p => p.Path == "Общее/Каталог Исходники.md");
+        pages[pages.FindIndex(p => p.Path == a.Path)] =
+            Page(a.Path, "Каталог Исходники", LongText, 2, humanCard: "Моя заметка");
+        // Карточка human добавлена в снимок — без неё сноска считается не-human (WikiProjections.cs:101).
+        pages.Add(Card("Общее/Источники/Моя заметка.md", "Моя заметка", "human"));
+
+        Pick(pages).Should().BeEmpty("предусловие A: все строки автора ai — human-сноска отсекает");
+    }
+
+    [Fact]
+    public void ДубльВОткрытомПакете_ПарНет()
+    {
+        Pick(DuplicateSnapshot(), open: ["Общее/Каталог Исходники.md"]).Should().BeEmpty(
+            "A — не в открытом пакете: другой пакет меняет её состояние");
+    }
+
+    [Fact]
+    public void ДубльBВОткрытомПакете_ПарНет()
+    {
+        Pick(DuplicateSnapshot(), open: ["Общее/Содержимое каталога Исходники.md"]).Should().BeEmpty(
+            "A и B — не в открытом пакете: проверка B — отдельный шаг ветки, не CanMergeInto(A)");
+    }
+
+    [Fact]
+    public void ДубльВКарантине_ПарНет()
+    {
+        Pick(DuplicateSnapshot(), quarantined: ["Общее/Каталог Исходники.md"]).Should().BeEmpty(
+            "карантин — предусловие A: здесь A — «Каталог Исходники» (2 утверждения против 3)");
+    }
+
     // ─── c3: лимиты ─────────────────────────────────────────────────────────────
 
     [Fact]

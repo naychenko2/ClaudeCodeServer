@@ -329,6 +329,91 @@ public class WikiRelatedTests
             "прежний FirstOrDefault по всем кандидатам дал бы ~1.8 млн");
     }
 
+    // ─── «По теме» (topic) ──────────────────────────────────────────────────────
+
+    private const string Gems = "аметист бирюза гранат хризолит";
+
+    // Фон: страницы без общих слов, чтобы df редких основ был малым долей снимка.
+    private static Fixture TopicFixture(string title = "Порядок работ")
+    {
+        var f = new Fixture().Target(title: title, text: Gems);
+        for (var i = 0; i < 60; i++)
+            f.Page($"Проекты/p1/Фон{i}.md", $"Фон{i}", text: $"уникальное{i}слово{i}");
+        return f;
+    }
+
+    [Fact]
+    public void ГруппаTopic_РедкиеОбщиеОсновы_ПорядокПоОценкеАНеПоПути()
+    {
+        var f = TopicFixture("Каменный кабинет редкий")
+            .Page("Проекты/p1/А-слабая.md", "А слабая", text: "аметист бирюза гранат хризолит")
+            .Page("Проекты/p1/Я-сильная.md", "Я сильная", text: "аметист бирюза гранат хризолит топаз");
+        // Те же основы, но заголовок делит слова с заголовком цели (не фразой — иначе это упоминание): ×2
+        f.Page("Проекты/p1/Яшма.md", "Редкий кабинет каменный", text: Gems);
+
+        var items = Group(f.Build(), WikiRelated.KindTopic).Items.Select(i => i.PageKey).ToList();
+
+        items.Should().HaveCount(3);
+        items[0].Should().Be("Проекты/p1/Яшма.md", "общие слова заголовков весят ×2 — выше по оценке, хотя путь позже");
+        items.Skip(1).Should().Equal("Проекты/p1/А-слабая.md", "Проекты/p1/Я-сильная.md");
+    }
+
+    [Fact]
+    public void ГруппаTopic_ПотолокПять_ДействуетИПриLimitNull()
+    {
+        var f = TopicFixture();
+        for (var i = 0; i < 7; i++)
+            f.Page($"Проекты/p1/Тема{i}.md", $"Тема{i}", text: Gems);
+
+        var groups = WikiRelated.Build(f.TargetDraft, [f.TargetDraft, .. f.Candidates], limit: null);
+
+        Group(groups, WikiRelated.KindTopic).Items.Should().HaveCount(WikiRelated.TopicLimit);
+    }
+
+    [Fact]
+    public void ГруппаTopic_БоковойРазделИХроникаНеПопадают()
+    {
+        var f = TopicFixture()
+            .Page("Проекты/p2/Боковая.md", "Боковая", text: Gems)
+            .Page("Проекты/p1/Хроники/chat-1.md", "Хроника", type: WikiFrontmatter.TypeChronicle, text: Gems)
+            .Page("Общее/Общая.md", "Общая", text: Gems);
+
+        Group(f.Build(), WikiRelated.KindTopic).Items.Select(i => i.PageKey)
+            .Should().Equal("Общее/Общая.md");
+    }
+
+    [Fact]
+    public void ГруппаTopic_СтраницаИзСтаршейГруппы_ВTopicНеДублируется()
+    {
+        var f = TopicFixture()
+            .Page("Проекты/p1/Ссылающаяся.md", "Ссылающаяся", text: Gems + " [[Порядок работ]]");
+
+        var groups = f.Build();
+
+        Group(groups, WikiRelated.KindBacklinks).Items.Should().ContainSingle();
+        groups.Should().NotContain(g => g.Kind == WikiRelated.KindTopic);
+    }
+
+    [Fact]
+    public void ГруппаTopic_ОднаОбщаяОснова_ГруппыНет()
+    {
+        var f = TopicFixture().Page("Проекты/p1/Слабая.md", "Слабая", text: "аметист");
+
+        f.Build().Should().NotContain(g => g.Kind == WikiRelated.KindTopic);
+    }
+
+    [Fact]
+    public void ГруппаTopic_ВызововSignificantWordsНеБольшеДвухНаСтраницу_НеНаПару()
+    {
+        var f = TopicFixture();
+        for (var i = 0; i < 6; i++)
+            f.Page($"Проекты/p1/Тема{i}.md", $"Тема{i}", text: Gems);
+        var n = f.Candidates.Count + 1;
+
+        f.WordsCalls().Should().BeLessThanOrEqualTo(2 * n,
+            "индекс строится один раз: заголовок и сводка каждой страницы снимка, пары слов не токенизируют");
+    }
+
     // ─── фикстура ───────────────────────────────────────────────────────────────
 
     private static WikiRelatedGroup Group(IReadOnlyList<WikiRelatedGroup> groups, string kind)
@@ -380,6 +465,8 @@ public class WikiRelatedTests
         public IReadOnlyList<WikiRelatedGroup> Build() => WikiRelated.Build(TargetDraft, [TargetDraft, .. Candidates]);
 
         // Тестовый срез (c3 вердикта): число нормализаций на том же снимке.
+        public int WordsCalls() => WikiRelated.CountWordsCalls(TargetDraft, [TargetDraft, .. Candidates]);
+
         public int NormCalls() => WikiRelated.CountNormCalls(TargetDraft, [TargetDraft, .. Candidates]);
 
         // Форма страницы полная (требование WikiPage.Parse): шапка, заголовок, канонические

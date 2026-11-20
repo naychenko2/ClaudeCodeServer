@@ -8,7 +8,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // Группы по порядку приоритета (дубль между группами остаётся только в старшей):
 // source — общая карточка источника в сносках; chronicle — хроника того чата, что является
 // источником этих карточек; mentions — упоминают эту страницу; mentionedHere — упомянуты
-// здесь; backlinks — OutboundLinks (WikiPage.cs:258) указывает сюда.
+// здесь; backlinks — OutboundLinks (WikiPage.cs:258) указывает сюда; topic — «По теме»:
+// страницы видимых разделов с редкими общими основами (WikiTopicScore), последняя группа —
+// в неё попадает только то, чего нет в старших.
 //
 // Карточки source и проекции `_*` из групп упоминаний и обратных ссылок исключены: источник
 // имеет свою группу, проекцию генерирует код. Пустые группы не отдаются; группа — не длиннее
@@ -30,10 +32,14 @@ public static class WikiRelated
     public const string KindMentions = "mentions";
     public const string KindMentionedHere = "mentionedHere";
     public const string KindBacklinks = "backlinks";
+    public const string KindTopic = "topic";
+
+    /// <summary>Потолок «По теме»: действует и при limit: null — группа подсказка, а не степень.</summary>
+    public const int TopicLimit = 5;
 
     // Порядок приоритета: дубль остаётся только в первой допустившей его группе.
     private static readonly string[] KindOrder =
-        [KindSource, KindChronicle, KindMentions, KindMentionedHere, KindBacklinks];
+        [KindSource, KindChronicle, KindMentions, KindMentionedHere, KindBacklinks, KindTopic];
 
     /// <summary>Проекция «Связанные» для одной страницы. page — сама страница (путь под pages/
     /// и текст); pages — снимок страниц её раздела и цепочки вверх (тот же набор, что state
@@ -53,6 +59,15 @@ public static class WikiRelated
         var counter = new NormCounter();
         Build(page, pages, GroupLimit, counter);
         return counter.Calls;
+    }
+
+    /// <summary>Тестовый срез: сколько вызовов WikiCandidates.SignificantWords делает полный
+    /// Build — индекс «По теме» строится один раз на Build, а не на каждую пару.</summary>
+    internal static int CountWordsCalls(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages)
+    {
+        var counter = new NormCounter();
+        Build(page, pages, GroupLimit, counter);
+        return counter.WordsCalls;
     }
 
     private static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages,
@@ -164,10 +179,27 @@ public static class WikiRelated
             Add(groups, taken, KindBacklinks, c);
         }
 
+        // 6. topic — по редким общим основам. Индекс (df) — по всему снимку видимых разделов
+        // вместе с целью, один раз на Build. Кандидаты — как у остальных групп, но без хроник и
+        // без уже занятых старшими группами; порядок — по оценке, он же и остаётся в выводе.
+        var snapshot = candidates.Where(c => allowed.Contains(c.Section))
+            .Append(new Cand(page.Path, targetSection, page.Content, target));
+        var topicIndex = WikiTopicScore.BuildIndex(
+            snapshot.Select(c => new WikiTopicScore.Entry(c.Path, c.Page.Title,
+                WikiProjections.SummaryOf(c.Page.Frontmatter, c.Content))),
+            counter is null ? null : counter.CountWords);
+        var byPath = candidates.ToDictionary(c => c.Path, StringComparer.Ordinal);
+        var topicPool = Navigable(candidates, allowed)
+            .Where(c => c.Page.Frontmatter.Type != WikiFrontmatter.TypeChronicle && !taken.Contains(c.Path))
+            .Select(c => c.Path);
+        foreach (var (path, _) in WikiTopicScore.Rank(topicIndex, page.Path, topicPool, take: TopicLimit))
+            Add(groups, taken, KindTopic, byPath[path]);
+
         return [.. KindOrder
             .Where(kind => groups.TryGetValue(kind, out var g) && g.Count > 0)
-            .Select(kind => new WikiRelatedGroup(kind, [.. groups[kind]
-                .OrderBy(c => c.Path, StringComparer.Ordinal)
+            .Select(kind => new WikiRelatedGroup(kind, [.. (kind == KindTopic
+                    ? groups[kind] // порядок «По теме» — оценка, а не путь
+                    : groups[kind].OrderBy(c => c.Path, StringComparer.Ordinal).ToList())
                 .Take(limit ?? int.MaxValue) // null — без потолка (A5); срез — только вывод группы
                 .Select(c => new WikiRelatedItem(c.Path, c.Page.Title, c.Page.Frontmatter.Type))]))];
     }
@@ -190,6 +222,13 @@ public static class WikiRelated
     internal sealed class NormCounter
     {
         public int Calls;
+        public int WordsCalls;
+
+        public HashSet<string> CountWords(string text)
+        {
+            WordsCalls++;
+            return WikiCandidates.SignificantWords(text);
+        }
     }
 
     private static string Norm(string text, NormCounter? counter)

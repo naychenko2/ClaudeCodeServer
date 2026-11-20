@@ -75,9 +75,9 @@ public class WikiLinkAgreementTests
     }
 
     // B0: цель берёт WikiPage.LinkTarget — одна на обе стороны, своей копии разбора «|» в
-    // резолвах нет. Якорь «#» — часть цели, он не режется. R-B0: LinkTarget additionally
-    // trims the edge spaces of the target: a link with spaces [[ Проект… ]] for a prefixed
-    // target is Resolved, not BadPrefix as before Trim.
+    // резолвах нет. Якорь «#» — часть цели, он не режется. R-B0: LinkTarget дополнительно
+    // снимает пробелы по краям цели: ссылка с краевыми пробелами [[ Проект… ]] для префиксной
+    // цели — Resolved, а не BadPrefix, как было до Trim.
     [Theory]
     [InlineData("Цель|подпись", "Resolved")]
     [InlineData(" Проекты/p1/Цель ", "Resolved")]

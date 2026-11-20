@@ -181,6 +181,9 @@ public class WikiMergeApplyTests : IDisposable
         BaseHashes = new Dictionary<string, string>(),
     };
 
+    // Для пакета из одних merge источники берутся из NewMergePackage(Section, APath, BPath,
+    // "h1", "h2") с заглушечными хэшами: нужен только .Sources (маркер пары «merge:{A}»),
+    // хэши-заглушки никуда не идут — базы реальных операций задаёт MergeOp.
     private WikiPackage CreateAccepted(params WikiPackage.Operation[] ops) =>
         CreateAcceptedPackage(new WikiPackage
         {

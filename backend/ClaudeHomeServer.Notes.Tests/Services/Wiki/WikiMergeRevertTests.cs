@@ -214,6 +214,9 @@ public class WikiMergeRevertTests : IDisposable
     private async Task<WikiPackage> AppliedMerge()
     {
         var pkg = CreateAcceptedMerge();
+        // Без контекста намеренно: пакет из одних merge карточку источника не ищет
+        // (WikiApplyService.cs:787-793) — новых утверждений он не создаёт. В Applied ниже,
+        // наоборот, контекст нужен: сноскам append-рендера нечем подтвердить цитату без него.
         var r = await _apply.ApplyAsync(User, pkg);
         r.Applied.Should().BeTrue(r.Reason);
         return WikiPackageStore.TryRead(Root, pkg.Id).Package!;
@@ -434,10 +437,11 @@ public class WikiMergeRevertTests : IDisposable
     }
 
     // Фиксация ТЕКУЩЕГО поведения (хвост R-C3 п.3), не желаемого: пакет S откатан побайтно, а снятие
-    // строк S с B упало (на B сноска с неопознанной целью — след не атрибутируется). Статус S уже «reverted», и повторный откат
-    // по источнику пакета не подбирает (Candidates берёт только applied) — строки S на B остаются
-    // навсегда, хотя ответ первого вызова называет их в Failed. Вариант правки — пометка пакета
-    // NeedsUnlink: решение Александра. Когда поведение поменяют, этот тест должен покраснеть.
+    // строк S с B упало (на B сноска с неопознанной целью — след не атрибутируется). Статус S уже
+    // «reverted», и повторный откат по источнику пакета не подбирает (Candidates берёт только
+    // applied) — строки S на B остаются навсегда, хотя ответ первого вызова называет их в Failed.
+    // Вариант правки — пометка пакета NeedsUnlink: решение Александра. Когда поведение поменяют,
+    // этот тест должен покраснеть.
     [Fact]
     public async Task RetractBySource_UnlinkOfBFailed_ReRetractDoesNotPickUpPackage_CurrentBehavior()
     {

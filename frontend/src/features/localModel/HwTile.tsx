@@ -13,7 +13,7 @@
 // C.track, вместо графика подложка.
 
 import type { ComponentType } from 'react';
-import { Gpu, Cpu, Zap, CircuitBoard, Droplet, HardDrive, MemoryStick, Fan, Thermometer } from 'lucide-react';
+import { Gpu, Cpu, Zap, CircuitBoard, Droplet, HardDrive, MemoryStick, Fan, Thermometer, Gauge, Battery, BatteryMedium, PlugZap } from 'lucide-react';
 import { C, FONT, FS, R, SP } from 'aihome_shell/kit';
 import type { HwTileView } from './hardwareFormat';
 import { ruNum } from './hardwareFormat';
@@ -21,7 +21,7 @@ import { Sparkline, SparklinePlaceholder } from './Sparkline';
 
 // kind → иконка lucide (имя из hardwareFormat.hwIcon).
 const ICONS: Record<string, ComponentType<{ size?: number; strokeWidth?: number; color?: string; style?: React.CSSProperties; className?: string }>> = {
-  Gpu, Cpu, Zap, CircuitBoard, Droplet, HardDrive, MemoryStick, Fan, Thermometer,
+  Gpu, Cpu, Zap, CircuitBoard, Droplet, HardDrive, MemoryStick, Fan, Thermometer, Gauge, Battery, BatteryMedium, PlugZap,
 };
 
 // Тон плитки по level: фон/рамка/точка/цвет значения. stale — данные устарели:

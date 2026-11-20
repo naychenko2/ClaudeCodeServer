@@ -436,7 +436,7 @@ GET  /api/local-model/hardware     ?node=<key>&window=1m|5m|15m|1h   (node: бе
      или файла нет — null); плитка карты берёт память, нет — ядро. Узел ram: tempC null, sensor "none".
      В stats и stats/media ТОЛЬКО админу добавляется hardware?: { level, gpus: [{ uuid, memTempC?, level, powerCap, thermal }], nodes: [{ key, level }] }
      (для строки-ссылки и точки на вкладке); у не-админа (scope "self") поля нет. Подробнее — ADR-029, «Решения: вкладка «Железо»».
-GET  /api/local-model/hardware/farm   (только admin, не-админ — 403) → { at, level, farmNodes: [{ key, title, roles, engines, media, status: ok|stale|down|incompatible, since?, level, hottest?, gpus, uptimeS?, cpuLoadPerc?, ramUsedPerc? }] }; без hardware в контейнере — пустой farmNodes; since у stale — по тому же правилу, что staleSince у /hardware
+GET  /api/local-model/hardware/farm   (только admin, не-админ — 403) → { at, level, farmNodes: [{ key, title, roles, engines, media, status: ok|stale|down|incompatible, since?, level, hottest?, gpus, uptimeS?, cpuLoadPerc?, ramUsedPerc? }], ups?: { title, status: ok|stale|down, since?, level, power: line|battery|lowBattery|null, powerLevel, loadLevel, loadPerc?, loadW?, chargePerc?, batteryV?, batteryNominalV?, inputV?, inputHz?, outputV?, tempC?, loadSpark15m, chargeSpark15m, inputVSpark15m, batteryDeciVSpark15m } }; ups — null без Ups:Host; без hardware в контейнере — пустой farmNodes; since у stale — по тому же правилу, что staleSince у /hardware
 GET  /api/local-model/stats/media  ?since=<unix ms>   (аутентифицированный; ADR-030 §9)
      → { scope: "all"|"self", queueAhead: number|null,
          configured, comfy: { status: working|busy|down|disabled, downSince?, version? },

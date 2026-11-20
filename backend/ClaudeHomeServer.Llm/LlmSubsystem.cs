@@ -573,6 +573,11 @@ public sealed class LlmSubsystem : IAppSubsystem
         });
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<HardwareSampler>());
         services.AddSingleton<IHardwareSampler>(sp => sp.GetRequiredService<HardwareSampler>());
+        // ИБП фермы: upsd (NUT) по TCP раз в 10 с; без Ups:Host цикл сразу выходит, в сводке ups = null.
+        services.AddOptions<UpsOptions>().Bind(config.GetSection(UpsOptions.Section));
+        services.AddSingleton<UpsSampler>();
+        services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<UpsSampler>());
+        services.AddSingleton<IUpsSampler>(sp => sp.GetRequiredService<UpsSampler>());
         services.AddSingleton<IHardwareReportService, HardwareReportService>();
 
         // Вкладка «Встречи» (Б1): читатель состояния конвейера транскрибации. Файлы конвейера

@@ -1,5 +1,6 @@
 // Вкладка «Стенды» панели «Локальные модели» (только админ), макет А. Сверху вниз:
-//   1. Карточка «Узлы» (FarmSummaryCard): все узлы, касание выбирает узел;
+//   1. Карточка «Узлы» (FarmSummaryCard): все узлы, касание выбирает узел; под ней — «ИБП»
+//      (UpsCard), если ИБП настроен (farm.ups);
 //   2. Баннер «Узел <key> не отвечает с HH:MM:SS» (узел молчит, данные последние);
 //   3. Детали выбранного узла: Card «Стенд» (плитки, счётчик «N показателей без данных»,
 //      вентиляторы), «Температуры», «Видеокарты», затем «Движок» (vLLM — если у узла есть
@@ -21,6 +22,7 @@ import { HwTile } from './HwTile';
 import { TempChart } from './TempChart';
 import { GpuDetailCard } from './GpuDetailCard';
 import { FarmSummaryCard } from './FarmSummaryCard';
+import { UpsCard } from './UpsCard';
 import { EngineCard, engineLine } from './EngineCard';
 import type { LocalModelMedia, LocalModelStats } from './types';
 import type { HardwareWindow } from './useLocalModelHardware';
@@ -223,6 +225,7 @@ export function HardwareTab({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
       {farm && <FarmSummaryCard farm={farm} selected={selected} onSelect={onSelect} isMobile={isMobile} engineLines={engineLines} />}
+      {farm?.ups && <UpsCard ups={farm.ups} isMobile={isMobile} />}
       {showBanner && <StaleBanner nodeKey={bannerKey} since={since} />}
       {details}
     </div>

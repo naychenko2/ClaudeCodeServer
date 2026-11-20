@@ -362,7 +362,7 @@ public class WikiRelatedTests
     public void ГруппаTopic_ПотолокПять_ДействуетИПриLimitNull()
     {
         var f = TopicFixture();
-        for (var i = 0; i < 7; i++)
+        for (var i = 0; i < 8; i++)
             f.Page($"Проекты/p1/Тема{i}.md", $"Тема{i}", text: Gems);
 
         var groups = WikiRelated.Build(f.TargetDraft, [f.TargetDraft, .. f.Candidates], limit: null);
@@ -375,7 +375,7 @@ public class WikiRelatedTests
     {
         var f = TopicFixture()
             .Page("Проекты/p2/Боковая.md", "Боковая", text: Gems)
-            .Page("Проекты/p1/Хроники/chat-1.md", "Хроника", type: WikiFrontmatter.TypeChronicle, text: Gems)
+            .Page("Проекты/p1/Хроники/chat-1.md", "Хризолит гранат бирюза аметист", type: WikiFrontmatter.TypeChronicle)
             .Page("Общее/Общая.md", "Общая", text: Gems);
 
         Group(f.Build(), WikiRelated.KindTopic).Items.Select(i => i.PageKey)
@@ -395,6 +395,20 @@ public class WikiRelatedTests
     }
 
     [Fact]
+    public void ГруппаTopic_ПоследняяПоПриоритету_СтраницаИзMentionsВНейНеДублируется()
+    {
+        var f = TopicFixture()
+            .Page("Проекты/p1/Упоминающая.md", "Упоминающая", text: Gems + " см. порядок работ тут")
+            .Page("Проекты/p1/Тема.md", "Тема", text: Gems);
+
+        var groups = f.Build();
+
+        groups.Select(g => g.Kind).Should().Equal(WikiRelated.KindMentions, WikiRelated.KindTopic);
+        Group(groups, WikiRelated.KindMentions).Items.Select(i => i.PageKey).Should().Equal("Проекты/p1/Упоминающая.md");
+        Group(groups, WikiRelated.KindTopic).Items.Select(i => i.PageKey).Should().Equal("Проекты/p1/Тема.md");
+    }
+
+    [Fact]
     public void ГруппаTopic_ОднаОбщаяОснова_ГруппыНет()
     {
         var f = TopicFixture().Page("Проекты/p1/Слабая.md", "Слабая", text: "аметист");
@@ -403,15 +417,15 @@ public class WikiRelatedTests
     }
 
     [Fact]
-    public void ГруппаTopic_ВызововSignificantWordsНеБольшеДвухНаСтраницу_НеНаПару()
+    public void ГруппаTopic_ВызововSignificantWordsНаBuild_НеБольшеNПлюсОдин()
     {
-        var f = TopicFixture();
-        for (var i = 0; i < 6; i++)
-            f.Page($"Проекты/p1/Тема{i}.md", $"Тема{i}", text: Gems);
-        var n = f.Candidates.Count + 1;
+        // N = 50 страниц снимка (цель и 49 кандидатов), общих редких основ ни у одной пары нет:
+        // индекс строится один раз — по вызову на страницу, а не на пару или на кандидата.
+        var f = new Fixture().Target(text: Gems);
+        for (var i = 0; i < 49; i++)
+            f.Page($"Проекты/p1/С{i}.md", $"С{i}", text: $"уникальное{i}слово{i}");
 
-        f.WordsCalls().Should().BeLessThanOrEqualTo(2 * n,
-            "индекс строится один раз: заголовок и сводка каждой страницы снимка, пары слов не токенизируют");
+        f.WordsCalls().Should().BeLessThanOrEqualTo(51);
     }
 
     // ─── фикстура ───────────────────────────────────────────────────────────────

@@ -24,11 +24,18 @@ public static class WikiTopicScore
     /// <summary>Страница снимка: путь, заголовок и сводка (null — сводки нет).</summary>
     public readonly record struct Entry(string Path, string Title, string? Summary);
 
-    /// <summary>Индекс снимка: основы каждой страницы и df основ. Строится BuildIndex один раз.</summary>
+    /// <summary>Индекс снимка: основы каждой страницы (заголовок вместе со сводкой) и df основ.
+    /// Строится BuildIndex один раз. Основы одного заголовка нужны лишь для ×2 и считаются лениво,
+    /// только у страниц допустимой по числу общих основ пары — на снимок остаётся ~N вызовов
+    /// SignificantWords, а не по два на страницу.</summary>
     public sealed class Index
     {
-        internal Dictionary<string, (HashSet<string> All, HashSet<string> Title)> Pages { get; } =
-            new(StringComparer.Ordinal);
+        private readonly Func<string, HashSet<string>> _words;
+        private readonly Dictionary<string, HashSet<string>> _titleSets = new(StringComparer.Ordinal);
+
+        internal Index(Func<string, HashSet<string>> words) => _words = words;
+
+        internal Dictionary<string, (HashSet<string> All, string Title)> Pages { get; } = new(StringComparer.Ordinal);
 
         internal Dictionary<string, int> Df { get; } = new(StringComparer.Ordinal);
 
@@ -36,24 +43,28 @@ public static class WikiTopicScore
         public int PageCount => Pages.Count;
 
         public bool Contains(string path) => Pages.ContainsKey(path);
+
+        internal HashSet<string> TitleStems(string path)
+        {
+            if (!_titleSets.TryGetValue(path, out var set))
+                _titleSets[path] = set = _words(Pages[path].Title);
+            return set;
+        }
     }
 
-    /// <summary>Строит индекс снимка: по два вызова SignificantWords на страницу (заголовок,
-    /// сводка) — не на пару. Повтор пути — первая запись остаётся. words — тестовый шов
-    /// счёта вызовов; в обычном пути null.</summary>
+    /// <summary>Строит индекс снимка: один вызов SignificantWords на страницу (заголовок и
+    /// сводка одним текстом). Повтор пути — первая запись остаётся. words — тестовый шов счёта
+    /// вызовов; в обычном пути null.</summary>
     public static Index BuildIndex(IEnumerable<Entry> pages, Func<string, HashSet<string>>? words = null)
     {
         words ??= WikiCandidates.SignificantWords;
-        var index = new Index();
+        var index = new Index(words);
         foreach (var e in pages)
         {
             if (index.Pages.ContainsKey(e.Path))
                 continue;
-            var title = words(e.Title);
-            var all = new HashSet<string>(title, StringComparer.Ordinal);
-            if (e.Summary is { Length: > 0 })
-                all.UnionWith(words(e.Summary));
-            index.Pages[e.Path] = (all, title);
+            var all = words(e.Summary is { Length: > 0 } ? e.Title + " " + e.Summary : e.Title);
+            index.Pages[e.Path] = (all, e.Title);
             foreach (var stem in all)
                 index.Df[stem] = index.Df.GetValueOrDefault(stem) + 1;
         }
@@ -70,22 +81,21 @@ public static class WikiTopicScore
             return null;
         var n = index.PageCount;
         var (small, large) = a.All.Count <= b.All.Count ? (a.All, b.All) : (b.All, a.All);
-        var common = 0;
-        var sum = 0.0;
+        var rare = new List<string>();
         foreach (var stem in small)
+            if (large.Contains(stem) && index.Df[stem] <= MaxDfShare * n) // частая основа предмета не называет
+                rare.Add(stem);
+        if (rare.Count < MinCommon)
+            return null;
+        var titleA = index.TitleStems(pathA);
+        var titleB = index.TitleStems(pathB);
+        var sum = 0.0;
+        foreach (var stem in rare)
         {
-            if (!large.Contains(stem))
-                continue;
-            var df = index.Df[stem];
-            if (df > MaxDfShare * n)
-                continue; // слишком частая основа предмета не называет
-            common++;
-            var weight = Math.Log((double)n / df);
-            if (a.Title.Contains(stem) && b.Title.Contains(stem))
-                weight *= TitleBoth;
-            sum += weight;
+            var weight = Math.Log((double)n / index.Df[stem]);
+            sum += titleA.Contains(stem) && titleB.Contains(stem) ? weight * TitleBoth : weight;
         }
-        return common >= MinCommon && sum >= minScore ? sum : null;
+        return sum >= minScore ? sum : null;
     }
 
     /// <summary>Кандидаты страницы по убыванию оценки; при равенстве — по Ordinal пути.

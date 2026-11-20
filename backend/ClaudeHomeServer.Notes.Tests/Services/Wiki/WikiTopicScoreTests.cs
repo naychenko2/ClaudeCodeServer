@@ -81,4 +81,29 @@ public class WikiTopicScoreTests
         WikiTopicScore.Rank(idx, "t", ["z", "y", "b"], take: 2).Select(r => r.Path).Should().Equal("b", "z");
         WikiTopicScore.Rank(idx, "t", ["z", "b"], take: 0).Should().BeEmpty();
     }
+
+    [Fact]
+    public void Rank_ПорядокВходаНеВлияет_РавныеОценкиПоOrdinal()
+    {
+        var s = "аметист бирюза гранат хризолит";
+        var idx = Snapshot(("t", "Цель", s), ("c", "Ц", s), ("a", "А", s), ("b", "Б", s));
+
+        var one = WikiTopicScore.Rank(idx, "t", ["c", "a", "b"]).Select(r => r.Path);
+        var two = WikiTopicScore.Rank(idx, "t", ["b", "c", "a"]).Select(r => r.Path);
+
+        one.Should().Equal("a", "b", "c");
+        two.Should().Equal(one);
+    }
+
+    [Fact]
+    public void BuildIndex_ВызововСловНеБольшеЧемСтраницПлюсЗаголовкиДопустимыхПар()
+    {
+        var calls = 0;
+        HashSet<string> Counted(string t) { calls++; return WikiCandidates.SignificantWords(t); }
+        var entries = Enumerable.Range(0, 50).Select(i => new WikiTopicScore.Entry($"p{i}", $"З{i}", $"уникальное{i}слово{i}"));
+
+        WikiTopicScore.BuildIndex(entries, Counted);
+
+        calls.Should().Be(50, "один вызов на страницу, не на пару");
+    }
 }

@@ -119,7 +119,12 @@ public partial class SessionManagerHierarchyTests
         fake.BgAlive = false;
         EndTurn(session, fake);
         await _sut.SendMessageAsync(session.Id, "ещё один", [], auto: true);
-        _sut.GetTurnActor(session.Id, TestUserId).Should().BeNull("наследовать нечего — актор неизвестен (Narrow)");
+        _sut.GetTurnActor(session.Id, TestUserId).Should().Be(Участник,
+            "агентов нет, но последний явный актор чата сохранён на сессии — системная подача наследует его");
+
+        var (fresh, _) = await RunChatAsync("ta-internal-fresh");
+        await _sut.SendMessageAsync(fresh.Id, "nudge", [], auto: true);
+        _sut.GetTurnActor(fresh.Id, TestUserId).Should().BeNull("явного актора не было никогда — актор неизвестен (Narrow)");
     }
 
     // Гонка «подача из очереди»: сообщение другого участника ждало в очереди, пока шёл ход первого.

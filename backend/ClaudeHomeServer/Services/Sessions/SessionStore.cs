@@ -743,7 +743,8 @@ public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource, Acces
     // вызывающих оставила бы устаревшего актора на каждом пропуске. Запись безусловная: каждая подача
     // перезаписывает оба поля, устаревший актор её не переживает; под PendingLock (читают потоки MCP-вызовов). Подача без инициатора
     // (null) у внутренних ходов (дренаж, WorkLoop, nudge, resume) наследует «липкого» актора прогона,
-    // пока живы его фоновые агенты; у остальных пишется UnknownActor (fail-closed).
+    // пока живы его фоновые агенты, иначе — последнего явного актора чата (Session.LastTurnActorId);
+    // у чатов без явного актора пишется UnknownActor (fail-closed).
     internal const string UnknownActor = "";
 
     // Ранг сужения: неизвестный уже арендатора, арендатор — самый широкий. Тот, кто уже, выигрывает.
@@ -770,15 +771,26 @@ public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource, Acces
         // Сужение побеждает и на человеческой подаче: пока живы фоновые агенты участника, актор
         // арендатора прогон не расширяет (1:1 с NoteRunDelegation, одинаково для хаба и REST)
         var keep = RunAgentsAlive(entry.Process);
+        var changed = false;
         lock (entry.PendingLock)
         {
             var prev = keep ? entry.RunActor : null;
+            // Последний ЯВНЫЙ актор чата живёт на Session и переживает рестарт: системная подача
+            // (доклад исполнителя, догон после рестарта, nudge) наследует его, а не UnknownActor.
+            // Отозванного участника отсекает IProjectAccess.Resolve, так что fail-closed цел.
             var effective = !string.IsNullOrEmpty(actor) ? actor
                 : !fromHuman && prev is not null ? prev
+                : !fromHuman && !string.IsNullOrEmpty(entry.Info.LastTurnActorId) ? entry.Info.LastTurnActorId
                 : UnknownActor;
+            if (!string.IsNullOrEmpty(actor) && entry.Info.LastTurnActorId != actor)
+            {
+                entry.Info.LastTurnActorId = actor;
+                changed = true;
+            }
             entry.SubmitActor = effective;
             entry.RunActor = NarrowerActor(prev, effective, tenant);
         }
+        if (changed) ScheduleDebouncedSave();
     }
 
     // Реестр актора хода (S2a-6b): с S3-6 запись расхода вызывает его через этот шов

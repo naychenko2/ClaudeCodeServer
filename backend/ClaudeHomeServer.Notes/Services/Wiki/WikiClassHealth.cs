@@ -142,6 +142,10 @@ public sealed class WikiClassHealth
             for (var i = 0; i < pkg.Operations.Count; i++)
             {
                 var op = pkg.Operations[i];
+                // Merge (операция 13) не идёт в обучение классов: слияние решает судья,
+                // его вердикт не метрика качества класса — счётчики класса merge не ведёт.
+                if (op.Op == WikiPackage.OpMerge)
+                    continue;
                 if (!WasApplied(op) || !WikiSettingsStore.IsValidClassKey(op.Class))
                     continue;
                 if (!opsByClass.TryGetValue(op.Class, out var list))

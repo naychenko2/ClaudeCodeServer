@@ -94,6 +94,10 @@ public sealed class WikiJudgeSweep
     /// модели: он несёт метку WikiPackage.JudgeModelCode (ревью J-J3a, Н4).</summary>
     public const string ModelUnknown = "unknown";
 
+    /// <summary>Заголовок блока страницы B входе merge-группы: судья видит, что вторая
+    /// страница — цель слияния, а не целевая страница операции (A стоит раньше).</summary>
+    internal const string MergeTargetLabel = "ТЕКСТ СТРАНИЦЫ B — ЦЕЛИ СЛИЯНИЯ merge (данные):";
+
     /// <summary>Замок прохода: ключ — путь корня вики, не экземпляр (тот же приём, что
     /// у _rootLocks / _createLocks сторов: разные вики друг друга не держат).</summary>
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _rootLocks = new(StringComparer.Ordinal);
@@ -240,7 +244,17 @@ public sealed class WikiJudgeSweep
                 return;
             var members = group.ToList();
             var pageText = ReadPageOrNull(root, group.Key);
-            var input = BuildGroupInput(members, pageText);
+            // Merge (операция 13): судье нужны ОБЕ страницы — A (Page, она же страница
+            // группы) и B (Target). B читается по своему пути; дубль и A-цель пропускаются.
+            // Порядок во входе: A раньше B (контракт C5).
+            var targetTexts = members
+                .Where(t => t.op.Op == WikiPackage.OpMerge)
+                .Select(t => t.op.Target)
+                .Where(t => !string.IsNullOrEmpty(t) && !string.Equals(t, group.Key, StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .Select(t => ReadPageOrNull(root, t!))
+                .ToList();
+            var input = BuildGroupInput(members, pageText, targetTexts);
 
             string? text;
             OneShotUsage? usage;
@@ -377,6 +391,9 @@ public sealed class WikiJudgeSweep
     private static bool IsUndecidedContested(WikiPackage.Operation op) =>
         op.Decision == WikiPackage.DecisionInbox && op.HumanDecision is null && op.JudgeDecision is null;
 
+    /// internal static: форма входа группы тестируется напрямую (тот же приём, что у
+    /// WikiApplyPolicy.Auto) — склейка страниц merge в неё своя, и тесту нужен результат
+    /// метода, а не проход с фейком модели.
     /// <summary>Вход судьи для одной группы: System + блоки операций (с потолка на
     /// стороне прохода), окрестности цитат и текст целевой страницы группы. Окрестности
     /// считаются по тексту страницы: текста источника на диске нет — ни карточка, ни
@@ -384,8 +401,12 @@ public sealed class WikiJudgeSweep
     /// (цель supersede/conflict), — ровно тот контекст, по которому судья судит
     /// «противоречит ли claim тексту страницы». Пустая окрестность в вход не идёт.
     /// Длины claim, цитат и окрестности ограничены на стороне прохода (хвост ревью
-    /// J-J1b №6).</summary>
-    private static string BuildGroupInput(List<(WikiPackage.Operation Op, int Index)> members, string? pageText)
+    /// J-J1b №6). Для merge (операция 13) к входу добавляются тексты страниц B (целей
+    /// merge-операций группы): каждая обрезается до MaxPageChars, A (текст целевой
+    /// страницы группы) стоит раньше любой B — вердикт по merge судья выносит только
+    /// apply/reject («переписать» нет).</summary>
+    internal static string BuildGroupInput(List<(WikiPackage.Operation Op, int Index)> members,
+        string? pageText, IReadOnlyList<string?> mergeTargetTexts)
     {
         var items = members.Select(t => new WikiJudgePrompts.WikiJudgeItem(
             t.Index,
@@ -414,7 +435,26 @@ public sealed class WikiJudgeSweep
         }
 
         var input = WikiJudgePrompts.BuildInput(items, pageText, MaxPageChars, contexts);
+        foreach (var text in mergeTargetTexts)
+        {
+            if (string.IsNullOrEmpty(text))
+                continue; // B нет на диске или не читается: судье остаётся описание операции
+            input += MergePageBlock(text);
+        }
         return WikiJudgePrompts.System + "\n\n" + input;
+    }
+
+    /// <summary>Блок страницы B для merge: та же рамка данных, что у BuildInput (маркеры
+    /// публичные в Prompts; экранирование разделителя в тексте B — здесь, та же формула,
+    /// что у Prompts.Escaped). Текст обрезается до MaxPageChars — потолок входа merge
+    /// остаётся 2 × MaxPageChars.</summary>
+    private static string MergePageBlock(string text)
+    {
+        var escaped = Cut(text, MaxPageChars)
+            .Replace(WikiJudgePrompts.DataOpen, "＜" + WikiJudgePrompts.DataOpen[1..^1] + "＞")
+            .Replace(WikiJudgePrompts.DataClose, "＜" + WikiJudgePrompts.DataClose[1..^1] + "＞");
+        return "\n\n" + MergeTargetLabel + "\n" + WikiJudgePrompts.DataOpen + "\n" + escaped + "\n"
+            + WikiJudgePrompts.DataClose + "\n";
     }
 
     /// <summary>Текст страницы с диска: null — страницы нет (create ещё не применён) или

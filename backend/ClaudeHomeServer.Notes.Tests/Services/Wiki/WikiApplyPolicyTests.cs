@@ -600,8 +600,10 @@ public class WikiApplyPolicyTests
          WikiApplyPolicy.CodeSectionNewPagesLimit, WikiApplyPolicy.CodeOriginUrl,
          WikiApplyPolicy.CodePersonalToCommon, WikiApplyPolicy.CodeTargetDisputed,
          WikiApplyPolicy.CodeAfterModelRepair];
+    // merge_proposal — как number_unconfirmed: код ставит не Decide (его рождает создающий
+    // merge-пакет, C5/C6), но форма пакета и допуск к судье по нему проверяются.
     private static readonly string[] ReasonCodesExpected =
-        [.. PolicyCodesExpected, WikiApplyPolicy.CodeNumberUnconfirmed];
+        [.. PolicyCodesExpected, WikiApplyPolicy.CodeNumberUnconfirmed, WikiApplyPolicy.CodeMergeProposal];
 
     [Fact]
     public void ReasonCodes_КаждыйКодПолитикиПолученСвоейВеткой_ПереченьПолный()
@@ -621,7 +623,7 @@ public class WikiApplyPolicyTests
         [WikiApplyPolicy.CodeClassDisabled, WikiApplyPolicy.CodeRevertQuarantine, WikiApplyPolicy.CodeNoHistorySection,
          WikiApplyPolicy.CodeOverridesHuman, WikiApplyPolicy.CodePageDuplicate, WikiApplyPolicy.CodeSectionNewPagesLimit,
          WikiApplyPolicy.CodePersonalToCommon, WikiApplyPolicy.CodeTargetDisputed, WikiApplyPolicy.CodeAfterModelRepair,
-         WikiApplyPolicy.CodeNumberUnconfirmed];
+         WikiApplyPolicy.CodeNumberUnconfirmed, WikiApplyPolicy.CodeMergeProposal];
 
     private static readonly string[] CodeRejectedExpected =
         [WikiApplyPolicy.CodeUnknownOp, WikiApplyPolicy.CodeNoClass, WikiApplyPolicy.CodeBadClass,

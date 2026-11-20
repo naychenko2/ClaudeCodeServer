@@ -46,22 +46,27 @@ public static class WikiApplyPolicy
     /// <summary>Код валидатора (число утверждения не подтверждено цитатой), не политики:
     /// числа проверяются в WikiPlanValidator после вердикта.</summary>
     public const string CodeNumberUnconfirmed = "number_unconfirmed";
+    /// <summary>Предложение слить две страницы (op merge, ADR-039 решение 13): код ставит
+    /// создающий merge-пакет (C6), не Decide — политика merge не порождает.</summary>
+    public const string CodeMergeProposal = "merge_proposal";
 
     /// <summary>Полный перечень кодов причины: форма пакета проверяется по нему.</summary>
     public static readonly IReadOnlyList<string> ReasonCodes =
         [CodeAutoApplyOff, CodeUnknownOp, CodeNoClass, CodeBadClass, CodeNoPage, CodeClassDisabled,
          CodeRevertQuarantine, CodeNoHistorySection, CodeOverridesHuman, CodePageDuplicate,
          CodeSectionNewPagesLimit, CodeOriginUrl, CodePersonalToCommon, CodeTargetDisputed,
-         CodeAfterModelRepair, CodeNumberUnconfirmed];
+         CodeAfterModelRepair, CodeNumberUnconfirmed, CodeMergeProposal];
 
     /// <summary>Допуск к облачному судье (решение Андрея 12.11): ровно «только для человека»
     /// случаи — выключенный класс, откатанная страница, замена без секции «История», замена
     /// утверждения человека, возможный дубль, сверх лимита новых страниц, личное в «Общем»,
-    /// спорная страница, пакет после ремонта, неподтверждённое число. autoapply_off (ручной
+    /// спорная страница, пакет после ремонта, неподтверждённое число, предложение слить
+    /// страницы (merge — решает судья: apply/reject, «переписать» нет). autoapply_off (ручной
     /// режим судью не зовёт вовсе) и отсутствие кода (старые пакеты) — не допущены (И4′).</summary>
     public static bool JudgeAdmitted(string? code) => code is CodeClassDisabled or CodeRevertQuarantine
         or CodeNoHistorySection or CodeOverridesHuman or CodePageDuplicate or CodeSectionNewPagesLimit
-        or CodePersonalToCommon or CodeTargetDisputed or CodeAfterModelRepair or CodeNumberUnconfirmed;
+        or CodePersonalToCommon or CodeTargetDisputed or CodeAfterModelRepair or CodeNumberUnconfirmed
+        or CodeMergeProposal;
 
     /// <summary>Отказ по коду: внешний текст и fail-closed ветки — судье там не о чём решать
     /// (И4′: операция с этими кодами к судье не попадает).</summary>

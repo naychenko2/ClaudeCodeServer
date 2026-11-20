@@ -32,9 +32,9 @@ import { useMemo, useState } from 'react';
 import type { MouseEvent, KeyboardEvent } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, Lock, Pencil, Quote, ScrollText, Sparkles, Undo2 } from 'lucide-react';
-import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, requestOpenWikiPage, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, normWikiStatement, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiRelatedGroupDto, type WikiRelatedItemDto, type WikiRelatedKind, type WikiSectionDto, type WikiPageLinkDto } from 'aihome_shell/kit';
 // Тип записи ссылки — из кита хоста: прямой импорт из lib/wiki запрещён границей модуля
 // «Заметки» (барьер сборки рубит даже type-import — src/lib/wiki в запрещённых).
+import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, requestOpenWikiPage, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, normWikiStatement, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiRelatedGroupDto, type WikiRelatedItemDto, type WikiRelatedKind, type WikiSectionDto, type WikiPageLinkDto } from 'aihome_shell/kit';
 
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
@@ -362,7 +362,8 @@ function SourcesBlock({ footnotes }: { footnotes: ParsedWikiPage['footnotes'] })
 
 // ─── «Связанные» (2Б, Q1-S7) ───
 
-// Подписи групп — по постановке шага; kind — контракт бэка (WikiRelated.KindSource…KindBacklinks).
+// Подписи групп — по постановке шага; kind — контракт бэка (WikiRelated.KindSource…KindTopic,
+// шесть групп).
 // Порядок групп — порядок массива с бэка (по приоритету), порядок пунктов — Ordinal пути:
 // экран ничего не переупорядочивает (тот же принцип, что у секций страницы). Пустая группа
 // не рисуется: бэк её не отдаёт, но и пустую в ответе экран не показывает; без поля или с
@@ -467,8 +468,11 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   // Группа с неизвестным фронту kind (новый бэндл бэка на этом фронте) тоже не рисуется:
   // без подписи в RELATED_LABELS нет строки — не «undefined» в заголовке и не исключение.
   // Проверка через Object.hasOwn, не `in`: `in` пропускает имена прототипа ('toString',
-  // 'constructor') — такой kind доставал бы функцию из прототипа и ронял страницу целиком
-  // («Functions are not valid as a React child»); тот же приём, что chatFilters.ts:172
+  // 'constructor') — такой kind дал бы подпись-функцию из прототипа. На react-dom 19.2.8
+  // function-ребёнок не бросает исключение: печатает console.error «Functions are not valid
+  // as a React child» и рендерит пусто — фактический вред прежнего `in`-guard'а не крах
+  // страницы, а группа без подписи (пункты её при этом остались бы). Тот же приём, что
+  // chatFilters.ts:172
   const relatedGroups = (dto?.related ?? []).filter(g => g.items.length > 0 && Object.hasOwn(RELATED_LABELS, g.kind));
   // Ссылки текста страницы (B4): индекс по тексту записи — сопоставление с местом в тексте,
   // не по индексу массива. Дубль текста (одна цель названа дважды) держит первое значение:

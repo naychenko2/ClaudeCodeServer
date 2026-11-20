@@ -361,6 +361,36 @@ public class WikiPlanValidatorTests
         r.Violations.Should().BeEmpty();
     }
 
+    [Fact]
+    public void Validate_CreateСВложениемЗаголовкаВОбщем_НеДубль_ПредметИщетсяТолькоВСвоёмРазделе()
+    {
+        // Страница по основам «содержание каталога исходных» стоит в Общее/ (цепочка вверх), новая —
+        // «каталог исходных» в проекте: точного имени нет, а вложение основ (C1) считается только по
+        // своему разделу. Мутация: DedupPool(targetPages…) → DedupPool(pages…) в WikiPlanValidator — дубль, inbox.
+        var upper = new WikiGate.Draft("Общее/Содержание-каталога-исходных.md",
+            PageFile.Replace("# Сущность", "# Содержание каталога исходных"));
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpCreate, "Каталог исходных", 0)),
+            Claims(GoodClaim), Src, Section, [WikiSections.Common],
+            [.. Snapshot(), upper], new());
+
+        r.Accepted.Should().ContainSingle().Which.Decision.Should().Be(WikiPackage.DecisionAuto);
+    }
+
+    [Fact]
+    public void Validate_CreateСВложениемЗаголовкаВСвоёмРазделе_ДубльПоПредмету()
+    {
+        var own = new WikiGate.Draft("Проекты/p1/Содержание-каталога-исходных.md",
+            PageFile.Replace("# Сущность", "# Содержание каталога исходных"));
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpCreate, "Каталог исходных", 0)),
+            Claims(GoodClaim), Src, Section, [WikiSections.Common],
+            [.. Snapshot(), own], new());
+
+        r.Accepted.Should().ContainSingle(op => op.Decision == WikiPackage.DecisionInbox);
+        r.Accepted[0].Reason.Should().Contain("дубль").And.Contain(own.Path);
+    }
+
     // ─── M1 (ревью S6b-2): проверка цели и рендер — в одном состоянии ──────────
 
     [Fact]

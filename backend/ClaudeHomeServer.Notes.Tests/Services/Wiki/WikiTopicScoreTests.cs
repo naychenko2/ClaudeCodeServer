@@ -116,4 +116,49 @@ public class WikiTopicScoreTests
 
         calls.Should().Be(50, "один вызов на страницу, не на пару");
     }
+
+    // ─── TitleSubset (C1): вложение основ заголовков без порога ───
+
+    [Theory]
+    [InlineData("", "Каталог исходных")]
+    [InlineData("Каталог исходных", "")]
+    [InlineData("", "")]
+    public void TitleSubset_ПустойЗаголовок_False(string a, string b) =>
+        WikiTopicScore.TitleSubset(a, b).Should().BeFalse();
+
+    [Fact]
+    public void TitleSubset_РегистрИЁ_НеВлияют()
+    {
+        WikiTopicScore.TitleSubset("ЗАМОК ВИШНЁВЫЙ", "Большой замок вишневый").Should().BeTrue();
+    }
+
+    [Fact]
+    public void TitleSubset_ПовторяющиесяОсновы_СхлопываютсяВНабор()
+    {
+        // «замок замок» — одна основа: короче MinCommon, вложение не считается.
+        WikiTopicScore.TitleSubset("замок замок", "замок вишневый").Should().BeFalse();
+        // а повтор в большем заголовке вложению не мешает.
+        WikiTopicScore.TitleSubset("замок вишневый", "замок замок вишневый").Should().BeTrue();
+    }
+
+    [Fact]
+    public void TitleSubset_Симметрия_ПорядокАргументовНеВлияет()
+    {
+        WikiTopicScore.TitleSubset("Каталог исходных", "Содержание каталога исходных")
+            .Should().Be(WikiTopicScore.TitleSubset("Содержание каталога исходных", "Каталог исходных"))
+            .And.Be(true);
+        WikiTopicScore.TitleSubset("замок вишневый", "река мутная")
+            .Should().Be(WikiTopicScore.TitleSubset("река мутная", "замок вишневый"))
+            .And.Be(false);
+    }
+
+    [Fact]
+    public void TitleSubset_ДвеОсновы_ГраницаMinCommon()
+    {
+        // ровно две общие основы — вложение есть; одна — нет (одна общая основа не предмет).
+        WikiTopicScore.TitleSubset("замок вишневый", "старый замок вишневый").Should().BeTrue();
+        WikiTopicScore.TitleSubset("замок", "старый замок вишневый").Should().BeFalse();
+        // две основы, но не вложены (одна чужая) — нет.
+        WikiTopicScore.TitleSubset("замок вишневый", "старый замок мутный").Should().BeFalse();
+    }
 }

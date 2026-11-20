@@ -124,7 +124,7 @@ public class WikiNightlyMergeTests : IDisposable
         .Where(p => p.Operations.Any(o => o.Op == WikiPackage.OpMerge)).ToList();
 
     [Fact]
-    public async Task Тумблер_ПоУмолчаниюВыключен_ПакетовНет_ПолеNull()
+    public async Task Тумблер_ПоУмолчаниюВыключен_ПакетовНет_ПолеНоль()
     {
         WriteDuplicatePair();
 
@@ -207,6 +207,25 @@ public class WikiNightlyMergeTests : IDisposable
     }
 
     [Fact]
+    public async Task ЖурналНечитаем_ПредложенийНет_FailClosed()
+    {
+        // Мутация: убрать `is not { } adopted → return 0` в ProposeMergesForRoot — пакет создаётся.
+        // Нечитаемость — эксклюзивная блокировка файла журнала (IOException на чтении; права не годятся:
+        // от root они не действуют).
+        WriteDuplicatePair();
+        EnableMerge();
+        var log = Path.Combine(Root(), "keeper", "log.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+        using var hold = new FileStream(log, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        WikiApplyService.ReadAdoptedPages(Root()).Should().BeNull("предусловие: журнал нечитаем");
+
+        await Sut().RunNightTickAsync(_now);
+
+        MergePackages().Should().BeEmpty("журнал нечитаем — fail-closed");
+        Last().MergeProposed.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ДвеМелкиеСВложениемЗаголовков_ОдинПакет()
     {
         WritePage(PageA, "Каталог исходных", 1);
@@ -221,8 +240,9 @@ public class WikiNightlyMergeTests : IDisposable
     [Fact]
     public async Task ЦепочкаДублей_ВторойПакетСТойЖеСтраницейНеСоздаётся()
     {
-        // Pick отдаёт 1→3 и 2→3 (одна B в двух парах; в других раскладках — цепочка 1→2→3). Мутация: убрать фильтр `taken` —
-        // пакетов два, и второй при применении откажет («другой открытый пакет»).
+        // Pick по Direction (A — с меньшим числом утверждений) отдаёт Каталог→Подробное и
+        // Содержание→Подробное: одна B в двух парах (в других раскладках — цепочка A→B, B→C).
+        // Мутация: убрать фильтр `taken` — пакетов два, и второй при применении откажет («другой открытый пакет»).
         const string pageC = "Общее/Подробное-содержание-каталога-исходных.md";
         WritePage(PageA, "Каталог исходных", 1);
         WritePage(PageB, "Содержание каталога исходных", 2);

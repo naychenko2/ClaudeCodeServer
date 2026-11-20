@@ -338,11 +338,11 @@ function AnswerSpeedCard({ data }: { data: LocalModelStats }) {
     return <Card title="Скорость ответа"><UnloadedNote text="Нет данных: сквозной скорости ещё не измерено." /></Card>;
   }
   // Число запросов в окне — подписью под заглавным числом: оно говорит, насколько
-  // оценка опорная. Формулировка — родительным падежом («запросов»), как в «Сейчас»:
-  // она грамматична при любом числе, склонение числа здесь не нужно.
+  // оценка опорная. Форма нейтральная (число после двоеточия): «N запросов» разъезжается
+  // на 1 и 21, а таблица склонений ради этой строки не стоит.
   const requestsNote = (n?: number) => (
     n != null && Number.isFinite(n)
-      ? <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>{n} запросов в окне</div>
+      ? <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>запросов в окне: {n}</div>
       : null
   );
   const head = (w: typeof w5, key: string) => {
@@ -543,7 +543,7 @@ function WhoRowView({ row, isMobile, onOpen }: { row: WhoRow; isMobile: boolean;
         )}
       </span>
       {/* Подсказка к числу скорости: формулу не меняем (её считает бэк), подсказка
-          называет, что в неё входит — ожидание слота и чтение промпта */}
+          называет, что в неё входит: текст — по формуле бэка, см. WHO_SPEED_HINT (format.ts) */}
       <span style={speedStyle} title={row.tone === 'gen' ? WHO_SPEED_HINT : undefined}>{row.speed}</span>
     </>
   );

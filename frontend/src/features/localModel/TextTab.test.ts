@@ -606,8 +606,8 @@ describe('карточка «Скорость ответа» (llm-F2)', () => {
     expect(html).toContain('13,8 с');
     expect(html).toContain('за 5 минут');
     expect(html).toContain('за час');
-    expect(html).toContain('402 запросов в окне');
-    expect(html).toContain('4804 запросов в окне');
+    expect(html).toContain('запросов в окне: 402');
+    expect(html).toContain('запросов в окне: 4804');
     expect(html).toContain('Время до первого токена');
   });
 
@@ -665,6 +665,26 @@ describe('карточка «Скорость ответа» (llm-F2)', () => {
     expect(html).not.toContain('>0,0 с');
   });
 
+  // Хвосты ревью eb3bc6ec: подпись числа запросов не должна разъезжаться по склонению
+  // («1 запросов», «21 запросов»). Форма нейтральная: число после двоеточия — одна на любой N.
+  it('число запросов — одна нейтральная подпись при любом N (1, 21)', () => {
+    const at = (n: number) => renderTab({
+      data: {
+        ...mockLocalModelStats('working'),
+        answerSpeed: {
+          windows: [
+            { window: '5m', endToEndTps: 42.1, medianTps: null, medianTtftSec: null, p90TtftSec: null, requests: n },
+            { window: '1h', endToEndTps: null, medianTps: null, medianTtftSec: null, p90TtftSec: null, requests: null },
+          ],
+        },
+      },
+    });
+    expect(at(1)).toContain('запросов в окне: 1');
+    expect(at(21)).toContain('запросов в окне: 21');
+    expect(at(1)).not.toContain('1 запросов');
+    expect(at(21)).not.toContain('21 запросов');
+  });
+
   it('выгруженная модель — «нет данных» в том же спокойном тоне, что «Скорость»', () => {
     const d = { ...mockEngineStats('yielded'), answerSpeed: ANSWER_SPEED };
     const html = renderTab({ data: d, engine: 'gemma' });
@@ -680,7 +700,10 @@ describe('подсказка скорости в строке «Кто сейч�
   it('число генерации — с подсказкой про сквозную скорость', () => {
     const html = renderTab({ data: mockLocalModelStats('working') });
     expect(html).toContain('title="сквозная скорость ответа чата');
-    expect(html).toContain('включая ожидание слота и чтение промпта');
+    // Текст подсказки — по формуле бэка (SseUsageObserver.cs:167–174): от начала ответа
+    // движка до последнего токена; ожидание слота в формулу не входит.
+    expect(html).toContain('от начала ответа движка до последнего токена, включая чтение промпта');
+    expect(html).not.toContain('ожидание слота');
   });
   it('«читает» и «ждёт» — без числовой подсказки', () => {
     const d = { ...mockLocalModelStats('working'), chats: [{ own: true, sessionId: 's-1', title: 'Чат', phase: 'reading' as const }] };

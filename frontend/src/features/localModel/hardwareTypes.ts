@@ -175,8 +175,38 @@ export interface HardwareFarmNode {
   ramUsedPerc: number | null;
 }
 
+// ИБП фермы (upsd, HardwareUpsDto). status — как у узла: нештатный ИБП не красится (level 'ok').
+// power — по флагам ups.status: 'line' от сети, 'battery' от батареи, 'lowBattery' батарея садится;
+// null — флагов нет. Спарки — 15 мин, 90 точек по 10 с; null — разрыв; батарея — в десятых вольта.
+export type HwUpsPower = 'line' | 'battery' | 'lowBattery';
+export interface HardwareUps {
+  title: string;
+  status: 'ok' | 'stale' | 'down';
+  since: number | null;
+  level: HwLevel;
+  power: HwUpsPower | null;
+  // Уровни плиток «Питание» и «Нагрузка» (level — худший из них).
+  powerLevel: HwLevel;
+  loadLevel: HwLevel;
+  loadPerc: number | null;
+  loadW: number | null;
+  chargePerc: number | null;
+  batteryV: number | null;
+  batteryNominalV: number | null;
+  inputV: number | null;
+  inputHz: number | null;
+  outputV: number | null;
+  tempC: number | null;
+  loadSpark15m: (number | null)[];
+  chargeSpark15m: (number | null)[];
+  inputVSpark15m: (number | null)[];
+  batteryDeciVSpark15m: (number | null)[];
+}
+
 export interface HardwareFarm {
   at: number;
   level: HwLevel;
   farmNodes: HardwareFarmNode[];
+  // null — ИБП не настроен (Ups:Host пуст); в ответах до ИБП поля нет.
+  ups?: HardwareUps | null;
 }

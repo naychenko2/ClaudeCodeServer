@@ -22,6 +22,8 @@ public static class HardwareThresholds
     public static readonly (int? Warn, int Danger) Water = (50, 55);
     // Диск без известного предела.
     public static readonly (int? Warn, int Danger) DiskNoLimit = (70, 80);
+    // Нагрузка ИБП, %: свыше 80 запас на пусковые токи мал, с 95 ИБП близок к перегрузке.
+    public static readonly (int? Warn, int Danger) UpsLoad = (80, 95);
     // Диск с пределом: предупреждение за 10 °C до него, опасность за 3 °C.
     public const int DiskWarnBelowLimit = 10;
     public const int DiskDangerBelowLimit = 3;
@@ -122,7 +124,7 @@ public interface IHardwareReportService
     HardwareFarmReport Farm();
 }
 
-public sealed class HardwareReportService(IHardwareSampler sampler, IConfiguration configuration) : IHardwareReportService
+public sealed class HardwareReportService(IHardwareSampler sampler, IConfiguration configuration, IUpsSampler? ups = null) : IHardwareReportService
 {
     private static readonly TimeSpan SparkWindow = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan SparkStep = TimeSpan.FromSeconds(10);
@@ -231,8 +233,35 @@ public sealed class HardwareReportService(IHardwareSampler sampler, IConfigurati
         var gpus = (all.FirstOrDefault(d => d.Def.Key == "worker") ?? all.FirstOrDefault())?.Gpus
             .Select(g => new HardwareBriefGpu(g.Dto.Uuid, g.Dto.MemTempC, g.Dto.Level, g.Dto.Throttle.PowerCap, g.Dto.Throttle.Thermal)).ToArray() ?? [];
         return new HardwareBrief(
-            HardwareThresholds.Worst(all.Select(d => d.Level)), gpus,
+            HardwareThresholds.Worst(all.Select(d => d.Level).Append(Ups()?.Level ?? "ok")), gpus,
             [.. all.Select(d => new HardwareBriefNode(d.Def.Key, d.Level))]);
+    }
+
+    // ИБП фермы; null — не настроен. Нештатный (stale/down) не красится, как молчащий узел.
+    // Уровень: от батареи — warn, батарея садится — danger; нагрузка — по порогу UpsLoad.
+    private HardwareUpsDto? Ups()
+    {
+        if (ups is not { Enabled: true }) return null;
+        var status = ups.Status;
+        var cur = ups.Current;
+        var flags = cur?.Status?.Split(' ', StringSplitOptions.RemoveEmptyEntries) ?? [];
+        string? power = flags.Contains("LB") ? "lowBattery"
+            : flags.Contains("OB") ? "battery"
+            : flags.Contains("OL") ? "line"
+            : null;
+        var ok = status == "ok";
+        var powerLevel = !ok ? "ok" : power switch { "lowBattery" => "danger", "battery" => "warn", null => "none", _ => "ok" };
+        var loadLevel = !ok ? "ok" : HardwareThresholds.Level(cur?.LoadPerc, HardwareThresholds.UpsLoad);
+        var level = HardwareThresholds.Worst([powerLevel, loadLevel]);
+        var loadW = cur?.LoadPerc is { } lp && ups.Options.RatedW is { } rw ? (int?)Math.Round(lp * rw / 100.0) : null;
+        int?[] Spark(Func<UpsSample, int?> sel) => [.. ups.Aggregate(sel, SparkWindow, SparkStep)];
+        return new HardwareUpsDto(
+            ups.Options.Title, status, ups.Since, level, power, powerLevel, loadLevel,
+            cur?.LoadPerc, loadW, cur?.ChargePerc, cur?.BatteryV, cur?.BatteryNominalV,
+            cur?.InputV, cur?.InputHz, cur?.OutputV, cur?.TempC,
+            Spark(s => s.LoadPerc), Spark(s => s.ChargePerc),
+            Spark(s => s.InputV is { } v ? (int)Math.Round(v) : null),
+            Spark(s => s.BatteryV is { } v ? (int)Math.Round(v * 10) : null));
     }
 
     public HardwareFarmReport Farm()
@@ -243,8 +272,10 @@ public sealed class HardwareReportService(IHardwareSampler sampler, IConfigurati
             d.View?.Status ?? "down", d.View?.Since, d.Level, Hottest(d),
             [.. d.Gpus.Select(g => new HardwareBriefGpu(g.Dto.Uuid, g.Dto.MemTempC, g.Dto.Level, g.Dto.Throttle.PowerCap, g.Dto.Throttle.Thermal))],
             d.Cur?.UptimeS, d.Cur?.CpuLoadPerc, Perc(d.Cur?.RamUsedGb, d.Cur?.RamTotalGb))).ToArray();
+        var upsDto = Ups();
         return new HardwareFarmReport(
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), HardwareThresholds.Worst(nodes.Select(n => n.Level)), nodes);
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            HardwareThresholds.Worst(nodes.Select(n => n.Level).Append(upsDto?.Level ?? "ok")), nodes, upsDto);
     }
 
     // «Горячо» узла — самый горячий измеренный показатель (ряды температуры плиток; заполненность %

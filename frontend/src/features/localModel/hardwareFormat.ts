@@ -44,8 +44,8 @@ export interface HwTileView {
   icon: string;
   name: string;
   value: number | null;
-  // Единица значения: температура или занятость (RAM, диск кэша).
-  unit: '°C' | '%';
+  // Единица значения: температура, занятость (RAM, диск кэша) или напряжение (ИБП).
+  unit: '°C' | '%' | 'В';
   dec: boolean;
   level: HwLevel;
   sensor: 'ok' | 'none' | 'nodata';

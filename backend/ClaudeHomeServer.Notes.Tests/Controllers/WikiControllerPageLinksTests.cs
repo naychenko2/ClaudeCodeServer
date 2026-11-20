@@ -18,7 +18,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // «Связанных». Контракт проверяется по web-JSON ответа (имена links/text/path/section), не по
 // типам: это контракт соседа-фронта. Фикстура: цель [[A]] и [[A|форма]] — сосед по разделу,
 // [[Вбок]] — страница бокового проекта: её резолв — Sideways, не право на ссылку (ADR-036,
-// решение 4), path=null. Мутация c2 («path по имени файла, без ResolveLink») нашла бы Вбок
+// решение 4), path=null; сноска [^s1] с целью [[Карточка ИИ]] — её цель ВХОДИТ в links[]:
+// сноска-ссылка — тоже ссылка, «Связанные» учитывают её так же (согласие с WikiRelated), а
+// порядок массива детерминирован: сначала ссылки тела, затем цели сносок (OutboundLinks,
+// WikiPage.cs:272-282). Мутация c2 («path по имени файла, без ResolveLink») нашла бы Вбок
 // по заголовку и дала бы путь — тест красный. Страница с боковой ссылкой пишется на диск
 // напрямую: такой записи гейт не позволяет, но уже написанную страницу GET отвечает как есть.
 // Контроллер строится напрямую (чтение, не транспорт) — фабрики хоста нет, метки Host нет.
@@ -74,13 +77,15 @@ public class WikiControllerPageLinksTests : IDisposable
         if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
     }
 
-    // ─── c1: links — порядок текста, текст с «|», путь только у разрешённых ────────
+    // ─── c1: links — порядок «тело, затем сноски», текст с «|», путь только у разрешённых ──
 
     [Fact]
     public async Task Page_Links_ResolvedAndNot()
     {
         var links = Json(PageResult()).GetProperty("links");
-        links.GetArrayLength().Should().Be(3, "три [[…]] тела — три записи, порядка текста это касается");
+        // Три [[…]] тела + цель сноски = четыре записи; порядок детерминирован: сначала тело,
+        // затем сноски (OutboundLinks, WikiPage.cs:272-282).
+        links.GetArrayLength().Should().Be(4, "три [[…]] тела и цель сноски — четыре записи, порядка текста это касается");
 
         links[0].GetProperty("text").GetString().Should().Be("A");
         links[0].GetProperty("path").GetString().Should().Be(_pageKey.Replace("Знание.md", "A.md"));
@@ -96,6 +101,14 @@ public class WikiControllerPageLinksTests : IDisposable
         // дала бы путь — эта строка краснеет.
         links[2].GetProperty("text").GetString().Should().Be("Вбок");
         links[2].GetProperty("path").ValueKind.Should().Be(JsonValueKind.Null);
+
+        // Цель сноски [^s1] — тоже ссылка: идёт после ссылок тела и резолвится общими
+        // правилами — путь карточки. «Связанные» учитывают её так же (согласие с WikiRelated).
+        // Мутация «отбросить цели сносок в links[]» — тест краснеет на длине, а без пути
+        // цели — на этой строке.
+        links[3].GetProperty("text").GetString().Should().Be(AiCard);
+        links[3].GetProperty("path").GetString().Should().Be(_pageKey.Replace("Знание.md", $"Источники/{AiCard}.md"),
+            "цель сноски резолвится общими правилами: путь карточки");
     }
 
     // ─── c2: section у каждого пункта related — ключ раздела его pageKey ──────────

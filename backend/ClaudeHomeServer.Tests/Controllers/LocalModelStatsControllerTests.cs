@@ -110,6 +110,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         private readonly SwapComfy _comfy = new();
         private readonly SwapDirectory _directory = new();
         private readonly SwapArbiter _arbiter = new();
+        private readonly SwapAnswerSpeed _answer = new();
 
         // Журнал вызовов мест: у каждого теста свой (Use* заводит новый), сервис — transient
         private EngineCallLedger _ledger = new();
@@ -134,6 +135,9 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
                 services.AddSingleton<IEngineArbiterStateReader>(_arbiter);
                 services.AddTransient<EngineCallLedger>(_ => _ledger);
                 services.AddSingleton<IComfyStats>(_comfy);
+                // Сборщик скорости ответа: боковая регистрация поверх боевой (тот же приём, что
+                // у reader/meter) — тест задаёт снимок агрегатов и смотрит, каким он пришёл на wire.
+                services.AddSingleton<ILocalModelAnswerSpeed>(_answer);
                 if (noComfy) services.RemoveAll(typeof(IComfyStats));
             };
         }
@@ -147,7 +151,17 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             _comfy.Target = new FakeComfyStats();
             _directory.Target = new FakeDirectory();
             _arbiter.Target = new FakeArbiterReader();
+            _answer.Target = new FakeAnswerSpeed();
             _ledger = new EngineCallLedger();
+            return this;
+        }
+
+        // Скорость ответа (фича «Скорость ответа»): снимок агрегатов по дорожкам — «нет данных»
+        // или заданный тестом.
+        public StatsHost UseSpeed(FakeAnswerSpeed speed)
+        {
+            Use();
+            _answer.Target = speed;
             return this;
         }
 
@@ -161,7 +175,8 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         // Второй стенд: читатель главного — по просьбе, дорожки и арбитр — фейки
         public StatsHost UseEngine(
             FakeDirectory dir, FakeArbiterReader? arbiter = null, IComfyStats? comfy = null,
-            bool mainConfigured = false, ILocalModelTurnMeter? meter = null)
+            bool mainConfigured = false, ILocalModelTurnMeter? meter = null,
+            FakeAnswerSpeed? answerSpeed = null)
         {
             Use(meter: meter, reader: new FakeReader
             {
@@ -174,6 +189,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             _directory.Target = dir;
             if (arbiter is not null) _arbiter.Target = arbiter;
             if (comfy is not null) _comfy.Target = comfy;
+            if (answerSpeed is not null) _answer.Target = answerSpeed;
             return this;
         }
 
@@ -220,6 +236,17 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             public IEngineArbiterStateReader Target { get; set; } = new FakeArbiterReader();
             public Task<EngineArbiterSnapshot?> GetAsync(string engineName, CancellationToken ct = default) =>
                 Target.GetAsync(engineName, ct);
+        }
+
+        private sealed class SwapAnswerSpeed : ILocalModelAnswerSpeed
+        {
+            public ILocalModelAnswerSpeed Target { get; set; } = new FakeAnswerSpeed();
+            public void OnRequestStarted(string requestId, string track, DateTimeOffset startedAt) =>
+                Target.OnRequestStarted(requestId, track, startedAt);
+            public void OnFirstToken(string requestId, DateTimeOffset at) => Target.OnFirstToken(requestId, at);
+            public void OnRequestCompleted(string requestId, long? outputTokens, DateTimeOffset completedAt) =>
+                Target.OnRequestCompleted(requestId, outputTokens, completedAt);
+            public AnswerSpeedSnapshot SnapshotOf(string track) => Target.SnapshotOf(track);
         }
     }
 
@@ -1125,6 +1152,10 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     // без engine не должен меняться ни байтом, когда появляются параметр engine и блок duty.
     // Мутация: снять [JsonIgnore(WhenWritingNull)] с Duty в DTO — в JSON появится "duty":null,
     // тест краснеет.
+    // Исключение из «ни байтом» — блок answerSpeed (фича «Скорость ответа», контракт заморожен
+    // в docs/features/llm-answer-speed-spec.md): он добавлен в контракт сознательно, снимок
+    // обновлён по нему. Пустой сборщик даёт окна с null-метриками и requests 0 — «нет данных»,
+    // а не «ноль скорости».
     [Fact]
     public async Task StatsБезEngine_СнапшотJSON()
     {
@@ -1161,7 +1192,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         var since = (long)t0.AddSeconds(-60).ToUnixTimeMilliseconds();
         var body = await (await admin.GetAsync($"/api/local-model/stats?since={since}")).Content.ReadAsStringAsync();
 
-        body.Should().Be("""{"configured":true,"engine":"vllm","model":"qwen35-9b","tensorParallel":2,"status":"busy","downSince":1793185200000,"running":2,"waiting":1,"othersCount":3,"speed":{"genPerStream":38,"prefillPerStream":640,"speculativeSpeedup":3.3},"cleanStepMs":58,"kv":{"usagePerc":0.61,"ramTierPerc":0.39,"prefixHitPerc":0.87,"ramTierHitPerc":0.52,"preemptions15m":7},"gpus":[{"index":0,"name":"NVIDIA GeForce RTX 3090","utilPerc":99,"memUsedMb":24000,"memTotalMb":24576,"tempC":71,"powerW":338,"powerLimitW":350}],"history":[{"t":1793185200000,"genThroughput":42,"waiting":1,"running":2,"kvUsage":0.61,"prefixHits":1234,"prefixQueries":5000,"ramHits":77,"ramQueries":900,"preemptions":3,"genTokens":600,"itlSeconds":10.5,"itlCount":120,"cleanStepMs":58,"prefillSeconds":2.5,"queueSeconds":1.5,"promptTokens":900}],"chats":[],"unsupported":["vllm:request_queue_time_seconds_sum"],"hardware":{"level":"ok","gpus":[],"nodes":[{"key":"worker","level":"ok"}]}}""");
+        body.Should().Be("""{"configured":true,"engine":"vllm","model":"qwen35-9b","tensorParallel":2,"status":"busy","downSince":1793185200000,"running":2,"waiting":1,"othersCount":3,"speed":{"genPerStream":38,"prefillPerStream":640,"speculativeSpeedup":3.3},"cleanStepMs":58,"answerSpeed":{"windows":[{"window":"5m","endToEndTps":null,"medianTps":null,"medianTtftSec":null,"p90TtftSec":null,"requests":0},{"window":"1h","endToEndTps":null,"medianTps":null,"medianTtftSec":null,"p90TtftSec":null,"requests":0}],"minTokensForMedian":32},"kv":{"usagePerc":0.61,"ramTierPerc":0.39,"prefixHitPerc":0.87,"ramTierHitPerc":0.52,"preemptions15m":7},"gpus":[{"index":0,"name":"NVIDIA GeForce RTX 3090","utilPerc":99,"memUsedMb":24000,"memTotalMb":24576,"tempC":71,"powerW":338,"powerLimitW":350}],"history":[{"t":1793185200000,"genThroughput":42,"waiting":1,"running":2,"kvUsage":0.61,"prefixHits":1234,"prefixQueries":5000,"ramHits":77,"ramQueries":900,"preemptions":3,"genTokens":600,"itlSeconds":10.5,"itlCount":120,"cleanStepMs":58,"prefillSeconds":2.5,"queueSeconds":1.5,"promptTokens":900}],"chats":[],"unsupported":["vllm:request_queue_time_seconds_sum"],"hardware":{"level":"ok","gpus":[],"nodes":[{"key":"worker","level":"ok"}]}}""");
     }
 
     // ─── Второй стенд (Б3c): GET /api/local-model/engines ───────────────────────────────
@@ -1567,6 +1598,80 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         body.GetProperty("downSince").ValueKind.Should().Be(JsonValueKind.Null, "уступка — не сбой");
     }
 
+    // ─── «Скорость ответа» (фича «Скорость ответа»): блок answerSpeed ──────────────────────
+
+    // Контракт спеки (docs/features/llm-answer-speed-spec.md): окна 5m и 1h в этом порядке,
+    // числа снимка как есть, minTokensForMedian рядом. Мутация: не позвать MapAnswerSpeed в
+    // Stats() — поля нет в ответе, тест краснеет.
+    [Fact]
+    public async Task AnswerSpeed_ОсновнойСтенд_БлокПоКонтракту()
+    {
+        var speed = new FakeAnswerSpeed();
+        speed.Snapshots["main"] = FakeAnswerSpeed.Snap(
+            FakeAnswerSpeed.Win("5m", 42.1, 46.0, 6.4, 14.2, 402),
+            FakeAnswerSpeed.Win("1h", 41.3, 45.1, 6.2, 13.8, 4804));
+        var factory = _hosts.Plain.UseSpeed(speed);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/stats")).Content.ReadFromJsonAsync<JsonElement>();
+        var block = body.GetProperty("answerSpeed");
+        block.GetProperty("minTokensForMedian").GetInt32().Should().Be(32);
+        var windows = block.GetProperty("windows");
+        windows.GetArrayLength().Should().Be(2);
+        windows[0].GetProperty("window").GetString().Should().Be("5m");
+        windows[0].GetProperty("endToEndTps").GetDouble().Should().Be(42.1);
+        windows[0].GetProperty("medianTps").GetDouble().Should().Be(46.0);
+        windows[0].GetProperty("medianTtftSec").GetDouble().Should().Be(6.4);
+        windows[0].GetProperty("p90TtftSec").GetDouble().Should().Be(14.2);
+        windows[0].GetProperty("requests").GetInt32().Should().Be(402);
+        windows[1].GetProperty("window").GetString().Should().Be("1h");
+        windows[1].GetProperty("requests").GetInt32().Should().Be(4804);
+        speed.AskedTracks.Should().BeEquivalentTo(new[] { "main" }, "основной стенд спрашивает свою дорожку");
+    }
+
+    // Стенд именованного движка: блок по ЕГО дорожке (имя движка), а не по main.
+    // Мутация: MapAnswerSpeed(LocalModelStatsPoller.MainTrackName) в NamedStatsAsync —
+    // снимок "gemma" не запрошен, в ответе пустые окна, тест краснеет.
+    [Fact]
+    public async Task AnswerSpeed_ИменованныйСтенд_ПоСвоейДорожке()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working" };
+        var speed = new FakeAnswerSpeed();
+        speed.Snapshots["gemma"] = FakeAnswerSpeed.Snap(
+            FakeAnswerSpeed.Win("5m", 12.5, 12.5, 1.5, 2.0, 7),
+            FakeAnswerSpeed.Win("1h", 12.5, 12.5, 1.5, 2.0, 40));
+        var factory = _hosts.Engine.UseEngine(dir, new FakeArbiterReader(), answerSpeed: speed);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
+        var w = body.GetProperty("answerSpeed").GetProperty("windows")[0];
+        w.GetProperty("window").GetString().Should().Be("5m");
+        w.GetProperty("endToEndTps").GetDouble().Should().Be(12.5);
+        w.GetProperty("requests").GetInt32().Should().Be(7);
+        speed.AskedTracks.Should().BeEquivalentTo(new[] { "gemma" }, "стенд именованного движка спрашивает свою дорожку");
+    }
+
+    // Нет данных: блок есть, метрики null, requests 0 — «нет данных» не читается как «ноль».
+    [Fact]
+    public async Task AnswerSpeed_НетДанных_NullМетрикиАНеНоль()
+    {
+        var factory = _hosts.Plain.Use();
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var body = await (await admin.GetAsync("/api/local-model/stats")).Content.ReadFromJsonAsync<JsonElement>();
+        var windows = body.GetProperty("answerSpeed").GetProperty("windows");
+        windows.GetArrayLength().Should().Be(2);
+        foreach (var w in windows.EnumerateArray())
+        {
+            w.GetProperty("requests").GetInt32().Should().Be(0);
+            w.GetProperty("endToEndTps").ValueKind.Should().Be(JsonValueKind.Null);
+            w.GetProperty("medianTps").ValueKind.Should().Be(JsonValueKind.Null);
+            w.GetProperty("medianTtftSec").ValueKind.Should().Be(JsonValueKind.Null);
+            w.GetProperty("p90TtftSec").ValueKind.Should().Be(JsonValueKind.Null);
+        }
+    }
+
     // ─── Хелперы ─────────────────────────────────────────────────────────────────
 
     // Фейковый ILocalModelStatsReader: тест задаёт Current и Points;
@@ -1646,6 +1751,46 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
 
     // Фейковый читатель состояния арбитра: подготовленный снимок по имени движка;
     // null — у движка нет StateUrl (или движок неизвестен) — как настоящий клиент.
+    // Фейковый сборщик скорости ответа (фича «Скорость ответа»): снимок по дорожке из таблицы
+    // теста; дорожки, которых спрашивали, записываются (тест проверяет, ЧЬЮ дорожку спросил
+    // стенд). Без снимка — пустые окна: то же, что отдаёт настоящий сборщик без запросов.
+    public sealed class FakeAnswerSpeed : ILocalModelAnswerSpeed
+    {
+        public Dictionary<string, AnswerSpeedSnapshot> Snapshots { get; } = new(StringComparer.Ordinal);
+        public List<string> AskedTracks { get; } = [];
+
+        public void OnRequestStarted(string requestId, string track, DateTimeOffset startedAt) { }
+        public void OnFirstToken(string requestId, DateTimeOffset at) { }
+        public void OnRequestCompleted(string requestId, long? outputTokens, DateTimeOffset completedAt) { }
+
+        public AnswerSpeedSnapshot SnapshotOf(string track)
+        {
+            AskedTracks.Add(track);
+            return Snapshots.TryGetValue(track, out var s)
+                ? s
+                : new AnswerSpeedSnapshot
+                {
+                    MinTokensForMedian = 32,
+                    Windows = [new AnswerSpeedWindow { Window = "5m" }, new AnswerSpeedWindow { Window = "1h" }],
+                };
+        }
+
+        public static AnswerSpeedSnapshot Snap(params AnswerSpeedWindow[] windows) =>
+            new() { MinTokensForMedian = 32, Windows = [.. windows] };
+
+        public static AnswerSpeedWindow Win(string name, double? endToEnd, double? medianTps,
+            double? medianTtft, double? p90Ttft, int requests) =>
+            new()
+            {
+                Window = name,
+                EndToEndTps = endToEnd,
+                MedianTps = medianTps,
+                MedianTtftSec = medianTtft,
+                P90TtftSec = p90Ttft,
+                Requests = requests,
+            };
+    }
+
     public sealed class FakeArbiterReader : IEngineArbiterStateReader
     {
         public Dictionary<string, EngineArbiterSnapshot?> Snapshots { get; } = new(StringComparer.Ordinal);

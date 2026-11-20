@@ -37,8 +37,10 @@ import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelEngine, LocalModelEngineName, LocalModelStats } from './api';
 import type { StatsPollError } from './useLocalModelStats';
 import {
-  formatGpuMem, formatPower, formatSince, formatTps, formatUpdatedAt, gpuCountLabel, notReportedText, whoRows,
-  standDot, standHint, statusPill, type StatusTone, type WhoRow,
+  answerSpeedMedianHint, answerSpeedTpsHint, answerSpeedWindowLabel, formatGpuMem, formatPower, formatSec,
+  formatSince, formatTps, formatUpdatedAt, GEN_SPEED_HINT, gpuCountLabel, notReportedText, whoRows,
+  standDot, standHint, statusPill, TTFT_MEDIAN_HINT, TTFT_P90_HINT, WHO_SPEED_HINT,
+  type StatusTone, type WhoRow,
 } from './format';
 import { DutyBlock } from './DutyBlock';
 import { useAllProjects } from '../projects/useAllProjects';
@@ -207,10 +209,11 @@ function YieldBanner({ data }: { data: LocalModelStats }) {
 
 // === «Сейчас»: идут / ждут ===
 // Крупные числа — FONT.mono FS.xl 700; «ждут» — warning, только когда > 0.
-function Kpi({ value, unit, label, note, warn }: { value: string; unit?: string; label: string; note?: string; warn?: boolean }) {
+// title — подсказка к самому числу: что это и с чем сравнивать (тексты подсказок — format.ts)
+function Kpi({ value, unit, label, note, warn, title }: { value: string; unit?: string; label: string; note?: string; warn?: boolean; title?: string }) {
   return (
     <div>
-      <div style={{ fontFamily: FONT.mono, fontSize: FS.xl, fontWeight: 700, lineHeight: 1.2, color: warn ? C.warningText : C.textHeading }}>
+      <div title={title} style={{ fontFamily: FONT.mono, fontSize: FS.xl, fontWeight: 700, lineHeight: 1.2, color: warn ? C.warningText : C.textHeading }}>
         {value}{unit && <small style={{ fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}> {unit}</small>}
       </div>
       <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xxs }}>{label}</div>
@@ -271,9 +274,13 @@ function SpeedCard({ data }: { data: LocalModelStats }) {
   return (
     <Card title="Скорость">
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm }}>
+        {/* Имя говорит, что это НЕ та величина, с которой сверяют облачные оценки
+            (для них — карточка «Скорость ответа» ниже): «пока пишет» = только время
+            генерации, без ожидания слота и чтения промпта */}
         <Kpi
           value={formatTps(data.speed.genPerStream)}
-          label="генерация на запрос, ток/с, за последнюю минуту"
+          label="скорость генерации (пока пишет), ток/с, за последнюю минуту"
+          title={GEN_SPEED_HINT}
         />
         {/* «с ожиданием» — по типу движка: у vLLM prompt-время включает очередь шагов
             (на любом стенде); у llama-server prompt_seconds_total — чистое время чтения,
@@ -282,6 +289,93 @@ function SpeedCard({ data }: { data: LocalModelStats }) {
           ? 'чтение промпта, ток/с, за последнюю минуту'
           : 'чтение промпта с ожиданием, ток/с, за последнюю минуту'} />
       </div>
+    </Card>
+  );
+}
+
+// === «Скорость ответа»: сквозное определение, как у облачных оценок ===
+// (фича llm-answer-speed, docs/features/llm-answer-speed-spec.md): заглавное число —
+// сквозная скорость за 5 минут (окно, как у OpenRouter), рядом — за час; ниже — медианы
+// по запросам и время до первого токена (медиана и p90) по тем же окнам.
+// Окна берутся ПО КЛЮЧУ из ответа ('5m'/'1h'), а не по индексу: порядок в ответе не
+// значим; окна нет — строки нет (выдуманного окна не придумываем).
+// Нет данных — спокойная строка «нет данных», а не нули: ноль — это измеренное значение,
+// а здесь измерять было нечего (у выгруженной модели — тот же тон, что у «Скорости»).
+const NO_DATA = 'нет данных';
+const AS_CELL_LABEL: CSSProperties = { fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs };
+const AS_GRID: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm };
+
+// Значение с подписью и подсказкой: есть число — моно, нет — спокойная «нет данных»
+// (не «—»: здесь человек должен прочесть, что данных нет, а не гадать по прочерку).
+function asCell(v: number | null | undefined, fmt: (n: number) => string, label: string, hint: string, big?: boolean) {
+  const has = v != null && Number.isFinite(v);
+  return (
+    <div>
+      <div
+        title={hint}
+        style={has
+          ? { fontFamily: FONT.mono, fontWeight: 700, lineHeight: 1.2, color: C.textHeading, fontSize: big ? FS.xl : FS.md }
+          : { fontFamily: FONT.mono, fontSize: FS.sm, color: C.textMuted }}
+      >
+        {has ? fmt(v as number) : NO_DATA}
+      </div>
+      <div style={AS_CELL_LABEL}>{label}</div>
+    </div>
+  );
+}
+
+function AnswerSpeedCard({ data }: { data: LocalModelStats }) {
+  const answer = data.answerSpeed;
+  const windows = answer?.windows ?? [];
+  const minTokens = answer?.minTokensForMedian;
+  const w5 = windows.find(w => w.window === '5m');
+  const w1h = windows.find(w => w.window === '1h');
+  if (data.status === 'yielded') {
+    return <Card title="Скорость ответа"><UnloadedNote text="Нет данных, пока модель выгружена." /></Card>;
+  }
+  const hasAny = windows.some(w => w.endToEndTps != null || w.medianTps != null || w.medianTtftSec != null || w.p90TtftSec != null);
+  if (!answer || windows.length === 0 || !hasAny) {
+    return <Card title="Скорость ответа"><UnloadedNote text="Нет данных: сквозной скорости ещё не измерено." /></Card>;
+  }
+  // Число запросов в окне — подписью под заглавным числом: оно говорит, насколько
+  // оценка опорная. Форма нейтральная (число после двоеточия): «N запросов» разъезжается
+  // на 1 и 21, а таблица склонений ради этой строки не стоит.
+  const requestsNote = (n?: number) => (
+    n != null && Number.isFinite(n)
+      ? <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>запросов в окне: {n}</div>
+      : null
+  );
+  const head = (w: typeof w5, key: string) => {
+    const name = answerSpeedWindowLabel(key);
+    return (
+      <div>
+        {asCell(w?.endToEndTps, formatTps, name, answerSpeedTpsHint(name), true)}
+        {requestsNote(w?.requests)}
+      </div>
+    );
+  };
+  const median = (w: typeof w5, key: string) => {
+    const name = answerSpeedWindowLabel(key);
+    return asCell(w?.medianTps, formatTps, `медиана по запросам, ${name}`, answerSpeedMedianHint(name, minTokens));
+  };
+  const ttft = (w: typeof w5, key: string) => {
+    const name = answerSpeedWindowLabel(key);
+    return (
+      <div>
+        <div style={{ fontSize: FS.xs, color: C.textMuted }}>{name}</div>
+        <div style={{ ...AS_GRID, marginTop: SP.xxs }}>
+          {asCell(w?.medianTtftSec, formatSec, 'медиана', TTFT_MEDIAN_HINT)}
+          {asCell(w?.p90TtftSec, formatSec, 'p90', TTFT_P90_HINT)}
+        </div>
+      </div>
+    );
+  };
+  return (
+    <Card title="Скорость ответа">
+      <div style={AS_GRID}>{head(w5, '5m')}{head(w1h, '1h')}</div>
+      <div style={{ ...AS_GRID, marginTop: SP.md }}>{median(w5, '5m')}{median(w1h, '1h')}</div>
+      <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.md }}>Время до первого токена</div>
+      <div style={{ ...AS_GRID, marginTop: SP.sm }}>{ttft(w5, '5m')}{ttft(w1h, '1h')}</div>
     </Card>
   );
 }
@@ -448,7 +542,10 @@ function WhoRowView({ row, isMobile, onOpen }: { row: WhoRow; isMobile: boolean;
           }}>{row.project}</span>
         )}
       </span>
-      <span style={speedStyle}>{row.speed}</span>
+      {/* Подсказка к числу скорости: формулу не меняем (её считает бэк), подсказка
+          называет, что в неё входит: ожидание слота в движке и чтение промпта — входят
+          (заголовки Strata шлёт до них), очередь CCS до отправки — нет; см. WHO_SPEED_HINT (format.ts) */}
+      <span style={speedStyle} title={row.tone === 'gen' ? WHO_SPEED_HINT : undefined}>{row.speed}</span>
     </>
   );
   // Чужой чат — div без перехода; свой — кнопка (клик открывает чат)
@@ -699,6 +796,9 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <NowCard data={data} />
         <SpeedCard data={data} />
+        {/* «Скорость ответа» — сразу после «Скорости»: сквозная оценка (та, с которой
+            сверяют облачные) идёт за справочной «пока пишет» */}
+        <AnswerSpeedCard data={data} />
         <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
         {/* Видеокарты: основной стенд — строка-ссылка на «Стенды» (хост CCS, только
             админ); второй движок — своя карточка Video, ссылка на «Стенды» была бы неправдой */}

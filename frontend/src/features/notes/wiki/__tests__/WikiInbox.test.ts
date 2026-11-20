@@ -27,6 +27,9 @@
 //  (10) вернуть в режиме судьи всё только для чтения (убрать условие outsideJudgeScope в
 //       рендере списка) → «пакет с операцией autoapply_off» краснеет (доработка J-F1,
 //       финал 9c305f19).
+//  (11) игнорировать judgeAdmitted в outsideJudgeScope (убрать проверку поля: любая
+//       нерешённая «вне допуска») → «merge с judgeAdmitted: true» и «пакет с операцией
+//       autoapply_off» краснеют (D2, QA-2).
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -571,27 +574,28 @@ function seedBoth(data: { packages: unknown[]; invalidCount: number }, settings:
 
 // Пакет с вердиктами судьи, ещё в очереди: проход решил op0 (отказ с причиной) и op1 (принятие),
 // op2 отложил (вердикта нет) — пакет остаётся proposed (StatusAfterDecisions: есть нерешённые).
-// У всех — допущенный код причины: без кода или с autoapply_off операция в очереди судьи
-// открыта человеку (J-F1 доработка), а здесь — очередь целиком судье.
+// У всех — допущенный код причины и judgeAdmitted: true из DTO (D2: допуск меряется полем,
+// не кодом): без поля или с false операция в очереди судьи открыта человеку (J-F1 доработка),
+// а здесь — очередь целиком судье.
 const JPKG = {
   ...PKG,
   operations: [
     op({
-      reasonCode: 'overrides_human',
+      reasonCode: 'overrides_human', judgeAdmitted: true,
       judgeDecision: 'rejected', judgeReason: 'числа в утверждении не подтверждены цитатой',
       judgeModel: 'claude-x', judgeAt: '2026-11-12T03:40:00Z', judgeCostUsd: 0.01, judgeAttempts: 1,
     }),
     op({
       index: 1, op: 'append', page: 'projects/p1/vera', target: null, text: 'Вера ведёт QA.',
       class: 'session×append', decision: 'inbox', reason: 'Дополняет страницу',
-      reasonCode: 'class_disabled',
+      reasonCode: 'class_disabled', judgeAdmitted: true,
       judgeDecision: 'accepted', judgeModel: 'claude-x', judgeAt: '2026-11-12T03:41:00Z', judgeCostUsd: 0.01, judgeAttempts: 1,
     }),
     op({
       index: 2, op: 'link', page: 'projects/p1/gleb', target: 'projects/p1/vera', text: null,
       class: 'session×link', decision: 'inbox', reason: 'Новая связь',
       // допущена и отложена проходом (попыток < 3): «вердикта ещё нет» — ожидание судьи, не человек
-      reasonCode: 'target_disputed',
+      reasonCode: 'target_disputed', judgeAdmitted: true,
     }),
     PKG.operations[1],
   ],
@@ -614,7 +618,7 @@ const JPKG_HUMAN = {
       index: 2, op: 'link', page: 'projects/p1/gleb', target: 'projects/p1/vera', text: null,
       class: 'session×link', decision: 'inbox', reason: 'Новая связь',
       // допущенная и нерешённая: в очереди судьи она остаётся только для чтения (J-F1 доработка)
-      reasonCode: 'overrides_human',
+      reasonCode: 'overrides_human', judgeAdmitted: true,
     }),
     PKG.operations[1],
   ],
@@ -716,13 +720,14 @@ describe('«Решения судьи» (J-F1)', () => {
 // допустительная без вердикта — без кнопок («вердикта ещё нет» — ожидание прохода), вердикт
 // судьи — без кнопок (И1). Пакет, где всё нерешённое допущено, остаётся строкой судьи.
 
-// op0 — autoapply_off (создана в ручном режиме, потом тумблер включили): судья её не зовёт.
-// op1 — допущена и ещё не решена. op2 — вердикт судьи.
+// op0 — autoapply_off (создана в ручном режиме, потом тумблер включили): судья её не зовёт,
+// бэк отдаёт judgeAdmitted: false. op1 — допущена и ещё не решена (judgeAdmitted: true).
+// op2 — вердикт судьи.
 const JPKG_OUT = {
   ...PKG,
   operations: [
-    op({ reasonCode: 'autoapply_off', reason: 'выключатель «Применять без ревью» выключен — каждая правка через «Входящие»' }),
-    op({ index: 1, reasonCode: 'overrides_human' }),
+    op({ reasonCode: 'autoapply_off', judgeAdmitted: false, reason: 'выключатель «Применять без ревью» выключен — каждая правка через «Входящие»' }),
+    op({ index: 1, reasonCode: 'overrides_human', judgeAdmitted: true }),
     op({ index: 2, judgeDecision: 'rejected', judgeReason: 'числа не подтверждены цитатой', judgeModel: 'claude-x' }),
   ],
 };
@@ -786,6 +791,49 @@ describe('режим судьи: пакет с операциями вне до�
     expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
     expect(buttonByTestId(c, 'wiki-op-accept-1')).not.toBeNull();
     expect(buttonByTestId(c, 'wiki-op-accept-2')).toBeNull();
+  });
+});
+
+// ─── D2 (QA-2): merge в «Решениях судьи» — по полю judgeAdmitted ───
+// Зеркало перечня кодов снято: допуск решает поле DTO (бэк — единственная точка правды).
+// merge_proposal бэк допускает судье: пакет с merge в режиме судьи — строка судьи, и
+// строка показывает «A → B» (та же разметка, что карточка пакета, C7), без кнопок человека.
+// merge вне допуска — ручная строка: экран пакета с кнопками.
+
+const mergeOp = (over: Record<string, unknown>) => op({
+  op: 'merge', page: 'projects/p1/gleb', target: 'projects/p1/vera',
+  class: 'wiki×merge', decision: 'inbox', reason: 'Две страницы об одном',
+  reasonCode: 'merge_proposal', ...over,
+});
+
+describe('D2: merge в «Решениях судьи» по полю judgeAdmitted', () => {
+  it('merge с judgeAdmitted: true: строка судьи «A → B», без кнопок человека', async () => {
+    const pkg = { ...PKG, operations: [mergeOp({ judgeAdmitted: true }), PKG.operations[1]] };
+    seedBoth({ packages: [pkg], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-judge-row')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-pkg-row')).toBeNull();
+    // «A → B» — имена без префикса раздела, та же строка, что в карточке пакета (C7)
+    const merge = findNodeByAttr(c, 'data-testid', 'wiki-op-merge');
+    expect(merge).not.toBeNull();
+    expect(textNodes(merge!).map(t => t.trim()).join(' ')).toContain('gleb → vera');
+    // merge решает судья: кнопок решения в очереди нет
+    expect(buttonByText(c, 'Принять')).toBeNull();
+    expect(buttonByText(c, 'Отклонить')).toBeNull();
+  });
+
+  it('merge с judgeAdmitted: false: ручная строка, экран пакета, с кнопками', async () => {
+    const pkg = { ...PKG, operations: [mergeOp({ judgeAdmitted: false }), PKG.operations[1]] };
+    seedBoth({ packages: [pkg], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    expect(buttonByTestId(c, 'wiki-pkg-row')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-judge-row')).toBeNull();
+    openPackage(c);
+    await settle();
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-0')).not.toBeNull();
   });
 });
 

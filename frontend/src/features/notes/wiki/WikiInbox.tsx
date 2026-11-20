@@ -114,24 +114,17 @@ export function pendingContested(p: WikiPackageDto): WikiPackageOperationDto[] {
   return p.operations.filter(o => o.decision === 'inbox' && !o.humanDecision && !o.judgeDecision);
 }
 
-// Допуск к облачному судье — зеркало бэкового перечня допущенных кодов
-// (WikiApplyPolicy.JudgeAdmitted, WikiApplyPolicy.cs:62-64): допуск решает код, не текст
-// причины (И4′). Зеркало держит ДОПУЩЕННЫЕ коды, а не недопущенные: незнакомый код
-// считается недопущенным → открытым человеку (человек решить может), обратный умолчание
-// («незнакомый = допущенный») оставил бы новый код висеть в очереди без судьи — ровно тот
-// дефект, который чинит эта доработка (J-F1).
-const JUDGE_ADMITTED_CODES = new Set([
-  'class_disabled', 'revert_quarantine', 'no_history_section', 'overrides_human', 'page_duplicate',
-  'section_new_pages_limit', 'personal_to_common', 'target_disputed', 'after_model_repair', 'number_unconfirmed',
-]);
-
 // Спорная (decision=inbox) операция вне допуска к судье: её не вынес ни человек, ни судья,
-// и код причины не допускает до судьи — или кода нет вовсе (старые пакеты; и все операции,
-// пока бэк не отдаёт reasonCode в списке — см. находку в отчёте J-F1). Проход судьи такую
-// не трогает (WikiJudgeSweep.cs:23-24), поэтому в режиме судьи её решает человек
-// (финал 9c305f19). auto-операции здесь нет: их решил код, они не «на решение» (S4a).
+// и бэк не допустил её судье — по полю judgeAdmitted из DTO операции
+// (WikiApplyPolicy.JudgeAdmitted(reasonCode), WikiPackagesController.cs:403-404; D2, QA-2).
+// Зеркала перечня кодов на клиенте больше нет: прежний набор не знал merge_proposal и
+// расходился с бэком ровно на новом коде — бэк и есть единственная точка правды (И4′).
+// Ответ без поля (старый транспорт) читается как «не допущена» → открыта человеку
+// (человек решить может). Проход судьи такую не трогает (WikiJudgeSweep.cs:23-24),
+// поэтому в режиме судьи её решает человек (финал 9c305f19). auto-операции здесь нет:
+// их решил код, они не «на решение» (S4a).
 export function outsideJudgeScope(o: WikiPackageOperationDto): boolean {
-  return o.decision === 'inbox' && !o.humanDecision && !o.judgeDecision && !JUDGE_ADMITTED_CODES.has(o.reasonCode ?? '');
+  return o.decision === 'inbox' && !o.humanDecision && !o.judgeDecision && o.judgeAdmitted !== true;
 }
 
 // Возраст пакета — коротко: минуты/часы свежие, дальше дата. Возраст — второстепенная
@@ -291,6 +284,16 @@ function JudgeRow({ pkg, narrow }: { pkg: WikiPackageDto; narrow: boolean }) {
                 </Button>
               </span>
             </span>
+            {/* merge (C7, D2): «A → B» — та же готовая строка карточки пакета
+                (WikiPackageView.tsx:216-222): A (op.page) слева, B (op.target) справа,
+                имена без префикса раздела; новую разметку для судьи не рисуем */}
+            {o.op === 'merge' && o.target && (
+              <div data-testid="wiki-op-merge" style={{ marginTop: SP.xs, fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'anywhere' }}>
+                <span style={{ color: C.textPrimary }}>{pageName(pkg, o.page)}</span>
+                {' → '}
+                <span style={{ color: C.textPrimary }}>{pageName(pkg, o.target)}</span>
+              </div>
+            )}
             {/* «почему» судьи — только когда она есть: причина обязательна отказу (WikiPackage.cs:270),
                 у принятия её может не быть */}
             {o.judgeReason && (

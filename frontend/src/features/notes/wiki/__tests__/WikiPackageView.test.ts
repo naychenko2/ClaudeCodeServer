@@ -188,11 +188,12 @@ function renderOps(ops: Record<string, unknown>[], judgeMode?: boolean) {
 }
 
 describe('режим судьи: кнопки только у операций вне допуска (доработка J-F1)', () => {
-  // op0 — autoapply_off (вне допуска), op1 — допущена и ещё не решена, op2 — вердикт судьи
+  // op0 — autoapply_off (вне допуска: judgeAdmitted false/нет), op1 — допущена и ещё не
+  // решена (judgeAdmitted: true из DTO, D2), op2 — вердикт судьи
   const MIXED = [
-    op({ reasonCode: 'autoapply_off' }),
-    op({ index: 1, reasonCode: 'overrides_human' }),
-    op({ index: 2, reasonCode: 'overrides_human', judgeDecision: 'rejected', judgeModel: 'claude-x', judgeReason: 'числа не подтверждены цитатой' }),
+    op({ reasonCode: 'autoapply_off', judgeAdmitted: false }),
+    op({ index: 1, reasonCode: 'overrides_human', judgeAdmitted: true }),
+    op({ index: 2, reasonCode: 'overrides_human', judgeAdmitted: true, judgeDecision: 'rejected', judgeModel: 'claude-x', judgeReason: 'числа не подтверждены цитатой' }),
   ];
 
   it('режим судьи: вне допуска — с кнопками; допустительная — «вердикта ещё нет» без кнопок; вердикт — без кнопок', () => {
@@ -219,7 +220,7 @@ describe('режим судьи: кнопки только у операций �
   it('режим судьи: «Принять всё» — нет для смешанного пакета, да когда всё нерешённое вне допуска', () => {
     const out1 = op({ reasonCode: 'autoapply_off' });
     const out2 = op({ index: 1, op: 'append', page: 'projects/p1/vera', target: null, text: 'Вера ведёт QA.', class: 'session×append', reasonCode: 'autoapply_off' });
-    const admitted = op({ index: 2, reasonCode: 'overrides_human' });
+    const admitted = op({ index: 2, reasonCode: 'overrides_human', judgeAdmitted: true });
     // смешанный: две человеческие + одна судьи — оптом забрать судью нельзя
     const c1 = renderOps([out1, out2, admitted], true);
     expect(findNodeByAttr(c1, 'data-testid', 'wiki-pkg-accept-all')).toBeNull();

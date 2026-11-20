@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 
@@ -265,5 +266,50 @@ public sealed class LocalModelAnswerSpeedTests
         w.Requests.Should().Be(1, "вытесняется самый старый открытый, новый запрос остаётся");
         w.EndToEndTps.Should().BeApproximately(10.0, 1e-9, "100 токенов / 10 с оставшегося запроса");
         w.MedianTtftSec.Should().BeApproximately(5.0, 1e-9);
+    }
+
+    // (14) Конкурентные вызовы (один lock на всё): параллельные старты/первые токены/завершения
+    //      из нескольких потоков дают точное число запросов и точную сумму токенов — ни одна
+    //      запись не теряется и не считается дважды. Ожидание — Join по событию окончания
+    //      потока, без Task.Delay. Мутация: снять lock в OnRequestStarted и OnRequestCompleted →
+    //      словарь открытых и кольцо рвутся на конкурентных вставках: поток бросает
+    //      (errors не пуст) или часть записей теряется (requests меньше N) — краснеет.
+    [Fact]
+    public void КонкурентныеВызовы_ТочныеЧислоЗапросовИСуммаТокенов()
+    {
+        const int threads = 8;
+        const int perThread = 100;
+        var (c, time) = New();
+
+        var errors = new ConcurrentQueue<Exception>();
+        var workers = Enumerable.Range(0, threads).Select(t => new Thread(() =>
+        {
+            try
+            {
+                for (var i = 0; i < perThread; i++)
+                {
+                    var id = $"t{t}-{i}";
+                    c.OnRequestStarted(id, Main, T0);
+                    c.OnFirstToken(id, T0 + TimeSpan.FromSeconds(1));
+                    // Токены 100+i: любой пропуск или двойной учёт записи сдвигает Σ —
+                    // сумма точна только при полном и единственном учёте всех запросов.
+                    c.OnRequestCompleted(id, 100 + i, T0 + TimeSpan.FromSeconds(2));
+                }
+            }
+            catch (Exception ex) { errors.Enqueue(ex); }
+        })).ToArray();
+
+        foreach (var wkr in workers) wkr.Start();
+        // Снимок — после полного окончания всех потоков: Join ждёт события, не паузы.
+        foreach (var wkr in workers)
+            wkr.Join(TimeSpan.FromSeconds(30)).Should().BeTrue("потоки должны завершиться");
+        errors.Should().BeEmpty("сборщик не должен бросать на конкурентных вызовах");
+
+        time.Advance(TimeSpan.FromSeconds(30));
+        var w5 = W(c.SnapshotOf(Main), "5m");
+        w5.Requests.Should().Be(threads * perThread, "каждый запрос учтён ровно один раз");
+        var tokens = threads * (perThread * 100L + perThread * (perThread - 1L) / 2L);
+        w5.EndToEndTps.Should().BeApproximately((double)tokens / (threads * perThread * 2.0), 1e-9,
+            "Σ токенов / Σ времени (каждый запрос — ровно 2 с): ни одна запись не потеряна");
     }
 }

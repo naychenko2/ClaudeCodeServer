@@ -480,13 +480,14 @@ export function wikiInboxReasonText(reason: string | null | undefined): string {
 
 // ─── Мета операций пакета (S7a; читает её экран пакета и список «Решения судьи» (J-F1)) ───
 
-// op — пять, удаления нет (WikiPackage.OpValues)
+// op — шесть, удаления нет (WikiPackage.OpValues); merge — укрупнение «A → B» (волна C, C2)
 export const OP_META: Record<string, { text: string; tone: BadgeTone }> = {
   create: { text: 'новая страница', tone: 'accent' },
   append: { text: 'дописать', tone: 'neutral' },
   supersede: { text: 'замещение', tone: 'warning' },
   conflict: { text: 'противоречие', tone: 'warning' },
   link: { text: 'связь', tone: 'neutral' },
+  merge: { text: 'слить страницы', tone: 'neutral' },
 };
 
 // ─── «Решения судьи» — вид очереди при включённом автоприменении (J-F1; ADR-039, решение 9) ───

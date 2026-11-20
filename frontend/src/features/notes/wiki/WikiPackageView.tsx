@@ -83,7 +83,9 @@ function intentLines(op: WikiPackageOperationDto): string {
   if (op.text) {
     for (const l of op.text.split('\n')) { if (l.trim()) lines.push(`+ ${l}`); }
   }
-  if (!lines.length && op.target) lines.push(`- ${op.target}`);
+  // merge: текста нет, а строка «− B» была бы неправдой — B не удаляется, в него вливают;
+  // намерение merge несёт строка «A → B» в карточке, не дифф
+  if (!lines.length && op.target && op.op !== 'merge') lines.push(`- ${op.target}`);
   return lines.join('\n');
 }
 
@@ -207,6 +209,15 @@ function OperationCard({
         <div style={{ marginTop: SP.xs, fontSize: FS.sm, color: C.textSecondary }}>
           {op.op === 'link' ? 'Связь с: ' : op.op === 'conflict' ? 'Оспаривает: ' : 'Замещает: '}
           <span style={{ color: C.textPrimary }}>{op.target}</span>
+        </div>
+      )}
+      {/* merge (C7): «A → B» — A (op.page) слева, B (op.target) справа; имена страниц без
+          префикса раздела, как в шапке карточки; длинные заголовки переносятся (overflowWrap) */}
+      {op.op === 'merge' && op.target && (
+        <div data-testid="wiki-op-merge" style={{ marginTop: SP.xs, fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'anywhere' }}>
+          <span style={{ color: C.textPrimary }}>{pageName(pkg, op.page)}</span>
+          {' → '}
+          <span style={{ color: C.textPrimary }}>{pageName(pkg, op.target)}</span>
         </div>
       )}
       {/* Для синтезированных операций Text === Claim: утверждение уже показано выше,

@@ -567,16 +567,20 @@ public class WikiMergeApplyTests : IDisposable
         (await _sut.ApplyAsync(User, pkg, Ctx)).Applied.Should().BeTrue();
         var after = Snapshot();
 
-        // Тот же пакет ещё раз — по дисковому состоянию (status-гейт :312-317), без опоры на
-        // формулировку причины. «applied» — конечный статус: не «applying» (тот отказ звучит
-        // иначе и оставил бы пакет в «applying»); второго применения нет, состояние диска —
-        // ровно как после первого.
+        // Тот же пакет ещё раз — по дисковому состоянию. «applied» — конечный статус:
+        // не «applying» (тот отказ звучит иначе и оставил бы пакет в «applying»); второго
+        // применения нет, состояние диска — ровно как после первого.
         var again = await _sut.ApplyAsync(User, WikiPackageStore.TryRead(Root, pkg.Id).Package!, Ctx);
 
         again.Applied.Should().BeFalse();
-        // Отказ статусным гейтом, не проверкой базы: без гейта заявка :333 не прошла бы из
-        // «applied» (переход только в «reverted», WikiPackage.cs:111) и отказ был бы CodeClaim.
+        // Отказ терминальным гейтом (WikiApplyService.cs:312-313), не общим стражем
+        // «не принят» (:314-317): для «applied» оба дают CodeStatus, поэтому стражи
+        // различаются причиной — слово «конечном» стоит только в причине гейта. Снят
+        // первый гейт — отказ даёт страж «не принят» с тем же кодом, и тест краснеет
+        // по причине. CodeClaim был бы только при снятии обоих (заявка :333 из «applied»
+        // не проходит: переход только в «reverted», WikiPackage.cs:111).
         again.Code.Should().Be(WikiApplyService.CodeStatus, "отказ по статусу, а не по базе или заявке");
+        again.Reason.Should().Contain("конечном", "отказ именно гейтом о конечном статусе, не стражем «не принят»");
         // По существу: пакет остался в терминальном «applied» — не сдвинут в «applying»
         // (его применял бы другой вызов) и не переведён в «stale»/«apply_failed».
         StatusOf(pkg.Id).Should().Be(WikiPackage.StatusApplied, "applied — конечный: повтор статуса не трогает");

@@ -106,11 +106,13 @@ public class WikiConnectivityBenchTests
         Assert.InRange(warm.K0, 0, 100);
         Assert.InRange(warm.K1, 0, 1);
         Assert.InRange(warm.K2, 0, 1);
+        // Индекс — по видимым разделам, как при показе: K1 боевого кода сходится с T0 (0,404).
+        Assert.InRange(warm.K1, WikiNightlyService.BaselineK1 - 0.02, WikiNightlyService.BaselineK1 + 0.02);
     }
 
     // Диагностика BaselineK1: доля страниц знаний, у которых есть хотя бы один «по теме»-сосед,
-    // при ГЛОБАЛЬНОМ индексе снимка (так считает продукт: WikiRelated.BuildTopicIndex — один
-    // индекс на весь снимок) и при индексе СВОЕГО РАЗДЕЛА (так считала приёмка T0, откуда
+    // при ГЛОБАЛЬНОМ индексе снимка (так считал продукт до доработки A6-1: один индекс на весь
+    // снимок; теперь запрещён) и при индексе СВОЕГО РАЗДЕЛА (так считала приёмка T0, откуда
     // взята константа BaselineK1 = 0,404). Разница индексов — разный df (N и df), а значит
     // разный отбор редких основ и разные рёбра.
     private static double TopicShare(List<WikiGate.Draft> drafts, List<string> knowledge, bool globalIndex)
@@ -120,7 +122,9 @@ public class WikiConnectivityBenchTests
             .GroupBy(d => WikiSections.Parse(d.Path)!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
         var knowledgeSet = new HashSet<string>(knowledge, StringComparer.Ordinal);
-        var global = WikiRelated.BuildTopicIndex(drafts);
+        var global = WikiTopicScore.BuildIndex(drafts
+            .Where(d => WikiSections.Parse(d.Path) is not null && !WikiPaths.IsProjection(d.Path))
+            .Select(EntryOf).OfType<WikiTopicScore.Entry>());
         var perSection = bySection.ToDictionary(
             kv => kv.Key,
             kv => WikiTopicScore.BuildIndex(kv.Value.Select(EntryOf).OfType<WikiTopicScore.Entry>()),
@@ -142,7 +146,7 @@ public class WikiConnectivityBenchTests
     private static WikiTopicScore.Entry? EntryOf(WikiGate.Draft d)
     {
         if (WikiPage.Parse(d.Content).Model is not { } model)
-            return null; // неразобранная страница в индекс не входит (как у BuildTopicIndex)
+            return null; // неразобранная страница в индекс не входит (как у индекса показа)
         return new WikiTopicScore.Entry(d.Path, model.Title,
             WikiProjections.SummaryOf(model.Frontmatter, d.Content));
     }

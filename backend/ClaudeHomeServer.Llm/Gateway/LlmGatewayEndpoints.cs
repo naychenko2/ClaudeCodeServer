@@ -103,6 +103,29 @@ public static class LlmGatewayEndpoints
         var normalize = selector.NormalizesToolInput(upstream.Route);
         var (request, requestBody) = await BuildRequestAsync(ctx, path, upstream, selector, normalize);
         using var _ = request;
+
+        // Опциональные швы метрик локальной модели — через GetService (единый стиль: биндинг
+        // endpoint'а не тянет их как обязательные параметры HandleAsync, а тесты без них — null).
+        // Решаются ДО отправки запроса: «скорость ответа» мерится от SendAsync, поэтому её гейт
+        // («маршрут локальный, метрики включены») нужен тоже до него.
+        var statsOptions = ctx.RequestServices.GetService<IOptionsMonitor<LocalModelStatsOptions>>();
+        var time = ctx.RequestServices.GetService<TimeProvider>();
+        var providers = ctx.RequestServices.GetService<LlmProviderRegistry>();
+        var answerSpeed = ctx.RequestServices.GetService<ILocalModelAnswerSpeed>();
+        // Время старта снимаем только когда оно кому-то нужно: без сборщика — ни одной лишней
+        // аллокации, поведение шлюза прежнее. Гейт — тот же, что у CreateUsageObserver ниже
+        // (локальный маршрут по модели + включённые метрики): облачный запрос в скорость
+        // локальной модели не входит. Дорожка — по ProviderKey маршрута (StatsTrackOf), как у
+        // счётчика хода; неизвестный ключ и подписка без провайдера — «main».
+        DateTimeOffset? startedAt = null;
+        string? answerTrack = null;
+        if (answerSpeed is not null && statsOptions?.CurrentValue.Enabled == true && time is not null
+            && providers?.ResolveByModel(upstream.Route.Model)?.IsLocal is true)
+        {
+            startedAt = time.GetUtcNow();
+            answerTrack = providers.StatsTrackOf(upstream.Route.ProviderKey) ?? LocalModelStatsPoller.MainTrackName;
+        }
+
         HttpResponseMessage response;
         try
         {
@@ -180,11 +203,8 @@ public static class LlmGatewayEndpoints
             // Копия каждого куска идёт наблюдателю ПОСЛЕ записи клиенту (клиент — первым).
             // LlmProviderRegistry — из DI (GetService): в тестах шлюза без него null →
             // наблюдатель не создаётся, поведение прежнее.
-            // Все опциональные швы — через GetService (единый стиль): биндинг endpoint'а
-            // не тянет их как обязательные параметры HandleAsync, а тесты без них — null.
-            var statsOptions = ctx.RequestServices.GetService<IOptionsMonitor<LocalModelStatsOptions>>();
-            var time = ctx.RequestServices.GetService<TimeProvider>();
-            var providers = ctx.RequestServices.GetService<LlmProviderRegistry>();
+            // Все опциональные швы — через GetService (единый стиль); statsOptions/time/providers
+            // решены выше, до SendAsync (их требует гейт скорости ответа), здесь — только sink.
             var sink = ctx.RequestServices.GetService<ILocalModelRequestSink>();
             var observer = CreateUsageObserver(sse, mediaType, grant, providers, statsOptions, time, sink);
             // observer non-null ⟹ sink non-null (CreateUsageObserver проверяет sink is null → null).
@@ -206,6 +226,13 @@ public static class LlmGatewayEndpoints
                 // M5: живая скорость — наблюдатель шлёт счётчик токенов на каждую дельту.
                 observer.OnTokenCount = count => sink!.OnTokenCount(requestId, grant.TurnId, count);
             }
+            // Скорость ответа: тот же requestId, что у приёмника хода. Начало — ДО отправки
+            // (снималось выше), поэтому в полное время запроса входят и установка соединения, и
+            // ожидание заголовков. Конец даёт наблюдатель: если его нет (не SSE / работает
+            // нормализатор) или он упал посреди потока, запись так и не завершится — её снимает
+            // TTL открытых запросов сборщика, метрика теряется.
+            if (answerSpeed is { } speed && startedAt is { } started)
+                speed.OnRequestStarted(requestId, answerTrack!, started);
             // «Первый токен» сообщаем приёмнику один раз: SawFirstDelta после первой дельты
             // остаётся true на всех последующих кусках, без флага OnFirstToken ушёл бы на каждый.
             var firstTokenSent = false;
@@ -234,6 +261,9 @@ public static class LlmGatewayEndpoints
                             {
                                 firstTokenSent = true;
                                 sink!.OnFirstToken(requestId, grant.TurnId);
+                                // Тот же момент «первого токена» для скорости ответа (time не null:
+                                // он уже нужен был, чтобы снять startedAt и создать наблюдателя).
+                                answerSpeed?.OnFirstToken(requestId, time!.GetUtcNow());
                             }
                         }
                         catch (Exception ex)
@@ -257,7 +287,12 @@ public static class LlmGatewayEndpoints
                 {
                     try
                     {
-                        sink!.OnRequestCompleted(requestId, grant.TurnId, done.Complete());
+                        var usage = done.Complete();
+                        // Токены — из usage ответа (null — движок usage не отдал): тогда запрос не
+                        // входит в Σ скорости, но считается в requests окна. Первым идёт сборщик
+                        // скорости: упавший счётчик хода не должен стоить метрики скорости.
+                        answerSpeed?.OnRequestCompleted(requestId, usage.OutputTokens, time!.GetUtcNow());
+                        sink!.OnRequestCompleted(requestId, grant.TurnId, usage);
                     }
                     catch (Exception ex)
                     {

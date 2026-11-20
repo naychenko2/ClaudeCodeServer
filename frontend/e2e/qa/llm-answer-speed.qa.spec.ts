@@ -1,13 +1,16 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { api, login, seed, type Api } from './helpers';
 import { mkdirSync } from 'node:fs';
+import path from 'node:path';
 
 // QA-приёмка фичи «Скорость ответа» (вкладка LLM панели «Ферма»).
 // Стенд уже наполнен ходами на локальной модели (сборщик шлюза живёт в памяти).
 
 const PREFIX = 'qa-llmspeed-';
-// MARK2
-const SHOTS = '/home/an/Sources/ClaudeCodeServer-wt/llm-answer-speed/.cc-attachments/qa-llm-speed/shots';
+// Корень проекта от файла спека: frontend/e2e/qa → корень (как в соседних qa-спеках).
+// Свидетельства — в .cc-attachments (вне git).
+const ROOT = path.resolve(new URL('../../..', import.meta.url).pathname);
+const SHOTS = path.join(ROOT, '.cc-attachments', 'qa-llm-speed', 'shots');
 
 let request: APIRequestContext;
 let token: string;

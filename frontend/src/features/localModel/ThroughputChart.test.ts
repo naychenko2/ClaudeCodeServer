@@ -14,6 +14,7 @@ import {
   timeSharesAriaLabel, tpChartAriaLabel, xForTime, yForThroughput,
   type ChartGeom, type Interval, type TimeShares, type TimeState, type ThroughputSample,
 } from './ThroughputChart';
+import { GEN_SPEED_HINT } from './format';
 
 // Геометрия как в компоненте (height 96, left 0, right 28)
 const GEOM: ChartGeom = { width: 340, height: 96, left: 0, right: 28, top: 8, bottom: 18 };
@@ -436,9 +437,10 @@ describe('главная линия графика подписана «скор
     expect(html).not.toContain('на запрос');
     // aria-label той же подписью
     expect(html).toContain('Скорость генерации, ток/с за 5 минут');
-    // подсказка легенды — та же, что у KPI «скорость генерации» (GEN_SPEED_HINT):
-    // с цифрами Artificial Analysis/OpenRouter сравнивается «Скорость ответа»
-    expect(html).toContain('Скорость ответа');
+    // подсказка легенды — та же, что у KPI «скорость генерации»: полная строка
+    // GEN_SPEED_HINT из format.ts, а не фрагмент: переименование подсказки
+    // в format.ts или в компоненте краснит этот тест
+    expect(html).toContain(GEN_SPEED_HINT);
     root.unmount();
   });
 });

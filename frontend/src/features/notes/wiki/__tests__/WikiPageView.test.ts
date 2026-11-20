@@ -34,7 +34,10 @@ import {
 } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiPageView, parseWikiPage } from '../WikiPageView';
 import { ReplacementDot } from '../WikiUnifiedChrome';
-import { __test as wikiStore, consumeOpenWikiPage, loadWikiPage, wikiActiveLines, wikiOverridesOf, type WikiPageDto, type WikiPageAuthoredDto, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiRelatedGroupDto } from '../../../../lib/wiki';
+import {
+  __test as wikiStore, consumeOpenWikiPage, loadWikiPage, wikiActiveLines, wikiOverridesOf,
+  type WikiPageDto, type WikiPageAuthoredDto, type WikiPageLinkDto, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiRelatedGroupDto,
+} from '../../../../lib/wiki';
 import { FOOTNOTE_TEXT, fmtDayMonth } from '../WikiFootnotePopover';
 
 // Мок с сохранением остальных экспортов: компонент берёт эти модули через кит хоста,
@@ -253,18 +256,52 @@ ${LONG_LINE}
 // «Связанные» (2Б, Q1-S7): две непустые группы — сосед по сноске (source) и обратные ссылки,
 // одна из них из «Общего» (цепочка вверх). Пути — форма бэка (путь под pages/,
 // WikiController.cs:309): «Проекты/{id}/…», «Общее/…»; порядок — бэковый (по приоритету kind)
+// section — ключ раздела цели (очередь 2, B3): его отдаёт бэк, экран его не выводит из пути
 const RELATED_TWO: WikiRelatedGroupDto[] = [
   {
     kind: 'source',
-    items: [{ pageKey: 'Проекты/p1/Источники/Чат.md', title: 'Чат «Ревью фронта»', type: 'source' }],
+    items: [{ pageKey: 'Проекты/p1/Источники/Чат.md', title: 'Чат «Ревью фронта»', type: 'source', section: 'projects/p1' }],
   },
   {
     kind: 'backlinks',
     items: [
-      { pageKey: 'Проекты/p1/Решения/р1.md', title: 'Ревюить звук до пятницы', type: 'rule' },
-      { pageKey: 'Общее/Термины/звук.md', title: 'Ревью звука', type: null },
+      { pageKey: 'Проекты/p1/Решения/р1.md', title: 'Ревюить звук до пятницы', type: 'rule', section: 'projects/p1' },
+      { pageKey: 'Общее/Термины/звук.md', title: 'Ревью звука', type: null, section: 'common' },
     ],
   },
+];
+
+// Ссылки текста страницы (очередь 2, B4): [[…]] в строках секций — с подписью («|форма»),
+// без неё и неразрешённая («вбок», вне раздела и цепочки вверх). Формулировки текста
+// ссылок — ровно те, что отдаёт бэк в links[].text: внутренность скобок как написана.
+const PAGE_LINKS = `---
+type: entity
+status: active
+---
+
+# Конвейер
+
+## Сводка
+- См. [[Конвейер сборки|конвейер]]. И боковое [[Вбок]].
+- Другая страница [[Прочная]] без подписи.
+`;
+
+// Пустая подпись (тот же формат, что тестит бэковый автосвязыватель): показывается цель
+const PAGE_LINK_EMPTY = `---
+type: entity
+status: active
+---
+
+# Пустая подпись
+
+## Сводка
+- Идёт по [[Пустая|]] дальше.
+`;
+
+const LINKS_MIXED: WikiPageLinkDto[] = [
+  { text: 'Конвейер сборки|конвейер', path: 'Проекты/p1/Конвейер.md', section: 'projects/p1' },
+  { text: 'Прочная', path: 'Общее/Термины/прочное.md', section: 'common' },
+  { text: 'Вбок', path: null, section: null },
 ];
 
 type Cont = ReturnType<typeof mount>['container'];
@@ -1185,11 +1222,12 @@ describe('Плашка «только чтение» и правка (F3a-qa)', 
 // Блок под текстом страницы, из поля related того же ответа GET /wiki/page (своего запроса
 // нет): группы — порядок с бэка, подписи — по постановке шага; пустая группа не рисуется;
 // поля нет или групп 0 — блока нет. Пункт ведёт существующим каналом стора requestOpenWikiPage
-// (тот же, что у «Журнала», «Решений» и дерева): раздел пункта бэк не несёт, он берётся из
-// самого пути — сосед из цепочки вверх открылся бы чужим разделом в 400 (WikiController.cs:241).
+// (тот же, что у «Журнала», «Решений» и дерева): раздел пункта отдаёт бэк полем section
+// (очередь 2, B3) — своего разбора пути на фронте нет (B4); без поля строка неактивна.
 // Мутации этого прогона (вывод — в отчёте задачи): «передать title вместо pageKey» →
 // «пункт ведёт…» краснеет; «не фильтровать пустые группы» → «пустая группа…» краснеет;
-// «не фильтровать related вовсе (рисовать пустой блок)» → «без поля…» краснеет.
+// «не фильтровать related вовсе (рисовать пустой блок)» → «без поля…» краснеет;
+// «вывести раздел пункта из его пути» → «раздела section нет…» краснеет.
 
 const relatedRows = (c: Cont) => allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-related-item');
 const relatedGroupKinds = (c: Cont) => allNodes(c)
@@ -1231,7 +1269,7 @@ describe('«Связанные» (2Б, Q1-S7)', () => {
     expect(rowText(rows[2])).toContain('Страница');
   });
 
-  it('пункт ведёт существующим каналом открытия страницы: раздел — из пути пункта', async () => {
+  it('пункт ведёт существующим каналом открытия страницы: раздел — из поля section пункта', async () => {
     await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN, related: RELATED_TWO });
     const c = renderPage();
     await settle();
@@ -1240,10 +1278,28 @@ describe('«Связанные» (2Б, Q1-S7)', () => {
     // Мутация «передать title вместо pageKey» краснит ровно этот тест
     click(rows[0], 'пункт «Тот же источник»');
     expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: 'Проекты/p1/Источники/Чат.md' });
-    // сосед из цепочки вверх («Общее») — СВОЙ раздел, а не тот, где открыта страница:
-    // бэк проверяет пару (раздел, страница), чужой раздел дал бы 400 wiki_page_key
+    // сосед из цепочки вверх («Общее») — СВОЙ раздел из поля бэка, а не тот, где открыта
+    // страница: бэк проверяет пару (раздел, страница), чужой раздел дал бы 400 wiki_page_key
     click(rows[2], 'пункт из «Общего»');
     expect(consumeOpenWikiPage()).toEqual({ section: 'common', path: 'Общее/Термины/звук.md' });
+  });
+
+  // Мутация «вывести раздел пункта из его пути» (фронтовая копия правил, которая выведена
+  // из файла) краснит ровно этот кейс: путь читается как «свой раздел» — запрос ушёл бы
+  // чужим разделом и получил 400
+  it('section нет (старый бэк без поля): строка неактивна, запроса нет — путь сам не читается', async () => {
+    await seedPage({
+      pageKey: PAGE_KEY,
+      content: PAGE_PLAIN,
+      related: [{ kind: 'backlinks', items: [{ pageKey: 'Общее/Термины/звук.md', title: 'Ревью звука', type: null }] }],
+    });
+    const c = renderPage();
+    await settle();
+    const rows = relatedRows(c);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].getAttribute('aria-disabled')).toBe('true');
+    click(rows[0], 'пункт без section');
+    expect(consumeOpenWikiPage()).toBeNull();
   });
 
   it('пустая группа не рисуется; из одних пустых групп — блока нет', async () => {
@@ -1346,5 +1402,127 @@ describe('«Связанные» (2Б, Q1-S7)', () => {
     const rows = relatedRows(c);
     expect(rows).toHaveLength(3);
     for (const r of rows) expect(Number(styleOf(r).minHeight)).toBeGreaterThanOrEqual(40);
+  });
+});
+
+// ─── Ссылки [[…]] в тексте страницы (очередь 2, B4) ───
+// [[…]] в строках секций — по полю links того же ответа GET /wiki/page: сопоставление по
+// тексту записи (text — внутренность скобок как написана, с «|подписью»), не по индексу
+// массива. Есть резолв (path + section) — кликабельная ссылка, её клик — тот же канал стора,
+// что у «Связанных», «Журнала» и дерева; резолва нет — текст без скобок, без клика. Резолв и
+// раздел цели считает бэк (B3): здесь нет ни поиска по имени, ни разбора пути. Записей,
+// которых нет в теле (цели сносок), на экране нет — это не ошибка.
+// Мутации этого прогона (вывод — в отчёте задачи): «открыть по разделу открытой страницы» →
+// «ведёт РАЗДЕЛ ЦЕЛИ» краснеет; «ссылка и без резолва» → «без резолва…» краснеет;
+// «брать запись по индексу массива» → «по тексту, не по индексу» краснеет.
+
+const linkNodes = (c: Cont) => allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-link');
+const linkText = (n: AnyNode) => textNodes(n).map(t => t.trim()).join('');
+const linkByPath = (c: Cont, path: string) => linkNodes(c).find(n => n.getAttribute('data-page-key') === path) ?? null;
+
+describe('Ссылки [[…]] в тексте страницы (очередь 2, B4)', () => {
+  it('[[цель|подпись]] с резолвом: в тексте — подпись без скобок, клик зовёт пару (section, path)', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_LINKS, links: LINKS_MIXED });
+    const c = renderPage();
+    await settle();
+    expect(has(c, 'конвейер')).toBe(true);
+    expect(has(c, 'Конвейер сборки')).toBe(false);
+    expect(has(c, '[[')).toBe(false);
+    const link = linkByPath(c, 'Проекты/p1/Конвейер.md');
+    expect(link).not.toBeNull();
+    expect(linkText(link!)).toBe('конвейер');
+    click(link, 'ссылка «конвейер»');
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: 'Проекты/p1/Конвейер.md' });
+  });
+
+  // Мутация «открыть по section открытой страницы» краснит ровно этот кейс: цель из «Общего»
+  // открылась бы чужим разделом и получила 400 wiki_page_key (WikiController.cs:241)
+  it('цель без подписи ведёт РАЗДЕЛ ЦЕЛИ, а не тот, где открыта страница', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_LINKS, links: LINKS_MIXED });
+    const c = renderPage();
+    await settle();
+    const link = linkByPath(c, 'Общее/Термины/прочное.md');
+    expect(link).not.toBeNull();
+    expect(linkText(link!)).toBe('Прочная');
+    click(link, 'ссылка «Прочная»');
+    expect(consumeOpenWikiPage()).toEqual({ section: 'common', path: 'Общее/Термины/прочное.md' });
+  });
+
+  // Мутация «рисовать ссылку и без резолва» краснит ровно этот кейс
+  it('без резолва (path и section null): текст подписи без скобок, ссылки и запроса нет', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_LINKS, links: LINKS_MIXED });
+    const c = renderPage();
+    await settle();
+    expect(has(c, 'Вбок')).toBe(true);
+    expect(has(c, '[[')).toBe(false);
+    expect(linkNodes(c).some(n => linkText(n) === 'Вбок')).toBe(false);
+    expect(consumeOpenWikiPage()).toBeNull();
+  });
+
+  it('несогласованный ответ (path есть, section нет): не кликабельно', async () => {
+    await seedPage({
+      pageKey: PAGE_KEY,
+      content: PAGE_LINKS,
+      links: [{ text: 'Конвейер сборки|конвейер', path: 'Проекты/p1/Конвейер.md', section: null }],
+    });
+    const c = renderPage();
+    await settle();
+    expect(has(c, 'конвейер')).toBe(true);
+    expect(linkNodes(c)).toHaveLength(0);
+  });
+
+  it('пустая подпись [[цель|]]: показывается цель, ссылка работает', async () => {
+    await seedPage({
+      pageKey: PAGE_KEY,
+      content: PAGE_LINK_EMPTY,
+      links: [{ text: 'Пустая|', path: 'Проекты/p1/Пустая.md', section: 'projects/p1' }],
+    });
+    const c = renderPage();
+    await settle();
+    const links = linkNodes(c);
+    expect(links).toHaveLength(1);
+    expect(linkText(links[0])).toBe('Пустая');
+    click(links[0], 'ссылка «Пустая»');
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: 'Проекты/p1/Пустая.md' });
+  });
+
+  // Мутация «брать запись по индексу массива links» краснит ровно этот кейс
+  it('сопоставление по тексту, не по индексу; записей, которых нет в теле, на экране нет', async () => {
+    const shuffled: WikiPageLinkDto[] = [
+      { text: 'Прочная', path: 'Общее/Термины/прочное.md', section: 'common' },
+      // цель сноски: её нет в тексте этой страницы — на экране её быть не должно
+      { text: 'Чат «Ревью фронта»', path: 'Проекты/p1/Источники/Чат.md', section: 'projects/p1' },
+      { text: 'Конвейер сборки|конвейер', path: 'Проекты/p1/Конвейер.md', section: 'projects/p1' },
+      { text: 'Вбок', path: null, section: null },
+    ];
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_LINKS, links: shuffled });
+    const c = renderPage();
+    await settle();
+    // порядок ссылок — порядок текста строки, не порядок links[]
+    expect(linkNodes(c).map(n => n.getAttribute('data-page-key')))
+      .toEqual(['Проекты/p1/Конвейер.md', 'Общее/Термины/прочное.md']);
+    expect(has(c, 'Чат «Ревью фронта»')).toBe(false);
+  });
+
+  it('поля links нет (старый бэк): прежний текст без скобок, ссылок нет', async () => {
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_LINKS });
+    const c = renderPage();
+    await settle();
+    expect(linkNodes(c)).toHaveLength(0);
+    expect(has(c, '[[')).toBe(false);
+    expect(has(c, 'Конвейер сборки|конвейер')).toBe(true);
+  });
+
+  it('ссылка живёт в строке текста: перенос задан, горизонтального переполнения нет', async () => {
+    mobileFlag.v = true;
+    await seedPage({ pageKey: PAGE_KEY, content: PAGE_LINKS, links: LINKS_MIXED });
+    const c = renderPage();
+    await settle();
+    const link = linkNodes(c)[0] ?? null;
+    expect(link).not.toBeNull();
+    const st = styleOf(link!);
+    expect(st.display).toBe('inline-block');
+    expect(st.maxWidth).toBe('100%');
+    expect(st.overflowWrap).toBe('break-word');
   });
 });

@@ -146,6 +146,18 @@ public class WikiPlanValidatorTests
     }
 
     [Fact]
+    public void Validate_МодельнаяОперацияMerge_Отброшена_ОстальнаяОперацияПринята()
+    {
+        var r = Run(Plan(
+            Op(WikiPackage.OpMerge, "Сущность", 0, "Сущность"),
+            Op(WikiPackage.OpAppend, "Сущность", 0)));
+
+        r.Accepted.Should().ContainSingle(op => op.Op == WikiPackage.OpAppend);
+        r.Rejected.Should().ContainSingle()
+            .Which.Reason.Should().Contain("merge").And.Contain("код подбора");
+    }
+
+    [Fact]
     public void Validate_КлассИПолитикаПоUrlИсточнику_ВоВходящих_СПричиной()
     {
         var r = Run(

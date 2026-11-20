@@ -239,6 +239,12 @@ public static class WikiPlanValidator
                 rejectedAt.Add(i);
                 continue;
             }
+            if (op.Op == WikiPackage.OpMerge)
+            {
+                rejected.Add(new(i, "merge строит код подбора, не план модели — операция в пакет не входит"));
+                rejectedAt.Add(i);
+                continue;
+            }
             if (IsProjectionRef(op.Page))
             {
                 rejected.Add(new(i, $"«{op.Page}»: в '_*' (\"_schema\", \"_index\", \"_log\", \"_health\") пишет код, план туда не пишет"));

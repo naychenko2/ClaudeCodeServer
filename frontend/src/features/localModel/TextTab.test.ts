@@ -699,15 +699,17 @@ describe('карточка «Скорость ответа» (llm-F2)', () => {
 describe('подсказка скорости в строке «Кто сейчас на модели» (llm-F2)', () => {
   it('число генерации — с подсказкой про сквозную скорость', () => {
     const html = renderTab({ data: mockLocalModelStats('working') });
-    expect(html).toContain('title="сквозная скорость ответа чата');
+    expect(html).toContain('title="сквозная скорость запроса');
     // Текст подсказки — по формуле бэка (SseUsageObserver.cs:167–174): от начала ответа
-    // движка до последнего токена; ожидание слота в формулу не входит.
-    expect(html).toContain('от начала ответа движка до последнего токена, включая чтение промпта');
-    expect(html).not.toContain('ожидание слота');
+    // движка до последнего токена. Strata шлёт заголовки до ожидания слота и чтения
+    // промпта — они в интервале; вне его только очередь CCS до отправки (Артём, 02a99fe4).
+    expect(html).toContain('от начала ответа движка до последнего токена');
+    expect(html).toContain('с ожиданием слота в движке и чтением промпта');
+    expect(html).toContain('очередь CCS до отправки запроса не входит');
   });
   it('«читает» и «ждёт» — без числовой подсказки', () => {
     const d = { ...mockLocalModelStats('working'), chats: [{ own: true, sessionId: 's-1', title: 'Чат', phase: 'reading' as const }] };
     const html = renderTab({ data: d });
-    expect(html).not.toContain('title="сквозная скорость ответа чата');
+    expect(html).not.toContain('title="сквозная скорость запроса');
   });
 });

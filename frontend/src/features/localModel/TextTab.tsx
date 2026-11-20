@@ -543,7 +543,8 @@ function WhoRowView({ row, isMobile, onOpen }: { row: WhoRow; isMobile: boolean;
         )}
       </span>
       {/* Подсказка к числу скорости: формулу не меняем (её считает бэк), подсказка
-          называет, что в неё входит: текст — по формуле бэка, см. WHO_SPEED_HINT (format.ts) */}
+          называет, что в неё входит: ожидание слота в движке и чтение промпта — входят
+          (заголовки Strata шлёт до них), очередь CCS до отправки — нет; см. WHO_SPEED_HINT (format.ts) */}
       <span style={speedStyle} title={row.tone === 'gen' ? WHO_SPEED_HINT : undefined}>{row.speed}</span>
     </>
   );

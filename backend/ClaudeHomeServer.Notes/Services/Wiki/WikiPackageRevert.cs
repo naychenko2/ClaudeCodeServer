@@ -224,7 +224,15 @@ public sealed class WikiPackageRevert
             {
                 return Fail(CodeInternal, $"не читается прообраз или страница «{page}»: {ex.Message}");
             }
-            if (!applied.TryGetValue(page, out var appliedHash))
+            // Страница A операции merge снята пакетом: в записи состояния применения её нет (записывается
+            // только то, что осталось на диске), а применённое состояние A — «файла нет». Любая другая
+            // страница без записи — по-прежнему неполная запись (fail-closed).
+            string? appliedHash;
+            if (applied.TryGetValue(page, out var recorded))
+                appliedHash = recorded;
+            else if (package.Operations.Any(o => o.Op == WikiPackage.OpMerge && o.Page == page))
+                appliedHash = null;
+            else
                 return Fail(CodeNoApplied, $"запись состояния применения не полна: для страницы «{page}» записи нет");
 
             // Тот же хэш, что у манифеста и применения (sha256 байтов), — им же записана и запись

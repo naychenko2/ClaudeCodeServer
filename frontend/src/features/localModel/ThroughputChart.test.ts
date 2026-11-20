@@ -2,7 +2,7 @@
 // шкала, среднее без простоя, пик. Мутация «null → 0» должна покрасить тест на
 // разрыв; «37 → 50» — на шкалу; «среднее с простоем» — на фильтр running>0.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   avgIssuedOf, avgPerStreamOf, avgTimeSharesOf, avgThroughputOf, breakRuns,
   buildIntervals, buildIssuedSegments, buildPerStreamSegments, buildTimeSharesBar,
@@ -372,18 +372,18 @@ describe('chartAriaLabel: подпись области графика', () => {
   });
 });
 
-describe('tpChartAriaLabel: SVG «На запрос, ток/с» обновляется на hover', () => {
+describe('tpChartAriaLabel: SVG «Скорость генерации, ток/с» обновляется на hover', () => {
   it('базовый: окно + кэш (среднее под графиком не дублируем)', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, null, null);
-    expect(label).toContain('На запрос, ток/с за 15 минут');
+    expect(label).toContain('Скорость генерации, ток/с за 15 минут');
     expect(label).toContain('кэш 87 %');
     expect(label).not.toContain('интервал');
     expect(label).not.toContain('в среднем');
   });
-  it('hover: интервал со скоростью на запрос', () => {
+  it('hover: интервал со скоростью генерации', () => {
     const label = tpChartAriaLabel('15m', 412, 0.87, '14:32', 250);
     expect(label).toContain('интервал 14:32');
-    expect(label).toContain('на запрос 250 ток/с');
+    expect(label).toContain('скорость генерации 250 ток/с');
   });
   it('hover на разрыве (perStream null) → «движок не отвечал»', () => {
     const label = tpChartAriaLabel('1h', 412, 0.87, '14:32', null);
@@ -391,6 +391,55 @@ describe('tpChartAriaLabel: SVG «На запрос, ток/с» обновля�
     expect(label).toContain('движок не отвечал');
     const after = label.split('интервал')[1] ?? '';
     expect(after).not.toMatch(/\d+\s+ток\/с/);
+  });
+});
+
+// === Подписи главной линии (шаг 3а, llm-F3): «скорость генерации», не «на запрос» ===
+// Главная линия — ΣgenTokens/ΣitlSeconds (время, когда модель реально писала), а не
+// скорость на весь запрос: прежнее имя «на запрос» путало её с KPI «Скорость ответа».
+// Рендер — linkedom + createRoot (как TextTab.test.ts): проверяется DOM карточки,
+// а не только aria-label. Мутация «вернуть "на запрос" в легенде» краснит тест.
+const { parseHTML } = await import('linkedom');
+const { window: domWin, document: domDoc } = parseHTML('<!doctype html><html><body></body></html>');
+vi.stubGlobal('window', domWin);
+vi.stubGlobal('document', domDoc);
+vi.stubGlobal('HTMLElement', domWin.HTMLElement);
+vi.stubGlobal('Node', domWin.Node);
+vi.stubGlobal('Event', domWin.Event);
+class FakeResizeObserver {
+  observe() {} unobserve() {} disconnect() {}
+}
+vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+// Динамический импорт ПОСЛЕ стабов: react-dom читает window при загрузке
+const { act, createElement } = await import('react');
+const { createRoot } = await import('react-dom/client');
+const { ThroughputChart } = await import('./ThroughputChart');
+
+describe('главная линия графика подписана «скорость генерации» (не «на запрос»)', () => {
+  it('FieldLabel и легенда — «скорость генерации, ток/с»; «на запрос» в карточке нет', () => {
+    // Точки с genTokens+itlSeconds — главная линия есть; genThroughput — вторая линия
+    // («всего по стенду») есть, чтобы не сработала заглушка NotReported.
+    const history = [
+      { t: 10_000, genThroughput: 100, running: 1, genTokens: 200, itlSeconds: 2 },
+      { t: 20_000, genThroughput: 100, running: 1, genTokens: 200, itlSeconds: 2 },
+    ];
+    const host = domDoc.createElement('div');
+    domDoc.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => { root.render(createElement(ThroughputChart, { history, window: '5m' as const })); });
+    const html = host.innerHTML;
+    expect(html).toContain('Скорость генерации, ток/с'); // FieldLabel поля 1
+    expect(html).toContain('скорость генерации, ток/с'); // легенда (строчными)
+    // Пунктир «всего по стенду» не переименован
+    expect(html).toContain('всего по стенду, ток/с');
+    // прежнего имени нигде в карточке нет
+    expect(html).not.toContain('на запрос');
+    // aria-label той же подписью
+    expect(html).toContain('Скорость генерации, ток/с за 5 минут');
+    // подсказка легенды — та же, что у KPI «скорость генерации» (GEN_SPEED_HINT):
+    // с цифрами Artificial Analysis/OpenRouter сравнивается «Скорость ответа»
+    expect(html).toContain('Скорость ответа');
+    root.unmount();
   });
 });
 

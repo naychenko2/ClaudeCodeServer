@@ -405,8 +405,10 @@ public static class WikiPlanValidator
             // Совпадение — «возможный дубль»: решает человек (политика), и в черновом
             // состоянии новой страницы нет: состояния с двумя одинаковыми именами вики
             // не бывает, его применение — исход решения человека, а не плана.
+            // Дубль по предмету (C1) — только по своему разделу назначения: тот же снимок
+            // (targetPages), нового прохода по диску нет; цепочка вверх под него не идёт.
             var duplicate = isCreate
-                ? WikiDedup.FindPageDuplicate(title, null, null, DedupPool(pages, allowed))
+                ? WikiDedup.FindPageDuplicate(title, null, null, DedupPool(pages, allowed), DedupPool(targetPages, allowed))
                 : null;
             if (isCreate && duplicate is null && pages.Any(p => p.Path == page.Path))
             {

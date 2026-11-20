@@ -121,4 +121,26 @@ public static class WikiTopicScore
             .ThenBy(x => x.Path, StringComparer.Ordinal)
             .Take(take ?? int.MaxValue)];
     }
+
+    /// <summary>Вложение основ заголовков (C1, page_duplicate по предмету): меньший набор основ
+    /// целиком входит в больший и имеет не меньше MinCommon основ — одна общая основа не предмет.
+    /// Основы — тот же токенизатор, что у меры (WikiCandidates.SignificantWords, как в BuildIndex).
+    /// Пустой заголовок и набор короче MinCommon — false. Порогов и весов нет: в своём разделе
+    /// слова-предметы стоят почти в каждом заголовке, их IDF мал, и оценка пары эту дубль-пару
+    /// не ловит (перепостановка 20.11, консультация a2b00801) — здесь предикат без порога,
+    /// точность даёт судья.</summary>
+    public static bool TitleSubset(string titleA, string titleB)
+    {
+        if (string.IsNullOrEmpty(titleA) || string.IsNullOrEmpty(titleB))
+            return false;
+        var a = WikiCandidates.SignificantWords(titleA);
+        var b = WikiCandidates.SignificantWords(titleB);
+        var (small, large) = a.Count <= b.Count ? (a, b) : (b, a);
+        if (small.Count < MinCommon)
+            return false;
+        foreach (var stem in small)
+            if (!large.Contains(stem))
+                return false;
+        return true;
+    }
 }

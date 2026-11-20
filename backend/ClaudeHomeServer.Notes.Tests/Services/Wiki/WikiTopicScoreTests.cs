@@ -16,12 +16,12 @@ public class WikiTopicScoreTests
     }
 
     [Fact]
-    public void ЧетыреОбщихРедкихОсновы_СуммаВесовЛогарифма()
+    public void ПятьОбщихРедкихОсновы_СуммаВесовЛогарифма()
     {
-        var idx = Snapshot(("a", "Страница А", "аметист бирюза гранат хризолит"),
-            ("b", "Страница Б", "аметист бирюза гранат хризолит"));
+        var idx = Snapshot(("a", "Страница А", "аметист бирюза гранат хризолит яшма"),
+            ("b", "Страница Б", "аметист бирюза гранат хризолит яшма"));
 
-        WikiTopicScore.Score(idx, "a", "b").Should().BeApproximately(4 * Math.Log(24.0 / 2), 1e-9);
+        WikiTopicScore.Score(idx, "a", "b").Should().BeApproximately(5 * Math.Log(24.0 / 2), 1e-9);
     }
 
     [Fact]
@@ -37,8 +37,18 @@ public class WikiTopicScoreTests
     {
         var idx = Snapshot(("a", "Страница А", "аметист бирюза"), ("b", "Страница Б", "аметист бирюза"));
 
-        WikiTopicScore.Score(idx, "a", "b").Should().BeNull("2·ln(12) ≈ 5.0 < 6");
+        WikiTopicScore.Score(idx, "a", "b").Should().BeNull("2·ln(12) ≈ 5.0 < 11");
         WikiTopicScore.Score(idx, "a", "b", minScore: 0).Should().BeApproximately(2 * Math.Log(12), 1e-9);
+    }
+
+    [Fact]
+    public void ТриОсновы_СуммаМеждуСтарымИНовымПорогом_ОтсечённаПоMinScore()
+    {
+        var idx = Snapshot(("a", "Страница А", "аметист бирюза гранат"), ("b", "Страница Б", "аметист бирюза гранат"));
+
+        WikiTopicScore.MinScore.Should().Be(11);
+        WikiTopicScore.Score(idx, "a", "b").Should().BeNull("3·ln(12) ≈ 7.5 < 11 (при прежнем 6 пара проходила)");
+        WikiTopicScore.Score(idx, "a", "b", minScore: 0).Should().BeApproximately(3 * Math.Log(12), 1e-9);
     }
 
     [Fact]
@@ -72,7 +82,7 @@ public class WikiTopicScoreTests
     [Fact]
     public void Rank_УбываниеОценки_РавенствоПоOrdinalПути_Потолок()
     {
-        var s = "аметист бирюза гранат хризолит";
+        var s = "аметист бирюза гранат хризолит яшма малахит нефрит";
         var idx = Snapshot(("t", "Цель", s), ("z", "Я", s), ("b", "Б", s), ("y", "Ы", "аметист бирюза гранат"), ("m", "М", "аметист топаз"));
 
         var ranked = WikiTopicScore.Rank(idx, "t", ["z", "y", "b", "m", "t"], minScore: 0, take: 3);
@@ -85,7 +95,7 @@ public class WikiTopicScoreTests
     [Fact]
     public void Rank_ПорядокВходаНеВлияет_РавныеОценкиПоOrdinal()
     {
-        var s = "аметист бирюза гранат хризолит";
+        var s = "аметист бирюза гранат хризолит яшма малахит нефрит";
         var idx = Snapshot(("t", "Цель", s), ("c", "Ц", s), ("a", "А", s), ("b", "Б", s));
 
         var one = WikiTopicScore.Rank(idx, "t", ["c", "a", "b"]).Select(r => r.Path);

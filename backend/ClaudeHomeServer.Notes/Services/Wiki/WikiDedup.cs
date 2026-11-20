@@ -24,6 +24,9 @@ public static class WikiDedup
     private const string TitleField = "заголовок";
     private const string AliasField = "алиас";
     private const string OwnsField = "owns";
+    // Предмет нового заголовка (C1): не поле frontmatter, а вложение основ заголовка —
+    // отдельный предикат без порога (WikiTopicScore.TitleSubset).
+    private const string SubjectField = "subject";
 
     // Секция, чьи ссылки цитату не занимают (ADR-039, решение 2): в «Историю» утверждение
     // переносят вытесненное — оно больше не владеет цитатой. Имя — из фиксированного набора
@@ -145,11 +148,17 @@ public static class WikiDedup
         return ids;
     }
 
-    /// Возможный дубль новой страницы (мера 2, третья строка): совпадение заголовка,
-    /// алиаса или owns новой страницы с любым из тех же полей существующих страниц —
-    /// раздела и цепочки вверх (их набор даёт вызывающий: WikiSections.UpChain).
+    /// Возможный дубль новой страницы (мера 2, третья строка): сначала точное имя —
+    /// совпадение заголовка, алиаса или owns новой страницы с любым из тех же полей
+    /// существующих страниц раздела и цепочки вверх (их набор даёт вызывающий:
+    /// WikiSections.UpChain). Точного совпадения нет — дубль по предмету (C1): вложение
+    /// основ нового заголовка в основы заголовка существующей страницы
+    /// (WikiTopicScore.TitleSubset, без порога) — ТОЛЬКО по страницам своего раздела
+    /// (sameSection: их даёт вызывающий; цепочка вверх под это правило не попадает),
+    /// Field = subject, ExistingField = заголовок.
     /// Возвращает ПЕРВОЕ совпадение в перечислении: поля новой страницы по порядку
-    /// (заголовок, алиасы, owns), затем страницы по данному порядку — детерминированно.
+    /// (заголовок, алиасы, owns), затем страницы по данному порядку, затем предмет —
+    /// по данному порядку sameSection. Детерминированно.
     ///
     /// existing == null или пустой список (раздел пуст) — дубля нет. Пустые имена новой
     /// страницы ничего не сравнивают: дубль не объявляется по пустоте.
@@ -157,7 +166,8 @@ public static class WikiDedup
         string newTitle,
         IReadOnlyList<string>? newAliases,
         IReadOnlyList<string>? newOwns,
-        IReadOnlyList<ExistingPage>? existing)
+        IReadOnlyList<ExistingPage>? existing,
+        IReadOnlyList<ExistingPage>? sameSection = null)
     {
         var wanted = NamesOf(newTitle, newAliases, newOwns);
         if (wanted.Count == 0 || existing is null)
@@ -174,6 +184,17 @@ public static class WikiDedup
                     if (want == have)
                         return new Duplicate(path, wantField, haveField);
                 }
+            }
+        }
+
+        if (sameSection is not null)
+        {
+            foreach (var (path, page) in sameSection)
+            {
+                if (page is null || string.IsNullOrEmpty(path))
+                    continue;
+                if (WikiTopicScore.TitleSubset(newTitle, page.Title))
+                    return new Duplicate(path, SubjectField, TitleField);
             }
         }
         return null;

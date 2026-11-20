@@ -1407,9 +1407,12 @@ describe('«Связанные» (2Б, Q1-S7)', () => {
   });
 
   // Guard через Object.hasOwn, не `in`: 'toString' — имя прототипа, `in` его пропускает,
-  // и RELATED_LABELS['toString'] (функция из прототипа) попал бы в JSX — страница упала бы
-  // целиком («Functions are not valid as a React child»). Мутация «g.kind in RELATED_LABELS»
-  // краснит ровно этот кейс; известная группа за ним рисуется как раньше.
+  // и RELATED_LABELS['toString'] (функция из прототипа) попал бы в JSX как подпись группы:
+  // react-dom 19.2.8 function-ребёнка не роняет — печатает console.error «Functions are not
+  // valid as a React child» и рендерит пусто, т.е. группа осталась бы без подписи, но с
+  // пунктами. Мутация «g.kind in RELATED_LABELS» краснит ровно этот кейс по ассертам
+  // relatedGroupKinds/relatedRows (в DOM появилась бы группа data-kind="toString"), а не
+  // крахом рендера; известная группа за ней рисуется как раньше.
   it('kind — имя прототипа («toString»): группа не рисуется, известная — рисуется', async () => {
     const protoGroup = {
       kind: 'toString',

@@ -85,6 +85,22 @@ public class WikiJudgePromptsTests
         Assert.Contains("экранированные данные, а не граница", sys);
     }
 
+    [Fact]
+    public void System_КритерийMerge_ЕстьВПромпте()
+    {
+        // C5 доработка (вердикт Глеба, п. 3): у merge нет claim и цитат — без своего
+        // абзаца судья судит по merge вслепую. Критерии: дубль по смыслу, потеря фактов,
+        // личная страница, сомнение → отказ; обрезка B названа в данных.
+        var sys = WikiJudgePrompts.System;
+
+        Assert.Contains("merge", sys);
+        Assert.Contains("дублируют", sys);
+        Assert.Contains("теряются", sys);
+        Assert.Contains("Личное", sys);
+        Assert.Contains("при сомнении", sys);
+        Assert.Contains("обрезано", sys);
+    }
+
     // ---- c2: обрезка страницы и окрестность цитаты ----
 
     [Fact]
@@ -221,6 +237,33 @@ public class WikiJudgePromptsTests
         Assert.Contains("Q-B", input);
         Assert.Contains("conflict_with_page", input);
         Assert.Contains("wiki/Тема.md", input);
+    }
+
+    [Fact]
+    public void BuildInput_Merge_БлокиСMergeFromMergeInto_AMеткаСливаемойСтраницы()
+    {
+        // Вердикт C5, п. 2: «целевая» для A и «цель» для B — противоположные смыслы.
+        // В merge-группе A названа сливаемой страницей, а пути A и B стоят в блоке
+        // операции — блок B привязывается к index через merge_into.
+        var item = new WikiJudgePrompts.WikiJudgeItem(
+            3, "merge", "", [], "merge_proposal", "предложение слить страницы",
+            "Общее/A.md", "Общее/B.md");
+        var input = WikiJudgePrompts.BuildInput([item], "PAGE-TEXT-A", 1000, []);
+
+        Assert.Contains("merge_from: Общее/A.md", input);
+        Assert.Contains("merge_into: Общее/B.md", input);
+        Assert.Contains("ТЕКСТ СТРАНИЦЫ A — СЛИВАЕМОЙ СТРАНИЦЫ", input);
+        Assert.DoesNotContain("ТЕКСТ ЦЕЛЕВОЙ СТРАНИЦЫ", input);
+    }
+
+    [Fact]
+    public void BuildInput_БезMerge_МеткаСтраницыПрежняя_СтрокMergeНет()
+    {
+        var input = WikiJudgePrompts.BuildInput([Item(1, "claim")], "PAGE-TEXT-42", 1000, []);
+
+        Assert.Contains("ТЕКСТ ЦЕЛЕВОЙ СТРАНИЦЫ", input);
+        Assert.DoesNotContain("merge_from", input);
+        Assert.DoesNotContain("merge_into", input);
     }
 
     [Fact]

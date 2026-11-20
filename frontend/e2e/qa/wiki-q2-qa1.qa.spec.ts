@@ -7,7 +7,7 @@ import { login, api } from './helpers';
 // раздел B — 5 страниц (изоляция), раздел C — одна страница без связей (пустое состояние).
 // Скриншоты — в .cc-attachments/wiki-q2-qa1/shots/.
 
-const SHOTS = '/home/an/Sources/ClaudeCodeServer-wiki-queue2/.cc-attachments/wiki-q2-qa1/shots';
+const SHOTS = '.cc-attachments/wiki-q2-qa1/shots';
 const A = 'ffb8fa06-0095-4ea3-ba00-38af6d324bb4';
 const B = 'a69a5d00-f31f-45b1-bbe5-edd2426a8f97';
 const C = 'de047127-380b-4add-806a-21c3593a4a7b';

@@ -42,11 +42,19 @@ public class WikiTopicScoreTests
     }
 
     [Fact]
+    public void ПорогMinScore_Равен11_СторожЗначения()
+    {
+        // Значение порога откалибровано замером T0 (нижняя граница корзины E, 11+;
+        // WikiTopicScore.cs:13-17). Отдельный сторож: смена значения падает здесь, а не
+        // в поведенческом тесте ниже, где она тонула среди проверок пары (хвост R-T1b, п. 1).
+        WikiTopicScore.MinScore.Should().Be(11);
+    }
+
+    [Fact]
     public void ТриОсновы_СуммаМеждуСтарымИНовымПорогом_ОтсечённаПоMinScore()
     {
         var idx = Snapshot(("a", "Страница А", "аметист бирюза гранат"), ("b", "Страница Б", "аметист бирюза гранат"));
 
-        WikiTopicScore.MinScore.Should().Be(11);
         WikiTopicScore.Score(idx, "a", "b").Should().BeNull("3·ln(12) ≈ 7.5 < 11 (при прежнем 6 пара проходила)");
         WikiTopicScore.Score(idx, "a", "b", minScore: 0).Should().BeApproximately(3 * Math.Log(12), 1e-9);
     }
@@ -77,6 +85,49 @@ public class WikiTopicScoreTests
         var idx = Snapshot(("a", "Аметист бирюза", null), ("b", "Страница Б", "аметист бирюза"));
 
         WikiTopicScore.Score(idx, "a", "b", minScore: 0).Should().BeApproximately(2 * Math.Log(12), 1e-9);
+    }
+
+    // ─── пины снимка (хвост R-T1, п. 3): N=1, df=N, пустая сводка ───
+
+    [Fact]
+    public void Пин_N1_ЕдинственнаяСтраница_КандидатовНет()
+    {
+        // Снимок из одной страницы (n=1): оценка пары не строится — Rank исключает саму
+        // цель, пары вне индекса нет; и при minScore=0: единственная страница даёт df каждой
+        // основы = n (1 > 0,25) — редких основ нет вовсе.
+        var idx = WikiTopicScore.BuildIndex([new WikiTopicScore.Entry("a", "Замок вишнёвый", "замок вишнёвый")]);
+
+        idx.PageCount.Should().Be(1);
+        WikiTopicScore.Rank(idx, "a", ["a"]).Should().BeEmpty("цель не кандидат сама себе");
+        WikiTopicScore.Score(idx, "a", "нет-такой").Should().BeNull("пары вне индекса нет");
+        WikiTopicScore.Score(idx, "a", "a", minScore: 0).Should().BeNull("при n=1 каждая основа частая");
+    }
+
+    [Fact]
+    public void Пин_DfРавнаN_ВсеОсновыЧастые_ПарыНет_ДажеБезПорога()
+    {
+        // df каждой общей основы = N (2 из 2 — доля 1 > MaxDfShare): основа не называет
+        // предмет, общих редких меньше MinCommon — пары нет ни при каком minScore.
+        var idx = WikiTopicScore.BuildIndex([
+            new WikiTopicScore.Entry("a", "Замок вишнёвый", "замок вишнёвый"),
+            new WikiTopicScore.Entry("b", "Замок вишнёвый", "замок вишнёвый")]);
+
+        idx.PageCount.Should().Be(2);
+        WikiTopicScore.Score(idx, "a", "b", minScore: 0).Should().BeNull();
+    }
+
+    [Fact]
+    public void Пин_ПустаяСводка_РавнаЕёОтсутствию()
+    {
+        // Пустая сводка к тексту страницы ничего не добавляет: BuildIndex берёт один
+        // заголовок (тот же путь, что для null) — оценки пустой и отсутствующей сводки равны.
+        var empty = Snapshot(("a", "Аметист бирюза", ""), ("b", "Аметист бирюза", ""));
+        var none = Snapshot(("a", "Аметист бирюза", null), ("b", "Аметист бирюза", null));
+
+        WikiTopicScore.Score(empty, "a", "b", minScore: 0).Should().BeApproximately(2 * 2 * Math.Log(12), 1e-9);
+        WikiTopicScore.Score(empty, "a", "b", minScore: 0)
+            .Should().Be(WikiTopicScore.Score(none, "a", "b", minScore: 0),
+                "пустая сводка равна её отсутствию");
     }
 
     [Fact]
@@ -115,5 +166,50 @@ public class WikiTopicScoreTests
         WikiTopicScore.BuildIndex(entries, Counted);
 
         calls.Should().Be(50, "один вызов на страницу, не на пару");
+    }
+
+    // ─── TitleSubset (C1): вложение основ заголовков без порога ───
+
+    [Theory]
+    [InlineData("", "Каталог исходных")]
+    [InlineData("Каталог исходных", "")]
+    [InlineData("", "")]
+    public void TitleSubset_ПустойЗаголовок_False(string a, string b) =>
+        WikiTopicScore.TitleSubset(a, b).Should().BeFalse();
+
+    [Fact]
+    public void TitleSubset_РегистрИЁ_НеВлияют()
+    {
+        WikiTopicScore.TitleSubset("ЗАМОК ВИШНЁВЫЙ", "Большой замок вишневый").Should().BeTrue();
+    }
+
+    [Fact]
+    public void TitleSubset_ПовторяющиесяОсновы_СхлопываютсяВНабор()
+    {
+        // «замок замок» — одна основа: короче MinCommon, вложение не считается.
+        WikiTopicScore.TitleSubset("замок замок", "замок вишневый").Should().BeFalse();
+        // а повтор в большем заголовке вложению не мешает.
+        WikiTopicScore.TitleSubset("замок вишневый", "замок замок вишневый").Should().BeTrue();
+    }
+
+    [Fact]
+    public void TitleSubset_Симметрия_ПорядокАргументовНеВлияет()
+    {
+        WikiTopicScore.TitleSubset("Каталог исходных", "Содержание каталога исходных")
+            .Should().Be(WikiTopicScore.TitleSubset("Содержание каталога исходных", "Каталог исходных"))
+            .And.Be(true);
+        WikiTopicScore.TitleSubset("замок вишневый", "река мутная")
+            .Should().Be(WikiTopicScore.TitleSubset("река мутная", "замок вишневый"))
+            .And.Be(false);
+    }
+
+    [Fact]
+    public void TitleSubset_ДвеОсновы_ГраницаMinCommon()
+    {
+        // ровно две общие основы — вложение есть; одна — нет (одна общая основа не предмет).
+        WikiTopicScore.TitleSubset("замок вишневый", "старый замок вишневый").Should().BeTrue();
+        WikiTopicScore.TitleSubset("замок", "старый замок вишневый").Should().BeFalse();
+        // две основы, но не вложены (одна чужая) — нет.
+        WikiTopicScore.TitleSubset("замок вишневый", "старый замок мутный").Should().BeFalse();
     }
 }

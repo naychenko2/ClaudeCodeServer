@@ -22,16 +22,25 @@ public sealed record WikiPackage
     /// <summary>Предел длины утверждения операции `claim` (ADR-039, решение 2).</summary>
     public const int MaxClaimLength = 600;
 
-    // Операций пять; удаления нет (ADR-035, решение 4): снятие знания — откат по пакету
+    // Операций шесть; удаления страницы операцией ИИ нет (ADR-035, решение 4): снятие знания — откат по пакету
     // или по источнику (решение 12г, меры 4–5), а не операция пакета.
     public const string OpCreate = "create";
     public const string OpAppend = "append";
     public const string OpSupersede = "supersede";
     public const string OpConflict = "conflict";
     public const string OpLink = "link";
+    // Укрупнение `merge A → B` (очередь 2, волна C): Page — путь A (сливаемая), Target — путь B
+    // (куда сливается), оба в форме ключа страницы; Text и Quotes — null: код переносит уже
+    // проверенные строки A, модель текста не пишет. Применение — WikiApplyService.
+    public const string OpMerge = "merge";
+
+    /// <summary>Префикс ref источника пакета merge из ночи: «session:merge:{A}». Маркер пары, а не
+    /// карточка источника: применение merge-пакета карточку не ищет (строки A уже проверены и
+    /// переезжают со своими сносками), откат по такому «источнику» запрещён — откатывают пакет.</summary>
+    public const string MergeSourcePrefix = "merge:";
 
     public static readonly IReadOnlyList<string> OpValues =
-        [OpCreate, OpAppend, OpSupersede, OpConflict, OpLink];
+        [OpCreate, OpAppend, OpSupersede, OpConflict, OpLink, OpMerge];
 
     // Операции, которых нет у модели: правку формулировки, секцию «Заметки» и поля шапки
     // намеревается только человек (ADR-038). Пакет ai с такой операцией — ошибка формы.
@@ -350,6 +359,11 @@ public sealed record WikiPackage
         {
             if (p.Operations.Count == 0)
                 errors.Add("пакет без операций");
+            // Применение пакета из одних merge карточку источника не ищет (WikiApplyService): без
+            // этого правила create без карточки обошёл бы проверку, спрятавшись рядом с merge.
+            if (p.Operations.Any(o => o is not null && o.Op == OpMerge)
+                && p.Operations.Any(o => o is not null && o.Op != OpMerge))
+                errors.Add("пакет с операцией «merge» содержит только merge: остальные операции идут своим пакетом с карточкой источника");
             foreach (var op in p.Operations)
             {
                 if (op is null)
@@ -385,8 +399,22 @@ public sealed record WikiPackage
                 var textRequired = op.Op is OpCreate or OpAppend or OpEdit || (op.Op == OpSupersede && !isHuman);
                 if (textRequired && string.IsNullOrWhiteSpace(op.Text))
                     errors.Add($"операция «{op.Op}» без содержания");
-                if (op.Op is OpSupersede or OpConflict or OpLink or OpEdit or OpHeader && string.IsNullOrWhiteSpace(op.Target))
-                    errors.Add($"операция «{op.Op}» без цели (замещаемого утверждения, ссылки или поля)");
+                if (op.Op is OpSupersede or OpConflict or OpLink or OpEdit or OpHeader or OpMerge && string.IsNullOrWhiteSpace(op.Target))
+                    errors.Add($"операция «{op.Op}» без цели (замещаемого утверждения, ссылки, поля или страницы B)");
+                if (op.Op == OpMerge)
+                {
+                    if (isHuman)
+                        errors.Add("операция «merge» бывает только у пакета ai");
+                    if (!string.IsNullOrWhiteSpace(op.Target))
+                    {
+                        if (op.Target == op.Page)
+                            errors.Add("merge: страница A и страница B совпадают");
+                        else if (WikiSections.Parse(op.Target) != p.Section)
+                            errors.Add($"merge: страница B «{op.Target}» не раздела «{p.Section}»");
+                    }
+                    if (op.Text is not null || op.Quotes is not null)
+                        errors.Add("merge: у операции нет текста и цитат — код переносит проверенные строки");
+                }
                 // Утверждение отдельно от доказательства (ADR-039, решение 2). Пока цитат нет
                 // — старый пакет, форма прежняя; с цитатами claim обязателен и ограничен.
                 if (op.Quotes is not null)

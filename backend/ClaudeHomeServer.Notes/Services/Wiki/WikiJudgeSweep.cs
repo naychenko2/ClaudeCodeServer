@@ -94,6 +94,14 @@ public sealed class WikiJudgeSweep
     /// модели: он несёт метку WikiPackage.JudgeModelCode (ревью J-J3a, Н4).</summary>
     public const string ModelUnknown = "unknown";
 
+    /// <summary>Заголовок блока страницы B входе merge-группы: инструкция — без пути B
+    /// (путь выбран моделью и остаётся внутри рамки данных, ревью C5, дельта п. 3);
+    /// привязка блока к операции — строкой «страница B: …» внутри рамки и merge_into
+    /// того же index (вердикт C5, п. 2); пометка «обрезано» — что текст усечён до
+    /// потолка и судья дальше не видит (вердикт C5, п. 4).</summary>
+    internal static string MergeTargetLabel(bool truncated) =>
+        $"ТЕКСТ СТРАНИЦЫ B — ЦЕЛИ СЛИЯНИЯ merge{(truncated ? ", ОБРЕЗАНО" : "")} (данные):";
+
     /// <summary>Замок прохода: ключ — путь корня вики, не экземпляр (тот же приём, что
     /// у _rootLocks / _createLocks сторов: разные вики друг друга не держат).</summary>
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _rootLocks = new(StringComparer.Ordinal);
@@ -240,7 +248,54 @@ public sealed class WikiJudgeSweep
                 return;
             var members = group.ToList();
             var pageText = ReadPageOrNull(root, group.Key);
-            var input = BuildGroupInput(members, pageText);
+            // Merge (операция 13): судье нужны ОБЕ страницы — A (Page, она же страница
+            // группы) и B (Target). B читается по своему пути; дубль цели читается один
+            // раз; A-цель дублирует текст группы и не перечитывается. Порядок во входе:
+            // A раньше B (контракт C5). Инвариант (вердикт ревью C5, п. 1): merge не
+            // доходит до модели без обоих текстов — B не читается (нет файла, путь вне
+            // pages/, Target не назван вовсе) → операция отклоняется кодом с причиной
+            // «страница B недоступна», модель по ней не звалась (тот же путь, что у
+            // отказа по коду, И4′). Дедуп — по результату чтения, а не по одному пути:
+            // при нечитаемой B кодом отклоняются ВСЕ операции с этой целью — дедуп по
+            // пути раньше чтения оставлял вторую merge-операцию идти к модели без
+            // текста B (ревью C5, дельта п. 1).
+            var targetTexts = new List<(string Path, string Text)>();
+            var readTargets = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var missingB = new List<(WikiPackage.Operation Op, int Index)>();
+            foreach (var t in members)
+            {
+                if (t.op.Op != WikiPackage.OpMerge)
+                    continue;
+                var target = t.op.Target;
+                if (string.IsNullOrEmpty(target))
+                {
+                    missingB.Add(t);
+                    continue;
+                }
+                if (string.Equals(target, group.Key, StringComparison.Ordinal))
+                    continue; // A-цель: текст B уже во входе как текст группы
+                if (!readTargets.TryGetValue(target, out var bText))
+                {
+                    bText = ReadPageOrNull(root, target);
+                    readTargets[target] = bText;
+                    if (bText is not null)
+                        targetTexts.Add((target, bText));
+                }
+                if (bText is null)
+                    missingB.Add(t);
+            }
+            if (missingB.Count > 0)
+            {
+                current = WriteOutcomes(root, current,
+                    missingB.Select(t => new WikiPackageStore.JudgeOutcome(
+                        t.Index, false, "отклонено кодом: страница B недоступна",
+                        WikiPackage.JudgeModelCode, null)).ToList(), counters) ?? current;
+                var rejected = missingB.Select(t => t.Index).ToHashSet();
+                members = members.Where(t => !rejected.Contains(t.i)).ToList();
+                if (members.Count == 0)
+                    continue; // вся группа отклонена кодом: вызова нет
+            }
+            var input = BuildGroupInput(members, pageText, targetTexts);
 
             string? text;
             OneShotUsage? usage;
@@ -377,6 +432,9 @@ public sealed class WikiJudgeSweep
     private static bool IsUndecidedContested(WikiPackage.Operation op) =>
         op.Decision == WikiPackage.DecisionInbox && op.HumanDecision is null && op.JudgeDecision is null;
 
+    /// internal static: форма входа группы тестируется напрямую (тот же приём, что у
+    /// WikiApplyPolicy.Auto) — склейка страниц merge в неё своя, и тесту нужен результат
+    /// метода, а не проход с фейком модели.
     /// <summary>Вход судьи для одной группы: System + блоки операций (с потолка на
     /// стороне прохода), окрестности цитат и текст целевой страницы группы. Окрестности
     /// считаются по тексту страницы: текста источника на диске нет — ни карточка, ни
@@ -384,8 +442,15 @@ public sealed class WikiJudgeSweep
     /// (цель supersede/conflict), — ровно тот контекст, по которому судья судит
     /// «противоречит ли claim тексту страницы». Пустая окрестность в вход не идёт.
     /// Длины claim, цитат и окрестности ограничены на стороне прохода (хвост ревью
-    /// J-J1b №6).</summary>
-    private static string BuildGroupInput(List<(WikiPackage.Operation Op, int Index)> members, string? pageText)
+    /// J-J1b №6). Для merge (операция 13) к входу добавляются тексты страниц B (целей
+    /// merge-операций группы): путь B — строкой внутри блока, как недоверенный текст
+    /// (ревью C5, дельта п. 3); каждый текст обрезается до MaxPageChars с пометкой
+    /// «обрезано» в заголовке, A (текст целевой страницы группы) стоит раньше любой B —
+    /// вердикт по merge судья выносит только apply/reject («переписать» нет). B без
+    /// текста сюда не доходит: нечитаемую B проход отклоняет кодом до вызова (инвариант
+    /// вердикта C5, п. 1).</summary>
+    internal static string BuildGroupInput(List<(WikiPackage.Operation Op, int Index)> members,
+        string? pageText, IReadOnlyList<(string Path, string Text)> mergeTargetTexts)
     {
         var items = members.Select(t => new WikiJudgePrompts.WikiJudgeItem(
             t.Index,
@@ -394,7 +459,8 @@ public sealed class WikiJudgeSweep
             (t.Op.Quotes ?? []).Select(q => Cut(q, MaxQuoteChars)).ToList(),
             t.Op.ReasonCode ?? "",
             t.Op.Reason ?? "",
-            t.Op.Page)).ToList();
+            t.Op.Page,
+            t.Op.Target ?? "")).ToList();
 
         var contexts = new List<WikiJudgePrompts.WikiJudgeQuoteContext>();
         if (pageText is not null)
@@ -414,7 +480,27 @@ public sealed class WikiJudgeSweep
         }
 
         var input = WikiJudgePrompts.BuildInput(items, pageText, MaxPageChars, contexts);
+        foreach (var (path, text) in mergeTargetTexts)
+            input += MergePageBlock(path, text);
         return WikiJudgePrompts.System + "\n\n" + input;
+    }
+
+    /// <summary>Блок страницы B для merge: та же рамка данных, что у BuildInput (маркеры
+    /// публичные в Prompts; экранирование разделителя — здесь, та же формула, что у
+    /// Prompts.Escaped). Путь B — текст, выбранный моделью (merge_into): он стоит
+    /// строкой «страница B: …» ВНУТРИ рамки данных, как остальной недоверенный текст,
+    /// а не в заголовке — в инструктивную часть промпта он не попадает (ревью C5,
+    /// дельта п. 3); привязка блока к операции — этой строкой и merge_into того же
+    /// index (вердикт C5, п. 2). Усечение до MaxPageChars видно судье пометкой
+    /// «обрезано» в заголовке (п. 4). Потолок входа merge остаётся 2 × MaxPageChars.</summary>
+    private static string MergePageBlock(string path, string text)
+    {
+        var truncated = text.Length > MaxPageChars;
+        var escaped = ("страница B: " + path + "\n" + Cut(text, MaxPageChars))
+            .Replace(WikiJudgePrompts.DataOpen, "＜" + WikiJudgePrompts.DataOpen[1..^1] + "＞")
+            .Replace(WikiJudgePrompts.DataClose, "＜" + WikiJudgePrompts.DataClose[1..^1] + "＞");
+        return "\n\n" + MergeTargetLabel(truncated) + "\n" + WikiJudgePrompts.DataOpen + "\n" + escaped + "\n"
+            + WikiJudgePrompts.DataClose + "\n";
     }
 
     /// <summary>Текст страницы с диска: null — страницы нет (create ещё не применён) или

@@ -31,7 +31,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // (WikiGate.cs:419): обе вне Resolved, обе отдают null/null — мутация «отдавать res.Section
 // для не-Resolved» краснеет именно на них (голая [[Вбок]] вне снимка — NotFound с null,
 // по ней мутация не проверяется); [[Общее/Верх]] — та же цель, что [[Верх]], но по ветке
-// явного префикса (WikiGate.cs:416-418). Страница с боковой ссылкой пишется на диск напрямую:
+// явного префикса (WikiGate.cs:416-418). R-B3(3) довершает ветки резолва на уровне
+// контроллера: [[Проекты/{своего}/A]] — явный префикс своего раздела к разрешённой цели
+// (Resolved с парой, WikiGate.cs:416-418), [[Проекты/{своего}/НетТакой]] — PrefixedUnknown
+// своего раздела (Section непустой, пара не отдаётся), [[НетТакой]] — голая ссылка, которой
+// нет нигде (NotFound, WikiGate.cs:431-435); голая вверх по цепочке уже покрыта [[Верх]].
+// Страница с боковой ссылкой пишется на диск напрямую:
 // такой записи гейт не позволяет, но уже написанную страницу GET отвечает как есть. Контроллер
 // строится напрямую (чтение, не транспорт) — фабрики хоста нет, метки Host нет.
 public class WikiControllerPageLinksTests : IDisposable
@@ -52,6 +57,9 @@ public class WikiControllerPageLinksTests : IDisposable
     private readonly string _sideSectionKey;
     private readonly string _upKey;
     private readonly string _upLink;
+    private readonly string _ownPref; // явный префикс своего раздела к цели A (R-B3(3))
+    private readonly string _ownMissing; // префикс своего раздела, страницы в нём нет
+    private const string BareMissing = "НетТакой"; // голая ссылка на несуществующую страницу
 
     public WikiControllerPageLinksTests()
     {
@@ -83,6 +91,8 @@ public class WikiControllerPageLinksTests : IDisposable
         _sideLink = $"Проекты/{side.Id}/Вбок"; // текст префиксной боковой ссылки (тот же путь без .md)
         _upLink = "Общее/Верх"; // страница общего раздела: цель «верх» ссылки — голой и с префиксом
         _upKey = _upLink + ".md";
+        _ownPref = $"Проекты/{project.Id}/A"; // явный префикс своего раздела к уже разрешённой цели
+        _ownMissing = $"Проекты/{project.Id}/НетТакой"; // тот же префикс, страницы в своём разделе нет
 
         SeedAsync().GetAwaiter().GetResult();
     }
@@ -99,9 +109,9 @@ public class WikiControllerPageLinksTests : IDisposable
     public async Task Page_Links_ResolvedAndNot()
     {
         var links = Json(PageResult()).GetProperty("links");
-        // Семь [[…]] тела (голые и префиксные) + цель сноски = восемь записей; порядок
+        // Десять [[…]] тела (голые и префиксные) + цель сноски = одиннадцать записей; порядок
         // детерминирован: сначала тело, затем сноски (OutboundLinks, WikiPage.cs:272-282).
-        links.GetArrayLength().Should().Be(8, "семь [[…]] тела и цель сноски — восемь записей, порядка текста это касается");
+        links.GetArrayLength().Should().Be(11, "десять [[…]] тела и цель сноски — одиннадцать записей, порядка текста это касается");
 
         links[0].GetProperty("text").GetString().Should().Be("A");
         links[0].GetProperty("path").GetString().Should().Be(_pageKey.Replace("Знание.md", "A.md"));
@@ -161,14 +171,41 @@ public class WikiControllerPageLinksTests : IDisposable
         links[6].GetProperty("section").GetString().Should().Be(WikiSections.Common,
             "явный префикс к разрешённой цели: section — раздел из Parse текста ссылки");
 
+        // [[Проекты/{своего}/A]] — явный префикс своего раздела к уже разрешённой цели:
+        // префикс разбирается и в allowed (свой раздел), цель ищется в нём (WikiGate.cs:416-418)
+        // — Resolved с парой: путь цели, section — ключ своего раздела. Мутация «искать
+        // префиксную цель только вверх по цепочке, не в своём разделе» — краснеет здесь.
+        links[7].GetProperty("text").GetString().Should().Be(_ownPref);
+        links[7].GetProperty("path").GetString().Should().Be(_pageKey.Replace("Знание.md", "A.md"),
+            "явный префикс своего раздела: та же цель, что у голой [[A]]");
+        links[7].GetProperty("section").GetString().Should().Be(_key,
+            "section — раздел из Parse текста ссылки: здесь он совпадает с разделом страницы");
+
+        // [[Проекты/{своего}/НетТакой]] — тот же префикс, страницы в своём разделе нет:
+        // PrefixedUnknown с непустым Section (своего ключа, WikiGate.cs:419). Та же изоляция,
+        // что у links[4]/[5]: null/null; мутация «отдавать res.Section для не-Resolved»
+        // вернула бы Section и здесь.
+        links[8].GetProperty("text").GetString().Should().Be(_ownMissing);
+        links[8].GetProperty("path").ValueKind.Should().Be(JsonValueKind.Null);
+        links[8].GetProperty("section").ValueKind.Should().Be(JsonValueKind.Null,
+            "PrefixedUnknown своего раздела — вне Resolved: section=null тогда же, когда path=null");
+
+        // [[НетТакой]] — голая ссылка в несуществующую нигде страницу: ни своего раздела, ни
+        // вверх, ни «вбок» (FindPage elsewhere, WikiGate.cs:431-435) — NotFound с null/null.
+        // Отличие от links[2] ([[Вбок]]): там страница есть на диске, но вне видимого снимка.
+        links[9].GetProperty("text").GetString().Should().Be(BareMissing);
+        links[9].GetProperty("path").ValueKind.Should().Be(JsonValueKind.Null);
+        links[9].GetProperty("section").ValueKind.Should().Be(JsonValueKind.Null,
+            "голая без цели нигде — NotFound: пара не отдаётся");
+
         // Цель сноски [^s1] — тоже ссылка: идёт после ссылок тела и резолвится общими
         // правилами — путь карточки. «Связанные» учитывают её так же (согласие с WikiRelated).
         // Мутация «отбросить цели сносок в links[]» — тест краснеет на длине, а без пути
         // цели — на этой строке.
-        links[7].GetProperty("text").GetString().Should().Be(AiCard);
-        links[7].GetProperty("path").GetString().Should().Be(_pageKey.Replace("Знание.md", $"Источники/{AiCard}.md"),
+        links[10].GetProperty("text").GetString().Should().Be(AiCard);
+        links[10].GetProperty("path").GetString().Should().Be(_pageKey.Replace("Знание.md", $"Источники/{AiCard}.md"),
             "цель сноски резолвится общими правилами: путь карточки");
-        links[7].GetProperty("section").GetString().Should().Be(_key,
+        links[10].GetProperty("section").GetString().Should().Be(_key,
             "section — ключ раздела цели: карточка в разделе страницы");
     }
 
@@ -219,7 +256,7 @@ public class WikiControllerPageLinksTests : IDisposable
         // Сама страница — на диск напрямую: [[Вбок]] — боковая ссылка, такой записи гейт
         // отказывает, но уже написанную страницу GET отвечает как есть (200, links с null).
         // Префиксные цели — те же страницы, что уже на диске, плюс одна несуществующая.
-        var page = $"---\ntype: topic\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Знание\n\n## Сводка\nСервер работает на порту пять тысяч. [^s1]\nСм. [[A]]. См. ещё [[A|форма]]. И боковое [[Вбок]]. И вверх [[Верх]].\nПрефикс вбок: [[{_sideLink}]]. Префикс без цели: [[Общее/НетТакой]]. Префикс вверх: [[{_upLink}]].\n\n## Хронология\n\n## Противоречия\n\n## История\n\n[^s1]: [[Карточка ИИ]] — «Сервер слушает порт пять тысяч в конфиге»\n";
+        var page = $"---\ntype: topic\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Знание\n\n## Сводка\nСервер работает на порту пять тысяч. [^s1]\nСм. [[A]]. См. ещё [[A|форма]]. И боковое [[Вбок]]. И вверх [[Верх]].\nПрефикс вбок: [[{_sideLink}]]. Префикс без цели: [[Общее/НетТакой]]. Префикс вверх: [[{_upLink}]].\nПрефикс своего раздела: [[{_ownPref}]]. Префикс своего раздела без цели: [[{_ownMissing}]]. Голая без цели: [[{BareMissing}]].\n\n## Хронология\n\n## Противоречия\n\n## История\n\n[^s1]: [[Карточка ИИ]] — «Сервер слушает порт пять тысяч в конфиге»\n";
         File.WriteAllText(Path.Combine(_pages, _pageKey.Replace('/', Path.DirectorySeparatorChar)), page);
     }
 

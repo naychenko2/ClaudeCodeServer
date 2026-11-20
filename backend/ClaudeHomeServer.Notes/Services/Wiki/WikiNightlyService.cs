@@ -170,7 +170,8 @@ public sealed partial class WikiNightlyService : BackgroundService
     /// StrippedLinks — ссылки, снятые валидатором у модели за проход (сумма ChatResult), NewConnectivity —
     /// связность новых страниц знаний ночи, SectionConnectivity — всех страниц знаний тронутых разделов,
     /// ConnectivityOk — K1 новых ≥ BaselineK1 − BaselineK1Slack (null — новых страниц не было); у
-    /// старого итога все четыре null — «не измерено», а не «0 %». В файле итога поля аддитивны: старый итог (без поля)
+    /// старого итога все четыре null — «не измерено», а не «0 %». MergeProposed (C6) — число пакетов
+    /// merge, созданных этой ночью; 0 — тумблер Wiki:MergeProposals выключен или предлагать нечего; null — подбор упал (и старый итог). В файле итога поля аддитивны: старый итог (без поля)
     /// читается нулями, старый Manual — false, Executors — null: «не измерено», а не «ни одного
     /// исполнителя не было» (читать его пустым нельзя — это разные вещи).</summary>
     public sealed record NightResult(
@@ -183,7 +184,7 @@ public sealed partial class WikiNightlyService : BackgroundService
         int Stage2Refused = 0, string? FirstStage2Refusal = null,
         IReadOnlyList<NightExecutorStat>? Executors = null,
         int? StrippedLinks = null, ConnectivityStat? NewConnectivity = null,
-        ConnectivityStat? SectionConnectivity = null, bool? ConnectivityOk = null);
+        ConnectivityStat? SectionConnectivity = null, bool? ConnectivityOk = null, int? MergeProposed = null);
 
     /// <summary>Связность среза страниц знаний (A6, ADR-039 р.13): Pages — сколько страниц измерено,
     /// K0 — прежняя средняя степень (mentions + mentionedHere + backlinks), K1 — доля со связью
@@ -443,6 +444,12 @@ public sealed partial class WikiNightlyService : BackgroundService
         {
             template.Append("; связность: новых страниц нет; ссылок снято у модели {Stripped}");
             args.Add(sl);
+        }
+        // Предложения merge (C6): часть только когда пакеты созданы (отдельная строка до судьи — в RunPassAsync).
+        if (r.MergeProposed is > 0 and var mp)
+        {
+            template.Append("; предложено merge {MergeProposed}");
+            args.Add(mp);
         }
         // Исполнители (W6a): по движку «анализировано/отказано», при выбывании — время. Части нет
         // вовсе при пути без названных исполнителей. Причин по исполнителю здесь нет: причина

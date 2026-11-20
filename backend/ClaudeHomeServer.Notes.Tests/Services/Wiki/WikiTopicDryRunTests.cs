@@ -95,11 +95,14 @@ public class WikiTopicDryRunTests
                 if (product is null)
                     continue; // общих редких основ меньше MinCommon — пара не оценивается вовсе
                 var mine = ScoreWith(ctx.Index, target.Path, cand, WikiTopicScore.MaxDfShare);
-                (mine.Sum - product.Value).Should().BeLessThan(Eps,
+                // R-T0(1): сходимость двусторонняя — расход в любую сторону, а не только
+                // «пересчёт не больше продуктового».
+                Math.Abs(mine.Sum - product.Value).Should().BeLessThan(Eps,
                     "пересчёт веса сходится с кодом продукта (округление 1e-9)");
                 var know = ScoreWith(ctx.IndexKnowOnly, target.Path, cand, WikiTopicScore.MaxDfShare);
                 var df15 = ScoreWith(ctx.Index, target.Path, cand, 0.15);
                 var df35 = ScoreWith(ctx.Index, target.Path, cand, 0.35);
+                AssertVariantsConsistent(ctx.Index, ctx.IndexKnowOnly, target.Path, cand, mine, know, df15, df35);
                 var key = PairKey(target.Path, cand);
                 if (pairs.ContainsKey(key))
                     continue; // пара считается один раз, независимо от направления
@@ -256,6 +259,65 @@ public class WikiTopicDryRunTests
             sum += ta.Contains(stem) && tb.Contains(stem) ? weight * 2 : weight;
         }
         return (sum, stems.Count, stems);
+    }
+
+    // R-T0(2): собственная сверка вариантов, которые идут в артефакт (ScoreKnowOnly,
+    // ScoreDf15, ScoreDf35) — раньше сверялся только 0,25 с кодом продукта. Отсечка частоты
+    // только выбрасывает общие основы: множества основ и суммы монотонны по отсечке, основа,
+    // добавленная или выброшенная между отсечками, имеет df ровно между ними, а разница сумм
+    // равна весам этой разницы. «Без карточек» сверяется с продуктовым Score по индексу знаний:
+    // если пара там невалидна (редких основ меньше MinCommon), пересчёт считает ровно их.
+    // Перевёрнутый сравнитель отсечки или подставленная не та доля краснеет здесь.
+    private static void AssertVariantsConsistent(
+        WikiTopicScore.Index index, WikiTopicScore.Index indexKnow, string a, string b,
+        (double Sum, int Rare, List<string> Stems) main,
+        (double Sum, int Rare, List<string> Stems) know,
+        (double Sum, int Rare, List<string> Stems) df15,
+        (double Sum, int Rare, List<string> Stems) df35)
+    {
+        var n = index.PageCount;
+        // df15.Rare может быть 0: все продуктовые редкие основы могут лежать выше 0,15·N.
+        df15.Rare.Should().BeLessOrEqualTo(main.Rare);
+        main.Rare.Should().BeLessOrEqualTo(df35.Rare);
+        df15.Sum.Should().BeLessOrEqualTo(main.Sum);
+        main.Sum.Should().BeLessOrEqualTo(df35.Sum);
+        var dropped = main.Stems.Except(df15.Stems).ToList();
+        var extra = df35.Stems.Except(main.Stems).ToList();
+        // основа в продуктовом варианте, но не в 0,15 — её df строго выше 0,15·N (и не выше 0,25·N);
+        // основа в 0,35, но не в продуктовом — df строго выше 0,25·N (и не выше 0,35·N).
+        foreach (var stem in dropped)
+            ((double)index.Df[stem]).Should().BeGreaterThan(0.15 * n, "основа выброшена отсечкой 0,15: df выше неё");
+        foreach (var stem in extra)
+            ((double)index.Df[stem]).Should().BeGreaterThan(0.25 * n, "основа добавлена отсечкой 0,35: df выше продуктовой");
+        Math.Abs(main.Sum - df15.Sum - WeightsOf(index, a, b, dropped)).Should().BeLessThan(Eps,
+            "разница 0,25↔0,15 — ровно веса выброшенных основ");
+        Math.Abs(df35.Sum - main.Sum - WeightsOf(index, a, b, extra)).Should().BeLessThan(Eps,
+            "разница 0,35↔0,25 — ровно веса добавленных основ");
+
+        var productKnow = WikiTopicScore.Score(indexKnow, a, b, minScore: 0);
+        if (productKnow is not null)
+            Math.Abs(know.Sum - productKnow.Value).Should().BeLessThan(Eps,
+                "«без карточек» сходится с кодом продукта по индексу знаний");
+        else
+            know.Rare.Should().BeLessThan(WikiTopicScore.MinCommon,
+                "пара невалидна в индексе знаний: пересчёт считает ровно меньше MinCommon редких основ");
+    }
+
+    // Независимый пересчёт весов набора основ по индексу: та же формула продукта
+    // (ln(N/df), ×2 за основу в обоих заголовках, WikiTopicScore.cs:100-101) — локальная,
+    // чтобы разница вариантов сверялась не с самой собой.
+    private static double WeightsOf(WikiTopicScore.Index index, string a, string b, List<string> stems)
+    {
+        var ta = index.TitleStems(a);
+        var tb = index.TitleStems(b);
+        var n = index.PageCount;
+        var sum = 0.0;
+        foreach (var stem in stems)
+        {
+            var weight = Math.Log((double)n / index.Df[stem]);
+            sum += ta.Contains(stem) && tb.Contains(stem) ? weight * 2 : weight;
+        }
+        return sum;
     }
 
     // Округление до 1e-9: равные по смыслу оценки не должны разойтись на ulp.

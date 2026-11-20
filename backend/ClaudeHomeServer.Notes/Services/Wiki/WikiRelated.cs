@@ -327,6 +327,10 @@ public static class WikiRelated
         var index = new Dictionary<(string, string), Cand>();
         foreach (var c in searchable)
             index.TryAdd((c.Section, Norm(c.Page.Title, counter)), c);
+        // Алиасы — после всех заголовков: заголовок старше (та же очерёдность, что у FindPage гейта).
+        foreach (var c in searchable)
+            foreach (var alias in c.Page.Frontmatter.Aliases)
+                index.TryAdd((c.Section, Norm(alias, counter)), c);
         return index;
     }
 

@@ -10,7 +10,10 @@
 //  (3) печатать op.text всегда (убрать text !== claim) → «утверждение один раз» краснеет;
 //  (4) вернуть поиск PAGE_TYPE без lower-case op.kind → «kind='State'» краснеет;
 //  (5) снять метку ожидания в бейдже режима судьи (последняя ветка decidedBadge → null) →
-//      «допустительная — «вердикта ещё нет» без кнопок» краснеет (доработка J-F1, финал 9c305f19).
+//      «допустительная — «вердикта ещё нет» без кнопок» краснеет (доработка J-F1, финал 9c305f19);
+//  (6) убрать строку «A → B» операции merge (блок wiki-op-merge) → «Мелкая → Крупная» краснеет;
+//      снять в intentLines признак op.op !== 'merge' у fallback «− target» → «нет предполагаемого
+//      изменения» краснеет (C7).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -185,11 +188,12 @@ function renderOps(ops: Record<string, unknown>[], judgeMode?: boolean) {
 }
 
 describe('режим судьи: кнопки только у операций вне допуска (доработка J-F1)', () => {
-  // op0 — autoapply_off (вне допуска), op1 — допущена и ещё не решена, op2 — вердикт судьи
+  // op0 — autoapply_off (вне допуска: judgeAdmitted false/нет), op1 — допущена и ещё не
+  // решена (judgeAdmitted: true из DTO, D2), op2 — вердикт судьи
   const MIXED = [
-    op({ reasonCode: 'autoapply_off' }),
-    op({ index: 1, reasonCode: 'overrides_human' }),
-    op({ index: 2, reasonCode: 'overrides_human', judgeDecision: 'rejected', judgeModel: 'claude-x', judgeReason: 'числа не подтверждены цитатой' }),
+    op({ reasonCode: 'autoapply_off', judgeAdmitted: false }),
+    op({ index: 1, reasonCode: 'overrides_human', judgeAdmitted: true }),
+    op({ index: 2, reasonCode: 'overrides_human', judgeAdmitted: true, judgeDecision: 'rejected', judgeModel: 'claude-x', judgeReason: 'числа не подтверждены цитатой' }),
   ];
 
   it('режим судьи: вне допуска — с кнопками; допустительная — «вердикта ещё нет» без кнопок; вердикт — без кнопок', () => {
@@ -216,7 +220,7 @@ describe('режим судьи: кнопки только у операций �
   it('режим судьи: «Принять всё» — нет для смешанного пакета, да когда всё нерешённое вне допуска', () => {
     const out1 = op({ reasonCode: 'autoapply_off' });
     const out2 = op({ index: 1, op: 'append', page: 'projects/p1/vera', target: null, text: 'Вера ведёт QA.', class: 'session×append', reasonCode: 'autoapply_off' });
-    const admitted = op({ index: 2, reasonCode: 'overrides_human' });
+    const admitted = op({ index: 2, reasonCode: 'overrides_human', judgeAdmitted: true });
     // смешанный: две человеческие + одна судьи — оптом забрать судью нельзя
     const c1 = renderOps([out1, out2, admitted], true);
     expect(findNodeByAttr(c1, 'data-testid', 'wiki-pkg-accept-all')).toBeNull();
@@ -254,5 +258,32 @@ describe('плашка смешанного пакета: решение зап�
     expect(all(c)).toContain('Они ниже — решите их, и пакет применится целиком.');
     // транспорт возвращаем к прежнему поведению файла — следующий тест не наследует мок
     req.mockImplementation(() => Promise.resolve(null));
+  });
+});
+
+// ─── Операция merge (C7): строка «A → B» ───
+// merge: page — путь A (сливаемая страница), target — путь B (куда вливают), text — null
+// (контракт C2, WikiPackage.cs:32-35). Бейдж «слить страницы» — из OP_META (тот же словарь
+// читает список «Решения судьи» в WikiInbox:275, поэтому «Решения» покрыты тем же ключом).
+// Имена сторон — без префикса раздела, как имя страницы в шапке карточки. Неизвестный op
+// по-прежнему не роняет рендер: карточка есть, бейджа операции нет.
+
+describe('операция merge: «A → B» и неизвестный op (C7)', () => {
+  it('merge: бейдж «слить страницы» и строка «Мелкая → Крупная»', () => {
+    const c = render(op({ op: 'merge', page: 'projects/p1/Мелкая', target: 'projects/p1/Крупная', text: null }));
+    expect(all(c)).toContain('слить страницы');
+    const row = nodeText(c, 'wiki-op-merge');
+    expect(row).not.toBeNull();
+    // порядок: A слева, B справа
+    expect(row).toContain('Мелкая → Крупная');
+    // текста нет → блока «Предполагаемое изменение» тоже нет: fallback «− target»
+    // для merge закрыт (B не удаляется, в него вливают)
+    expect(all(c)).not.toContain('Предполагаемое изменение');
+  });
+
+  it("неизвестный op 'zzz': карточка рендерится, исключения нет", () => {
+    const c = render(op({ op: 'zzz', target: 'Неизвестная операция' }));
+    expect(opRowNodes(c)).toHaveLength(1);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-merge')).toBeNull();
   });
 });

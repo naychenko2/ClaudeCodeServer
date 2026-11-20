@@ -89,6 +89,10 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //    в журнале. Хроника здесь не обрабатывается: она снимается целиком (п. 5).
 //    Снятие нормализует файл страницы через WikiPage.Render(): правится не только сноска —
 //    весь файл приводится к каноническому виду.
+//    Merge A → B (очередь 2, волна C): строки пакета источника могли уехать с A на B пакетом-слиянием,
+//    а A после него нет. К страницам пакета добавляются B применённых слияний (по цепочке, MergeTargets) —
+//    это и для пакета, откатанного побайтно (его A «уже в состоянии до пакета»), и для оставшегося в
+//    NeedsUnlink. Слияние, откатанное раньше, вернуло строки на A — их снял откат пакета.
 // 8. Журнал: строка op=retract на каждый раздел, где диск изменился, — по ФАКТИЧЕСКИ изменённым
 //    страницам (доработка ревью S4f-2, MAJOR 3): возвращённые побайтно, удалённые, снятые,
 //    хроника с убранной строкой продолжения — независимо от того, доведён ли их пакет до
@@ -608,9 +612,13 @@ public sealed class WikiRetractService
         {
             var pkg = candidates[i];
             var outcome = outcomes[i];
-            if (outcome.Reverted || !PagesRemained(outcome.Code))
+            // Откатанный побайтно пакет сам страниц не оставил, но его строки могли уехать на B
+            // через merge другого пакета: их снимает тот же обход (п.7 шапки, merge).
+            var rolledBack = outcome.Reverted;
+            if (!rolledBack && !PagesRemained(outcome.Code))
                 continue;
-            var pages = UnlinkPages(root, pkg);
+            List<string> pages = rolledBack ? [] : UnlinkPages(root, pkg);
+            pages.AddRange(MergeTargets(root, pkg, pages));
             if (pages.Count == 0)
                 // Страниц пакета в вики нет (или все они — хроника, снятая п.5): снимать нечего,
                 // статуса этот путь не меняет.
@@ -660,6 +668,8 @@ public sealed class WikiRetractService
             // (п.8 шапки; доработка ревью S4f-2, MAJOR 3): на диске изменённая страница всегда
             // отражена в журнале. Пустой список строки не требует.
             unlinked.Add(new UnlinkOutcome(pkg.Id, pkg.Section, changed, pkgFailed == 0));
+            if (rolledBack)
+                continue; // пакет уже «reverted» побайтным откатом: статус не трогаем
             if (pkgFailed > 0)
                 // Необработанный хвост остаётся «applied» и в NeedsUnlink: о своей странице решает
                 // человек. Повторный вызов этих же страниц не перепишет (следов уже нет) и вторую
@@ -694,7 +704,13 @@ public sealed class WikiRetractService
     /// меряется побайтный откат (это то, что пакет реально записал); без прообразов — по
     /// операциям. Хроника исключается: она снимается целиком (п.5). Страницы, которой нет на
     /// диске, не обрабатывается.</summary>
-    private static List<string> UnlinkPages(string root, WikiPackage pkg)
+    private static List<string> UnlinkPages(string root, WikiPackage pkg) =>
+        WrittenPages(root, pkg).Where(p => File.Exists(SafePath.Join(root, "pages/" + p))).ToList();
+
+    /// <summary>Страницы, которые пакет записал (по прообразам, без прообразов — по операциям), без
+    /// хроники и независимо от того, есть ли файл сейчас: страницу A операции merge пакет-слияние
+    /// снял, а её строки живут на B.</summary>
+    private static List<string> WrittenPages(string root, WikiPackage pkg)
     {
         var preimagesDir = SafePath.Join(root, WikiApplyService.PreimagesRel(pkg.Id));
         IEnumerable<string> raw;
@@ -707,10 +723,40 @@ public sealed class WikiRetractService
             // нет, иначе обход упал бы NRE уже после побайтных откатов, без журнала (хвост ревью).
             raw = [.. pkg.Operations.Where(op => op.Page is not null).Select(op => op.Page!)];
         return raw
-            .Where(p => !IsChroniclePath(p) && File.Exists(SafePath.Join(root, "pages/" + p)))
+            .Where(p => !IsChroniclePath(p))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>Страницы B, на которые строки пакета уехали через применённые merge A → B (очередь 2,
+    /// волна C): сноски источника на них те же, а страницы A, по которой пакет искался, уже нет.
+    /// Идёт по цепочке (B могла уйти в C), только по «applied»-слияниям того же раздела: откатанное
+    /// слияние вернуло строки на A, и откат пакета их там и снял. Уже названные страницы не
+    /// повторяются; несуществующая B не возвращается.</summary>
+    private static List<string> MergeTargets(string root, WikiPackage pkg, List<string> already)
+    {
+        var merges = WikiPackageStore.List(root).Packages
+            .Where(p => p.Status == WikiPackage.StatusApplied && p.Section == pkg.Section && p.Id != pkg.Id)
+            .SelectMany(p => p.Operations)
+            .Where(o => o.Op == WikiPackage.OpMerge && o.Page is not null && o.Target is not null)
+            .ToList();
+        if (merges.Count == 0)
+            return [];
+        var reach = new HashSet<string>(WrittenPages(root, pkg), StringComparer.Ordinal);
+        var found = new List<string>();
+        for (var grew = true; grew;)
+        {
+            grew = false;
+            foreach (var m in merges)
+                if (reach.Contains(m.Page!) && reach.Add(m.Target!))
+                {
+                    grew = true;
+                    if (!already.Contains(m.Target!) && File.Exists(SafePath.Join(root, "pages/" + m.Target)))
+                        found.Add(m.Target!);
+                }
+        }
+        return found.Distinct(StringComparer.Ordinal).OrderBy(p => p, StringComparer.Ordinal).ToList();
     }
 
     /// <summary>Снятие сносок источника на одной странице. Возврат: (список изменён, причина
@@ -1140,6 +1186,8 @@ public sealed class WikiRetractService
             return "источник не формы «{origin}:…» из закрытого перечня";
         if (IdPartOf(sourceRef).Length == 0)
             return "источник без карточки";
+        if (IdPartOf(sourceRef).StartsWith(WikiPackage.MergeSourcePrefix, StringComparison.Ordinal))
+            return "это маркер слияния, а не источник — откатывайте пакет";
         return null;
     }
 

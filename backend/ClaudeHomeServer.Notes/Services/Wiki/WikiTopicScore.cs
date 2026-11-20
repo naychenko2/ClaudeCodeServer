@@ -121,4 +121,49 @@ public static class WikiTopicScore
             .ThenBy(x => x.Path, StringComparer.Ordinal)
             .Take(take ?? int.MaxValue)];
     }
+
+    /// <summary>Вложение основ заголовков (C1, page_duplicate по предмету): меньший набор основ
+    /// целиком входит в больший и имеет не меньше MinCommon основ — одна общая основа не предмет.
+    /// Основы — тот же токенизатор, что у меры (WikiCandidates.SignificantWords, как в BuildIndex).
+    /// Пустой заголовок и набор короче MinCommon — false. Порогов и весов нет: в своём разделе
+    /// слова-предметы стоят почти в каждом заголовке, их IDF мал, и оценка пары эту дубль-пару
+    /// не ловит (перепостановка 20.11, консультация a2b00801) — здесь предикат без порога,
+    /// точность даёт судья.</summary>
+    public static bool TitleSubset(string titleA, string titleB)
+    {
+        if (string.IsNullOrEmpty(titleA) || string.IsNullOrEmpty(titleB))
+            return false;
+        var a = WikiCandidates.SignificantWords(titleA);
+        var b = WikiCandidates.SignificantWords(titleB);
+        var (small, large) = a.Count <= b.Count ? (a, b) : (b, a);
+        if (small.Count < MinCommon)
+            return false;
+        foreach (var stem in small)
+            if (!large.Contains(stem))
+                return false;
+        return true;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex DateToken = new(
+        @"\b(?:\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[-./]\d{1,2}[-./]\d{2,4})\b",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Заголовки различаются только токеном даты («Отчёт 2026-11-05» и «Отчёт 2026-11-12»):
+    /// после снятия дат (ГГГГ-ММ-ДД, ДД.ММ.ГГГГ) и схлопывания пробелов они равны без учёта регистра,
+    /// а исходные — нет, и непустой остаток есть. Страницы-версии одного предмета: слияние схлопнуло
+    /// бы снимки в алиасы, поэтому подбор merge такие пары не берёт. Предикат рядом с TitleSubset, но
+    /// отдельный: TitleSubset не меняется — на нём откалиброваны константы замера T0.</summary>
+    public static bool DateVersionsOnly(string titleA, string titleB)
+    {
+        if (string.IsNullOrWhiteSpace(titleA) || string.IsNullOrWhiteSpace(titleB))
+            return false;
+        if (string.Equals(titleA.Trim(), titleB.Trim(), StringComparison.OrdinalIgnoreCase))
+            return false;
+        var a = StripDates(titleA);
+        var b = StripDates(titleB);
+        return a.Length > 0 && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string StripDates(string title) =>
+        string.Join(' ', DateToken.Replace(title, " ").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

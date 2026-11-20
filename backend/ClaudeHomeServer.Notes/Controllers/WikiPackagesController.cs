@@ -359,7 +359,7 @@ public class WikiPackagesController : ControllerBase
             o.InputTokens, o.OutputTokens, o.HumanDecision, o.HumanReason,
             o.Claim, o.Quotes, o.Kind, o.AsOf,
             o.JudgeDecision, o.JudgeReason, o.JudgeModel, o.JudgeAt, o.JudgeCostUsd,
-            o.ReasonCode))]);
+            o.ReasonCode, WikiApplyPolicy.JudgeAdmitted(o.ReasonCode)))]);
 
     // Раздел пакета — чужой проект? Имя проекта не показывается и не решается: только своя
     // вики (ADR-036, решение 1).
@@ -400,7 +400,8 @@ public sealed record WikiPackageSourceDto(string Origin, string Ref);
 /// Код причины (дефект из ревью a92a9550): reasonCode — машинный код вердикта политики
 /// (перечень WikiApplyPolicy.ReasonCodes), как есть из операции: по нему решается допуск
 /// к облачному судье (WikiApplyPolicy.JudgeAdmitted). У операции без кода (старый пакет)
-/// — null, а не отсутствие поля.</summary>
+/// — null, а не отсутствие поля. judgeAdmitted — единственная точка правды «допущена ли операция
+/// судье» для фронта: WikiApplyPolicy.JudgeAdmitted(reasonCode), зеркала перечня кодов на клиенте нет.</summary>
 public sealed record WikiPackageOperationDto(
     int Index,
     string Op,
@@ -424,7 +425,8 @@ public sealed record WikiPackageOperationDto(
     string? JudgeModel = null,
     DateTimeOffset? JudgeAt = null,
     decimal? JudgeCostUsd = null,
-    string? ReasonCode = null);
+    string? ReasonCode = null,
+    bool JudgeAdmitted = false);
 
 /// <summary>Решение по одной спорной операции. accept=false требует reason.</summary>
 public sealed record WikiDecideRequest(int? Index, bool? Accept, string? Reason);

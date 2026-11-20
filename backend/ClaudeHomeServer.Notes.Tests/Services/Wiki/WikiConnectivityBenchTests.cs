@@ -10,14 +10,18 @@ namespace ClaudeHomeServer.Tests.Services;
 // QA-1 (очередь 2, выкат 1): замер производительности и связности WikiConnectivity.Measure
 // на копии боевого корпуса (снимок 19.11). Только чтение — боевые данные не трогаются.
 //
-// Каталог копии — WIKI_DRYRUN_DIR (ожидается <корень>/data, внутри pages/ и keeper/); без
-// переменной берётся копия из репозитория (.cc-attachments/wiki-q2-dryrun/data-19-11).
-// Каталога нет — прогон ПРОПУСКАЕТСЯ (как сухие прогоны A0/T0: считать нечего).
+// Каталог копии — переменная окружения WIKI_DRYRUN_DIR (ожидается <корень>/data, внутри
+// pages/ и keeper/). Без переменной или без её каталога — прогон ЯВНО ПРОПУСКАЕТСЯ через
+// DryRunFactAttribute (WikiAutoLinkDryRunTests.cs:14), как сухие прогоны A0/T0: пропуск
+// решается на этапе discovery, поэтому обычный прогон CI/гейта показывает «skipped»,
+// а не «passed» и не «красный».
 //
 // Что меряется:
 // - время WikiConnectivity.Measure на всех страницах знаний корпуса (задача QA-1: «замер
-//   времени на 300+ страницах»); меряется и второй (тёплый) прогон — индекс «По теме»
-//   строится заново на каждый Measure;
+//   времени на 300+ страницах»); меряется и второй (тёплый) прогон: кеш индекса «По теме»
+//   живёт внутри одного Measure — индекс строится один раз на каждый набор видимых
+//   разделов (TopicIndexCache), а не на страницу и не один на весь снимок (после A6-1);
+//   второй прогон платит сборку индексов заново: кеша между вызовами Measure нет;
 // - K0/K1/K2 тем же Measure, что у ночного итога (A6), и сверка K1 с BaselineK1 = 0,404
 //   (константа ночного критерия, WikiNightlyService.BaselineK1).
 //
@@ -35,16 +39,14 @@ public class WikiConnectivityBenchTests
         return dir?.FullName ?? AppContext.BaseDirectory;
     }
 
-    [Fact]
+    [DryRunFact]
     public void Замер_Связности_На_Копии_Корпуса()
     {
         var root = RepoRoot();
-        var dir = Environment.GetEnvironmentVariable("WIKI_DRYRUN_DIR");
-        if (string.IsNullOrWhiteSpace(dir))
-            dir = Path.Combine(root, ".cc-attachments", "wiki-q2-dryrun", "data-19-11");
+        // DryRunFact пропускает тест на этапе discovery, если переменной нет или каталога нет.
+        var dir = Environment.GetEnvironmentVariable(DryRunFactAttribute.DirVariable)!;
         var pagesRoot = Path.Combine(dir, "pages");
-        if (!Directory.Exists(pagesRoot))
-            return; // пропуск: копии корпуса нет — считать нечего
+        Directory.Exists(pagesRoot).Should().BeTrue("в каталоге копии должен быть pages/");
 
         var drafts = new List<WikiGate.Draft>();
         var knowledge = new List<string>();

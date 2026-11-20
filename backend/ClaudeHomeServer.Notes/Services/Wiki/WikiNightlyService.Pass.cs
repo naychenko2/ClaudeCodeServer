@@ -115,6 +115,8 @@ public sealed partial class WikiNightlyService
         var strippedLinks = 0;
         ConnectivityStat? newConn = null, sectionConn = null;
         bool? connOk = null;
+        // Предложенные merge (C6): null — тумблер выключен или подбор не состоялся.
+        int? mergeProposed = null;
         // Снимок страниц до прохода — основа для «новые страницы / тронутые разделы» (A6).
         var pagesBefore = ReadPageSnapshot(root);
         // Отказы ступени 2 (хвост ревью R-J-W0): раньше их не было ни в журнале, ни в итоге.
@@ -396,6 +398,22 @@ public sealed partial class WikiNightlyService
             outcome = OutcomeError;
         }
 
+        // Предложения merge (C6, ADR-039 р.13): после окон и ДО судьи — судья в этом же проходе
+        // решает только что созданные пакеты. За тумблером Wiki:MergeProposals (по умолчанию выкл);
+        // ночь без доверия к итогу (ошибка, выключили посреди) пакетов не создаёт. Догона нет.
+        // Сбой подбора итог не роняет: поле остаётся null, как у замера связности.
+        if (MergeProposalsEnabled() && outcome is not (OutcomeError or OutcomeDisabledMidway))
+        {
+            try
+            {
+                mergeProposed = await Task.Run(() => ProposeMergesForRoot(root), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                LogWarnSafe("Ночной разбор {Owner}: предложения merge не созданы: {Reason}", ownerId, ex.Message);
+            }
+        }
+
         // Точка запуска (а) (J-J4): проход судьи после разбора чатов — под тем же замком владельца
         // (его держит RunOwnerAsync/StartManual вокруг RunOwnerPassAsync) и до записи
         // keeper/nightly-last.json: его счётчики попадают в тот же файл, ту же строку журнала и то
@@ -436,7 +454,8 @@ public sealed partial class WikiNightlyService
             overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual, dropped, firstDropReason,
             judgeCalls, judgeCost, judgeApplied, judgeRejected, judgeDeferred, codeRejected,
             stage2Refused, firstStage2Refusal, ExecutorStats(),
-            StrippedLinks: strippedLinks, NewConnectivity: newConn, SectionConnectivity: sectionConn, ConnectivityOk: connOk);
+            StrippedLinks: strippedLinks, NewConnectivity: newConn, SectionConnectivity: sectionConn, ConnectivityOk: connOk,
+            MergeProposed: mergeProposed);
 
         // Счётчики итога по исполнителям (W6a): порядок — как список стора. Движок, которому ни
         // одного чата не досталось (не был готов, был занят), в списке есть с нулями: владельцу
@@ -787,6 +806,126 @@ public sealed partial class WikiNightlyService
             return m.Count == 0 ? null : new ConnectivityStat(m.Count, m.K0, m.K1, m.K2);
         }
         return (Stat(newPaths), Stat(sectionPaths));
+    }
+
+    // ── предложения merge (C6, ADR-039 р.13) ──────────────────────────────────────────────
+
+    /// <summary>Потолок ОТКРЫТЫХ пакетов, при котором ночь ещё предлагает merge: предложения
+    /// не должны вытеснять разбор чатов (жёсткий лимит вики — WikiPackage.MaxOpenPackages).</summary>
+    internal const int MergeOpenLimit = 15;
+
+    private bool MergeProposalsEnabled() =>
+        string.Equals(_config["Wiki:MergeProposals"], "true", StringComparison.OrdinalIgnoreCase);
+
+    // Подбор пар по снимку pages/ и создание пакетов. Идёт под замком владельца (Running).
+    private int ProposeMergesForRoot(string root)
+    {
+        if (WikiPackageStore.CountOpen(root) >= MergeOpenLimit)
+            return 0;
+        var pages = ReadPageSnapshot(root)
+            .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => new WikiGate.Draft(kv.Key, kv.Value)).ToList();
+        // Страницы любого открытого пакета (и цели операций) — состояние их меняет другой пакет.
+        var open = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var p in WikiPackageStore.List(root).Packages.Where(p => WikiPackage.IsOpen(p.Status)))
+            foreach (var o in p.Operations)
+            {
+                open.Add(o.Page);
+                if (o.Target is not null) open.Add(o.Target);
+            }
+        // Карантин: страницы, которые человек откатил менее RevertQuarantineDays назад.
+        var quarantined = WikiJournalReader.ReadRecentHumanReverts(
+            root, _clock().AddDays(-WikiApplyPolicy.RevertQuarantineDays)).Keys.ToHashSet(StringComparer.Ordinal);
+        // Принятые человеком (adopt) страницы сливать нельзя — применение их откажет; кладём в карантин
+        // (только для A). Журнал нечитаем — fail-closed: предложений нет.
+        if (WikiApplyService.ReadAdoptedPages(root) is not { } adopted)
+            return 0;
+        quarantined.UnionWith(adopted);
+        var pairs = WikiMergeCandidates.Pick(pages, open, quarantined);
+        // Pick допускает B, ставшую A другой пары (цепочка A→B→C, цикл): применение второго пакета
+        // отказало бы («другой открытый пакет на A или B»). Оставляем только пары, чьи A и B ещё не
+        // заняты ранее взятой парой; порядок Pick детерминирован.
+        var taken = new HashSet<string>(StringComparer.Ordinal);
+        var distinct = new List<(string A, string B)>();
+        foreach (var (a, b) in pairs)
+        {
+            if (taken.Contains(a) || taken.Contains(b))
+                continue;
+            taken.Add(a);
+            taken.Add(b);
+            distinct.Add((a, b));
+        }
+        return ProposeMerges(root, distinct);
+    }
+
+    /// <summary>Пакеты op merge (Page = A, Target = B, код merge_proposal, решение inbox) по парам
+    /// подбора. Лимит открытых перепроверяется перед КАЖДЫМ созданием: между созданиями ручной
+    /// «Разобрать» мог добавить пакеты. afterCreate — шов теста гонки (вызывается после каждого
+    /// созданного пакета). Возвращает число созданных.</summary>
+    internal static int ProposeMerges(string root, IReadOnlyList<(string A, string B)> pairs, Action<int>? afterCreate = null)
+    {
+        var created = 0;
+        foreach (var (a, b) in pairs)
+        {
+            if (WikiPackageStore.CountOpen(root) >= MergeOpenLimit)
+                break;
+            if (WikiSections.Parse(a) is not { } section)
+                continue;
+            if (!TryHash(root, a, out var hashA) || !TryHash(root, b, out var hashB))
+                continue; // страница пропала между снимком и созданием — пара не предлагается
+            var package = new WikiPackage
+            {
+                Id = WikiPackageStore.NewId(),
+                Author = WikiPackage.AuthorAi,
+                Section = section,
+                // Источник — сама пара: ref не разбирается как сессия, поэтому гашение «того же окна»
+                // (SupersedeUnappliedOfSameSources) к предложениям merge не применяется.
+                Sources = [new WikiPackage.SourceRef(WikiGate.OriginSession, "merge:" + a)],
+                Operations =
+                [
+                    new WikiPackage.Operation
+                    {
+                        Op = WikiPackage.OpMerge,
+                        Page = a,
+                        Target = b,
+                        Class = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpMerge),
+                        Decision = WikiPackage.DecisionInbox,
+                        Reason = $"предложение слить «{a}» в «{b}»: дубль по заголовкам или мелкая страница по теме",
+                        ReasonCode = WikiApplyPolicy.CodeMergeProposal,
+                        BaseHashes = new Dictionary<string, string> { [a] = hashA!, [b] = hashB! },
+                    },
+                ],
+                Status = WikiPackage.StatusChecking,
+            };
+            var res = WikiPackageStore.Create(root, package);
+            if (!res.Ok)
+            {
+                if (res.Code == WikiPackageStore.CodeLimit)
+                    break;
+                continue;
+            }
+            if (!WikiPackageStore.Transition(root, package.Id, WikiPackage.StatusProposed).Ok)
+                continue;
+            created++;
+            afterCreate?.Invoke(created);
+        }
+        return created;
+    }
+
+    private static bool TryHash(string root, string page, out string? hash)
+    {
+        hash = null;
+        try
+        {
+            var full = SafePath.Join(Path.Combine(root, "pages"), page);
+            if (!File.Exists(full)) return false;
+            hash = WikiApplyService.Sha256OfBytes(File.ReadAllBytes(full));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static bool IsKnowledgePage(WikiGate.Draft d) =>

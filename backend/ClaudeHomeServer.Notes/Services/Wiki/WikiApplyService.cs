@@ -1083,7 +1083,12 @@ public sealed class WikiApplyService
 
     /// <summary>Страница в журнале как «принятая» (op=adopt): её байты человек принял как есть или
     /// как свою правку — сливать её нельзя. Нечитаемый журнал — «принятой» (fail-closed).</summary>
-    private static bool IsAdopted(string root, string pageKey)
+    private static bool IsAdopted(string root, string pageKey) =>
+        ReadAdoptedPages(root) is not { } adopted || adopted.Contains(pageKey);
+
+    /// <summary>Все страницы журнала с op=adopt — одним чтением (подбор merge ночи, C6). null —
+    /// журнал нечитаем: вызывающий действует fail-closed.</summary>
+    internal static HashSet<string>? ReadAdoptedPages(string root)
     {
         string[] lines;
         try
@@ -1091,7 +1096,8 @@ public sealed class WikiApplyService
             var full = SafePath.Join(root, "keeper/log.jsonl");
             lines = File.Exists(full) ? File.ReadAllLines(full, System.Text.Encoding.UTF8) : [];
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        var result = new HashSet<string>(StringComparer.Ordinal);
         foreach (var line in lines)
         {
             if (line.Length == 0)
@@ -1104,12 +1110,13 @@ public sealed class WikiApplyService
                     || !obj.TryGetProperty("op", out var op) || op.GetString() != WikiPackage.ActionAdopt
                     || !obj.TryGetProperty("pages", out var pages) || pages.ValueKind != JsonValueKind.Array)
                     continue;
-                if (pages.EnumerateArray().Any(p => p.ValueKind == JsonValueKind.String && p.GetString() == pageKey))
-                    return true;
+                foreach (var p in pages.EnumerateArray())
+                    if (p.ValueKind == JsonValueKind.String && p.GetString() is { } name)
+                        result.Add(name);
             }
             catch (JsonException) { /* оборванная строка — не строка */ }
         }
-        return false;
+        return result;
     }
 
     // ─── Правка человека (ADR-038, B3b) ─────────────────────────────────────────

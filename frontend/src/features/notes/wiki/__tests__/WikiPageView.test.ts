@@ -298,6 +298,18 @@ status: active
 - Идёт по [[Пустая|]] дальше.
 `;
 
+// Дубль текста: одна цель названа дважды в одной строке (B4, доработка 1)
+const PAGE_LINK_DUP = `---
+type: entity
+status: active
+---
+
+# Дубль
+
+## Сводка
+- Первый раз [[Дубль]]. И второй раз [[Дубль]].
+`;
+
 const LINKS_MIXED: WikiPageLinkDto[] = [
   { text: 'Конвейер сборки|конвейер', path: 'Проекты/p1/Конвейер.md', section: 'projects/p1' },
   { text: 'Прочная', path: 'Общее/Термины/прочное.md', section: 'common' },
@@ -1394,6 +1406,28 @@ describe('«Связанные» (2Б, Q1-S7)', () => {
     expect(has(c2, 'Связанные')).toBe(false);
   });
 
+  // Guard через Object.hasOwn, не `in`: 'toString' — имя прототипа, `in` его пропускает,
+  // и RELATED_LABELS['toString'] (функция из прототипа) попал бы в JSX — страница упала бы
+  // целиком («Functions are not valid as a React child»). Мутация «g.kind in RELATED_LABELS»
+  // краснит ровно этот кейс; известная группа за ним рисуется как раньше.
+  it('kind — имя прототипа («toString»): группа не рисуется, известная — рисуется', async () => {
+    const protoGroup = {
+      kind: 'toString',
+      items: [{ pageKey: 'Проекты/p1/Решения/р1.md', title: 'Ревюить звук до пятницы', type: 'rule' }],
+    } as unknown as WikiRelatedGroupDto;
+    await seedPage({
+      pageKey: PAGE_KEY,
+      content: PAGE_PLAIN,
+      related: [protoGroup, { kind: 'source', items: [{ pageKey: 'Проекты/p1/Источники/Чат.md', title: 'Чат «Ревью фронта»', type: 'source' }] }],
+    });
+    const c = renderPage();
+    await settle();
+    expect(relatedGroupKinds(c)).toEqual(['source']);
+    expect(relatedRows(c)).toHaveLength(1);
+    expect(has(c, 'Тот же источник')).toBe(true);
+    expect(has(c, 'toString')).toBe(false);
+  });
+
   it('на телефоне тач-цель пункта ≥ 40 px', async () => {
     mobileFlag.v = true;
     await seedPage({ pageKey: PAGE_KEY, content: PAGE_PLAIN, related: RELATED_TWO });
@@ -1511,6 +1545,26 @@ describe('Ссылки [[…]] в тексте страницы (очередь 
     expect(linkNodes(c)).toHaveLength(0);
     expect(has(c, '[[')).toBe(false);
     expect(has(c, 'Конвейер сборки|конвейер')).toBe(true);
+  });
+
+  // «Дубль текста держит первое значение» (!idx.has в linkIndex): одна цель названа дважды,
+  // запись в links[] одна — обе подстановки резолвятся в неё и кликаются на ту же цель
+  it('дубль текста: [[Дубль]] дважды, запись одна — обе ссылки кликаются на ту же цель', async () => {
+    await seedPage({
+      pageKey: PAGE_KEY,
+      content: PAGE_LINK_DUP,
+      links: [{ text: 'Дубль', path: 'Проекты/p1/Дубль.md', section: 'projects/p1' }],
+    });
+    const c = renderPage();
+    await settle();
+    const links = linkNodes(c);
+    expect(links).toHaveLength(2);
+    expect(links.map(n => n.getAttribute('data-page-key')))
+      .toEqual(['Проекты/p1/Дубль.md', 'Проекты/p1/Дубль.md']);
+    click(links[0], 'первая ссылка «Дубль»');
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: 'Проекты/p1/Дубль.md' });
+    click(links[1], 'вторая ссылка «Дубль»');
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: 'Проекты/p1/Дубль.md' });
   });
 
   it('ссылка живёт в строке текста: перенос задан, горизонтального переполнения нет', async () => {

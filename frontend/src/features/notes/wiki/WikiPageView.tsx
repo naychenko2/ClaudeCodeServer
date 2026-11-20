@@ -466,8 +466,11 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   // «Связанные» — поле того же ответа GET /wiki/page (2Б): своего запроса нет, порядок групп
   // остаётся бэковым. Пустая группа не рисуется; без поля или из одних пустых групп — блока нет.
   // Группа с неизвестным фронту kind (новый бэндл бэка на этом фронте) тоже не рисуется:
-  // без подписи в RELATED_LABELS нет строки — не «undefined» в заголовке и не исключение
-  const relatedGroups = (dto?.related ?? []).filter(g => g.items.length > 0 && g.kind in RELATED_LABELS);
+  // без подписи в RELATED_LABELS нет строки — не «undefined» в заголовке и не исключение.
+  // Проверка через Object.hasOwn, не `in`: `in` пропускает имена прототипа ('toString',
+  // 'constructor') — такой kind доставал бы функцию из прототипа и ронял страницу целиком
+  // («Functions are not valid as a React child»); тот же приём, что chatFilters.ts:172
+  const relatedGroups = (dto?.related ?? []).filter(g => g.items.length > 0 && Object.hasOwn(RELATED_LABELS, g.kind));
   // Ссылки текста страницы (B4): индекс по тексту записи — сопоставление с местом в тексте,
   // не по индексу массива. Дубль текста (одна цель названа дважды) держит первое значение:
   // резолв одной цели даёт один и тот же путь. Поля links в ответе нет (старый бэк) — индекса

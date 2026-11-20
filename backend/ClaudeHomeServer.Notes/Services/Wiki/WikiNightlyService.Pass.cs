@@ -111,6 +111,12 @@ public sealed partial class WikiNightlyService
         var perEngine = new Dictionary<string, (int Analyzed, int Rejected, long InputTokens)>(StringComparer.Ordinal);
         var dropped = 0;
         string? firstDropReason = null;
+        // Снятые у модели ссылки (A6, хвост 26): сумма по разобранным чатам.
+        var strippedLinks = 0;
+        ConnectivityStat? newConn = null, sectionConn = null;
+        bool? connOk = null;
+        // Снимок страниц до прохода — основа для «новые страницы / тронутые разделы» (A6).
+        var pagesBefore = ReadPageSnapshot(root);
         // Отказы ступени 2 (хвост ревью R-J-W0): раньше их не было ни в журнале, ни в итоге.
         var stage2Refused = 0;
         string? firstStage2Refusal = null;
@@ -258,6 +264,7 @@ public sealed partial class WikiNightlyService
                         st.InputTokens + r.InputTokens);
                 }
                 dropped += r.Dropped;
+                strippedLinks += r.StrippedLinks;
                 firstDropReason ??= r.FirstDropReason;
                 // Отказанные разборы (WN-2): считаются и называются в журнале — без них ночь из
                 // 100 отказов выглядела completed и не оставила ни строки (отчёт 79e98305, Ш2).
@@ -411,12 +418,25 @@ public sealed partial class WikiNightlyService
             if (sweep.FirstFailure is not null)
                 LogWarnSafe("Ночной разбор {Owner}: проход судьи не доведён: {Reason}", ownerId, sweep.FirstFailure);
         }
+        // Связность (A6): после судьи, до записи итога; страницы только читаются (инвариант «ночь
+        // после судьи ничего не пишет»), сбой замера итог не роняет — поля остаются null.
+        try
+        {
+            (newConn, sectionConn) = await Task.Run(() => MeasureConnectivity(pagesBefore, ReadPageSnapshot(root)), ct)
+                .ConfigureAwait(false);
+            connOk = newConn is null ? null : newConn.K1 >= BaselineK1 - BaselineK1Slack;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogWarnSafe("Ночной разбор {Owner}: замер связности не удался: {Reason}", ownerId, ex.Message);
+        }
         return Result(outcome);
 
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
             overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual, dropped, firstDropReason,
             judgeCalls, judgeCost, judgeApplied, judgeRejected, judgeDeferred, codeRejected,
-            stage2Refused, firstStage2Refusal, ExecutorStats());
+            stage2Refused, firstStage2Refusal, ExecutorStats(),
+            StrippedLinks: strippedLinks, NewConnectivity: newConn, SectionConnectivity: sectionConn, ConnectivityOk: connOk);
 
         // Счётчики итога по исполнителям (W6a): порядок — как список стора. Движок, которому ни
         // одного чата не досталось (не был готов, был занят), в списке есть с нулями: владельцу
@@ -715,4 +735,65 @@ public sealed partial class WikiNightlyService
         }
         return [.. result.OrderByDescending(c => c.Important).ThenByDescending(c => c.Session.UpdatedAt)];
     }
+
+    // ─── Связность итога (A6) ─────────────────────────────────────────────────
+
+    // Страницы вики владельца: ключ под pages/ → текст. Проекции `_*` не входят; нечитаемый файл
+    // пропускается (замер — витрина, а не запись). Каталога pages/ нет — пустой снимок.
+    private static Dictionary<string, string> ReadPageSnapshot(string root)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var dir = Path.Combine(root, "pages");
+        if (!Directory.Exists(dir))
+            return result;
+        foreach (var file in Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories))
+        {
+            var key = Path.GetRelativePath(dir, file).Replace('\\', '/');
+            if (WikiPaths.IsProjection(key))
+                continue;
+            try
+            {
+                result[key] = File.ReadAllText(file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+        return result;
+    }
+
+    // Связность новых страниц знаний ночи (появились между снимками) и всех страниц знаний
+    // тронутых разделов (раздел новой или изменённой страницы). Страницы знаний — не карточки
+    // источника и не хроники. Новых страниц нет — NewConnectivity null (ConnectivityOk тогда null).
+    internal static (ConnectivityStat? New, ConnectivityStat? Section) MeasureConnectivity(
+        IReadOnlyDictionary<string, string> before, IReadOnlyDictionary<string, string> after)
+    {
+        var drafts = after.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => new WikiGate.Draft(kv.Key, kv.Value)).ToList();
+        var knowledge = drafts.Where(d => IsKnowledgePage(d)).ToList();
+        var newPaths = knowledge.Where(d => !before.ContainsKey(d.Path)).Select(d => d.Path).ToList();
+        var touched = drafts
+            .Where(d => !before.TryGetValue(d.Path, out var old) || !string.Equals(old, d.Content, StringComparison.Ordinal))
+            .Select(d => WikiSections.Parse(d.Path))
+            .Where(sec => sec is not null)
+            .ToHashSet(StringComparer.Ordinal);
+        var sectionPaths = knowledge.Where(d => touched.Contains(WikiSections.Parse(d.Path))).Select(d => d.Path).ToList();
+
+        // Один замер по объединению срезов (новые страницы входят в тронутые разделы), результат
+        // раскладывается по двум срезам: memo групп общий, второй проход не нужен.
+        var stats = WikiConnectivity.MeasurePages(drafts, [.. newPaths.Union(sectionPaths, StringComparer.Ordinal)]);
+        ConnectivityStat? Stat(List<string> paths)
+        {
+            if (paths.Count == 0)
+                return null;
+            var m = WikiConnectivity.Aggregate(paths.Where(stats.ContainsKey).Select(p => stats[p]));
+            return m.Count == 0 ? null : new ConnectivityStat(m.Count, m.K0, m.K1, m.K2);
+        }
+        return (Stat(newPaths), Stat(sectionPaths));
+    }
+
+    private static bool IsKnowledgePage(WikiGate.Draft d) =>
+        WikiSections.Parse(d.Path) is not null &&
+        WikiPage.Parse(d.Content).Model is { } m &&
+        m.Frontmatter.Type is not (WikiFrontmatter.TypeSource or WikiFrontmatter.TypeChronicle);
 }

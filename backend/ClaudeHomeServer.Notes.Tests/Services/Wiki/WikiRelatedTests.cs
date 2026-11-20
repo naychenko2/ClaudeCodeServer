@@ -27,7 +27,7 @@ public class WikiRelatedTests
 
         var groups = f.Build();
 
-        Group(groups, WikiRelated.KindSource).Items.Should().Equal(new[] { new WikiRelatedItem(Card, "Источник работ", "source") });
+        Group(groups, WikiRelated.KindSource).Items.Should().Equal(new[] { new WikiRelatedItem(Card, "Источник работ", "source", "projects/p1") });
         groups.Should().HaveCount(1, "ссылка на не-карточку — не источник: группы для неё нет");
     }
 
@@ -42,7 +42,7 @@ public class WikiRelatedTests
             .Page(chronicle, "Источник чата 2026-11-01", type: WikiFrontmatter.TypeChronicle);
 
         Group(f.Build(), WikiRelated.KindChronicle).Items
-            .Should().Equal(new[] { new WikiRelatedItem(chronicle, "Источник чата 2026-11-01", "chronicle") });
+            .Should().Equal(new[] { new WikiRelatedItem(chronicle, "Источник чата 2026-11-01", "chronicle", "projects/p1") });
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class WikiRelatedTests
             .Page(other, "Порядок встреч", text: "Обсудили Порядок работ и записали решение.");
 
         var groups = f.Build();
-        Group(groups, WikiRelated.KindMentions).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic") });
+        Group(groups, WikiRelated.KindMentions).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic", "projects/p1") });
         groups.Should().HaveCount(1);
     }
 
@@ -126,7 +126,7 @@ public class WikiRelatedTests
             .Page(other, "Порядок встреч");
 
         var groups = f.Build();
-        Group(groups, WikiRelated.KindMentionedHere).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic") });
+        Group(groups, WikiRelated.KindMentionedHere).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic", "projects/p1") });
         groups.Should().HaveCount(1);
     }
 
@@ -159,7 +159,7 @@ public class WikiRelatedTests
             .Page(other, "Порядок встреч", text: "См. [[Порядок работ]].");
 
         var groups = f.Build();
-        Group(groups, WikiRelated.KindBacklinks).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic") });
+        Group(groups, WikiRelated.KindBacklinks).Items.Should().Equal(new[] { new WikiRelatedItem(other, "Порядок встреч", "topic", "projects/p1") });
         groups.Should().HaveCount(1);
     }
 
@@ -291,14 +291,16 @@ public class WikiRelatedTests
     // ─── c3: JSON-контракт Q1-S7 ────────────────────────────────────────────────
 
     [Fact]
-    public void СериализацияWebНастройками_РовноКлючиKindItemsPageKeyTitleType()
+    public void СериализацияWebНастройками_РовноКлючиKindItemsPageKeyTitleTypeSection()
     {
         var f = new Fixture()
             .Target()
             .Page("Проекты/p1/Порядок-встреч.md", "Порядок встреч", text: "Обсудили Порядок работ.");
 
+        // B3: к ключам добавился section — ключ раздела цели (тот же Parse, что отбирает
+        // кандидатов): порядок ключей — порядок полей record.
         Json(f.Build()).Should().Be(
-            """[{"kind":"mentions","items":[{"pageKey":"Проекты/p1/Порядок-встреч.md","title":"Порядок встреч","type":"topic"}]}]""");
+            """[{"kind":"mentions","items":[{"pageKey":"Проекты/p1/Порядок-встреч.md","title":"Порядок встреч","type":"topic","section":"projects/p1"}]}]""");
     }
 
     // ─── c3 вердикта 141df4ac: резолв по словарю, а не FirstOrDefault с нормализацией ─
@@ -320,13 +322,112 @@ public class WikiRelatedTests
 
         var groups = f.Build();
         Group(groups, WikiRelated.KindBacklinks).Items
-            .Should().Equal(new[] { new WikiRelatedItem(linked, "Фикстура 300", "topic") });
+            .Should().Equal(new[] { new WikiRelatedItem(linked, "Фикстура 300", "topic", "projects/p1") });
         groups.Should().HaveCount(1);
 
         var calls = f.NormCalls();
         calls.Should().BeLessThanOrEqualTo(20_000,
             "словарь строится один раз (O(N)) и нормализует цель ссылки один раз на ссылу (O(L)); " +
             "прежний FirstOrDefault по всем кандидатам дал бы ~1.8 млн");
+    }
+
+    // ─── «По теме» (topic) ──────────────────────────────────────────────────────
+
+    private const string Gems = "аметист бирюза гранат хризолит яшма малахит";
+
+    // Фон: страницы без общих слов, чтобы df редких основ был малым долей снимка.
+    private static Fixture TopicFixture(string title = "Порядок работ")
+    {
+        var f = new Fixture().Target(title: title, text: Gems);
+        for (var i = 0; i < 60; i++)
+            f.Page($"Проекты/p1/Фон{i}.md", $"Фон{i}", text: $"уникальное{i}слово{i}");
+        return f;
+    }
+
+    [Fact]
+    public void ГруппаTopic_РедкиеОбщиеОсновы_ПорядокПоОценкеАНеПоПути()
+    {
+        var f = TopicFixture("Каменный кабинет редкий")
+            .Page("Проекты/p1/А-слабая.md", "А слабая", text: "аметист бирюза гранат хризолит")
+            .Page("Проекты/p1/Я-сильная.md", "Я сильная", text: "аметист бирюза гранат хризолит топаз");
+        // Те же основы, но заголовок делит слова с заголовком цели (не фразой — иначе это упоминание): ×2
+        f.Page("Проекты/p1/Яшма.md", "Редкий кабинет каменный", text: Gems);
+
+        var items = Group(f.Build(), WikiRelated.KindTopic).Items.Select(i => i.PageKey).ToList();
+
+        items.Should().HaveCount(3);
+        items[0].Should().Be("Проекты/p1/Яшма.md", "общие слова заголовков весят ×2 — выше по оценке, хотя путь позже");
+        items.Skip(1).Should().Equal("Проекты/p1/А-слабая.md", "Проекты/p1/Я-сильная.md");
+    }
+
+    [Fact]
+    public void ГруппаTopic_ПотолокПять_ДействуетИПриLimitNull()
+    {
+        var f = TopicFixture();
+        for (var i = 0; i < 8; i++)
+            f.Page($"Проекты/p1/Тема{i}.md", $"Тема{i}", text: Gems);
+
+        var groups = WikiRelated.Build(f.TargetDraft, [f.TargetDraft, .. f.Candidates], limit: null);
+
+        Group(groups, WikiRelated.KindTopic).Items.Should().HaveCount(WikiRelated.TopicLimit);
+    }
+
+    [Fact]
+    public void ГруппаTopic_БоковойРазделИХроникаНеПопадают()
+    {
+        var f = TopicFixture()
+            .Page("Проекты/p2/Боковая.md", "Боковая", text: Gems)
+            .Page("Проекты/p1/Хроники/chat-1.md", "Хризолит гранат бирюза аметист", type: WikiFrontmatter.TypeChronicle)
+            .Page("Общее/Общая.md", "Общая", text: Gems);
+
+        Group(f.Build(), WikiRelated.KindTopic).Items.Select(i => i.PageKey)
+            .Should().Equal("Общее/Общая.md");
+    }
+
+    [Fact]
+    public void ГруппаTopic_СтраницаИзСтаршейГруппы_ВTopicНеДублируется()
+    {
+        var f = TopicFixture()
+            .Page("Проекты/p1/Ссылающаяся.md", "Ссылающаяся", text: Gems + " [[Порядок работ]]");
+
+        var groups = f.Build();
+
+        Group(groups, WikiRelated.KindBacklinks).Items.Should().ContainSingle();
+        groups.Should().NotContain(g => g.Kind == WikiRelated.KindTopic);
+    }
+
+    [Fact]
+    public void ГруппаTopic_ПоследняяПоПриоритету_СтраницаИзMentionsВНейНеДублируется()
+    {
+        var f = TopicFixture()
+            .Page("Проекты/p1/Упоминающая.md", "Упоминающая", text: Gems + " см. порядок работ тут")
+            .Page("Проекты/p1/Тема.md", "Тема", text: Gems);
+
+        var groups = f.Build();
+
+        groups.Select(g => g.Kind).Should().Equal(WikiRelated.KindMentions, WikiRelated.KindTopic);
+        Group(groups, WikiRelated.KindMentions).Items.Select(i => i.PageKey).Should().Equal("Проекты/p1/Упоминающая.md");
+        Group(groups, WikiRelated.KindTopic).Items.Select(i => i.PageKey).Should().Equal("Проекты/p1/Тема.md");
+    }
+
+    [Fact]
+    public void ГруппаTopic_ОднаОбщаяОснова_ГруппыНет()
+    {
+        var f = TopicFixture().Page("Проекты/p1/Слабая.md", "Слабая", text: "аметист");
+
+        f.Build().Should().NotContain(g => g.Kind == WikiRelated.KindTopic);
+    }
+
+    [Fact]
+    public void ГруппаTopic_ВызововSignificantWordsНаBuild_НеБольшеNПлюсОдин()
+    {
+        // N = 50 страниц снимка (цель и 49 кандидатов), общих редких основ ни у одной пары нет:
+        // индекс строится один раз — по вызову на страницу, а не на пару или на кандидата.
+        var f = new Fixture().Target(text: Gems);
+        for (var i = 0; i < 49; i++)
+            f.Page($"Проекты/p1/С{i}.md", $"С{i}", text: $"уникальное{i}слово{i}");
+
+        f.WordsCalls().Should().BeLessThanOrEqualTo(51);
     }
 
     // ─── фикстура ───────────────────────────────────────────────────────────────
@@ -380,6 +481,8 @@ public class WikiRelatedTests
         public IReadOnlyList<WikiRelatedGroup> Build() => WikiRelated.Build(TargetDraft, [TargetDraft, .. Candidates]);
 
         // Тестовый срез (c3 вердикта): число нормализаций на том же снимке.
+        public int WordsCalls() => WikiRelated.CountWordsCalls(TargetDraft, [TargetDraft, .. Candidates]);
+
         public int NormCalls() => WikiRelated.CountNormCalls(TargetDraft, [TargetDraft, .. Candidates]);
 
         // Форма страницы полная (требование WikiPage.Parse): шапка, заголовок, канонические

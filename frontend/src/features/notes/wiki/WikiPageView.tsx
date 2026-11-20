@@ -19,18 +19,23 @@
 // MarkdownViewer — S5e, здесь его не ждём: маркер-
 // надстрочник с цитатой в title и блок «Источники» из определений сносок.
 //
-// Открытие страницы — из каталога (WikiTab, одна точка подключения) и из блока «Связанные»
-// (2Б, Q1-S7): он под текстом страницы и ведёт существующим каналом стора requestOpenWikiPage
-// (тот же, что у «Журнала», «Решений» и дерева). Открытие по вики-ссылке в тексте — по-прежнему
-// не этот шаг: [[…]] рендерится как текст, цели перехода на фронте нет (резолвер ссылки живёт
-// на бэке, WikiGate.ResolveLink). Сирота: имени и даты удаления проекта бэк не отдаёт
+// Открытие страницы — из каталога (WikiTab, одна точка подключения), из блока «Связанные»
+// (2Б, Q1-S7) и по вики-ссылке в тексте страницы (очередь 2, B4): все три ведут существующим
+// каналом стора requestOpenWikiPage (тот же, что у «Журнала», «Решений» и дерева). Резолв
+// [[…]] — только на бэке: экран сопоставляет место в тексте с записью поля links ответа
+// (text — внутренность скобок как написана) и открывает её пару (section, path); своей копии
+// этих правил здесь нет — ни разбора пути, ни поиска по имени. Без резолва (path null) ссылка
+// остаётся текстом. Сирота: имени и даты удаления проекта бэк не отдаёт
 // (хвост S2f) — плашка общая, как в каталоге (WikiTab.OrphanNotice).
 
 import { useMemo, useState } from 'react';
 import type { MouseEvent, KeyboardEvent } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, Lock, Pencil, Quote, ScrollText, Sparkles, Undo2 } from 'lucide-react';
-import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, requestOpenWikiPage, sectionKeyOfPagePath, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, normWikiStatement, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiRelatedGroupDto, type WikiRelatedItemDto, type WikiRelatedKind, type WikiSectionDto } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, requestOpenWikiPage, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, normWikiStatement, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiRelatedGroupDto, type WikiRelatedItemDto, type WikiRelatedKind, type WikiSectionDto, type WikiPageLinkDto } from 'aihome_shell/kit';
+// Тип записи ссылки — из кита хоста: прямой импорт из lib/wiki запрещён границей модуля
+// «Заметки» (барьер сборки рубит даже type-import — src/lib/wiki в запрещённых).
+
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Notice } from '../../../components/ui/Notice';
@@ -137,8 +142,9 @@ function fmtDate(s: string): string {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : s;
 }
 
-// Строка содержания: [^sN] → надстрочник-маркер с цитатой в title; [[X]] → текст без
-// скобок (открытие по ссылке — не этот шаг). Полный markdown-рендер — S5e
+// Строка содержания: [^sN] → надстрочник-маркер с цитатой в title; [[X]] → по полю links
+// того же ответа: разрешённая бэком ссылка — кликабельная, без резолва — текст без скобок.
+// Полный markdown-рендер — S5e
 // Со включённым авторством (F3a) сноска — нажимаемая плашка: у ИИ прежний номер, у человека
 // «✎ имя, дата»; клик открывает поповер. Без fnx — прежний надстрочник.
 interface FootnoteUi { views: Map<string, FootnoteView>; onOpen: (v: FootnoteView, el: HTMLElement) => void }
@@ -162,7 +168,48 @@ function FootnotePlate({ v, ui }: { v: FootnoteView; ui: FootnoteUi }) {
   );
 }
 
-function renderLine(line: string, quotes: Map<string, string>, keyBase: string, ui?: FootnoteUi): ReactNode[] {
+// ─── Вики-ссылка в тексте строки (очередь 2, B4) ───
+
+// Подпись: часть после «|» — её ставит автосвязыватель словоформ ([[Заголовок|как в тексте]],
+// B5); без «|» или с пустой подписью — сама цель. Резолв на бэке режет цель по первому «|»
+// (WikiPage.LinkTarget), здесь подпись только показывается.
+function linkLabel(text: string): string {
+  const i = text.indexOf('|');
+  if (i < 0) return text;
+  return text.slice(i + 1) || text.slice(0, i);
+}
+
+// Клик — тот же канал открытия страницы, что у «Связанных», «Журнала» и дерева. Он возможен
+// только по паре (section, path): бэковый GET проверяет принадлежность страницы разделу
+// (WikiController.cs:241), а свой вывод раздела из пути здесь не заводится (B3/B4).
+// Вид — текстовая ссылка в строке (тот же приём, что inline-кнопка в тексте,
+// SphereMemory.tsx:158): переносится вместе с текстом строки, горизонтального переполнения
+// нет (maxWidth 100% + перенос длинных целей).
+function PageLink({ section, path, label }: { section: string; path: string; label: string }) {
+  return (
+    <button
+      type="button"
+      data-testid="wiki-link"
+      data-page-key={path}
+      aria-label={`Открыть страницу: ${label}`}
+      onClick={() => requestOpenWikiPage({ section, path })}
+      style={{
+        display: 'inline-block', maxWidth: '100%', padding: '0 2px', border: 'none', background: 'none',
+        cursor: 'pointer', color: C.accent, textDecoration: 'underline', fontFamily: 'inherit',
+        fontSize: 'inherit', lineHeight: 'inherit', overflowWrap: 'break-word',
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// Ссылки строки сопоставляются по тексту записи links, не по индексу: порядок массива бэка
+// (тело, затем сноски, WikiPage.cs:272-282) для экрана не значим, а записей без места в тексте
+// в нём бывают (цели сносок) — они просто не находят своего места.
+type LinkIndex = Map<string, WikiPageLinkDto>;
+
+function renderLine(line: string, quotes: Map<string, string>, keyBase: string, ui?: FootnoteUi, links?: LinkIndex): ReactNode[] {
   const parts: ReactNode[] = [];
   let last = 0;
   let k = 0;
@@ -179,8 +226,16 @@ function renderLine(line: string, quotes: Map<string, string>, keyBase: string, 
           {m[1]}
         </sup>,
       );
-    } else {
-      parts.push(m[2]);
+    } else if (m[2] !== undefined) {
+      // Резолв есть — ссылка. Поле links пришло, но этой записи в нём нет или резолва нет
+      // (path/section null) — подпись без скобок, некликабельная: своей копии резолва здесь
+      // нет. Поля links нет вовсе (старый бэк) — прежний текст без скобок.
+      const link = links?.get(m[2]);
+      if (link && link.path && link.section) {
+        parts.push(<PageLink key={`${keyBase}-lk${k++}`} section={link.section} path={link.path} label={linkLabel(m[2])} />);
+      } else {
+        parts.push(links ? linkLabel(m[2]) : m[2]);
+      }
     }
     last = m.index + m[0].length;
   }
@@ -239,12 +294,13 @@ const EMPTY_HINT: Record<string, string> = {
   История: 'Ничего не замещено.',
 };
 
-function SectionBlock({ name, lines, quotes, ui, marks }: {
+function SectionBlock({ name, lines, quotes, ui, marks, links }: {
   name: string;
   lines: string[];
   quotes: Map<string, string>;
   ui?: FootnoteUi;
   marks?: LineMarks;
+  links?: LinkIndex;
 }) {
   return (
     <section data-testid="wiki-section" data-section-name={name} style={{ marginTop: SP.lg }}>
@@ -256,7 +312,7 @@ function SectionBlock({ name, lines, quotes, ui, marks }: {
         <ul style={{ margin: `${SP.sm}px 0 0`, paddingLeft: SP.lg, display: 'flex', flexDirection: 'column', gap: SP.sm }}>
           {lines.map((ln, i) => (
             <li key={i} style={{ fontSize: FS.md, color: C.textPrimary, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
-              {renderLine(ln.replace(BULLET_RX, ''), quotes, `s${i}`, ui)}
+              {renderLine(ln.replace(BULLET_RX, ''), quotes, `s${i}`, ui, links)}
               {marks && name !== 'История' && (() => {
                 const t = marks.tags.get(normStatement(ln));
                 return t ? <MarkTag kind={t.kind} at={t.at} /> : null;
@@ -317,6 +373,7 @@ const RELATED_LABELS: Record<WikiRelatedKind, string> = {
   mentions: 'Упоминают эту страницу',
   mentionedHere: 'Упомянуты здесь',
   backlinks: 'Ссылаются сюда',
+  topic: 'По теме',
 };
 
 // Тач-цель пункта на телефоне — та же, что у строк каталога и дерева (WikiTab ROW_H_TOUCH,
@@ -325,13 +382,12 @@ const RELATED_ROW_H_TOUCH = 44;
 
 // Пункт ведёт на страницу каналом открытия страницы стора (requestOpenWikiPage → OPEN-1 в
 // WikiTab) — тем же, каким ведут «Журнал», «Решения» и дерево; своей точки перехода у
-// страницы нет. Раздел пункта бэк в related не несёт (только путь под pages/) — он берётся
-// из самого пути (sectionKeyOfPagePath — зеркало бэкового WikiSections.Parse): бэк проверяет
-// пару (раздел, страница) (WikiController.cs:241), и сосед из цепочки вверх открылся бы
-// чужим разделом в 400. Путь вне раздела (ни одна из папок) — не переход: строка остаётся
-// неактивной, чужую строку в канал не пускаем.
+// страницы нет. Раздел пункта отдаёт бэк (очередь 2, B3): он проверяет пару (раздел, страница)
+// (WikiController.cs:241), и сосед из цепочки вверх открылся бы чужим разделом в 400. Своего
+// разбора пути здесь больше нет: фронтовая копия этих правил выведена из файла (B4).
+// Раздела нет (старый бэк без поля) — не переход: строка остаётся неактивной.
 function RelatedRow({ item, isMobile }: { item: WikiRelatedItemDto; isMobile: boolean }) {
-  const sectionKey = sectionKeyOfPagePath(item.pageKey);
+  const sectionKey = item.section ?? null;
   const open = () => { if (sectionKey) requestOpenWikiPage({ section: sectionKey, path: item.pageKey }); };
   return (
     <button
@@ -407,8 +463,24 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   const drift = dto?.drift === true;
   const quotes = new Map(page.footnotes.map(f => [f.id, f.quote]));
   // «Связанные» — поле того же ответа GET /wiki/page (2Б): своего запроса нет, порядок групп
-  // остаётся бэковым. Пустая группа не рисуется; без поля или из одних пустых групп — блока нет
-  const relatedGroups = (dto?.related ?? []).filter(g => g.items.length > 0);
+  // остаётся бэковым. Пустая группа не рисуется; без поля или из одних пустых групп — блока нет.
+  // Группа с неизвестным фронту kind (новый бэндл бэка на этом фронте) тоже не рисуется:
+  // без подписи в RELATED_LABELS нет строки — не «undefined» в заголовке и не исключение.
+  // Проверка через Object.hasOwn, не `in`: `in` пропускает имена прототипа ('toString',
+  // 'constructor') — такой kind доставал бы функцию из прототипа и ронял страницу целиком
+  // («Functions are not valid as a React child»); тот же приём, что chatFilters.ts:172
+  const relatedGroups = (dto?.related ?? []).filter(g => g.items.length > 0 && Object.hasOwn(RELATED_LABELS, g.kind));
+  // Ссылки текста страницы (B4): индекс по тексту записи — сопоставление с местом в тексте,
+  // не по индексу массива. Дубль текста (одна цель названа дважды) держит первое значение:
+  // резолв одной цели даёт один и тот же путь. Поля links в ответе нет (старый бэк) — индекса
+  // нет вовсе: строки рендерятся как раньше, а не «с пустым резолвом».
+  const linkIndex = useMemo<LinkIndex | undefined>(() => {
+    const src = dto?.links;
+    if (!Array.isArray(src)) return undefined;
+    const idx: LinkIndex = new Map();
+    for (const l of src) if (typeof l?.text === 'string' && !idx.has(l.text)) idx.set(l.text, l);
+    return idx;
+  }, [dto?.links]);
 
   // Сноски с происхождением (footnotes[] страницы, B7); нет поля — прежний вид
   const authored = dto as WikiPageOverriddenDto | null;
@@ -711,7 +783,7 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
       )}
 
       {bodySections.map(s => (
-        <SectionBlock key={s.name} name={s.name} lines={s.lines} quotes={quotes} ui={footnoteUi} marks={marks} />
+        <SectionBlock key={s.name} name={s.name} lines={s.lines} quotes={quotes} ui={footnoteUi} marks={marks} links={linkIndex} />
       ))}
 
       {unified && !isChronicle && (

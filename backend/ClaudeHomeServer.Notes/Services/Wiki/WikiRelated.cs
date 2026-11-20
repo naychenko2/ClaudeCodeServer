@@ -8,7 +8,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // Группы по порядку приоритета (дубль между группами остаётся только в старшей):
 // source — общая карточка источника в сносках; chronicle — хроника того чата, что является
 // источником этих карточек; mentions — упоминают эту страницу; mentionedHere — упомянуты
-// здесь; backlinks — OutboundLinks (WikiPage.cs:258) указывает сюда.
+// здесь; backlinks — OutboundLinks (WikiPage.cs:258) указывает сюда; topic — «По теме»:
+// страницы видимых разделов с редкими общими основами (WikiTopicScore), последняя группа —
+// в неё попадает только то, чего нет в старших.
 //
 // Карточки source и проекции `_*` из групп упоминаний и обратных ссылок исключены: источник
 // имеет свою группу, проекцию генерирует код. Пустые группы не отдаются; группа — не длиннее
@@ -30,28 +32,131 @@ public static class WikiRelated
     public const string KindMentions = "mentions";
     public const string KindMentionedHere = "mentionedHere";
     public const string KindBacklinks = "backlinks";
+    public const string KindTopic = "topic";
+
+    /// <summary>Потолок «По теме»: действует и при limit: null — группа подсказка, а не степень.</summary>
+    public const int TopicLimit = 5;
 
     // Порядок приоритета: дубль остаётся только в первой допустившей его группе.
     private static readonly string[] KindOrder =
-        [KindSource, KindChronicle, KindMentions, KindMentionedHere, KindBacklinks];
+        [KindSource, KindChronicle, KindMentions, KindMentionedHere, KindBacklinks, KindTopic];
 
     /// <summary>Проекция «Связанные» для одной страницы. page — сама страница (путь под pages/
     /// и текст); pages — снимок страниц её раздела и цепочки вверх (тот же набор, что state
     /// гейта для allowed-разделов): своя страница, неразобранный путь, проекция и неразобранная
-    /// страница из него выпадают — та же мера, что у гейта (WikiGate.cs:101-137).</summary>
-    public static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages) =>
-        Build(page, pages, null);
+    /// страница из него выпадают — та же мера, что у гейта (WikiGate.cs:101-137).
+    /// limit — потолок группы: по умолчанию прежний GroupLimit (вызовы без него ведут себя как
+    /// раньше); null — без потолка (A5: степени WikiConnectivity не должны срезаться —
+    /// страница с 10 обратными ссылками даёт степень 10, а не 8).</summary>
+    public static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages,
+        int? limit = GroupLimit) =>
+        Build(page, pages, limit, null);
 
     /// <summary>Тестовый срез (c3 вердикта 141df4ac): сколько вызовов WikiGate.Norm делает
     /// полный Build на этом снимке — сторож O(N+L) резолва вместо прежнего O(N·L·N).</summary>
     internal static int CountNormCalls(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages)
     {
         var counter = new NormCounter();
-        Build(page, pages, counter);
+        Build(page, pages, GroupLimit, counter);
         return counter.Calls;
     }
 
-    private static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages, NormCounter? counter)
+    /// <summary>Тестовый срез: сколько вызовов WikiCandidates.SignificantWords делает полный
+    /// Build — индекс «По теме» строится один раз на Build, а не на каждую пару.</summary>
+    internal static int CountWordsCalls(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages)
+    {
+        var counter = new NormCounter();
+        Build(page, pages, GroupLimit, counter);
+        return counter.WordsCalls;
+    }
+
+    /// <summary>Внутренний вариант для замера связности (A6): индекс «По теме» готов заранее —
+    /// WikiConnectivity.Measure берёт его из TopicIndexCache по видимым разделам страницы.
+    /// Остальное — как у Build(limit: null).</summary>
+    internal static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages,
+        WikiTopicScore.Index topicIndex, int? limit = null, NormCounter? counter = null) =>
+        Build(page, pages, limit, counter, topicIndex);
+
+    /// <summary>Единственное место сборки индекса «По теме» (A6, доработка 1): страницы РАЗДЕЛОВ
+    /// allowed (видимых странице) вместе с ней самой — тот же состав, что видит человек при
+    /// показе. Глобальный индекс по всему снимку запрещён: df и N другого корпуса дают другие
+    /// рёбра, чем на экране. pool обязан содержать и саму страницу.</summary>
+    private static WikiTopicScore.Index BuildAllowedTopicIndex(IEnumerable<Cand> pool, HashSet<string> allowed,
+        NormCounter? counter) =>
+        WikiTopicScore.BuildIndex(
+            pool.Where(c => allowed.Contains(c.Section))
+                .Select(c => new WikiTopicScore.Entry(c.Path, c.Page.Title,
+                    WikiProjections.SummaryOf(c.Page.Frontmatter, c.Content))),
+            counter is null ? null : counter.CountWords);
+
+    /// <summary>Кеш индексов «По теме» для замера связности: снимок разбирается один раз, индекс —
+    /// один на каждый набор видимых разделов (ключ — сам набор allowed), а не на страницу и не
+    /// один на весь снимок.</summary>
+    internal sealed class TopicIndexCache(IReadOnlyList<WikiGate.Draft> pages, NormCounter? counter = null)
+    {
+        private readonly List<Cand> _all = ParseSnapshot(pages);
+        private readonly Dictionary<string, WikiTopicScore.Index> _byAllowed = new(StringComparer.Ordinal);
+
+        /// <summary>Сколько разных индексов построено (тестовый срез: ≤ числа разных наборов allowed).</summary>
+        public int Built => _byAllowed.Count;
+
+        /// <summary>Индекс для страницы с разделом section; страница обязана быть в снимке.</summary>
+        public WikiTopicScore.Index For(string section)
+        {
+            var allowed = AllowedSections(section, _all);
+            var key = string.Join('\u001f', allowed.OrderBy(s => s, StringComparer.Ordinal));
+            if (!_byAllowed.TryGetValue(key, out var index))
+                _byAllowed[key] = index = BuildAllowedTopicIndex(_all, allowed, counter);
+            return index;
+        }
+
+        private static List<Cand> ParseSnapshot(IReadOnlyList<WikiGate.Draft> pages)
+        {
+            var list = new List<Cand>();
+            foreach (var d in pages)
+            {
+                var section = WikiSections.Parse(d.Path);
+                if (section is null || WikiPaths.IsProjection(d.Path))
+                    continue;
+                if (WikiPage.Parse(d.Content).Model is { } model)
+                    list.Add(new Cand(d.Path, section, d.Content, model));
+            }
+            return list;
+        }
+    }
+
+    /// <summary>Резолвится ли хоть одна [[…]] страницы тела на страницу знаний (не карточку
+    /// источника и не хронику) — K2 замера связности. Резолв и область видимости те же, что у
+    /// групп «Связанных».</summary>
+    internal static bool LinksToKnowledgePage(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages)
+    {
+        var section = WikiSections.Parse(page.Path);
+        if (section is null || WikiPaths.IsProjection(page.Path))
+            return false;
+        var target = WikiPage.Parse(page.Content).Model;
+        if (target is null)
+            return false;
+        var candidates = new List<Cand>();
+        foreach (var draft in pages)
+        {
+            if (draft.Path == page.Path)
+                continue;
+            var sec = WikiSections.Parse(draft.Path);
+            if (sec is null || WikiPaths.IsProjection(draft.Path))
+                continue;
+            var model = WikiPage.Parse(draft.Content).Model;
+            if (model is not null)
+                candidates.Add(new Cand(draft.Path, sec, draft.Content, model));
+        }
+        var allowed = AllowedSections(section, candidates);
+        var index = BuildIndex([.. candidates, new Cand(page.Path, section, page.Content, target)], null);
+        return target.OutboundLinks().Any(link =>
+            ResolveLink(link.Text, section, allowed, index, null) is { } hit && hit.Path != page.Path &&
+            hit.Page.Frontmatter.Type is not (WikiFrontmatter.TypeSource or WikiFrontmatter.TypeChronicle));
+    }
+
+    private static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages,
+        int? limit, NormCounter? counter, WikiTopicScore.Index? prebuiltTopicIndex = null)
     {
         var targetSection = WikiSections.Parse(page.Path);
         if (targetSection is null || WikiPaths.IsProjection(page.Path))
@@ -159,12 +264,25 @@ public static class WikiRelated
             Add(groups, taken, KindBacklinks, c);
         }
 
+        // 6. topic — по редким общим основам. Индекс (df) — по всему снимку видимых разделов
+        // вместе с целью, один раз на Build. Кандидаты — как у остальных групп, но без хроник и
+        // без уже занятых старшими группами; порядок — по оценке, он же и остаётся в выводе.
+        var topicIndex = prebuiltTopicIndex ?? BuildAllowedTopicIndex(
+            candidates.Append(new Cand(page.Path, targetSection, page.Content, target)), allowed, counter);
+        var byPath = candidates.ToDictionary(c => c.Path, StringComparer.Ordinal);
+        var topicPool = Navigable(candidates, allowed)
+            .Where(c => c.Page.Frontmatter.Type != WikiFrontmatter.TypeChronicle && !taken.Contains(c.Path))
+            .Select(c => c.Path);
+        foreach (var (path, _) in WikiTopicScore.Rank(topicIndex, page.Path, topicPool, take: TopicLimit))
+            Add(groups, taken, KindTopic, byPath[path]);
+
         return [.. KindOrder
             .Where(kind => groups.TryGetValue(kind, out var g) && g.Count > 0)
-            .Select(kind => new WikiRelatedGroup(kind, [.. groups[kind]
-                .OrderBy(c => c.Path, StringComparer.Ordinal)
-                .Take(GroupLimit)
-                .Select(c => new WikiRelatedItem(c.Path, c.Page.Title, c.Page.Frontmatter.Type))]))];
+            .Select(kind => new WikiRelatedGroup(kind, [.. (kind == KindTopic
+                    ? groups[kind] // порядок «По теме» — оценка, а не путь
+                    : groups[kind].OrderBy(c => c.Path, StringComparer.Ordinal).ToList())
+                .Take(limit ?? int.MaxValue) // null — без потолка (A5); срез — только вывод группы
+                .Select(c => new WikiRelatedItem(c.Path, c.Page.Title, c.Page.Frontmatter.Type, c.Section))]))];
     }
 
     /// <summary>Общий матчер упоминаний: вынесен из WikiLint.UnlinkedMentions (тот же смысл,
@@ -185,6 +303,13 @@ public static class WikiRelated
     internal sealed class NormCounter
     {
         public int Calls;
+        public int WordsCalls;
+
+        public HashSet<string> CountWords(string text)
+        {
+            WordsCalls++;
+            return WikiCandidates.SignificantWords(text);
+        }
     }
 
     private static string Norm(string text, NormCounter? counter)
@@ -254,6 +379,9 @@ public static class WikiRelated
     private static Cand? ResolveLink(string text, string fromSection, HashSet<string> allowed,
         Dictionary<(string Section, string Title), Cand> index, NormCounter? counter)
     {
+        // Цель — то, что до первого «|» (WikiPage.LinkTarget): одна копия разбора на весь
+        // резолв, здесь своей нет.
+        text = WikiPage.LinkTarget(text);
         if (text.Contains('/'))
         {
             var section = WikiSections.Parse(text);
@@ -282,5 +410,7 @@ public static class WikiRelated
 public sealed record WikiRelatedGroup(string Kind, IReadOnlyList<WikiRelatedItem> Items);
 
 /// <summary>Один элемент группы: pageKey — путь под pages/, title — заголовок страницы,
-/// type — значение type её шапки (для карточек источника — «source»).</summary>
-public sealed record WikiRelatedItem(string PageKey, string Title, string? Type);
+/// type — значение type её шапки (для карточек источника — «source»), section — ключ раздела
+/// цели (тот же WikiSections.Parse, которым кандидат отобран в снимок): в выдаче пути —
+/// ключи разделов, а не папки, второго разбора пути на фронте нет.</summary>
+public sealed record WikiRelatedItem(string PageKey, string Title, string? Type, string Section);

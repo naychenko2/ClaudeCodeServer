@@ -376,7 +376,13 @@ public static class WikiGate
         NotFound,
     }
 
-    internal readonly record struct LinkResolution(LinkOutcome Outcome, string? Section);
+    /// <summary>Исход резолва и раздел, где он случился. Path — путь найденной страницы при
+    /// Resolved (тот, что называет FindPage и раньше, но выбрасывал): резолверу ссылок
+    /// страницы (GET page, B3) нужен путь цели — второй копии правил для этого нет.</summary>
+    internal readonly record struct LinkResolution(LinkOutcome Outcome, string? Section)
+    {
+        public string? Path { get; init; }
+    }
 
     /// <summary>Резолв одной ссылки [[text]] — те же правила, что у всего гейта
     /// (ADR-036, решение 4): голая — свой раздел, потом вверх по цепочке; с префиксом —
@@ -392,6 +398,9 @@ public static class WikiGate
         IReadOnlyList<string> upChain,
         IReadOnlyList<(string Section, WikiPage Page, string Path)> snapshot)
     {
+        // Цель — то, что до первого «|» (WikiPage.LinkTarget): подпись после «|» в резолв не
+        // входит, «#»-якорь остаётся частью цели. Та же цель, что у «Связанных».
+        text = WikiPage.LinkTarget(text);
         var allowed = new HashSet<string>(StringComparer.Ordinal) { sectionKey };
         allowed.UnionWith(upChain);
         if (text.Contains('/'))
@@ -404,16 +413,21 @@ public static class WikiGate
             if (!allowed.Contains(section))
                 return new(LinkOutcome.Sideways, section);
             var title = text.Split('/')[^1];
-            return FindPage(title, [section], snapshot) is not null
-                ? new(LinkOutcome.Resolved, section)
+            var prefixed = FindPage(title, [section], snapshot);
+            return prefixed is not null
+                ? new(LinkOutcome.Resolved, section) { Path = prefixed.Value.Path }
                 : new(LinkOutcome.PrefixedUnknown, section);
         }
         // Голая ссылка: свой раздел, потом вверх по цепочке; нигде больше.
-        if (FindPage(text, [sectionKey], snapshot) is not null)
-            return new(LinkOutcome.Resolved, sectionKey);
+        var own = FindPage(text, [sectionKey], snapshot);
+        if (own is not null)
+            return new(LinkOutcome.Resolved, sectionKey) { Path = own.Value.Path };
         foreach (var section in upChain)
-            if (FindPage(text, [section], snapshot) is not null)
-                return new(LinkOutcome.Resolved, section);
+        {
+            var up = FindPage(text, [section], snapshot);
+            if (up is not null)
+                return new(LinkOutcome.Resolved, section) { Path = up.Value.Path };
+        }
         var elsewhere = FindPage(text,
             snapshot.Select(s => s.Section).Distinct().Where(s => !allowed.Contains(s)), snapshot);
         return elsewhere is not null
@@ -448,8 +462,6 @@ public static class WikiGate
     // при применении плана) и WikiChatIngestService.AppendChronicleAsync (снятие при
     // записи claim в хронику — для раздела дома хроники и его цепочки вверх, Q1-S4b).
 
-    private static readonly Regex ClaimLinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
-
     internal static string StripUnresolvedLinks(
         string claim, string sectionKey, IReadOnlyList<string> upChain,
         IReadOnlyList<(string Section, WikiPage Page, string Path)> snapshot, out int removed)
@@ -457,7 +469,7 @@ public static class WikiGate
         removed = 0;
         var sb = new StringBuilder(claim.Length);
         var pos = 0;
-        foreach (Match m in ClaimLinkRx.Matches(claim))
+        foreach (Match m in WikiPage.LinkRx.Matches(claim))
         {
             var inner = m.Groups[1].Value;
             if (ResolveLink(inner, sectionKey, upChain, snapshot).Outcome == LinkOutcome.Resolved)

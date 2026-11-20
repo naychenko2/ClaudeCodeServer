@@ -392,6 +392,9 @@ public static class WikiGate
         IReadOnlyList<string> upChain,
         IReadOnlyList<(string Section, WikiPage Page, string Path)> snapshot)
     {
+        // Цель — то, что до первого «|» (WikiPage.LinkTarget): подпись после «|» в резолв не
+        // входит, «#»-якорь остаётся частью цели. Та же цель, что у «Связанных».
+        text = WikiPage.LinkTarget(text);
         var allowed = new HashSet<string>(StringComparer.Ordinal) { sectionKey };
         allowed.UnionWith(upChain);
         if (text.Contains('/'))

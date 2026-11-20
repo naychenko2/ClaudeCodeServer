@@ -31,9 +31,19 @@ public class WikiLinkAgreementTests
     {
         { "Цель", "Проекты/p1/Цель.md", "заголовок" },
         { "цель", "Проекты/p1/Цель.md", "заголовок, регистр" },
-        { "Цель|подпись", null, "заголовок с подписью: цель — всё внутри скобок, как у гейта" },
+        // B0: цель — то, что до первого «|»; подпись в резолв не входит.
+        { "Цель|подпись", "Проекты/p1/Цель.md", "заголовок с подписью: цель — до «|»" },
+        { "Цель|", "Проекты/p1/Цель.md", "пустая подпись (хвост 15)" },
+        { "Цель | подпись", "Проекты/p1/Цель.md", "пробелы вокруг цели обрезаны" },
+        { "Проекты/p1/Цель|подпись", "Проекты/p1/Цель.md", "префикс своего раздела с подписью" },
+        { "Общее/Общий|подпись", "Общее/Общий.md", "префикс раздела вверх с подписью" },
+        { "Общий |подпись", "Общее/Общий.md", "голая вверх по цепочке с подписью" },
+        { "|подпись", null, "пустая цель: резолвить нечего" },
+        { "Чужой|подпись", null, "голая ссылка вбок с подписью" },
+        { "Проекты/p2/Чужой|подпись", null, "префикс бокового раздела с подписью" },
+        { "Неизвестная|подпись", null, "несуществующая страница с подписью" },
+        { "Цель#якорь|подпись", null, "якорь и подпись: якорь остаётся частью цели" },
         { "Цель#якорь", null, "заголовок с якорем: то же" },
-        { "Цель|", null, "пустая подпись (хвост 15)" },
         { "Псевдоним", null, "алиас страницы: резолв по заголовку, алиасы не участвуют" },
         { "Проекты/p1/Сосед", "Проекты/p1/Сосед.md", "префикс своего раздела" },
         { "Общее/Общий", "Общее/Общий.md", "префикс раздела вверх по цепочке" },
@@ -60,11 +70,47 @@ public class WikiLinkAgreementTests
         AssertAgreement("- Пример `[[Проекты/p1/Сосед]]` в коде.", null, "код-спан");
     }
 
-    private static void AssertAgreement(string linkerBody, string? expectedPath, string form)
+    // B0: цель берёт WikiPage.LinkTarget — одна на обе стороны, своей копии разбора «|» в
+    // резолвах нет. Якорь «#» — часть цели, он не режется.
+    [Theory]
+    [InlineData("Цель|подпись", "Resolved")]
+    [InlineData("Цель|", "Resolved")]
+    [InlineData("Цель | подпись", "Resolved")]
+    [InlineData("Проекты/p1/Цель|подпись", "Resolved")]
+    [InlineData("Общее/Общий|подпись", "Resolved")]
+    [InlineData("Цель#якорь", "NotFound")]
+    [InlineData("Цель#якорь|подпись", "NotFound")]
+    [InlineData("|подпись", "NotFound")]
+    [InlineData("Неизвестная|подпись", "NotFound")]
+    public void РезолвБерётЦельДоВертикали(string link, string expected)
     {
-        var drafts = Pages.Select(p => new WikiGate.Draft(p.Path, Content(p.Title, p.Aliases, "Содержимое без упоминаний.")))
+        var snapshot = Snapshot($"См. [[{link}]].");
+        WikiGate.ResolveLink(link, LinkerSection, ["common"], snapshot).Outcome.ToString()
+            .Should().Be(expected, $"{link}: цель — до первого «|», якорь остаётся в цели");
+    }
+
+    [Fact]
+    public void СнятиеОставляетРезолвимуюСсылку_НеразрешимуюСнимаетВПодпись()
+    {
+        var claim = "См. [[Цель|подпись]] и [[Неизвестная|текст]].";
+        var snapshot = Snapshot(claim);
+        var stripped = WikiGate.StripUnresolvedLinks(claim, LinkerSection, ["common"], snapshot, out var removed);
+        stripped.Should().Be("См. [[Цель|подпись]] и текст.",
+            "резолвимая ссылка остаётся байт-в-байт; неразрешимая — как прежде, в алиас (PlainLinkText не тронут)");
+        removed.Should().Be(1);
+    }
+
+    private static List<WikiGate.Draft> Drafts(string linkerBody) =>
+        Pages.Select(p => new WikiGate.Draft(p.Path, Content(p.Title, p.Aliases, "Содержимое без упоминаний.")))
             .Append(new WikiGate.Draft(Linker, Content("Источник", [], linkerBody)))
             .ToList();
+
+    private static List<(string Section, WikiPage Page, string Path)> Snapshot(string linkerBody) =>
+        Drafts(linkerBody).Select(d => (WikiSections.Parse(d.Path)!, WikiPage.Parse(d.Content).Model!, d.Path)).ToList();
+
+    private static void AssertAgreement(string linkerBody, string? expectedPath, string form)
+    {
+        var drafts = Drafts(linkerBody);
         var snapshot = drafts
             .Select(d => (WikiSections.Parse(d.Path)!, WikiPage.Parse(d.Content).Model!, d.Path))
             .ToList();

@@ -47,6 +47,16 @@ public sealed class WikiPage
     /// хранитель, учёт чисел и проекции; ссылки заметок (NotesService.WikiLink), видимость и
     /// тексты причин гейта — другая семантика, отдельные образцы.</summary>
     internal static readonly Regex LinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
+    /// <summary>Цель ссылки из внутренности [[…]]: часть до первого «|» (подпись отрезана),
+    /// обрамляющие пробелы обрезаны. «#»-якорь — часть цели, он не трогается: резолвится
+    /// как написан (сейчас — ни в чём). Пустая цель (внутренность с «|» в начале или пустая) —
+    /// пустая строка. Единственный разбор «|» для резолва: его зовут WikiGate.ResolveLink и
+    /// WikiRelated.ResolveLink; своей копии в них нет.</summary>
+    internal static string LinkTarget(string inner)
+    {
+        var bar = inner.IndexOf('|');
+        return (bar >= 0 ? inner[..bar] : inner).Trim();
+    }
     private static readonly Regex SessionRefRx = new(@"^session:([A-Za-z0-9_-]+)#m([0-9]+)-([0-9]+)\z", RegexOptions.CultureInvariant);
 
     /// <summary>Сложить текст в одну строку: формат страницы строчный — строки секций и

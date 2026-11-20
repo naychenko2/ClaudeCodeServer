@@ -298,6 +298,9 @@ public static class WikiRelated
     private static Cand? ResolveLink(string text, string fromSection, HashSet<string> allowed,
         Dictionary<(string Section, string Title), Cand> index, NormCounter? counter)
     {
+        // Цель — то, что до первого «|» (WikiPage.LinkTarget): одна копия разбора на весь
+        // резолв, здесь своей нет.
+        text = WikiPage.LinkTarget(text);
         if (text.Contains('/'))
         {
             var section = WikiSections.Parse(text);

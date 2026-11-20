@@ -70,8 +70,55 @@ public static class WikiRelated
         return counter.WordsCalls;
     }
 
+    /// <summary>Внутренний вариант для замера связности (A6): индекс «По теме» готов заранее —
+    /// WikiConnectivity.Measure строит его один раз на весь замер, а не на каждую страницу.
+    /// Остальное — как у Build(limit: null).</summary>
+    internal static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages,
+        WikiTopicScore.Index topicIndex, int? limit = null) =>
+        Build(page, pages, limit, null, topicIndex);
+
+    /// <summary>Индекс «По теме» по снимку: те же страницы и тот же текст оценки (заголовок и
+    /// сводка), что собирает Build сам; проекции и неразобранные страницы не входят.</summary>
+    internal static WikiTopicScore.Index BuildTopicIndex(IReadOnlyList<WikiGate.Draft> pages) =>
+        WikiTopicScore.BuildIndex(pages
+            .Where(d => WikiSections.Parse(d.Path) is not null && !WikiPaths.IsProjection(d.Path))
+            .Select(d => (d.Path, Model: WikiPage.Parse(d.Content).Model, d.Content))
+            .Where(x => x.Model is not null)
+            .Select(x => new WikiTopicScore.Entry(x.Path, x.Model!.Title,
+                WikiProjections.SummaryOf(x.Model.Frontmatter, x.Content))));
+
+    /// <summary>Резолвится ли хоть одна [[…]] страницы тела на страницу знаний (не карточку
+    /// источника и не хронику) — K2 замера связности. Резолв и область видимости те же, что у
+    /// групп «Связанных».</summary>
+    internal static bool LinksToKnowledgePage(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages)
+    {
+        var section = WikiSections.Parse(page.Path);
+        if (section is null || WikiPaths.IsProjection(page.Path))
+            return false;
+        var target = WikiPage.Parse(page.Content).Model;
+        if (target is null)
+            return false;
+        var candidates = new List<Cand>();
+        foreach (var draft in pages)
+        {
+            if (draft.Path == page.Path)
+                continue;
+            var sec = WikiSections.Parse(draft.Path);
+            if (sec is null || WikiPaths.IsProjection(draft.Path))
+                continue;
+            var model = WikiPage.Parse(draft.Content).Model;
+            if (model is not null)
+                candidates.Add(new Cand(draft.Path, sec, draft.Content, model));
+        }
+        var allowed = AllowedSections(section, candidates);
+        var index = BuildIndex([.. candidates, new Cand(page.Path, section, page.Content, target)], null);
+        return target.OutboundLinks().Any(link =>
+            ResolveLink(link.Text, section, allowed, index, null) is { } hit && hit.Path != page.Path &&
+            hit.Page.Frontmatter.Type is not (WikiFrontmatter.TypeSource or WikiFrontmatter.TypeChronicle));
+    }
+
     private static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages,
-        int? limit, NormCounter? counter)
+        int? limit, NormCounter? counter, WikiTopicScore.Index? prebuiltTopicIndex = null)
     {
         var targetSection = WikiSections.Parse(page.Path);
         if (targetSection is null || WikiPaths.IsProjection(page.Path))
@@ -182,11 +229,11 @@ public static class WikiRelated
         // 6. topic — по редким общим основам. Индекс (df) — по всему снимку видимых разделов
         // вместе с целью, один раз на Build. Кандидаты — как у остальных групп, но без хроник и
         // без уже занятых старшими группами; порядок — по оценке, он же и остаётся в выводе.
-        var snapshot = candidates.Where(c => allowed.Contains(c.Section))
-            .Append(new Cand(page.Path, targetSection, page.Content, target));
-        var topicIndex = WikiTopicScore.BuildIndex(
-            snapshot.Select(c => new WikiTopicScore.Entry(c.Path, c.Page.Title,
-                WikiProjections.SummaryOf(c.Page.Frontmatter, c.Content))),
+        var topicIndex = prebuiltTopicIndex ?? WikiTopicScore.BuildIndex(
+            candidates.Where(c => allowed.Contains(c.Section))
+                .Append(new Cand(page.Path, targetSection, page.Content, target))
+                .Select(c => new WikiTopicScore.Entry(c.Path, c.Page.Title,
+                    WikiProjections.SummaryOf(c.Page.Frontmatter, c.Content))),
             counter is null ? null : counter.CountWords);
         var byPath = candidates.ToDictionary(c => c.Path, StringComparer.Ordinal);
         var topicPool = Navigable(candidates, allowed)

@@ -81,6 +81,33 @@ public sealed class LlmGatewayAnswerSpeedTests : IAsyncDisposable
         public AnswerSpeedSnapshot SnapshotOf(string track) => inner.SnapshotOf(track);
     }
 
+    // Приёмник хода, который считает вызовы: падение сборщика скорости не должно стоить метрики
+    // счётчика хода — без этого счёта «получатель не пострадал» в тесте не видно.
+    private sealed class CountingSink : ILocalModelRequestSink
+    {
+        public int Completed;
+        public void OnRequestStarted(string requestId, string turnId, string? providerKey = null) { }
+        public void OnFirstToken(string requestId, string turnId) { }
+        public void OnRequestCompleted(string requestId, string turnId, RequestUsage usage) => Interlocked.Increment(ref Completed);
+        public void OnTokenCount(string requestId, string turnId, int cumulativeTokens) { }
+    }
+
+    // Сборщик, который бросает на всех трёх точках: проверяет, что ни одна из них не рвёт
+    // поток клиента (все три вызова в шлюзе — в своих try/catch).
+    private sealed class ThrowingAnswerSpeed : ILocalModelAnswerSpeed
+    {
+        public int Calls;
+        private void Boom()
+        {
+            Interlocked.Increment(ref Calls);
+            throw new InvalidOperationException("сборщик упал");
+        }
+        public void OnRequestStarted(string requestId, string track, DateTimeOffset startedAt) => Boom();
+        public void OnFirstToken(string requestId, DateTimeOffset at) => Boom();
+        public void OnRequestCompleted(string requestId, long? outputTokens, DateTimeOffset completedAt) => Boom();
+        public AnswerSpeedSnapshot SnapshotOf(string track) => new() { Windows = [], MinTokensForMedian = 32 };
+    }
+
     private sealed class ManualTime(DateTimeOffset now) : TimeProvider
     {
         public DateTimeOffset Now { get; set; } = now;
@@ -119,10 +146,14 @@ public sealed class LlmGatewayAnswerSpeedTests : IAsyncDisposable
         _collector = new LocalModelAnswerSpeed(_time);
         _speed = new SpyAnswerSpeed(_collector);
         _statsOptions = new MutableOptionsMonitor<LocalModelStatsOptions>(new LocalModelStatsOptions { Enabled = true });
-        (_app, _client) = BuildApp(_kit.Selector, _kit.Providers);
+        (_app, _client) = BuildApp(_kit.Selector, _kit.Providers, _speed);
     }
 
-    private (WebApplication App, HttpClient Client) BuildApp(UpstreamSelector selector, LlmProviderRegistry providers)
+    // Сборщик в DI — тот, который проверяет этот тест: шпион (_speed) или падающий. Приёмник
+    // хода — NullSink, если тесту не нужен считающий.
+    private (WebApplication App, HttpClient Client) BuildApp(
+        UpstreamSelector selector, LlmProviderRegistry providers, ILocalModelAnswerSpeed speed,
+        ILocalModelRequestSink? sink = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -135,8 +166,8 @@ public sealed class LlmGatewayAnswerSpeedTests : IAsyncDisposable
         builder.Services.AddSingleton<IOptionsMonitor<LocalModelStatsOptions>>(_statsOptions);
         // Часы теста — те же, что у сборщика: моменты шлюза проверяются на них.
         builder.Services.AddSingleton<TimeProvider>(_time);
-        builder.Services.AddSingleton<ILocalModelAnswerSpeed>(_speed);
-        builder.Services.AddSingleton<ILocalModelRequestSink>(new NullSink());
+        builder.Services.AddSingleton<ILocalModelAnswerSpeed>(speed);
+        builder.Services.AddSingleton<ILocalModelRequestSink>(sink ?? new NullSink());
         builder.Services.AddHttpClient(LlmGatewayEndpoints.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => _upstream);
         _device.AddTo(builder.Services);
@@ -161,7 +192,8 @@ public sealed class LlmGatewayAnswerSpeedTests : IAsyncDisposable
     }
 
     // Локальный SSE-запрос через шлюз: upstream отвечает через UpstreamDelay, поток пишется в pipe.
-    private async Task StreamAsync(IssuedTurnToken t, HttpClient client, string model)
+    // Возвращает тело, которое получил клиент: тесты «поток целиком» сравнивают его с SseBody.
+    private async Task<string> StreamAsync(IssuedTurnToken t, HttpClient client, string model)
     {
         var pipe = new Pipe();
         _upstream.Respond = _ =>
@@ -177,7 +209,24 @@ public sealed class LlmGatewayAnswerSpeedTests : IAsyncDisposable
         var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
         await pipe.Writer.WriteAsync(Encoding.UTF8.GetBytes(SseBody));
         await pipe.Writer.CompleteAsync();
-        _ = await new StreamReader(await resp.Content.ReadAsStreamAsync()).ReadToEndAsync();
+        return await new StreamReader(await resp.Content.ReadAsStreamAsync()).ReadToEndAsync();
+    }
+
+    // Тот же запрос, но апстрим отдаёт одно тело application/json (не SSE): ответ проходит шлюз
+    // как есть, наблюдателя нет — он живёт в ветке SSE.
+    private async Task<string> JsonAsync(IssuedTurnToken t, HttpClient client, string model, string body)
+    {
+        _upstream.Respond = _ =>
+        {
+            var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8) };
+            r.Content.Headers.ContentType = new("application/json");
+            return r;
+        };
+        var req = _device.Sign(new HttpRequestMessage(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/llm/v1/messages"));
+        req.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, t.Token);
+        req.Content = new StringContent($"{{\"model\":\"{model}\"}}", Encoding.UTF8, "application/json");
+        var resp = await client.SendAsync(req);
+        return await resp.Content.ReadAsStringAsync();
     }
 
     // (1) Локальный маршрут: запрос попал в учёт целиком. 40 токенов / 5 с ответа апстрима = 8.
@@ -250,7 +299,7 @@ public sealed class LlmGatewayAnswerSpeedTests : IAsyncDisposable
         }).Build();
         var providers = new LlmProviderRegistry(config);
         var selector = new UpstreamSelector(_kit.Pool, providers, _kit.Options);
-        var (app, client) = BuildApp(selector, providers);
+        var (app, client) = BuildApp(selector, providers, _speed);
         try
         {
             var start = selector.StartTurn(_tokens, "owner", "chat", _device.Id, "gemma-4-26b-a4b");
@@ -262,6 +311,84 @@ public sealed class LlmGatewayAnswerSpeedTests : IAsyncDisposable
             _collector.SnapshotOf("gemma").Windows.Single(w => w.Window == "5m").Requests.Should().Be(1);
             _collector.SnapshotOf(LocalModelStatsPoller.MainTrackName)
                 .Windows.All(w => w.Requests == 0).Should().BeTrue("чужая дорожка в main не пишется");
+        }
+        finally
+        {
+            await app.DisposeAsync();
+        }
+    }
+
+    // (5) Не-SSE ответ (одно тело JSON): наблюдателя нет — начало не ставится, открытой записи
+    //     нет. Без правки запись висела бы открытой до TTL (1 ч) и в метрику не попадала.
+    //     Мутация: вернуть вызов OnRequestStarted без observer is not null → Started = 1, краснеет.
+    [Fact]
+    public async Task НеSSE_Ответ_ОткрытойЗаписиНет()
+    {
+        const string json = "{\"id\":\"msg_1\",\"type\":\"message\",\"content\":[{\"type\":\"text\",\"text\":\"привет\"}]}";
+        var t = StartLocal(LocalModel);
+        var body = await JsonAsync(t, _client, LocalModel, json);
+
+        body.Should().Be(json, "ответ прошёл клиенту как есть");
+        _speed.Started.Should().Be(0, "начала нет там, где нет наблюдателя, который закончил бы запись");
+        _speed.Completed.Should().Be(0);
+        _collector.SnapshotOf(LocalModelStatsPoller.MainTrackName)
+            .Windows.All(w => w.Requests == 0).Should().BeTrue();
+    }
+
+    // (6) Ветка нормализатора (флаг провайдера NormalizeToolInputArrays): тот же SSE-ответ, но
+    //     фильтр включён — наблюдателя нет, и начала тоже нет. Мутация та же, что у (5).
+    //     Здесь проверяется: весь поток дошёл до клиента и открытой записи нет; сама правка
+    //     tool_use.input — в ToolInputNormalizerTests.
+    [Fact]
+    public async Task ВеткаНормализатора_ОткрытойЗаписиНет()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-gemma:DisplayName"] = "Local Gemma",
+            ["LlmProviders:local-gemma:AnthropicBaseUrl"] = "http://127.0.0.1:8081",
+            ["LlmProviders:local-gemma:IsLocal"] = "true",
+            ["LlmProviders:local-gemma:NormalizeToolInputArrays"] = "true",
+            ["LlmProviders:local-gemma:Models:0:Id"] = "gemma-4-26b-a4b",
+        }).Build();
+        var providers = new LlmProviderRegistry(config);
+        var selector = new UpstreamSelector(_kit.Pool, providers, _kit.Options);
+        var (app, client) = BuildApp(selector, providers, _speed);
+        try
+        {
+            var start = selector.StartTurn(_tokens, "owner", "chat", _device.Id, "gemma-4-26b-a4b");
+            start.Token.Should().NotBeNull(start.FailureText);
+            var body = await StreamAsync(start.Token!, client, "gemma-4-26b-a4b");
+
+            body.Should().Be(SseBody, "клиент получил весь поток");
+            _speed.Started.Should().Be(0, "нормализатор исключает наблюдателя — исключает и начало записи");
+            _collector.SnapshotOf(LocalModelStatsPoller.MainTrackName)
+                .Windows.All(w => w.Requests == 0).Should().BeTrue();
+        }
+        finally
+        {
+            await app.DisposeAsync();
+        }
+    }
+
+    // (7) Сборщик бросает на всех трёх точках: поток клиента — целиком, счётчик хода — со своим
+    //     итогом, запрос просто не попадает в метрику скорости. Мутации (каждая краснеет):
+    //     снять try у начала или у первого токена — тело обрывается исключением; снять try у итога
+    //     — sink.OnRequestCompleted не вызван (Completed = 0).
+    [Fact]
+    public async Task СборщикБросает_ПотокКлиентаЦеликом()
+    {
+        var throwing = new ThrowingAnswerSpeed();
+        var sink = new CountingSink();
+        var (app, client) = BuildApp(_kit.Selector, _kit.Providers, throwing, sink);
+        try
+        {
+            var t = StartLocal(LocalModel);
+            var body = await StreamAsync(t, client, LocalModel);
+
+            body.Should().Be(SseBody, "исключение сборщика не рвёт поток клиента");
+            throwing.Calls.Should().Be(3,
+                "все три точки вызваны и каждая проглочена: начало, первый токен, итог");
+            sink.Completed.Should().Be(1, "падение сборщика скорости не стоит метрики счётчика хода");
         }
         finally
         {

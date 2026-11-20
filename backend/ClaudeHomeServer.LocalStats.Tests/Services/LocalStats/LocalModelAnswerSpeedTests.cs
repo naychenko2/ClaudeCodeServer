@@ -221,4 +221,49 @@ public sealed class LocalModelAnswerSpeedTests
         w.MedianTps.Should().BeNull();
         w.MedianTtftSec.Should().BeApproximately(0.0, 1e-9, "первый токен в тот же момент — TTFT 0, это данные");
     }
+
+    // (12) Потолок кольца (MaxRecordsPerTrack на дорожку): лишние — самые старые по завершению.
+    //     Самый старый запрос намеренно жирный (миллион токенов): если он останется в кольце,
+    //     requests станет 50 001, а сквозная скорость поднимется с 10 до ~12 — краснеет и то,
+    //     и другое. Мутация: снять RemoveRange в OnRequestCompleted.
+    [Fact]
+    public void ПотолокКольца_ЛишниеСамыеСтарыеВырезаются()
+    {
+        var (c, time) = New();
+        var cap = LocalModelAnswerSpeed.MaxRecordsPerTrack;
+        // По завершению — по возрастанию: жирный самый старый, дальше по 100 токенов за 10 с.
+        Run(c, "oldest-fat", TimeSpan.Zero, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(10), 1_000_000);
+        for (var i = 0; i < cap; i++)
+            Run(c, $"r{i}", TimeSpan.FromMilliseconds(i), null, TimeSpan.FromSeconds(10) + TimeSpan.FromMilliseconds(i), 100);
+        time.Advance(TimeSpan.FromMinutes(1));
+
+        var w = W(c.SnapshotOf(Main), "5m");
+        w.Requests.Should().Be(cap, "кольцо не растёт выше потолка");
+        w.EndToEndTps.Should().BeApproximately(10.0, 1e-9,
+            "вырезан самый старый (жирный): Σ = 50 000·100 токенов / 500 000 с, а не 6 000 000/500 010");
+    }
+
+    // (13) Потолок открытых (MaxOpenRequests): шторм запросов без завершения не растит словарь —
+    //     вытесняется самый старый по старту (его метрика всё равно потерялась бы по TTL), новый
+    //     жив. Мутация: убрать EvictOldestOpen в OnRequestStarted → r0 доживает до своего
+    //     завершения, requests станет 2 — краснеет.
+    [Fact]
+    public void ПотолокОткрытых_СамыйСтарыйВытесняется()
+    {
+        var (c, _) = New();
+        var cap = LocalModelAnswerSpeed.MaxOpenRequests;
+        for (var i = 0; i < cap + 1; i++)
+            c.OnRequestStarted($"r{i}", Main, T0 + TimeSpan.FromMilliseconds(i));
+
+        // Самый старый вытеснен при переполнении: его «завершение» метрикой не станет.
+        c.OnRequestCompleted("r0", 100, T0 + TimeSpan.FromSeconds(1));
+        // Последний — на месте: полный цикл даёт метрику.
+        c.OnFirstToken($"r{cap}", T0 + TimeSpan.FromSeconds(15));
+        c.OnRequestCompleted($"r{cap}", 100, T0 + TimeSpan.FromSeconds(20));
+
+        var w = W(c.SnapshotOf(Main), "5m");
+        w.Requests.Should().Be(1, "вытесняется самый старый открытый, новый запрос остаётся");
+        w.EndToEndTps.Should().BeApproximately(10.0, 1e-9, "100 токенов / 10 с оставшегося запроса");
+        w.MedianTtftSec.Should().BeApproximately(5.0, 1e-9);
+    }
 }

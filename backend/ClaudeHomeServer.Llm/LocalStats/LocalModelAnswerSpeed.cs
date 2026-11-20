@@ -6,9 +6,10 @@ namespace ClaudeHomeServer.Services.Llm;
 // Singleton: состояние живёт в памяти процесса, на диск не пишется — панель живая, а история
 // нужна ровно на час. Потокобезопасно: один lock на всё (шлюз зовёт из параллельных запросов).
 //
-// Память ограничена с двух сторон: кольцо завершённых — по времени (старче часа выбрасывается)
-// и по числу (потолок на дорожку); открытые без завершения стареют по последней активности
-// (процесс убит посреди запроса — запись не живёт вечно).
+// Память ограничена с двух сторон и по времени, и по числу: кольцо завершённых — старче часа
+// выбрасывается, дальше потолка на дорожку вырезаются самые старые; открытые без завершения
+// стареют по последней активности (процесс убит посреди запроса — запись не живёт вечно) и не
+// растут выше потолка открытых.
 public sealed class LocalModelAnswerSpeed : ILocalModelAnswerSpeed
 {
     // Порог медианы скорости: запросы с меньшим числом выходных токенов в медиану не входят —
@@ -22,7 +23,13 @@ public sealed class LocalModelAnswerSpeed : ILocalModelAnswerSpeed
 
     // Потолок кольца на дорожку: ~1 МБ записей при 50 000 запросов в час; дальше рос бы только
     // риск, а не точность. При переполнении вырезаются самые старые (кольцо).
-    private const int MaxRecordsPerTrack = 50_000;
+    // internal — тесты меряют оба потолка по нему же, а не по своему числу.
+    internal const int MaxRecordsPerTrack = 50_000;
+
+    // Потолок открытых запросов: шторм запросов без завершения (движок висит) не должен растить
+    // словарь до TTL — он ограничен и по числу. Одновременно живых запросов к локальному
+    // движку десятки; десяток тысяч — запас, после которого растёт только риск.
+    internal const int MaxOpenRequests = 10_000;
 
     // TTL открытого запроса: без активности дольше часа он мёртв (процесс убит посреди запроса,
     // событие потеряно) — запись удаляется, метрика теряется.
@@ -62,6 +69,10 @@ public sealed class LocalModelAnswerSpeed : ILocalModelAnswerSpeed
         lock (_gate)
         {
             Prune(startedAt);
+            // Потолок открытых: при переполнении вытесняется самый старый по старту — он ближе
+            // всех к TTL (его метрика всё равно потерялась бы), новый запрос ещё может завершиться.
+            if (!_open.ContainsKey(requestId) && _open.Count >= MaxOpenRequests)
+                EvictOldestOpen();
             // Повторный старт с тем же id (невозможен у шлюза, возможен у повторного вызова):
             // новая запись перекрывает старую — считаем по последнему старту.
             _open[requestId] = new OpenRequest { Track = track, StartedAt = startedAt, LastActivity = startedAt };
@@ -179,6 +190,24 @@ public sealed class LocalModelAnswerSpeed : ILocalModelAnswerSpeed
         var sorted = values.OrderBy(v => v).ToList();
         var idx = Math.Min(sorted.Count - 1, (int)Math.Ceiling(0.9 * sorted.Count) - 1);
         return sorted[idx];
+    }
+
+    // Вытеснение самого старого открытого запроса: линейный поиск по словарю, который уже
+    // ограничен потолком. Вызывается только под замком и только при переполнении — то есть
+    // только в шторме запросов без завершения.
+    private void EvictOldestOpen()
+    {
+        string? oldest = null;
+        DateTimeOffset oldestStart = default;
+        foreach (var (id, o) in _open)
+        {
+            if (oldest is null || o.StartedAt < oldestStart)
+            {
+                oldest = id;
+                oldestStart = o.StartedAt;
+            }
+        }
+        if (oldest is not null) _open.Remove(oldest);
     }
 
     // Чистка по «сейчас»: кольцо — всё, что старше часа; открытые — без активности старше TTL.

@@ -228,11 +228,24 @@ public static class LlmGatewayEndpoints
             }
             // Скорость ответа: тот же requestId, что у приёмника хода. Начало — ДО отправки
             // (снималось выше), поэтому в полное время запроса входят и установка соединения, и
-            // ожидание заголовков. Конец даёт наблюдатель: если его нет (не SSE / работает
-            // нормализатор) или он упал посреди потока, запись так и не завершится — её снимает
-            // TTL открытых запросов сборщика, метрика теряется.
-            if (answerSpeed is { } speed && startedAt is { } started)
-                speed.OnRequestStarted(requestId, answerTrack!, started);
+            // ожидание заголовков. Конец даёт только наблюдатель, поэтому начало — только с ним:
+            // без наблюдателя (не-SSE ответ, работает нормализатор) запись не открывается —
+            // она висела бы открытой до TTL и в метрику не попадала. Если наблюдатель упадёт
+            // посреди потока, начатая запись не завершится — её снимает TTL открытых запросов.
+            // Вызов защищён: исключение сборщика не рвёт поток клиента (тот же запрет, что у
+            // двух остальных точек; здесь поток ещё не начал писаться).
+            if (observer is not null && answerSpeed is { } speed && startedAt is { } started)
+            {
+                try
+                {
+                    speed.OnRequestStarted(requestId, answerTrack!, started);
+                }
+                catch (Exception ex)
+                {
+                    loggers.CreateLogger(LogCategory).LogDebug(ex,
+                        "Сборщик скорости ответа не принял начало (ход {TurnId}) — запрос вне метрики", grant.TurnId);
+                }
+            }
             // «Первый токен» сообщаем приёмнику один раз: SawFirstDelta после первой дельты
             // остаётся true на всех последующих кусках, без флага OnFirstToken ушёл бы на каждый.
             var firstTokenSent = false;
@@ -263,7 +276,17 @@ public static class LlmGatewayEndpoints
                                 sink!.OnFirstToken(requestId, grant.TurnId);
                                 // Тот же момент «первого токена» для скорости ответа (time не null:
                                 // он уже нужен был, чтобы снять startedAt и создать наблюдателя).
-                                answerSpeed?.OnFirstToken(requestId, time!.GetUtcNow());
+                                // Свой try: падение сборщика скорости не стоит наблюдателя — он
+                                // ловится общим catch ниже и выключал бы учёт хода до его конца.
+                                try
+                                {
+                                    answerSpeed?.OnFirstToken(requestId, time!.GetUtcNow());
+                                }
+                                catch (Exception ex)
+                                {
+                                    loggers.CreateLogger(LogCategory).LogDebug(ex,
+                                        "Сборщик скорости ответа не принял первый токен (ход {TurnId})", grant.TurnId);
+                                }
                             }
                         }
                         catch (Exception ex)
@@ -289,9 +312,17 @@ public static class LlmGatewayEndpoints
                     {
                         var usage = done.Complete();
                         // Токены — из usage ответа (null — движок usage не отдал): тогда запрос не
-                        // входит в Σ скорости, но считается в requests окна. Первым идёт сборщик
-                        // скорости: упавший счётчик хода не должен стоить метрики скорости.
-                        answerSpeed?.OnRequestCompleted(requestId, usage.OutputTokens, time!.GetUtcNow());
+                        // входит в Σ скорости, но считается в requests окна. Каждый получатель — в
+                        // своём try: падение одного получателя не стоит итога другого.
+                        try
+                        {
+                            answerSpeed?.OnRequestCompleted(requestId, usage.OutputTokens, time!.GetUtcNow());
+                        }
+                        catch (Exception ex)
+                        {
+                            loggers.CreateLogger(LogCategory).LogDebug(ex,
+                                "Сборщик скорости ответа не принял итог (ход {TurnId})", grant.TurnId);
+                        }
                         sink!.OnRequestCompleted(requestId, grant.TurnId, usage);
                     }
                     catch (Exception ex)

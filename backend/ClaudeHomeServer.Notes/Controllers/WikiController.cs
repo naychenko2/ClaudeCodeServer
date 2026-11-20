@@ -330,8 +330,11 @@ public class WikiController : ControllerBase
     // (OutboundLinks, WikiPage.cs:272). text — внутренность скобок как написана, вместе с
     // «|подписью»: фронт сопоставляет по ней; своей разбора «|» ни здесь, ни на фронте нет
     // (WikiPage.LinkTarget). path — путь цели, если резолв гейта (WikiGate.ResolveLink —
-    // единственные правила, WikiGate.cs:389) дошёл до Resolved, иначе null: «вбок» и «нет
-    // такой» для показа одинаковы — мёртвая ссылка остаётся текстом. Снимок — видимая область
+    // единственные правила, WikiGate.cs:395) дошёл до Resolved, иначе null: «вбок» и «нет
+    // такой» для показа одинаковы — мёртвая ссылка остаётся текстом. section (B3b) — ключ
+    // раздела, где резолв нашёл цель (res.Section того же резолва): «вверх по цепочке» —
+    // чужой раздел, и фронту для открытия нужна пара {section, path}; у неразрешимой — null,
+    // тогда же, что path. Снимок — видимая область
     // страницы, та же, что у «Связанных» (её раздел и цепочка вверх), плюс сама страница:
     // ссылка на себя — тоже ссылка. Неразобранный сосед выпадает той же мерой, что там;
     // неразобранная страница — без ссылок: показывать нечего.
@@ -352,8 +355,8 @@ public class WikiController : ControllerBase
         var upChain = WikiSections.UpChain(sectionKey, ownerId, _spheres);
         return [.. model.OutboundLinks().Select(link => WikiGate.ResolveLink(link.Text, sectionKey, upChain, pages)
             is { Outcome: WikiGate.LinkOutcome.Resolved } res
-            ? new WikiPageLinkDto(link.Text, res.Path)
-            : new WikiPageLinkDto(link.Text, null))];
+            ? new WikiPageLinkDto(link.Text, res.Path, res.Section)
+            : new WikiPageLinkDto(link.Text, null, null))];
     }
 
     // «Вернуть мою» принимает формулировку из «Истории» страницы, а не цитату цели модели: цель
@@ -958,9 +961,12 @@ public sealed record WikiFootnoteDto(string Label, string Card, string? Origin, 
 
 /// <summary>Ссылка [[…]] текста страницы в GET page (B3): text — внутренность скобок как
 /// написана, вместе с «|подписью» (фронт сопоставляет по ней); path — путь разрешённой цели
-/// или null (неразрешимая — мёртвая ссылка, её рисуют текстом). Порядок — порядок появления
-/// в тексте. Резолв — только WikiGate.ResolveLink: на бэке одна копия правил, на фронте — ни одной.</summary>
-public sealed record WikiPageLinkDto(string Text, string? Path);
+/// или null (неразрешимая — мёртвая ссылка, её рисуют текстом); section — ключ раздела, где
+/// резолв нашёл цель (B3b: фронту для открытия нужна пара {section, path}, и «вверх по
+/// цепочке» — это чужой раздел; на фронте раздела не вычислить). У неразрешимой — null,
+/// тогда же, что path. Порядок — порядок появления в тексте. Резолв — только
+/// WikiGate.ResolveLink: на бэке одна копия правил, на фронте — ни одной.</summary>
+public sealed record WikiPageLinkDto(string Text, string? Path, string? Section);
 
 /// <summary>Что ИИ сам сделал с утверждением человека на странице за последние 14 дней
 /// (GET page, overrides): op — supersede | conflict, statement — текст ИИ без сносок, previous —

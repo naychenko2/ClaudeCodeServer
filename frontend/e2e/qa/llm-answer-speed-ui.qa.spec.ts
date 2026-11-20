@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { api, login, seed } from './helpers';
 const PREFIX = 'qa-llmspeed-ui-';
-const SHOTS = '/home/an/Sources/ClaudeCodeServer-wt/llm-answer-speed/.cc-attachments/qa-llm-speed/shots';
 let request: any; let token: string; let client: any; let seeded: any; let projectId: string; let projectName: string;
 
 test.describe.configure({ mode: 'serial' });

@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
-import { api, collectConsoleErrors, login, seed, type Api } from './helpers';
+import { api, login, seed, type Api } from './helpers';
 import { mkdirSync } from 'node:fs';
 
 // QA-приёмка фичи «Скорость ответа» (вкладка LLM панели «Ферма»).

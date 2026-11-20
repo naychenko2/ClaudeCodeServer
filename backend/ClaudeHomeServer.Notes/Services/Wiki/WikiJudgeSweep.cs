@@ -94,11 +94,13 @@ public sealed class WikiJudgeSweep
     /// модели: он несёт метку WikiPackage.JudgeModelCode (ревью J-J3a, Н4).</summary>
     public const string ModelUnknown = "unknown";
 
-    /// <summary>Заголовок блока страницы B входе merge-группы: путь B в заголовке
-    /// привязывает блок к операции (merge_into того же index), пометка «обрезано» — что
-    /// текст усечён до потолка и судья дальше не видит (вердикт C5, п. 2 и п. 4).</summary>
-    internal static string MergeTargetLabel(string path, bool truncated) =>
-        $"ТЕКСТ СТРАНИЦЫ B «{path}» — ЦЕЛИ СЛИЯНИЯ merge{(truncated ? ", ОБРЕЗАНО" : "")} (данные):";
+    /// <summary>Заголовок блока страницы B входе merge-группы: инструкция — без пути B
+    /// (путь выбран моделью и остаётся внутри рамки данных, ревью C5, дельта п. 3);
+    /// привязка блока к операции — строкой «страница B: …» внутри рамки и merge_into
+    /// того же index (вердикт C5, п. 2); пометка «обрезано» — что текст усечён до
+    /// потолка и судья дальше не видит (вердикт C5, п. 4).</summary>
+    internal static string MergeTargetLabel(bool truncated) =>
+        $"ТЕКСТ СТРАНИЦЫ B — ЦЕЛИ СЛИЯНИЯ merge{(truncated ? ", ОБРЕЗАНО" : "")} (данные):";
 
     /// <summary>Замок прохода: ключ — путь корня вики, не экземпляр (тот же приём, что
     /// у _rootLocks / _createLocks сторов: разные вики друг друга не держат).</summary>
@@ -247,15 +249,18 @@ public sealed class WikiJudgeSweep
             var members = group.ToList();
             var pageText = ReadPageOrNull(root, group.Key);
             // Merge (операция 13): судье нужны ОБЕ страницы — A (Page, она же страница
-            // группы) и B (Target). B читается по своему пути; дубль читается один раз;
-            // A-цель дублирует текст группы и не перечитывается. Порядок во входе:
+            // группы) и B (Target). B читается по своему пути; дубль цели читается один
+            // раз; A-цель дублирует текст группы и не перечитывается. Порядок во входе:
             // A раньше B (контракт C5). Инвариант (вердикт ревью C5, п. 1): merge не
             // доходит до модели без обоих текстов — B не читается (нет файла, путь вне
             // pages/, Target не назван вовсе) → операция отклоняется кодом с причиной
             // «страница B недоступна», модель по ней не звалась (тот же путь, что у
-            // отказа по коду, И4′).
+            // отказа по коду, И4′). Дедуп — по результату чтения, а не по одному пути:
+            // при нечитаемой B кодом отклоняются ВСЕ операции с этой целью — дедуп по
+            // пути раньше чтения оставлял вторую merge-операцию идти к модели без
+            // текста B (ревью C5, дельта п. 1).
             var targetTexts = new List<(string Path, string Text)>();
-            var seenTargets = new HashSet<string>(StringComparer.Ordinal);
+            var readTargets = new Dictionary<string, string?>(StringComparer.Ordinal);
             var missingB = new List<(WikiPackage.Operation Op, int Index)>();
             foreach (var t in members)
             {
@@ -269,13 +274,15 @@ public sealed class WikiJudgeSweep
                 }
                 if (string.Equals(target, group.Key, StringComparison.Ordinal))
                     continue; // A-цель: текст B уже во входе как текст группы
-                if (!seenTargets.Add(target))
-                    continue;
-                var bText = ReadPageOrNull(root, target);
+                if (!readTargets.TryGetValue(target, out var bText))
+                {
+                    bText = ReadPageOrNull(root, target);
+                    readTargets[target] = bText;
+                    if (bText is not null)
+                        targetTexts.Add((target, bText));
+                }
                 if (bText is null)
                     missingB.Add(t);
-                else
-                    targetTexts.Add((target, bText));
             }
             if (missingB.Count > 0)
             {
@@ -436,11 +443,12 @@ public sealed class WikiJudgeSweep
     /// «противоречит ли claim тексту страницы». Пустая окрестность в вход не идёт.
     /// Длины claim, цитат и окрестности ограничены на стороне прохода (хвост ревью
     /// J-J1b №6). Для merge (операция 13) к входу добавляются тексты страниц B (целей
-    /// merge-операций группы) с их путями в заголовке блока: каждый обрезается до
-    /// MaxPageChars с пометкой «обрезано» в заголовке, A (текст целевой страницы
-    /// группы) стоит раньше любой B — вердикт по merge судья выносит только
-    /// apply/reject («переписать» нет). B без текста сюда не доходит: нечитаемую B
-    /// проход отклоняет кодом до вызова (инвариант вердикта C5, п. 1).</summary>
+    /// merge-операций группы): путь B — строкой внутри блока, как недоверенный текст
+    /// (ревью C5, дельта п. 3); каждый текст обрезается до MaxPageChars с пометкой
+    /// «обрезано» в заголовке, A (текст целевой страницы группы) стоит раньше любой B —
+    /// вердикт по merge судья выносит только apply/reject («переписать» нет). B без
+    /// текста сюда не доходит: нечитаемую B проход отклоняет кодом до вызова (инвариант
+    /// вердикта C5, п. 1).</summary>
     internal static string BuildGroupInput(List<(WikiPackage.Operation Op, int Index)> members,
         string? pageText, IReadOnlyList<(string Path, string Text)> mergeTargetTexts)
     {
@@ -478,17 +486,20 @@ public sealed class WikiJudgeSweep
     }
 
     /// <summary>Блок страницы B для merge: та же рамка данных, что у BuildInput (маркеры
-    /// публичные в Prompts; экранирование разделителя в тексте B — здесь, та же формула,
-    /// что у Prompts.Escaped). Путь B в заголовке привязывает блок к операции (merge_into
-    /// того же index, вердикт C5, п. 2); усечение до MaxPageChars видно судье пометкой
-    /// «обрезано» (п. 4). Потолок входа merge остаётся 2 × MaxPageChars.</summary>
+    /// публичные в Prompts; экранирование разделителя — здесь, та же формула, что у
+    /// Prompts.Escaped). Путь B — текст, выбранный моделью (merge_into): он стоит
+    /// строкой «страница B: …» ВНУТРИ рамки данных, как остальной недоверенный текст,
+    /// а не в заголовке — в инструктивную часть промпта он не попадает (ревью C5,
+    /// дельта п. 3); привязка блока к операции — этой строкой и merge_into того же
+    /// index (вердикт C5, п. 2). Усечение до MaxPageChars видно судье пометкой
+    /// «обрезано» в заголовке (п. 4). Потолок входа merge остаётся 2 × MaxPageChars.</summary>
     private static string MergePageBlock(string path, string text)
     {
         var truncated = text.Length > MaxPageChars;
-        var escaped = Cut(text, MaxPageChars)
+        var escaped = ("страница B: " + path + "\n" + Cut(text, MaxPageChars))
             .Replace(WikiJudgePrompts.DataOpen, "＜" + WikiJudgePrompts.DataOpen[1..^1] + "＞")
             .Replace(WikiJudgePrompts.DataClose, "＜" + WikiJudgePrompts.DataClose[1..^1] + "＞");
-        return "\n\n" + MergeTargetLabel(path, truncated) + "\n" + WikiJudgePrompts.DataOpen + "\n" + escaped + "\n"
+        return "\n\n" + MergeTargetLabel(truncated) + "\n" + WikiJudgePrompts.DataOpen + "\n" + escaped + "\n"
             + WikiJudgePrompts.DataClose + "\n";
     }
 

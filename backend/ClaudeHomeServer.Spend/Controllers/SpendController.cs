@@ -117,33 +117,36 @@ public class SpendController(SpendAnalyticsService analytics, ISessionDirectory 
     // собой — служебная вещь админа (как /api/local-model/stats).
     [HttpGet("answer-speed")]
     [Authorize(Roles = "admin")]
-    public IActionResult AnswerSpeed(string? from = null, string? to = null)
+    public IActionResult AnswerSpeed()
     {
         // Рантайм-проверка рядом с атрибутом: атрибут защищает маршрут, а проверка — сам
         // контроллер (его зовут и в обход конвейера).
         if (!IsAdmin) return Forbidden("Скорость ответа по моделям доступна только администратору");
-        // Дефолт окна — последние сутки (сегодня минус день, сегодня)
-        var (f, t) = ClampPeriod(from, to, analytics.Store.EarliestDate, defaultDays: 1);
-        return Ok(answerSpeed.AnswerSpeed(f, t));
+        // Окно по времени: последние 24 часа от текущего момента (UTC), half-open [from, to).
+        // Параметров окна нет намеренно: прежняя дата-пара «вчера—сегодня» из часового пояса
+        // клиента давала от 24 до 48 часов (хвост ревью aa8af844, п.1). Кто считает — тот и
+        // называет окно: фронт его не вычисляет и не передаёт.
+        var to = DateTime.UtcNow;
+        return Ok(answerSpeed.AnswerSpeed(to.AddHours(-SpendAnswerSpeedService.WindowHours), to));
     }
 
     // Максимальная длина периода запроса: byDay обзора строится по каждому дню, и без клампа
     // from=0001-01-01 раздул бы ответ на сотни тысяч дней (ревью Глеба, minor-1)
     internal const int MaxPeriodDays = 366;
 
+    // Дефолтный период запроса: 29 дней назад от «to» — окно в 30 дней включительно
+    internal const int DefaultPeriodDays = 29;
+
     private (DateOnly From, DateOnly To) Period(string? from, string? to) =>
         ClampPeriod(from, to, analytics.Store.EarliestDate);
 
     // Период запроса: дефолт — последние 30 дней по UTC. Кламп: раньше самой ранней записи
     // стора не ходим (earliest) и длиннее MaxPeriodDays не отдаём
-    // defaultDays — сколько дней назад от «to» берётся начало окна, если from не задан
-    // (дефолт 29 — окно в 30 дней включительно; у скорости ответа дефолт 1 — последние сутки).
-    internal static (DateOnly From, DateOnly To) ClampPeriod(string? from, string? to, DateOnly? earliest,
-        int defaultDays = 29)
+    internal static (DateOnly From, DateOnly To) ClampPeriod(string? from, string? to, DateOnly? earliest)
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var t = DateOnly.TryParse(to, out var pt) ? pt : today;
-        var f = DateOnly.TryParse(from, out var pf) ? pf : t.AddDays(-defaultDays);
+        var f = DateOnly.TryParse(from, out var pf) ? pf : t.AddDays(-DefaultPeriodDays);
         if (f > t) return (t, t);
         if (earliest is { } e && f < e) f = e;
         if (t.DayNumber - f.DayNumber >= MaxPeriodDays) f = t.AddDays(-(MaxPeriodDays - 1));

@@ -582,7 +582,7 @@ export interface CloudAnswerSpeedModel {
 
 // Снимок за сутки целиком.
 export interface CloudAnswerSpeedResponse {
-  // окно, за которое посчитано (YYYY-MM-DD)
+  // фактическое окно снимка — ISO UTC (YYYY-MM-DDTHH:mm:ssZ), его задал бэкенд
   from: string;
   to: string;
   // порог ответа в токенах, ниже которого ход в медиану не попадает

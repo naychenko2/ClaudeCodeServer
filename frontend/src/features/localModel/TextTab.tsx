@@ -41,7 +41,7 @@ import {
   formatSince, formatTps, formatUpdatedAt, GEN_SPEED_HINT, gpuCountLabel, notReportedText, whoRows,
   standDot, standHint, statusPill, TTFT_MEDIAN_HINT, TTFT_P90_HINT, WHO_SPEED_HINT,
   CLOUD_SPEED_REQUESTS_HINT, CLOUD_SPEED_WINDOW_LABEL, cloudSpeedCardHint, cloudSpeedMedianHint,
-  cloudSpeedTpsHint, cloudSpeedWindowCaption,
+  cloudSpeedTpsHint,
   type StatusTone, type WhoRow,
 } from './format';
 import type { CloudAnswerSpeedState } from './useCloudAnswerSpeed';
@@ -414,8 +414,10 @@ function CloudAnswerSpeedCard({ state }: { state: CloudAnswerSpeedState }) {
             </div>
           </div>
         ))}
+      {/* Подпись окна статична: окно — последние 24 часа, его считает бэкенд; дата-пара
+          «за 19.11 — 20.11» была бы неправдой (хвост ревью aa8af844, п.1) */}
       <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm }}>
-        {data ? cloudSpeedWindowCaption(data.from, data.to) : CLOUD_SPEED_WINDOW_LABEL}
+        {CLOUD_SPEED_WINDOW_LABEL}
       </div>
     </Card>
   );

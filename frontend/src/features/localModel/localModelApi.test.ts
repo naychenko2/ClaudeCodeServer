@@ -272,18 +272,21 @@ describe('фикстуры состояний второй движок (мак�
 // разделе расхода, и подмешивание в api.localModel перекрыло бы api.spend.
 // Мутации, которые обязаны покрасить: «двойной префикс /api/api/…» и «съесть 403».
 describe('fetchCloudAnswerSpeed — контракт GET /api/spend/answer-speed', () => {
-  it('шлёт окно в query и возвращает ответ как есть', async () => {
+  // Окно в запроса нет намеренно: последние 24 часа считает бэкенд и называет их в ответе
+  // (ISO UTC). Прежняя дата-пара «вчера—сегодня» по местному времени клиента давала
+  // 24–48 часов (хвост ревью aa8af844, п.1). Мутация: вернуть from/to в query — краснеет.
+  it('зовёт без окна и возвращает ответ как есть', async () => {
     const dto = {
-      from: '2026-11-19', to: '2026-11-20', minTokensForMedian: 32,
+      from: '2026-11-19T18:51:00Z', to: '2026-11-20T18:51:00Z', minTokensForMedian: 32,
       models: [{ provider: 'claude', model: 'claude-sonnet-5-5', endToEndTps: 38.2, medianTps: 41.0, requests: 57, outputTokens: 412000, apiMs: 10785000 }],
     };
     fetchMock.mockResolvedValue(jsonResponse(dto));
 
     const { fetchCloudAnswerSpeed } = await import('./api');
-    const res = await fetchCloudAnswerSpeed('2026-11-19', '2026-11-20');
+    const res = await fetchCloudAnswerSpeed();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/spend/answer-speed?from=2026-11-19&to=2026-11-20');
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/spend/answer-speed');
     expect(res).toEqual(dto);
   });
 
@@ -291,7 +294,7 @@ describe('fetchCloudAnswerSpeed — контракт GET /api/spend/answer-speed
     fetchMock.mockResolvedValue(jsonResponse({ error: 'Не админ' }, 403));
 
     const { fetchCloudAnswerSpeed } = await import('./api');
-    const p = fetchCloudAnswerSpeed('2026-11-19', '2026-11-20');
+    const p = fetchCloudAnswerSpeed();
     await expect(p).rejects.toMatchObject({ status: 403 });
   });
 });

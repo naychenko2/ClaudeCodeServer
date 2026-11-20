@@ -5,7 +5,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { fetchCloudAnswerSpeed } from './api';
-import { cloudSpeedWindowDates } from './format';
 import type { CloudAnswerSpeedResponse } from './types';
 
 export interface CloudAnswerSpeedState {
@@ -35,8 +34,8 @@ export function useCloudAnswerSpeed(active: boolean, intervalMs = 60_000): Cloud
     let cancelled = false;
     const load = () => {
       if (forbiddenRef.current) return;
-      const { from, to } = cloudSpeedWindowDates(new Date());
-      void fetchCloudAnswerSpeed(from, to).then(d => {
+      // Окна нет в запросе: последние 24 часа считает бэкенд (api.ts)
+      void fetchCloudAnswerSpeed().then(d => {
         if (!cancelled) setState({ data: d, loading: false, forbidden: false });
       }).catch((err: unknown) => {
         if (cancelled) return;

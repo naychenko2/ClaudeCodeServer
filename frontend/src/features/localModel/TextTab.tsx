@@ -40,8 +40,11 @@ import {
   answerSpeedMedianHint, answerSpeedTpsHint, answerSpeedWindowLabel, formatGpuMem, formatPower, formatSec,
   formatSince, formatTps, formatUpdatedAt, GEN_SPEED_HINT, gpuCountLabel, notReportedText, whoRows,
   standDot, standHint, statusPill, TTFT_MEDIAN_HINT, TTFT_P90_HINT, WHO_SPEED_HINT,
+  CLOUD_SPEED_REQUESTS_HINT, CLOUD_SPEED_WINDOW_LABEL, cloudSpeedCardHint, cloudSpeedMedianHint,
+  cloudSpeedTpsHint, cloudSpeedWindowCaption,
   type StatusTone, type WhoRow,
 } from './format';
+import type { CloudAnswerSpeedState } from './useCloudAnswerSpeed';
 import { DutyBlock } from './DutyBlock';
 import { useAllProjects } from '../projects/useAllProjects';
 import { HwLinkRow } from './HwLinkRow';
@@ -51,14 +54,14 @@ import { ThroughputChart, WindowToggle, type Window } from './ThroughputChart';
 // Карточка: C.bgWhite (тот же фон, что у карточек соседних панелей и контентной
 // зоны), рамка C.borderLight, R.xl, паддинг SP.md. Заголовок —
 // 11 / 700 / uppercase / C.textMuted.
-function Card({ title, right, children }: { title: string; right?: React.ReactNode; children?: React.ReactNode }) {
+function Card({ title, right, hint, children }: { title: string; right?: React.ReactNode; hint?: string; children?: React.ReactNode }) {
   return (
     <section style={{
       background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md,
     }}>
       {/* flexWrap — на 320 переключатель окна уходит под заголовок, а не сжимает его (макет §6) */}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
-        <h3 style={{
+        <h3 title={hint} style={{
           margin: 0, fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
           letterSpacing: '0.06em', color: C.textSecondary,
         }}>{title}</h3>
@@ -376,6 +379,44 @@ function AnswerSpeedCard({ data }: { data: LocalModelStats }) {
       <div style={{ ...AS_GRID, marginTop: SP.md }}>{median(w5, '5m')}{median(w1h, '1h')}</div>
       <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.md }}>Время до первого токена</div>
       <div style={{ ...AS_GRID, marginTop: SP.sm }}>{ttft(w5, '5m')}{ttft(w1h, '1h')}</div>
+    </Card>
+  );
+}
+
+// === «Облачные модели: скорость ответа» ===
+// Числа облака — сессионная скорость по нашей нагрузке за сутки (не per-request,
+// как у локальной карточки выше): определение разное, и подсказка говорит это прямо.
+// 403 (не админ) — карточка не показывается вовсе; пустое окно — спокойная строка.
+const CLOUD_GRID: CSSProperties = {
+  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))', gap: SP.sm,
+};
+const CLOUD_ROW: CSSProperties = {
+  borderTop: `1px solid ${C.borderLight}`, paddingTop: SP.sm, marginTop: SP.sm,
+};
+
+function CloudAnswerSpeedCard({ state }: { state: CloudAnswerSpeedState }) {
+  if (state.forbidden) return null;
+  const data = state.data;
+  const models = data?.models ?? [];
+  const minTokens = data?.minTokensForMedian;
+  return (
+    <Card title="Облачные модели: скорость ответа" hint={cloudSpeedCardHint()}>
+      {models.length === 0
+        ? <UnloadedNote text="Нет данных: за сутки не было ни одного хода облачной модели." />
+        : models.map(m => (
+          <div key={`${m.provider}/${m.model}`} style={CLOUD_ROW}>
+            <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>{m.model}</div>
+            <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>{m.provider}</div>
+            <div style={{ ...CLOUD_GRID, marginTop: SP.sm }}>
+              {asCell(m.endToEndTps, formatTps, 'сквозная скорость', cloudSpeedTpsHint())}
+              {asCell(m.medianTps, formatTps, 'медиана по ходам', cloudSpeedMedianHint(minTokens))}
+              {asCell(m.requests, n => String(n), 'ходов за сутки', CLOUD_SPEED_REQUESTS_HINT)}
+            </div>
+          </div>
+        ))}
+      <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm }}>
+        {data ? cloudSpeedWindowCaption(data.from, data.to) : CLOUD_SPEED_WINDOW_LABEL}
+      </div>
     </Card>
   );
 }
@@ -742,7 +783,7 @@ function TextTabSkeleton() {
 // engines — список движков для переключателя (пустой/один — переключателя нет);
 // onEngineChange — выбор человека (панель пишет его в стор Ф1, тот в localStorage);
 // onOpenMedia — переход на вкладку «Медиа» по ссылке «→ Медиа» в «Дежурстве».
-export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch, onOpenHardware, onOpenMedia, window, onWindowChange, engines, engine = 'main', onEngineChange }: {
+export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch, onOpenHardware, onOpenMedia, window, onWindowChange, engines, engine = 'main', onEngineChange, cloudSpeed }: {
   data: LocalModelStats | null;
   loading: boolean;
   // Причина последнего сбоя поллера (из снимка, Ф10): без данных определяет,
@@ -758,6 +799,9 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
   engines?: LocalModelEngine[];
   engine?: LocalModelEngineName;
   onEngineChange?: (e: LocalModelEngineName) => void;
+  // «Облачные модели: скорость ответа» — снимок из своего опроса (раз в минуту);
+  // без него карточки нет (не-админу карточка и не положена).
+  cloudSpeed?: CloudAnswerSpeedState;
 }) {
   // Переключатель — над ЛЮБЫМ состоянием вкладки, а не только над стендом
   // (дефект b129c182): упал один стенд — уйти на другой надо из интерфейса, а не
@@ -799,6 +843,9 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
         {/* «Скорость ответа» — сразу после «Скорости»: сквозная оценка (та, с которой
             сверяют облачные) идёт за справочной «пока пишет» */}
         <AnswerSpeedCard data={data} />
+        {/* Облачная карточка — после локальной «Скорости ответа»: сначала локальная
+            (per-request), затем облачная (сессионная) — определения разные */}
+        {cloudSpeed ? <CloudAnswerSpeedCard state={cloudSpeed} /> : null}
         <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
         {/* Видеокарты: основной стенд — строка-ссылка на «Стенды» (хост CCS, только
             админ); второй движок — своя карточка Video, ссылка на «Стенды» была бы неправдой */}

@@ -37,6 +37,10 @@ public sealed class SpendSubsystem : IAppSubsystem
 
         services.AddSingleton<SpendAnalyticsService>();
 
+        // Скорость ответа облачных ходов (сессионная): агрегат по провайдерам и моделям
+        // из детальных записей расхода. Тот же SpendStore, что у аналитики.
+        services.AddSingleton<SpendAnswerSpeedService>();
+
         // Шов расхода по фиче (обзор фич, волна 3, шаг Б9a): читает тот же SpendStore.
         // Регистрация здесь, а не в Main: при выключенной подсистеме (гейт
         // Subsystems:spend:Enabled) Register не вызывается, шов не зарегистрирован,

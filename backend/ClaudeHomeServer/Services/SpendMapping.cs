@@ -180,6 +180,9 @@ internal static class SpendMapping
                 CacheCreationTokens = m.Usage.CacheCreationTokens,
                 CostUsd = m.TotalCostUsd,
                 DurationMs = m.DurationMs,
+                // Время запросов к API за ход (без работы инструментов) — знаменатель
+                // сессионной скорости ответа. Не пришло (сторонний поток) — null.
+                DurationApiMs = m.DurationApiMs,
             });
         }
         catch (Exception ex) { log?.LogWarning(ex, "spend: запись хода не удалась"); }

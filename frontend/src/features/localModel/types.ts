@@ -565,3 +565,27 @@ export interface TranscriptionSnapshot {
   // (на сервере раз в 30–60 с).
   deps?: TranscriptionDep[];
 }
+
+// === «Облачные модели: скорость ответа» ===
+// Ответ GET /api/spend/answer-speed (контракт заморожен): сессионная скорость
+// облачной модели по нашей нагрузке за сутки. endToEndTps/medianTps — nullable:
+// нет данных — null, а не 0 (ноль — измеренное значение).
+export interface CloudAnswerSpeedModel {
+  provider: string;
+  model: string;
+  endToEndTps: number | null;
+  medianTps: number | null;
+  requests: number;
+  outputTokens: number;
+  apiMs: number;
+}
+
+// Снимок за сутки целиком.
+export interface CloudAnswerSpeedResponse {
+  // окно, за которое посчитано (YYYY-MM-DD)
+  from: string;
+  to: string;
+  // порог ответа в токенах, ниже которого ход в медиану не попадает
+  minTokensForMedian: number;
+  models: CloudAnswerSpeedModel[];
+}

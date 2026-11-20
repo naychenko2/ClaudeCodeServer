@@ -14,6 +14,7 @@ using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Spend.Controllers;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
@@ -133,7 +134,8 @@ public class SpendControllerTests : IDisposable
             new SessionDirectoryAdapter(_sessions),
             _taskLookup,
             new TaskPromptMetricsStore(Path.Combine(_dir, "spend_metrics_" + Guid.NewGuid().ToString("N"))),
-            access ?? new OwnerOnlyProjectAccess(_sessions, _projectManager));
+            access ?? new OwnerOnlyProjectAccess(_sessions, _projectManager),
+            new SpendAnswerSpeedService(store, _llmResolver));
         ctl.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = Principal(userId, admin) },
@@ -539,6 +541,73 @@ public class SpendControllerTests : IDisposable
 
         r0.Items.First().Should().Be(rNeg.Items.First(),
             "offset=-5 → Math.Max(-5,0)=0 → тот же первый элемент, что offset=0");
+    }
+
+    // --- Скорость ответа по моделям (только админ) ---
+
+    // Запись расхода со временем API (знаменатель сессионной скорости ответа)
+    private static SpendRecord SpeedRec(DateTime ts, string provider = "claude", string model = "opus",
+        long output = 100, long? apiMs = 1000) => new()
+        {
+            Timestamp = ts,
+            OwnerId = "u1",
+            Provider = provider,
+            Model = model,
+            Source = SpendSources.ChatTurn,
+            InputTokens = 10,
+            OutputTokens = output,
+            DurationApiMs = apiMs,
+        };
+
+    [Fact]
+    public void AnswerSpeed_НеАдмин_403()
+    {
+        var store = NewStore("speed_gate");
+        store.Record(SpeedRec(DateTime.UtcNow));
+        var ctl = NewController(store, "u1", admin: false);
+
+        var result = ctl.AnswerSpeed();
+
+        var or = result.Should().BeOfType<ObjectResult>().Which;
+        or.StatusCode.Should().Be(403);
+    }
+
+    [Fact]
+    public void AnswerSpeed_Админ_Ok_ФормаОтвета()
+    {
+        var store = NewStore("speed_ok");
+        var now = DateTime.UtcNow;
+        store.Record(SpeedRec(now.AddDays(-1)));
+        store.Record(SpeedRec(now));
+        var ctl = NewController(store, "u1", admin: true);
+
+        var result = ctl.AnswerSpeed();
+
+        var dto = result.Should().BeOfType<OkObjectResult>().Which.Value
+            .Should().BeOfType<SpendAnswerSpeedDto>().Subject;
+        dto.MinTokensForMedian.Should().Be(32);
+        // Дефолт окна — последние сутки; начало клампится к самой ранней записи стора
+        dto.From.Should().Be(DateOnly.FromDateTime(now).AddDays(-1).ToString("yyyy-MM-dd"));
+        dto.To.Should().Be(DateOnly.FromDateTime(now).ToString("yyyy-MM-dd"));
+        var row = dto.Models.Should().ContainSingle().Subject;
+        row.Provider.Should().Be("claude");
+        row.Model.Should().Be("opus");
+        row.EndToEndTps.Should().Be(100);
+        row.MedianTps.Should().Be(100);
+        row.Requests.Should().Be(2);
+        row.OutputTokens.Should().Be(200);
+        row.ApiMs.Should().Be(2000);
+    }
+
+    [Fact]
+    public void AnswerSpeed_Маршрут_ТребуетРолиАдмина()
+    {
+        var attr = typeof(SpendController).GetMethod("AnswerSpeed")!
+            .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+            .OfType<AuthorizeAttribute>()
+            .FirstOrDefault();
+        attr.Should().NotBeNull();
+        attr!.Roles.Should().Contain("admin");
     }
 
     // Доступ «только владелец» без рубильника общих проектов: то же решение, что у ProjectAccessService для владельца

@@ -12,17 +12,24 @@ public sealed class BuildHintContributor : IPromptSectionContributor
 {
     public const string SectionKey = "mcp-dev";
 
-    public const string Text =
+    // Сборка — всегда; абзац про дев-стенд — только когда start_stand/stop_stand выданы
+    // (облегчённый профиль оставляет у dev один build)
+    public const string BuildText =
         "`dotnet build` и `npm run build` (и другие скрипты сборки из package.json) запускай инструментом "
         + "mcp__dev__build (если его схемы ещё нет — сначала ToolSearch с запросом «select:mcp__dev__build»), "
         + "а не Bash: он показывает прогресс сборки в чате, встаёт в общую очередь сборок и останавливается по "
         + "«Стоп». Вид — аргументом kind (dotnet по умолчанию, npm); всегда указывай target (проект или решение "
         + "dotnet, каталог с package.json для npm), имя скрипта npm — аргументом script. Сборка дольше 9 минут "
-        + "обрывается — повтори вызов, следующая сборка будет инкрементальной. Дев-стенд поднимай инструментом "
+        + "обрывается — повтори вызов, следующая сборка будет инкрементальной.";
+
+    public const string StandText =
+        " Дев-стенд поднимай инструментом "
         + "mcp__dev__start_stand (service — id сервиса из панели «Сервисы» или путь к .csproj), а не "
         + "`dotnet run &`/`npm run dev &` в Bash: фоновый процесс Bash умрёт вместе с CLI, а стенд инструмента "
         + "живёт после хода и виден в панели «Сервисы»; гасится mcp__dev__stop_stand. e2e против стенда — "
         + "его URL передай в env.PLAYWRIGHT_BASE_URL у run_tests.";
+
+    public const string Text = BuildText + StandText;
 
     public string Key => SectionKey;
     public string Title => "Как собирать проект";
@@ -35,5 +42,5 @@ public sealed class BuildHintContributor : IPromptSectionContributor
 
     public Task<PromptSectionContribution?> BuildAsync(PromptSessionContext sessionContext, string? turnText) =>
         Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
-            [new PromptSection(Key, Text, Title)]));
+            [new PromptSection(Key, sessionContext.HasDevStandTools ? Text : BuildText, Title)]));
 }

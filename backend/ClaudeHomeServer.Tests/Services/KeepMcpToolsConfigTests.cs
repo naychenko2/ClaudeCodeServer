@@ -69,16 +69,21 @@ public class KeepMcpToolsConfigTests
     }
 
     // Состав локальной модели по фактическому спросу (решение 2026-09-19): закреплён целиком,
-    // чтобы расширение или сужение шло осознанно, с новыми цифрами в #comment-keeptools-demand
-    [Fact]
-    public void LocalQwen_СоставПоФактическомуСпросу()
+    // чтобы расширение или сужение шло осознанно, с новыми цифрами в #comment-keeptools-demand.
+    // 2026-11-20 возвращено чтение (tasks_search/list, dossier_lookup/get): модель звала их вслепую,
+    // вызов снятого инструмента обрывал ход
+    [Theory]
+    [InlineData("LlmProviders:local-qwen:KeepMcpTools")]
+    [InlineData("LlmProviders:LightProfile:KeepMcpTools")]
+    public void LocalQwen_СоставПоФактическомуСпросу(string path)
     {
-        var keep = Real().GetSection("LlmProviders:local-qwen:KeepMcpTools");
+        var keep = Real().GetSection(path);
 
         keep.GetSection("tasks").Get<string[]>().Should().BeEquivalentTo(
-            "tasks_get", "tasks_update", "tasks_complete", "tasks_add_subtask", "tasks_toggle_subtask", "tasks_create");
+            "tasks_get", "tasks_update", "tasks_complete", "tasks_add_subtask", "tasks_toggle_subtask", "tasks_create",
+            "tasks_search", "tasks_list");
         keep.GetSection("memory").Get<string[]>().Should().BeEquivalentTo(
-            "memory_recall", "memory_search", "memory_remember", "team_memory_search");
+            "memory_recall", "memory_search", "memory_remember", "team_memory_search", "dossier_lookup", "dossier_get");
         keep.GetSection("codegraph").Get<string[]>().Should().BeEquivalentTo("codegraph_find", "codegraph_neighbors");
         keep.GetSection("tests").Get<string[]>().Should().BeEquivalentTo("run_tests", "ui_probe", "pregate");
         keep.GetSection("dev").Get<string[]>().Should().BeEquivalentTo("build");

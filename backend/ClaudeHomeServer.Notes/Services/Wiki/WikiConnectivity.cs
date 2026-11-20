@@ -43,9 +43,15 @@ public static class WikiConnectivity
 
     /// <summary>Замер по subset на снимке pages: pages — полный снимок (его видит Build —
     /// связи измеряются против всего снимка, а не против subset).</summary>
-    public static Result Measure(IReadOnlyList<WikiGate.Draft> pages, IReadOnlyList<string> subset)
+    public static Result Measure(IReadOnlyList<WikiGate.Draft> pages, IReadOnlyList<string> subset) =>
+        Measure(pages, subset, null);
+
+    /// <summary>Тестовый шов: counter считает вызовы SignificantWords (сторож цены — индекс
+    /// «По теме» один раз на замер, а не на каждую страницу).</summary>
+    internal static Result Measure(IReadOnlyList<WikiGate.Draft> pages, IReadOnlyList<string> subset,
+        WikiRelated.NormCounter? counter)
     {
-        var topicIndex = WikiRelated.BuildTopicIndex(pages); // один раз на замер
+        var topicIndex = WikiRelated.BuildTopicIndex(pages, counter); // один раз на замер
         var byPath = new Dictionary<string, WikiGate.Draft>(StringComparer.Ordinal);
         foreach (var d in pages)
             byPath.TryAdd(d.Path, d);
@@ -53,7 +59,7 @@ public static class WikiConnectivity
         IReadOnlyList<WikiRelatedGroup> GroupsOf(string path)
         {
             if (!memo.TryGetValue(path, out var g))
-                memo[path] = g = WikiRelated.Build(byPath[path], pages, topicIndex, limit: null);
+                memo[path] = g = WikiRelated.Build(byPath[path], pages, topicIndex, limit: null, counter: counter);
             return g;
         }
         HashSet<string> CardsOf(string path) => GroupsOf(path)

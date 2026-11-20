@@ -151,6 +151,27 @@ public class WikiNightlyConnectivityTests : IDisposable
     }
 
     [Fact]
+    public async Task Pass_TwoNewPages_OneTopicLinked()
+    {
+        // Фон из 58 страниц делает N большим, старая страница «Квантовая телепортация фотонов» —
+        // сосед «По теме» первой новой (другого источника: карточек нет). Вторая новая изолирована.
+        for (var i = 0; i < 58; i++)
+            WritePage($"Пустая страница номер {i}");
+        WritePage("Квантовая телепортация фотонов");
+        var log = new RecordingLog();
+        await Sut(Analyze(() =>
+        {
+            WritePage("Телепортация фотонов квантовая запутанных");
+            WritePage("Омега");
+        }), log).RunNightTickAsync(_now);
+
+        var r = Last();
+        r.NewConnectivity!.Pages.Should().Be(2);
+        r.NewConnectivity.K1.Should().Be(0.5);
+        log.Rows.Select(x => x.Message).Should().Contain(m => m.Contains("связность: новые K1 50 %"));
+    }
+
+    [Fact]
     public async Task Итог_НовыеИзолированы_ConnectivityOkFalse()
     {
         await Sut(Analyze(() =>

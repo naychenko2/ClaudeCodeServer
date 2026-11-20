@@ -118,6 +118,23 @@ public class WikiConnectivityTests
     }
 
     [Fact]
+    public void Measure_ИндексПоТемеОдинРазНаЗамер_SignificantWordsНеБолее2N()
+    {
+        // Сторож цены. Мутация: передать в Build null вместо topicIndex — индекс строится на каждую
+        // страницу, вызовов порядка N², тест красный.
+        var f = WithBackground(new Fixture().Page(TopicA, TopicTitleA).Page(TopicB, TopicTitleB));
+        f.Page("Проекты/p1/Ссылка.md", "Ссылающаяся страница", text: "См. [[Квантовая телепортация фотонов]].");
+        var n = f.Snapshot.Count;
+        n.Should().BeGreaterThanOrEqualTo(50);
+        var counter = new WikiRelated.NormCounter();
+
+        WikiConnectivity.Measure(f.Snapshot, [.. f.Snapshot.Select(d => d.Path)], counter);
+
+        counter.WordsCalls.Should().BeLessThanOrEqualTo(2 * n,
+            "индекс — N вызовов, заголовочные основы лениво — не более N; на каждую страницу индекс не строится");
+    }
+
+    [Fact]
     public void K2_СсылкаНаСтраницуЗнанийДаёт_СсылкаНаКарточкуНет()
     {
         var card = "Проекты/p1/Источники/Источник-работ.md";

@@ -74,18 +74,20 @@ public static class WikiRelated
     /// WikiConnectivity.Measure строит его один раз на весь замер, а не на каждую страницу.
     /// Остальное — как у Build(limit: null).</summary>
     internal static IReadOnlyList<WikiRelatedGroup> Build(WikiGate.Draft page, IReadOnlyList<WikiGate.Draft> pages,
-        WikiTopicScore.Index topicIndex, int? limit = null) =>
-        Build(page, pages, limit, null, topicIndex);
+        WikiTopicScore.Index topicIndex, int? limit = null, NormCounter? counter = null) =>
+        Build(page, pages, limit, counter, topicIndex);
 
     /// <summary>Индекс «По теме» по снимку: те же страницы и тот же текст оценки (заголовок и
     /// сводка), что собирает Build сам; проекции и неразобранные страницы не входят.</summary>
-    internal static WikiTopicScore.Index BuildTopicIndex(IReadOnlyList<WikiGate.Draft> pages) =>
+    internal static WikiTopicScore.Index BuildTopicIndex(IReadOnlyList<WikiGate.Draft> pages,
+        NormCounter? counter = null) =>
         WikiTopicScore.BuildIndex(pages
             .Where(d => WikiSections.Parse(d.Path) is not null && !WikiPaths.IsProjection(d.Path))
             .Select(d => (d.Path, Model: WikiPage.Parse(d.Content).Model, d.Content))
             .Where(x => x.Model is not null)
             .Select(x => new WikiTopicScore.Entry(x.Path, x.Model!.Title,
-                WikiProjections.SummaryOf(x.Model.Frontmatter, x.Content))));
+                WikiProjections.SummaryOf(x.Model.Frontmatter, x.Content))),
+            counter is null ? null : counter.CountWords);
 
     /// <summary>Резолвится ли хоть одна [[…]] страницы тела на страницу знаний (не карточку
     /// источника и не хронику) — K2 замера связности. Резолв и область видимости те же, что у

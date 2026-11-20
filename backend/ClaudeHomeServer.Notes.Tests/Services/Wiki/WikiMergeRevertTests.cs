@@ -284,6 +284,48 @@ public class WikiMergeRevertTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task RevertMerge_Twice_SecondCallRefusedByStatus_NothingChanges()
+    {
+        SeedBase();
+        var merge = await Applied("chat-2", MergeOp());
+        (await _revert.RevertAsync(User, merge.Id)).Reverted.Should().BeTrue();
+        var before = Snapshot();
+        var manifestBefore = WikiManifest.TryRead(Root, Section).Manifest.ToDictionary(kv => kv.Key, kv => kv.Value);
+
+        var again = await _revert.RevertAsync(User, merge.Id);
+
+        again.Reverted.Should().BeFalse();
+        again.Code.Should().Be(WikiPackageRevert.CodeStatus, "повторный откат отказан по статусу, а не падает");
+        Snapshot().Should().Equal(before, "второй вызов файлов не трогает");
+        WikiManifest.TryRead(Root, Section).Manifest.Should().Equal(manifestBefore);
+        StatusOf(merge.Id).Should().Be(WikiPackage.StatusReverted);
+        LogLines("revert").Should().ContainSingle("второй строки журнала нет");
+    }
+
+    [Fact]
+    public async Task RevertMerge_AReCreatedManuallyAfterMerge_RefusedAsChanged_ManualEditKept()
+    {
+        SeedBase();
+        var merge = await Applied("chat-2", MergeOp());
+        // Человек завёл страницу A заново мимо Хранителя: содержимое ни прообраз, ни «файла нет».
+        PutRaw(APath, Page("Сущность-А", ["Новая версия, написанная вручную"], []));
+        var manual = File.ReadAllBytes(PageFull(APath));
+        var before = Snapshot();
+        var manifestBefore = WikiManifest.TryRead(Root, Section).Manifest.ToDictionary(kv => kv.Key, kv => kv.Value);
+
+        var r = await _revert.RevertAsync(User, merge.Id);
+
+        r.Reverted.Should().BeFalse();
+        r.Code.Should().Be(WikiPackageRevert.CodeChanged);
+        r.ChangedPages.Should().Equal(APath);
+        File.ReadAllBytes(PageFull(APath)).Should().Equal(manual, "ручная правка не затёрта прообразом");
+        Snapshot().Should().Equal(before, "на диске не тронуто ничего, в том числе B");
+        WikiManifest.TryRead(Root, Section).Manifest.Should().Equal(manifestBefore);
+        StatusOf(merge.Id).Should().Be(WikiPackage.StatusApplied);
+        LogLines("revert").Should().BeEmpty();
+    }
+
     // ─── путь 2: откат по источнику ───
 
     // Блокер волны C: строки источника S перенесены с A на B другим пакетом (merge, источник не S).
@@ -346,5 +388,60 @@ public class WikiMergeRevertTests : IDisposable
         File.ReadAllBytes(PageFull(BPath)).Should().Equal(bSeed);
         StatusOf(merge.Id).Should().Be(WikiPackage.StatusReverted);
         StatusOf(first.Id).Should().Be(WikiPackage.StatusReverted);
+    }
+
+    [Fact]
+    public async Task RetractBySource_Twice_SecondCallIsEmptyOutcome_NothingChanges()
+    {
+        SeedBase();
+        await Applied("chat-A", Op(WikiPackage.OpAppend, APath, ClaimS));
+        await Applied("chat-A", MergeOp());
+        (await _retract.RetractAsync(User, SourceRef)).Ok.Should().BeTrue();
+        var before = Snapshot();
+        var manifestBefore = WikiManifest.TryRead(Root, Section).Manifest.ToDictionary(kv => kv.Key, kv => kv.Value);
+
+        var again = await _retract.RetractAsync(User, SourceRef);
+
+        again.Ok.Should().BeTrue(again.Reason);
+        again.Outcomes.Should().BeEmpty("applied-пакетов источника больше нет");
+        again.RemovedChronicles.Should().BeEmpty();
+        Snapshot().Should().Equal(before);
+        WikiManifest.TryRead(Root, Section).Manifest.Should().Equal(manifestBefore);
+        LogLines("retract").Should().ContainSingle("второй строки журнала нет");
+    }
+
+    // Фиксация ТЕКУЩЕГО поведения (хвост R-C3 п.3), не желаемого: пакет S откатан побайтно, а снятие
+    // строк S с B упало (на B сноска с неопознанной целью — след не атрибутируется). Статус S уже «reverted», и повторный откат
+    // по источнику пакета не подбирает (Candidates берёт только applied) — строки S на B остаются
+    // навсегда, хотя ответ первого вызова называет их в Failed. Вариант правки — пометка пакета
+    // NeedsUnlink: решение Александра. Когда поведение поменяют, этот тест должен покраснеть.
+    [Fact]
+    public async Task RetractBySource_UnlinkOfBFailed_ReRetractDoesNotPickUpPackage_CurrentBehavior()
+    {
+        PutRaw(CardPath, Card(CardTitle, "session:chat-A#m1-9"));
+        PutRaw(BPath, Page("Сущность-Б", ["Каменный кабинет хранит свой план [^s1]"], [(CardTitle, ClaimOwn)]));
+        var s = await Applied("chat-A", Op(WikiPackage.OpCreate, APath, ClaimS));
+        await Applied("chat-2", MergeOp());
+        File.ReadAllText(PageFull(BPath)).Should().Contain(ClaimS);
+        // На B появилась сноска на неизвестную карточку (правка мимо Хранителя): снять её нельзя.
+        var bGood = File.ReadAllText(PageFull(BPath));
+        var withUnknown = bGood.TrimEnd('\n') + "\n[^s9]: [[Неведомая карточка]] — «чужая цитата»\n";
+        File.WriteAllText(PageFull(BPath), withUnknown);
+        WikiPage.Parse(withUnknown).Model.Should().NotBeNull("подготовка: страница с лишней сноской разбирается");
+
+        var first = await _retract.RetractAsync(User, SourceRef);
+
+        first.Ok.Should().BeTrue(first.Reason);
+        StatusOf(s.Id).Should().Be(WikiPackage.StatusReverted, "побайтный откат пакета S прошёл");
+        first.Failed.Should().NotBeEmpty("снятие строк S с B названо неудавшимся");
+        File.ReadAllText(PageFull(BPath)).Should().Contain(ClaimS, "строки S на B остались");
+
+        // Человек убирает лишнюю сноску и повторяет откат по источнику.
+        File.WriteAllText(PageFull(BPath), bGood);
+        var second = await _retract.RetractAsync(User, SourceRef);
+
+        second.Ok.Should().BeTrue();
+        second.Outcomes.Should().BeEmpty("пакет S уже «reverted» и выборкой не подбирается");
+        File.ReadAllText(PageFull(BPath)).Should().Contain(ClaimS, "повтор строки с B не снял");
     }
 }

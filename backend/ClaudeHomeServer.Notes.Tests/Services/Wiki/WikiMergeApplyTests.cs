@@ -36,6 +36,8 @@ public class WikiMergeApplyTests : IDisposable
     private const string Q2 = "Контенер собран на второй машине";
     private const string Q3 = "Решение: перенести сборку на Linux";
 
+    // Контекст (карточка и текст источника) нужен только append-пакетам; merge применяется без него —
+    // боевым путём ApplyDecidedAsync: пакет из одних merge карточку источника не ищет.
     private static readonly WikiApplyService.ApplyContext Ctx = new(CardTitle, SourceText);
 
     private readonly string _dir;
@@ -158,17 +160,16 @@ public class WikiMergeApplyTests : IDisposable
         PutRaw(BPath, B());
     }
 
-    private WikiPackage.Operation MergeOp(IReadOnlyDictionary<string, string>? baseHashes = null) => new()
+    // Пакет merge строит та же фабрика, что и ночь (WikiNightlyService.NewMergePackage): источник —
+    // маркер пары «session:merge:{A}», карточки источника у пакета нет. Тест не обходит поиск карточки.
+    private WikiPackage MergePackage(string page, string target, IReadOnlyDictionary<string, string>? baseHashes = null)
     {
-        Op = WikiPackage.OpMerge,
-        Page = APath,
-        Target = BPath,
-        Text = null,
-        Class = WikiPackage.ClassKey("session", WikiPackage.OpMerge),
-        Decision = WikiPackage.DecisionAuto,
-        BaseHashes = baseHashes ?? new Dictionary<string, string>
-            { [APath] = ManifestHash(APath), [BPath] = ManifestHash(BPath) },
-    };
+        var pkg = WikiNightlyService.NewMergePackage(Section, page, target, ManifestHash(page), ManifestHash(target));
+        return baseHashes is null ? pkg : pkg with { Operations = [pkg.Operations[0] with { BaseHashes = baseHashes }] };
+    }
+
+    private WikiPackage.Operation MergeOp(IReadOnlyDictionary<string, string>? baseHashes = null) =>
+        MergePackage(APath, BPath, baseHashes).Operations[0];
 
     private static WikiPackage.Operation AppendOp(string page, string text) => new()
     {
@@ -180,20 +181,29 @@ public class WikiMergeApplyTests : IDisposable
         BaseHashes = new Dictionary<string, string>(),
     };
 
-    private WikiPackage CreateAccepted(params WikiPackage.Operation[] ops)
-    {
-        var pkg = new WikiPackage
+    private WikiPackage CreateAccepted(params WikiPackage.Operation[] ops) =>
+        CreateAcceptedPackage(new WikiPackage
         {
             Id = WikiPackageStore.NewId(),
             Section = Section,
-            Sources = [new WikiPackage.SourceRef("session", "chat-1")],
+            Sources = ops.All(o => o.Op == WikiPackage.OpMerge)
+                ? WikiNightlyService.NewMergePackage(Section, APath, BPath, "h1", "h2").Sources
+                : [new WikiPackage.SourceRef("session", "chat-1")],
             Operations = ops,
             Status = WikiPackage.StatusChecking,
-        };
+        });
+
+    private WikiPackage CreateAcceptedPackage(WikiPackage pkg)
+    {
         var created = WikiPackageStore.Create(Root, pkg);
         created.Ok.Should().BeTrue(created.Reason);
         WikiPackageStore.Transition(Root, pkg.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
-        WikiPackageStore.Transition(Root, pkg.Id, WikiPackage.StatusAccepted).Ok.Should().BeTrue();
+        // Ночной merge — спорная операция (inbox): применяется только по принятому решению человека.
+        for (var i = 0; i < pkg.Operations.Count; i++)
+            if (pkg.Operations[i].Decision == WikiPackage.DecisionInbox)
+                WikiPackageStore.DecideOperation(Root, pkg.Id, i, accept: true).Ok.Should().BeTrue();
+        if (WikiPackageStore.TryRead(Root, pkg.Id).Package!.Status != WikiPackage.StatusAccepted)
+            WikiPackageStore.Transition(Root, pkg.Id, WikiPackage.StatusAccepted).Ok.Should().BeTrue();
         return WikiPackageStore.TryRead(Root, pkg.Id).Package!;
     }
 
@@ -217,7 +227,7 @@ public class WikiMergeApplyTests : IDisposable
         var aBytes = File.ReadAllBytes(PageFull(APath));
         var pkg = CreateAccepted(MergeOp());
 
-        var r = await _sut.ApplyAsync(User, pkg, Ctx);
+        var r = await _sut.ApplyAsync(User, pkg);
 
         r.Applied.Should().BeTrue(r.Reason);
         File.Exists(PageFull(APath)).Should().BeFalse("файл A удалён");
@@ -245,7 +255,7 @@ public class WikiMergeApplyTests : IDisposable
         SeedBase(Page("Сущность-А", ["Контенер собран на второй машине [^s1]"],
             ["Решение: перенести сборку на Linux [^s2]"], [(CardTitle, Q2), (CardTitle, Q3)]));
 
-        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()), Ctx);
+        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()));
 
         r.Applied.Should().BeTrue(r.Reason);
         var b = Parsed(File.ReadAllText(PageFull(BPath)));
@@ -260,7 +270,7 @@ public class WikiMergeApplyTests : IDisposable
     {
         SeedBase();
         PutRaw(ThirdPath, Third());
-        (await _sut.ApplyAsync(User, CreateAccepted(MergeOp()), Ctx)).Applied.Should().BeTrue();
+        (await _sut.ApplyAsync(User, CreateAccepted(MergeOp()))).Applied.Should().BeTrue();
 
         var drafts = AllDrafts();
         var snapshot = drafts
@@ -285,7 +295,7 @@ public class WikiMergeApplyTests : IDisposable
     {
         SeedBase();
         PutRaw(ThirdPath, Third());
-        (await _sut.ApplyAsync(User, CreateAccepted(MergeOp()), Ctx)).Applied.Should().BeTrue();
+        (await _sut.ApplyAsync(User, CreateAccepted(MergeOp()))).Applied.Should().BeTrue();
 
         var drafts = AllDrafts();
         drafts.Add(new WikiGate.Draft("Общее/Хроники/s1.md", Chronicle()));
@@ -341,7 +351,7 @@ public class WikiMergeApplyTests : IDisposable
     private async Task AssertRefusedUntouched(WikiPackage pkg, string reasonPart)
     {
         var before = Snapshot();
-        var r = await _sut.ApplyAsync(User, pkg, Ctx);
+        var r = await _sut.ApplyAsync(User, pkg);
         r.Applied.Should().BeFalse();
         r.Code.Should().Be(WikiApplyService.CodeMerge);
         r.Reason.Should().Contain(reasonPart);
@@ -385,14 +395,7 @@ public class WikiMergeApplyTests : IDisposable
     {
         SeedBase();
         var op = MergeOp() with { Target = "Проекты/p1/Сущность-Б.md" };
-        var pkg = new WikiPackage
-        {
-            Id = WikiPackageStore.NewId(),
-            Section = Section,
-            Sources = [new WikiPackage.SourceRef("session", "chat-1")],
-            Operations = [op],
-            Status = WikiPackage.StatusChecking,
-        };
+        var pkg = MergePackage(APath, BPath) with { Operations = [op] };
         var before = Snapshot();
         WikiPackageStore.Create(Root, pkg).Ok.Should().BeFalse("пакет — в пределах одного раздела: форма отбивает чужую B");
         Snapshot().Should().Equal(before);
@@ -403,11 +406,7 @@ public class WikiMergeApplyTests : IDisposable
     {
         SeedBase();
         var bad = MergeOp() with { Target = null };
-        var pkg = new WikiPackage
-        {
-            Id = WikiPackageStore.NewId(), Section = Section, Status = WikiPackage.StatusChecking,
-            Sources = [new WikiPackage.SourceRef("session", "chat-1")], Operations = [bad],
-        };
+        var pkg = MergePackage(APath, BPath) with { Operations = [bad] };
         WikiPackage.ShapeErrors(pkg).Should().Contain(e => e.Contains("без цели"));
         WikiPackage.ShapeErrors(pkg with { Operations = [MergeOp() with { Text = "x" }] })
             .Should().Contain(e => e.Contains("нет текста"));
@@ -429,7 +428,7 @@ public class WikiMergeApplyTests : IDisposable
         var bAfterAppend = File.ReadAllBytes(PageFull(BPath));
         var aBytes = File.ReadAllBytes(PageFull(APath));
 
-        var merge = await _sut.ApplyAsync(User, mergePkg, Ctx);
+        var merge = await _sut.ApplyAsync(User, mergePkg);
 
         merge.Applied.Should().BeFalse();
         merge.Code.Should().Be(WikiApplyService.CodeStale, "база B изменилась: пакет требует нового разбора, а не порчи");
@@ -443,7 +442,7 @@ public class WikiMergeApplyTests : IDisposable
     {
         SeedBase();
         var pkg = CreateAccepted(MergeOp());
-        var prepared = await _sut.PrepareAsync(User, pkg, Ctx);
+        var prepared = await _sut.PrepareAsync(User, pkg, null);
         prepared.Ready.Should().BeTrue(prepared.Reason);
         // Чужая правка B мимо Хранителя в окне между проверкой и записью.
         File.AppendAllText(PageFull(BPath), "\n");
@@ -475,7 +474,7 @@ public class WikiMergeApplyTests : IDisposable
             ["Контенер собран на второй машине [^s1]"], ["Решение: перенести сборку на Linux [^s2]"],
             [(CardTitle, Q2), (CardTitle, Q3)]));
 
-        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()), Ctx);
+        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()));
 
         r.Applied.Should().BeTrue(r.Reason);
         var b = Parsed(File.ReadAllText(PageFull(BPath)));
@@ -495,7 +494,7 @@ public class WikiMergeApplyTests : IDisposable
             ["Контенер собран на второй машине [^s1]"], ["Каменный кабинет хранит план остаться на Windows [^s2]"],
             [(CardTitle, Q2), (CardTitle, Q1)]));
 
-        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()), Ctx);
+        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()));
 
         r.Applied.Should().BeTrue(r.Reason);
         var b = Parsed(File.ReadAllText(PageFull(BPath)));
@@ -512,19 +511,15 @@ public class WikiMergeApplyTests : IDisposable
         var aHash = ManifestHash(APath);
         var bHash = ManifestHash(BPath);
         var forward = CreateAccepted(MergeOp());
-        (await _sut.ApplyAsync(User, forward, Ctx)).Applied.Should().BeTrue();
+        (await _sut.ApplyAsync(User, forward)).Applied.Should().BeTrue();
         File.Exists(PageFull(APath)).Should().BeFalse();
         var bAfterMerge = File.ReadAllBytes(PageFull(BPath));
 
         // Пакет B → A после применения A → B: A больше нет на диске — база намерения исчезла.
-        var back = CreateAccepted(new WikiPackage.Operation
-        {
-            Op = WikiPackage.OpMerge, Page = BPath, Target = APath, Text = null,
-            Class = WikiPackage.ClassKey("session", WikiPackage.OpMerge), Decision = WikiPackage.DecisionAuto,
-            BaseHashes = new Dictionary<string, string> { [BPath] = bHash, [APath] = aHash },
-        });
+        var back = CreateAcceptedPackage(
+            WikiNightlyService.NewMergePackage(Section, BPath, APath, bHash, aHash));
 
-        var r = await _sut.ApplyAsync(User, back, Ctx);
+        var r = await _sut.ApplyAsync(User, back);
 
         r.Applied.Should().BeFalse();
         r.Code.Should().Be(WikiApplyService.CodeStale);
@@ -564,13 +559,13 @@ public class WikiMergeApplyTests : IDisposable
     {
         SeedBase();
         var pkg = CreateAccepted(MergeOp());
-        (await _sut.ApplyAsync(User, pkg, Ctx)).Applied.Should().BeTrue();
+        (await _sut.ApplyAsync(User, pkg)).Applied.Should().BeTrue();
         var after = Snapshot();
 
         // Тот же пакет ещё раз — по дисковому состоянию. «applied» — конечный статус:
         // не «applying» (тот отказ звучит иначе и оставил бы пакет в «applying»); второго
         // применения нет, состояние диска — ровно как после первого.
-        var again = await _sut.ApplyAsync(User, WikiPackageStore.TryRead(Root, pkg.Id).Package!, Ctx);
+        var again = await _sut.ApplyAsync(User, WikiPackageStore.TryRead(Root, pkg.Id).Package!);
 
         again.Applied.Should().BeFalse();
         // Отказ терминальным гейтом (WikiApplyService.cs:312-313), не общим стражем
@@ -601,7 +596,7 @@ public class WikiMergeApplyTests : IDisposable
             ["Каменный кабинет хранит план остаться на Windows [^s1]", "См. [[Сущность-А]] про прежний план [^s1]"],
             [], [(CardTitle, Q1)]));
 
-        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()), Ctx);
+        var r = await _sut.ApplyAsync(User, CreateAccepted(MergeOp()));
 
         r.Applied.Should().BeTrue(r.Reason);
         var b = Parsed(File.ReadAllText(PageFull(BPath)));

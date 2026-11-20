@@ -182,19 +182,40 @@ public class WikiMergeRevertTests : IDisposable
         BaseHashes = new Dictionary<string, string> { [APath] = ManifestHash(APath), [BPath] = ManifestHash(BPath) },
     };
 
-    private WikiPackage CreateAccepted(string sourceRef, params WikiPackage.Operation[] ops)
-    {
-        var pkg = new WikiPackage
+    // Пакет merge строит та же фабрика, что и ночь (WikiNightlyService.NewMergePackage): источник —
+    // маркер пары «session:merge:{A}», карточки источника у пакета нет.
+    private WikiPackage CreateAcceptedMerge() => CreateAcceptedPackage(
+        WikiNightlyService.NewMergePackage(Section, APath, BPath, ManifestHash(APath), ManifestHash(BPath)));
+
+    private WikiPackage CreateAccepted(string sourceRef, params WikiPackage.Operation[] ops) =>
+        CreateAcceptedPackage(new WikiPackage
         {
             Id = WikiPackageStore.NewId(),
             Section = Section,
             Sources = [new WikiPackage.SourceRef("session", sourceRef)],
             Operations = ops,
             Status = WikiPackage.StatusChecking,
-        };
-        WikiPackageStore.Create(Root, pkg).Ok.Should().BeTrue();
+        });
+
+    private WikiPackage CreateAcceptedPackage(WikiPackage pkg)
+    {
+        var created = WikiPackageStore.Create(Root, pkg);
+        created.Ok.Should().BeTrue(created.Reason);
         WikiPackageStore.Transition(Root, pkg.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
-        WikiPackageStore.Transition(Root, pkg.Id, WikiPackage.StatusAccepted).Ok.Should().BeTrue();
+        // Ночной merge — спорная операция (inbox): применяется только по принятому решению человека.
+        for (var i = 0; i < pkg.Operations.Count; i++)
+            if (pkg.Operations[i].Decision == WikiPackage.DecisionInbox)
+                WikiPackageStore.DecideOperation(Root, pkg.Id, i, accept: true).Ok.Should().BeTrue();
+        if (WikiPackageStore.TryRead(Root, pkg.Id).Package!.Status != WikiPackage.StatusAccepted)
+            WikiPackageStore.Transition(Root, pkg.Id, WikiPackage.StatusAccepted).Ok.Should().BeTrue();
+        return WikiPackageStore.TryRead(Root, pkg.Id).Package!;
+    }
+
+    private async Task<WikiPackage> AppliedMerge()
+    {
+        var pkg = CreateAcceptedMerge();
+        var r = await _apply.ApplyAsync(User, pkg);
+        r.Applied.Should().BeTrue(r.Reason);
         return WikiPackageStore.TryRead(Root, pkg.Id).Package!;
     }
 
@@ -217,7 +238,7 @@ public class WikiMergeRevertTests : IDisposable
         var aBefore = File.ReadAllBytes(PageFull(APath));
         var bBefore = File.ReadAllBytes(PageFull(BPath));
         var manifestBefore = WikiManifest.TryRead(Root, Section).Manifest.ToDictionary(kv => kv.Key, kv => kv.Value);
-        var merge = await Applied("chat-2", MergeOp());
+        var merge = await AppliedMerge();
         File.Exists(PageFull(APath)).Should().BeFalse("merge снял A");
 
         var r = await _revert.RevertAsync(User, merge.Id);
@@ -238,7 +259,7 @@ public class WikiMergeRevertTests : IDisposable
         // целиком, затем откат merge). B изменена после merge → откат отказан по сверке хэша B,
         // файлы не тронуты: чужая запись не стирается вместе с merge.
         SeedBase();
-        var merge = await Applied("chat-2", MergeOp());
+        var merge = await AppliedMerge();
         await Applied("chat-3", Op(WikiPackage.OpAppend, BPath, ClaimB));
         var before = Snapshot();
         var manifestBefore = WikiManifest.TryRead(Root, Section).Manifest.ToDictionary(kv => kv.Key, kv => kv.Value);
@@ -260,7 +281,7 @@ public class WikiMergeRevertTests : IDisposable
         // Настоящая гонка: порядок любой, исход один из двух и без порчи.
         SeedBase();
         var aBefore = File.ReadAllBytes(PageFull(APath));
-        var merge = await Applied("chat-2", MergeOp());
+        var merge = await AppliedMerge();
         var append = CreateAccepted("chat-3", Op(WikiPackage.OpAppend, BPath, ClaimB));
 
         var revertTask = Task.Run(() => _revert.RevertAsync(User, merge.Id));
@@ -288,7 +309,7 @@ public class WikiMergeRevertTests : IDisposable
     public async Task RevertMerge_Twice_SecondCallRefusedByStatus_NothingChanges()
     {
         SeedBase();
-        var merge = await Applied("chat-2", MergeOp());
+        var merge = await AppliedMerge();
         (await _revert.RevertAsync(User, merge.Id)).Reverted.Should().BeTrue();
         var before = Snapshot();
         var manifestBefore = WikiManifest.TryRead(Root, Section).Manifest.ToDictionary(kv => kv.Key, kv => kv.Value);
@@ -307,7 +328,7 @@ public class WikiMergeRevertTests : IDisposable
     public async Task RevertMerge_AReCreatedManuallyAfterMerge_RefusedAsChanged_ManualEditKept()
     {
         SeedBase();
-        var merge = await Applied("chat-2", MergeOp());
+        var merge = await AppliedMerge();
         // Человек завёл страницу A заново мимо Хранителя: содержимое ни прообраз, ни «файла нет».
         PutRaw(APath, Page("Сущность-А", ["Новая версия, написанная вручную"], []));
         var manual = File.ReadAllBytes(PageFull(APath));
@@ -335,7 +356,7 @@ public class WikiMergeRevertTests : IDisposable
     {
         SeedBase();
         await Applied("chat-A", Op(WikiPackage.OpAppend, APath, ClaimS));
-        var merge = await Applied("chat-2", MergeOp());
+        var merge = await AppliedMerge();
         File.ReadAllText(PageFull(BPath)).Should().Contain(ClaimS, "строка S переехала на B");
 
         var r = await _retract.RetractAsync(User, SourceRef);
@@ -359,7 +380,7 @@ public class WikiMergeRevertTests : IDisposable
         PutRaw(BPath, Page("Сущность-Б", ["Каменный кабинет хранит свой план [^s1]"], [(CardTitle, ClaimOwn)]));
         // A создана пакетом S (create, цитата — из источника).
         await Applied("chat-A", Op(WikiPackage.OpCreate, APath, ClaimS));
-        var merge = await Applied("chat-2", MergeOp());
+        var merge = await AppliedMerge();
         File.ReadAllText(PageFull(BPath)).Should().Contain(ClaimS);
 
         var r = await _retract.RetractAsync(User, SourceRef);
@@ -378,6 +399,8 @@ public class WikiMergeRevertTests : IDisposable
         var aSeed = File.ReadAllBytes(PageFull(APath));
         var bSeed = File.ReadAllBytes(PageFull(BPath));
         var first = await Applied("chat-A", Op(WikiPackage.OpAppend, APath, ClaimS));
+        // Намеренно руками, а не фабрикой ночи: тест держит откат merge С РЕАЛЬНЫМ источником S
+        // (пакет того же источника откатывается цепочкой); у ночного merge источник — маркер пары.
         var merge = await Applied("chat-A", MergeOp());
 
         var r = await _retract.RetractAsync(User, SourceRef);
@@ -395,7 +418,7 @@ public class WikiMergeRevertTests : IDisposable
     {
         SeedBase();
         await Applied("chat-A", Op(WikiPackage.OpAppend, APath, ClaimS));
-        await Applied("chat-A", MergeOp());
+        await AppliedMerge();
         (await _retract.RetractAsync(User, SourceRef)).Ok.Should().BeTrue();
         var before = Snapshot();
         var manifestBefore = WikiManifest.TryRead(Root, Section).Manifest.ToDictionary(kv => kv.Key, kv => kv.Value);
@@ -421,7 +444,7 @@ public class WikiMergeRevertTests : IDisposable
         PutRaw(CardPath, Card(CardTitle, "session:chat-A#m1-9"));
         PutRaw(BPath, Page("Сущность-Б", ["Каменный кабинет хранит свой план [^s1]"], [(CardTitle, ClaimOwn)]));
         var s = await Applied("chat-A", Op(WikiPackage.OpCreate, APath, ClaimS));
-        await Applied("chat-2", MergeOp());
+        await AppliedMerge();
         File.ReadAllText(PageFull(BPath)).Should().Contain(ClaimS);
         // На B появилась сноска на неизвестную карточку (правка мимо Хранителя): снять её нельзя.
         var bGood = File.ReadAllText(PageFull(BPath));

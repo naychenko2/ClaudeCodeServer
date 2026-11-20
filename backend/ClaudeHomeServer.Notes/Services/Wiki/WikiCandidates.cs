@@ -161,6 +161,16 @@ public static class WikiCandidates
             .Select(s => s.Draft)];
     }
 
+    /// <summary>Полный нормализованный токен (нижний регистр, ё→е) — в стоп-списке: тот же
+    /// признак, по которому SignificantWords снимает служебные слова. Автолинкер (Q2-A2)
+    /// берёт его как фильтр: однословный заголовок из стоп-списка целью не становится.</summary>
+    public static bool IsStopWord(string normalizedWord) => StopWords.Contains(normalizedWord);
+
+    /// <summary>Основа нормализованного слова — та же Stem, что строят SignificantWords.
+    /// Автолинкер (Q2-A2) сравнивает фразы по этим основам (словоформы), ссылку ставит
+    /// только на точном совпадении.</summary>
+    public static string StemOf(string normalizedWord) => Stem(normalizedWord);
+
     private static void AddWord(HashSet<string> words, StringBuilder token)
     {
         if (token.Length < MinWordLength)

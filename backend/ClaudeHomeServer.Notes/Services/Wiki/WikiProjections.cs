@@ -35,7 +35,6 @@ public static class WikiProjections
     private static readonly Regex FootnoteRefRx = new(@"\[\^(s\d+)\]", RegexOptions.CultureInvariant);
     // Ссылка вики в сводке каталога заменяется видимым текстом: [[x|y]] → y, [[x]] → x —
     // каталог читается одной строкой, а скобки модели кочуют в заголовок операции.
-    private static readonly Regex LinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
     private static readonly Regex SpaceRx = new(@"\s+", RegexOptions.CultureInvariant);
 
     // Секция, чьи сноски авторство не считает: в «Истории» лежат снятые и замещённые утверждения,
@@ -213,7 +212,7 @@ public static class WikiProjections
         if (swodka is null || swodka.Lines.Count == 0)
             return null;
         var oneLine = FootnoteRefRx.Replace(WikiPage.OneLine(string.Join(" ", swodka.Lines)), "");
-        oneLine = LinkRx.Replace(oneLine, m =>
+        oneLine = WikiPage.LinkRx.Replace(oneLine, m =>
         {
             var target = m.Groups[1].Value;
             var bar = target.IndexOf('|');

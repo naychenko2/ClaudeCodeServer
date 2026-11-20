@@ -64,6 +64,7 @@ export type {
   WikiPurgeDto, WikiPurgePageDto,
   WikiNightDecisionDto, WikiNightDecisionsDto, WikiRevertDto,
   WikiRelatedKind, WikiRelatedItemDto, WikiRelatedGroupDto,
+  WikiPageLinkDto,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────

@@ -588,16 +588,17 @@ public class WikiPlanValidatorSynthTests
     }
 
     [Fact]
-    public void ValidateSynth_СсылкаСАлиасом_СнятаВАлиас_ЦельНеПомогает()
+    public void ValidateSynth_СсылкаСАлиасом_РезолвитсяЦель_СсылкаОстаётся()
     {
-        // Полное имя ссылки — «Сущность|подробнее о сборке»: страницы с таким именем нет
-        // (целое имя — цель, как её читает гейт). Снимается в алиас — текст без скобок.
+        // B0: цель — то, что до первого «|» (WikiPage.LinkTarget): «Сущность» — существующая
+        // страница этого раздела, ссылка резолвится и остаётся как написана. В алиас снимается
+        // только нерезолвимая (тот же PlainLinkText, что прежде).
         var r = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка уходит на Linux [[Сущность|подробнее о сборке]]", [QLinux]));
 
         r.Rejected.Should().BeEmpty();
         var op = r.Accepted.Should().ContainSingle().Subject;
-        op.Text.Should().Be("Сборка уходит на Linux подробнее о сборке");
-        op.StrippedLinks.Should().Be(1);
+        op.Text.Should().Be("Сборка уходит на Linux [[Сущность|подробнее о сборке]]");
+        op.StrippedLinks.Should().Be(0);
     }
 
     [Fact]

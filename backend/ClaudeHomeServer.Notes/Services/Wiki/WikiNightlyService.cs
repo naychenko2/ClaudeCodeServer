@@ -166,7 +166,11 @@ public sealed partial class WikiNightlyService : BackgroundService
     /// серому чату и причина первой из них: без неё нелокальный маршрут места молча оставлял
     /// чаты серыми весь проход. Executors (W6a) — счётчики по названным исполнителям прохода в
     /// порядке их списка стора; пустой список — путь без названных исполнителей (имени движка
-    /// там нет, J-W2). В файле итога поля аддитивны: старый итог (без поля)
+    /// там нет, J-W2). Поля A6 (StrippedLinks, NewConnectivity, SectionConnectivity, ConnectivityOk):
+    /// StrippedLinks — ссылки, снятые валидатором у модели за проход (сумма ChatResult), NewConnectivity —
+    /// связность новых страниц знаний ночи, SectionConnectivity — всех страниц знаний тронутых разделов,
+    /// ConnectivityOk — K1 новых ≥ BaselineK1 − BaselineK1Slack (null — новых страниц не было); у
+    /// старого итога все четыре null — «не измерено», а не «0 %». В файле итога поля аддитивны: старый итог (без поля)
     /// читается нулями, старый Manual — false, Executors — null: «не измерено», а не «ни одного
     /// исполнителя не было» (читать его пустым нельзя — это разные вещи).</summary>
     public sealed record NightResult(
@@ -177,7 +181,24 @@ public sealed partial class WikiNightlyService : BackgroundService
         int JudgeCalls = 0, decimal JudgeCostUsd = 0m, int JudgeApplied = 0, int JudgeRejected = 0,
         int JudgeDeferred = 0, int CodeRejected = 0,
         int Stage2Refused = 0, string? FirstStage2Refusal = null,
-        IReadOnlyList<NightExecutorStat>? Executors = null);
+        IReadOnlyList<NightExecutorStat>? Executors = null,
+        int? StrippedLinks = null, ConnectivityStat? NewConnectivity = null,
+        ConnectivityStat? SectionConnectivity = null, bool? ConnectivityOk = null);
+
+    /// <summary>Связность среза страниц знаний (A6, ADR-039 р.13): Pages — сколько страниц измерено,
+    /// K0 — прежняя средняя степень (mentions + mentionedHere + backlinks), K1 — доля со связью
+    /// «тема ↔ тема» (критерий ночи), K2 — доля с резолвящейся [[…]] на страницу знаний.</summary>
+    public sealed record ConnectivityStat(int Pages, double K0, double K1, double K2);
+
+    /// <summary>K1 корпуса при выбранном MinScore = 11 (отчёт T0, .cc-attachments/wiki-q2-topic/
+    /// report.md, §3: «вся вики (337)» 0,404; индекс «По теме» — по видимым разделам, как при
+    /// показе: так считал T0 и так считает Measure). ConnectivityOk — K1 новых страниц ночи не ниже
+    /// этой линии минус BaselineK1Slack (новые страницы не должны быть изолированнее корпуса).
+    /// При смене MinScore или состава корпуса константу перемерить (шаг T0).</summary>
+    public const double BaselineK1 = 0.404;
+
+    /// <summary>Допуск ConnectivityOk к BaselineK1 — 10 п. п. (разрез 20.11, §2).</summary>
+    public const double BaselineK1Slack = 0.10;
 
     /// <summary>Счётчики одного названного исполнителя прохода (W6a): что он сделал в этой ночи.
     /// Engine — имя движка из списка стора (тот же ключ, что в состоянии отказов W5);
@@ -408,6 +429,21 @@ public sealed partial class WikiNightlyService : BackgroundService
         args.Add(r.JudgeCalls);
         args.Add(CostText(r.JudgeCostUsd));
         args.Add(r.Manual);
+        // Связность (A6): новые K1, тело K2 (по тронутым разделам), прежняя степень K0 новых и
+        // ссылки, снятые у модели. Нет замера (старый итог, ранний выход) — части нет.
+        if (r.NewConnectivity is { } nc)
+        {
+            template.Append("; связность: новые K1 {NewK1}, тело K2 {SectionK2}, прежняя степень {NewK0}; ссылок снято у модели {Stripped}");
+            args.Add(Percent(nc.K1));
+            args.Add(r.SectionConnectivity is { } sc ? Percent(sc.K2) : "—");
+            args.Add(nc.K0.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
+            args.Add(r.StrippedLinks ?? 0);
+        }
+        else if (r.StrippedLinks is { } sl)
+        {
+            template.Append("; связность: новых страниц нет; ссылок снято у модели {Stripped}");
+            args.Add(sl);
+        }
         // Исполнители (W6a): по движку «анализировано/отказано», при выбывании — время. Части нет
         // вовсе при пути без названных исполнителей. Причин по исполнителю здесь нет: причина
         // отказа — только ReasonMarker выше (полная — в файле итога и построчных записях).
@@ -471,6 +507,9 @@ public sealed partial class WikiNightlyService : BackgroundService
 
     /// <summary>Стоимость судьи для строки журнала: инвариантный формат, разделитель —
     /// точка (та же запись, что в JSON), т. е. точная сумма, а не форма витрины.</summary>
+    private static string Percent(double share) =>
+        Math.Round(share * 100).ToString("0", System.Globalization.CultureInfo.InvariantCulture) + " %";
+
     private static string CostText(decimal cost) => cost.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>Стоимость судьи в заголовке уведомления (доработка QA J-J4, пункт 2, правило

@@ -229,23 +229,19 @@ public class WikiKeeperPromptsTests
         Assert.Contains("good: \"Перенос сборки на Linux\"", prompt);
     }
 
-    // Q1-S5 + Q1-S13: ссылка в claim — обязательна и дословна по каталогу: без хвоста «— вид»,
-    // без префикса раздела и без алиаса «|» (гейт читает «x|y» как целое имя, и ссылка с алиасом
-    // молча снимается в текст — рабочая ссылка теряется). «may» убрано: ссылка не право модели,
-    // а обязанность по уже названному предмету. Пример один и только правильный, без алиаса
-    // (ревью Q1-S13: локальная модель копирует то, что видит, а негативные примеры работают
-    // хуже позитивных) — запрет алиаса выражен словами «no alias after "|"». Пример нейтрален:
-    // в промпте нет данных конкретного владельца.
+    // A4 (волна A): мёртвое требование ссылок в промпте снято — модель их не ставит, ссылки
+    // ставит код (страховка StripUnresolvedLinks остаётся). Операция "link" в схеме и точное
+    // именование страницы по каталогу — на месте (иначе сбросился бы кэш префикса).
     [Fact]
-    public void Synth_СсылкаВКлиме_ТолькоГолаяПоКаталогу_БезХвостаПрефиксаИАлиаса()
+    public void Synth_ТребованияСсылокВКлимеВПромптеНет_ОперацияLinkИТочноеИменованиеОсталось()
     {
         var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
 
-        Assert.Contains("If the claim names the subject of a catalog page", prompt);
-        Assert.Contains("no \"— type\" tail, no section prefix,", prompt);
-        Assert.Contains("no alias after \"|\".", prompt);
-        Assert.Contains("[[Конвейер сборки]]", prompt);
-        Assert.DoesNotContain("you may link another page", prompt);
+        Assert.DoesNotContain("If the claim names the subject of a catalog page", prompt);
+        Assert.DoesNotContain("[[Конвейер сборки]]", prompt);
+        Assert.DoesNotContain("A link the code cannot resolve is stripped", prompt);
+        Assert.Contains("\"link\" — connect two pages", prompt);
+        Assert.Contains("Name an existing page exactly as the catalog names it", prompt);
     }
 
     // Q1-S5 (c2): схема операции не меняется: набор полей равен базе, поля summary нет

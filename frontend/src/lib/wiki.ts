@@ -72,8 +72,19 @@ export interface WikiCatalogDto { key: string; name: string | null; orphan: bool
 // Неизвестный фронту kind бэк может прислать и раньше фронта (новый бэндл на старом фронте) —
 // экран такую группу пропускает (WikiPageView), тип не расширяем «на всякий случай».
 export type WikiRelatedKind = 'source' | 'chronicle' | 'mentions' | 'mentionedHere' | 'backlinks' | 'topic';
-export interface WikiRelatedItemDto { pageKey: string; title: string; type: string | null }
+// section — ключ раздела цели (очередь 2, B3): его считает бэк тем же WikiSections.Parse,
+// которым отбирает соседа в снимок (WikiRelated.cs:88, :333). Поля может не быть (старый бэк):
+// экран не выводит раздел из пути — своей копии этих правил на фронте нет (B4).
+export interface WikiRelatedItemDto { pageKey: string; title: string; type: string | null; section?: string }
 export interface WikiRelatedGroupDto { kind: WikiRelatedKind; items: WikiRelatedItemDto[] }
+
+// «Ссылки страницы» (очередь 2, B3/B4): каждая [[…]] текста страницы, разрешённая бэком.
+// text — внутренность скобок как написана, вместе с «|подписью» (WikiController.cs:353-356):
+// по ней экран сопоставляет запись с местом в тексте. path/section — цель резолва
+// (WikiGate.ResolveLink): путь страницы под pages/ и ключ её раздела; оба null — когда резолва
+// нет (ссылка «вбок», WikiGate.cs:371-372). Своего разбора пути или имени на фронте нет.
+// В списке бывают цели сносок и записи, которых нет в теле: экран их не рисует — это не ошибка.
+export interface WikiPageLinkDto { text: string; path: string | null; section: string | null }
 
 // drift — тот же сигнал, что у каталога: сверка файла с манифестом на бэке (доработка S5b)
 export interface WikiPageDto {
@@ -82,6 +93,7 @@ export interface WikiPageDto {
   drift?: boolean;
   manifestState?: WikiManifestState;
   related?: WikiRelatedGroupDto[];
+  links?: WikiPageLinkDto[];
 }
 
 export interface WikiInitResult { initialized: boolean }

@@ -13,18 +13,27 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
-// B3: GET /api/wiki/page отдаёт links[] — каждую [[…]] текста страницы с путём цели (резолв —
-// только WikiGate.ResolveLink, фронт не заводит третью копию правил) и поле section у пунктов
-// «Связанных». Контракт проверяется по web-JSON ответа (имена links/text/path/section), не по
-// типам: это контракт соседа-фронта. Фикстура: цель [[A]] и [[A|форма]] — сосед по разделу,
-// [[Вбок]] — страница бокового проекта: её резолв — Sideways, не право на ссылку (ADR-036,
-// решение 4), path=null; сноска [^s1] с целью [[Карточка ИИ]] — её цель ВХОДИТ в links[]:
-// сноска-ссылка — тоже ссылка, «Связанные» учитывают её так же (согласие с WikiRelated), а
-// порядок массива детерминирован: сначала ссылки тела, затем цели сносок (OutboundLinks,
-// WikiPage.cs:272-282). Мутация c2 («path по имени файла, без ResolveLink») нашла бы Вбок
-// по заголовку и дала бы путь — тест красный. Страница с боковой ссылкой пишется на диск
-// напрямую: такой записи гейт не позволяет, но уже написанную страницу GET отвечает как есть.
-// Контроллер строится напрямую (чтение, не транспорт) — фабрики хоста нет, метки Host нет.
+// B3+B3b: GET /api/wiki/page отдаёт links[] — каждую [[…]] текста страницы с парой {path,
+// section} разрешённой цели (резолв — только WikiGate.ResolveLink, фронт не заводит третью
+// копию правил; section — ключ раздела цели, «вверх по цепочке» — чужой раздел) и поле
+// section у пунктов «Связанных». Контракт проверяется по web-JSON ответа (имена
+// links/text/path/section), не по типам: это контракт соседа-фронта. Фикстура: цель [[A]] и
+// [[A|форма]] — сосед по разделу, [[Вбок]] — страница бокового проекта: её резолв — Sideways,
+// не право на ссылку (ADR-036, решение 4), path=null и section=null; [[Верх]] — страница
+// общего раздела: резолв идёт вверх по цепочке, section — «common», не раздел страницы
+// (мутация c2: подставить sectionKey вместо res.Section — краснеет ровно этот кейс); сноска
+// [^s1] с целью [[Карточка ИИ]] — её цель ВХОДИТ в links[]: сноска-ссылка — тоже ссылка,
+// «Связанные» учитывают её так же (согласие с WikiRelated), а порядок массива детерминирован:
+// сначала ссылки тела, затем цели сносок (OutboundLinks, WikiPage.cs:272-282). Мутация
+// «path по имени файла, без ResolveLink» нашла бы Вбок по заголовку и дала бы путь — тест
+// красный. Префиксные ссылки изолируют section: [[Проекты/чужого/Вбок]] — Sideways с
+// непустым Section (WikiGate.cs:413-414), [[Общее/НетТакой]] — PrefixedUnknown с Section
+// (WikiGate.cs:419): обе вне Resolved, обе отдают null/null — мутация «отдавать res.Section
+// для не-Resolved» краснеет именно на них (голая [[Вбок]] вне снимка — NotFound с null,
+// по ней мутация не проверяется); [[Общее/Верх]] — та же цель, что [[Верх]], но по ветке
+// явного префикса (WikiGate.cs:416-418). Страница с боковой ссылкой пишется на диск напрямую:
+// такой записи гейт не позволяет, но уже написанную страницу GET отвечает как есть. Контроллер
+// строится напрямую (чтение, не транспорт) — фабрики хоста нет, метки Host нет.
 public class WikiControllerPageLinksTests : IDisposable
 {
     private const string User = "u1";
@@ -39,7 +48,10 @@ public class WikiControllerPageLinksTests : IDisposable
     private readonly string _key;
     private readonly string _pageKey;
     private readonly string _sideKey;
+    private readonly string _sideLink;
     private readonly string _sideSectionKey;
+    private readonly string _upKey;
+    private readonly string _upLink;
 
     public WikiControllerPageLinksTests()
     {
@@ -68,6 +80,9 @@ public class WikiControllerPageLinksTests : IDisposable
         var side = _projects.Create("Соседний", sideRoot, User, User);
         _sideSectionKey = "projects/" + side.Id;
         _sideKey = $"Проекты/{side.Id}/Вбок.md";
+        _sideLink = $"Проекты/{side.Id}/Вбок"; // текст префиксной боковой ссылки (тот же путь без .md)
+        _upLink = "Общее/Верх"; // страница общего раздела: цель «верх» ссылки — голой и с префиксом
+        _upKey = _upLink + ".md";
 
         SeedAsync().GetAwaiter().GetResult();
     }
@@ -77,38 +92,84 @@ public class WikiControllerPageLinksTests : IDisposable
         if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
     }
 
-    // ─── c1: links — порядок «тело, затем сноски», текст с «|», путь только у разрешённых ──
+    // ─── c1: links — порядок «тело, затем сноски», текст с «|», пара {path, section} только
+    //     у разрешённых; section — ключ раздела цели, «вверх» — чужой раздел ─────────────
 
     [Fact]
     public async Task Page_Links_ResolvedAndNot()
     {
         var links = Json(PageResult()).GetProperty("links");
-        // Три [[…]] тела + цель сноски = четыре записи; порядок детерминирован: сначала тело,
-        // затем сноски (OutboundLinks, WikiPage.cs:272-282).
-        links.GetArrayLength().Should().Be(4, "три [[…]] тела и цель сноски — четыре записи, порядка текста это касается");
+        // Семь [[…]] тела (голые и префиксные) + цель сноски = восемь записей; порядок
+        // детерминирован: сначала тело, затем сноски (OutboundLinks, WikiPage.cs:272-282).
+        links.GetArrayLength().Should().Be(8, "семь [[…]] тела и цель сноски — восемь записей, порядка текста это касается");
 
         links[0].GetProperty("text").GetString().Should().Be("A");
         links[0].GetProperty("path").GetString().Should().Be(_pageKey.Replace("Знание.md", "A.md"));
+        links[0].GetProperty("section").GetString().Should().Be(_key,
+            "section — ключ раздела цели: здесь он совпадает с разделом страницы");
 
         // Текст — внутренность скобок как написана, вместе с «|подписью»: фронт сопоставляет
         // по ней; своей обрезки «|» здесь нет (цель для резолва режет WikiPage.LinkTarget).
         links[1].GetProperty("text").GetString().Should().Be("A|форма");
         links[1].GetProperty("path").GetString().Should().Be(_pageKey.Replace("Знание.md", "A.md"),
             "подпись не меняет цель: та же страница");
+        links[1].GetProperty("section").GetString().Should().Be(_key);
 
-        // [[Вбок]] — страница бокового проекта: вне раздела и цепочки вверх, резолв — Sideways,
-        // не право на ссылку. Мутация «path по имени файла, без ResolveLink» нашла бы её и
-        // дала бы путь — эта строка краснеет.
+        // [[Вбок]] — страница бокового проекта: вне видимого снимка (свой раздел + цепочка
+        // вверх, WikiController.cs:299) — резолв голой ссылки до неё не доходит, это NotFound
+        // с Section=null (WikiGate.cs:431-435). Мутация «path по имени файла, без ResolveLink»
+        // нашла бы её и дала бы путь — эта строка краснеет. Неразрешимая — без пары:
+        // section=null тогда же, когда path=null.
         links[2].GetProperty("text").GetString().Should().Be("Вбок");
         links[2].GetProperty("path").ValueKind.Should().Be(JsonValueKind.Null);
+        links[2].GetProperty("section").ValueKind.Should().Be(JsonValueKind.Null,
+            "неразрешимая ссылка — без пары: section=null тогда же, когда path=null");
+
+        // [[Верх]] — страница общего раздела: резолв идёт вверх по цепочке (projects/{id} →
+        // common, WikiSections.UpChain), section — «common», а НЕ раздел страницы. Мутация
+        // «подставить sectionKey вместо res.Section» краснеет ровно на этой строке.
+        links[3].GetProperty("text").GetString().Should().Be("Верх");
+        links[3].GetProperty("path").GetString().Should().Be(_upKey);
+        links[3].GetProperty("section").GetString().Should().Be(WikiSections.Common,
+            "ссылка вверх по цепочке: section — ключ верхнего раздела, не раздела страницы");
+
+        // [[Проекты/чужого/Вбок]] — та же боковая страница, но с явным префиксом раздела:
+        // префикс разбирается (WikiSections.Parse) и вне allowed — Sideways с непустым
+        // Section (WikiGate.cs:413-414). Вне Resolved — пара не отдаётся: null/null, хотя
+        // у резолва Section есть. Мутация «отдавать res.Section для не-Resolved» краснеет
+        // ровно здесь (по links[2] она не проверяется: у NotFound Section=null).
+        links[4].GetProperty("text").GetString().Should().Be(_sideLink);
+        links[4].GetProperty("path").ValueKind.Should().Be(JsonValueKind.Null);
+        links[4].GetProperty("section").ValueKind.Should().Be(JsonValueKind.Null,
+            "Sideways — вне Resolved: section=null тогда же, когда path=null, хотя Section у резолва непустой");
+
+        // [[Общее/НетТакой]] — префикс допустимого раздела (common в цепочке вверх), страницы
+        // в нём нет: PrefixedUnknown с непустым Section («common», WikiGate.cs:419). Та же
+        // изоляция: null/null; та же мутация «отдавать res.Section» вернула бы Section и здесь.
+        links[5].GetProperty("text").GetString().Should().Be("Общее/НетТакой");
+        links[5].GetProperty("path").ValueKind.Should().Be(JsonValueKind.Null);
+        links[5].GetProperty("section").ValueKind.Should().Be(JsonValueKind.Null,
+            "PrefixedUnknown — вне Resolved: section=null тогда же, когда path=null");
+
+        // [[Общее/Верх]] — та же цель, что links[3], но по ветке явного префикса
+        // (WikiGate.cs:416-418): section — из WikiSections.Parse текста ссылки («common»),
+        // путь — найденной страницы. Мутация «искать заголовок префиксной ссылки только в
+        // разделе страницы» (WikiGate.cs:416: [section] → [sectionKey]) не нашла бы её —
+        // PrefixedUnknown, path=null: краснеет эта строка.
+        links[6].GetProperty("text").GetString().Should().Be(_upLink);
+        links[6].GetProperty("path").GetString().Should().Be(_upKey);
+        links[6].GetProperty("section").GetString().Should().Be(WikiSections.Common,
+            "явный префикс к разрешённой цели: section — раздел из Parse текста ссылки");
 
         // Цель сноски [^s1] — тоже ссылка: идёт после ссылок тела и резолвится общими
         // правилами — путь карточки. «Связанные» учитывают её так же (согласие с WikiRelated).
         // Мутация «отбросить цели сносок в links[]» — тест краснеет на длине, а без пути
         // цели — на этой строке.
-        links[3].GetProperty("text").GetString().Should().Be(AiCard);
-        links[3].GetProperty("path").GetString().Should().Be(_pageKey.Replace("Знание.md", $"Источники/{AiCard}.md"),
+        links[7].GetProperty("text").GetString().Should().Be(AiCard);
+        links[7].GetProperty("path").GetString().Should().Be(_pageKey.Replace("Знание.md", $"Источники/{AiCard}.md"),
             "цель сноски резолвится общими правилами: путь карточки");
+        links[7].GetProperty("section").GetString().Should().Be(_key,
+            "section — ключ раздела цели: карточка в разделе страницы");
     }
 
     // ─── c2: section у каждого пункта related — ключ раздела его pageKey ──────────
@@ -150,9 +211,15 @@ public class WikiControllerPageLinksTests : IDisposable
         var side = "---\ntype: topic\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Вбок\n\n## Сводка\nБоковая страница.\n\n## Хронология\n\n## Противоречия\n\n## История\n";
         (await _keeper.WritePageAsync(User, _sideSectionKey, _sideKey, side)).Status.Should().Be(WikiOpStatus.Applied);
 
+        // Страница общего раздела — цель «верх» ссылки: цепочка projects/{id} → common
+        // (WikiSections.UpChain), её резолв — Resolved с Section="common".
+        var up = "---\ntype: topic\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Верх\n\n## Сводка\nСтраница общего раздела.\n\n## Хронология\n\n## Противоречия\n\n## История\n";
+        (await _keeper.WritePageAsync(User, "common", _upKey, up)).Status.Should().Be(WikiOpStatus.Applied);
+
         // Сама страница — на диск напрямую: [[Вбок]] — боковая ссылка, такой записи гейт
         // отказывает, но уже написанную страницу GET отвечает как есть (200, links с null).
-        var page = "---\ntype: topic\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Знание\n\n## Сводка\nСервер работает на порту пять тысяч. [^s1]\nСм. [[A]]. См. ещё [[A|форма]]. И боковое [[Вбок]].\n\n## Хронология\n\n## Противоречия\n\n## История\n\n[^s1]: [[Карточка ИИ]] — «Сервер слушает порт пять тысяч в конфиге»\n";
+        // Префиксные цели — те же страницы, что уже на диске, плюс одна несуществующая.
+        var page = $"---\ntype: topic\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Знание\n\n## Сводка\nСервер работает на порту пять тысяч. [^s1]\nСм. [[A]]. См. ещё [[A|форма]]. И боковое [[Вбок]]. И вверх [[Верх]].\nПрефикс вбок: [[{_sideLink}]]. Префикс без цели: [[Общее/НетТакой]]. Префикс вверх: [[{_upLink}]].\n\n## Хронология\n\n## Противоречия\n\n## История\n\n[^s1]: [[Карточка ИИ]] — «Сервер слушает порт пять тысяч в конфиге»\n";
         File.WriteAllText(Path.Combine(_pages, _pageKey.Replace('/', Path.DirectorySeparatorChar)), page);
     }
 

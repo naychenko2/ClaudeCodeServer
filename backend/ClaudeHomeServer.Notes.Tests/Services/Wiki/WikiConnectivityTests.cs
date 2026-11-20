@@ -71,6 +71,87 @@ public class WikiConnectivityTests
                 "пути вне снимка не измеряются: метрика не догадывается о тексте, которого не видит");
     }
 
+    // ─── K1 / K2 (A6) ───────────────────────────────────────────────────────────────
+
+    private const string TopicA = "Проекты/p1/Квантовая-телепортация-фотонов.md";
+    private const string TopicB = "Проекты/p1/Телепортация-фотонов-квантовая.md";
+    private const string TopicTitleA = "Квантовая телепортация фотонов";
+    private const string TopicTitleB = "Телепортация фотонов квантовая запутанных";
+
+    // Фон из 58 страниц без общих редких основ: N большой, df общих основ у двух страниц — 2,
+    // вес основы ln(30) ≈ 3,4, три основы из обоих заголовков (×2) — сумма заведомо выше MinScore.
+    private static Fixture WithBackground(Fixture f)
+    {
+        for (var i = 0; i < 58; i++)
+            f.Page($"Проекты/p1/Фон-{i}.md", $"Пустая страница номер {i}");
+        return f;
+    }
+
+    [Fact]
+    public void K1_ТолькоТемаВместоСсылок_ЗасчитываетсяA_НоK0НеРастёт()
+    {
+        var f = WithBackground(new Fixture()
+            .Page(TopicA, TopicTitleA)
+            .Page(TopicB, TopicTitleB));
+
+        var r = WikiConnectivity.Measure(f.Snapshot, [TopicA, TopicB]);
+
+        r.K1.Should().Be(1.0, "общие редкие основы дают ребро «По теме» с обеих сторон");
+        r.K0.Should().Be(0, "прежняя степень topic не считает: ни упоминаний, ни ссылок");
+        r.K2.Should().Be(0);
+    }
+
+    [Fact]
+    public void K1_ПараДелитКарточкуИсточника_РёбраНеДаёт()
+    {
+        // Инвариант «метрика не засчитывает связь, которую сама и создала»: общая карточка —
+        // происхождение, а не связь темы с темой. Мутация: убрать Overlaps в Measure — красный.
+        var card = "Проекты/p1/Источники/Источник-работ.md";
+        var f = WithBackground(new Fixture()
+            .Page(card, "Источник работ", type: WikiFrontmatter.TypeSource, origin: "session", @ref: "session:chat-1#m1-5")
+            .Page(TopicA, TopicTitleA, footnotes: ["Источник работ"])
+            .Page(TopicB, TopicTitleB, footnotes: ["Источник работ"]));
+
+        var r = WikiConnectivity.Measure(f.Snapshot, [TopicA, TopicB]);
+
+        r.K1.Should().Be(0, "обе страницы из одной карточки источника: ребро не засчитано");
+    }
+
+    [Fact]
+    public void Measure_ИндексПоТемеОдинРазНаЗамер_SignificantWordsНеБолее2N()
+    {
+        // Сторож цены. Мутация: передать в Build null вместо topicIndex — индекс строится на каждую
+        // страницу, вызовов порядка N², тест красный.
+        var f = WithBackground(new Fixture().Page(TopicA, TopicTitleA).Page(TopicB, TopicTitleB));
+        f.Page("Проекты/p1/Ссылка.md", "Ссылающаяся страница", text: "См. [[Квантовая телепортация фотонов]].");
+        var n = f.Snapshot.Count;
+        n.Should().BeGreaterThanOrEqualTo(50);
+        var counter = new WikiRelated.NormCounter();
+
+        WikiConnectivity.Measure(f.Snapshot, [.. f.Snapshot.Select(d => d.Path)], counter);
+
+        counter.WordsCalls.Should().BeLessThanOrEqualTo(2 * n,
+            "индекс — N вызовов, заголовочные основы лениво — не более N; на каждую страницу индекс не строится");
+    }
+
+    [Fact]
+    public void K2_СсылкаНаСтраницуЗнанийДаёт_СсылкаНаКарточкуНет()
+    {
+        var card = "Проекты/p1/Источники/Источник-работ.md";
+        var target = "Проекты/p1/Порядок-работ.md";
+        var toKnowledge = "Проекты/p1/Ссылка-на-знание.md";
+        var toCard = "Проекты/p1/Ссылка-на-карточку.md";
+        var f = new Fixture()
+            .Page(card, "Источник работ", type: WikiFrontmatter.TypeSource)
+            .Page(target, "Порядок работ")
+            .Page(toKnowledge, "Ссылка на знание", text: "См. [[Порядок работ]].")
+            .Page(toCard, "Ссылка на карточку", text: "См. [[Источник работ]].");
+
+        var r = WikiConnectivity.Measure(f.Snapshot, [toKnowledge, toCard, target]);
+
+        r.K2.Should().BeApproximately(1.0 / 3, 1e-9, "[[…]] на знание — только у одной из трёх страниц");
+    }
+
     // ─── фикстура (та же форма страницы, что в WikiRelatedTests) ────────────────────
 
     private sealed class Fixture

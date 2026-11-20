@@ -143,11 +143,14 @@ public sealed class WikiChatIngestService
     /// позднего окна не стирает то, что было отброшено раньше (минор ревью C2R-Sh1).
     /// CatalogChars (Q1-S2, риск 1 разреза) — символы каталогов промпта всех разобранных
     /// окон: каталог — часть входа модели; вызывающий (ночь) прибавляет его /4 к оценке
-    /// расхода. 0 — до окон дело не дошло или разделы были пустые.</summary>
+    /// расхода. 0 — до окон дело не дошло или разделы были пустые.
+    /// StrippedLinks (A6, хвост 26) — сумма IngestResult.StrippedLinks по окнам: сколько ссылок
+    /// валидатор снял у модели; ночь складывает их в итог.</summary>
     public readonly record struct ChatResult(
         string Outcome, string? Reason, IReadOnlyList<string> PackageIds, string? Code = null,
         int OverrodeHuman = 0, IReadOnlyList<string>? DisputedPages = null, bool Partial = false,
-        long InputTokens = 0, int Dropped = 0, string? FirstDropReason = null, int CatalogChars = 0);
+        long InputTokens = 0, int Dropped = 0, string? FirstDropReason = null, int CatalogChars = 0,
+        int StrippedLinks = 0);
 
     /// <summary>Последний исход разбора чата с временем окончания (S7b0a, чтение
     /// analyze-status и списка).</summary>
@@ -537,20 +540,29 @@ public sealed class WikiChatIngestService
     private async Task<ChatResult> RunProtectedAsync(string ownerId, string sessionId, string home, Session session,
         string? actionKey, string? engine)
     {
+        // Снятые ссылки (A6): сумма по окнам копится в тале и ставится в исход одним местом —
+        // все выходы разбора (в том числе отказы) несут её без правки каждого return.
+        var tally = new StripTally();
         try
         {
-            return await RunAsync(ownerId, sessionId, home, session, actionKey, engine);
+            var r = await RunAsync(ownerId, sessionId, home, session, actionKey, engine, tally);
+            return r with { StrippedLinks = tally.Stripped };
         }
         catch (Exception e)
         {
             // Любой неожиданный сбой — исход с причиной: ни исключения вызывающему,
             // ни «половины разбора» на диске без объяснения.
-            return Refused(null, $"внутренний сбой разбора чата: {e.Message}");
+            return Refused(null, $"внутренний сбой разбора чата: {e.Message}") with { StrippedLinks = tally.Stripped };
         }
     }
 
+    private sealed class StripTally
+    {
+        public int Stripped;
+    }
+
     private async Task<ChatResult> RunAsync(string ownerId, string sessionId, string home, Session session,
-        string? actionKey, string? engine)
+        string? actionKey, string? engine, StripTally tally)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
         if (!WikiPaths.IsInitialized(_dataDir, ownerId))
@@ -649,6 +661,7 @@ public sealed class WikiChatIngestService
             inputTokens += ing.InputTokens;
             catalogChars += ing.CatalogChars;
             dropped += ing.Dropped;
+            tally.Stripped += ing.StrippedLinks;
             if (ing.DropReasons is { Count: > 0 } dr) firstDropReason ??= dr[0];
             switch (ing.Outcome)
             {

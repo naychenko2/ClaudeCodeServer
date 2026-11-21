@@ -237,7 +237,10 @@ function isLlamaServer(data: LocalModelStats): boolean {
 // (макет .html:194–205). Заголовки и все поля — прежние; убрана только внешняя обёртка.
 const NO_DATA = 'нет данных';
 const METRIC_HEAD: CSSProperties = {
-  margin: 0, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary,
+  // Границу группы несёт отступ, а не рамка (вердикт R-Ф-5): тело DisclosureSection
+  // не даёт верхнего паддинга, а снятая обёртка-грид нёс gap/paddingTop — верхний
+  // отступ заголовка возвращает его (макет .detail-body h4 { margin: 12px 0 6px }).
+  margin: `${SP.md}px 0 ${SP.xs}px`, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary,
 };
 const METRIC_ROW: CSSProperties = {
   display: 'flex', justifyContent: 'space-between', gap: SP.md, padding: `${SP.xs}px 0`,

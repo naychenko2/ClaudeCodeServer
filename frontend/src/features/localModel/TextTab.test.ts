@@ -15,6 +15,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { parseHTML } from 'linkedom';
+import { SP } from '../../lib/design';
 
 const { window: win, document: doc } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
 vi.stubGlobal('window', win);
@@ -93,6 +94,16 @@ function sectionHtml(html: string, anchor: string): string | null {
   if (from < 0) return null;
   const to = html.indexOf('</section>', from);
   return html.slice(from, to < 0 ? html.length : to);
+}
+
+// Верхний отступ из inline-стиля элемента: явный margin-top или первое значение
+// шортхенда margin; свойства нет — отступ 0 (для guard'а границы группы, Ф-5р).
+function topMarginPx(style: string): number {
+  const one = style.match(/(?:^|;)margin-top:\s*([^;]+)/);
+  if (one) return parseFloat(one[1]) || 0;
+  const all = style.match(/(?:^|;)margin:\s*([^;]+)/);
+  if (!all) return 0;
+  return parseFloat(all[1].trim().split(/\s+/)[0]) || 0;
 }
 
 // История с кэш-содержанием и вытеснениями: на ней видно и разницу main/gemma —
@@ -735,6 +746,19 @@ describe('карточка «Скорость ответа» (llm-F2)', () => {
     expect(html).toContain('>Скорость ответа</h3>');
     expect(html).toContain('Нет данных, пока модель выгружена.');
     expect(html).not.toContain('42 ток/с');
+  });
+
+  // Ф-5р (вердикт R-Ф-5): границу группы несёт отступ, а не рамка. Тело
+  // DisclosureSection не даёт верхнего паддинга (0 SP.md SP.md), а снятая обёртка-грид
+  // нёс gap/paddingTop — верхний отступ заголовка группы возвращает его (макет
+  // .detail-body h4 { margin: 12px 0 6px }). Мутация «вернуть margin: 0» краснит.
+  it('граница группы: заголовки «Скорость» и «Скорость ответа» отделены сверху ≥ SP.md', () => {
+    const html = renderTab({ data: withAnswer() });
+    for (const title of ['Скорость', 'Скорость ответа']) {
+      const head = html.match(new RegExp(`<h3[^>]*style="([^"]*)"[^>]*>${title}<\\/h3>`));
+      expect(head, `заголовок «${title}» с inline-стилем не найден`).toBeTruthy();
+      expect(topMarginPx(head![1])).toBeGreaterThanOrEqual(SP.md);
+    }
   });
 });
 

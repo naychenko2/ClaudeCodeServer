@@ -6413,8 +6413,14 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // waitIfBusy=false: занятый файл не ждём (прежний бэкоф до 8 с стоял на горячем пути
             // старта хода); при провале ход идёт дальше и полагается на --resume.
+            // normalizeMcpBlocks=true: метод срабатывает ТОЛЬКО при расхождении корней — класс
+            // «ключ пула + модель стороннего провайдера» (у штатного хода корни равны либо
+            // приёмник уже содержит транскрипт и мы вернулись выше). Источник — профиль
+            // подписки, приёмник — профиль стороннего провайдера: разные типы поставщика,
+            // инцидент 21.11 (GLM → Kimi, 400 на mcp_tool_use) применим напрямую.
             var sw = Stopwatch.StartNew();
-            var copied = TranscriptMigrator.TryMigrate(ownRoot, dst, _rootPath, csid, out var error, waitIfBusy: false);
+            var copied = TranscriptMigrator.TryMigrate(ownRoot, dst, _rootPath, csid, out var error,
+                waitIfBusy: false, normalizeMcpBlocks: true);
             var ms = (long)sw.Elapsed.TotalMilliseconds;
             if (!copied)
                 Console.Error.WriteLine(

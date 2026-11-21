@@ -397,8 +397,14 @@ public sealed class ProviderMigration
                 Console.Error.WriteLine(
                     $"[SessionManager] Чат {sessionId}: транскрипт {entry.Info.ClaudeSessionId} "
                     + $"уже в {dstRoot} — копировать нечего, меняем провайдера");
+            // Разные типы поставщика (GLM ↔ Kimi, сторонний ↔ подписка) — нормализуем
+            // провайдеро-специфичную историю в целевой копии (инцидент 21.11): mcp_tool_use/
+            // mcp_tool_result от GLM webReader у Kimi дают 400 на каждом --resume. Ротация
+            // подписок одного пула (sub-a → sub-b) и копии внутри одного провайдера остаются
+            // побайтовыми. Детский путь (RepinChildSubjectAsync) идёт через этот же код.
             else if (!TranscriptMigrator.TryMigrate(srcRoot, dstRoot,
-                         cwd, entry.Info.ClaudeSessionId, out var error))
+                         cwd, entry.Info.ClaudeSessionId, out var error,
+                         normalizeMcpBlocks: !_llmProviders.SameProviderKind(currentKey, targetKey)))
                 throw new InvalidOperationException($"Не удалось перенести транскрипт: {error}");
             else
                 transcriptMoved = true;

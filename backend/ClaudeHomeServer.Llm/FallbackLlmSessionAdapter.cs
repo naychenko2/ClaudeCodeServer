@@ -689,7 +689,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     // (ход должен идти; эндпоинт мог уже подняться, а кулдаун — лишь наблюдение).
                     // TryMigrateTranscript=true при отсутствии ClaudeSessionId — переносить нечего,
                     // подмена разрешена (как и везде в адаптере).
-                    if (!TryMigrateTranscript(stepRoot))
+                    if (!TryMigrateTranscript(stepRoot, currentKey, stepKey))
                     {
                         LogWarn($"Стартовая подмена (кулдаун) {Info.Id}: транскрипт не перенесён в профиль «{stepKey}» — остаёмся на исходной паре «{origProvider}» (ход продолжится, кулдаун — наблюдение, а не запрет)");
                     }
@@ -763,7 +763,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // исходной паре» — рабочий вариант (эндпоинт мог подняться), а тут исходная пара
                 // заведомо не может, и запускать её значило бы сжечь попытку ради того же отказа.
                 var winRoot = winIdx >= 0 ? ResolveRootFor(winKey!) : null;
-                if (winIdx < 0 || !TryMigrateTranscript(winRoot))
+                if (winIdx < 0 || !TryMigrateTranscript(winRoot, currentKey, winKey))
                 {
                     LogWarn($"Окно 1M недоступно (session {Info.Id}): нет живой подписки с доступом к «{currentModel}»"
                         + (winIdx < 0
@@ -1324,6 +1324,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         // перезаписываем приёмник, НЕ preserve (иначе «приёмник длиннее» оставит
                         // висящий turn без ответа → реюрект дубля на следующем ходе, доп. №5).
                         TryCopyTranscriptBack(ResolveRootFor(origProvider),
+                            appliedProvider, origProvider,
                             preserveLongerDestination: lastEnd is not { Kind: AttemptEndKind.Result });
                     Info.Provider = origProvider;
                     providerRestored = true;
@@ -1549,7 +1550,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             {
                 if (attempted.Contains((model, candidate))) continue;
                 var dstRoot = ResolveRootFor(candidate);
-                if (!TryMigrateTranscript(dstRoot)) continue;
+                if (!TryMigrateTranscript(dstRoot, currentKey, candidate)) continue;
                 // Смена подписки того же пула Claude — тихо: маркер в ленте только при
                 // переходе на ДРУГОЙ тип поставщика. Причина сохраняется в LogDetail для
                 // разбора (какая подписка на какую сменилась), наружу не идёт.
@@ -1611,7 +1612,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     continue;
                 }
                 var dstRoot = ResolveRootFor(stepKey);
-                if (!TryMigrateTranscript(dstRoot)) continue;
+                if (!TryMigrateTranscript(dstRoot, currentKey, stepKey)) continue;
                 // Живой — берём сразу
                 chainIndex = scan;
                 return ChainStepTarget(scan, stepKey, stepModel, dstRoot);
@@ -1622,7 +1623,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 var cm = chain[cooledIdx];
                 var ck = cooledKey!;
                 var dstRoot = ResolveRootFor(ck);
-                if (TryMigrateTranscript(dstRoot))
+                if (TryMigrateTranscript(dstRoot, currentKey, ck))
                 {
                     chainIndex = cooledIdx;
                     return ChainStepTarget(cooledIdx, ck, cm, dstRoot);
@@ -1772,9 +1773,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     // Перенос транскрипта в профиль целевой пары (тот же механизм, что у ручной миграции
     // MigrateProviderAsync и автофейловера TryPoolFailover). Ход ещё не начинался —
-    // переносить нечего. Ошибка копирования — кандидат пропускается (fail-closed)
-    private bool TryMigrateTranscript(string? dstRoot)
+    // переносить нечего. Ошибка копирования — кандидат пропускается (fail-closed).
+    // currentKey/dstKey — ключи пары источник/приёмник для решения о нормализации: разные
+    // типы поставщика (GLM ↔ Kimi, сторонний ↔ подписка) — история другого формата,
+    // инцидент 21.11, нормализация в целевой копии обязательна (mcp_tool_use/mcp_tool_result).
+    private bool TryMigrateTranscript(string? dstRoot, string? currentKey, string? dstKey)
     {
+        var normalize = _providers is null || !_providers.SameProviderKind(currentKey, dstKey);
         if (Info.ClaudeSessionId is null) return true;
         if (!_transcriptOnServer) return true;
         if (_profileRoot is null || dstRoot is null) return false;
@@ -1799,7 +1804,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             LogInfo($"Транскрипт {Info.ClaudeSessionId} не найден в {_profileRoot} — CLI умер до первой записи, переносить нечего");
             return true;
         }
-        if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error))
+        if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error,
+                normalizeMcpBlocks: normalize))
         {
             LogWarn($"Транскрипт {Info.Id} не перенесён {dstRoot}: {error}");
             return false;
@@ -1817,9 +1823,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // (_profileRoot); restore вернёт Info.Provider в исходный — следующий ход на --resume из
     // исходного профиля не нашёл бы ответ модели. Копируем туда, где его ждёт resume. Провал
     // не роняет ход, но пишем Warning с обоими путями (иначе потеря памяти диалога останется
-    // незамеченной). cwd — тот же, что у прямого переноса (TryMigrateTranscript).
-    private bool TryCopyTranscriptBack(string? dstRoot, bool preserveLongerDestination = true)
+    // незамеченной). cwd — тот же, что у прямого переноса (TryMigrateTranscript). srcKey/dstKey —
+    // ключи пары для решения о нормализации (инцидент 21.11): restore после подмены на другого
+    // поставщика — тот же разрез, что у прямого переноса.
+    private bool TryCopyTranscriptBack(string? dstRoot, string? srcKey, string? dstKey,
+        bool preserveLongerDestination = true)
     {
+        var normalize = _providers is null || !_providers.SameProviderKind(srcKey, dstKey);
         if (Info.ClaudeSessionId is null) return true;
         if (!_transcriptOnServer) return true;
         if (_profileRoot is null || dstRoot is null) return false;
@@ -1841,7 +1851,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // расхождению копий: на следующем ходе --resume из приёмника реплеит висящий turn = дубль
         // реакции (инцидент 2026-08-10, доп. №5). Поэтому успешный ход → перезапись (preserve=false).
         if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error,
-                preserveLongerDestination: preserveLongerDestination))
+                preserveLongerDestination: preserveLongerDestination, normalizeMcpBlocks: normalize))
         {
             LogWarn($"Обратный перенос транскрипта {Info.Id} не удался: src={_profileRoot}, dst={dstRoot}: {error}");
             return false;

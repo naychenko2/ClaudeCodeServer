@@ -1965,4 +1965,27 @@ public class LlmProviderRegistryTests
         reg.StatsTrackOf(withStats).Should().Be("main");
         reg.StatsTrackOf(withStats == "local-z" ? "local-a" : "local-z").Should().BeNull();
     }
+
+    // --- SameProviderKind: решение о нормализации транскрипта при переносе (инцидент 21.11) ---
+
+    [Theory]
+    [InlineData("glm", "kimi", false)]      // два разных сторонних — нормализация нужна
+    [InlineData("glm", "glm", true)]        // тот же провайдер — копия побайтовая
+    [InlineData("sub-a", "sub-b", true)]    // две подписки пула Claude — ротация, не нормализуем
+    [InlineData("glm", "sub-a", false)]     // сторонний ↔ подписка — нормализация нужна
+    [InlineData("GLM", "glm", true)]        // регистр ключа не важен
+    [InlineData(null, "sub-a", true)]       // локальный вход (PrimaryKey) и подписка — оба нативный Claude
+    public void SameProviderKind_РазличаетТипыПоставщика(string? a, string? b, bool same)
+    {
+        // glm — реестровый сторонний; kimi — второй реестровый; sub-a/sub-b — подписки
+        // (реестром не знает — GetByKey null с обеих сторон)
+        var reg = Create(new Dictionary<string, string?>
+        {
+            ["LlmProviders:kimi:AnthropicBaseUrl"] = "https://kimi.test/anthropic",
+            ["LlmProviders:kimi:ApiKey"] = "sk-k",
+            ["LlmProviders:kimi:Models:0:Id"] = "k3.1-pro",
+        });
+
+        reg.SameProviderKind(a, b).Should().Be(same);
+    }
 }

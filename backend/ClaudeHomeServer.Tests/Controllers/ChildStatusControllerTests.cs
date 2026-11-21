@@ -146,6 +146,7 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
                 : new Dictionary<string, object>(),
             dailyBudgetUsd = 2,
             monthlyBudgetUsd = 40,
+            acknowledgeRouteRisk = true, // без согласия профиля маршрут ребёнка не принимается (И2″)
         };
         var put = await _admin.PutAsJsonAsync($"/api/users/{id}/child-profile", body);
         put.StatusCode.Should().Be(HttpStatusCode.OK);

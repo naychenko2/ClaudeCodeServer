@@ -404,7 +404,7 @@ public sealed record LlmSessionContext(
     // MCP-сервер сторожей чатов (watch_*): null — чат без владельца. Наличие контекста —
     // свойство владельца (инвариант стабильности состава ADR-012).
     WatchMcpContext? WatchMcp = null,
-    // MCP-сервер репетитора (search_materials/list_materials/read_material): только у ребёнка
+    // MCP-сервер репетитора (search_materials): только у ребёнка
     // (свойство владельца — инвариант стабильности состава ADR-012); у взрослого всегда null.
     TutorMcpContext? TutorMcp = null,
     // MCP-сервер веб-поиска (web_search/web_read): null — чат без владельца или пустой

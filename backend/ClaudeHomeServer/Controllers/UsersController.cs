@@ -17,20 +17,23 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Route("api/users")]
 [Authorize(Roles = "admin")]
-// knowledge — необязательная зависимость от вертикали «Знаний» (К1b): детский профиль
-// живёт и без неё, а новый datasetId без сервиса или без Dify — отказ knowledge_unavailable,
-// не исключение и не обязательный параметр конструктора (тот же приём, что у
-// FilesController/OnboardingController с опциональными сервисами).
 public class UsersController(UserStore users, SessionManager sessions,
     UserKnowledgeCascade knowledgeCascade, DefaultAssistantProvisioner provisioner,
     ProjectMembershipService membership, IPersonalProjects personalProjects,
     ChildTutorProvisioner childTutorProvisioner, ClaudeSubscriptionPool subscriptionPool,
     LlmProviderRegistry llmProviders,
-    PersonaManager personas, ChildSubjectMaterialsStore childMaterials,
-    ILogger<UsersController> logger,
-    // `= null` — обязательность для DI (S2b-1, ADR-014): на выключенной вертикали «Знаний»
-    // активация контроллера не должна падать; без неё новый datasetId — отказ ниже.
-    KnowledgeService? knowledge = null) : ControllerBase
+    PersonaManager personas,
+    // projects + childSubjectProjects (Б8c): каскад проектов-предметов при удалении ребёнка —
+    // единая уборка ProjectDeletionService и per-ключевой замок провижнера (ветка Delete ниже).
+    ProjectManager projects, ChildSubjectProjectProvisioner childSubjectProjects,
+    ProjectDeletionService deletion,
+    // childCuratorSync (Б14a, решение 61): кураторы = опекуны профиля; обход Members
+    // проектов-предметов на каждой точке сохранения профиля.
+    ChildCuratorSync childCuratorSync,
+    // sharedProjects (Б4a, ADR-041 ред. 6 решение 60): готовность опекунов для окна — флаги
+    // читаются только через гейт (его правило: инлайновых GetValue этих ключей не заводим).
+    SharedProjectsGate sharedProjects,
+    ILogger<UsersController> logger) : ControllerBase
 {
     private static readonly Regex UsernameRegex = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
 
@@ -143,12 +146,46 @@ public class UsersController(UserStore users, SessionManager sessions,
             try { await knowledgeCascade.CleanupAsync(user.Id, user.Username); }
             catch (Exception ex) { logger.LogWarning(ex, "Каскад знаний при удалении пользователя {User}", id); }
 
-            // Каталог материалов предмета (разрез «Знания репетитора» §2, К2c): без этого
-            // звена data/child-subjects/{id} сиротеет навсегда — ребёнок — id из UserStore,
-            // повторного с таким id пользователя не будет. Сбой звена — только лог: ответ
-            // Delete не меняется (тот же best-effort, что у соседних звеньев).
-            try { await childMaterials.DeleteChildAsync(user.Id); }
-            catch (Exception ex) { logger.LogWarning(ex, "Каталог материалов ребёнка при удалении {User}", id); }
+            // Звено «Каталог материалов ребёнка» снято (Х-W4-19, хвост решения 68): стора в
+            // обороте нет, каталога child-subjects на проде и стендах тоже нет — сносить нечего.
+
+            // Проекты-предметы (Б8c, ADR-041 ред. 5, разрез §11.1): удаление ребёнка сносит все его
+            // проекты-предметы штатным ProjectManager.Delete — тем же путём стора, что и
+            // ProjectsController.Delete, а не своей рекурсией по папке (снимается запись и её
+            // служебные файлы: фон, значок). Знания проекта (Dify-датасет, запись БЗ) снимает
+            // соседнее звено «Каскада знаний» выше: оно идёт до этого звена и находит проекты
+            // по владельцу, пока запись ещё в сторе.
+            if (user.ChildMode is { } childProfile)
+            {
+                // Вызов провижнера по предмету снимка — это замок, а не провижн: per-ключевой
+                // замок ChildSubjectProjectProvisioner (childId:subjectId) — единственный замок
+                // создания проекта-предмета, и без входа в него остаётся окно: провижнер прочитал
+                // ребёнка до users.Delete, а записал проект после нашего перечисления — сирота.
+                // Под тем же замком порядок бинарный: либо провижн завершился до перечисления
+                // (проект в него попадает), либо провижнер перечитал живой профиль после удаления
+                // (ребёнка нет → проекта нет). Ребёнка в сторе здесь уже нет, поэтому провижн
+                // ничего не создаёт: EnsureSubjectProjectAsync вернёт существующий проект или null.
+                foreach (var subject in childProfile.Subjects)
+                {
+                    try
+                    {
+                        var project = await childSubjectProjects.EnsureSubjectProjectAsync(user.Id, subject);
+                        if (project is not null) await deletion.DeleteAsync(project);
+                    }
+                    catch (Exception ex) { logger.LogWarning(ex, "Проект-предмет предмета {Subject} при удалении ребёнка {User}", subject.Id, id); }
+                }
+            }
+
+            // Страховка: проекты-предметы, которых цикл не охватил — «старые» проекты ранее
+            // удалённых из профиля предметов (по ADR-041 они живут) и проекты, записанные
+            // параллельным провижнером, пока цикл ждал его замка. Сбой одного проекта —
+            // только лог, остальные удаляются (тот же best-effort, что у соседних звеньев:
+            // ответ Delete остаётся 204, необработанного исключения нет).
+            foreach (var orphan in projects.GetByOwner(user.Id).Where(p => p.ChildSubjectId is not null).ToList())
+            {
+                try { await deletion.DeleteAsync(orphan); }
+                catch (Exception ex) { logger.LogWarning(ex, "Проект-предмет {Project} при удалении ребёнка {User}", orphan.Id, id); }
+            }
         }
 
         // «Личное»: запись стора удаляется, папка на диске остаётся (ADR-040 §3)
@@ -195,6 +232,57 @@ public class UsersController(UserStore users, SessionManager sessions,
     }
 
     /// <summary>
+    /// Галка «детский режим» в «Управлении пользователями» (ADR-041 ред. 4, решение 30; Б4a):
+    /// узкая ручка включения/выключения без тела профиля. Включение заводит профиль в состоянии
+    /// «не настроен»: без предметов, маршрутов и тьютора — дальше решает только политика
+    /// fail-closed: нечитаемый профиль есть DenyAll, ребёнку не открывается ничего
+    /// (ChildModePolicy), окно показывает «администратор ещё не настроил занятия». Галка ничего
+    /// не провит: тьютор и проекты-предметы придут первой полной записью PUT child-profile.
+    /// Уже включённый режим — идемпотентный 200 без записи: повторный запрос не смеет тронуть
+    /// выставленный профиль. Выключенный — возвращается с настройками (DisableChildMode сохранил
+    /// их ровно для этого): в запись идёт только Enabled, предметы/тьютор/правила/согласие стор
+    /// возьмёт из живого профиля под своим замком. Выключение — как сейчас: та же ветка, что у
+    /// PUT child-profile {enabled:false}. Запись — через стор под его замком: два одновременных
+    /// PUT сходятся в один профиль; пользователя нет на момент записи — 500, профиля пополам нет.
+    /// Проверки «при включении» здесь: not_container (среда ребёнка — песочница, И2/И4; среда
+    /// фиксируется после появления чатов — guard метода Update, — поэтому локальный пользователь
+    /// с чатами не будет включён никогда). Роль — ровно как у child-profile: [Authorize] по claim
+    /// + AdminByStore; [ChildAllowed] нет намеренно: ребёнок свой режим не включает (тот же
+    /// приём, что у child-profile). На этой ручке ребёнка отбивает правило роли до контроллера;
+    /// на общей непомеченной поверхности его дописывает сторож эндпоинтов (ChildModeEndpointGuardTests).
+    /// </summary>
+    [HttpPut("{id}/child-mode")]
+    [Authorize(Policy = AdminByStoreRequirement.PolicyName)]
+    public IActionResult SetChildMode(string id, [FromBody] ChildModeRequest req)
+    {
+        var user = users.GetById(id);
+        if (user is null)
+            return NotFound(new { code = "user_not_found", message = "Пользователь не найден." });
+
+        // Выключение — без проверок: отказы таблицы ADR — проверки «при включении» (тот же
+        // порядок, что у ветки !Enabled метода SetChildProfile).
+        if (!req.Enabled)
+        {
+            users.DisableChildMode(id);
+            var off = users.GetById(id)!;
+            return Ok(new ChildProfileResponse(ToChildProfileDto(off.ChildMode), off.ChildMode?.TutorPersonaId ?? ""));
+        }
+
+        if (user.ExecutionEnvironment != ExecutionEnvironments.Container)
+            return BadRequest(new { code = "not_container", message = "Детский режим включается только пользователям со средой исполнения container." });
+
+        // Решение «включить/оставить» и запись — под замком стора (EnableChildModeIfAbsentOrDisabled):
+        // здесь live читался бы ДО записи, и параллельный PUT child-profile с телом между чтением
+        // и записью затёрся бы пустым профилем галки. null — пользователя нет на момент записи
+        // (параллельное удаление): профиля пополам не бывает.
+        var profile = users.EnableChildModeIfAbsentOrDisabled(id);
+        if (profile is null)
+            return StatusCode(500, new { code = "profile_not_saved", message = "Профиль ребёнка не сохранился; повторите." });
+
+        return Ok(new ChildProfileResponse(ToChildProfileDto(profile), profile.TutorPersonaId));
+    }
+
+    /// <summary>
     /// Детский профиль пользователя (ADR-041 «Контракт», ручка №10; KM-B1e): включает и правит
     /// режим только админ. Роль — и по claim ([Authorize] класса), и по стору (AdminByStore):
     /// сервисный токен хода — всегда роль "user", без политики он к админ-ручке не допускается,
@@ -229,64 +317,17 @@ public class UsersController(UserStore users, SessionManager sessions,
         if (ChildProfileValidator.Validate(req, user, users, subscriptionPool, llmProviders) is { } reject)
             return BadRequest(new { code = reject.Code, message = reject.Message });
 
-        // Привязка базы знаний (К1b, разрез §1/§3) — после того, как тело само читаемо: id
-        // предметов здесь ключи сличения с сохранённой привязкой. Новый datasetId проверяется
-        // по свежему списку Dify (он один на запрос и только если тело просит привязку).
-        // Без вертикали «Знаний», без настроенного Dify или без ответа Dify — отказ до записи
-        // профиля: не исключение и не тихий пропуск проверки.
-        if (RequestsKnowledgeBinding(req))
-        {
-            if (knowledge is null || !knowledge.IsConfigured)
-                return BadRequest(new { code = "knowledge_unavailable", message = "База знаний недоступна: вертикаль «Знаний» выключена или Dify не настроен." });
-
-            IReadOnlyDictionary<string, string> datasets;
-            try
-            {
-                // id → логическое имя (префикс неймспейса снимает сам KnowledgeService): дальше
-                // по этому имени идёт предикат допустимой привязки (К1a).
-                datasets = (await knowledge.ListDatasetsAsync()).ToDictionary(d => d.Id, d => d.Name ?? "");
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Детский режим: список датасетов Dify не получен для {User}", id);
-                return BadRequest(new { code = "knowledge_unavailable", message = "Не удалось проверить базу знаний: Dify не ответил." });
-            }
-
-            // Привязывает адмен ручки: «своя» база бывает у него, а не у ребёнка. Вызывающий
-            // проверяется после списка датасетов — непосредственно перед валидатором, который
-            // его читает: состояние «адмена нет в сторе» достижимо только внутри запроса —
-            // политика ручки (AdminByStore) читает тот же стор до действия, и на момент
-            // авторизации вызывающий в нём есть. Знание о вызывающем до списка описывало бы
-            // более ранний момент и сливалось бы с отказом вертикали; knowledge_unavailable
-            // остаётся текстом только про вертикаль/Dify (минор R-К1b 24b98007).
-            var caller = string.IsNullOrEmpty(callerId) ? null : users.GetById(callerId);
-            if (caller is null)
-                return StatusCode(403, new { code = "caller_not_found", message = "Администратор, вызвавший изменение, не найден." });
-
-            if (ChildProfileValidator.ValidateSubjectKnowledge(req, caller, users, LiveKnowledge(user), datasets) is { } kReject)
-                return BadRequest(new { code = kReject.Code, message = kReject.Message });
-        }
-
         // Снимок прежнего профиля — ради отката при отказе провижнера («профиль не сохранён»).
         var previous = user.ChildMode;
         // Целый новый профиль, мутация — под локом стора: RulesAgreedAt/RulesSummary стор
         // возьмёт из живого профиля, а не из нашего снимка (иначе затёрся бы параллельный
         // agree ребёнка), и два одновременных PUT дают один целый профиль, не смесь полей.
-        // Привязка знания — тот же приём: в профиле только кандидат (id вызывающего админа и
-        // момент запроса), живая пара остаётся, если id датасета не изменился (К1b).
-        // Отзыв согласия (Х1): acknowledgeRouteRisk=false — снять согласие даже при том же providerKey;
-        // здесь только список id, решение — под замком стора по живому предмету (UserStore.SetChildProfile).
-        HashSet<string>? revokedAcks = null;
-        if (req.Subjects is { } bodySubjects)
-        {
-            revokedAcks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var s in bodySubjects)
-                if (s?.AcknowledgeRouteRisk == false && !string.IsNullOrWhiteSpace(s.Id))
-                    revokedAcks.Add(s.Id!);
-        }
-
+        // Согласие на риск маршрутов (ADR-041 ред. 4, решение 26) — ОДНО на профиль: здесь только
+        // сигнал «админ отзывает» (acknowledgeRouteRisk=false в теле профиля), решение по живому
+        // профилю — под замком стора (UserStore.SetChildProfile). Флаг в теле предмета больше не
+        // читается: согласия предмета нет, его прежние поля — история.
         users.SetChildProfile(id, ToChildProfile(req, callerId ?? "", DateTime.UtcNow),
-            resetRules: req.ResetRules == true, revokeAcknowledgedSubjectIds: revokedAcks);
+            resetRules: req.ResetRules == true, revokeRouteRisk: req.AcknowledgeRouteRisk == false);
 
         // Тьютор провится после записи: EnsureAsync закрепляет id в существующем профиле
         // (SetChildTutorPersona) и идемпотентен — повторное включение возвращает живого тьютора.
@@ -309,17 +350,15 @@ public class UsersController(UserStore users, SessionManager sessions,
             return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось закрепить персону-тьютора; профиль не изменён." });
         }
 
-        // Репетиторы предметов (Т2b, разрез §2): после тьютора профиля — по каждому предмету
-        // сохранённого профиля. Провижер идемпотентен: живой ключ возвращает тот же id без
-        // создания (один репетитор может вести несколько предметов, засев миграции даёт
-        // предмету тьютора профиля), пустой или висящий — провится заново.
-        // «Создана ЭТИМ запросом» собирается в цикле: ключ результата, отличный от ключа
-        // предмета на момент вызова (живое чтение прямо перед ним). Сравнение с снимком до
-        // цикла — неверный критерий при параллельном PUT: соседний запрос закрепил своего
-        // репетитора после снимка, а этот провиж вернул его как живой — откат по снимку удалил
-        // бы чужую персону, оставив висящий ключ (минор R-Т2b 3a7f4e3c). Точность здесь —
-        // окно одного вызова: чужая запись между живым чтением и провижем того же предмета
-        // всё ещё возможна; точное «создана мной» знает только провижер под своим замком.
+        // Провижнер предмета (Б17a, решения 69–70, разрез §13): после тьютора профиля — по каждому
+        // предмету сохранённого профиля: проект предмета (Б8b) → проектная персона → руководитель
+        // проекта (DefaultPersonaId). Провижер идемпотентен: живой руководитель возвращается без
+        // создания; предмет без проекта или с висящим руководителем провится (перенос прежних
+        // репетиторов — миграция Б17b). Ключа репетитора у предмета больше нет — Б17c.
+        // «Создана ЭТИМ запросом» — собственный ответ провижнера (Created): точное «создана
+        // мной» знает только он под своим замком (минор R-Т2b 3a7f4e3c — сравнение с снимком
+        // контроллера ошибается на параллельном PUT). Отказанная персона уже удалена самим
+        // провижером (RollbackDelete) — в список своего отката она не входит.
         var ownCreatedTutors = new List<string>();
         try
         {
@@ -327,89 +366,57 @@ public class UsersController(UserStore users, SessionManager sessions,
             {
                 foreach (var subject in stored.Subjects)
                 {
-                    var beforeKey = subject.TutorPersonaId;
-                    string? subjectTutorId;
-                    try
-                    {
-                        subjectTutorId = await childTutorProvisioner.EnsureSubjectTutorAsync(id, subject.Id);
-                    }
-                    catch
-                    {
-                        // Исключение изнутри провижна: ключ уже закреплён (отказ вещания после
-                        // закрепления) — созданная персона наша, добавляем её живым ключом;
-                        // закрепления не было — провижер удалил свою сам, и живой ключ равен
-                        // прежнему, добавлять нечего.
-                        if (!string.IsNullOrWhiteSpace(subject.TutorPersonaId) && subject.TutorPersonaId != beforeKey)
-                            ownCreatedTutors.Add(subject.TutorPersonaId);
-                        throw;
-                    }
+                    var provision = await childTutorProvisioner.EnsureSubjectTutorAsync(id, subject.Id);
                     // null — провижн невозможен (ребёнок или предмет исчезли на параллельной
-                    // правке, запрос отменён): ребёнок с предметом без репетитора не остаётся.
-                    if (subjectTutorId is null)
+                    // правке, запрос отменён, домашняя папка не настроена): ребёнок с предметом
+                    // без репетитора не остаётся.
+                    if (provision is null)
                     {
-                        logger.LogWarning("Детский режим: провижн репетитора предмета {Subject} не удался для {User}", subject.Id, id);
+                        logger.LogWarning("Детский режим: провижн предмета {Subject} не удался для {User}", subject.Id, id);
                         RollbackSubjectTutors(id, ownCreatedTutors);
                         RollbackChildProfile(id, previous);
-                        return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось закрепить персону-репетитора предмета; профиль не изменён." });
+                        return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось создать репетитора предмета; профиль не изменён." });
                     }
-                    if (subjectTutorId != beforeKey) ownCreatedTutors.Add(subjectTutorId);
+                    if (provision.Value.Created) ownCreatedTutors.Add(provision.Value.Id);
                 }
             }
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Детский режим: провижн репетитора предмета не удался для {User}", id);
+            logger.LogWarning(ex, "Детский режим: провижн предмета не удался для {User}", id);
             RollbackSubjectTutors(id, ownCreatedTutors);
             RollbackChildProfile(id, previous);
-            return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось создать персону-репетитора предмета; профиль не изменён." });
+            return StatusCode(500, new { code = "tutor_provision_failed", message = "Не удалось создать репетитора предмета; профиль не изменён." });
         }
 
         var saved = users.GetById(id);
         if (saved?.ChildMode is not { } finalProfile)
             return StatusCode(500, new { code = "tutor_provision_failed", message = "Профиль ребёнка не сохранился; повторите." });
 
-        // Репетиторы-сироты удалённых предметов (Т2d, разрез §1): ключ каждого предмета,
-        // исчезнувшего из списка (его Id нет в итоговом профиле), — кандидат на удаление.
-        // Снимок previous — объект до записи: при живом слиянии «тела без subjects» его
-        // список — копия [.. live.Subjects] (UserStore.cs:671), предметы общие с живым
-        // профилем, но в этой ветке живой список сохраняется как есть — ни один Id не
-        // исчезает и список кандидатов пуст. При «теле с subjects» новые объекты строит
-        // ToChildProfile, а ключи исчезнувших предметов доживают только в previous —
-        // сравнение по Id, не по объекту: общий объект дал бы пустой список там, где
-        // предмет реально убран. Провижер решает «сирота ли» по ЖИВОМУ профилю под своим
-        // замком — устаревшая запись (предмет вернулся параллельной правкой) не удаляется.
-        // Чаты предмета не трогаются (только чтение — Т1c/Т1d). Сбой удаления — лог внутри
-        // провижера, ответ остаётся 200: профиль уже сохранён и корректен.
-        var orphanTutors = RemovedSubjectTutors(previous, finalProfile);
-        if (orphanTutors.Count > 0)
-            await childTutorProvisioner.RemoveOrphanTutorsAsync(id, orphanTutors);
-
-        // Перезакрепление маршрута предмета (Т2e, Т2e2; решение Андрея 18.11): старые чаты предмета
-        // продолжают с новой моделью — их закреплённые при создании поля (PersonaId, Provider, Model)
-        // приводятся к маршруту предмета, а при смене поставщика транскрипт ещё и копируется в
-        // профиль нового (SessionManager.RepinChildSubjectAsync → ProviderMigration). Условие одно:
-        // маршрут принят ChildRoute (не-пул только с согласием админа). Без согласия чаты не
-        // трогаем: ход и так откажет им (ChildModeGate.LaunchMismatch), а чат с несогласованным
-        // маршрутом — намеренное состояние «ждёт согласия».
-        // Поля берёт делегат liveTarget: он читает ЖИВОЙ профиль на каждый чат внутри очереди
-        // перезакрепления, а не снимок finalProfile (прочитан до await RemoveOrphanTutorsAsync):
-        // параллельный PUT, дописавшийся за время ожидания, не будет затёрт значениями этого запроса.
-        // Сбой переноса отдельного чата — лог внутри, ответ остаётся 200.
+        // Перезакрепление маршрута предмета (Т2e, Т2e2; Б2b): старые чаты предмета продолжают с
+        // новой моделью — их закреплённые при создании поля (PersonaId, Provider, Model) приводятся
+        // к ЖИВОМУ маршруту предмета, а при смене поставщика транскрипт ещё и копируется в профиль
+        // нового (SessionManager.RepinChildSubjectAsync → ProviderMigration). Живой маршрут
+        // разворачивает детский гейт (IChildModeGate.LiveRouteFor): та же точка, что у сверки
+        // запуска и у догона на старте хода — своей копии развёртки здесь нет (И10: второй точки
+        // правды не заводим). Живой профиль читается на каждый чат внутри очереди перезакрепления,
+        // а не снимок finalProfile (прочитан до await RemoveOrphanTutorsAsync): параллельный PUT,
+        // дописавшийся за время ожидания, не будет затёрт значениями этого запроса.
+        // Маршрут не принят ChildRoute (в т. ч. без согласия профиля, решение 26) или репетитора
+        // нет — чаты не трогаем: ход и так откажет им (ChildModeGate.LaunchMismatch), а чат с
+        // несогласованным маршрутом — намеренное состояние «ждёт согласия». Сбой переноса
+        // отдельного чата — лог внутри, ответ остаётся 200.
         foreach (var subject in finalProfile.Subjects)
         {
             if (subject is null || string.IsNullOrWhiteSpace(subject.Id)) continue;
-            var subjectId = subject.Id;
-            await sessions.RepinChildSubjectAsync(id, subjectId, () =>
-            {
-                var live = users.GetById(id)?.ChildMode?.Subjects?
-                    .FirstOrDefault(x => x is not null && string.Equals(x.Id, subjectId, StringComparison.OrdinalIgnoreCase));
-                if (live is null) return null;
-                if (!ChildRoute.Evaluate(live.ProviderKey, live.Model,
-                        live.RouteAcknowledgedAt is not null, subscriptionPool, llmProviders).Accepted)
-                    return null;
-                return new ChildRepinTarget(live.TutorPersonaId, live.ProviderKey, live.Model);
-            });
+            await sessions.RepinChildSubjectAsync(id, subject.Id);
         }
+
+        // Кураторы = опекуны (Б14a, решение 61): после записи профиля — полный обход
+        // Members проектов-предметов (desired читается из ЖИВОГО профиля под замком синка,
+        // не из снимка). Сбой отдельного проекта — лог внутри синка, ответ остаётся 200:
+        // профиль сохранён и корректен, следующий обход доводит.
+        await childCuratorSync.SyncChildCuratorsAsync(id);
 
         return Ok(new ChildProfileResponse(ToChildProfileDto(finalProfile), tutorId));
     }
@@ -446,47 +453,8 @@ public class UsersController(UserStore users, SessionManager sessions,
         }
     }
 
-    // Ключи репетиторов исчезнувших предметов (Т2d): непустой TutorPersonaId каждого
-    // предмета previous, чьего Id нет в итоговом профиле. Сравнение по Id — снимок и итог
-    // при «теле без subjects» делят одни и те же объекты предметов (UserStore.cs:671),
-    // по объекту разница не читалась бы. «Оставшийся» — любой предмет итогового профиля,
-    // выключенный (Enabled=false) тоже: его репетитора нет в списке удаления.
-    private static List<string> RemovedSubjectTutors(ChildProfile? previous, ChildProfile finalProfile)
-    {
-        var kept = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var subject in finalProfile.Subjects)
-            if (subject is not null)
-                kept.Add(subject.Id);
-
-        var removed = new List<string>();
-        foreach (var subject in previous?.Subjects ?? [])
-        {
-            if (subject is null || string.IsNullOrWhiteSpace(subject.TutorPersonaId)) continue;
-            if (kept.Contains(subject.Id)) continue;
-            removed.Add(subject.TutorPersonaId);
-        }
-        return removed;
-    }
-
     private static UserDto ToDto(User u) =>
         new(u.Id, u.Username, u.Role, u.CreatedAt, u.ExecutionEnvironment);
-
-    // Есть ли в теле хоть одна привязка (К1b): нужен ли ради проверки свежий список Dify.
-    // Пустой/отсутствующий datasetId — снятие, а не привязка: проверка ему не нужна.
-    private static bool RequestsKnowledgeBinding(ChildProfileDto req) =>
-        req.Subjects?.Any(s => !string.IsNullOrWhiteSpace(s?.Knowledge?.DatasetId)) == true;
-
-    // Привязки ЖИВОГО профиля: id предмета → DatasetId (предметов без привязки в словаре нет).
-    // Снимок ради вопроса «изменился ли id» — решение о сохранении пары стор делает под своим
-    // локом по живому значению (UserStore.SetChildProfile), здесь только сравнение валидатора.
-    private static Dictionary<string, string> LiveKnowledge(User user)
-    {
-        var live = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var subject in user.ChildMode?.Subjects ?? [])
-            if (subject?.Knowledge is { } k)
-                live[subject.Id] = k.DatasetId;
-        return live;
-    }
 
     // Wire-контракт ADR-041 (ChildProfileDto) → модель стора. Правил (RulesAgreedAt/
     // RulesSummary) в wire-типе нет: они живут только в модели и из тела не принимаются
@@ -511,9 +479,8 @@ public class UsersController(UserStore users, SessionManager sessions,
             }),
         // Предметы (Т2a): тела нет — null как сигнал стору «предметы не трогать» (живое
         // слияние в SetChildProfile; без живого профиля он нормализует его в []). Явный []
-        // — очистить. Порядок сохраняется. Тьютора предмета из тела НЕ читаем: слияние
-        // берёт его по Id из живого профиля, новый предмет остаётся пустым — персону
-        // пишет SetChildSubjectTutor (Т2b).
+        // — очистить. Порядок сохраняется. Предмет — только плитка (Б17c): маршрута, репетитора и
+        // знаний в нём нет, маркеры Migrated/KnowledgeMoved стор берёт из живого предмета.
         Subjects = req.Subjects is null
             ? null!
             : [.. req.Subjects.Select(s => new ChildSubject
@@ -522,47 +489,47 @@ public class UsersController(UserStore users, SessionManager sessions,
                     Label = s?.Label ?? "",
                     Glyph = s?.Glyph ?? "",
                     Color = s?.Color ?? "",
-                    ProviderKey = s?.ProviderKey ?? "",
-                    Model = s?.Model ?? "",
                     Enabled = s?.Enabled ?? true,
-                    // Согласие на не-Anthropic маршрут (Т5a): из тела — только флаг; в модель идёт КАНДИДАТ
-                    // (момент запроса и админ из claim) ровно при true; при false или отсутствии поля — пусто.
-                    // Решает слияние стора под замком по ЖИВОМУ предмету: то же providerKey и уже стоящее
-                    // согласие — остаётся прежнее; смена providerKey без нового согласия в теле — сброс;
-                    // false — отзыв (id передан в revokeAcknowledgedSubjectIds), он снимает и живое согласие.
-                    RouteAcknowledgedAt = s?.AcknowledgeRouteRisk == true ? attachedAt : null,
-                    RouteAcknowledgedBy = s?.AcknowledgeRouteRisk == true ? callerId : null,
-                    // Привязка знания (К1b): из тела — только id датасета; автор и момент —
-                    // вызывающий админ и момент запроса. Это КАНДИДАТ: живое слияние стора
-                    // сохранит прежнюю пару, если id не изменился, и возьмёт этот — если
-                    // изменился. null (поля нет или datasetId пуст) — привязка снимается.
-                    Knowledge = string.IsNullOrWhiteSpace(s?.Knowledge?.DatasetId)
-                        ? null
-                        : new ChildSubjectKnowledge(s!.Knowledge!.DatasetId!, callerId, attachedAt),
                 })],
         DailyBudgetUsd = req.DailyBudgetUsd,
         MonthlyBudgetUsd = req.MonthlyBudgetUsd,
         WarnMinutes = req.WarnMinutes ?? 5,
+        // Согласие админа на риск маршрутов (ADR-041 ред. 4, решение 26) — ОДНО на профиль: из тела
+        // читается только флаг, в модель идёт КАНДИДАТ (момент запроса и админ из claim) ровно при
+        // true; при false или отсутствии поля — пусто. Решает слияние стора под замком по ЖИВОМУ
+        // профилю: живое согласие остаётся (смена модели или поставщика его не касается), false —
+        // отзыв (он передан revokeRouteRisk).
+        RouteRiskAcknowledgedAt = req.AcknowledgeRouteRisk == true ? attachedAt : null,
+        RouteRiskAcknowledgedBy = req.AcknowledgeRouteRisk == true ? callerId : null,
     };
 
     // Обратный маппинг — для поля profile ответа (null — профиля нет: выключение пользователя,
     // который им и не был). Правила наружу не отдаются: их поле — дата согласия ребёнка,
-    // её показывает status-ручка (№1), не этот ответ.
-    private static ChildProfileDto? ToChildProfileDto(ChildProfile? p) => p is null ? null :
+    // её показывает status-ручка (№1), не этот ответ. Маппинг больше не static: флаги опекунов
+    // и рубильник инстанса читаются через SharedProjectsGate (Б4a).
+    private ChildProfileDto? ToChildProfileDto(ChildProfile? p) => p is null ? null :
         new ChildProfileDto(p.Enabled, [.. p.GuardianUserIds], p.ProviderKey, p.Model,
             p.Spaces.ToDictionary(
                 kv => kv.Key,
                 kv => new ChildSpaceLimitsDto([.. kv.Value.Windows.Select(
                     w => new ChildTimeWindowDto(w.From, w.To, w.Weekdays is { } days ? [.. days] : null))],
                     kv.Value.DailyMinutes)),
-            // Предметы — в порядке стора (он же порядок плиток); тьютор — живой (Т2a:
-            // поле ответа, из тела оно не читалось). Привязка знания — id и момент (К1b):
-            // автор привязки в ответ не идёт, он остаётся в сторе.
+            // Предметы — в порядке стора (он же порядок плиток); knowledgeMoved — пометка «у предмета
+            // была привязана база знаний: перенесите материалы в папку проекта-предмета» (Б17c).
             [.. p.Subjects.Select(s => new ChildSubjectDto(
-                s.Id, s.Label, s.Glyph, s.Color, s.ProviderKey, s.Model, s.Enabled, s.TutorPersonaId,
-                s.Knowledge is { } k ? new ChildSubjectKnowledgeDto(k.DatasetId, k.AttachedAt) : null,
-                s.RouteAcknowledgedAt is not null, s.RouteAcknowledgedAt))],
-            p.DailyBudgetUsd, p.MonthlyBudgetUsd, p.WarnMinutes, null);
+                s.Id, s.Label, s.Glyph, s.Color, s.Enabled, s.KnowledgeMoved))],
+            p.DailyBudgetUsd, p.MonthlyBudgetUsd, p.WarnMinutes, null,
+            // Согласие профиля (решение 26): состояние, момент и автор — поля фронта (галка
+            // «согласие стоит», дата и «кто согласился»). Автор в ответе с Б4a: окно настроек
+            // показывает его прямо; прежде он оставался только в сторе.
+            p.RouteRiskAcknowledgedAt is not null, p.RouteRiskAcknowledgedAt,
+            p.RouteRiskAcknowledgedBy,
+            // Готовность опекунов к общим проектам (Б4a, ADR-041 ред. 6 решение 60): куратором
+            // проекта-предмета опекун становится механизмом общих проектов — ему нужен свой флаг
+            // shared-projects и рубильник инстанса. Окно прямо скажет, у чего что; сервер флаг
+            // за человека не включает.
+            [.. p.GuardianUserIds.Select(g => new ChildGuardianDto(g, sharedProjects.FlagOn(g)))],
+            sharedProjects.InstanceEnabled);
 
     private static string? ValidateUsername(string? username)
     {
@@ -600,4 +567,7 @@ public class UsersController(UserStore users, SessionManager sessions,
 public record UserDto(string Id, string Username, string Role, DateTime CreatedAt, string ExecutionEnvironment);
 public record CreateUserRequest(string Username, string Password, string Role, string? ExecutionEnvironment = null);
 public record UpdateUserRequest(string? Username, string? Role, string? ExecutionEnvironment = null);
+// Тело узкой ручки галки (Б4a, ADR-041 ред. 4 решение 30): только флаг. Это не ChildProfileDto:
+// галка не описывает профиль — «не настроен» есть состояние сервера, а не пустое тело.
+public record ChildModeRequest(bool Enabled);
 public record ResetPasswordRequest(string NewPassword);

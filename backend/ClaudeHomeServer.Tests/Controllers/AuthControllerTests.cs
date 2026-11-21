@@ -2,8 +2,12 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -244,6 +248,70 @@ public class AuthControllerTests : IClassFixture<TestWebApplicationFactory>
         // Возвращаем обоих к дефолтам — фабрика общая для класса
         await owner.PutAsJsonAsync("/api/auth/cache-thresholds", new { });
         await other.PutAsJsonAsync("/api/auth/cache-thresholds", new { });
+    }
+
+    // ─── Б18a: детская поверхность в /me (ADR-041 ред. 8 §14.1) ───
+    // Ребёнок заводится через публичный путь стора (Add + SetChildProfile), как в
+    // ChildModePolicyTests: валидный профиль → снимок без DenyAll → /me отдаёт surface.
+
+    private const string ChildPassword = "kid-test-password";
+
+    private string AddChildUser()
+    {
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        var username = "kid-" + Guid.NewGuid().ToString("N");
+        var kid = users.Add(username, ChildPassword, "user");
+        users.SetChildProfile(kid.Id, new ChildProfile
+        {
+            Enabled = true,
+            TutorPersonaId = "tutor-1",
+            ProviderKey = "pool-key",
+            Model = "sonnet",
+            Spaces = { ["lessons"] = new SpaceLimits { Windows = [new TimeWindow { From = "16:00", To = "19:00" }], DailyMinutes = 60 } },
+        }, resetRules: false).Should().BeTrue();
+        return username;
+    }
+
+    [Fact]
+    public async Task Me_Child_ReturnsFrozenChildSurface()
+    {
+        var username = AddChildUser();
+        var body = await MeBody(_factory.CreateAuthenticatedClient(username, ChildPassword));
+
+        body.GetProperty("isChild").GetBoolean().Should().BeTrue();
+        var surface = body.GetProperty("childSurface");
+        surface.ValueKind.Should().Be(JsonValueKind.Object);
+        // Точное множество и порядок панелей — ключи реестра фронта (panelCatalog.ts)
+        surface.GetProperty("panels").EnumerateArray().Select(e => e.GetString())
+            .Should().Equal("files", "knowledge", "notes", "chatContext", "tasks", "chats");
+        surface.GetProperty("composerFeatures").EnumerateArray().Select(e => e.GetString())
+            .Should().Contain("voiceInput");
+    }
+
+    [Fact]
+    public async Task Me_Adult_ReturnsNullChildSurface()
+    {
+        var authed = _factory.CreateAuthenticatedClient();
+        var body = await MeBody(authed);
+
+        body.GetProperty("isChild").GetBoolean().Should().BeFalse();
+        // У взрослого поля нет — это и есть «не ребёнок»: фронт без него пересечения не строит
+        body.GetProperty("childSurface").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public void ChildModeAllowList_Surface_IsFrozenSnapshot()
+    {
+        // Снимок трёх списков (c2): любое изменение Surface без правки этого теста краснеет.
+        // Мутация «добавить panel "git"» краснит первую строку.
+        ChildModeAllowList.Surface.Panels.Should()
+            .Equal("files", "knowledge", "notes", "chatContext", "tasks", "chats");
+        ChildModeAllowList.Surface.ComposerFeatures.Should()
+            .Equal("text", "attachFromSubject", "voiceInput", "askUserAnswer");
+        // Виды ленты — один в один с childFeed (ChildLessonChat.tsx:66-95)
+        ChildModeAllowList.Surface.FeedKinds.Should()
+            .Equal("user_message", "text", "result", "error", "error_group", "rate_limit",
+                "provider_limit", "model_switched", "work_loop_stopped", "hands_notice", "tool_use");
     }
 
     private static async Task<JsonElement> MeBody(HttpClient client) =>

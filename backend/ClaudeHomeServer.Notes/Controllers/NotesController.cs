@@ -1,6 +1,9 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ChildMode;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using Microsoft.AspNetCore.Authorization;
@@ -23,6 +26,11 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // реализация в Main (`NotesHubNotifier` поверх `ISessionBroadcaster`)
 // сама конструирует `NotesChangedMessage` и шлёт в группу владельца.
 // Core-контракт намеренно не видит тип сообщения — обратной зависимости нет.
+//
+// Детский режим (Б20b, ADR-041 ред. 8, разрез §14.2): часть ручек размечена [ChildAllowed]
+// и для ребёнка ведёт себя иначе — см. блок «Детский режим» ниже. Обе точки детской проверки
+// — Core (`IChildModePolicy`, каталог проектов через `IProjectManager`/`ProjectCapabilityGuard`):
+// ссылки вертикали Notes на Main нет и быть не должно.
 [ApiController]
 [Authorize]
 [Route("api/notes")]
@@ -34,15 +42,26 @@ public class NotesController : ControllerBase
     private readonly NoteTaskSyncService _noteTasks;
     private readonly INotesHubNotifier _hubNotifier;
     private readonly string _dataDir;
+    private readonly IChildModePolicy? _childPolicy;
+    private readonly IProjectManager? _projects;
 
     public NotesController(NotesService notes, NotesKnowledgeService kb, NotesAiService ai,
-        NoteTaskSyncService noteTasks, INotesHubNotifier hubNotifier, IConfiguration config)
+        NoteTaskSyncService noteTasks, INotesHubNotifier hubNotifier, IConfiguration config,
+        // Б20b: «ребёнок ли вызывающий» — только через единую точку политики; его проекты-
+        // предметы — через Core-шов каталога проектов. Опциональны по той же причине, что
+        // соответствующие параметры NotesService: бесхостовые тесты конструируют контроллер
+        // напрямую. В боевой DI обе зарегистрированы (ядро берёт IChildModePolicy обязательным,
+        // IProjectManager — ProjectManagerAdapter), поэтому «точки нет» — только тестовая
+        // сборка: в ней ребёнок не опознаётся, и ручка отвечает как раньше.
+        IChildModePolicy? childPolicy = null, IProjectManager? projects = null)
     {
         _notes = notes;
         _kb = kb;
         _ai = ai;
         _noteTasks = noteTasks;
         _hubNotifier = hubNotifier;
+        _childPolicy = childPolicy;
+        _projects = projects;
         // Каталог данных — как у всех сервисов и у WikiController (DataPath указывает на
         // projects.json в dataDir): нужен только корню вики для учёта чтений (R4).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
@@ -73,10 +92,11 @@ public class NotesController : ControllerBase
         return _hubNotifier.BroadcastNotesChangedAsync(UserId, action, noteId ?? string.Empty, projectId);
     }
 
-    // Источник заметки из её id (base64url(sourceKey|relPath)) — нужен только Delete:
-    // остальные операции знают источник из возвращённой заметки или из запроса.
-    // null — id не разобрался (событие пойдёт только владельцу, как раньше).
-    private static string? SourceOfId(string id)
+    // Разбор id заметки (base64url(sourceKey|relPath), тот же EncodeId, что у NotesService):
+    // источник нужен Delete (событие), путь — детской проверке пути (Get/Update/Delete), которая
+    // судит путь ДО обращения к сервису. null, null — id не разобрался: для события это «только
+    // владельцу, как раньше», для ребёнка — отказ (ChildGate не знает источника → 403).
+    private static (string? Source, string? RelPath) IdParts(string id)
     {
         try
         {
@@ -84,10 +104,12 @@ public class NotesController : ControllerBase
             switch (b64.Length % 4) { case 2: b64 += "=="; break; case 3: b64 += "="; break; }
             var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(b64));
             var sep = raw.IndexOf('|');
-            return sep < 0 ? null : raw[..sep];
+            return sep < 0 ? (null, null) : (raw[..sep], raw[(sep + 1)..]);
         }
-        catch (FormatException) { return null; }
+        catch (FormatException) { return (null, null); }
     }
+
+    private static string? SourceOfId(string id) => IdParts(id).Source;
 
     // Единый ответ отказа «в вики пишет только Хранитель» (ADR-035, решение 2): 409 с кодом
     // wiki_readonly и текстом-подсказкой из исключения (он без абсолютных путей и ownerId).
@@ -99,11 +121,124 @@ public class NotesController : ControllerBase
     private ObjectResult WikiReadOnly(WikiReadOnlyException ex) =>
         new(new { code = WikiReadOnlyException.ErrorCode, message = ex.Message }) { StatusCode = 409 };
 
+    // ─── Детский режим (Б20b, ADR-041 ред. 8, разрез §14.2) ───────────────────────
+    //
+    // Ребёнку из этих ручек открыт только notes/ его проектов-предметов: маркер
+    // Project.ChildSubjectId (признак читается единой точкой ProjectCapabilities) плюс
+    // per-owner — тот же вывод актёра, что в рельсе «Файлы» (ChildSubjectActor там же).
+    // Личный vault ребёнка, чужой проект, источник вики и пустой source — 403 child_source,
+    // а не 404: папка есть, она просто не этого ребёнка; «несуществующего» здесь нет.
+    // Путь внутри разрешённого источника судит та же ChildPathPolicy, что у решения
+    // разрешения инструмента хода и «Файлов»: Hidden → 404, Deny → 403 child_path.
+    // Взрослый — обычной рельсой: свои проекты и права участника решает ProjectScope внутри
+    // NotesService, здесь она не повторяется; куратор-опекун проекта-предмета — обычный
+    // редактор его notes/ (снимков в корзину ему не делается: корзина — механизм ребёнка).
+    private const string ChildSourceErrorCode = "child_source";
+    private const string ChildPathErrorCode = "child_path";
+
+    // Папка заметок проекта-предмета относительно ЕГО корня — тот же путь, что собирает
+    // ResolveRoot (NotesService: Path.Combine(ServerRoot(project), "notes")). Имя нужно здесь
+    // потому, что ChildPathPolicy судит путь от корня ПРЕДМЕТА, а заметки источника лежат на
+    // уровень ниже — в notes/ проекта.
+    private const string NotesDir = "notes";
+
+    private sealed record ChildNotesScope(string Root);
+
+    private static ObjectResult ChildRefuse(string code, string message) =>
+        new(new { code, message }) { StatusCode = 403 };
+
+    // Контекст ребёнка в ручке заметок: Scope — источник разрешён; Deny — отказ; ни того, ни
+    // другого — вызывающий не ребёнок, обычная рельса (как до шага). Ребёнок опознаётся по
+    // стору через единую точку политики (тот же приём, что у ChildChatsController): выключенный
+    // профиль = обычный пользователь. DenyAll до этой ручки не доходит — сам гейт отказывает
+    // его 403 на любом эндпоинте (ChildModeEndpointGuardTests.DenyAllProfile_Gets403).
+    private (ChildNotesScope? Scope, ObjectResult? Deny) ChildGate(string? sourceKey)
+    {
+        if (_childPolicy?.For(UserId) is null) return (null, null);
+
+        var project = string.IsNullOrEmpty(sourceKey) ? null : _projects?.GetById(sourceKey);
+        // per-owner + маркер предмета: чужой проект-предмет, личный vault, вики и несуществующий
+        // id источника — один отказ. Локальный проект (файлы на устройстве) здесь же: к его
+        // notes/ сервер не обращается ни для кого (матрица, а не своя проверка локальности).
+        if (project is null || project.OwnerId != UserId || !ProjectCapabilities.IsChildSubject(project)
+            || ProjectCapabilityGuard.Refusal(project, ProjectCapabilityArea.FileBound) is not null
+            || string.IsNullOrWhiteSpace(project.RootPath))
+            return (null, ChildRefuse(ChildSourceErrorCode,
+                "Заметки можно вести только в папке своего предмета."));
+
+        return (new ChildNotesScope(project.RootPath), null);
+    }
+
+    // Путь заметки от корня предмета: relPath — путь внутри источника (его несёт id заметки и
+    // поле Path ответа, forward slashes).
+    private static string SubjectPath(string? relPath) =>
+        string.IsNullOrEmpty(relPath) ? NotesDir : NotesDir + "/" + relPath.TrimStart('/');
+
+    // Видимость записи списка для ребёнка: Hidden/Deny — в ответе нет ни строки, ни её
+    // количества (тот же приём, что фильтр видимости в «Файлах»).
+    private static bool ChildPathAllowed(ChildNotesScope scope, string? relPath, ChildPathOp op) =>
+        ChildPathPolicy.Decide(ChildActor.Child, op, SubjectPath(relPath), scope.Root).Allowed;
+
+    // Отказ по пути (И8) или null — можно продолжать. Тот же разбор, что у «Файлов»:
+    // Hidden → 404 («этой заметки нет»: невидимость, а не запрет), Deny → 403 с причиной
+    // политики.
+    private static ObjectResult? ChildPathDenied(ChildNotesScope scope, string? relPath, ChildPathOp op)
+    {
+        var d = ChildPathPolicy.Decide(ChildActor.Child, op, SubjectPath(relPath), scope.Root);
+        return d.Verdict switch
+        {
+            ChildPathVerdict.Allow => null,
+            ChildPathVerdict.Hidden => new ObjectResult(new { error = "Этой заметки нет." }) { StatusCode = 404 },
+            _ => ChildRefuse(ChildPathErrorCode, d.Reason ?? "Эта папка тебе не открыта."),
+        };
+    }
+
+    // Имя файла заметки — её заголовок (Obsidian: файл = имя), санитайзер живёт в NotesService
+    // и сохраняет ведущую «.» (срезает только хвостовые). ChildPathPolicy защищает скрытые имена
+    // на любой глубине, поэтому заголовок с «.» в начале дал бы файл «.имя.md», которого ребёнок
+    // не видит: отказывать надо до записи, а не после. Проверка — по ведущей «.»: это единственный
+    // случай, который санитайзер доносит до защищённого имени (прочие защищённые имена при
+    // добавлении «.md» перестают быть ими).
+    private static ObjectResult? ChildHiddenTitle(string? title) =>
+        title?.Trim() is { Length: > 0 } t && t.TrimEnd('.').Length > 0 && t[0] == '.'
+            ? ChildRefuse(ChildPathErrorCode, "Скрытые файлы (с «.» в начале) тебе не открыты.")
+            : null;
+
+    // Снимок прежней версии перед записью ребёнка (конкурентность правки, И8/И11): то, что
+    // ребёнок перезаписывает, не теряется — прежняя версия идёт в .ccs-trash/ предмета ДО
+    // записи (тот же ChildTrash, что снимает версию перед правкой репетитора и удалением
+    // ребёнка). Если клиент идёт по If-Match и его копия уже не актуальна, записи не будет
+    // (409 ниже) — снимка не нужно: на диске ничего не перезаписалось. «*» (слабая форма,
+    // «если существует») — запись будет при любом содержимом: снимок нужен.
+    private bool ChildVersionIsOverwritten(ChildNotesScope scope, string? relPath, string ifMatch)
+    {
+        if (string.IsNullOrWhiteSpace(ifMatch)) return true;
+        var token = ifMatch.Trim();
+        if (token.StartsWith("W/", StringComparison.OrdinalIgnoreCase)) token = token[2..];
+        token = token.Trim('"').Trim();
+        if (token == "*") return true;
+        var full = SafePath.Join(scope.Root, SubjectPath(relPath));
+        // System.IO.File, не File: у ControllerBase есть своё File(...) — см. Attachment выше.
+        if (!System.IO.File.Exists(full)) return false; // несуществующее не перезаписывается: 404 ниже
+        return string.Equals(
+            NotesService.ContentSha256(System.IO.File.ReadAllText(full, System.Text.Encoding.UTF8)),
+            token, StringComparison.OrdinalIgnoreCase);
+    }
+
     // Список заметок владельца (все источники). source — фильтр по источнику, q — поиск.
+    // Ребёнку: source обязателен и это его проект-предмет (ChildGate), а из него убрано то,
+    // что закрыто границей И8 (скрытые и защищённые папки — ни строки, ни количества).
     [HttpGet]
+    [ChildAllowed]
     public ActionResult<IReadOnlyList<NoteSummary>> List(
-        [FromQuery] string? source, [FromQuery] string? q) =>
-        Ok(_notes.GetSummaries(UserId, source, q));
+        [FromQuery] string? source, [FromQuery] string? q)
+    {
+        var (child, denied) = ChildGate(source);
+        if (denied is not null) return denied;
+        var summaries = _notes.GetSummaries(UserId, source, q);
+        return Ok(child is null ? summaries
+            : summaries.Where(n => ChildPathAllowed(child, n.Path, ChildPathOp.List)).ToList());
+    }
 
     // Источники для выбора «куда создать» (личный vault + проекты владельца).
     [HttpGet("sources")]
@@ -501,8 +636,14 @@ public class NotesController : ControllerBase
     // GET отдаёт заметку и заголовок ETag — хеш её содержимого (К8): по нему следующий PUT
     // проверяет, что копия клиента ещё актуальна.
     [HttpGet("{id}")]
+    [ChildAllowed]
     public ActionResult<NoteDetail> Get(string id)
     {
+        var (sourceKey, relPath) = IdParts(id);
+        var (child, denied) = ChildGate(sourceKey);
+        if (denied is not null) return denied;
+        if (child is not null && ChildPathDenied(child, relPath, ChildPathOp.Read) is { } pathDenied)
+            return pathDenied;
         var note = _notes.GetDetail(UserId, id);
         if (note is null) return NotFound();
         // R4 (ADR-039, §7): открытие страницы вики в «Заметках» — чтение Human; обычная заметка
@@ -521,10 +662,22 @@ public class NotesController : ControllerBase
         Ok(_notes.GetBacklinks(UserId, id));
 
     [HttpPost]
+    [ChildAllowed]
     public async Task<ActionResult<NoteDetail>> Create([FromBody] CreateNoteRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Title))
             return BadRequest("Не задан заголовок заметки");
+        var (child, denied) = ChildGate(req.Source);
+        if (denied is not null) return denied;
+        if (child is not null)
+        {
+            // Папка внутри notes/ предмета — по той же границе И8. Имя файла — заголовок,
+            // его санитайзер (NotesService) к этой проверке добавляет только суффикс коллизии
+            // «-2» (он не делает имя защищённым) и не сносит ведущую «.» — она ниже.
+            if (ChildPathDenied(child, NotesService.SanitizeFolder(req.Folder), ChildPathOp.Write) is { } pathDenied)
+                return pathDenied;
+            if (ChildHiddenTitle(req.Title) is { } hiddenTitle) return hiddenTitle;
+        }
         try
         {
             // S3-3c1: это правка человека (REST-ручка) — в журнал правок общего проекта (S3-3)
@@ -541,9 +694,22 @@ public class NotesController : ControllerBase
     // не совпадает — 409 note_changed с актуальным состоянием, заметка не тронута.
     // Без If-Match — как раньше.
     [HttpPut("{id}")]
+    [ChildAllowed]
     public async Task<ActionResult<NoteDetail>> Update(string id, [FromBody] UpdateNoteRequest req)
     {
         var ifMatch = Request.Headers.IfMatch.ToString();
+        var (sourceKey, relPath) = IdParts(id);
+        var (child, denied) = ChildGate(sourceKey);
+        if (denied is not null) return denied;
+        if (child is not null)
+        {
+            if (ChildPathDenied(child, relPath, ChildPathOp.Write) is { } pathDenied) return pathDenied;
+            // Переименование файла при смене заголовка (Obsidian) — та же грань имени, что при
+            // создании: скрытого имени ребёнок не заводит.
+            if (ChildHiddenTitle(req.Title) is { } hiddenTitle) return hiddenTitle;
+            if (ChildVersionIsOverwritten(child, relPath, ifMatch))
+                ChildTrash.Snapshot(child.Root, SubjectPath(relPath), UserId);
+        }
         try
         {
             // S3-3c1: правка человека — в журнал правок (S3-3); при 409/403/404 ниже — отказа
@@ -580,8 +746,21 @@ public class NotesController : ControllerBase
     }
 
     [HttpDelete("{id}")]
+    [ChildAllowed]
     public async Task<IActionResult> Delete(string id)
     {
+        var (sourceKey, relPath) = IdParts(id);
+        var (child, denied) = ChildGate(sourceKey);
+        if (denied is not null) return denied;
+        if (child is not null)
+        {
+            if (ChildPathDenied(child, relPath, ChildPathOp.Delete) is { } pathDenied) return pathDenied;
+            // Удаление ребёнка обратимо (решение 54): прежняя версия — в .ccs-trash/ ДО удаления,
+            // тот же порядок, что в рельсе «Файлы». Снимок не отменяет удаления и не откладывается
+            // после него: иначе между ними в файл мог бы вернуться другой. Несуществующего файла
+            // нет в корзине (контракт Snapshot — null), и удаление остаётся 404, как раньше.
+            ChildTrash.Snapshot(child.Root, SubjectPath(relPath), UserId);
+        }
         try
         {
             // S3-3c1: удаление человеком — правка пути в журнал (S3-3); 404 (файла нет) — отказа нет

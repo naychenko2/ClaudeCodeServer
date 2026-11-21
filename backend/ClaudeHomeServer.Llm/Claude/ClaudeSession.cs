@@ -39,11 +39,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Ключ владельца — _turnOwnerId (владелец хода), а не Info.OwnerId: у проектной сессии
     // тот пуст по контракту и резолв по нему падал на общий слот инстанса, хотя старт
     // заморожен из личного слота арендатора (DEC-FALLBACK 3f2f33fb).
-    // И2′: у ребёнка модель — явная модель предмета (профиля), назначение места и модель хода её не
-    // переопределяют: иначе ChatPersona на другую модель увела бы ход мимо маршрута предмета.
+    // Ребёнок (Б17c): явной модели предмета больше нет — модель чата закрепил запуск по персоне
+    // проекта-предмета (или профилем, чат правил), дальше обычный резолв места.
     private string? EffectiveModel =>
-        (ChildSnapshotNow is { } childSnap ? ChildRoute.ExplicitModelFor(childSnap, Info) : null)
-        ?? _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId)
+        _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId)
         ?? (_turnModelOverride ?? Info.Model);
 
     // Детская политика «сейчас»: снимок идущего хода, а вне хода (старт оркестрации фолбэка идёт
@@ -103,12 +102,23 @@ public class ClaudeSession : ILlmSessionAdapter
     // _turnOwnerId; по Info.OwnerId хвост чата проекта брался из общего слота инстанса
     // (DEC-FALLBACK 3f2f33fb).
     internal IReadOnlyList<string> EffectiveTurnChain =>
-        // И2: у ребёнка фолбэка нет — цепочка из одной модели, отказ провайдера = ошибка хода.
         // Решает снимок политики, а не наличие делегата: фабрика выдаёт делегат любому владельцу,
         // у взрослого он возвращает null — и фолбэк ADR-007 обязан жить.
-        ChildSnapshotNow is not null && EffectiveModel is { } childModel ? new[] { childModel } :
+        ChildSnapshotNow is not null ? ChildTurnChain() :
         _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
+
+    // Цепочка хода ребёнка (И2″, решение 27): тот же резолв места, что у взрослого (первый шаг —
+    // явная модель предмета/профиля, для ребёнка это и есть EffectiveModel; хвост — слоты
+    // ребёнка-владельца), но пропущенный через фильтр ребёнка ChildRoute.ChildChain: облачные шаги
+    // без цены выпадают — на них бюджет И3 молча перестал бы ограничивать. Первый шаг принятого
+    // маршрута из фильтра не выпадает никогда: пул-шаг — нативный Claude, провайдер-шаг — с ценой
+    // или локальный (их проверяет Evaluate). Без резолвера/реестра (тестовая сборка) — одна модель.
+    private IReadOnlyList<string> ChildTurnChain() =>
+        _assignments is not null && _providers is not null && EffectiveModel is { } childModel
+            ? ChildRoute.ChildChain(
+                _assignments.ResolveChain(UsageKey, childModel, _turnOwnerId, _personaProvider?.Invoke()), _providers)
+            : EffectiveModel is { } m ? new[] { m } : Array.Empty<string>();
 
     // Размер контекста последнего запроса для слоя фолбэка (оценка заполнения окна): при
     // ContextOverflow оркестратор по нему решает, вместит ли кандидат из цепочки текущий
@@ -2850,8 +2860,15 @@ public class ClaudeSession : ILlmSessionAdapter
         Info.MessageCount++;
         Info.UpdatedAt = DateTime.UtcNow;
 
-        // Если сообщение — вызов скилла (/skill-name [args]), разворачиваем его содержимое
-        var effectiveText = _commandExpansion?.ExpandSkill(text) ?? text;
+        // Если сообщение — вызов скилла (/skill-name [args]), разворачиваем его содержимое.
+        // Ход ребёнка (И11): развёртка «/»-команд выключена — текст уходит как есть. Снимок
+        // детской политики читается здесь ОДИН раз на ход и передаётся вниз по цепочке:
+        // RunTurnAsync своего чтения не делает (см. его параметр), весь детский слой —
+        // развёртка, аргументы, env, ключ — решается по одному снимку.
+        var childSnapshot = _childPolicy?.Invoke();
+        var effectiveText = childSnapshot is null
+            ? _commandExpansion?.ExpandSkill(text) ?? text
+            : text;
         // Картинки отправляем как image-блоки (base64), остальные файлы — инлайним в текст
         var (imagePaths, otherPaths) = AttachmentInliner.SplitImagePaths(attachedPaths);
         var fullText = AttachmentInliner.BuildMessageText(_rootPath, effectiveText, otherPaths);
@@ -2868,16 +2885,17 @@ public class ClaudeSession : ILlmSessionAdapter
             imagePaths = [];
         }
 
-        return QueueTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, turnModelOverride);
+        return QueueTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, turnModelOverride, childSnapshot);
     }
 
     // Ручное сворачивание контекста: /compact как обычный ход,
     // минуя счётчики сообщений, авто-имя чата и разворачивание скиллов
-    public Task CompactAsync() => QueueTurnAsync("/compact", [], 0, false);
+    public Task CompactAsync() => QueueTurnAsync("/compact", [], 0, false,
+        childSnapshot: _childPolicy?.Invoke());
 
     // Ставит ход в очередь в фоне, чтобы не блокировать SignalR-соединение
     private Task QueueTurnAsync(string fullText, List<string> imagePaths, int agentDepth, bool suppressTasksExecute,
-        string? turnModelOverride = null)
+        string? turnModelOverride = null, ChildPolicySnapshot? childSnapshot = null)
     {
         _ = Task.Run(async () =>
         {
@@ -2905,7 +2923,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 if (_turnLock.CurrentCount == 0) { await EmitStartPhaseAsync("queued"); queuedShown = true; }
                 await _turnLock.WaitAsync(_cts.Token);
                 BeginStartTimings(queuedTs);
-                try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token, turnModelOverride); }
+                try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token, turnModelOverride, childSnapshot); }
                 catch (OperationCanceledException) { /* остановка сессии — штатно */ }
                 // Адаптер снесли из-под хода (закрытие сессии, реанимация чата) — это остановка,
                 // а не сбой модели: показывать человеку «Cannot access a disposed object» нельзя
@@ -3148,6 +3166,21 @@ public class ClaudeSession : ILlmSessionAdapter
             return;
         }
 
+        // И1 (п.12) + И8: ход ребёнка решает детская граница — ни карточки, ни «всегда
+        // разрешать», ни авто-allow. Она здесь, а не в DecidePermissionAsync: решение судит по
+        // всему can_use_tool — пути из input и, при симлинке, blocked_path (input.file_path при
+        // этом остаётся внутри cwd, наружный назван именно blocked_path — КТ0 п.2), — и свой
+        // текст отказа отдаёт модели в том же control_response.
+        if (_childPolicy?.Invoke() is not null)
+        {
+            var (childBehavior, childMessage) = ChildPermissionDecision(req);
+            if (childBehavior != "allow") _pendingFileClaims.TryRemove(toolUseId, out _);
+            SendControlResponse(requestId, childBehavior == "allow"
+                ? (object)new { behavior = "allow" }
+                : new { behavior = "deny", message = childMessage }, run.Process);
+            return;
+        }
+
         var behavior = await DecidePermissionAsync(requestId, toolName, inputEl, input);
         // Отказ в разрешении ИЛИ Interrupt: инструмент не выполнится, tool_result может не
         // прийти вовсе — снимаем ожидающую заявку атрибуции (см. _pendingFileClaims) ДО раннего
@@ -3166,9 +3199,11 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Решение по инструменту: правила проекта → «всегда разрешать» этой сессии → карточка
     // пользователю. Возвращает "allow" | "deny" | "cancelled" (Interrupt во время ожидания).
-    // Решение по разрешению для хода ребёнка (И1, п.12): allow — только MCP-пара (сервер,
-    // инструмент) из детского allow-list; всё остальное, включая встроенные инструменты CLI, —
-    // deny. Имя от CLI — «mcp__{сервер}__{инструмент}»; нераспознанное имя — deny (fail-closed).
+    // ИМЕННАЯ часть детской границы (И1, п.12): allow — только MCP-пара (сервер, инструмент)
+    // из детского allow-list; всё остальное, включая встроенные инструменты CLI, — deny.
+    // Имя от CLI — «mcp__{сервер}__{инструмент}»; нераспознанное имя — deny (fail-closed).
+    // Пять файловых инструментов по одному имени не решаются: без пути их разрешить нельзя,
+    // поэтому сюда они и приходят как deny. Полный ответ — по запросу целиком, ниже.
     internal static string ChildPermissionDecision(string toolName)
     {
         const string prefix = "mcp__";
@@ -3179,12 +3214,167 @@ public class ClaudeSession : ILlmSessionAdapter
         return ChildModeAllowList.Allows(rest[..sep], rest[(sep + 2)..]) ? "allow" : "deny";
     }
 
-    // Встроенные инструменты CLI ребёнку закрыты разрешающим списком (И1, п.11): «--tools ""»
-    // оставляет у хода ноль встроенных (проверено на CLI 2.1.325: init.tools = []). Список запретов
-    // тут не годится — набор встроенных меняется от версии к версии (в 'default' этого CLI уже нет
-    // Glob/Grep). Прежний «--tools» от BareMode (его BareTools) снимается: детский пустой список
-    // сильнее любого непустого.
-    internal static void ForceNoBuiltinTools(List<string> args)
+    // Пять файловых инструментов детского хода (тот же набор, что в --tools, ChildBuiltinTools):
+    // решаются по пути, а не по имени.
+    private static readonly string[] ChildPathTools = ["Read", "Glob", "Grep", "Write", "Edit"];
+
+    private static (string Behavior, string Message) ChildDeny(string message) => ("deny", message);
+
+    // Детская граница по всему can_use_tool (И8; ADR-041 ред.5–6, решения 53/65/67). Возвращает
+    // поведение и текст для модели: у отказа — причину, у allow — пустой.
+    //  - инструмент, названный в запретах хода (полем персоны, этапом или детским слоем) — deny по
+    //    имени, до пути: вычитание права не должно теряться на границе can_use_tool (И10);
+    //  - MCP — пара детского allow-list (именная часть выше);
+    //  - Read/Glob/Grep/Write/Edit — по пути через ChildPathPolicy: та же функция путей И8, что
+    //    у рельсы «Файлы» и загрузки (решение 65), второй копии правил нет;
+    //  - AskUserQuestion — allow (ответ на нём — Б11c);
+    //  - неизвестный инструмент или нераспознанный input — deny (fail-closed).
+    // Состояния на сессию нет: два can_use_tool одного хода получают ответы своих request_id.
+    // Единственный побочный эффект — снимок прежней версии перед Write/Edit существующего
+    // файла (Б10c, решение 54): он здесь, где решён путь и есть разрешение, — и он же
+    // последняя защита: нет снимка — нет перезаписи.
+    private (string Behavior, string Message) ChildPermissionDecision(JsonElement request)
+    {
+        var toolName = request.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
+        // Запрет инструмента силы решения по пути не отдаёт: репетитор с Access = ReadOnly
+        // (Write/Edit в запретах) не пишет в папку предмета, даже когда путь свой. Тот же список
+        // уже ушёл в --disallowedTools и CLI не предложит инструмент модели; это вторая граница —
+        // на случай, когда запрос всё равно пришёл (полем персоны или этапа он назван позже, чем
+        // --tools, и сниматься целым списком больше не может).
+        if (_disallowedTools.Contains(toolName, StringComparer.Ordinal))
+            return ChildDeny("Инструмент не разрешён ребёнку");
+        if (toolName.StartsWith("mcp__", StringComparison.Ordinal))
+            return ChildPermissionDecision(toolName) == "allow" ? ("allow", "") : ChildDeny("Инструмент не разрешён ребёнку");
+        if (toolName == "AskUserQuestion") return ("allow", "");
+        if (Array.IndexOf(ChildPathTools, toolName) < 0) return ChildDeny("Инструмент не разрешён ребёнку");
+
+        var input = request.TryGetProperty("input", out var io) ? io : default;
+        // Путь вызова: file_path у Read/Write/Edit, path у Glob/Grep (каталог-основа поиска).
+        // У Glob/Grep без path основа поиска — cwd хода, т.е. сама папка предмета: это не
+        // «нераспознанный input», а обычный поиск у себя в папке.
+        var rawPath = toolName is "Glob" or "Grep" ? JsonStringProp(input, "path") : JsonStringProp(input, "file_path");
+        if (rawPath is null && toolName is "Read" or "Write" or "Edit") return ChildDeny("Не распознать аргументы вызова");
+        // У Glob каталог обхода называет ещё и pattern: «../*/*.md» обойдёт чужие папки,
+        // «/etc/*» — всё вне дерева; при пустом path решение по одному path дало бы allow.
+        // Поэтому у Glob судится основа pattern (GlobSearchHostPath), а path остаётся только
+        // основой, относительно которой относительная основа резолвится. Инвариант: любой путь,
+        // который Glob реально обойдёт, лежит в папке предмета.
+        var globPattern = toolName == "Glob" ? JsonStringProp(input, "pattern") : null;
+        if (toolName == "Glob" && globPattern is null) return ChildDeny("Не распознать аргументы вызова");
+        // При симлинке наружный путь назван полем blocked_path самого запроса — решение по нему.
+        var path = JsonStringProp(request, "blocked_path") ?? rawPath;
+
+        var op = toolName switch
+        {
+            "Read" => ChildPathOp.Read,
+            "Glob" or "Grep" => ChildPathOp.List,
+            _ => ChildPathOp.Write,
+        };
+
+        // Хостовый путь: относительный резолвится против cwd хода — его хостовой counterpart
+        // есть _rootPath (WorkingDirectory процесса); абсолютный — путь среды исполнения, он
+        // переводится IPathMapper, как остальные пути запуска. Ни одному пути из input не
+        // доверяем как абсолютному (КТ0, наблюдение 7). Путь среды вне точек монтирования —
+        // он и вне папки предмета: ToHost бросает, и отказываем.
+        string hostPath;
+        try
+        {
+            hostPath = path is null ? _rootPath
+                : Path.IsPathRooted(path) ? _launcher.Paths.ToHost(path)
+                : Path.GetFullPath(path, _rootPath);
+        }
+        catch (Exception) { return ChildDeny("Файл вне папки предмета"); }
+
+        // Действующий инструментами урока — репетитор (персона-руководитель чата,
+        // ChildChatsController): «Для репетитора/» ему читается, ребёнку — нет (решение 65).
+        var verdict = ChildPathPolicy.Decide(ChildActor.Tutor, op, hostPath, _rootPath);
+        if (verdict.Verdict == ChildPathVerdict.Hidden) return ChildDeny("Нет такого файла");
+        if (verdict.Verdict == ChildPathVerdict.Deny) return ChildDeny(verdict.Reason ?? "Файл вне папки предмета");
+
+        // Вторая половина той же границы для Glob: проверен path хода, дальше — основа обхода,
+        // которую называет сам pattern. Отказ по ней — те же формулировки ChildPathPolicy.
+        if (globPattern is not null)
+        {
+            string globBase;
+            try
+            {
+                globBase = GlobSearchHostPath(globPattern, hostPath, _launcher.Paths);
+            }
+            catch (Exception) { return ChildDeny("Файл вне папки предмета"); }
+            var baseVerdict = ChildPathPolicy.Decide(ChildActor.Tutor, ChildPathOp.List, globBase, _rootPath);
+            if (baseVerdict.Verdict == ChildPathVerdict.Hidden) return ChildDeny("Нет такого файла");
+            if (baseVerdict.Verdict == ChildPathVerdict.Deny) return ChildDeny(baseVerdict.Reason ?? "Файл вне папки предмета");
+        }
+
+        // Картинка модели без зрения (решение 67): Read отказывается с путём текстовой копии.
+        if (toolName == "Read" && !Capabilities.SupportsImages
+            && AttachmentInliner.ImageExts.Contains(Path.GetExtension(hostPath)))
+            return ChildDeny($"Эта модель не видит картинки. Текстовая копия: {TextCopyPath(hostPath)}");
+
+        // Снимок прежней версии перед перезаписью существующего файла (Б10c, решение 54):
+        // нет снимка — нет перезаписи, сбой записи (диск) отказывается здесь, а не бросает
+        // наружу из control_response. Нового файла защищать нечем: Snapshot отдаёт null
+        // без записи, разрешение остаётся allow.
+        if (toolName is "Write" or "Edit")
+        {
+            try
+            {
+                ChildTrash.Snapshot(_rootPath, Path.GetRelativePath(_rootPath, hostPath), _turnOwnerId);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return ChildDeny("Не сохранить прежнюю версию файла — перезапись отменена");
+            }
+        }
+
+        return ("allow", "");
+    }
+
+    private static string? JsonStringProp(JsonElement el, string prop) =>
+        el.ValueKind == JsonValueKind.Object && el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() is { Length: > 0 } s ? s : null
+            : null;
+
+    // Каталог, из которого Glob реально начнёт обход: буквальный префикс pattern — сегменты до
+    // первого символа «*?[{». Пустая основа («**/*», «*», «**/*.md») — обход от основы поиска,
+    // т.е. от hostBase: path хода или, когда path нет, самой папки предмета. Абсолютная основа
+    // («/etc/*», контейнерный «/projects/…/*») — путь среды исполнения: переводится IPathMapper,
+    // как остальные пути запуска; вне точек монтирования ToHost бросает — вызывающий отказывает.
+    // Относительная («../*», «Материалы/../../x/*») резолвится против hostBase через
+    // Path.GetFullPath, а не SafePath.Join: Join срезает ведущие разделители и молча приклеил бы
+    // «/etc/*» к папке предмета — отказ по чужому абсолютному пути исчез бы (шапка SafePath).
+    private static string GlobSearchHostPath(string pattern, string hostBase, IPathMapper paths)
+    {
+        var cut = pattern.IndexOfAny(['*', '?', '[', '{']);
+        var baseDir = (cut < 0 ? pattern : pattern[..cut]).TrimEnd('/', '\\');
+        if (baseDir.Length == 0) return hostBase;
+        return Path.IsPathRooted(baseDir) ? paths.ToHost(baseDir) : Path.GetFullPath(baseDir, hostBase);
+    }
+
+    // Путь текстовой копии картинки (решение 67): форма копии — одна функция
+    // ChildPathPolicy.TextCopyOf (решение 90): тот же относительный путь в «.ccs-text/» с
+    // сохранённым расширением оригинала. Саму копию пишет не здесь (Б11b/Б13c) — здесь только
+    // подсказка модели.
+    private string TextCopyPath(string hostPath)
+    {
+        var root = _rootPath.TrimEnd('/', '\\').Replace('\\', '/');
+        var norm = hostPath.Replace('\\', '/');
+        var rel = norm.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase)
+            ? norm[(root.Length + 1)..]
+            : Path.GetFileName(norm);
+        return ChildPathPolicy.TextCopyOf(rel);
+    }
+
+    // Встроенные инструменты, разрешённые ребёнку (И11; решение 10 в новой форме — ADR-041 ред. 5):
+    // чтение/поиск/запись файлов хода и «вопрос с кнопками» AskUserQuestion (ответ на нём — Б11c).
+    // Форма — разрешающий список «--tools a,b,c» (CLI 2.1.325: «specify tool names (e.g.
+    // "Bash,Edit,Read")»), а не список запретов: набор встроенных меняется от версии к версии
+    // (в 'default' этого CLI уже нет Glob/Grep). Прежний «--tools» от BareMode (его BareTools)
+    // снимается: у детского хода свой список, он сильнее любого чужого.
+    internal static readonly string[] ChildBuiltinTools =
+        ["Read", "Glob", "Grep", "Write", "Edit", "AskUserQuestion"];
+
+    internal static void ForceChildBuiltinTools(List<string> args)
     {
         for (var i = args.Count - 1; i >= 0; i--)
         {
@@ -3192,15 +3382,19 @@ public class ClaudeSession : ILlmSessionAdapter
             args.RemoveAt(i);
             if (i < args.Count) args.RemoveAt(i);
         }
-        args.AddRange(["--tools", ""]);
+        args.AddRange(["--tools", string.Join(",", ChildBuiltinTools)]);
     }
 
     private async Task<string> DecidePermissionAsync(string requestId, string toolName, JsonElement inputEl, object toolInput)
     {
-        // И1 (ADR-041, п.12): ход ребёнка решает ТОЛЬКО детский allow-list. Ни карточки, ни
-        // «всегда разрешать», ни авто-allow исполнителя/персоны/режима — любой запрос вне списка
-        // отклоняется сразу. Снимок политики, а не флаг сессии: выключение профиля действует
-        // со следующего запроса.
+        // И1 (ADR-041, п.12): ход ребёнка решает ТОЛЬКО детская граница. Ни карточки, ни
+        // «всегда разрешать», ни авто-allow исполнителя/персоны/режима — любой запрос вне
+        // границы отклоняется сразу. Снимок политики, а не флаг сессии: выключение профиля
+        // действует со следующего запроса. Актуальный канал (control_request/can_use_tool)
+        // решается целиком в HandleControlRequestAsync — там виден весь запрос, включая путь и
+        // blocked_path. Сюда детский запрос приходит старым каналом (sdk_control_request:
+        // только tool_name + tool_input, без полей запроса) — по одному имени, где пять
+        // файловых инструментов не разрешить (fail-closed).
         if (_childPolicy?.Invoke() is not null) return ChildPermissionDecision(toolName);
 
         // Гард «координатор не пишет код сам» (Э7-фикс): жёстче project-правил и «всегда
@@ -3611,7 +3805,8 @@ public class ClaudeSession : ILlmSessionAdapter
     }
 
     private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, int agentDepth,
-        bool suppressTasksExecute, CancellationToken ct, string? turnModelOverride = null)
+        bool suppressTasksExecute, CancellationToken ct, string? turnModelOverride = null,
+        ChildPolicySnapshot? childSnapshot = null)
     {
         // Глубина делегирования действует ровно на этот ход (внутри _turnLock):
         // MCP-конфиг ниже собирается уже с учётом анти-рекурсии, сброс — в finally
@@ -3622,10 +3817,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // ход, сброс в finally ниже. Фолбэк-адаптер ставит то же значение ДО чтения цепочки,
         // поэтому EffectiveModel/EffectiveTurnChain видят его и на старте оркестрации.
         _turnModelOverride = turnModelOverride;
-        // Один снимок детской политики на запуск хода (И1/И2): аргументы, env, ключ и чистка env
-        // решаются по одному и тому же снимку, а не по трём независимым чтениям, между которыми
-        // профиль могли выключить. Запросы разрешений читают политику сами — им нужна свежесть.
-        var childSnapshot = _childPolicy?.Invoke();
+        // Снимок детской политики читается ОДИН раз на ход — на его постановке (SendMessageAsync)
+        // — и приходит сюда вместе с текстом (И1/И2): развёртка «/», аргументы, env, ключ и чистка
+        // env решаются по одному снимку, а не по независимым чтениям, между которыми профиль могли
+        // выключить. Запросы разрешений читают политику сами — им нужна свежесть.
         _turnChildSnapshot = childSnapshot;
 
         // P31: подстраховка от залипания pending control-состояния. К началу нового хода
@@ -3854,9 +4049,17 @@ public class ClaudeSession : ILlmSessionAdapter
             _lastBareModeMapBytes = 0;
         }
 
-        // Ход ребёнка (И1, п.11): ни одного встроенного инструмента CLI.
+        // Ход ребёнка: свой разрешающий список встроенных (И11, решение 10) и «настройки папки
+        // не действуют на ход» (И8): --setting-sources user — CLI читает только user-настройки,
+        // .claude/settings*.json cwd его не касаются; --strict-mcp-config — только серверы из
+        // --mcp-config этого хода, ни user-scope-конфига, ни .mcp.json cwd. По результатам КТ0
+        // п.3–4 (ADR-041 ред. 8, разрез §11.3).
         var childTurn = childSnapshot is not null;
-        if (childTurn) ForceNoBuiltinTools(args);
+        if (childTurn)
+        {
+            ForceChildBuiltinTools(args);
+            args.AddRange(["--setting-sources", "user", "--strict-mcp-config"]);
+        }
 
         // Подсказка следующего сообщения: CLI после result испускает prompt_suggestion
         // (генерация фоном с переиспользованием prompt cache хода; при холодном кэше CLI
@@ -3999,6 +4202,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 string.Join(",", personaAgents.MemoryServers.Select(s => "mcp__" + s.ServerKey))]);
 
         // Блокируем коннекторы аккаунта claude.ai — они вливаются помимо --mcp-config.
+        // Запреты уходят как есть, и у хода ребёнка тоже: снять их whole списком (прежний
+        // Except(ChildBuiltinTools)) значило потерять запрет персоны или этапа на встроенных
+        // ребёнка — репетитор с Access = ReadOnly мог писать в папку предмета (И10: поля персоны
+        // только вычитают). Противоречия с --tools больше нет: детский слой (ChildDisallowedBuiltins)
+        // называет только то, что ребёнку и так не дано; ChildBuiltinTools в запретах бывает
+        // только по явному решению персоны/этапа — и оно сильнее разрешения списка.
         if (disallowed.Length > 0)
             args.AddRange(["--disallowedTools", string.Join(",", disallowed)]);
 
@@ -4515,7 +4724,10 @@ public class ClaudeSession : ILlmSessionAdapter
             // сабагенты через Task — под --bare тоже мёртв, но по нему секцию не рубим:
             // текст умеет быть чисто persona_ask'овым (SessionManager.BuildMentionsHint,
             // ветка viaAsk), и общий отказ увёл бы рабочий инструмент из виду.
-            if (_personasMcp?.MentionsHint is { } mentionsHint && McpDelivered("personas"))
+            // Ход ребёнка (И11): @-упоминания выключены и на этой стороне — ни подсказки, ни
+            // пути позвать кого-то (TurnLaunchContextFactory сервер personas ребёнку не даёт
+            // вовсе; это второй замок, тот же снимок политики, что у остального детского слоя).
+            if (!childTurn && _personasMcp?.MentionsHint is { } mentionsHint && McpDelivered("personas"))
                 Add("persona-mentions", "Кого можно позвать через @", mentionsHint, group: "persona");
 
             // Подсказка про субагентов-персон в Workflow: перечисляем handle'ы доступных
@@ -4796,23 +5008,38 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
 
-        // И2′ (ADR-041 ред. 2): ход ребёнка идёт по маршруту предмета — запись пула с API-ключом либо
-        // провайдер LlmProviders. Подписку не выбираем (ни основную, ни пула), пару «провайдер-модель»
-        // не лечим; нет допустимого маршрута или рассогласование модели с ним — отказ запуска, а не откат.
+        // И2″ (ADR-041 ред. 4, решения 25–27): ход ребёнка идёт по маршруту предмета — любая
+        // допустимая запись пула (setup-token, API-ключ или оба) либо провайдер LlmProviders.
+        // Подписку не выбираем (ни основную, ни пула), пару «провайдер-модель» не лечим; нет
+        // допустимого маршрута или рассогласование модели с ним — отказ запуска, а не откат.
+        // Текст отказа — без обещания уведомления (доработка ревью Б4b, п.3): эти точки события
+        // child/route-refusal не публикуют (единственная публикация — ChildModeGate.LogRefusal),
+        // рассылки не было бы никогда, даже при опекунах в профиле.
         // Токен подписки из унаследованного env вычищает TurnClearEnv (CLAUDE_CODE_OAUTH_TOKEN).
         if (childSnapshot is not null)
         {
-            var childRoute = ChildRoute.Resolve(childSnapshot, ChildRoute.SubjectFor(childSnapshot, Info),
-                _subscriptionPool, _providers);
+            // Согласие, которым меряется маршрут (И2″, решение 26): ОДНО на профиль — его поле
+            // читает вызывающий на старте хода (Б2b), в ChildRoute поля профиля не читаются.
+            // Прежних согласий предмета (поле снято Б17c) нет: маршрут открывает только согласие профиля.
+            var childConsent = childSnapshot.Profile?.RouteRiskAcknowledgedAt is not null;
+            var childRoute = ChildRoute.SubjectFor(childSnapshot, Info) is null
+                ? ChildRoute.Resolve(childSnapshot, childConsent, _subscriptionPool, _providers)
+                : ChildRoute.ResolveLesson(childSnapshot, Info.Provider, EffectiveModel, childConsent,
+                    _subscriptionPool, _providers);
             envOverrides[ChildTurnMarker.EnvKey] = "1";
             var modelProvider = _providers?.ResolveByModel(EffectiveModel);
             if (childRoute.Kind == ChildRouteKind.Pool)
             {
                 // Ключ пула годится только Anthropic-модели: чужая модель с ним — чужой эндпоинт.
                 if (modelProvider is not null)
-                    throw new ChildRouteRefusedException(ChildRoute.RefusedText);
-                var childEnv = _providers?.BuildOAuthCliEnv(childRoute.Pool!.Key, "", childRoute.Pool.ApiKey, EffectiveModel)
-                    ?? throw new ChildRouteRefusedException(ChildRoute.RefusedText);
+                    throw new ChildRouteRefusedException(ChildRoute.RefusedTextNoGuardians);
+                // Env записи — полный, как в родительском пул-блоке: форма аутентификации самой
+                // записи (setup-token → CLAUDE_CODE_OAUTH_TOKEN, API-ключ → ANTHROPIC_*). Профиль —
+                // изолированный «sub-{key}»: у песочницы-ребёнка RewriteProfileEnv переписывает его
+                // на профиль ребёнка ({ProfilesHostDir}/{childId}/…), хостовая учётка до хода не доезжает.
+                var childEnv = _providers?.BuildOAuthCliEnv(childRoute.Pool!.Key, childRoute.Pool.OAuthToken,
+                    childRoute.Pool.ApiKey, EffectiveModel)
+                    ?? throw new ChildRouteRefusedException(ChildRoute.RefusedTextNoGuardians);
                 foreach (var (k, v) in childEnv)
                     envOverrides[k] = v;
             }
@@ -4821,7 +5048,7 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 // Провайдер модели обязан совпасть с маршрутом предмета. Env провайдера (cliEnv выше) —
                 // BuildCliEnv, как у взрослого.
-                throw new ChildRouteRefusedException(ChildRoute.RefusedText);
+                throw new ChildRouteRefusedException(ChildRoute.RefusedTextNoGuardians);
             }
         }
 

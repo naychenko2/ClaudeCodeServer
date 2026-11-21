@@ -116,8 +116,10 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
     {
         _hosts = hosts;
         _hosts.ExtraConfig[$"ClaudeSubscriptions:{KidsKey}:ApiKey"] = "sk-ant-test-kids";
-        // Ребёнок — container-владелец: корень его чатов лежит в песочнице (CliRoute.ResolveChatRoot)
-        _hosts.ExtraConfig["Sandbox:ProjectsRoot"] = Path.Combine(Path.GetTempPath(), "ccs-child-rules-" + Guid.NewGuid().ToString("N"));
+        // Ребёнок — container-владелец: корень его чатов лежит в песочнице (CliRoute.ResolveChatRoot);
+        // чат «Уроков» после согласия (agree → обычный чат пространства) — чат проекта-предмета,
+        // ему нужны папка песочницы и рубильник общих проектов.
+        ChildTestSubjects.ConfigureSubjectHost(_hosts, "ccs-child-rules");
         _admin = _hosts.CreateAuthenticatedClient();
         _users = _hosts.Services.GetRequiredService<UserStore>();
     }
@@ -138,12 +140,15 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
         var to = local.AddHours(3).ToString("HH:mm", CultureInfo.InvariantCulture);
         var put = await _admin.PutAsJsonAsync($"/api/users/{id}/child-profile", new
         {
-            enabled = true, providerKey = KidsKey, model = "sonnet",
+            enabled = true, acknowledgeRouteRisk = true, providerKey = KidsKey, model = ChildTestSubjects.TutorModel,
             spaces = new Dictionary<string, object> { ["lessons"] = new { windows = new[] { new { from, to } }, dailyMinutes } },
             dailyBudgetUsd = 2m, monthlyBudgetUsd = 40m,
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
         ChildTestSubjects.Seed(_hosts.Services, id);
+        // Живой маршрут репетитора (И10) — модель его персоны-руководителя: без неё обычный чат
+        // «Уроков» (его создают тесты agree) не создан — 409 subject_not_ready.
+        ChildTestSubjects.SetTutorModel(_hosts.Services);
         return id;
     }
 
@@ -435,7 +440,7 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
         var manyGuardians = Enumerable.Repeat(_users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, 60).ToArray();
         var put = _admin.PutAsJsonAsync($"/api/users/{id}/child-profile", new
         {
-            enabled = true, guardianUserIds = manyGuardians, providerKey = KidsKey, model = "sonnet",
+            enabled = true, acknowledgeRouteRisk = true, guardianUserIds = manyGuardians, providerKey = KidsKey, model = ChildTestSubjects.TutorModel,
             spaces = new Dictionary<string, object> { ["lessons"] = new { windows = new[] { new { from = "06:00", to = "22:00" } }, dailyMinutes = 99 } },
             dailyBudgetUsd = 3m, monthlyBudgetUsd = 50m,
         });

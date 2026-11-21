@@ -54,6 +54,13 @@ public abstract record SendAndWaitResult
     public sealed record QueueFull(int Limit) : SendAndWaitResult;
     public sealed record Completed(TurnResult Result) : SendAndWaitResult;
     public sealed record Running : SendAndWaitResult;
+    // Ход ОТКЛОНЁН на приёме (Х-W4-73, дефект 358bfe10): тот же отказ, что у хаб-пути
+    // (TurnIntake.ChildTurnRefusal — ход детского чата только его владельца-ребёнка), но
+    // возвращённый вызывающему, а не написанный в ленту: REST-канал (chats_send) не должен
+    // отвечать «202 running» на ход, который никогда не начнётся. Ничего не началось: ни
+    // очереди, ни процесса, ни реплики в ленте получателя — текст отказа принадлежит
+    // вызывающему (он и есть тот, кто пытался начать ход).
+    public sealed record Refused(string Reason) : SendAndWaitResult;
 }
 
 // Значения include ветвления чата (docs/research/chat-branching-2026-09.md §5, §6):

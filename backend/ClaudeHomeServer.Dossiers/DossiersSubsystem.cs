@@ -53,6 +53,8 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // - `IDossierRecallSource` (Core) — шов НАРУЖУ: его реализует `DossierRecallService`,
 //   а зовёт вертикаль Memory из auto-recall персоны. Форвардер регистрируем сами (ниже),
 //   потому что контракт объявляет сторона-поставщик.
+// - `IDossierProjectCleaner` (Core) — второй шов НАРУЖУ: его реализует `DossierStore`,
+//   а зовёт корневой `ProjectDeletionService` (уборка паспортов при удалении проекта).
 // - `ClaudeHomeServer.Protocol` — WS-контракт, часть общей спинки (Core):
 //   `StoredMessage` в полях async-state-машин
 //   `DossierCaptureService+<BuildTranscriptAsync>d__NN` и
@@ -65,9 +67,10 @@ public sealed class DossiersSubsystem : IAppSubsystem
 
     public string Title => "Паспорта изменений";
 
-    // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:26) требует
-    // DossierStore обязательным параметром; та же зависимость — у MemoryToolset
-    // (Services/Mcp/Http/MemoryToolset.cs:45).
+    // Ядро (CanDisable=false, S2b-1): ядро проектов доходит до DossierStore через Core-шов
+    // IDossierProjectCleaner — обязательный параметр ProjectDeletionService
+    // (Services/ProjectDeletionService.cs:22, форвардер ниже); прямая зависимость — у MemoryToolset
+    // (Services/Mcp/Http/MemoryToolset.cs:47).
     public bool CanDisable => false;
 
     public void Register(IServiceCollection services, IConfiguration config)
@@ -81,6 +84,11 @@ public sealed class DossiersSubsystem : IAppSubsystem
         // иначе связь была бы прямой «вертикаль → вертикаль» (Этап 5, волна 3).
         services.AddSingleton<IDossierRecallSource>(
             sp => sp.GetRequiredService<DossierRecallService>());
+        // Форвардер Core-шва уборки паспортов удалённого проекта: его потребитель — корневой
+        // ProjectDeletionService (он не ссылается на вертикаль, root-сторож), контракт объявляет
+        // сторона-поставщик — тот же образец, что у IDossierRecallSource (доработка Б8e).
+        services.AddSingleton<IDossierProjectCleaner>(
+            sp => sp.GetRequiredService<DossierStore>());
         services.AddSingleton<DossierDiscussionStore>();
         services.AddSingleton<DossierDiscussionService>();
         services.AddGatedHostedService<DossierCaptureService>(config);

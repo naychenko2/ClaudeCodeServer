@@ -78,13 +78,17 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         var childSnapshot = userId is null ? null : childPolicy.For(userId);
         var isChild = childSnapshot is not null;
         var childSpaces = childSnapshot?.Profile?.Spaces.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList() ?? [];
+        // Детская поверхность (Б18a, ADR-041 ред. 8 §14.1): замороженный список Core,
+        // одинаковый для всех детей — он не зависит от профиля и проекта. У взрослого — null:
+        // отсутствие поля и есть «не ребёнок»; фронт без него пересечения не строит (Ф1).
+        var childSurface = isChild ? ChildModeAllowList.Surface : null;
         return Ok(new
         {
             userId, username, displayName = me?.DisplayName, role, featureFlags,
             contextThresholds, cacheWarnThresholds, executionEnvironment,
             defaultPersonaId, needsOnboarding, onboardingSessionId = me?.OnboardingSessionId,
             subsystems = subsystems.ActiveKeys(),
-            isChild, childSpaces,
+            isChild, childSpaces, childSurface,
         });
     }
 

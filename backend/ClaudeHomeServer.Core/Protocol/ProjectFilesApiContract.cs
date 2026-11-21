@@ -12,6 +12,9 @@ public record PathRequest(string Path);
 // существующий путь → 409, без тихой перезаписи
 public record CreateFileRequest(string Path, string? Content = null);
 public record RenameRequest(string OldPath, string NewPath);
+/// <summary>Вернуть запись корзины (.ccs-trash/) на её исходный путь, POST files/restore
+/// (ADR-041 ред. 6, решение 56). Id — тот, что отдал DELETE ребёнка.</summary>
+public record RestoreFromTrashRequest(string EntryId);
 public record GitPathRequest(string Path);
 public record GitCommitRequest(string Message, bool Amend = false);
 
@@ -102,6 +105,8 @@ public static class DeviceAgentRoutes
         // Пакетный резолв по worktree проекта (шаг B2b): у локального проекта trees нет,
         // фронт locate не зовёт (разрез bc27cbee §3)
         new("POST", "files/locate"),
+        // Корзина (.ccs-trash/) — серверный механизм ребёнка (376a6517f): у агента корзины нет
+        new("POST", "files/restore"),
         // Архив папки собирает только сервер — агент архивов не умеет
         new("GET", "files/zip"),
         // OnlyOffice живёт рядом с сервером и тянет файл по адресу сервера

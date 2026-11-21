@@ -41,8 +41,8 @@ public sealed class ChildModePolicy(IUserStore users, ILogger<ChildModePolicy>? 
         SubjectsValid(profile.Subjects);
 
     // И1-бис по предмету (разрез Т1c): id всех предметов — slug и уникален без учёта регистра;
-    // каждый ВКЛЮЧЁННЫЙ предмет несёт персону, поставщика и модель. Выключенный предмет может быть
-    // недозаполнен: его чаты всё равно не стартуют.
+    // репетитор и модель предмета живут в проекте-предмете (Б17c), а не в записи профиля —
+    // ни пустой ключ персоны, ни пустой маршрут записи предмета профиль не портят.
     private static bool SubjectsValid(List<ChildSubject>? subjects)
     {
         if (subjects is null) return true;
@@ -50,10 +50,6 @@ public sealed class ChildModePolicy(IUserStore users, ILogger<ChildModePolicy>? 
         foreach (var subject in subjects)
         {
             if (subject is null || !SubjectId.IsMatch(subject.Id ?? "") || !ids.Add(subject.Id!)) return false;
-            if (subject.Enabled &&
-                (string.IsNullOrWhiteSpace(subject.TutorPersonaId) || string.IsNullOrWhiteSpace(subject.ProviderKey) ||
-                 string.IsNullOrWhiteSpace(subject.Model)))
-                return false;
         }
         return true;
     }

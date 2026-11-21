@@ -4,6 +4,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.ChildMode;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -26,10 +27,23 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // Кэш отпечатков префиксов истории (Перф-3 B8) — см. ChatsController._prefixFpCache
     private readonly PrefixFingerprintCache _prefixFpCache = prefixFpCache;
 
+    // Х-W4-31 (дефект d7c8477b): прямой доступ ребёнка к взрослому списку чатов закрыт всем,
+    // кроме своего проекта-предмета — тот же образец, что у «Знаний» (решение 81): [ChildAllowed]
+    // на ручке + «свой ли это предмет» внутри неё. Сама граница — в одной точке,
+    // ChildSubjectAccess (Х-W4-47). Свой предмет — свои уроки (взрослых чатов в проекте-предмете
+    // нет — TurnsOnlyForChildChats); свой обычный или чужой проект — 403 not_child_subject,
+    // до всякой работы со списком. Взрослый путь без изменений.
+
+    [ChildAllowed]
     [HttpGet]
     [ProjectScope]
     public IActionResult GetAll(string projectId)
     {
+        // Детская проверка — до списка: [ProjectScope] пропускает ребёнка-участника чужого
+        // проекта при рубильнике общих проектов — границу держит эта проверка, а не невидимость.
+        if (ChildSubjectAccess.IsChild(HttpContext, UserId)
+            && !ChildSubjectAccess.IsOwnSubjectProject(projects.GetById(projectId), UserId))
+            return ChildSubjectAccess.NotOwnSubject("Чаты");
         // Вычисляемые parentSessionId/taskDone дописывает конвертер Session на границе
         // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно.
         // Условный GET: фронт опрашивает список каждые несколько секунд, а меняется он редко;
@@ -46,6 +60,18 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     [ProjectScope(Right = ProjectRight.RunTurn)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
+        // Б8d (ADR-041 И9′, решение 85): в проекте-предмете нет взрослого чата. Куратор — Editor
+        // общего проекта; его чат здесь был бы вторым разговором в папке предмета, вне детской
+        // границы. Закрывает профиль проекта-предмета: ProjectCapabilities.ChildSubjectProfile.
+        // TurnsOnlyForChildChats (Б8a) — та же точка, что у матрицы права и фронта; инлайновой
+        // проверки маркера вне ProjectCapabilities здесь нет. Урок создаёт только детская точка
+        // ребёнка (B9b); самому ребёнку эта ручка закрыта и так — нет [ChildAllowed]. Отказ —
+        // до всякой работы с проектом (резолва персоны, провижна ассистента).
+        var subjectProject = projects.GetById(projectId);
+        if (ProjectCapabilities.IsChildSubject(subjectProject)
+            && ProjectCapabilities.ChildSubjectProfile.TurnsOnlyForChildChats)
+            return Conflict(new { error = "В проекте-предмете ребёнка чат создаёт только его детская точка",
+                code = "child_subject_project" });
         // Приватный чат создаётся приватным атомарно (W4-B1a): флаг принимается только общим
         // проектом — та же проверка и тот же отказ, что у тумблера видимости (ChatsController
         // .SetVisibility → not_shared_project). Отказ идёт ДО всякой работы (резолва персоны,

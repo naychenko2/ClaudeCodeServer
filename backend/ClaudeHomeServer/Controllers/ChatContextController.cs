@@ -5,6 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -17,6 +18,10 @@ namespace ClaudeHomeServer.Controllers;
 // регистрирует — её элементы приходят с missing, а запись такого вида отказывает 400 kind_unknown.
 // Локальный проект (ADR-016): сервер его файлов не видит, поэтому чтение отдаёт пустой контекст, а
 // запись — 400 project_local_unsupported до любого обращения к диску.
+// Ребёнку (Б20c, ADR-041 ред. 8, решение 78): открыты только два GET — контекст и сохранённые
+// файлы — с проверкой «чат свой и детский» (граница та же, что у чтения чата, B9d). Записи
+// (PUT/POST/DELETE, сброс) метки не имеют: их отсекает гейт И1 до тела ручки — строку контекста
+// задают редакторы медиа, которых у ребёнка нет.
 [ApiController]
 [Authorize]
 public class ChatContextController(
@@ -28,12 +33,17 @@ public class ChatContextController(
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
+    [ChildAllowed]
     [HttpGet(ChatContextRoutes.Base)]
     public IActionResult Get(string sessionId)
     {
         if (Scope(sessionId) is not { } scope) return NotFound();
         if (FilesUnavailable(scope)) return Ok(new ChatContextDto(0, null, []));
-        return Ok(Dto(scope, store.Get(UserId, sessionId)));
+        var state = store.Get(UserId, sessionId);
+        // Ребёнку скрытые его границей файлы в ответ не попадают (Х-W4-51): ChildPathPolicy — единственная точка
+        // правил, фронт их не повторяет; стор не трогаем, взрослому и агенту контекст отдаётся как был.
+        if (ChildSubjectAccess.IsChild(HttpContext, UserId)) state = ChildVisibleOnly(scope, state);
+        return Ok(Dto(scope, state));
     }
 
     [HttpPut(ChatContextRoutes.Primary)]
@@ -79,12 +89,20 @@ public class ChatContextController(
         return Write(scope, () => store.Clear(UserId, sessionId, revision));
     }
 
+    [ChildAllowed]
     [HttpGet(ChatContextRoutes.SavedFiles)]
     public IActionResult SavedFiles(string sessionId)
     {
         if (Scope(sessionId) is not { } scope) return NotFound();
         if (FilesUnavailable(scope)) return Ok(Array.Empty<ChatSavedFile>());
-        return Ok(savedFiles.SelectMany(s => s.List(scope)).OrderBy(f => f.SavedAt).ToList());
+        var files = savedFiles.SelectMany(s => s.List(scope)).ToList();
+        // Ребёнку — только пути, которые разрешает его граница (Х-W4-53, та же точка правил, что у
+        // контекста в Х-W4-51). След сохранения пишет вертикаль медиа (картинка/звук/видео), а они
+        // ребёнку закрыты гейтом И1 — сегодня его список пуст; фильтр держит границу на самой ручке,
+        // чтобы она не разъехалась, когда редактор откроют: «Для репетитора/», скрытые сегменты и пути
+        // вне папки предмета в ответ не попадут.
+        if (ChildSubjectAccess.IsChild(HttpContext, UserId)) files = ChildVisibleSaved(scope, files);
+        return Ok(files.OrderBy(f => f.SavedAt).ToList());
     }
 
     private ContextScope? Scope(string sessionId)
@@ -93,9 +111,41 @@ public class ChatContextController(
         // вызывающего, контекст чата арендатора в него не кладём.
         // S2d-3b: чужой приватный чат — тот же отказ даже для владельца проекта
         if (sessions.GetOwnedVisible(sessionId, UserId) is not { } session) return null;
+        // Б20c (решение 78): ребёнку — только контекст своего детского чата; граница та же, что у
+        // чтения чата (ChatsController.Get, B9d): владение через GetOwnedVisible + ChildSpace.
+        // Свой без ChildSpace, чужой и несуществующий неотличимы (тот же 404, существование не
+        // раскрываем). Записи сюда не доходят: гейт И1 отказывает их до тела ручки (метки нет).
+        if (session.ChildSpace is null && ChildSubjectAccess.IsChild(HttpContext, UserId)) return null;
         var project = session.ProjectId is { } pid ? projects.GetById(pid) : null;
         return new ContextScope(UserId, session, project, UserId);
     }
+
+    // Файл проекта виден ребёнку, только если чтение разрешает ChildPathPolicy (Allow): Hidden («Для репетитора/»,
+    // скрытые сегменты) и Deny отсекаются, «Материалы/» и обычные файлы остаются. Путь не разобрать или проекта
+    // нет — fail-closed, элемент не отдаём. Прочие виды (картинка, звук…) файлами предмета не являются.
+    private static ChatContextState ChildVisibleOnly(ContextScope scope, ChatContextState state)
+    {
+        bool Visible(ContextItem item) =>
+            item.Kind != ProjectFileContextKind.Kind
+            || (scope.Project?.RootPath is { Length: > 0 } root
+                && item.Ref["path"] is JsonValue v && v.TryGetValue<string>(out var path)
+                && ChildPathPolicy.Decide(ChildActor.Child, ChildPathOp.Read, path, root).Allowed);
+
+        return state with
+        {
+            Primary = state.Primary is { } p && Visible(p) ? p : null,
+            Refs = state.Refs.Where(Visible).ToList(),
+        };
+    }
+
+    // Тот же судящий, что у ChildVisibleOnly, по списку сохранённых файлов (Х-W4-53): путь нити —
+    // путь проекта (его пишет MoveToFile вертикали), поэтому он судится ChildPathPolicy как файл
+    // предмета, а не отдельным правилом. Путь вне папки предмета или не разобрать — Deny, «Для
+    // репетитора/» и скрытые — Hidden: то и другое отсекается; проекта нет — fail-closed, пусто.
+    private static List<ChatSavedFile> ChildVisibleSaved(ContextScope scope, List<ChatSavedFile> files) =>
+        scope.Project?.RootPath is { Length: > 0 } root
+            ? [.. files.Where(f => ChildPathPolicy.Decide(ChildActor.Child, ChildPathOp.Read, f.Path, root).Allowed)]
+            : [];
 
     private static bool FilesUnavailable(ContextScope scope) =>
         scope.Project is { } p && !ProjectCapabilityGuard.Allows(p, ProjectCapabilityArea.FileBound);

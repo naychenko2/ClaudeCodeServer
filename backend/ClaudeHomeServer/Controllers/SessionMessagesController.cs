@@ -201,6 +201,15 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
                 limit = f.Limit,
                 hint = $"в очереди чата уже {f.Limit} сообщений — дождись, пока он их разберёт",
             }),
+            // Х-W4-73 (дефект 358bfe10): ход детского чата запускает только его
+            // владелец-ребёнок (ADR-041 И9′, решение 85). Текст — тот же, что у хаб-пути
+            // (он рождается в TurnIntake.ChildTurnRefusal, здесь только переносится); 409, а
+            // не 202 running: ход не начался и не начнётся, «попробуй позже» здесь — ложь.
+            SessionMessagingService.SendOutcome.ChildTurnRefused r => Conflict(new
+            {
+                error = r.Reason,
+                code = ChildTurnOwnerOnlyCode,
+            }),
             SessionMessagingService.SendOutcome.Completed c => Ok(new
             {
                 status = "completed",
@@ -278,6 +287,12 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
 
     // Машинный код «не отправитель» (S2a-10b): единственный адресат отказа «не доставлять».
     private const string NotSenderCode = "not_sender";
+
+    // Машинный код отказа хода в детском чате не-владельцу (Х-W4-73, ADR-041 И9′ решение 85):
+    // тот же ряд, что child_subject_project (создание чата) и child_subject_persona — одна
+    // граница, свой код на каждую её дверь. Текст отказа — из ядра (TurnIntake.ChildTurnRefusal),
+    // здесь он только переносится наружу.
+    private const string ChildTurnOwnerOnlyCode = "child_turn_owner_only";
 
     // DELETE /api/sessions/{sid}/pending/{messageId} — «не доставлять» сообщение из очереди
     // (крестик на карточке-призраке). 404 — уже доставлено или отменено.

@@ -172,4 +172,38 @@ public class UserHomeResolverTests : IDisposable
         Build().Resolve(new User { Username = "" }).Should().BeNull();
         Build().Resolve((User?)null).Should().BeNull();
     }
+
+    // --- папка предмета ребёнка (SubjectHome, Б8b/Б17a): граница «внутри дома» на самом резолвере ---
+
+    [Fact]
+    public void SubjectHome_обычный_id_внутри_дома_в_прослойке_Предметы()
+    {
+        var home = Path.Combine(_tempDir, "alice");
+        Build().SubjectHome("alice", null, "math")
+            .Should().Be(Path.Combine(home, "Предметы", "math"));
+    }
+
+    [Fact]
+    public void SubjectHome_пустой_id_даёт_null()
+    {
+        Build().SubjectHome("alice", null, "").Should().BeNull();
+        Build().SubjectHome("alice", null, null).Should().BeNull();
+        Build().SubjectHome("alice", null, "  ").Should().BeNull();
+    }
+
+    [Fact]
+    public void SubjectHome_разыменовывающие_id_не_выходят_за_дом_ребёнка()
+    {
+        // «..» без отказа схлопнулся бы в сам дом: SafePath.Join разрешает путь, равный корню
+        // (SafePath.cs:34), и папка предмета стала бы всем домом ребёнка. «a/../..» — то же.
+        // Границу сейчас держит только валидатор профиля (slug [a-z0-9-]{1,32}); резолвер обязан
+        // держать её сам: отказ — null, проекта нет. Мутация «снять проверку сегмента» — красный:
+        // «..» вернёт сам дом.
+        var resolver = Build();
+        resolver.SubjectHome("alice", null, "..").Should().BeNull();
+        resolver.SubjectHome("alice", null, ".").Should().BeNull();
+        resolver.SubjectHome("alice", null, "a/../..").Should().BeNull();
+        // «a/b» — не slug: прослойки в контракте пути нет.
+        resolver.SubjectHome("alice", null, "a/b").Should().BeNull();
+    }
 }

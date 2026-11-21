@@ -42,14 +42,19 @@ public class ChatAttachmentRawController(
     [HttpGet("{id}/attachments/raw")]
     public IActionResult Raw(string id, [FromQuery] string? path)
     {
-        // Чат виден вызывающему. Ребёнку — только свой чат вне проекта с ChildSpace (та же граница,
-        // что у GET api/chats/{id}); чужой, не детский и несуществующий — одно тело 404.
+        // Чат виден вызывающему. Ребёнку — его ChildSpace-чаты, независимо от ProjectId: та же
+        // граница, что у GET api/chats/{id} и GET …/history после Б9d (ChatsController.cs:148, 785).
+        // Условие «вне проекта» осталось от KM-B7, когда ни у одного детского чата проекта не было:
+        // после Б9b урок — чат проекта-предмета, и загрузить вложение ребёнку можно только в него
+        // (ChildAttachmentsController.cs:72), значит миниатюра своего вложения обязана доставаться
+        // ему здесь же (И1 п.22 ADR-041 говорит «свой чат с ChildSpace», без условия проекта).
+        // Свой без ChildSpace, чужой и несуществующий — одно тело 404. Ключ корня — сам ребёнок:
+        // владельца его урока резолвит проект-предмета, он и есть арендатор (CliRoute.GetChatRoot:65).
         string tenantOwnerId;
         Session chat;
         if (childPolicy.For(UserId) is not null)
         {
-            if (sessions.GetOwnedVisible(id, UserId) is not { } own || own.ProjectId is not null
-                || own.ChildSpace is null)
+            if (sessions.GetOwnedVisible(id, UserId) is not { } own || own.ChildSpace is null)
                 return Error("chat_not_found", "Чат не найден.");
             chat = own;
             tenantOwnerId = UserId;

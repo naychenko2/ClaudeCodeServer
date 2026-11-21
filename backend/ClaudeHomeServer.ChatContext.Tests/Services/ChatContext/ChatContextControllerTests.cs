@@ -17,7 +17,9 @@ namespace ClaudeHomeServer.Tests.Services.ChatContext;
 
 // Ручки контекста чата (ADR-023 §2.1) на собранном приложении: пять ручек и saved-files, 409 со
 // свежим DTO, 404 на чужую сессию, засев из фокусов вертикалей без записи на диск, двойная запись
-// фокуса и проекция фокуса в DTO вертикали, событие в хаб.
+// фокуса и проекция фокуса в DTO вертикали, событие в хаб. Детская часть (Б20c, ADR-041 ред. 8,
+// решение 78): ребёнку — только чтение контекста и сохранённых файлов своего урока, правки —
+// 403 child_mode до тела ручки (метки нет, гейт И1).
 [Trait("Category", "Host")]
 public class ChatContextControllerTests : IClassFixture<ChatContextControllerTests.Hosts>
 {
@@ -433,5 +435,256 @@ public class ChatContextControllerTests : IClassFixture<ChatContextControllerTes
         // ни путей, ни Missing, ни Ref, приватность через рассылку не утекает.
         msg.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(new[] { "type", "sessionId", "revision" });
         msg.GetProperty("revision").GetInt64().Should().Be(1);
+    }
+
+    // ── Ребёнку: только чтение контекста своего урока (Б20c, ADR-041 ред. 8, решение 78) ──────
+    // Видно: основной объект, «чем», референсы, сохранённые файлы — своего ChildSpace-чата.
+    // Нельзя: PUT основного объекта, POST/DELETE референсов и сброс — [ChildAllowed] на них нет,
+    // их отсекает гейт И1 до тела ручки (403 child_mode). Чужой чат, свой без ChildSpace и
+    // несуществующий — тот же 404, что для взрослого: существование чата не раскрываем.
+
+    private const string KidPassword = "b20c-kid-pw-123456";
+
+    // Ребёнок без профиля на момент создания (обычный пользователь): CreateChatAsync стартует
+    // сессию, а детская сверка хода отказывает ребёнку «старый урок» вне проекта (B9a) — фикстура
+    // в неё не входит (образец ClearChild в ChildChatReadTests). Профиль ставит SetChild.
+    private (string Id, string Username) Kid(string tag)
+    {
+        var user = _factory.Services.GetRequiredService<UserStore>().Add($"b20c-kid-{tag}", KidPassword, "user");
+        return (user.Id, user.Username);
+    }
+
+    // Валидный профиль (тот же снимок, что SetChild в ChildModeEndpointGuardTests): живая
+    // IChildModePolicy читает его по стору — токен проходит гейт И1, а детская проверка
+    // Scope видит ребёнка.
+    private void SetChild(string kidId) =>
+        _factory.Services.GetRequiredService<UserStore>().GetById(kidId)!.ChildMode = new ChildProfile
+        {
+            Enabled = true,
+            TutorPersonaId = "tutor",
+            ProviderKey = "key",
+            Model = "sonnet",
+        };
+
+    private HttpClient KidClient(string username) => _factory.CreateAuthenticatedClient(username, KidPassword);
+
+    // Свой детский чат (ChildSpace проставляется напрямую — создание урока штатным POST относится
+    // к Б9b и здесь не нужен). Профиль ребёнка ставится ПОСЛЕ создания: детская сверка хода
+    // не задевает тестовую фикстуру (образец ChildChatReadTests).
+    private async Task<Session> KidChatAsync(string kidId, string? childSpace)
+    {
+        var chat = await Sessions.CreateChatAsync(kidId, ClaudeMode.Auto, name: "Урок");
+        chat.ChildSpace = childSpace;
+        Sessions.SaveSessions();
+        return chat;
+    }
+
+    // Проект-предмета ребёнка и живой урок в нём — форма Б9b: маркер ChildSubjectId при создании
+    // проекта (то же поле, что пишет провижер предмета, Б8b) + чат с ChildSpace/ChildSubject
+    // внутри него (та же фабрика, что у POST …/spaces/lessons/chat). Штатный POST здесь не идёт:
+    // он требует провижна с домом контейнера и живой развёртки модели — это фикстура
+    // ChildChatReadTests.NewSubjectChildAsync, для границы Scope достаточно формы урока.
+    // Профиль — ПОСЛЕ создания (тот же приём, что KidChatAsync).
+    private async Task<(Project Project, Session Lesson)> KidSubjectLessonAsync(string kidId, string kidName)
+    {
+        var root = Path.Combine(_factory.TempDir, "subj_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(root);
+        var project = _factory.Services.GetRequiredService<ProjectManager>()
+            .Create("russian", root, kidId, kidName, childSubjectId: "russian");
+        var lesson = await Sessions.CreateAsync(project.Id, ClaudeMode.Auto, name: "Урок в предмете",
+            childSpace: ChildSpaces.Lessons, childSubject: "russian");
+        return (project, lesson);
+    }
+
+    [Fact]
+    public async Task РебёнокЧитаетКонтекстИФайлыСвоегоУрока_200()
+    {
+        var (kidId, kidName) = Kid("read");
+        var chat = await KidChatAsync(kidId, ChildSpaces.Lessons);
+        SetChild(kidId);
+        using var kid = KidClient(kidName);
+
+        var resp = await kid.GetAsync(Ctx(chat));
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        var body = await Json(resp);
+        body.GetProperty("revision").GetInt64().Should().Be(0);
+        body.GetProperty("primary").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("refs").GetArrayLength().Should().Be(0);
+
+        var files = await kid.GetAsync($"{Ctx(chat)}/saved-files");
+        files.StatusCode.Should().Be(HttpStatusCode.OK, "сохранённые файлы своего урока — открыты (решение 78)");
+        (await Json(files)).ValueKind.Should().Be(JsonValueKind.Array);
+    }
+
+    // Живой урок в проекте-предмете (Б9b, хвост ревью R-Б20c п.1): граница — ChildSpace,
+    // ProjectId в ней не участвует (тот же смысл, что у ChatsController, B9d). Мутация
+    // «граница по ProjectId» («ребёнку только чаты вне проекта») красит этот кейс, а чтение
+    // беспроектного урока под ней остаётся зелёным — разрыв закрывает именно урок в проекте.
+    [Fact]
+    public async Task РебёнокЧитаетКонтекстУрокаВПроектеПредмета_200()
+    {
+        var (kidId, kidName) = Kid("subject");
+        var (project, lesson) = await KidSubjectLessonAsync(kidId, kidName);
+        SetChild(kidId);
+        using var kid = KidClient(kidName);
+
+        // Sanity: урок — чат проекта-предмета этого ребёнка (форма Б9b), а не чат вне проекта
+        lesson.ProjectId.Should().Be(project.Id);
+        lesson.ChildSpace.Should().Be(ChildSpaces.Lessons);
+
+        var resp = await kid.GetAsync(Ctx(lesson));
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "урок в проекте-предмете — свой ChildSpace-чат, 200");
+        var body = await Json(resp);
+        body.GetProperty("revision").GetInt64().Should().Be(0);
+        body.GetProperty("primary").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("refs").GetArrayLength().Should().Be(0);
+    }
+
+    // Граница «сохранённых файлов» (Х-W4-53, хвост ревью Х-W4-51): след сохранения пишет вертикаль
+    // медиа (ImageThreadStore.MoveToFile), а она ребёнку закрыта гейтом И1 — поэтому след кладёт
+    // сама фикстура, ровно так, как он появился бы, если бы редактор ребёнку открыли. Ручка судит
+    // эти пути ChildPathPolicy (та же точка правил, что у контекста урока): «Для репетитора/»,
+    // служебное и всё вне папки предмета отсекаются; обычные файлы и «Материалы/» остаются, копия
+    // судится по своему оригиналу (решение 91).
+    [Fact]
+    public async Task РебёнкуСохранённыеФайлыУрока_ТолькоРазрешённыеChildPathPolicy()
+    {
+        var (kidId, kidName) = Kid("saved");
+        var (project, lesson) = await KidSubjectLessonAsync(kidId, kidName);
+        SetChild(kidId);
+        using var kid = KidClient(kidName);
+
+        var outside = Path.Combine(_factory.TempDir, "outside.png"); // вне папки предмета — Deny
+        foreach (var path in new[]
+        {
+            "Заметки/картинка.png",                        // обычный файл предмета — Allow
+            "Материалы/лист.png",                         // «Материалы» — ребёнку чтение
+            ".ccs-text/Заметки/картинка.png.txt",         // копия разрешённого оригинала — Allow
+            "Для репетитора/ключ.png",                    // Hidden
+            "CLAUDE.md",                                  // Hidden (защищённый сегмент)
+            ".ccs-text/Для репетитора/ключ.png.txt",      // копия скрытого оригинала — Hidden
+            outside,
+        })
+        {
+            var thread = Images.Create(kidId, lesson.Id, null, "", false).Thread.Id;
+            Images.MoveToFile(kidId, lesson.Id, thread, path);
+        }
+
+        var resp = await kid.GetAsync($"{Ctx(lesson)}/saved-files");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+
+        var paths = (await Json(resp)).EnumerateArray().Select(i => i.GetProperty("path").GetString()).ToList();
+        paths.Should().BeEquivalentTo(new[] { "Заметки/картинка.png", "Материалы/лист.png", ".ccs-text/Заметки/картинка.png.txt" },
+            "за пределами ChildPathPolicy ребёнку ничего не отдаём (мутация «без фильтра» красит этот список до семи)");
+    }
+
+    [Fact]
+    public async Task РебёнкуЧужойЧатСвойБезChildSpaceИНетТакого_404_НаОбеихGET()
+    {
+        var (kidId, kidName) = Kid("foreign");
+        var foreign = await Chat(); // чат админа в его проекте — ребёнку не свой
+        var notChild = await KidChatAsync(kidId, null); // свой, но не урок
+        SetChild(kidId);
+        using var kid = KidClient(kidName);
+
+        foreach (var url in new[] { Ctx(foreign), $"{Ctx(foreign)}/saved-files" })
+            (await kid.GetAsync(url)).StatusCode.Should().Be(HttpStatusCode.NotFound, $"{url}: чужой");
+        foreach (var url in new[] { Ctx(notChild), $"{Ctx(notChild)}/saved-files" })
+            (await kid.GetAsync(url)).StatusCode.Should().Be(HttpStatusCode.NotFound, $"{url}: свой без ChildSpace");
+        (await kid.GetAsync("/api/chats/net-takogo/context"))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound, "несуществующий неотличим");
+    }
+
+    [Fact]
+    public async Task РебёнкуВсеЗаписиКонтекста_403_ChildMode()
+    {
+        var (kidId, kidName) = Kid("write");
+        var chat = await KidChatAsync(kidId, ChildSpaces.Lessons);
+        SetChild(kidId);
+        using var kid = KidClient(kidName);
+
+        var put = await kid.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = (string?)null });
+        put.StatusCode.Should().Be(HttpStatusCode.Forbidden, "PUT основного объекта — метки нет");
+        (await put.Content.ReadAsStringAsync()).Should().Contain("child_mode");
+
+        var post = await kid.PostAsJsonAsync($"{Ctx(chat)}/refs", new { kind = "project-file", @ref = new { path = "a.md" } });
+        post.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await post.Content.ReadAsStringAsync()).Should().Contain("child_mode");
+
+        var del = await kid.DeleteAsync($"{Ctx(chat)}/refs/ci_x");
+        del.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await del.Content.ReadAsStringAsync()).Should().Contain("child_mode");
+
+        var clear = await kid.DeleteAsync(Ctx(chat));
+        clear.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await clear.Content.ReadAsStringAsync()).Should().Contain("child_mode");
+
+        // Ни одна запись не оставила следа: контекст своего урока пуст и без файла
+        (await Json(await kid.GetAsync(Ctx(chat)))).GetProperty("revision").GetInt64().Should().Be(0);
+        File.Exists(StateFile(chat)).Should().BeFalse();
+    }
+
+    // Х-W4-51: файлы проекта в контексте урока судит ChildPathPolicy. Скрытое ребёнку («Для репетитора/»,
+    // скрытые сегменты) в ответ не попадает вовсе, «Материалы/» и обычные файлы видны обычным чипом.
+    private static ContextItem FileRef(string path) => new("ci_" + Guid.NewGuid().ToString("N")[..12],
+        ProjectFileContextKind.Kind, new System.Text.Json.Nodes.JsonObject { ["path"] = path }, null,
+        ContextActor.Human, DateTime.UtcNow);
+
+    private static readonly string[] ВсеФайлы =
+        ["Для репетитора/конспект.pdf", "Материалы/лист.pdf", "урок.txt", ".скрытое/x.txt"];
+
+    private void SeedFiles(string ownerId, Session chat, string root)
+    {
+        foreach (var rel in ВсеФайлы)
+        {
+            var full = Path.Combine(root, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, "x");
+        }
+        var store = _factory.Services.GetRequiredService<IChatContextStore>();
+        foreach (var rel in ВсеФайлы) store.AddRef(ownerId, chat.Id, FileRef(rel), null);
+    }
+
+    private static string[] Paths(JsonElement body) => body.GetProperty("refs").EnumerateArray()
+        .Select(r => r.GetProperty("ref").GetProperty("path").GetString()!).ToArray();
+
+    [Fact]
+    public async Task РебёнкуСкрытыеЕгоГраницейФайлыВОтветеКонтекстаНеОтдаются()
+    {
+        var (kidId, kidName) = Kid("hidden-files");
+        var (project, lesson) = await KidSubjectLessonAsync(kidId, kidName);
+        SeedFiles(kidId, lesson, project.RootPath);
+        SetChild(kidId);
+        using var kid = KidClient(kidName);
+
+        var resp = await kid.GetAsync(Ctx(lesson));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        var body = await Json(resp);
+        Paths(body).Should().BeEquivalentTo(["Материалы/лист.pdf", "урок.txt"],
+            "«Для репетитора/» и скрытые сегменты ребёнку не видны, «Материалы/» и обычный файл — видны");
+        body.GetProperty("refs").EnumerateArray().Should().OnlyContain(r => !r.GetProperty("missing").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ВзрослыйВидитВсеФайлыКонтекстаКакРаньше()
+    {
+        var chat = await Chat();
+        SeedFiles(_ownerId, chat, _projectRoot);
+
+        var body = await Json(await _client.GetAsync(Ctx(chat)));
+
+        Paths(body).Should().BeEquivalentTo(ВсеФайлы, "граница — только для детей, взрослому ответ не режется");
+    }
+
+    [Fact]
+    public async Task ВзрослыйЧитаетКонтекстСвоегоЧатаБезChildSpace_КакРаньше()
+    {
+        var chat = await Chat();
+
+        var resp = await _client.GetAsync(Ctx(chat));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "детская проверка — только для детей");
+        (await Json(resp)).GetProperty("revision").GetInt64().Should().Be(0);
     }
 }

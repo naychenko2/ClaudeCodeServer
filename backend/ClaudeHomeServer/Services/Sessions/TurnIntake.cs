@@ -273,18 +273,62 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         return SendUserOutcome.Started;
     }
 
-    // Ход, не начатый по причине отказа: сообщение об ошибке в ленту, статус Error, процесс не трогаем
-    private async Task RefuseTurnAsync(string sessionId, SessionEntry entry, string reason)
+    // Ход, не начатый по причине отказа: сообщение об ошибке в ленте, статус Error, процесс не трогаем.
+    // action — метка на карточке отказа: по «change-companion» фронт узнаёт отказ сферы персоны
+    // (personaZone.ts isZoneRefusal) и предлагает сменить собеседника; отказу маршрута ребёнка
+    // даётся своя метка «child-route-refusal» (константа в ChildRoute) — фронт показывает ребёнку
+    // текст точки отказа как есть (без неё childFeedFilter.ts подменяет любой error общей плашкой,
+    // дефект 5f7854e7). Отказу маршрута «сменить собеседника» не даётся: собеседник урока —
+    // репетитор предмета, ребёнку менять нечего.
+    private async Task RefuseTurnAsync(string sessionId, SessionEntry entry, string reason,
+        string? action = PersonaZone.ChangeCompanionAction)
     {
         _log.LogWarning("Ход чата {Session} отклонён: {Reason}", sessionId, reason);
         var runId = TurnProcessHost.NextRunId(); // сквозной счётчик прогонов живёт в хосте (S3-5)
         entry.RunId = runId;
         var acc = entry.Accumulator!;
-        await _completion.OnMessageQueuedAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true, Action: PersonaZone.ChangeCompanionAction), runId);
+        await _completion.OnMessageQueuedAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true, Action: action), runId);
         await _completion.OnMessageQueuedAsync(sessionId, acc, new ResultMessage(
             Subtype: "error", DurationMs: 0, NumTurns: 0, Usage: null, TotalCostUsd: null), runId);
         await _completion.OnMessageQueuedAsync(sessionId, acc, new ExitedMessage(), runId);
     }
+
+    // Подъём процесса с отказом детского маршрута вместо исключения из Compose (И1-бис,
+    // TurnLaunchContextFactory.cs:165): true — процесс готов, ход идёт; false — приём закончился
+    // штатным отказом хода (текст в ленту, процесс не тронут). До правки исключение доезжало до
+    // хаба: вызов падал «An unexpected error occurred invoking 'SendMessage'», а детский текст,
+    // сформированный точкой отказа, в ленту не шёл — ребёнок видел техтекст мёртвого CLI-процесса
+    // (дефект f974e03f, QA-4). Текст берётся из исключения как есть: его формирует точка отказа по
+    // профилю — RefusedTextFor с обещанием там, где отказ опубликован событием ChildModeGate,
+    // RefusedTextNoGuardians там, где события нет; ядро приёма своих детских формулировок не
+    // выдумывает и обещание за точку отказа не берёт.
+    private async Task<bool> EnsureProcessOrRefuseAsync(string sessionId, SessionEntry entry)
+    {
+        try { await _process.EnsureProcessAsync(sessionId, entry); return true; }
+        catch (ChildRouteRefusedException ex)
+        {
+            await RefuseTurnAsync(sessionId, entry, ex.Message, action: ChildRoute.RefusalAction);
+            return false;
+        }
+    }
+
+    // Б8d (ADR-041 И9′, решение 85): ход в детском чате запускает только его владелец-ребёнок.
+    // Куратор (Editor общего проекта) видит уроки штатным Read, но не пишет в них и не запускает
+    // ходов; тот же отказ — у любого другого не-владельца (очередь, REST, автопродолжение).
+    // Профиль — ProjectCapabilities.ChildSubjectProfile.TurnsOnlyForChildChats (Б8a), та же
+    // точка, что у матрицы права и фронта; инлайновой проверки признака вне её здесь нет.
+    // Детский чат — метка ChildSpace ИЛИ проект-предмет (ProjectCapabilities.IsChildSubject):
+    // чат предмета без метки куратор-Editor иначе запустил бы ходом. Владелец резолвится тем же
+    // ResolveOwnerId, что детским догоном ниже и меткой автора реплики: осиротший чат
+    // (резолва нет) — отказ. Подача без отправителя (senderUserId = null: цикл «до готово»,
+    // добивание сабагента, возобновление после рестарта) человека не представляет — не отказ.
+    private string? ChildTurnRefusal(SessionEntry entry, string? senderUserId) =>
+        ProjectCapabilities.ChildSubjectProfile.TurnsOnlyForChildChats
+        && (entry.Info.ChildSpace is not null || _store.InChildSubjectProject(entry.Info))
+        && senderUserId is not null
+        && _store.ResolveOwnerId(entry.Info) != senderUserId
+            ? "Ход детского чата запускает только его владелец-ребёнок"
+            : null;
 
     // Непосредственный запуск хода в процесс (гейты очереди уже пройдены либо не требуются).
     // fromQueue — доставка пользовательского сообщения из очереди: клиент рисовал его
@@ -303,6 +347,18 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         if (_settings.ZoneRefusalForTurn(entry) is { } refusal)
         {
             await RefuseTurnAsync(sessionId, entry, refusal);
+            await CloseQueuedPhaseAsync(sessionId, queuedShown);
+            return;
+        }
+
+        // Б8d (ADR-041 И9′, решение 85): ход в детском чате — только его владельца-ребёнка.
+        // Аккумулятор поднимается ДО отказа: первый ход урока мог быть именно отказанным, а
+        // RefuseTurnAsync пишет причину в ленту — ей нужен аккумулятор (его штатное место —
+        // EnsureProcessCoreAsync, куда эта ветка не доходит).
+        if (ChildTurnRefusal(entry, senderUserId) is { } childRefusal)
+        {
+            await _process.EnsureAccumulatorAsync(entry);
+            await RefuseTurnAsync(sessionId, entry, childRefusal);
             await CloseQueuedPhaseAsync(sessionId, queuedShown);
             return;
         }
@@ -431,8 +487,36 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         {
             // Догон перезакрепления детского чата ДО EnsureProcessAsync и снаружи его EnsureLock
             if (entry.Info.ChildSpace is not null && _store.ResolveOwnerId(entry.Info) is { } childOwner)
+            {
                 await _settings.CatchUpChildChatAsync(sessionId, childOwner);
-            await _process.EnsureProcessAsync(sessionId, entry);
+                // И10 (дефект a771ca12): вердикт маршрута и лимитов — на каждом ходу, до процесса.
+                // При живом процессе EnsureProcessCoreAsync выходит на entry.Process is not null
+                // (TurnProcessHost.cs:189) и Compose не зовётся вовсе: без этой точки ни И1-бис, ни И3
+                // не спрашивались ни на одном ходу живого чата — ход шёл на закреплённых полях, для
+                // И3 — ещё и вне окна/сверх лимита. На живом маршруте вердикт null: правка ничего
+                // не ломает; процесс ради проверки ни поднимается, ни роняется — на живом
+                // маршруте тот же мокадтер остаётся на своём месте (ЖивойМаршрутЖивойПроцесс).
+                // Текст — из точки отказа (там же, где и публикация уведомления), ядро приёма
+                // детских формулировок не выдумывает.
+                if (_settings.ChildTurnRefusalFor(childOwner, entry.Info) is { } routeRefusal)
+                {
+                    // Аккумулятор — до отказа: RefuseTurnAsync пишет причину в ленту (тот же приём,
+                    // что веткой выше: его штатное место — EnsureProcessCoreAsync, куда не дошли)
+                    await _process.EnsureAccumulatorAsync(entry);
+                    await RefuseTurnAsync(sessionId, entry, routeRefusal, action: ChildRoute.RefusalAction);
+                    await CloseQueuedPhaseAsync(sessionId, queuedShown);
+                    return;
+                }
+            }
+            // Х-W4-74 (дефект f974e03f): отказ живого маршрута — тот же исход приёма, что отказ
+            // сферы/автора выше: текст в ленту, вызов завершён штатно, а не падает исключением.
+            // Тот же исход, что сразу выше, но на другой точке: здесь refusal даёт пересборка
+            // процесса (мёртвый процесс, рестарт сервера) — до Compose доходит только на этом пути
+            if (!await EnsureProcessOrRefuseAsync(sessionId, entry))
+            {
+                await CloseQueuedPhaseAsync(sessionId, queuedShown);
+                return;
+            }
         }
 
         // Авторство реплик хода: text-сообщения истории получают персону на момент хода
@@ -670,6 +754,24 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
 
+        // Х-W4-73 (дефект 358bfe10): тот же запрет хода в детском чате, что у хаб-пути
+        // (тот же ChildTurnRefusal, что вызывает SendDirectAsync), действует и здесь —
+        // иначе REST-канал агентов его обходил: куратор по POST /api/sessions/{id}/messages
+        // получал «202 running», а в ленте урока поднимались его реплика и session_started.
+        // Место — до всякого побочного эффекта входа: до ClaimFirstMessage (отмеченный
+        // «чат принял сообщение» при отказе остался бы пустым чатом с отметкой), до взятия
+        // TurnWaiter, до очереди и до процесса. Отказ здесь — не запись в ленту, как у
+        // хаба (там RefuseTurnAsync: отправитель смотрит в этот же чат), а ответ
+        // вызывающему: в chats_send просит хода другой чат, и текст отказа принадлежит ему.
+        // Проверка одна на оба пути метода — прямой запуск хода и очередь занятого чата:
+        // не-владелец не должен оставлять в очереди детского чата сообщение, которое никогда
+        // не станет его ходом (поздняя доставка через SendDirectAsync отказала бы её
+        // молча для вызывающего: он уже получил «202 queued»).
+        // Подача без отправителя (senderUserId = null — будильник сторожа, директива) —
+        // не отказ: те же правила, что у хаб-пути, их держит ChildTurnRefusal.
+        if (ChildTurnRefusal(entry, senderUserId) is { } childRefusal)
+            return new SendAndWaitResult.Refused(childRefusal);
+
         _store.ClaimFirstMessage(entry);
 
         // Занята только при реально идущем ходе (Working) или ожидании человека (Waiting).
@@ -722,7 +824,18 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
                 SenderUserId: senderUserId));
 
         if (entry.Info.ChildSpace is not null && _store.ResolveOwnerId(entry.Info) is { } childOwner)
+        {
             await _settings.CatchUpChildChatAsync(sessionId, childOwner);
+            // И10 (дефект a771ca12): тот же вердикт, что на хаб-пути (SendDirectAsync). Здесь отказ
+            // — ответ вызывающему, а не запись в ленту: в chats_send просит хода другой чат (тот же
+            // приём, что ChildTurnRefusal выше по этому методу). Без него было два прохода: при
+            // живом процессе EnsureProcessAsync прошёл бы молча и ход пошёл на недопустимом
+            // маршруте; при мёртвом он бросил бы ChildRouteRefusedException наружу — тот же исход
+            // хаба, что исправлен правкой f974e03f (дефект f974e03f), но на этом канале он и не
+            // был закрыт (п.б задачи Х-W4-81).
+            if (_settings.ChildTurnRefusalFor(childOwner, entry.Info) is { } routeRefusal)
+                return new SendAndWaitResult.Refused(routeRefusal);
+        }
         await _process.EnsureProcessAsync(sessionId, entry);
         entry.Accumulator?.SetPersona(entry.Info.PersonaId);
 

@@ -35,6 +35,12 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     /// </summary>
     public sealed class Hosts : TestWebApplicationFactory
     {
+        // Корень песочницы — на фикстуре, а не на тест-классе: хост один на класс, и его
+        // Sandbox:ProjectsRoot — значение первого экземпляра. Проект изолированного владельца
+        // обязан лежать внутри НЕГО (ProjectManager.EnsureRootAllowed), поэтому тесту нужен
+        // ровно тот путь, который получил хост, а не свежий guid следующего теста.
+        internal readonly string SandboxRoot = Path.Combine(Path.GetTempPath(), "ccs-kids-profile-" + Guid.NewGuid().ToString("N"));
+
         // internal: тип поля — приватный вложенный класс тест-класса, public-поле было бы
         // менее доступным, чем его тип (CS0052)
         internal readonly ThrowingBroadcaster BroadcasterStub = new();
@@ -111,7 +117,7 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         _hosts.ExtraConfig["LlmProviders:deepseek:Models:0:PriceOutPer1M"] = "1.0";
         // Тест «предмет удалён — чат цел» создаёт детский чат: корень чатов container-владельца
         // в песочнице (CliRoute.ResolveChatRoot) — та же настройка, что у ChildChatsControllerTests.
-        _hosts.ExtraConfig["Sandbox:ProjectsRoot"] = Path.Combine(Path.GetTempPath(), "ccs-kids-profile-" + Guid.NewGuid().ToString("N"));
+        _hosts.ExtraConfig["Sandbox:ProjectsRoot"] = _hosts.SandboxRoot;
         _admin = _hosts.CreateAuthenticatedClient();
         _users = _hosts.Services.GetRequiredService<UserStore>();
         _policy = _hosts.Services.GetRequiredService<IChildModePolicy>();
@@ -140,10 +146,13 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     /// <summary>Валидное тело включения: провайдер — запись пула с ApiKey, «Уроки» с окном
-    /// и дневным лимитом, опекун — существующий пользователь.</summary>
+    /// и дневным лимитом, опекун — существующий пользователь. Согласие на риск маршрута здесь
+    /// стоит: без него не годен ни один маршрут, включая запись пула (И2″, решение 26), —
+    /// тело без него уже не «валидное».</summary>
     private object ValidBody(string guardianId = "") => new
     {
         enabled = true,
+        acknowledgeRouteRisk = true,
         guardianUserIds = guardianId.Length > 0 ? new[] { guardianId } : Array.Empty<string>(),
         providerKey = KidsKey,
         model = "sonnet",
@@ -204,62 +213,12 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             .GetProperty("id").GetString()!;
     }
 
-    /// <summary>Тело с одним предметом «math» и привязкой базы знаний (К1b): datasetId —
-    /// привязать, null — снять. Остальные поля предмета валидны: отказ не должен прийти
-    /// из них. Пустой/отсутствующий datasetId — снятие, а не привязка. guardians — та же длина пути запроса, что у теста согласия правил.</summary>
-    private static Dictionary<string, object?> BodyWithSubjectKnowledge(string? datasetId, string[]? guardians = null) => new()
-    {
-        ["enabled"] = true,
-        ["providerKey"] = KidsKey,
-        ["model"] = "sonnet",
-        ["spaces"] = new Dictionary<string, object>(),
-        ["guardianUserIds"] = guardians ?? Array.Empty<string>(),
-        ["subjects"] = new[]
-        {
-            new Dictionary<string, object?>
-            {
-                ["id"] = "math",
-                ["label"] = "Математика",
-                ["glyph"] = "М",
-                ["color"] = "info",
-                ["providerKey"] = KidsKey,
-                ["model"] = "sonnet",
-                ["knowledge"] = datasetId is null ? (object?)null : new { datasetId },
-            },
-        },
-    };
-
-    /// <summary>Привязка сохранённого предмета — из стора, а не из ответа.</summary>
-    private ChildSubjectKnowledge StoredKnowledge(string childId, string subjectId = "math") =>
-        _users.GetById(childId)!.ChildMode!.Subjects.Single(s => s.Id == subjectId).Knowledge!;
-
-    /// <summary>Тело с предметом «math» на чужом поставщике (deepseek — в реестре хоста с ценой):
-    /// acknowledgeRouteRisk — true / null (поля нет) / false: трёхзначный флаг согласия (Х1).
-    /// Остальные поля предмета валидны: отказ не должен прийти из них. guardians — та же длина
-    /// пути запроса, что у тестов гонки.</summary>
-    private static Dictionary<string, object?> BodyWithRoutedSubject(object? acknowledge, string[]? guardians = null) => new()
-    {
-        ["enabled"] = true,
-        ["providerKey"] = KidsKey,
-        ["model"] = "sonnet",
-        ["spaces"] = new Dictionary<string, object>(),
-        ["guardianUserIds"] = guardians ?? Array.Empty<string>(),
-        ["subjects"] = new[]
-        {
-            new Dictionary<string, object?>
-            {
-                ["id"] = "math",
-                ["label"] = "Математика",
-                ["glyph"] = "М",
-                ["color"] = "info",
-                ["providerKey"] = "deepseek",
-                ["model"] = "deepseek-v4-pro",
-                ["acknowledgeRouteRisk"] = acknowledge,
-            },
-        },
-    };
-
     /// <summary>Предмет сохранённого профиля — из стора, а не из ответа.</summary>
+    /// <summary>Проект-предмет ребёнка (Б17a): репетитор — его руководитель (DefaultPersonaId).</summary>
+    private Project LeadProject(string childId, string subjectId) =>
+        _hosts.Services.GetRequiredService<ProjectManager>().GetByOwner(childId)
+            .Single(p => p.ChildSubjectId == subjectId);
+
     private ChildSubject StoredSubject(string childId, string subjectId = "math") =>
         _users.GetById(childId)!.ChildMode!.Subjects.Single(s => s.Id == subjectId);
 
@@ -321,37 +280,30 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     [Fact]
-    public async Task Put_ПровайдерНеРезолвится_400_provider_not_api_key_ТекстВеткиForPool()
+    public async Task Put_ПровайдерНеРезолвится_400_provider_not_api_key_ТекстОдинДляПрофиляИПредмета()
     {
         // Ключ, который не резолвится ни в одну запись (нет в пуле, нет в реестре провайдеров):
-        // ChildRoute.Evaluate → NoRoute → ветка forPool:true RouteReject: тот же код, что у
-        // «не запись с ключом», а текст называет пул подписок. Сторож именно этой ветки:
-        // Put_ПровайдерНеЗаписьСApiKey_400_provider_not_api_key проверяет код, текст forPool
-        // здесь — единственный в классе.
-        // Мутация «поменять местами тексты веток NoRoute» — красный на Contain, не на коде.
+        // ChildRoute.Evaluate → NoRoute → RouteReject. Отдельной «профильной» ветки текста (forPool)
+        // больше нет: маршрут ребёнка — любой маршрут реестра взрослых (решение 25), поэтому и
+        // «что не так» у профиля и предмета одно. Мутация «вернуть ветку forPool» — красный на
+        // Contain, не на коде.
         var id = await NewContainerUser("kid-provider-unresolved");
         var body = new { enabled = true, providerKey = "no-such-provider", model = "sonnet", spaces = new Dictionary<string, object>() };
 
         var (status, resp) = await PutAsync(id, body);
         status.Should().Be(HttpStatusCode.BadRequest);
         CodeOf(resp).Should().Be("provider_not_api_key");
-        resp.GetProperty("message").GetString().Should().Contain("пула подписок с API-ключом",
-            "отказ профиля — ветка forPool:true: текст называет пул подписок");
+        resp.GetProperty("message").GetString().Should().Contain("записью пула с API-ключом или включённым провайдером моделей",
+            "текст NoRoute один: он называет и пул, и реестр провайдеров");
         _users.GetById(id)!.ChildMode.Should().BeNull();
     }
 
     [Fact]
-    public async Task PutProfile_RulesChatProviderRoute_Returns400()
+    public async Task PutProfile_ЧатПравилНаЧужомПоставщике_БезСогласияПрофиля_400_route_risk_unacknowledged()
     {
-        // Сторож «чат правил + облачный провайдер = отказ» (минор ревью Т5a): deepseek —
-        // законный маршрут ПРЕДМЕТА с согласия админа (тесты Т5a дают ему 200), но маршрут
-        // чата правил — только запись пула с API-ключом: Evaluate профиля всегда идёт с
-        // acknowledged: false (проверка маршрута профиля в начале ChildProfileValidator.Validate),
-        // а flag согласия в теле — не поле
-        // контракта профиля и не читается никогда. Отказ здесь — ChildRouteRefusal.RiskUnacknowledged
-        // → код route_risk_unacknowledged в ChildProfileValidator.RouteReject: deepseek резолвится
-        // в реестре хоста, но не-Anthropic без согласия. Флаг forPool меняет только текст ветки
-        // NoRoute (до неё здесь не доходит) — текст отказа потому называет «не Anthropic», а не пул.
+        // Маршрут профиля (его несёт чат правил) — любой маршрут реестра взрослых, но только за
+        // согласием профиля (решение 26): deepseek резолвится в реестре хоста и с ценой, поэтому
+        // отказ — ChildRouteRefusal.RiskUnacknowledged, а не provider_not_api_key.
         var id = await NewContainerUser("kid-rules-provider");
         var body = new
         {
@@ -359,24 +311,46 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             providerKey = "deepseek",
             model = "deepseek-v4-pro",
             spaces = new Dictionary<string, object>(),
-            acknowledgeRouteRisk = true,   // поля профиля нет в контракте: согласия для него не бывает
         };
 
         var (status, resp) = await PutAsync(id, body);
         status.Should().Be(HttpStatusCode.BadRequest);
         CodeOf(resp).Should().Be("route_risk_unacknowledged");
-        resp.GetProperty("message").GetString().Should().Contain("профиля",
-            "отказ называет маршрут профиля, а не предмета");
+        resp.GetProperty("message").GetString().Should().Contain("нужно согласие на профиле ребёнка",
+            "отказ называет согласие профиля — единственное, что теперь бывает");
         _users.GetById(id)!.ChildMode.Should().BeNull("отказ включению — профиль не сохранён");
+    }
+
+    [Fact]
+    public async Task PutProfile_ЧатПравилНаЧужомПоставщике_ССогласиемПрофиля_200_ПараВСторе()
+    {
+        var id = await NewContainerUser("kid-rules-provider-ack");
+        var (status, resp) = await PutAsync(id, new
+        {
+            enabled = true,
+            providerKey = "deepseek",
+            model = "deepseek-v4-pro",
+            spaces = new Dictionary<string, object>(),
+            acknowledgeRouteRisk = true,
+        });
+        status.Should().Be(HttpStatusCode.OK);
+
+        var (at, by) = StoredConsent(id);
+        at.Should().NotBeNull("согласие профиля ставится телом с acknowledgeRouteRisk=true");
+        by.Should().Be(AdminId, "автор согласия — админ из claim запроса");
+        resp.GetProperty("profile").GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
     public async Task Put_ОкноНечитаемое_400_invalid_window()
     {
         var id = await NewContainerUser("kid-window");
+        // Согласие профиля в теле нужно, чтобы тело дошло до проверяемой проверки: без него
+        // маршрут не годен (И2″) и отказ был бы route_risk_unacknowledged, а не invalid_window.
         var body = new
         {
             enabled = true,
+            acknowledgeRouteRisk = true,
             providerKey = KidsKey,
             model = "sonnet",
             spaces = new Dictionary<string, object>
@@ -398,6 +372,8 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         var body = new
         {
             enabled = true,
+            // Тот же смысл, что в тесте нечитаемого окна: без согласия профиля отказ был бы по согласию.
+            acknowledgeRouteRisk = true,
             providerKey = KidsKey,
             model = "sonnet",
             spaces = new Dictionary<string, object>
@@ -418,6 +394,8 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         var body = new
         {
             enabled = true,
+            // Тот же смысл, что в тестах окон: без согласия профиля отказ был бы по согласию.
+            acknowledgeRouteRisk = true,
             providerKey = KidsKey,
             model = "sonnet",
             spaces = new Dictionary<string, object>
@@ -495,12 +473,10 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     [Fact]
-    public async Task Put_БезSubjects_ЖивыеПредметыСохранены_ОтветНесётЖивогоТьютора()
+    public async Task Put_БезSubjects_ЖивыеПредметыСохранены_ОтветБезПолейМаршрута()
     {
         var id = await EnableChild("kid-subjects-keep");
-        var tutor = _users.GetById(id)!.ChildMode!.TutorPersonaId;
-        // Засев предмета прямой записью в живой профиль (как делает миграция): предмет
-        // несёт поля профиля и его тьютора.
+        // Засев предмета прямой записью в живой профиль (как делает миграция).
         ChildTestSubjects.Seed(_hosts.Services, id);
 
         // PUT вкладки «Режим и время»: тела без subjects — правка лимитов не стирает
@@ -511,17 +487,18 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         var stored = _users.GetById(id)!.ChildMode!;
         stored.Subjects.Should().ContainSingle("PUT без subjects не стирает предметы")
             .Which.Id.Should().Be(ChildTestSubjects.Key);
-        stored.Subjects[0].TutorPersonaId.Should().Be(tutor, "живой тьютор предмета сохранён");
 
-        // Ответ отдаёт предметы с живым тьютором (Т2a: tutorPersonaId — поле ответа, из тела не читалось).
-        body.GetProperty("profile").GetProperty("subjects")[0].GetProperty("tutorPersonaId")
-            .GetString().Should().Be(tutor);
+        // Ответ отдаёт плитку предмета без репетитора, маршрута и знаний (Б17c): их несёт проект-предмет.
+        var tile = body.GetProperty("profile").GetProperty("subjects")[0];
+        foreach (var removed in new[] { "tutorPersonaId", "providerKey", "model", "knowledge", "acknowledgeRouteRisk", "routeAcknowledgedAt" })
+            tile.TryGetProperty(removed, out _).Should().BeFalse($"поле «{removed}» предмета снято");
+        tile.GetProperty("knowledgeMoved").GetBoolean().Should().BeFalse("базы знаний у предмета не было");
     }
 
     // --- репетиторы предметов (Т2b): провижн при добавлении, откат при отказе ---
 
     [Fact]
-    public async Task Put_НовыйПредмет_200_РепетиторПроведён_КлючВПредмете()
+    public async Task Put_НовыйПредмет_200_РепетиторПроведён_РуководительПроекта()
     {
         var id = await EnableChild("kid-subject-provision");
 
@@ -539,15 +516,16 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         var (status, resp) = await PutAsync(id, body);
         status.Should().Be(HttpStatusCode.OK);
 
-        // У предмета в ответе непустой tutorPersonaId: персону провит сам PUT (Т2b),
-        // ключ закреплён в записи стора, персона — ребёнка.
-        var subjectTutor = resp.GetProperty("profile").GetProperty("subjects")[0]
-            .GetProperty("tutorPersonaId").GetString()!;
+        // Б17a: репетитор — руководитель проекта предмета (DefaultPersonaId — единственная точка
+        // правды), персона проектная и ребёнка; ключа в предмете больше нет (Б17c).
+        var project = LeadProject(id, "math");
+        var subjectTutor = project.DefaultPersonaId!;
         subjectTutor.Should().NotBeNullOrEmpty();
-        _users.GetById(id)!.ChildMode!.Subjects[0].TutorPersonaId.Should().Be(subjectTutor);
         var persona = _hosts.Services.GetRequiredService<PersonaManager>().Get(subjectTutor, id);
         persona.Should().NotBeNull();
         persona!.Name.Should().Be("Репетитор: Математика");
+        persona.Scope.Should().Be(PersonaScope.Project);
+        persona.ProjectId.Should().Be(project.Id);
 
         // Тьютор профиля не подменён предметным: это разные персоны (разрез §1).
         _users.GetById(id)!.ChildMode!.TutorPersonaId.Should().NotBe(subjectTutor);
@@ -586,7 +564,6 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             var stored = _users.GetById(id)!.ChildMode!;
             stored.TutorPersonaId.Should().Be(tutor);
             stored.Subjects.Should().ContainSingle().Which.Id.Should().Be(ChildTestSubjects.Key);
-            stored.Subjects[0].TutorPersonaId.Should().Be(tutor, "живой предмет отказанный PUT не трогает");
 
             // Созданная персона предмета удалена откатом: у ребёнка остались тьютор профиля
             // («Помощник») и дефолт-ассистент (провится при POST /api/users, UsersController.cs:51);
@@ -602,70 +579,11 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     [Fact]
-    public async Task Put_УдалениеСироты_ВещаниеБросает_200_ПерсонаУдалена()
+    public async Task PutProfile_SubjectRemoved_LeadersKept_ChatKept()
     {
-        // Т2d + правка вердикта a18a26cf: сбой вещания удаления не должен превращать ответ
-        // вызывающего в 500 — профиль уже сохранён, исключение внутри RemoveOrphanTutorsAsync
-        // остаётся логом. Здесь ThrowingBroadcaster бросает ровно на вещании удаления: первый
-        // PUT провит обоих репетиторов без отказа (ThrowFor ещё null), а второй не содержит
-        // нового провижна — живой тьютор профиля и живой ключ «physics» возвращаются Early-return
-        // без вещания, единственный ToOwner на этом пути — «deleted» сироты.
-        var id = await EnableChild("kid-orphan-broadcast-fail");
-        var (firstStatus, firstResp) = await PutAsync(id, new
-        {
-            enabled = true,
-            providerKey = KidsKey,
-            model = "sonnet",
-            spaces = new Dictionary<string, object>(),
-            subjects = new[]
-            {
-                new { id = "math", label = "Математика", glyph = "×÷", color = "info", providerKey = KidsKey, model = "sonnet" },
-                new { id = "physics", label = "Физика", glyph = "×", color = "info", providerKey = KidsKey, model = "sonnet" },
-            },
-        });
-        firstStatus.Should().Be(HttpStatusCode.OK);
-        var subjects = firstResp.GetProperty("profile").GetProperty("subjects");
-        var mathTutor = subjects[0].GetProperty("tutorPersonaId").GetString()!;
-        var physicsTutor = subjects[1].GetProperty("tutorPersonaId").GetString()!;
-        mathTutor.Should().NotBeNullOrEmpty();
-        physicsTutor.Should().NotBeNullOrEmpty();
-
-        // Второй PUT: «math» в теле нет — его ключ (живой, сохранённый слиянием по Id,
-        // UserStore.cs:703) становится кандидатом сироты в RemovedSubjectTutors.
-        _hosts.BroadcasterStub.ThrowFor = id;
-        try
-        {
-            var (status, _) = await PutAsync(id, new
-            {
-                enabled = true,
-                providerKey = KidsKey,
-                model = "sonnet",
-                spaces = new Dictionary<string, object>(),
-                subjects = new[]
-                {
-                    new { id = "physics", label = "Физика", glyph = "×", color = "info", providerKey = KidsKey, model = "sonnet" },
-                },
-            });
-            status.Should().Be(HttpStatusCode.OK,
-                "сбой вещания — лог внутри провижера: профиль сохранён, ответ остаётся 200");
-
-            var personas = _hosts.Services.GetRequiredService<PersonaManager>();
-            personas.Get(mathTutor, id).Should().BeNull(
-                "удаление предшествовало вещанию: отказ вещания не отменяет состоявшееся удаление");
-            personas.Get(physicsTutor, id).Should().NotBeNull("репетитор оставшегося предмета не затронут");
-        }
-        finally
-        {
-            _hosts.BroadcasterStub.ThrowFor = null;
-        }
-    }
-
-    [Fact]
-    public async Task PutProfile_SubjectRemoved_TutorDeleted_ChatKept()
-    {
-        // Минор R-Т2d 66780808: RemovedSubjectTutors покрыта настоящим PUT: предмет убран
-        // списком тела, его репетитор — сирота (кандидат по Id), репетитор оставшегося предмета
-        // не тронут, а чат предмета остаётся — только для чтения.
+        // PUT убрал предмет списком тела: репетиторы-руководители проектов (ни удалённого, ни оставшегося
+        // предмета) не трогаются — проект удалённого предмета живёт (ADR-041), чат остаётся только для
+        // чтения. Б17c: контракта сирот старых ключей предмета больше нет (полей нет).
         var id = await NewContainerUser("kid-subject-removed");
         var local = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Moscow).DateTime;
         // Окно, действительное «сейчас» (переход через полночь — законное окно): детский чат
@@ -678,9 +596,12 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
                 dailyMinutes = 40,
             },
         };
-        var (firstStatus, firstResp) = await PutAsync(id, new
+        // Согласие профиля в первом теле (решение 26): без него ни один маршрут не годен (И2″) —
+        // тело отбилось бы до записи. Второе тело поля не несёт: живое согласие сохраняется.
+        var (firstStatus, _) = await PutAsync(id, new
         {
             enabled = true,
+            acknowledgeRouteRisk = true,
             providerKey = KidsKey,
             model = "sonnet",
             spaces,
@@ -688,19 +609,21 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             monthlyBudgetUsd = 40,
             subjects = new[]
             {
-                new { id = "math", label = "Математика", glyph = "×÷", color = "info", providerKey = KidsKey, model = "sonnet" },
-                new { id = "physics", label = "Физика", glyph = "×", color = "info", providerKey = KidsKey, model = "sonnet" },
+                new { id = "math", label = "Математика", glyph = "×÷", color = "info" },
+                new { id = "physics", label = "Физика", glyph = "×", color = "info" },
             },
         });
         firstStatus.Should().Be(HttpStatusCode.OK);
-        var subjectsJson = firstResp.GetProperty("profile").GetProperty("subjects");
-        var mathTutor = subjectsJson[0].GetProperty("tutorPersonaId").GetString()!;
-        var physicsTutor = subjectsJson[1].GetProperty("tutorPersonaId").GetString()!;
-        mathTutor.Should().NotBeNullOrEmpty();
-        physicsTutor.Should().NotBeNullOrEmpty();
+        var mathLead = LeadProject(id, "math").DefaultPersonaId;
+        var physicsLead = LeadProject(id, "physics").DefaultPersonaId;
+        mathLead.Should().NotBeNullOrEmpty();
+        physicsLead.Should().NotBeNullOrEmpty();
+        var personas = _hosts.Services.GetRequiredService<PersonaManager>();
         SeedRules(id, RulesT1, "правила согласованы"); // без согласия правил чат не создаётся (RulesPending)
 
-        // Чат «Уроков» предмета «math» — своим клиентом ребёнка (детский чат админ не создаёт).
+        // Урок «math» — своим клиентом ребёнка через единственную точку создания (Б9b): чат
+        // проекта-предмета; руководителю заранее дана живая модель (И10), без неё точка 409.
+        SetLeadModel(id, "math", "sonnet");
         var childClient = _hosts.CreateAuthenticatedClient("kid-subject-removed", KidsPassword);
         (await ChildTestSubjects.CreateChat(childClient, "math")).EnsureSuccessStatusCode();
 
@@ -715,17 +638,18 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             monthlyBudgetUsd = 40,
             subjects = new[]
             {
-                new { id = "physics", label = "Физика", glyph = "×", color = "info", providerKey = KidsKey, model = "sonnet" },
+                new { id = "physics", label = "Физика", glyph = "×", color = "info" },
             },
         });
         status.Should().Be(HttpStatusCode.OK);
         _users.GetById(id)!.ChildMode!.Subjects.Should().ContainSingle().Which.Id.Should().Be("physics");
 
-        var personas = _hosts.Services.GetRequiredService<PersonaManager>();
-        personas.Get(mathTutor, id).Should().BeNull("сирота удалённого предмета удалена");
-        personas.Get(physicsTutor, id).Should().NotBeNull("репетитор оставшегося предмета не тронут");
+        // Руководители — не сироты: проект удалённого предмета живёт (ADR-041), его уроки остаются
+        // видимыми; их удаление — не контракт этой ручки.
+        personas.Get(mathLead!, id).Should().NotBeNull("руководитель удалённого предмета не сирота: проект живёт");
+        personas.Get(physicsLead!, id).Should().NotBeNull("руководитель оставшегося предмета не тронут");
 
-        // Чат предмета цел (только чтение — Т1c/Т1d): тот же чат предмета, с флагом закрытого
+        // Чат предмета цел (только чтение — Т1c/Т1d): тот же чат проекта-предмета, с флагом закрытого
         // предмета.
         var resp = await childClient.GetAsync("/api/child/spaces/lessons/chats");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -748,22 +672,21 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         var id = await EnableChild("kid-rollback-race");
         _users.SeedChildSubjectsIfEmpty(id,
         [
-            new ChildSubject { Id = "physics", Label = "Физика", Glyph = "×", Color = "info", ProviderKey = KidsKey, Model = "sonnet" },
-            new ChildSubject { Id = "math", Label = "Математика", Glyph = "×÷", Color = "info", ProviderKey = KidsKey, Model = "sonnet" },
+            new ChildSubject { Id = "physics", Label = "Физика", Glyph = "×", Color = "info"},
+            new ChildSubject { Id = "math", Label = "Математика", Glyph = "×÷", Color = "info"},
         ]).Should().BeTrue("профиль ребёнка пуст — засев проходит");
 
         var foreign = _hosts.Services.GetRequiredService<PersonaManager>().Create(
             id, "Репетитор: Математика", null, null, null, null, null, PersonaScope.Global, null, null, null, false);
 
-        // Первая creation запроса (physics): хук вызывается после закрепления ключа — тест
-        // читает свой ключ запроса и записывает соседский в «math»; затем отказ вещания —
-        // запрос идёт в откат.
+        // Первая creation запроса (physics): хук вызывается после закрепления руководителя —
+        // тест читает id своей персоны; затем отказ вещания — провижнер откатывает её сам.
+        // Чужая персона ребёнка при этом остаётся.
         string? ownTutor = null;
         _hosts.BroadcasterStub.ArmFirstCreated(() =>
         {
-            ownTutor = StoredSubject(id, "physics").TutorPersonaId;
-            ownTutor.Should().NotBeNullOrEmpty("запрос закрепил своего репетитора до вещания");
-            StoredSubject(id, "math").TutorPersonaId = foreign.Id;
+            ownTutor = LeadProject(id, "physics").DefaultPersonaId;
+            ownTutor.Should().NotBeNullOrEmpty("запрос закрепил своего руководителя до вещания");
         });
         _hosts.BroadcasterStub.ThrowFor = id;
         try
@@ -779,6 +702,7 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             personas.Get(foreign.Id, id).Should().NotBeNull(
                 "чужой репетитор появился в профиле после снимка: откат своих его не трогает");
             personas.Get(ownTutor!, id).Should().BeNull("персону, созданную этим запросом, откат удалил");
+            LeadProject(id, "physics").Should().NotBeNull("проект предмета остаётся — повторный провижн его подхватит");
         }
         finally
         {
@@ -791,13 +715,17 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
 
     /// <summary>Тело формы с предметами заданных пар (id, поставщик, модель, согласие):
     /// список тела авторитетен (тот же формат, что у теста «предмет удалён — чат цел»), окно
-    /// «Уроков» действительное «сейчас» — детский чат должен пройти И3 при создании.</summary>
+    /// «Уроков» действительное «сейчас» — детский чат должен пройти И3 при создании.
+    /// Согласие на риск с решения 26 — одно на профиль, и без него не годен ни один маршрут
+    /// (И2″), поэтому тело всегда с ним: флаг в строке предмета больше ничего не решает.
+    /// Тесту, которому нужен отказ «без согласия», — снять поле из returned тела.</summary>
     private static Dictionary<string, object?> RepinBody(params (string Id, string ProviderKey, string Model, bool? Ack)[] subjects)
     {
         var local = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Moscow).DateTime;
         return new Dictionary<string, object?>
         {
             ["enabled"] = true,
+            ["acknowledgeRouteRisk"] = true,
             ["providerKey"] = KidsKey,
             ["model"] = "sonnet",
             ["spaces"] = new Dictionary<string, object>
@@ -820,8 +748,8 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     /// <summary>Ребёнок с предметами и согласованными правилами: включение → PUT с предметами
-    /// (провижн тьюторов, как у админа на живой ручке) → запись согласия правил — без него
-    /// чат не создаётся (RulesPending, тот же приём, что у SeedRules в тесте удаления).</summary>
+    /// (провижн проектов и руководителей, как у админа на живой ручке) → запись согласия правил — без него чат не создаётся (RulesPending,
+    /// тот же приём, что у SeedRules в тесте удаления).</summary>
     private async Task<string> EnableChildWithSubjects(string name, params (string Id, string ProviderKey, string Model, bool? Ack)[] subjects)
     {
         var id = await NewContainerUser(name);
@@ -832,44 +760,78 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     /// <summary>Чат «Уроков» предмета, созданный клиентом ребёнка (логин — по имени, как в
-    /// тесте удаления), — и его закреплённые при создании поля: админ детский чат не создаёт.</summary>
+    /// тесте удаления): Б9b — единственной точкой создания урока POST …/chat; это чат проекта-
+    /// предмета, его репетитор — руководитель проекта (И10). До создания тест обязан дать
+    /// руководителю развёрнутую модель (SetLeadModel): без живой модели урока точка создаёт
+    /// 409 subject_not_ready.</summary>
     private async Task<Session> CreateChildChatAsync(string childName, string subjectId)
     {
         var client = _hosts.CreateAuthenticatedClient(childName, KidsPassword);
-        (await ChildTestSubjects.CreateChat(client, subjectId)).EnsureSuccessStatusCode();
-        return ChildChatOf(_users.FindByUsername(childName)!.Id, subjectId);
+        var resp = await ChildTestSubjects.CreateChat(client, subjectId);
+        var text = await resp.Content.ReadAsStringAsync();
+        resp.StatusCode.Should().Be(HttpStatusCode.Created, $"чат предмета не создан: {text}");
+        var id = JsonSerializer.Deserialize<JsonElement>(text).GetProperty("sessionId").GetString()!;
+        return _hosts.Services.GetRequiredService<SessionManager>().GetById(id)!;
     }
 
-    /// <summary>Живой чат ребёнка с этим предметом — ровно один (реестр стора, не ответ ручки).</summary>
-    private Session ChildChatOf(string childId, string subjectId) =>
-        _hosts.Services.GetRequiredService<SessionManager>().GetAll()
-            .Single(s => s.ChildSpace is not null && s.ChildSubject == subjectId && s.OwnerId == childId);
+    /// <summary>Живой чат ребёнка с этим предметом (реестр стора, не ответ ручки): для урока в
+    /// проекте-предмете владелец — по проекту (SessionStore.ResolveOwnerId), как его считает
+    /// и перезакрепление (ProviderMigration.RepinChildSubjectAsync).</summary>
+    private List<Session> ChildChatsOf(string childId, string subjectId)
+    {
+        var store = _hosts.Services.GetRequiredService<SessionStore>();
+        return _hosts.Services.GetRequiredService<SessionManager>().GetAll()
+            .Where(s => s.ChildSpace is not null && s.ChildSubject == subjectId && store.ResolveOwnerId(s) == childId)
+            .ToList();
+    }
+
+    /// <summary>Живая модель репетитора — модель персоны-руководителя проекта-предмета (И10):
+    /// провижер Б17a создаёт её без своей модели (её задаёт куратор штатной дверью персоны,
+    /// разрез §14.3) — тест даёт её той же дверью. Возвращает id руководителя.</summary>
+    private string SetLeadModel(string childId, string subjectId, string model)
+    {
+        var leadId = LeadProject(childId, subjectId).DefaultPersonaId;
+        leadId.Should().NotBeNullOrEmpty($"у предмета {subjectId} нет руководителя — провижер Б17a не отработал");
+        _hosts.Services.GetRequiredService<PersonaManager>().Update(leadId!, childId,
+            null, null, null, null, model, null, null, null, null, null, null);
+        return leadId!;
+    }
 
     [Fact]
     public async Task PutProfile_SubjectModelChanged_ChatsGetNewModel_OtherSubjectsAndChildrenUnchanged()
     {
-        // Т2e (c1): смена модели предмета перезакрепляет его чаты. Отбор точный: только чаты
-        // этого ребёнка этого предмета — соседний «math» того же ребёнка и «russian» другого
-        // ребёнка (id предмета — slug и повторяется между детьми) не тронуты.
-        // UpdatedAt не двигается: маршрут — настройка чата, а не активность (инвариант роли).
+        // Т2e (c1) на живом маршруте (И10, решение 71): модель урока — у персоны-руководителя,
+        // записанная модель предмета больше не указ. Тест меняет модель руководителя «russian»
+        // дверью персоны; следующий PUT перезакрепляет чаты этого предмета на живой маршрут.
+        // Отбор точный: только чаты этого ребёнка этого предмета — соседний «math» того же
+        // ребёнка и «russian» другого ребёнка (id предмета — slug и повторяется между детьми)
+        // не тронуты. UpdatedAt не двигается: маршрут — настройка чата, а не активность (инвариант роли).
         var kid = await EnableChildWithSubjects("kid-repin-model",
             ("russian", KidsKey, "sonnet", null), ("math", KidsKey, "sonnet", null));
         var other = await EnableChildWithSubjects("kid-repin-other", ("russian", KidsKey, "sonnet", null));
+        var russianLead = SetLeadModel(kid, "russian", "sonnet");
+        SetLeadModel(kid, "math", "sonnet");
+        SetLeadModel(other, "russian", "sonnet");
 
         var russianChat = await CreateChildChatAsync("kid-repin-model", "russian");
         var mathChat = await CreateChildChatAsync("kid-repin-model", "math");
         var otherChat = await CreateChildChatAsync("kid-repin-other", "russian");
         var before = (russianChat.UpdatedAt, mathChat.UpdatedAt, otherChat.UpdatedAt);
 
+        // Живая модель репетитора «russian» — opus (та же дверь, что у куратора). Тело PUT с той же
+        // парой остаётся валидным, но маршрут решает руководитель, а не запись предмета.
+        _hosts.Services.GetRequiredService<PersonaManager>().Update(russianLead, kid,
+            null, null, null, null, "opus", null, null, null, null, null, null);
+
         var (status, _) = await PutAsync(kid, RepinBody(("russian", KidsKey, "opus", null), ("math", KidsKey, "sonnet", null)));
         status.Should().Be(HttpStatusCode.OK);
 
         var sessions = _hosts.Services.GetRequiredService<SessionManager>();
-        sessions.GetById(russianChat.Id)!.Model.Should().Be("opus", "чат предмета продолжает на новой модели");
+        sessions.GetById(russianChat.Id)!.Model.Should().Be("opus", "чат предмета продолжает на новой модели репетитора");
         sessions.GetById(russianChat.Id)!.Provider.Should().Be(KidsKey, "та же запись пула — тот же профиль");
-        sessions.GetById(russianChat.Id)!.PersonaId.Should().Be(StoredSubject(kid, "russian").TutorPersonaId,
+        sessions.GetById(russianChat.Id)!.PersonaId.Should().Be(russianLead,
             "репетитор предмета не изменился");
-        sessions.GetById(mathChat.Id)!.Model.Should().Be("sonnet", "предмет без смены маршрута не перезакрепляется");
+        sessions.GetById(mathChat.Id)!.Model.Should().Be("sonnet", "предмет без смены живого маршрута не перезакрепляется");
         sessions.GetById(otherChat.Id)!.Model.Should().Be("sonnet",
             "тот же slug у другого ребёнка не тронут: перезакрепление по владельцу");
 
@@ -896,20 +858,24 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     [Fact]
     public async Task PutProfile_SubjectProviderChanged_ChatsMovedWithTranscript()
     {
-        // Т2e2: сменился поставщик (пул → deepseek, с согласием) — чат перезакрепляется И его
-        // транскрипт копируется в профиль нового поставщика: --resume находит его после рестарта.
-        // Сверка И1-бис проходит (поля чата равны записи предмета). Исходный файл остаётся.
+        // Т2e2 на живом маршруте (И10): смена поставщика начинается со смены модели репетитора
+        // (поставщик — по модели): тест даёт руководителю «deepseek-v4-pro», следующий PUT
+        // (предмет на deepseek, с согласием) перезакрепляет чат И его транскрипт копируется в
+        // профиль нового поставщика: --resume находит его после рестарта. Сверка И1-бис проходит
+        // (поля чата равны живому маршруту). Исходный файл остаётся.
         var kid = await EnableChildWithSubjects("kid-repin-provider", ("russian", KidsKey, "sonnet", null));
+        var lead = SetLeadModel(kid, "russian", "sonnet");
         var chat = await CreateChildChatAsync("kid-repin-provider", "russian");
         var dst = SeedTranscript(kid, chat, KidsKey, "csid-repin-1", "deepseek", out var src);
 
+        SetLeadModel(kid, "russian", "deepseek-v4-pro");
         var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
         status.Should().Be(HttpStatusCode.OK);
 
         var live = _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!;
         live.Provider.Should().Be("deepseek");
         live.Model.Should().Be("deepseek-v4-pro");
-        live.PersonaId.Should().Be(StoredSubject(kid, "russian").TutorPersonaId);
+        live.PersonaId.Should().Be(lead);
         File.Exists(dst).Should().BeTrue("транскрипт скопирован в профиль нового поставщика");
         File.Exists(src).Should().BeTrue("исходный файл не удаляется");
         _hosts.Services.GetRequiredService<IChildModeGate>().LaunchMismatch(kid, live).Should().BeNull();
@@ -918,14 +884,19 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     [Fact]
     public async Task PutProfile_SubjectProviderChanged_NoConsent_ChatsUntouched()
     {
-        // Без согласия админа маршрут ChildRoute не принимает: PUT отклоняется валидатором,
-        // чат и его транскрипт остаются как были.
+        // Отзыв согласия при живом маршруте (решение 26 + И2″): без согласия не годен ни один
+        // маршрут, поэтому PUT отбивается валидатором — чат и его транскрипт остаются как были.
+        // Флаг в строке предмета здесь null — он бы ничего не изменил: согласия предмета нет.
         var kid = await EnableChildWithSubjects("kid-repin-noack", ("russian", KidsKey, "sonnet", null));
+        SetLeadModel(kid, "russian", "sonnet");
         var chat = await CreateChildChatAsync("kid-repin-noack", "russian");
         var dst = SeedTranscript(kid, chat, KidsKey, "csid-repin-2", "deepseek", out _);
 
-        var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", null)));
+        var body = RepinBody(("russian", "deepseek", "deepseek-v4-pro", null));
+        body["acknowledgeRouteRisk"] = false; // адним снимает согласие — и тело становится невалидным
+        var (status, resp) = await PutAsync(kid, body);
         status.Should().NotBe(HttpStatusCode.OK);
+        CodeOf(resp).Should().Be("route_risk_unacknowledged");
 
         var live = _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!;
         live.Provider.Should().Be(KidsKey);
@@ -936,19 +907,20 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     public async Task PutProfile_SubjectProviderChanged_OneChatFails_OthersMoved_Put200()
     {
         // Т2e2: у первого чата целевой файл транскрипта занят каталогом — копия падает; чат остаётся на
-        // старых полях (его ход откажет «предмет закрыт»/несовпадением), второй чат переносится, PUT — 200.
+        // старых полях (его ход откажет несовпадением с живым маршрутом), второй чат переносится, PUT — 200.
         var kid = await EnableChildWithSubjects("kid-repin-partial", ("russian", KidsKey, "sonnet", null));
+        SetLeadModel(kid, "russian", "sonnet");
         var client = _hosts.CreateAuthenticatedClient("kid-repin-partial", KidsPassword);
         (await ChildTestSubjects.CreateChat(client, "russian")).EnsureSuccessStatusCode();
         (await ChildTestSubjects.CreateChat(client, "russian")).EnsureSuccessStatusCode();
         var sessions = _hosts.Services.GetRequiredService<SessionManager>();
-        var chats = sessions.GetAll().Where(c => c.ChildSpace is not null && c.ChildSubject == "russian" && c.OwnerId == kid)
-            .OrderBy(c => c.Id).ToList();
+        var chats = ChildChatsOf(kid, "russian").OrderBy(c => c.Id).ToList();
         chats.Should().HaveCount(2);
         var dstBad = SeedTranscript(kid, chats[0], KidsKey, "csid-partial-bad", "deepseek", out _);
         Directory.CreateDirectory(dstBad);
         var dstOk = SeedTranscript(kid, chats[1], KidsKey, "csid-partial-ok", "deepseek", out _);
 
+        SetLeadModel(kid, "russian", "deepseek-v4-pro");
         var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
         status.Should().Be(HttpStatusCode.OK);
 
@@ -971,11 +943,15 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     {
         // Т2e2 (ревью be3ab479, п.1): идущий ход пропускает перенос только при СМЕНЕ ПОСТАВЩИКА.
         // Смена модели у того же поставщика (ADR-041 р.4, Т2e) переписывает поля сразу — идущий
-        // ход доживает со старыми. Мутация «пропуск по HasTurnInFlight до providerChanged» — красный.
+        // ход доживает со старыми. Живая модель — у репетитора (И10): тест меняет её дверью
+        // персоны; оба варианта — на записи пула KidsKey. Мутация «пропуск по HasTurnInFlight до
+        // providerChanged» — красный.
         var kid = await EnableChildWithSubjects("kid-repin-inflight-model", ("russian", KidsKey, "sonnet", null));
+        SetLeadModel(kid, "russian", "sonnet");
         var chat = await CreateChildChatAsync("kid-repin-inflight-model", "russian");
         MarkTurnInFlight(chat.Id);
 
+        SetLeadModel(kid, "russian", "opus");
         var (status, _) = await PutAsync(kid, RepinBody(("russian", KidsKey, "opus", null)));
         status.Should().Be(HttpStatusCode.OK);
 
@@ -989,12 +965,15 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     {
         // Т2e2 (ревью be3ab479, п.3): при смене поставщика чат с идущим ходом пропускается — копия
         // неполного транскрипта потеряла бы хвост ответа, который доживающий процесс допишет в старый
-        // профиль. Поля и транскрипт не тронуты, PUT — 200. Мутация «удалить блок пропуска» — красный.
+        // профиль. Смена поставщика начинается со смены модели репетитора (поставщик — по модели).
+        // Поля и транскрипт не тронуты, PUT — 200. Мутация «удалить блок пропуска» — красный.
         var kid = await EnableChildWithSubjects("kid-repin-inflight-prov", ("russian", KidsKey, "sonnet", null));
+        SetLeadModel(kid, "russian", "sonnet");
         var chat = await CreateChildChatAsync("kid-repin-inflight-prov", "russian");
         var dst = SeedTranscript(kid, chat, KidsKey, "csid-inflight-1", "deepseek", out _);
         MarkTurnInFlight(chat.Id);
 
+        SetLeadModel(kid, "russian", "deepseek-v4-pro");
         var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
         status.Should().Be(HttpStatusCode.OK);
 
@@ -1009,12 +988,14 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     {
         // Т2e2 (ревью be3ab479, п.2): PUT со сменой поставщика на идущем ходе пропустил чат; ход
         // кончился — на старте следующего (TurnIntake → ChatSettings → ProviderMigration.CatchUp…)
-        // чат переносится на маршрут предмета вместе с транскриптом, и сверка И1-бис проходит.
+        // чат переносится на живой маршрут предмета вместе с транскриптом, и сверка И1-бис проходит.
         var kid = await EnableChildWithSubjects("kid-catchup", ("russian", KidsKey, "sonnet", null));
+        SetLeadModel(kid, "russian", "sonnet");
         var chat = await CreateChildChatAsync("kid-catchup", "russian");
         var dst = SeedTranscript(kid, chat, KidsKey, "csid-catchup-1", "deepseek", out _);
         MarkTurnInFlight(chat.Id);
 
+        SetLeadModel(kid, "russian", "deepseek-v4-pro");
         var (status, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
         status.Should().Be(HttpStatusCode.OK);
         var sessions = _hosts.Services.GetRequiredService<SessionManager>();
@@ -1034,30 +1015,14 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     [Fact]
-    public async Task CatchUp_PoolKey_ChatGetsExactlyThatKey_NotPick()
-    {
-        // И2′ для пути догона: цель — ровно ProviderKey предмета. Мутация «targetKey = Pick(model)»
-        // отправила бы чат на аккаунт, выбранный пулом, а не на запись предмета.
-        var kid = await EnableChildWithSubjects("kid-catchup-pool", ("russian", KidsKey, "sonnet", null));
-        var chat = await CreateChildChatAsync("kid-catchup-pool", "russian");
-        var dst = SeedTranscript(kid, chat, KidsKey, "csid-catchup-2", KidsKey2, out _);
-        MarkTurnInFlight(chat.Id);
-        (await PutAsync(kid, RepinBody(("russian", KidsKey2, "sonnet", null)))).Status.Should().Be(HttpStatusCode.OK);
-        _hosts.Services.GetRequiredService<SessionStore>().Sessions[chat.Id].TurnWaiter = null;
-
-        await _hosts.Services.GetRequiredService<ProviderMigration>().CatchUpChildChatAsync(chat.Id, kid);
-
-        _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.Provider.Should().Be(KidsKey2);
-        File.Exists(dst).Should().BeTrue("транскрипт переехал в профиль записи предмета");
-    }
-
-    [Fact]
     public async Task CatchUp_TurnStillInFlight_ChatSkipped()
     {
         // Догон под идущим ходом — тот же пропуск, что у PUT: поля и транскрипт не тронуты.
         var kid = await EnableChildWithSubjects("kid-catchup-busy", ("russian", KidsKey, "sonnet", null));
+        SetLeadModel(kid, "russian", "sonnet");
         var chat = await CreateChildChatAsync("kid-catchup-busy", "russian");
         var dst = SeedTranscript(kid, chat, KidsKey, "csid-catchup-3", "deepseek", out _);
+        SetLeadModel(kid, "russian", "deepseek-v4-pro");
         (await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)))).Status.Should().Be(HttpStatusCode.OK);
         _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.Provider.Should().Be("deepseek");
         // Чат уже перенесён PUT'ом; вернём его на старые поля и займём ходом
@@ -1093,29 +1058,15 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
     }
 
     [Fact]
-    public async Task PutProfile_SubjectPoolKeyChanged_ChatGetsExactlyThatKey_NotPick()
-    {
-        // Т2e2, сторож И2′: цель переноса — ровно ProviderKey предмета. Мутация «targetKey =
-        // _subscriptionPool.Pick(model)» выбирает аккаунт пула сама — чат уехал бы не на запись предмета.
-        var kid = await EnableChildWithSubjects("kid-repin-pool", ("russian", KidsKey, "sonnet", null));
-        var chat = await CreateChildChatAsync("kid-repin-pool", "russian");
-        var dst = SeedTranscript(kid, chat, KidsKey, "csid-repin-3", KidsKey2, out _);
-
-        var (status, _) = await PutAsync(kid, RepinBody(("russian", KidsKey2, "sonnet", null)));
-        status.Should().Be(HttpStatusCode.OK);
-
-        _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.Provider.Should().Be(KidsKey2);
-        File.Exists(dst).Should().BeTrue("транскрипт переехал в профиль выбранной записи пула");
-    }
-
-    [Fact]
     public async Task RepinCrossProvider_TwoPuts_SingleFinalRoute()
     {
         // Т2e2 (конкурентность): первый PUT (russian→opus на пуле) встал на провиже нового предмета
-        // «art» — после записи профиля и до перезакрепления; второй PUT целиком сменил поставщика
-        // (→deepseek) и перенёс чат. Первый продолжается и берёт ЖИВОЙ маршрут (deepseek), а не
-        // свой: чат один раз на итоговом маршруте, повторный перенос — no-op, транскрипт на месте.
+        // «art» — после записи профиля и до перезакрепления. В этом окне тест даёт репетитору «russian»
+        // внешнюю модель (живой маршрут, И10) и второй PUT (→deepseek) доходит целиком, перенося чат.
+        // Первый продолжается и берёт ЖИВОЙ маршрут (deepseek), а не свой: чат один раз на итоговом
+        // маршруте, повторный перенос — no-op, транскрипт на месте.
         var kid = await EnableChildWithSubjects("kid-repin-2puts", ("russian", KidsKey, "sonnet", null));
+        SetLeadModel(kid, "russian", "sonnet");
         var chat = await CreateChildChatAsync("kid-repin-2puts", "russian");
         var dst = SeedTranscript(kid, chat, KidsKey, "csid-repin-4", "deepseek", out _);
 
@@ -1128,6 +1079,7 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
             catch (TimeoutException) { }
             arrived.Should().BeTrue("первый запрос не встал на провиже — окна гонки не было");
 
+            SetLeadModel(kid, "russian", "deepseek-v4-pro");
             var (statusB, _) = await PutAsync(kid, RepinBody(("russian", "deepseek", "deepseek-v4-pro", true)));
             statusB.Should().Be(HttpStatusCode.OK);
 
@@ -1140,80 +1092,6 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         live.Provider.Should().Be("deepseek");
         live.Model.Should().Be("deepseek-v4-pro");
         File.Exists(dst).Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task Repin_StaleSnapshot_AfterOrphanRemoval_ChatsMatchLastWrite()
-    {
-        // Ревью Т2e: поля перезакрепления брались из снимка профиля до await RemoveOrphanTutorsAsync.
-        // Первый PUT (убирает «math», russian остаётся sonnet) встал на удалении репетитора-сироты —
-        // после записи профиля; второй PUT записал russian→opus и перезакрепил чат. Первый
-        // продолжается: со снимком он вернул бы чат на «sonnet». Мутация «finalProfile вместо
-        // живого чтения» — красный.
-        var kid = await EnableChildWithSubjects("kid-repin-orphan", ("russian", KidsKey, "sonnet", null), ("math", KidsKey, "sonnet", null));
-        var chat = await CreateChildChatAsync("kid-repin-orphan", "russian");
-
-        _hosts.BroadcasterStub.ArmDeleteHold(kid);
-        try
-        {
-            var putA = PutAsync(kid, RepinBody(("russian", KidsKey, "sonnet", null)));
-            var arrived = false;
-            try { arrived = await _hosts.BroadcasterStub.DeleteHoldArrived!.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
-            catch (TimeoutException) { }
-            arrived.Should().BeTrue("первый запрос не встал на удалении сироты — окна гонки не было");
-
-            var (statusB, _) = await PutAsync(kid, RepinBody(("russian", KidsKey, "opus", null)));
-            statusB.Should().Be(HttpStatusCode.OK);
-
-            _hosts.BroadcasterStub.OpenDeleteHold();
-            (await putA).Status.Should().Be(HttpStatusCode.OK);
-        }
-        finally { _hosts.BroadcasterStub.ClearDeleteHold(); }
-
-        StoredSubject(kid, "russian").Model.Should().Be("opus");
-        _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.Model.Should().Be("opus",
-            "чат равен последней записи, а не снимку первого запроса");
-    }
-
-    [Fact]
-    public async Task Repin_ParallelPuts_ChatsMatchFinalProfile()
-    {
-        // Т2e (c3): два PUT одного ребёнка. Первый записал свой маршрут (russian→opus) и встал
-        // внутри провижна нового предмета «art» — на вещании его создания, то есть ПОСЛЕ записи
-        // профиля и ДО перезакрепления; в этом окне второй PUT дошёл целиком (russian→haiku,
-        // «art» из списка убран) и перезакрепил чаты. Первый продолжается после него и берёт
-        // значения ЖИВОГО профиля, а не своего тела: чаты остаются при финальном профиле.
-        // Мутация «брать поля из снимка до замка» — первый дописывает свой «sonnet» после
-        // второго: чаты при значении старого запроса, тест красный.
-        var kid = await EnableChildWithSubjects("kid-repin-race", ("russian", KidsKey, "sonnet", null));
-        var chat = await CreateChildChatAsync("kid-repin-race", "russian");
-
-        _hosts.BroadcasterStub.ArmCreateHold(kid);
-        try
-        {
-            var putA = PutAsync(kid, RepinBody(("russian", KidsKey, "opus", null), ("art", KidsKey, "sonnet", null)));
-
-            var arrived = false;
-            try { arrived = await _hosts.BroadcasterStub.CreateHoldArrived!.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
-            catch (TimeoutException) { }
-            arrived.Should().BeTrue("первый запрос не встал на провиже нового предмета — окна гонки не было");
-
-            var (statusB, _) = await PutAsync(kid, RepinBody(("russian", KidsKey, "haiku", null)));
-            statusB.Should().Be(HttpStatusCode.OK);
-
-            _hosts.BroadcasterStub.OpenCreateHold();
-            var (statusA, _) = await putA;
-            statusA.Should().Be(HttpStatusCode.OK);
-        }
-        finally
-        {
-            _hosts.BroadcasterStub.ClearCreateHold();
-        }
-
-        StoredSubject(kid, "russian").Model.Should().Be("haiku", "финальный маршрут — последней записи");
-        _hosts.Services.GetRequiredService<SessionManager>().GetById(chat.Id)!.Model
-            .Should().Be(StoredSubject(kid, "russian").Model,
-                "чаты при финальном профиле, а не при значении старого запроса");
     }
 
     // --- правила ребёнка: их не принимает тело, resetRules — единственный сброс ---
@@ -1348,84 +1226,456 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         whole.Should().BeTrue("одновременные PUT не перемешивают поля");
     }
 
-    // --- согласие на не-Anthropic маршрут (Т5a, И2′): трёхзначный acknowledgeRouteRisk (Х1) ---
+    // --- согласие на риск маршрутов (ADR-041 ред. 4, решение 26): ОДНО на профиль ребёнка,
+    // трёхзначный acknowledgeRouteRisk в теле профиля; в теле ПРЕДМЕТА поле игнорируется ---
+
+    /// <summary>Тело валидного профиля с трёхзначным согласием на риск (решение 26): true —
+    /// поставить, null — поля в теле нет («не трогать»), false — отозвать. Маршрут профиля здесь
+    /// — запись пула с ApiKey; по И2″ она тоже маршрут только с согласием профиля, поэтому тело
+    /// с null/флаговым отсутствием поля годится лишь когда согласие уже стоит в сторе.</summary>
+    private static Dictionary<string, object?> BodyWithProfileConsent(object? acknowledge) => new()
+    {
+        ["enabled"] = true,
+        ["providerKey"] = KidsKey,
+        ["model"] = "sonnet",
+        ["spaces"] = new Dictionary<string, object>(),
+        ["guardianUserIds"] = Array.Empty<string>(),
+        ["acknowledgeRouteRisk"] = acknowledge,
+    };
+
+    /// <summary>Согласие профиля — из стора, а не из ответа.</summary>
+    private (DateTimeOffset? At, string? By) StoredConsent(string childId)
+    {
+        var profile = _users.GetById(childId)!.ChildMode!;
+        return (profile.RouteRiskAcknowledgedAt, profile.RouteRiskAcknowledgedBy);
+    }
 
     [Fact]
-    public async Task PutProfile_AckFalse_SameProvider_RevokesAck()
+    public async Task PutProfile_СогласиеTrue_СтавитПару_ОтветЕёНесёт()
     {
-        var id = await EnableChild("kid-ack-revoke");
+        var id = await NewContainerUser("kid-consent-set");
+        var (status, resp) = await PutAsync(id, BodyWithProfileConsent(true));
+        status.Should().Be(HttpStatusCode.OK);
 
-        // Согласие стоит: PUT с true — пара (момент запроса, адмен) в сторе и в ответе.
-        var (first, firstBody) = await PutAsync(id, BodyWithRoutedSubject(true));
+        var (at, by) = StoredConsent(id);
+        at.Should().NotBeNull("согласие ставится телом с acknowledgeRouteRisk=true");
+        by.Should().Be(AdminId, "автор — админ из claim запроса");
+        var profile = resp.GetProperty("profile");
+        profile.GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeTrue();
+        profile.GetProperty("routeRiskAcknowledgedAt").ValueKind.Should().Be(JsonValueKind.String,
+            "ответ — снимок после записи: момент согласия виден фронту");
+    }
+
+    [Fact]
+    public async Task PutProfile_БезСогласия_ЗаписьПула_ТожеОтбивается_400_route_risk_unacknowledged()
+    {
+        // И2″ (решения 25–26): режима «безопасный маршрут без согласия» больше нет — без согласия
+        // не годен ни один маршрут, включая запись пула с ApiKey. Форма маршрута проверяется
+        // раньше (нет записи / чужая модель / нет цены), согласие — последнее: поэтому здесь
+        // именно route_risk_unacknowledged, а не provider_not_api_key.
+        var id = await NewContainerUser("kid-consent-none");
+        var (status, resp) = await PutAsync(id, BodyWithProfileConsent(null));
+        status.Should().Be(HttpStatusCode.BadRequest);
+        CodeOf(resp).Should().Be("route_risk_unacknowledged");
+        _users.GetById(id)!.ChildMode.Should().BeNull("отказ включению — профиля нет");
+    }
+
+    [Fact]
+    public async Task PutProfile_СменаМоделиИПоставщика_СогласиеНеСбрасывается()
+    {
+        var id = await NewContainerUser("kid-consent-keep");
+        var (first, _) = await PutAsync(id, new
+        {
+            enabled = true,
+            providerKey = "deepseek",
+            model = "deepseek-v4-pro",
+            spaces = new Dictionary<string, object>(),
+            acknowledgeRouteRisk = true,
+        });
         first.Should().Be(HttpStatusCode.OK);
-        var seeded = StoredSubject(id);
-        seeded.RouteAcknowledgedAt.Should().NotBeNull();
-        seeded.RouteAcknowledgedBy.Should().Be(AdminId);
-        firstBody.GetProperty("profile").GetProperty("subjects")[0]
-            .GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeTrue();
+        var (at0, by0) = StoredConsent(id);
+        at0.Should().NotBeNull();
 
-        // Снятая галка при том же providerKey — ОТЗЫВ: 200, предмет сохранён «не согласованным».
-        // 400 route_risk_unacknowledged на false не отдаём: запуск хода откажет сам
-        // (ChildRoute.Resolve читает RouteAcknowledgedAt предмета).
-        var (status, body) = await PutAsync(id, BodyWithRoutedSubject(false));
+        // PUT без поля согласия и с другим маршрутом профиля — сменились и поставщик, и модель.
+        // Согласие одно на профиль и к маршруту не привязано (в отличие от согласия предмета):
+        // пара остаётся той же, ответ отдаёт её как стоящую. Мутация «сбрасывать согласие при
+        // смене маршрута» — красный.
+        var (status, resp) = await PutAsync(id, new
+        {
+            enabled = true,
+            providerKey = KidsKey,
+            model = "sonnet",
+            spaces = new Dictionary<string, object>(),
+        });
         status.Should().Be(HttpStatusCode.OK);
-        var subject = StoredSubject(id);
-        subject.Id.Should().Be("math", "предмет сохранён");
-        subject.ProviderKey.Should().Be("deepseek", "тот же providerKey");
-        subject.RouteAcknowledgedAt.Should().BeNull("снятая галка отзывает живое согласие того же providerKey");
-        subject.RouteAcknowledgedBy.Should().BeNull();
-        var json = body.GetProperty("profile").GetProperty("subjects")[0];
-        json.GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeFalse();
-        json.GetProperty("routeAcknowledgedAt").ValueKind.Should().Be(JsonValueKind.Null, "ответ — снимок после записи");
+        var (at, by) = StoredConsent(id);
+        at.Should().Be(at0, "смена модели и поставщика согласия не касается");
+        by.Should().Be(by0, "ни автора");
+        resp.GetProperty("profile").GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
-    public async Task PutProfile_AckOmitted_SameProvider_KeepsAck()
+    public async Task PutProfile_СогласиеFalse_Отозвано_ОбаПоляСнимаютсяВместе()
     {
-        var id = await EnableChild("kid-ack-keep");
-        (await PutAsync(id, BodyWithRoutedSubject(true))).Status.Should().Be(HttpStatusCode.OK);
-        var at0 = StoredSubject(id).RouteAcknowledgedAt!.Value;
-        StoredSubject(id).RouteAcknowledgedBy.Should().Be(AdminId);
+        var id = await NewContainerUser("kid-consent-revoke");
+        (await PutAsync(id, BodyWithProfileConsent(true))).Status.Should().Be(HttpStatusCode.OK);
+        StoredConsent(id).At.Should().NotBeNull();
 
-        // Поля нет — живое согласие того же providerKey остаётся (как было): пара не переставляется
-        // и не обнуляется, ответ отдаёт её как стоящую.
-        var (status, body) = await PutAsync(id, BodyWithRoutedSubject(null));
+        // Отзыв — телом без маршрутов: при живом маршруте отозвать нельзя, потому что маршрут
+        // без согласия не годен (И2″) и такое тело отбивается (это отдельный тест
+        // PutProfile_SubjectProviderChanged_NoConsent_ChatsUntouched). Пустой маршрут допустим.
+        var (status, resp) = await PutAsync(id, new
+        {
+            enabled = true,
+            spaces = new Dictionary<string, object>(),
+            acknowledgeRouteRisk = false,
+        });
         status.Should().Be(HttpStatusCode.OK);
-        var subject = StoredSubject(id);
-        subject.RouteAcknowledgedAt.Should().Be(at0, "повторный PUT без поля момента не меняет");
-        subject.RouteAcknowledgedBy.Should().Be(AdminId, "ни автора");
-        body.GetProperty("profile").GetProperty("subjects")[0]
-            .GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeTrue();
+        var (at, by) = StoredConsent(id);
+        at.Should().BeNull("снятая галка отзывает согласие безусловно");
+        by.Should().BeNull("половины согласия нет: оба поля снимаются одной записью под локом");
+        var profile = resp.GetProperty("profile");
+        profile.GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeFalse();
+        profile.GetProperty("routeRiskAcknowledgedAt").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]
-    public async Task PutProfile_AckAndRevokeParallel_NoMixedPair()
+    public async Task PutProfile_БезМаршрута_200_НеНастроен_ПолитикаDenyAll()
     {
-        var id = await EnableChild("kid-ack-race");
+        // Профиль без маршрутов («не настроен») допустим при включении: админ сохраняет лимиты,
+        // ещё не выбрав поставщика. «Ходить нельзя» закрывает не валидатор, а политика:
+        // нечитаемый профиль (пустые providerKey/model) — DenyAll. Мутация «отказывать пустой
+        // маршрут» — красный на статусе.
+        var id = await NewContainerUser("kid-no-route");
+        var (status, _) = await PutAsync(id, new
+        {
+            enabled = true,
+            spaces = new Dictionary<string, object> { ["lessons"] = new { dailyMinutes = 20 } },
+        });
+        status.Should().Be(HttpStatusCode.OK);
+
+        var stored = _users.GetById(id)!.ChildMode!;
+        stored.ProviderKey.Should().Be("");
+        stored.Model.Should().Be("");
+        StoredConsent(id).At.Should().BeNull("без маршрутов согласия тоже нет");
+        _policy.For(id)!.DenyAll.Should().BeTrue("пустой маршрут — нечитаемый профиль: всё запрещено");
+    }
+
+    [Theory]
+    // 20 прогонов в одном запуске (к2 c2): гонка нестабильна по природе, одиночный зелёный прогон
+    // ничего не доказывает. Мутация «снять замок стора» (лок SetChildProfile) — красный здесь.
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(9)]
+    [InlineData(10)]
+    [InlineData(11)]
+    [InlineData(12)]
+    [InlineData(13)]
+    [InlineData(14)]
+    [InlineData(15)]
+    [InlineData(16)]
+    [InlineData(17)]
+    [InlineData(18)]
+    [InlineData(19)]
+    public async Task PutProfile_ГонкаСогласияИПравок_СогласиеСтоит_ПоляВторогоПрименены(int iter)
+    {
+        // Ребёнок уже с согласием (ValidBody): тело «не трогать» с маршрутом валидно ровно потому,
+        // что живое согласие стоит (И2″) — и именно его второй PUT не должен затирать.
+        var id = await EnableChild("kid-consent-race-" + iter);
+        var at0 = StoredConsent(id).At!.Value;
         var manyGuardians = Enumerable.Repeat(AdminId, 60).ToArray();
 
-        // Живое согласие до гонки: с него начинается то, что обязан не вернуть отзыв, если
-        // параллельный «true» ещё держит прежнюю пару.
-        (await PutAsync(id, BodyWithRoutedSubject(true))).Status.Should().Be(HttpStatusCode.OK);
-        var at0 = StoredSubject(id).RouteAcknowledgedAt!.Value;
-
-        // Два PUT одного ребёнка одновременно: один просит согласие, второй его отзывает. Оба —
-        // длинный путь (60 опекунов — десятки обращений к стору): окно между первым чтением
-        // профиля запросом и его записью под локом — живое.
-        var putAck = PutAsync(id, BodyWithRoutedSubject(true, manyGuardians));
-        var putRevoke = PutAsync(id, BodyWithRoutedSubject(false, manyGuardians));
-        await Task.WhenAll(putAck, putRevoke);
+        // Два PUT одного ребёнка одновременно: один ставит согласие, второй его не трогает и
+        // правит другие поля (свою модель и свой список опекунов). Оба — длинный путь: проверка
+        // 60 опекунов — десятки обращений к стору между первым чтением запроса и его записью
+        // под локом, то есть окно, в котором гонка реальна.
+        var putAck = PutAsync(id, new Dictionary<string, object?>
+        {
+            ["enabled"] = true,
+            ["providerKey"] = KidsKey,
+            ["model"] = "sonnet",
+            ["spaces"] = new Dictionary<string, object>(),
+            ["acknowledgeRouteRisk"] = true,
+        });
+        var putEdit = PutAsync(id, new Dictionary<string, object?>
+        {
+            ["enabled"] = true,
+            ["providerKey"] = KidsKey,
+            ["model"] = "haiku",
+            ["spaces"] = new Dictionary<string, object>(),
+            ["guardianUserIds"] = manyGuardians,
+        });
+        var both = Task.WhenAll(putAck, putEdit);
+        (await Task.WhenAny(both, Task.Delay(TimeSpan.FromSeconds(30)))).Should().Be(both,
+            $"итерация {iter}: гонка не завершилась");
         (await putAck).Status.Should().Be(HttpStatusCode.OK);
-        (await putRevoke).Status.Should().Be(HttpStatusCode.OK);
+        (await putEdit).Status.Should().Be(HttpStatusCode.OK);
 
-        // Итог — одно из двух состояний целиком: либо согласия нет (отзыв записан последним),
-        // либо свежее согласие PUT-«true» (он записан последним после отзыва). Прежней пары (at0)
-        // среди исходов нет: «false» снимает её безусловно, а «true» при живом согласии её не
-        // переставляет. Смешанной пары тоже нет: At и By приходят из одной записи под локом.
-        var stored = StoredSubject(id);
-        var outcome = (stored.RouteAcknowledgedAt is null && stored.RouteAcknowledgedBy is null)
-            || (stored.RouteAcknowledgedAt > at0 && stored.RouteAcknowledgedBy == AdminId);
-        outcome.Should().BeTrue("одновременные согласие и отзыв дают целый исход, не смесь пары At/By");
+        var stored = _users.GetById(id)!.ChildMode!;
+        // Согласие стоит при любом порядке записей и это та же пара: PUT «не трогать» живую
+        // пару не стирает, PUT «поставить» при живом согласии её не переставляет, а замок по
+        // пользователю (не по экземпляру запроса) не даёт перемешанной пары At/By.
+        stored.RouteRiskAcknowledgedAt.Should().Be(at0,
+            $"итерация {iter}: момент согласия — момент его постановки, его не двигает ни один из PUT");
+        stored.RouteRiskAcknowledgedBy.Should().Be(AdminId,
+            $"итерация {iter}: половины пары нет: автор согласия — админ, поставивший его");
+        // Поля второго применены целиком: модель и список опекунов — из одной записи, а не смесь.
+        var whole = (stored.Model == "sonnet" && stored.GuardianUserIds.Count == 0)
+            || (stored.Model == "haiku" && stored.GuardianUserIds.Count == 60);
+        whole.Should().BeTrue($"итерация {iter}: одновременные PUT дают один целый профиль, не смесь полей");
+    }
+
+    // 20 прогонов (c4): гонка нестабильна по природе, одиночный зелёный ничего не доказывает.
+    // Мутация «пару согласия читать снимком профиля вне замка стора» — красный здесь: второй PUT,
+    // прочитавший профиль до согласия первого, записал бы его обратно как «согласия нет».
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(9)]
+    [InlineData(10)]
+    [InlineData(11)]
+    [InlineData(12)]
+    [InlineData(13)]
+    [InlineData(14)]
+    [InlineData(15)]
+    [InlineData(16)]
+    [InlineData(17)]
+    [InlineData(18)]
+    [InlineData(19)]
+    public async Task PutProfile_ГонкаСогласияСЧистогоПрофиля_СогласиеСтоит_ПриЛюбомПорядке(int iter)
+    {
+        // Чистый профиль: включён, маршрутов нет, согласия нет (тот же состояние, что у
+        // «не настроен» выше). Два PUT одновременно: первый ставит согласие и свой маршрут,
+        // второй согласия не просит и правит другие поля (свою модель, свой список опекунов).
+        var id = await NewContainerUser("kid-consent-clean-race-" + iter);
+        (await PutAsync(id, new { enabled = true, spaces = new Dictionary<string, object>() }))
+            .Status.Should().Be(HttpStatusCode.OK);
+        StoredConsent(id).At.Should().BeNull("профиль чистый: согласия нет");
+        var manyGuardians = Enumerable.Repeat(AdminId, 60).ToArray();
+
+        var putAck = PutAsync(id, new Dictionary<string, object?>
+        {
+            ["enabled"] = true,
+            ["providerKey"] = KidsKey,
+            ["model"] = "sonnet",
+            ["spaces"] = new Dictionary<string, object>(),
+            ["acknowledgeRouteRisk"] = true,
+        });
+        var putEdit = PutAsync(id, new Dictionary<string, object?>
+        {
+            ["enabled"] = true,
+            ["providerKey"] = KidsKey,
+            ["model"] = "haiku",
+            ["spaces"] = new Dictionary<string, object>(),
+            ["guardianUserIds"] = manyGuardians,
+        });
+        var both = Task.WhenAll(putAck, putEdit);
+        (await Task.WhenAny(both, Task.Delay(TimeSpan.FromSeconds(30)))).Should().Be(both,
+            $"итерация {iter}: гонка не завершилась");
+        var ack = await putAck;
+        var edit = await putEdit;
+
+        // Порядок любой. Согласие ставит тот, кто его просит, — он проходит всегда. Второй PUT
+        // без живого согласия меняет маршрут, поэтому отклонён (это правильный исход, а не провал);
+        // если согласие уже стоит — он проходит.
+        ack.Status.Should().Be(HttpStatusCode.OK, $"итерация {iter}");
+        (edit.Status == HttpStatusCode.OK || CodeOf(edit.Body) == "route_risk_unacknowledged")
+            .Should().BeTrue($"итерация {iter}: отказ второго PUT — только по согласию, не чем-то другим");
+
+        var stored = _users.GetById(id)!.ChildMode!;
+        // Инвариант: согласие, которое успели поставить, не теряется ни в одном порядке и оно
+        // целое (момент и автор — из одной записи).
+        stored.RouteRiskAcknowledgedAt.Should().NotBeNull($"итерация {iter}: согласие потеряно вторым PUT");
+        stored.RouteRiskAcknowledgedBy.Should().Be(AdminId, $"итерация {iter}: половины пары нет");
+        // Профиль — одна целая запись, не смесь полей двух запросов.
+        var whole = (stored.Model == "sonnet" && stored.GuardianUserIds.Count == 0)
+            || (stored.Model == "haiku" && stored.GuardianUserIds.Count == 60);
+        whole.Should().BeTrue($"итерация {iter}: одновременные PUT дали смесь полей, а не целый профиль");
+    }
+
+    // --- Б2b (И10, решение 71): живой маршрут урока — модель персоны-руководителя проекта-предмета ---
+
+    [Fact]
+    public async Task SubjectProject_ChatCatchesUpToLeadPersonaModel_NotToSubjectRecord()
+    {
+        // И10: модель урока — у руководителя проекта-предмета, записанная модель предмета больше
+        // не указ. Проект и руководитель — провижер Б17a на PUT с предметом; урок создан на живой
+        // модели руководителя («sonnet» — та же, что в записи предмета). Тест меняет модель
+        // руководителя на «haiku» (дверью персоны): чат отстаёт от живого маршрута, ход ему отказал
+        // бы, догон приводит поля к живому маршруту и сверка проходит. Мутация «LiveRouteOf брать
+        // поля предмета, когда проект-предмета есть» — красный на первом же утверждении (догон
+        // нечего менять: запись предмета — «sonnet»).
+        var name = "kid-lead-model";
+        var kid = await EnableChildWithSubjects(name, ("russian", KidsKey, "sonnet", null));
+        var tutorId = SetLeadModel(kid, "russian", "sonnet");
+        var chat = await CreateChildChatAsync(name, "russian");
+        var sessions = _hosts.Services.GetRequiredService<SessionManager>();
+        var migration = _hosts.Services.GetRequiredService<ProviderMigration>();
+        var gate = _hosts.Services.GetRequiredService<IChildModeGate>();
+
+        SetLeadModel(kid, "russian", "haiku");
+        gate.LaunchMismatch(kid, sessions.GetById(chat.Id)!).Should().NotBeNull(
+            "поля чата отстают от живой модели репетитора — до догона ход отказал бы");
+        (await migration.CatchUpChildChatAsync(chat.Id, kid)).Should().BeTrue();
+
+        var pinned = sessions.GetById(chat.Id)!;
+        pinned.PersonaId.Should().Be(tutorId, "репетитор чата — руководитель проекта");
+        pinned.Model.Should().Be("haiku");
+        pinned.Provider.Should().Be(KidsKey,
+            "поставщик — по модели: Claude-модель обслуживает запись предмета, Pick не зовётся (И2′)");
+        gate.LaunchMismatch(kid, pinned).Should().BeNull();
+
+        // Смена модели репетитора любой дверью (здесь — правкой персоны) → следующий догон приводит
+        // поля снова: хук на каждую дверь не нужен (решение 71).
+        _hosts.Services.GetRequiredService<PersonaManager>().Update(tutorId, kid,
+            null, null, null, null, "sonnet", null, null, null, null, null, null);
+        (await migration.CatchUpChildChatAsync(chat.Id, kid)).Should().BeTrue();
+        sessions.GetById(chat.Id)!.Model.Should().Be("sonnet");
+        gate.LaunchMismatch(kid, sessions.GetById(chat.Id)!).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SubjectProject_LeadPersonaDeleted_RefusalWithReason_NoException()
+    {
+        // Сбой резолва персоны (руководителя удалили) — отказ запуска с причиной, без
+        // необработанного исключения; догон такие чаты не трогает.
+        var name = "kid-lead-gone";
+        var kid = await EnableChildWithSubjects(name, ("russian", KidsKey, "sonnet", null));
+        var tutorId = SetLeadModel(kid, "russian", "sonnet");
+        var chat = await CreateChildChatAsync(name, "russian");
+        var sessions = _hosts.Services.GetRequiredService<SessionManager>();
+        var gate = _hosts.Services.GetRequiredService<IChildModeGate>();
+        var live = sessions.GetById(chat.Id)!;
+        live.PersonaId.Should().Be(tutorId, "урок создан на руководителе проекта (И10)");
+        gate.LaunchMismatch(kid, live).Should().BeNull("на живом репетиторе и той же модели сверка проходит");
+
+        _hosts.Services.GetRequiredService<PersonaManager>().Delete(tutorId, kid);
+
+        var act = () => gate.LaunchMismatch(kid, live);
+        act.Should().NotThrow("причина — текст отказа, не исключение");
+        act().Should().Be("персона-репетитор предмета не найдена");
+        gate.LiveRouteFor(kid, live).Should().BeNull("живого маршрута нет — приводить нечего");
+    }
+
+    // 20 прогонов (c4): ход закрепления и правка модели персоны идут одновременно.
+    // Мутация «писать поля чата по частям вне очереди догона» — красный: поля вышли бы смесью
+    // состояний двух запросов (персона одного, модель другого).
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(9)]
+    [InlineData(10)]
+    [InlineData(11)]
+    [InlineData(12)]
+    [InlineData(13)]
+    [InlineData(14)]
+    [InlineData(15)]
+    [InlineData(16)]
+    [InlineData(17)]
+    [InlineData(18)]
+    [InlineData(19)]
+    public async Task SubjectProject_МодельРепетитораМеняетсяНаСтартеХода_ЧатНаОдномЦеломМаршруте(int iter)
+    {
+        var name = $"kid-lead-race-{iter}";
+        var kid = await EnableChildWithSubjects(name, ("russian", KidsKey, "sonnet", null));
+        var tutorId = SetLeadModel(kid, "russian", "haiku");
+        var chat = await CreateChildChatAsync(name, "russian");
+        var sessions = _hosts.Services.GetRequiredService<SessionManager>();
+        var migration = _hosts.Services.GetRequiredService<ProviderMigration>();
+        var gate = _hosts.Services.GetRequiredService<IChildModeGate>();
+
+        // Одновременно: куратор меняет модель репетитора (дверь персоны) и стартует ход (догон
+        // на его старте). Ход обязан пойти или на прежнем, или на новом маршруте ЦЕЛИКОМ.
+        var change = Task.Run(() => _hosts.Services.GetRequiredService<PersonaManager>()
+            .Update(tutorId, kid, null, null, null, null, "sonnet", null, null, null, null, null, null));
+        var both = Task.WhenAll(change, migration.CatchUpChildChatAsync(chat.Id, kid));
+        (await Task.WhenAny(both, Task.Delay(TimeSpan.FromSeconds(30)))).Should().Be(both,
+            $"итерация {iter}: гонка не завершилась");
+
+        var live = sessions.GetById(chat.Id)!;
+        live.PersonaId.Should().Be(tutorId, $"итерация {iter}");
+        live.Model.Should().BeOneOf("haiku", "sonnet",
+            $"итерация {iter}: поля чата — одна целая модель, не смесь двух запросов");
+
+        // Живой маршрут — ровно тот, что сейчас у репетитора; следующий догон приводит поля к нему,
+        // и строгая сверка проходит. Это и есть «догон покрывает любую дверь правки».
+        var target = gate.LiveRouteFor(kid, live);
+        target.Should().NotBeNull($"итерация {iter}");
+        target!.Model.Should().Be("sonnet");
+        // Следующий догон приводит поля к живому маршруту — или они уже приведены этим ходом,
+        // и тогда менять нечего. Значит не факт, что догон что-то изменил; факт другой: после
+        // него поля равны живому маршруту, и строгая сверка проходит.
+        await migration.CatchUpChildChatAsync(chat.Id, kid);
+        var settled = sessions.GetById(chat.Id)!;
+        settled.Model.Should().Be("sonnet", $"итерация {iter}: поля чата не приведены к живому маршруту");
+        gate.LaunchMismatch(kid, settled).Should().BeNull($"итерация {iter}");
+    }
+
+    [Fact]
+    public async Task PutProfile_ПровижерУпал_500_СогласиеЛибоЦеликомЛибоНикак()
+    {
+        // 500 с откатом профиля (провижер тьютора бросает после записи) не оставляет половины
+        // согласия: первый PUT (профиля не было) — после отката профиля нет целиком, ни момента,
+        // ни автора.
+        var id = await NewContainerUser("kid-consent-rollback");
+        _hosts.BroadcasterStub.ThrowFor = id;
+        try
+        {
+            var (status, _) = await PutAsync(id, BodyWithProfileConsent(true));
+            status.Should().Be(HttpStatusCode.InternalServerError);
+            _users.GetById(id)!.ChildMode.Should().BeNull("откат возвращает прежний снимок целиком");
+        }
+        finally
+        {
+            _hosts.BroadcasterStub.ThrowFor = null;
+        }
+
+        // Ребёнок с согласием, отзыв под упавшим провижером: откат возвращает прежний профиль
+        // как был — пара остаётся обеими полями, «половины» (At без By) после 500 быть не может.
+        // Отзыв — телом без маршрутов (при живом маршруте отозвать нельзя: маршрут без согласия
+        // не годен, такое тело отбивается до стора — это другой тест).
+        var kid = await EnableChild("kid-consent-rollback-2");
+        (await PutAsync(kid, BodyWithProfileConsent(true))).Status.Should().Be(HttpStatusCode.OK);
+        var (at0, by0) = StoredConsent(kid);
+        _users.GetById(kid)!.ChildMode!.TutorPersonaId = ""; // ключ тьютора «повис» — Ensure бросит
+        _hosts.BroadcasterStub.ThrowFor = kid;
+        try
+        {
+            var (status, _) = await PutAsync(kid, new
+            {
+                enabled = true,
+                spaces = new Dictionary<string, object>(),
+                acknowledgeRouteRisk = false,
+            });
+            status.Should().Be(HttpStatusCode.InternalServerError);
+            var (at, by) = StoredConsent(kid);
+            (at, by).Should().Be((at0, by0), "откат целиком: согласие либо ценой, либо никакого");
+        }
+        finally
+        {
+            _hosts.BroadcasterStub.ThrowFor = null;
+        }
     }
 
     // только персоны-тьюторы (роль «Репетитор…»): дефолт-ассистент ребёнка не в счёт
@@ -1498,241 +1748,6 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
 
     // --- привязка базы знаний к предмету (К1b, разрез §1/§3) ---
 
-    [Fact]
-    public async Task Put_Знание_СвояСамостоятельная_200_АвторВызывающегоАдмена_ВОтветеБезАвтора()
-    {
-        var id = await NewContainerUser("kid-kb-own");
-        var (status, body) = await PutAsync(id, BodyWithSubjectKnowledge("d-kb"));
-        status.Should().Be(HttpStatusCode.OK);
-
-        // Ответ: id датасета и момент, поставленный сервером; автора в ответе нет (К1b).
-        var knowledge = body.GetProperty("profile").GetProperty("subjects")[0].GetProperty("knowledge");
-        knowledge.GetProperty("datasetId").GetString().Should().Be("d-kb");
-        knowledge.TryGetProperty("attachedAt", out var at).Should().BeTrue("ответ несёт момент привязки");
-        DateTimeOffset.Parse(at.GetString()!).Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
-        knowledge.TryGetProperty("attachedByUserId", out var _).Should().BeFalse("автор привязки наружу не отдаётся");
-
-        // Стор: автор — id вызывающего адмена (не имя, не из тела).
-        StoredKnowledge(id).DatasetId.Should().Be("d-kb");
-        StoredKnowledge(id).AttachedByUserId.Should().Be(AdminId);
-    }
-
-    [Fact]
-    public async Task Put_Знание_ТелоНесётAttachedByUserId_Игнорируется()
-    {
-        var id = await NewContainerUser("kid-kb-body-author");
-        var body = BodyWithSubjectKnowledge("d-kb");
-        var subject = (Dictionary<string, object?>)((object[])body["subjects"]!)[0];
-        subject["knowledge"] = new { datasetId = "d-kb", attachedAt = RulesT0, attachedByUserId = "not-me" };
-
-        var (status, _) = await PutAsync(id, body);
-        status.Should().Be(HttpStatusCode.OK);
-
-        // Ни момент, ни автор из тела не прочитаны: их ставит сервер.
-        var stored = StoredKnowledge(id);
-        stored.AttachedByUserId.Should().Be(AdminId);
-        stored.AttachedAt.Should().NotBe(RulesT0);
-    }
-
-    [Fact]
-    public async Task Put_Знание_БазаЗаметокАдмена_400_dataset_not_attachable()
-    {
-        var id = await NewContainerUser("kid-kb-notes");
-        var (status, resp) = await PutAsync(id, BodyWithSubjectKnowledge("d-notes"));
-        status.Should().Be(HttpStatusCode.BadRequest);
-        CodeOf(resp).Should().Be("dataset_not_attachable");
-        // Отказ до записи: профиль не создан.
-        _users.GetById(id)!.ChildMode.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task Put_Знание_СвояБазаДругогоАдмена_400_dataset_not_attachable()
-    {
-        // Из-за ревью К1a (953ef02f): предикат считает имя «глобальным», если его владельца нет
-        // в others. Без второго адмена в списке его «…:kb:…» привязался бы как общая база —
-        // валидатор обязан передавать ВСЕХ пользователей, включая адменов.
-        const string otherAdminName = "kbadmin-a";
-        var otherAdmin = await NewAdminUser(otherAdminName);
-        _users.GetById(otherAdmin)!.Role.Should().Be("admin");
-        _hosts.DifyStub.DatasetsJson = DatasetsJson(("d-other-admin", $"{otherAdminName}:kb:физика"));
-
-        var id = await NewContainerUser("kid-kb-other-admin");
-        var (status, resp) = await PutAsync(id, BodyWithSubjectKnowledge("d-other-admin"));
-        status.Should().Be(HttpStatusCode.BadRequest);
-        CodeOf(resp).Should().Be("dataset_not_attachable");
-    }
-
-    [Fact]
-    public async Task Put_Знание_ГлобальнаяБаза_200()
-    {
-        var id = await NewContainerUser("kid-kb-global");
-        var (status, _) = await PutAsync(id, BodyWithSubjectKnowledge("d-global"));
-        status.Should().Be(HttpStatusCode.OK);
-        StoredKnowledge(id).DatasetId.Should().Be("d-global");
-        StoredKnowledge(id).AttachedByUserId.Should().Be(AdminId);
-    }
-
-    [Fact]
-    public async Task Put_Знание_DifyНеНастроен_400_knowledge_unavailable()
-    {
-        var id = await NewContainerUser("kid-kb-off");
-        // IsConfigured читает эти поля (KnowledgeService.cs:228) — то же состояние инстанса,
-        // на котором вертикаль «Знаний» не настроена: отказ до записи, не исключение.
-        _hosts.Dify.ApiUrl = "";
-        try
-        {
-            var (status, resp) = await PutAsync(id, BodyWithSubjectKnowledge("d-kb"));
-            status.Should().Be(HttpStatusCode.BadRequest);
-            CodeOf(resp).Should().Be("knowledge_unavailable");
-            _users.GetById(id)!.ChildMode.Should().BeNull();
-        }
-        finally
-        {
-            _hosts.Dify.ApiUrl = "http://dify.test/v1";
-        }
-    }
-
-    [Fact]
-    public async Task Put_Знание_DifyОтказал_400_knowledge_unavailable_БезИсключения()
-    {
-        var id = await NewContainerUser("kid-kb-down");
-        _hosts.DifyStub.Throw = true;
-        try
-        {
-            var (status, resp) = await PutAsync(id, BodyWithSubjectKnowledge("d-kb"));
-            status.Should().Be(HttpStatusCode.BadRequest);
-            CodeOf(resp).Should().Be("knowledge_unavailable");
-            _users.GetById(id)!.ChildMode.Should().BeNull();
-        }
-        finally
-        {
-            _hosts.DifyStub.Throw = false;
-        }
-    }
-
-    [Fact]
-    public async Task PutProfile_CallerMissing_Returns403CallerNotFound()
-    {
-        // Минор R-К1b 24b98007: «вызывающий админ не найден в сторе» — отдельный отказ, а не
-        // knowledge_unavailable с текстом про Dify. Состояние достижимо только внутри запроса:
-        // политика ручки (AdminByStore) читает тот же стор до действия, и на момент авторизации
-        // вызывающий в нём есть. Тест держит запрос на списке датасетов — точке после политики
-        // и проверки тела, перед поиском вызывающего — и удаляет его там.
-        var id = await NewContainerUser("kid-caller-gone");
-        var goneAdminName = "admin-gone";
-        var goneAdmin = await NewAdminUser(goneAdminName);
-        var client = _hosts.CreateAuthenticatedClient(goneAdminName, KidsPassword);
-
-        var arrived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var open = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _hosts.DifyStub.HoldArrived = arrived;
-        _hosts.DifyStub.HoldOpen = open;
-        try
-        {
-            var send = client.SendAsync(new HttpRequestMessage(HttpMethod.Put, $"/api/users/{id}/child-profile")
-            { Content = JsonContent.Create(BodyWithSubjectKnowledge("d-kb")) });
-            // Порог — страховка от зависания, не проверка: не дошёл — красный с текстом.
-            var arrivedInTime = false;
-            try { arrivedInTime = await arrived.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
-            catch (TimeoutException) { }
-            arrivedInTime.Should().BeTrue("запрос не дошёл до списка датасетов");
-
-            _users.Delete(goneAdmin); // автора привязки в сторе больше нет
-            open.SetResult(true);
-
-            var resp = await send;
-            var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
-            resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-            CodeOf(body).Should().Be("caller_not_found", "отсутствие вызывающего — не отказ Dify");
-            body.TryGetProperty("message", out _).Should().BeTrue("отказ формы {code,message}");
-            _users.GetById(id)!.ChildMode.Should().BeNull("отказ до записи профиля");
-        }
-        finally
-        {
-            _hosts.DifyStub.HoldArrived = null;
-            _hosts.DifyStub.HoldOpen = null;
-        }
-    }
-
-    [Fact]
-    public async Task Put_Знание_ТотЖеIdОтДругогоАдмена_ПараНеМеняется_NullСнимает()
-    {
-        var id = await NewContainerUser("kid-kb-keep");
-        const string otherAdminName = "kbadmin-b";
-        var otherAdmin = await NewAdminUser(otherAdminName);
-
-        var (first, _) = await PutAsync(id, BodyWithSubjectKnowledge("d-kb"));
-        first.Should().Be(HttpStatusCode.OK);
-        var author = StoredKnowledge(id).AttachedByUserId;
-        var at = StoredKnowledge(id).AttachedAt;
-        author.Should().Be(AdminId);
-
-        // Тот же datasetId от другого адмена: автор и момент — прежние (К1b: поле ставит
-        // сервер по живому значению, повторный вызов его не переставляет).
-        var client = _hosts.CreateAuthenticatedClient(otherAdminName, KidsPassword);
-        var resp = await client.PutAsJsonAsync($"/api/users/{id}/child-profile", BodyWithSubjectKnowledge("d-kb"));
-        resp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var kept = StoredKnowledge(id);
-        kept.AttachedByUserId.Should().Be(AdminId, "повторный PUT другого адмена автора не меняет");
-        kept.AttachedAt.Should().Be(at, "и момент привязки");
-        kept.AttachedByUserId.Should().NotBe(otherAdmin);
-
-        // Явный null — привязка снята (поле в сторе пустое).
-        var (off, offBody) = await PutAsync(id, BodyWithSubjectKnowledge(null));
-        off.Should().Be(HttpStatusCode.OK);
-        StoredKnowledge(id).Should().BeNull();
-        offBody.GetProperty("profile").GetProperty("subjects")[0]
-            .GetProperty("knowledge").ValueKind.Should().Be(JsonValueKind.Null, "ответ отдаёт снятую привязку как null");
-    }
-
-    [Fact]
-    public async Task PutProfile_ParallelKnowledge_NoMixedPair()
-    {
-        // Минор R-К1b 24b98007 (п.3): гонка двух PUT без записи в живой объект мимо замка и
-        // без порога времени. Два PUT одного ребёнка привязывают РАЗНЫЕ датасеты (основной
-        // адмен — свою «самостоятельную», другой адмен — глобальную); барьер на списке
-        // датасетов: оба запроса встречаются на нём и идут дальше вместе — окно между
-        // первым чтением профиля и записью под локом стора живо для обоих.
-        var id = await EnableChild("kid-kb-race");
-        var otherAdminName = "kbadmin-c";
-        var otherAdmin = await NewAdminUser(otherAdminName);
-
-        _hosts.DifyStub.ArmBarrier(2);
-        try
-        {
-            var putA = PutAsync(id, BodyWithSubjectKnowledge("d-kb"));
-            var clientB = _hosts.CreateAuthenticatedClient(otherAdminName, KidsPassword);
-            var sendB = clientB.SendAsync(new HttpRequestMessage(HttpMethod.Put, $"/api/users/{id}/child-profile")
-            { Content = JsonContent.Create(BodyWithSubjectKnowledge("d-global")) });
-
-            // Барьер открылся только когда оба запроса дошли до списка — гонка состоялась.
-            // Порог здесь — страховка от зависания, не проверка: не сошлись — красный с текстом.
-            var raced = false;
-            try { raced = await _hosts.DifyStub.BarrierArrived.WaitAsync(TimeSpan.FromSeconds(30)); }
-            catch (TimeoutException) { }
-            raced.Should().BeTrue("оба запроса не сошлись на списке датасетов — гонки не было");
-
-            var (statusA, _) = await putA;
-            var respB = await sendB;
-            statusA.Should().Be(HttpStatusCode.OK);
-            respB.StatusCode.Should().Be(HttpStatusCode.OK);
-
-            // Итог — пара одного запроса целиком: либо основного адмена (он записал последним),
-            // либо другого адмена (он записал последним). Смешанной пары (datasetId одного
-            // запроса с автором другого) быть не может: слияние под локом стора либо сохраняет
-            // живую пару целиком (тот же id), либо берёт кандидат одного запроса — его id,
-            // его автор, его момент (UserStore.SetChildProfile).
-            var kept = StoredKnowledge(id);
-            var whole = (kept.DatasetId == "d-kb" && kept.AttachedByUserId == AdminId)
-                || (kept.DatasetId == "d-global" && kept.AttachedByUserId == otherAdmin);
-            whole.Should().BeTrue("пара привязки — из одного запроса, не смесь двух");
-        }
-        finally
-        {
-            _hosts.DifyStub.ClearBarrier();
-        }
-    }
-
     // --- GET живого профиля (Д1, дефект 06201244): редактор читает ровно то, что сохранил PUT ---
 
     private async Task<(HttpStatusCode Status, JsonElement Body)> GetAsync(string id)
@@ -1761,11 +1776,15 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         got.GetProperty("tutorPersonaId").GetString().Should().Be(putBody.GetProperty("tutorPersonaId").GetString());
 
         // Содержание по пунктам карточки — не только побайтовое равенство: профиль включён,
-        // предметы в порядке стора, у каждого свой репетитор, согласие предмета видно с моментом.
+        // предметы в порядке стора, у каждого свой репетитор, согласие профиля видно с моментом
+        // (решение 26: оно одно на профиль; у предмета в ответе — только историческая пара).
         var profile = got.GetProperty("profile");
         profile.GetProperty("enabled").GetBoolean().Should().BeTrue();
         profile.GetProperty("providerKey").GetString().Should().Be(KidsKey);
         profile.GetProperty("model").GetString().Should().Be("sonnet");
+        profile.GetProperty("acknowledgeRouteRisk").GetBoolean().Should().BeTrue(
+            "тело просило согласие — оно стоит и видно обеим ручкам");
+        profile.GetProperty("routeRiskAcknowledgedAt").ValueKind.Should().Be(JsonValueKind.String);
         profile.GetProperty("spaces").GetProperty("lessons").GetProperty("dailyMinutes").GetInt32().Should().Be(40);
         profile.GetProperty("spaces").GetProperty("lessons").GetProperty("windows")[0]
             .GetProperty("from").GetString().Should().NotBeNullOrEmpty();
@@ -1779,13 +1798,9 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         {
             var subject = subjects[i];
             var stored = StoredSubject(id, subject.GetProperty("id").GetString()!);
-            subject.GetProperty("tutorPersonaId").GetString().Should().Be(stored.TutorPersonaId,
-                "репетитор предмета — живой ключ из стора, а не пуст");
-            subject.GetProperty("providerKey").GetString().Should().Be(stored.ProviderKey);
-            subject.GetProperty("model").GetString().Should().Be(stored.Model);
-            subject.GetProperty("acknowledgeRouteRisk").GetBoolean().Should().Be(stored.RouteAcknowledgedAt is not null);
-            subject.GetProperty("routeAcknowledgedAt").ValueKind
-                .Should().Be(stored.RouteAcknowledgedAt is null ? JsonValueKind.Null : JsonValueKind.String);
+            foreach (var removed in new[] { "tutorPersonaId", "providerKey", "model", "knowledge", "acknowledgeRouteRisk", "routeAcknowledgedAt" })
+                subject.TryGetProperty(removed, out _).Should().BeFalse($"поле «{removed}» предмета снято (Б17c)");
+            subject.GetProperty("knowledgeMoved").GetBoolean().Should().Be(stored.KnowledgeMoved);
         }
     }
 

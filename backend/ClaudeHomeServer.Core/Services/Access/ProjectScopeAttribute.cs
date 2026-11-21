@@ -99,13 +99,13 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
             // читателя (S2c-8); RunTurn — то же «нет» для читателя на действии хода: создании чата
             // (S2d-1c): отказ различается правом, а не статусом. Для персоны — та же грань:
             // читатель проекта видит её персону (RP(Read) не null), но хода с ней не ведёт (§2).
-            if (Right is ProjectRight.Write or ProjectRight.Configure
+            if (Right is ProjectRight.Write or ProjectRight.Configure or ProjectRight.ConfigurePersonas
                     or ProjectRight.WriteContent or ProjectRight.RunTurn
                 && VisibleWithRead(access, caller, id))
             {
                 context.Result = Fail(StatusCodes.Status403Forbidden, Right switch
                 {
-                    ProjectRight.Configure => "Только владелец проекта",
+                    ProjectRight.Configure or ProjectRight.ConfigurePersonas => "Только владелец проекта",
                     ProjectRight.RunTurn => "Нет права вести ход",
                     _ => "Нет права на запись",
                 });

@@ -896,6 +896,12 @@ public sealed class ChatSettings
     internal Task<bool> CatchUpChildChatAsync(string sessionId, string ownerId)
         => _providerMigration.CatchUpChildChatAsync(sessionId, ownerId);
 
+    // Вердикт запуска хода ребёнка (И10, дефект a771ca12): тонкий делегат к роли, которая уже
+    // держит догон на старте хода, — как сам догон выше. Прямой зависимости от гейта у этой роли
+    // нет (их ровно десять по таблице S3-0 §1), и своей копии сверки здесь заводить нечего.
+    internal string? ChildTurnRefusalFor(string ownerId, Session session)
+        => _providerMigration.ChildTurnRefusalFor(ownerId, session);
+
     internal async Task RouteGroupSpeakerAsync(string sessionId, SessionEntry entry, string text)
     {
         if (entry.Info.Participants is not { Count: > 1 } participantIds) return;

@@ -139,7 +139,7 @@ public sealed class ChildModePolicyTests : IDisposable
 
     private static ChildSubject Subject(string id, bool enabled = true) => new()
     {
-        Id = id, Label = "П", Glyph = "П", Color = "info", TutorPersonaId = "t", ProviderKey = "p", Model = "m",
+        Id = id, Label = "П", Glyph = "П", Color = "info",
         Enabled = enabled,
     };
 
@@ -160,15 +160,22 @@ public sealed class ChildModePolicyTests : IDisposable
             [Subject("")],                                 // пустой id
             [Subject(new string('a', 33))],                // длиннее 32
             [Subject("math"), Subject("MATH")],            // дубль без учёта регистра
-            [new ChildSubject { Id = "a", TutorPersonaId = "", ProviderKey = "p", Model = "m" }],
-            [new ChildSubject { Id = "a", TutorPersonaId = "t", ProviderKey = " ", Model = "m" }],
-            [new ChildSubject { Id = "a", TutorPersonaId = "t", ProviderKey = "p", Model = "" }],
         })
         {
             var profile = ValidProfile();
             profile.Subjects = subjects;
             _policy.For(AddUser(profile))!.DenyAll.Should().BeTrue(subjects[0].Id);
         }
+    }
+
+    // Б17c (дефект ee86ee26): у предмета нет ни репетитора, ни маршрута — включённый предмет
+    // без этих полей профиль не портит, ребёнок не уходит в DenyAll.
+    [Fact]
+    public void EnabledSubjectWithoutRoute_NotDenied()
+    {
+        var profile = ValidProfile();
+        profile.Subjects = [new ChildSubject { Id = "a", Label = "П", Glyph = "П", Color = "info", Enabled = true }];
+        _policy.For(AddUser(profile))!.DenyAll.Should().BeFalse();
     }
 
     [Fact]

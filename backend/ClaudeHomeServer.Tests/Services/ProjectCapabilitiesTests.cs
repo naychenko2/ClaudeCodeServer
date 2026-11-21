@@ -58,6 +58,83 @@ public class ProjectCapabilitiesTests
         caps.Exec.Available.Should().BeTrue();
     }
 
+    // --- Б8a: профиль «проект-предмет» (детский режим, ADR-041)
+
+    private static Project Subject() => new() { Name = "math", RootPath = "/srv/kid/Предметы/math", ChildSubjectId = "math" };
+
+    // Таблица ожиданий: свойство профиля → значение. Новое свойство без строки — красный тест.
+    private static readonly Dictionary<string, bool> SubjectExpected = new()
+    {
+        [nameof(ProjectChildSubjectProfile.Files)] = true,
+        [nameof(ProjectChildSubjectProfile.KnowledgeSync)] = true,
+        [nameof(ProjectChildSubjectProfile.TasksBoard)] = true,
+        [nameof(ProjectChildSubjectProfile.TaskExecutor)] = false,
+        [nameof(ProjectChildSubjectProfile.Workflows)] = false,
+        [nameof(ProjectChildSubjectProfile.Git)] = false,
+        [nameof(ProjectChildSubjectProfile.DevServers)] = false,
+        [nameof(ProjectChildSubjectProfile.Terminal)] = false,
+        [nameof(ProjectChildSubjectProfile.CodeGraph)] = false,
+        [nameof(ProjectChildSubjectProfile.Onboarding)] = false,
+        [nameof(ProjectChildSubjectProfile.Icon)] = false,
+        [nameof(ProjectChildSubjectProfile.Background)] = false,
+        [nameof(ProjectChildSubjectProfile.MapHygiene)] = false,
+        [nameof(ProjectChildSubjectProfile.Wiki)] = false,
+        [nameof(ProjectChildSubjectProfile.Plugins)] = false,
+        [nameof(ProjectChildSubjectProfile.McpRegistry)] = false,
+        [nameof(ProjectChildSubjectProfile.PersonaAutomation)] = false,
+        [nameof(ProjectChildSubjectProfile.FileWatchers)] = false,
+        [nameof(ProjectChildSubjectProfile.Tags)] = false,
+        [nameof(ProjectChildSubjectProfile.Summaries)] = false,
+        [nameof(ProjectChildSubjectProfile.Memory)] = false,
+        [nameof(ProjectChildSubjectProfile.Changelog)] = false,
+        [nameof(ProjectChildSubjectProfile.ChangedBy)] = false,
+        [nameof(ProjectChildSubjectProfile.Notes)] = true,
+        [nameof(ProjectChildSubjectProfile.TurnsOnlyForChildChats)] = true,
+    };
+
+    [Fact]
+    public void ПроектПредмет_КаждоеСвойствоПрофиляСверенноСТаблицей()
+    {
+        var profile = ProjectCapabilities.For(Subject(), null).ChildSubject;
+        profile.Should().NotBeNull();
+
+        var actual = typeof(ProjectChildSubjectProfile).GetProperties()
+            .Where(p => p.PropertyType == typeof(bool))
+            .ToDictionary(p => p.Name, p => (bool)p.GetValue(profile)!);
+
+        actual.Keys.Should().BeEquivalentTo(SubjectExpected.Keys, "новое свойство профиля требует строки в таблице ожиданий");
+        foreach (var (name, expected) in SubjectExpected)
+            actual[name].Should().Be(expected, $"свойство {name}");
+        typeof(ProjectChildSubjectProfile).GetProperties().Should().OnlyContain(p => p.PropertyType == typeof(bool));
+    }
+
+    [Fact]
+    public void ПроектПредмет_ОбычныйИЛокальныйПроектПрофиляНеИмеет()
+    {
+        ProjectCapabilities.For(Server(), null).ChildSubject.Should().BeNull();
+        ProjectCapabilities.For(Local(), Device()).ChildSubject.Should().BeNull();
+        new Project { ChildSubjectId = null }.IsChildSubject.Should().BeFalse();
+        new Project { ChildSubjectId = "" }.IsChildSubject.Should().BeFalse();
+        Subject().IsChildSubject.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ПроектПредмет_ГруппыМатрицыСогласованыСПрофилем()
+    {
+        var caps = ProjectCapabilities.For(Subject(), null);
+
+        caps.Host.Should().Be(CapabilityHost.Server);
+        caps.Files.Features.Should().BeEquivalentTo([ProjectFeatures.Files]);
+        caps.ServerContent.Features.Should().BeEquivalentTo([ProjectFeatures.Knowledge]);
+        caps.Platform.Features.Should().Contain([ProjectFeatures.Tasks, ProjectFeatures.Notes])
+            .And.NotContain(ProjectFeatures.Memory);
+        caps.Transcript.Available.Should().BeFalse();
+        caps.Plugins.Available.Should().BeFalse();
+        ProjectCapabilities.PluginsFor(Subject()).Available.Should().BeFalse();
+        ProjectCapabilities.WikiSectionFor(Subject()).Available.Should().BeFalse();
+        ProjectCapabilities.ServerContentEnabled(Subject()).Should().BeTrue();
+    }
+
     // --- S1-1: общий проект (shared-projects, разрез §2.6): только серверный
 
     [Fact]

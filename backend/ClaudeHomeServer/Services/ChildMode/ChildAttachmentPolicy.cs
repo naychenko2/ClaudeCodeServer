@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text;
 
 namespace ClaudeHomeServer.Services.ChildMode;
@@ -8,10 +9,12 @@ namespace ClaudeHomeServer.Services.ChildMode;
 /// в .png остаётся .exe). Состав ровно attachmentTypes ADR: PNG/JPEG/WEBP, PDF (%PDF-),
 /// UTF-8-текст без нулевых байтов. Allow-list — константа в коде, не конфигурация
 /// (тот же принцип, что у ChildLimitsCalculator.AttachmentTypesAllowList).
+/// Для загрузки в папку предмета состав шире: к нему добавлены офисные файлы без макросов
+/// (DetectForUpload, решения 45 и 56) — он же и есть allow-list писателя ChildTextCopyService.
 /// </summary>
 public static class ChildAttachmentPolicy
 {
-    public enum Kind { Image, Pdf, Text, Unsupported }
+    public enum Kind { Image, Pdf, Office, Text, Unsupported }
 
     // Текст одного вложения не может быть больше инлайна: AttachmentInliner.MaxInlineBytes
     // (256 КБ) читает целиком, большего всё равно не отдаёт модели.
@@ -34,6 +37,47 @@ public static class ChildAttachmentPolicy
         if (ImageExtOf(bytes) is not null) return Kind.Image;
         if (StartsWith(bytes, Pdf)) return Kind.Pdf;
         return IsUsableText(bytes) ? Kind.Text : Kind.Unsupported;
+    }
+
+    private static readonly byte[] ZipLocalHeader = [0x50, 0x4B, 0x03, 0x04]; // «PK\003\004» — начало первой записи zip
+
+    /// <summary>
+    /// Тип загрузки в папку предмета (решения 45 и 56): тот же Detect, к которому добавлены
+    /// офисные docx/xlsx/pptx без макросов. Сигнатура — только байты содержимого zip,
+    /// расширение и Content-Type не смотрятся (тот же принцип, что у Detect). Состав этого
+    /// метода — allow-list писателя ChildTextCopyService; Detect (вложения детского чата) им
+    /// НЕ расширяется: офис в чат не прикладывается.
+    /// </summary>
+    public static Kind DetectForUpload(byte[] bytes)
+    {
+        var kind = Detect(bytes);
+        return kind is not Kind.Unsupported ? kind : OfficeExtOf(bytes) is not null ? Kind.Office : Kind.Unsupported;
+    }
+
+    /// <summary>
+    /// Расширение офисного файла по содержимому zip: docx — word/document.xml, xlsx —
+    /// xl/workbook.xml, pptx — ppt/presentation.xml. Макросы — запись «vbaProject.bin»
+    /// (docm/xlsm/pptm): null, файл не в allow-list загрузки (решение 45). «PK…» без
+    /// валидного central directory — не zip (InvalidDataException), тоже null.
+    /// </summary>
+    public static string? OfficeExtOf(byte[] bytes)
+    {
+        if (bytes.Length < ZipLocalHeader.Length || !bytes[..ZipLocalHeader.Length].SequenceEqual(ZipLocalHeader))
+            return null;
+        try
+        {
+            using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
+            if (zip.Entries.Any(e => e.FullName.EndsWith("vbaProject.bin", StringComparison.OrdinalIgnoreCase)))
+                return null;
+            if (zip.Entries.Any(e => e.FullName == "word/document.xml")) return ".docx";
+            if (zip.Entries.Any(e => e.FullName == "xl/workbook.xml")) return ".xlsx";
+            if (zip.Entries.Any(e => e.FullName == "ppt/presentation.xml")) return ".pptx";
+            return null;
+        }
+        catch (InvalidDataException)
+        {
+            return null; // «PK…» без валидного central directory — не zip, значит не офис
+        }
     }
 
     // Формат картинки по сигнатуре: расширение для сохранения (NormalizeExtension) или null,
@@ -83,14 +127,16 @@ public static class ChildAttachmentPolicy
     /// AttachmentInliner.SplitImagePaths относит файл к картинкам по расширению,
     /// MarkitdownService выбирает конвертер по нему же. Расширение не должно расходиться
     /// с kind: Image оставляет допустимое расширение из allow-list, иначе ставит по сигнатуре;
-    /// Text ставит .txt; Pdf ставит .pdf. Меняется только расширение — имя остаётся читаемым.
-    /// Unsupported не трогается: такой файл отказан вызывающим до сохранения.
+    /// Text ставит .txt; Pdf ставит .pdf; Office — по определённому подтику (.docx/.xlsx/.pptx),
+    /// для правильно названного файла это тот же путь. Меняется только расширение — имя остаётся
+    /// читаемым. Unsupported не трогается: такой файл отказан вызывающим до сохранения.
     /// </summary>
     public static string NormalizeExtension(string fileName, Kind kind, byte[] bytes) => kind switch
     {
         Kind.Image when AllowedImageExts.Contains(Path.GetExtension(fileName)) => fileName,
         Kind.Image => Path.ChangeExtension(fileName, ImageExtOf(bytes) ?? ".png"),
         Kind.Pdf => Path.ChangeExtension(fileName, ".pdf"),
+        Kind.Office => Path.ChangeExtension(fileName, OfficeExtOf(bytes) ?? ".docx"),
         Kind.Text => Path.ChangeExtension(fileName, ".txt"),
         _ => fileName,
     };

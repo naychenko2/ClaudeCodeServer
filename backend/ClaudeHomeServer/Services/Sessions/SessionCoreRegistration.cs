@@ -186,13 +186,26 @@ public static class SessionCoreRegistration
         // null), поэтому контейнер без зарегистрированного логгера остаётся рабочим. Без логгера
         // LogWarning в catch гейта молчит — причину сбоя расчёта видно не будет (хвост R-KM-B5d);
         // что проводка его передаёт, проверяет ChildPolicyWiringGuardTests.
+        // Живой маршрут урока (Б2b, И10) разворачивается из персоны-руководителя проекта-предмета,
+        // поэтому гейт держит реестр проектов, стор персон и резолвер модели. Все три зарегистрированы
+        // в этом же блоке ядра, значит GetRequiredService: без них живой маршрут не развёрнут, и молча
+        // брать переходную ветку (поля предмета) — значит не заметить отсутствие проводки.
+        // PersonaLayerBuilder здесь не берётся: он сам принимает IChildModeGate (optional-параметр),
+        // и прямая зависимость замкнула бы граф синглтонов — ядро бы не поднялось.
         services.TryAddSingleton<ClaudeHomeServer.Services.ChildMode.IChildModeGate>(sp =>
             new ClaudeHomeServer.Services.ChildMode.ChildModeGate(
                 sp.GetRequiredService<ClaudeHomeServer.Services.ChildMode.IChildModePolicy>(),
                 sp.GetService<ClaudeHomeServer.Services.ChildMode.ChildLimitsCalculator>(),
                 sp.GetService<ILogger<ClaudeHomeServer.Services.ChildMode.ChildModeGate>>(),
                 sp.GetService<ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(),
-                sp.GetService<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>()));
+                sp.GetService<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(),
+                sp.GetRequiredService<ProjectManager>(),
+                sp.GetRequiredService<PersonaManager>(),
+                sp.GetRequiredService<ModelAssignmentResolver>(),
+                // Шина для события отказа маршрута (Б4b): GetService, как остальные необязательные
+                // параметры гейта — без шины отказ остаётся с причиной в журнале, не происходит
+                // только рассылка кураторам (подписчик регистрирует Main, Program.cs).
+                sp.GetService<ClaudeHomeServer.Services.Turn.ITurnEventBus>()));
         services.AddSingleton(sp => new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(),
             sp.GetRequiredService<FeatureFlagService>(),

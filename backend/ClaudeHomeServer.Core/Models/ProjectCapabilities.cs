@@ -121,6 +121,43 @@ public static class ProjectFeatures
 }
 
 /// <summary>
+/// Профиль «проект-предмет» (детский режим, ADR-041 ред. 5–6, разрез §11.2/§12): что можно
+/// проекту, привязанному к предмету ребёнка. Включены только файлы, синк Dify, доска задач
+/// (задачи ребёнка, Б20d) и заметки проекта (решения 60/76/80); остальное выключено. Каждое bool-свойство — строка таблицы в
+/// <c>ProjectCapabilitiesTests</c>: новое свойство без строки там — красный тест.
+/// Фронт получает профиль в поле <c>capabilities.childSubject</c> ответа проекта (null у обычных).
+/// </summary>
+public sealed record ProjectChildSubjectProfile
+{
+    public bool Files { get; init; } = true;
+    public bool KnowledgeSync { get; init; } = true;
+    public bool TasksBoard { get; init; } = true;
+    public bool TaskExecutor { get; init; }
+    public bool Workflows { get; init; }
+    public bool Git { get; init; }
+    public bool DevServers { get; init; }
+    public bool Terminal { get; init; }
+    public bool CodeGraph { get; init; }
+    public bool Onboarding { get; init; }
+    public bool Icon { get; init; }
+    public bool Background { get; init; }
+    public bool MapHygiene { get; init; }
+    public bool Wiki { get; init; }
+    public bool Plugins { get; init; }
+    public bool McpRegistry { get; init; }
+    public bool PersonaAutomation { get; init; }
+    public bool FileWatchers { get; init; }
+    public bool Tags { get; init; }
+    public bool Summaries { get; init; }
+    public bool Memory { get; init; }
+    public bool Changelog { get; init; }
+    public bool ChangedBy { get; init; }
+    public bool Notes { get; init; } = true;
+    /// <summary>Ход в проекте-предмете допустим только у детских чатов.</summary>
+    public bool TurnsOnlyForChildChats { get; init; } = true;
+}
+
+/// <summary>
 /// Матрица возможностей проекта (ADR-016 §4) — ЕДИНСТВЕННАЯ точка правды о том, серверный
 /// проект или локальный и что из этого следует, для фронта и серверных guard'ов. Инлайновых
 /// проверок локальности (<c>DeviceId != null</c>, <c>IsLocal</c>) вне этого файла не заводим:
@@ -139,7 +176,8 @@ public sealed record ProjectCapabilities(
     ProjectCapabilityGroup ServerContent,
     ProjectCapabilityGroup Transcript,
     ProjectExecCapability Exec,
-    ProjectPluginsCapability Plugins)
+    ProjectPluginsCapability Plugins,
+    ProjectChildSubjectProfile? ChildSubject = null)
 {
     public const string DeviceMissingReason = "Устройство проекта не найдено или отозвано";
     public const string DeviceOfflineReason = "Устройство проекта не в сети";
@@ -157,11 +195,22 @@ public sealed record ProjectCapabilities(
     public const string HandsProjectOffReason = "Руки выключены в настройках проекта";
     public const string PluginsLocalOffReason =
         "У локального проекта плагины выключены: каталог пакетов и секреты на устройство не едут (MVP)";
+    public const string ChildSubjectOffReason = "В проекте-предмете ребёнка это отключено";
     public const string WikiSectionLocalOffReason =
         "У локального проекта вики пока не ведётся: его раздел появится на сервере после пилота (Ф0–Ф1 — отказ)";
 
     /// <summary>Проект привязан к устройству. Единственная проверка локальности во всём коде.</summary>
     public static bool IsDeviceBound(Project project) => project.DeviceId is not null;
+
+    /// <summary>
+    /// Проект-предмет ребёнка (ADR-041 ред. 7): ЕДИНСТВЕННАЯ точка чтения признака для
+    /// матрицы, права доступа (<see cref="Access.ProjectAccess"/>), ChildModeGate и индексатора
+    /// базы знаний предмета. Определение маркера остаётся в модели (<c>Project.IsChildSubject</c>
+    /// по <c>ChildSubjectId</c>), здесь — то, как его читают: инлайновых
+    /// <c>project.IsChildSubject</c> вне этого файла не заводим (тот же приём, что
+    /// <see cref="IsDeviceBound"/> для локальности). null-проект — не проект-предмет.
+    /// </summary>
+    public static bool IsChildSubject(Project? project) => project?.IsChildSubject == true;
 
     /// <summary>Файлы проекта лежат на диске сервера — вход серверной файловой подсистемы допустим.</summary>
     public static bool FilesOnServer(Project project) => !IsDeviceBound(project);
@@ -182,7 +231,8 @@ public sealed record ProjectCapabilities(
     /// <c>PluginDirSource</c>.
     /// </summary>
     public static ProjectPluginsCapability PluginsFor(Project? project) =>
-        project is null || !IsDeviceBound(project)
+        IsChildSubject(project) ? new ProjectPluginsCapability(false, ChildSubjectOffReason)
+        : project is null || !IsDeviceBound(project)
             ? new ProjectPluginsCapability(true, null)
             : new ProjectPluginsCapability(false, PluginsLocalOffReason);
 
@@ -193,7 +243,8 @@ public sealed record ProjectCapabilities(
     /// локальности в вызывающих не заводим (сторож G10).
     /// </summary>
     public static ProjectWikiSectionCapability WikiSectionFor(Project? project) =>
-        project is null || !IsDeviceBound(project)
+        IsChildSubject(project) ? new ProjectWikiSectionCapability(false, ChildSubjectOffReason)
+        : project is null || !IsDeviceBound(project)
             ? new ProjectWikiSectionCapability(true, null)
             : new ProjectWikiSectionCapability(false, WikiSectionLocalOffReason);
 
@@ -335,6 +386,25 @@ public sealed record ProjectCapabilities(
         : !projectHandsEnabled ? HandsProjectOffReason
         : null;
 
+    /// <summary>Профиль проекта-предмета: единственный экземпляр, значения — по умолчанию записи.</summary>
+    public static readonly ProjectChildSubjectProfile ChildSubjectProfile = new();
+
+    private static ProjectCapabilities ForChildSubject()
+    {
+        const string off = ChildSubjectOffReason;
+        return new ProjectCapabilities(
+            CapabilityHost.Server, null,
+            new ProjectCapabilityGroup(CapabilityHost.Server, true, null, [ProjectFeatures.Files]),
+            new ProjectCapabilityGroup(CapabilityHost.Server, true, null,
+                [ProjectFeatures.Chat, ProjectFeatures.History, ProjectFeatures.Tasks, ProjectFeatures.Personas,
+                 ProjectFeatures.Notes, ProjectFeatures.Costs, ProjectFeatures.Tts]),
+            new ProjectCapabilityGroup(CapabilityHost.Server, true, null, [ProjectFeatures.Knowledge]),
+            new ProjectCapabilityGroup(CapabilityHost.Off, false, off, ProjectFeatures.Transcript),
+            new ProjectExecCapability(true, null),
+            new ProjectPluginsCapability(false, off),
+            ChildSubjectProfile);
+    }
+
     /// <summary>
     /// Матрица для проекта. <paramref name="device"/> — состояние устройства проекта из шва
     /// <see cref="IDeviceExecChannel"/>; у серверного проекта не нужен, у локального null
@@ -342,6 +412,8 @@ public sealed record ProjectCapabilities(
     /// </summary>
     public static ProjectCapabilities For(Project project, DeviceExecStatus? device)
     {
+        if (IsChildSubject(project)) return ForChildSubject();
+
         var platform = new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.Platform);
         if (!IsDeviceBound(project))
             return new ProjectCapabilities(

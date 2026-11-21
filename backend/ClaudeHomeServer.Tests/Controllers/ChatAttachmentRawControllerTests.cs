@@ -20,6 +20,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Каждый путь отказа — отдельным тестом: путь вне Attachments, «..», чужой private-автор,
 /// чужой чат, детский чат без ChildSpace, не-картинка, локальный проект. Тип — по сигнатуре байтов
 /// (JPEG-байты под .png отдаются как image/jpeg).
+///
+/// Положительный кейс ребёнка — его урок: после Б9b это чат проекта-предмета, и граница ручки
+/// меряется как у соседних дверей чтения урока — «свой + ChildSpace, независимо от ProjectId»
+/// (29ea583b, решение Софьи 20.11). Мутация: вернуть в ChatAttachmentRawController.cs условие
+/// own.ProjectId is null — этот кейс краснеет (404 chat_not_found).
 /// </summary>
 [Trait("Category", "Host")]
 public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawControllerTests.Hosts>
@@ -28,7 +33,9 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
     {
         public Hosts()
         {
-            ExtraConfig["Sandbox:ProjectsRoot"] = Path.Combine(Path.GetTempPath(), "ccs-raw-att-" + Guid.NewGuid().ToString("N"));
+            // Урок — чат проекта-предмета: фикстуре нужны папка песочницы (дом ребёнка) и
+            // рубильник общих проектов (куратор — участник проекта-предмета).
+            ChildTestSubjects.ConfigureSubjectHost(this, "ccs-raw-att");
             ExtraServices = services => services.AddSingleton<IOwnerSpendReader>(new FixedSpend());
         }
     }
@@ -73,7 +80,7 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
         var local = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Moscow).DateTime;
         var put = await _admin.PutAsJsonAsync($"/api/users/{id}/child-profile", new
         {
-            enabled = true, providerKey = KidsKey, model = "sonnet",
+            enabled = true, acknowledgeRouteRisk = true, providerKey = KidsKey, model = ChildTestSubjects.TutorModel,
             spaces = new Dictionary<string, object>
             {
                 ["lessons"] = new
@@ -86,6 +93,8 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
         ChildTestSubjects.Seed(_hosts.Services, id);
+        // Живой маршрут репетитора (И10) — модель его персоны-руководителя: без неё урока нет.
+        ChildTestSubjects.SetTutorModel(_hosts.Services);
         var p = _hosts.Services.GetRequiredService<UserStore>().GetById(id)!.ChildMode!;
         p.RulesAgreedAt = new DateTime(2026, 11, 17, 10, 0, 0, DateTimeKind.Utc);
         p.RulesSummary = "правила";
@@ -192,20 +201,23 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
     }
 
     // И6 №3 (К3, разрез «Знания репетитора» §4): ручка миниатюр не отдаёт материалы предмета —
-    // каталог data/child-subjects вне корня чата. Три формы пути (абсолютный, обход от корня, «data/…»),
+    // каталог data/child-subjects (бывший магазин материалов, стор удалён Х-W4-28) вне корня чата.
+    // Граница держится и для оставшегося на диске каталога: она — про путь, а не про то, что его
+    // кто-то пишет. Три формы пути (абсолютный, обход от корня, «data/…»),
     // каждая и без учёта, и с записью в Session.Attachments: ни одна не 2xx, содержимого в ответе нет.
     [Fact]
     public async Task ДетскийЧат_ПутьВКаталогМатериаловПредмета_НеОтдаётся()
     {
         var name = "kid-raw-materials";
         var (childId, chatId, root) = await ChildChat(name);
-        var dataDir = Path.GetDirectoryName(ChildSubjectMaterialsStore.RootFromConfig(
-            _hosts.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()))!;
-        var materials = Path.Combine(dataDir, ChildSubjectMaterialsStore.DirName, childId, "russian", "text", "m_000000000001.txt");
+        // Путь по резолверу хоста (TestWebApplicationFactory.cs:76: DataPath = TempDir/projects.json):
+        // каталог данных — TempDir, его подкаталог — тот же literal, что был константой DirName
+        // удалённого стора.
+        var materials = Path.Combine(_hosts.TempDir, "child-subjects", childId, "russian", "text", "m_000000000001.txt");
         Directory.CreateDirectory(Path.GetDirectoryName(materials)!);
         File.WriteAllBytes(materials, Png); // даже валидная картинка по сигнатуре не должна уйти ребёнку
         var traversal = Path.GetRelativePath(root, materials).Replace('\\', '/');
-        var viaData = $"data/{ChildSubjectMaterialsStore.DirName}/{childId}/russian/text/m_000000000001.txt";
+        var viaData = $"data/child-subjects/{childId}/russian/text/m_000000000001.txt";
         var attachments = Sessions.GetById(chatId)!.Attachments ??= [];
         using var child = _hosts.CreateAuthenticatedClient(name, ChildPassword);
 
@@ -230,6 +242,11 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
         (await _admin.GetAsync(Url(chat, "/" + rel.Replace('/', '\\')))).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
+    // Свой урок ребёнка — чат проекта-предмета (Б9b), и это единственная форма детского чата с
+    // вложением: загрузить его ребёнку можно только в урок (ChildAttachmentsController.cs:72).
+    // Граница этой ручки — та же, что у чтения самого урока после Б9d: «свой + ChildSpace,
+    // независимо от ProjectId» (ChatsController.cs:148, И1 п.22 ADR-041). Мутация: вернуть
+    // own.ProjectId is null → 404 chat_not_found, кейс красный.
     [Fact]
     public async Task Ребёнок_СвойДетскийЧат_200()
     {
@@ -240,6 +257,7 @@ public class ChatAttachmentRawControllerTests : IClassFixture<ChatAttachmentRawC
 
         r.StatusCode.Should().Be(HttpStatusCode.OK);
         r.Content.Headers.ContentType!.MediaType.Should().Be("image/png");
+        (await r.Content.ReadAsByteArrayAsync()).Should().Equal(Png, "миниатюра своего вложения урока доходит до ребёнка");
     }
 
     // ─── 404: каждый путь отказа отдельным тестом ───

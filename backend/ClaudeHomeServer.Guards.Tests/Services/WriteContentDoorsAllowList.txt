@@ -13,6 +13,12 @@ FilesController.Rename
 FilesController.Upload
 FilesController.Delete
 FilesController.ToMarkdown
+# Б11a (376a6517f): POST files/restore — вернуть запись .ccs-trash/ на её исходный путь. Дверь
+# названа здесь осознанно: возврат пишет файл обратно в дерево проекта — это запись контента
+# (тот же правый край, что у CreateFile/Upload), а не чтение корзины. Путь возврата судится
+# границей И8 (ChildPathDenied, op=Write) — той же, что обычная запись, поэтому отдельного
+# права не просит.
+FilesController.RestoreFromTrash
 # F2-T1 (57aa6c829, разрез §2.1): дверь создания задачи общего проекта открыта редактору правом
 # WriteContent (матрица RoleHasRight): POST /api/projects/{p}/tasks названа здесь. Остальные
 # правки задачи — не ProjectScope-двери с WriteContent: PUT/DELETE/execute закрыты явными

@@ -10,8 +10,11 @@ using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// И2 (ADR-041): ход ребёнка идёт только по API-ключу записи пула, без подписки и без фолбэка.
-// Процесс CLI подменён сном — проверяем собранный ProcessSpec (env и ClearEnv) и отказ запуска.
+// И2″ (ADR-041 ред. 4): ход ребёнка идёт по согласованному маршруту (запись пула или провайдер),
+// без фолбэка на подписку и без хода без согласия профиля. Процесс CLI подменён сном — проверяем
+// собранный ProcessSpec (env и ClearEnv) и отказ запуска. С Б2b моста Resolve(4 args) нет:
+// поле согласия читает вызывающий на старте хода, поэтому живой поток отказывает по согласию
+// сам (ХодРебёнка_БезСогласияПрофиля), а параметр Resolve проверяется напрямую.
 [Collection(TestCollections.ProcessGlobalState)]
 public class ChildRouteTests : IDisposable
 {
@@ -66,8 +69,22 @@ public class ChildRouteTests : IDisposable
         }
     }
 
+    // Согласие профиля (решение 26) на месте: с Б2b его читает вызывающий на старте хода, поэтому
+    // живой ход здесь согласованный по умолчанию. Тестам отказа по согласию — ChildWithoutConsent.
     private static ChildPolicySnapshot Child(string providerKey = "kids-api") =>
-        new("kid", new ChildProfile { Enabled = true, ProviderKey = providerKey, Model = "sonnet" }, false);
+        new("kid", Profile(providerKey, consent: true), false);
+
+    private static ChildPolicySnapshot ChildWithoutConsent(string providerKey = "kids-api") =>
+        new("kid", Profile(providerKey, consent: false), false);
+
+    private static ChildProfile Profile(string providerKey, bool consent) => new()
+    {
+        Enabled = true,
+        ProviderKey = providerKey,
+        Model = "sonnet",
+        RouteRiskAcknowledgedAt = consent ? new DateTime(2026, 11, 18, 10, 0, 0, DateTimeKind.Utc) : null,
+        RouteRiskAcknowledgedBy = consent ? "admin" : null,
+    };
 
     private static ClaudeSubscriptionPool Pool(params (string Key, string? OAuth, string? ApiKey)[] subs)
     {
@@ -125,17 +142,61 @@ public class ChildRouteTests : IDisposable
             "унаследованный токен подписки бэкенда обязан быть вычищен");
     }
 
-    [Theory]
-    [InlineData("oauth-only")]   // запись без ApiKey
-    [InlineData("both")]         // ApiKey вместе с OAuthToken — подписка
-    [InlineData("missing")]      // записи нет
-    public async Task ХодРебёнка_ЗаписьНеГодится_ОтказЗапускаБезОткатаНаПодписку(string case_)
+    [Fact]
+    public async Task ХодРебёнка_НетЗаписиМаршрута_ОтказЗапускаБезОткатаНаПодписку()
     {
-        var pool = Pool(("oauth-only", "oauth-x", null), ("both", "oauth-x", "sk-ant-x"));
-        var (spec, errors) = await RunAsync(() => Child(case_), pool);
+        // Живая запись пула в конфиге есть — откатиться на неё ход ребёнка не вправе.
+        var pool = Pool(("oauth-only", "oauth-x", null));
+        var (spec, errors) = await RunAsync(() => Child("missing"), pool);
 
         spec.Should().BeNull("процесс CLI не стартует");
-        errors.Should().ContainSingle().Which.Should().Be(ChildRoute.RefusedText);
+        errors.Should().ContainSingle().Which.Should().Be(ChildRoute.RefusedTextNoGuardians,
+            "внутренний отказ без публикации события — текст без обещания уведомления");
+    }
+
+    // Живой поток с отказом по согласию станет после Б2b (там вызывающий читает поле профиля).
+    // Здесь та же граница — параметром Resolve: без согласия не годится ни одна запись пула (И2″),
+    // отказ — ChildRouteRefusedException с текстом без обещания (события эта точка не публикует).
+    [Theory]
+    [InlineData("kids-api")]   // запись с API-ключом
+    [InlineData("oauth-only")] // claude setup-token
+    public void Resolve_БезСогласияПрофиля_НиОдинМаршрутНеГоден(string providerKey)
+    {
+        var pool = Pool(("kids-api", null, "sk-ant-kids"), ("oauth-only", "oauth-x", null));
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection().Build());
+        var snap = Child(providerKey);
+
+        FluentActions.Invoking(() => ChildRoute.Resolve(snap, false, pool, providers))
+            .Should().Throw<ChildRouteRefusedException>();
+    }
+
+    // Живой поток с Б2b: поле согласия читает вызывающий на старте хода (ClaudeSession), поэтому
+    // отказ по согласию проверяется самим запуском процесса, а не параметром Resolve.
+    [Theory]
+    [InlineData("kids-api")]   // запись с API-ключом
+    [InlineData("oauth-only")] // claude setup-token
+    public async Task ХодРебёнка_БезСогласияПрофиля_ПроцессНеСтартует(string providerKey)
+    {
+        var pool = Pool(("kids-api", null, "sk-ant-kids"), ("oauth-only", "oauth-x", null));
+        var (spec, errors) = await RunAsync(() => ChildWithoutConsent(providerKey), pool);
+
+        spec.Should().BeNull($"процесс CLI не стартует без согласия профиля ({providerKey})");
+        errors.Should().ContainSingle().Which.Should().Be(ChildRoute.RefusedTextNoGuardians,
+            "внутренний отказ без публикации события — текст без обещания уведомления");
+    }
+
+    [Fact]
+    public async Task ХодРебёнка_СмешаннаяЗаписьПула_ИдётПоApiKey_БезТокенаАккаунта()
+    {
+        // Смешанная запись — маршрут ребёнка (решение 25); токен аккаунта при этом не едет:
+        // приоритет ApiKey — тот же, что у выбора аккаунта в пуле.
+        var pool = Pool(("both", "oauth-x", "sk-ant-x"));
+        var (spec, _) = await RunAsync(() => Child("both"), pool);
+
+        spec.Should().NotBeNull();
+        spec!.Env!["ANTHROPIC_API_KEY"].Should().Be("sk-ant-x");
+        spec.Env.Should().NotContainKey("CLAUDE_CODE_OAUTH_TOKEN");
+        spec.Env[ChildTurnMarker.EnvKey].Should().Be("1");
     }
 
     [Fact]
@@ -145,7 +206,8 @@ public class ChildRouteTests : IDisposable
             Pool(("kids-api", null, "sk-ant-kids")));
 
         spec.Should().BeNull();
-        errors.Should().ContainSingle().Which.Should().Be(ChildRoute.RefusedText);
+        errors.Should().ContainSingle().Which.Should().Be(ChildRoute.RefusedTextNoGuardians,
+            "внутренний отказ без публикации события — текст без обещания уведомления");
     }
 
     [Fact]

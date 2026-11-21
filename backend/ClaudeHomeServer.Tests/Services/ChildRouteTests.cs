@@ -39,7 +39,8 @@ public class ChildRouteTests
         var start = Selector(new StubPolicy("kid")).StartTurn(new TurnTokenService(new TurnEventBus()), "kid", "chat", null, "sonnet");
 
         start.Token.Should().BeNull();
-        start.FailureText.Should().Be(ChildRoute.RefusedText);
+        start.FailureText.Should().Be(ChildRoute.RefusedTextNoGuardians,
+            "шлюз не публикует событие отказа, поэтому уведомление не обещает (13c5785bd)");
     }
 
     [Fact]

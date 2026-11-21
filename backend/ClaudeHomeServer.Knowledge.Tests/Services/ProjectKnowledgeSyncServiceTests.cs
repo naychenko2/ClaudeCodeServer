@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
@@ -50,6 +51,14 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
             if (request.Method == HttpMethod.Post && path.Contains("/document/create_by_text"))
             {
                 var name = JsonDocument.Parse(body).RootElement.GetProperty("name").GetString();
+                return Json($"{{\"document\":{{\"id\":\"doc-{++_docSeq}\",\"name\":{JsonSerializer.Serialize(name)},\"indexing_status\":\"completed\"}}}}");
+            }
+            if (request.Method == HttpMethod.Post && path.Contains("/document/create_by_file"))
+            {
+                // Имя бинарного документа — filename файловой части multipart
+                // (KnowledgeService.IndexFileByBytesAsync: form.Add(..., "file", fileName))
+                var m = Regex.Match(body, "filename=\"?([^\";\r\n]+)");
+                var name = m.Success ? m.Groups[1].Value : "";
                 return Json($"{{\"document\":{{\"id\":\"doc-{++_docSeq}\",\"name\":{JsonSerializer.Serialize(name)},\"indexing_status\":\"completed\"}}}}");
             }
             if (request.Method == HttpMethod.Get && path.Contains("/documents"))
@@ -131,14 +140,26 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private void WriteProjectFile(string rel, string content)
+    private void WriteProjectFile(string rel, string content) => WriteFile(_projectDir, rel, content);
+
+    private static void WriteFile(string dir, string rel, string content)
     {
-        var full = Path.Combine(_projectDir, rel.Replace('/', Path.DirectorySeparatorChar));
+        var full = Path.Combine(dir, rel.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         File.WriteAllText(full, content);
     }
 
-    private WorkspaceKnowledge Wk() => _wkStore.GetByPath(_projectDir)!;
+    private WorkspaceKnowledge Wk() => WkOf(_projectDir);
+    private WorkspaceKnowledge WkOf(string dir) => _wkStore.GetByPath(dir)!;
+
+    // Проект-предмет (маркер ChildSubjectId пишется вместе с записью, Б8b): своя папка —
+    // EnsureRootFree не даёт двух проектов одного владельца в одной папке
+    private Project CreateChildSubject(string name)
+    {
+        var dir = Path.Combine(_tempDir, name);
+        Directory.CreateDirectory(dir);
+        return _projects.Create(name, dir, _ownerId, "tester", childSubjectId: "subj-" + name);
+    }
 
     [Fact]
     public async Task IndexPathAsync_Индексирует_И_Отслеживает()
@@ -337,6 +358,93 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
         _dify.CallsOf("DELETE", "/datasets/p1").Should().BeEmpty();
         // Запись знаний проекта владельца снята
         _wkStore.GetByPath(_projectDir).Should().BeNull();
+    }
+
+    // --- Проект-предмет (Б13a): база знаний предмета — только материалы ребёнка ---
+
+    [Fact]
+    public async Task ChildSubject_В_Индекс_Предмета_Идут_Только_Материалы_Ребёнка()
+    {
+        var subject = CreateChildSubject("subject");
+        // Полный набор: файлы ребёнка + «Материалы/» + копии этих путей — идут; ключи репетитора,
+        // их копии, корзина, вложения и копия на глубине — нет (иначе ключи ответов найдутся
+        // ребёнку поиском в «Знаниях», дефект 64996f49; копия на глубине — скрытый сегмент).
+        WriteFile(subject.RootPath, "a.md", "урок");
+        WriteFile(subject.RootPath, "Материалы/b.pdf", "pdf");
+        WriteFile(subject.RootPath, ".ccs-text/b.pdf.txt", "текст pdf для чтения");
+        WriteFile(subject.RootPath, "Для репетитора/k.pdf", "ключ ответов");
+        WriteFile(subject.RootPath, ".ccs-text/Для репетитора/k.pdf.txt", "текст ключа");
+        WriteFile(subject.RootPath, "Заметки/.ccs-text/x.txt", "копия на глубине");
+        WriteFile(subject.RootPath, ".ccs-trash/x/a.md", "корзина");
+        WriteFile(subject.RootPath, ".cc-attachments/i.png", "вложение");
+
+        var indexed = new List<string>();
+        var refused = new List<string>();
+        foreach (var rel in new[] { "a.md", "Материалы/b.pdf", ".ccs-text/b.pdf.txt",
+                                   "Для репетитора/k.pdf", ".ccs-text/Для репетитора/k.pdf.txt",
+                                   "Заметки/.ccs-text/x.txt", ".ccs-trash/x/a.md", ".cc-attachments/i.png" })
+        {
+            try { await _sut.IndexPathAsync(subject, "tester", rel); indexed.Add(rel); }
+            catch (InvalidOperationException) { refused.Add(rel); }
+        }
+
+        indexed.Should().BeEquivalentTo(new[] { "a.md", "Материалы/b.pdf", ".ccs-text/b.pdf.txt" });
+        refused.Should().BeEquivalentTo(new[] { "Для репетитора/k.pdf", ".ccs-text/Для репетитора/k.pdf.txt",
+                                              "Заметки/.ccs-text/x.txt", ".ccs-trash/x/a.md", ".cc-attachments/i.png" });
+        WkOf(subject.RootPath).Docs!.Keys.Should().BeEquivalentTo(
+            new[] { "a.md", "Материалы/b.pdf", ".ccs-text/b.pdf.txt" });
+        // Ровно 3 документа в датасете: два текстовых + один бинарный
+        _dify.CallsOf("POST", "/document/create_by_text").Should().HaveCount(2);
+        _dify.CallsOf("POST", "/document/create_by_file").Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task ChildSubject_Перенос_в_Для_репетитора_Удаляет_Документ_При_Синке()
+    {
+        var subject = CreateChildSubject("subject2");
+        WriteFile(subject.RootPath, "ключи.md", "ключи ответа");
+        var (_, doc) = await _sut.IndexPathAsync(subject, "tester", "ключи.md");
+
+        // Перенос между двумя проходами синка — через файловый API (рельса куратора):
+        // HandleRename мигрирует ключ под исключённое имя, следующий проход удаляет документ
+        Directory.CreateDirectory(Path.Combine(subject.RootPath, "Для репетитора"));
+        _files.Rename(subject.RootPath, "ключи.md", "Для репетитора/ключи.md");
+        var changed = await _sut.SyncAsync(subject.RootPath);
+
+        changed.Should().Be(1);
+        // Карта не держит ни старый ключ, ни исключённый новый
+        WkOf(subject.RootPath).Docs.Should().BeEmpty();
+        _dify.CallsOf("DELETE", $"/documents/{doc.Id}").Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task ChildSubject_Синк_Стартует_И_Не_Мигрирует_Документ_В_Исключённую_Папку()
+    {
+        var subject = CreateChildSubject("subject3");
+        WriteFile(subject.RootPath, "a.md", "урок");
+        var (_, doc) = await _sut.IndexPathAsync(subject, "tester", "a.md");
+
+        // Перенос мимо файлового API (как делает ватчер/корзина): документ не «переезжает»
+        // в исключённую папку — он удаляется. Что синк здесь реально работал — по диффу: changed=1
+        Directory.CreateDirectory(Path.Combine(subject.RootPath, ".ccs-trash", "2026-11-19"));
+        File.Move(Path.Combine(subject.RootPath, "a.md"),
+            Path.Combine(subject.RootPath, ".ccs-trash", "2026-11-19", "a.md"));
+        var changed = await _sut.SyncAsync(subject.RootPath, [".ccs-trash/2026-11-19/a.md"]);
+
+        changed.Should().Be(1);
+        WkOf(subject.RootPath).Docs.Should().BeEmpty();
+        _dify.CallsOf("DELETE", $"/documents/{doc.Id}").Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task ОбычныйПроект_Папка_Для_репетитора_Индексируется_Как_Раньше()
+    {
+        // Исключения — только проекта-предмета: у обычного проекта такая папка — обычная
+        WriteProjectFile("Для репетитора/key.md", "ключи");
+        var (_, doc) = await _sut.IndexPathAsync(_project, "tester", "Для репетитора/key.md");
+
+        doc.Name.Should().Be("Для репетитора/key.md");
+        Wk().Docs.Should().ContainKey("Для репетитора/key.md");
     }
 }
 

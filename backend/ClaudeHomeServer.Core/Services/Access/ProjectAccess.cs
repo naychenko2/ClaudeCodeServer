@@ -51,6 +51,16 @@ public enum ProjectRight
     /// (FeatureOwnerGate) — редактору они не открываются этим правом.
     /// </summary>
     WriteContent,
+    /// <summary>
+    /// Правка проектных персон: карточка, модель, доступы, привязки и автоматика (ADR-041 ред. 7,
+    /// находка 1). Равно <see cref="Configure"/> везде, кроме одного случая: в проекте-предмете
+    /// ребёнка его получает и <see cref="ProjectRole.Editor"/> — куратор обязан настроить
+    /// персону-репетитора, а <see cref="Configure"/> ему дать нельзя: это удаление проекта, имя,
+    /// режим, терминал и членство. Двери персон переводятся на это право поимённо (Б16b), здесь —
+    /// только матрица. Значение — в конце: прежние числа <see cref="ProjectRight"/> не сдвинуты
+    /// (снимок проверяет <c>МатрицаПрав_ЧислаProjectRight_СнимкаНеСдвинуты</c>).
+    /// </summary>
+    ConfigurePersonas,
 }
 
 /// <summary>
@@ -78,9 +88,15 @@ public static class ProjectAccess
         return member.Role is ProjectRole.Editor or ProjectRole.Reader ? member.Role : null;
     }
 
-    /// <summary>Можно ли человеку право <paramref name="right"/> в проекте.</summary>
+    /// <summary>
+    /// Можно ли человеку право <paramref name="right"/> в проекте. Признак проекта-предмета
+    /// берётся из единой точки его чтения — <see cref="ProjectCapabilities.IsChildSubject"/>
+    /// (тот же, по которому матрица отдаёт профиль <c>ChildSubject</c> через
+    /// <see cref="ProjectCapabilities.For"/>); следствий этой привязанности здесь нет, матрице
+    /// нужен только сам признак.
+    /// </summary>
     public static bool Can(Project? project, string? userId, ProjectRight right) =>
-        RoleHasRight(Check(project, userId), right);
+        RoleHasRight(Check(project, userId), right, ProjectCapabilities.IsChildSubject(project));
 
     /// <summary>
     /// «Проект общий» — единственное определение: с непустым списком участников (пустой список
@@ -97,14 +113,19 @@ public static class ProjectAccess
     /// <summary>
     /// Матрица «роль → права» (разрез §2.1, минимальная): владелец имеет все права,
     /// редактор — Read, Write и RunTurn (отправка и ведение своего хода, S2a-10; Configure не
-    /// получит никогда), читатель — только Read («нет права на запись»). Приглашение участников
-    /// — отдельное решение владельца в ProjectMembersController. null-роль не имеет ни одного права.
+    /// получит никогда), читатель — только Read («нет права на запись»). Единственное исключение
+    /// из строки редактора — <see cref="ProjectRight.ConfigurePersonas"/> в проекте-предмете
+    /// ребёнка (<paramref name="isChildSubject"/>): куратор правит персону-репетитора, не проект
+    /// (ADR-041 ред. 7, находка 1). В обычном проекте редактор этого права не имеет. Приглашение
+    /// участников — отдельное решение владельца в ProjectMembersController. null-роль не имеет ни
+    /// одного права.
     /// </summary>
-    private static bool RoleHasRight(ProjectRole? role, ProjectRight right) =>
+    private static bool RoleHasRight(ProjectRole? role, ProjectRight right, bool isChildSubject) =>
         role switch
         {
             ProjectRole.Owner => true,
-            ProjectRole.Editor => right is ProjectRight.Read or ProjectRight.Write or ProjectRight.RunTurn or ProjectRight.WriteContent,
+            ProjectRole.Editor => right is ProjectRight.Read or ProjectRight.Write or ProjectRight.RunTurn or ProjectRight.WriteContent
+                || right == ProjectRight.ConfigurePersonas && isChildSubject,
             ProjectRole.Reader => right == ProjectRight.Read,
             _ => false,
         };

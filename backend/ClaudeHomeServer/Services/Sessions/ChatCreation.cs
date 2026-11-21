@@ -365,10 +365,17 @@ public sealed class ChatCreation
 
     // === Фабрики чатов ===
 
+    // childSpace/childSubject + providerKey (Б9b): урок ребёнка — чат проекта-предмета с его
+    // детской меткой и закреплённым поставщиком. И метка, и поставщик нужны ДО StartNewSessionAsync:
+    // сверка И1-бис читает их в момент старта (TurnLaunchContextFactory), а Pick пула здесь не
+    // зовётся (И2′: поставщик урока — ровно записанный у предмета, ребёнок не переезжает между
+    // аккаунтами молча) — как в CreateChatAsync ниже. Ставит их единственная точка создания
+    // урока — POST /api/child/spaces/{space}/chat.
     internal async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null, string? createdByUserId = null, string? privateToUserId = null)
+        string? onboardingKind = null, string? createdByUserId = null, string? privateToUserId = null,
+        string? childSpace = null, string? childSubject = null, string? providerKey = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -383,7 +390,9 @@ public sealed class ChatCreation
             Name = name,
             Model = string.IsNullOrWhiteSpace(defaultModel) ? null : defaultModel.Trim(),
             AgentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
-            Provider = _route.ResolveSubscriptionProvider(defaultModel),
+            // providerKey — закреплённый поставщик (Б9b, И2′): без него сверка И1-бис внутри
+            // StartNewSessionAsync видела бы выведенного из модели Pick'ом пула
+            Provider = providerKey ?? _route.ResolveSubscriptionProvider(defaultModel),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
             // Персона-слой подхватится общим механизмом (BuildPersonaLayer).
             // Маршрутизация остаётся по вызывающему коду (задача), не по зоне персоны.
@@ -404,6 +413,9 @@ public sealed class ChatCreation
             // в общую историю проекта. Отказ от приватности флаг сам не снимает: только явное
             // согласие автора (TrySetExcludeFromDossiers после снятия), как у тумблера.
             ExcludeFromDossiers = privateToUserId is not null,
+            // Метка детского урока (Б9b) — до старта: её читает И1-бис в StartNewSessionAsync
+            ChildSpace = childSpace,
+            ChildSubject = childSubject,
         };
 
         await _process.StartNewSessionAsync(session, project.RootPath, project.SystemPrompt,

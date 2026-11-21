@@ -64,8 +64,9 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (3, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Gateway/UpstreamSelector.cs"] = (1, "LLM-провайдер"),
         // Маршрут хода ребёнка (Т5b): provider.IsLocal — локальность LLM-поставщика (своей модели
-        // цена не нужна), не локальность проекта.
-        ["backend/ClaudeHomeServer.Llm/ChildRoute.cs"] = (1, "IsLocal поставщика LLM, не проекта"),
+        // цена не нужна), не локальность проекта. Два вхождения: Evaluate (своя модель не требует
+        // цены) и IsChainStepAllowed (шаг цепочки от локального поставщика) — оба про поставщика.
+        ["backend/ClaudeHomeServer.Llm/ChildRoute.cs"] = (2, "IsLocal поставщика LLM, не проекта"),
         // Ручка child-routes (Т2f): kind/priced маршрута пикера строятся из IsLocal поставщика
         // (код плюс два упоминания в комментарии ручки) — локальность поставщика, не проекта.
         ["backend/ClaudeHomeServer/Controllers/ChildRoutesController.cs"] = (4, "IsLocal поставщика LLM, не проекта"),

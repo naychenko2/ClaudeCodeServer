@@ -1795,6 +1795,10 @@ public sealed partial class WorkspaceToolset(
                         durationMs = c.DurationMs,
                         costUsd = c.CostUsd,
                     }),
+                    // Х-W4-73 (дефект 358bfe10): ход детского чата запускает только его
+                    // владелец-ребёнок — тот же отказ, что у REST-канала. Deny, а не
+                    // status=running: хода нет и не будет, ретраить его бессмысленно.
+                    SessionMessagingService.SendOutcome.ChildTurnRefused r => Deny(r.Reason),
                     _ => Json(new
                     {
                         status = "running",

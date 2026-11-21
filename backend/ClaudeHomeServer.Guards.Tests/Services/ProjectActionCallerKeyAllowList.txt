@@ -74,6 +74,17 @@
 # ADR-040 Ф2-4: ImageEditScopeGate 6→8 (TryCharacterProject) — userId уходит только в проверки доступа внутри шлюза
 # (TryProject, TryPersonalChat), ключом хранилищ не служит: персонаж берётся из папки «Личного» владельца чата
 # (session.OwnerId) или проекта по гейту.
+# Х-W4-47 (хвост ревью e748c039): детская граница «свой/чужой предмет» вынесена в общую точку
+# ChildSubjectAccess (копии хелперов из контроллеров удалены) — строки с id
+# вызывающего переехали из тел приватных хелперов на места вызова, класс мест тот же (KM-G1, Б8e):
+# id участвует только в «ребёнок ли вызывающий» (IChildModePolicy, профиль самого вызывающего) и
+# «свой ли это его проект-предмета» (владение своим предметом); ключом хранилищ не служит: списки
+# адресуются projectId, задачи — id и арендатором. ChatsController 65→66, KnowledgeController 4→5,
+# SessionsController 18→20 и PreviewController 12→14 — к прежним счётчикам добавлены строки вызова
+# IsChild(…, UserId)/IsOwnSubjectProject(…, UserId) (у Sessions/Preview коммит e7021183e добавил
+# For(UserId) в приватный хелпер и не поднял снимок — сторож на ветке краснел с него; здесь
+# разница закрыта); TasksController 108→107 — тело ChildTaskScope.IsChild ушло в общий хелпер,
+# места вызова в контроллере не изменились.
 backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
 backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|6
 backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|8
@@ -105,7 +116,13 @@ backend/ClaudeHomeServer/Controllers/ChatSubjectsController.cs|1
 # аргументы createdByUserId/callerUserId — в словарь они не входят.
 # KM-G1 (ADR-041, KM-B6f): 62→63 — CurrentOwnerIsChild() зовёт IChildModePolicy.For(UserId): это профиль
 # САМОГО вызывающего (ребёнок ли он), а не ключ хранилищ проекта; детские чаты всегда вне проекта (И1-бис).
-backend/ClaudeHomeServer/Controllers/ChatsController.cs|63
+# Б8e (детская ветка чтения, ADR-041 ред. 8 решение 89): 63→65 — :152 (GET {id}) и :781
+# (GET {id}/history): id вызывающего входит только в GetOwnedVisible — «виден ли ЭТОТ чат
+# вызывающему» (граница владения своим ChildSpace-чатом). Ключом хранилищ не служит: история
+# читается по id чата (GetHistoryAsync(id)), записей по вызывающему нет. Уточнение к вердикту
+# KM-G1: с решения 89 урок — чат проекта-предмета, поэтому граница — владение, а не «вне
+# проекта»; данные ребёнка по-прежнему ключуются им самим (И1-бис), арендатор здесь не подставляется.
+backend/ClaudeHomeServer/Controllers/ChatsController.cs|66
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 # S2c-8: FilesController 5→6 — ветка папки Delete: id вызывающего входит только в явную проверку
 # права Write (папка остаётся на Write, файл переведён на WriteContent); ключом хранилищ ничто
@@ -125,7 +142,15 @@ backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 # (PrivateAttachments.IsForeign → 404) и передаётся в FileService.Search как ЗРИТЕЛЬ выдачи.
 # Ключом хранилищ он не стал: файловые вызовы по-прежнему идут от GetRoot(projectId) (S2c-8),
 # хранилищ по вызывающему не появилось; для Search это фильтр видимости, а не адресация.
-backend/ClaudeHomeServer/Controllers/FilesController.cs|11
+# Б8e (детская граница рельсы «Файлы», И8 / ADR-041 решения 53-56): 11→14 — три строки.
+# :146 и :151 — имя `actor` из словаря S2c-6, но значением там НЕ id человека: ChildActor —
+# enum роли (Child/Curator, ChildPathPolicy.cs:216), выведенный из роли вызывающего в
+# проекте-предмете (:133-136); входит только в ChildPathPolicy.Decide — вердикт по пути.
+# :1254 — ChildTrash.Snapshot(root, rel, UserId): id уходит в meta.json записи корзины как
+# АВТОР снимка (ChildTrash.cs:51), атрибуция; сама корзина адресована папкой предмета
+# (subjectRoot — корень проекта арендатора). Ключом хранилищ ничто из этого не стало:
+# все файловые вызовы идут от GetRoot(projectId), как в S2c-8.
+backend/ClaudeHomeServer/Controllers/FilesController.cs|14
 # S3-1b: GitController 1→3 — AuthorOfRequestUser: id вызывающего берётся из sub JWT и входит только
 # в чтение своей записи пользователя (UserStore.GetById) и в конструирование автора коммита
 # (GitCommitAuthor: имя/логин для git-автора). Ключом хранилищ ничто не стало: git-операции идут
@@ -140,7 +165,11 @@ backend/ClaudeHomeServer/Controllers/GitController.cs|4
 # ЗРИТЕЛЬ обхода (тот же фильтр, что у читающих ручек, S2d-6b-2 доработка 1). Ключом хранилищ он
 # не стал: индексация адресована корнем проекта арендатора (GetScopedProject → GetById), записей
 # по вызывающему нет; тот же класс мест, что FilesController в S2d-6b-2.
-backend/ClaudeHomeServer/Controllers/KnowledgeController.cs|3
+# Б8e (детская граница «Знаний», ADR-041 ред. 8 решение 81): 3→4 — :56 CurrentOwnerIsChild()
+# зовёт IChildModePolicy.For(UserId): профиль САМОГО вызывающего (ребёнок ли он), тот же класс
+# места, что KM-G1 в ChatsController. Ключом хранилищ не служит: статус и список БЗ адресуются
+# GetScopedProject(projectId) — корнем проекта арендатора.
+backend/ClaudeHomeServer/Controllers/KnowledgeController.cs|5
 backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # 94c2fd37 доработка 1: PersonasController 110→111 — AskCallerIsPrivateOrUnknown: id вызывающего входит
 # только в GetOwnedVisible (видит ли человек чат-вызыватель persona_ask) для признака «приватный или
@@ -214,7 +243,7 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # вызывающего). Ключом хранилищ не служит: ничего не пишется, дальше чтение персоны — по
 # TenantOwnerId из RequestScope (строка 671).
 backend/ClaudeHomeServer/Controllers/PersonasController.cs|39
-backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
+backend/ClaudeHomeServer/Controllers/PreviewController.cs|14
 # R-ФИНАЛ (сведение feat/opt-components с master): ProjectBackgroundsController 0→1 — явный
 # IProjectAccess.Resolve вместо [ProjectScope] (тот же путь, что CodeGraphController): на выключенной
 # вертикали отказ 503 с причиной обязан идти раньше разрешения проекта, а атрибут-фильтр ответил бы
@@ -223,7 +252,15 @@ backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectBackgroundsController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
-backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
+# Б8e (детская ветка списка проектов + адресат события удаления датасета): 15→16.
+# +1: :151 ChildScope() зовёт IChildModePolicy.For(UserId) — профиль САМОГО вызывающего
+# (ребёнок ли он; та же точка правды, что у гейта И1). Ключом хранилищ не служит: список
+# проектов ребёнка берётся GetByOwner(childId), childId — владелец из этого же профиля.
+# −1: :467 переезд проекта на устройство снимает осиротевшую базу — DropKnowledgeIfOrphanAsync
+# зовётся с TenantId: событие «датасет удалён» (ProjectDeletionService.cs:126, группа
+# user_{notifyOwnerId}) идёт владельцу датасета, а не вызывающему-редактору; строка с id
+# вызывающего из кода ушла — потому 16, а не 17.
+backend/ClaudeHomeServer/Controllers/ProjectsController.cs|16
 # S2d-3e: SessionsController 10→14 — четыре новых входа по id вызывающего в решении о чате:
 # GetAccessible (чтение истории и состава контекста) и GetOwnedVisible (смена собеседника,
 # PUT контекста). id вызывающего входит только в IProjectAccess.ResolveSession /
@@ -254,7 +291,7 @@ backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
 # допуск — ResolvePersona с ключом области), запись SetPersona(…, TenantOwnerId). Добавлены два
 # допуска ResolvePersona(…, UserId, …) — id вызывающего входит только в решение «персона → область»,
 # ключом хранилищ он не стал. Сторож посчитал это снижением.
-backend/ClaudeHomeServer/Controllers/SessionsController.cs|18
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|20
 # Снимок 10→8: добивание остатка bc38eb0ba (W3-B5c «навыки персоны — только владельцу»): ключ записи
 # привязки и резолв в POST /api/skills/suggest переведены на TenantOwnerId/ResolvePersona, счётчик
 # тогда не был снижен — сторож краснел с того коммита.
@@ -321,7 +358,16 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|8
 # «stage.BuildFileDiff(…, UserId)» (B06) и «access.ResolvePersona(UserId, …)» в PersonaNameOf (B01). id
 # вызывающего идёт актором видимости (StageScreenService.Visible) и аргументом И-1 (ResolvePersona), тот же
 # класс мест, что D1a: ключом хранилищ не служит; ответ на вопрос этапа адресован id задачи и вопроса.
-backend/ClaudeHomeServer/Controllers/TasksController.cs|99
+# Б8e (детские ручки задач, ADR-041 ред. 8, разрез §14.4): 99→108 — девять строк, один класс:
+# id вызывающего входит только в детскую проверку «свой/чужой» перед обычным правом:
+# :88 :109 :655 :2151 ChildTaskScope.IsChild(HttpContext, UserId) — ребёнок ли вызывающий
+# (IChildModePolicy по стору, :2293); :90 :112 IsOwnSubjectProject(project, UserId) — свой ли
+# это проект-предмет; :657 :2151 IsOwnTask(task, UserId) — своя ли это задача (автор —
+# CreatedByUserId, fail-closed на null); :91 CuratorNames(users, UserId) — имена кураторов
+# ребёнка для поля «Эту доску видят» в ответе ребёнка. Ключом хранилищ ничто не стало: список
+# берётся GetByProject(projectId), карточка — GetById(taskId), запись — под арендатором (F2-T1);
+# данные ребёнка ключуются им самим по построению ADR-041 (И1-бис), а не подставляемым арендатором.
+backend/ClaudeHomeServer/Controllers/TasksController.cs|107
 # Задача b078fa12 (блокер мержа, шаги P1e/P2b): TaskWorkflowController 0→1 — «FeatureOwnerGate.IsOwnerOf(access, UserId, epic)»
 # в EpicOfCaller (recommend/confirm маршрута эпика). id вызывающего — актор права «только владелец»
 # (владелец записи либо ProjectRight.Write через IProjectAccess), тот же предикат, что у двери правки

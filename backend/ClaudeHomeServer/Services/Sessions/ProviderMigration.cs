@@ -225,11 +225,13 @@ public sealed class ProviderMigration
     // SingleFinalRoute). Статический: ProviderMigration — синглтон, но сторож не должен зависеть от DI.
     private static readonly SemaphoreSlim ChildRepinGate = new(1, 1);
 
-    // Перезакрепление маршрута предмета (Т2e, решение Андрея 18.11) и перенос чатов при смене
+    // Перезакрепление маршрута предмета (Т2e, решение Андрея 18.11; Б2b) и перенос чатов при смене
     // поставщика (Т2e2): каждый чат этого ребёнка и предмета получает персону, поставщика и модель
-    // из ЖИВОГО маршрута предмета. liveTarget зовётся на каждый чат внутри очереди: два PUT подряд
-    // оставляют чаты при итоговом маршруте, а не при значении старого запроса; null — маршрут
-    // не принят ChildRoute или предмета нет (чат не трогаем, ход ему и так откажет).
+    // из ЖИВОГО маршрута предмета. Живой маршрут разворачивает гейт (LiveRouteFor) — та же точка,
+    // что у сверки запуска и у догона ниже: своей копии развёртки у вызывающего нет (И10).
+    // Живой профиль читается на каждый чат внутри очереди: два PUT подряд оставляют чаты при
+    // итоговом маршруте, а не при значении старого запроса; null — маршрут не принят ChildRoute,
+    // репетитора нет или предмета нет (чат не трогаем, ход ему и так откажет).
     // Цель — РОВНО ProviderKey предмета (И2′): _subscriptionPool.Pick здесь не зовётся никогда,
     // подмена аккаунта пула у ребёнка недопустима. Сменился поставщик — транскрипт копируется в
     // профиль нового (MoveTranscript, то же правило, что у MigrateProviderAsync): иначе --resume
@@ -241,7 +243,7 @@ public sealed class ProviderMigration
     // переписывает поля сразу, идущий ход доживает со старыми. Сбой переноса одного
     // чата — лог, чат остаётся на прежних полях, остальные переносятся. UpdatedAt не двигается:
     // маршрут — настройка чата, а не активность. Возвращает число перезакреплённых чатов.
-    public async Task<int> RepinChildSubjectAsync(string ownerId, string subjectId, Func<ChildRepinTarget?> liveTarget)
+    public async Task<int> RepinChildSubjectAsync(string ownerId, string subjectId)
     {
         var candidates = _store.Sessions.Values.Select(e => e.Info)
             .Where(i => i.ChildSpace is not null
@@ -254,7 +256,12 @@ public sealed class ProviderMigration
             await ChildRepinGate.WaitAsync();
             try
             {
-                if (await RepinOneChildChatAsync(sessionId, ownerId, liveTarget)) changed++;
+                // Живой профиль и живой маршрут — на каждый чат, внутри очереди (та же гарантия,
+                // что была у делегата контроллера: значения параллельного PUT не затираются).
+                var info = _store.Sessions.TryGetValue(sessionId, out var e) ? e.Info : null;
+                if (info is not null
+                    && await RepinOneChildChatAsync(sessionId, ownerId, () => _childGate.LiveRouteFor(ownerId, info)))
+                    changed++;
             }
             catch (Exception ex)
             {
@@ -289,6 +296,14 @@ public sealed class ProviderMigration
         }
         finally { ChildRepinGate.Release(); }
     }
+
+    // Вердикт запуска хода ребёнка (И10, дефект a771ca12) — тот же рубеж, что у догона выше:
+    // догон приводит закреплённые поля к живому маршруту, здесь — ответ «а если привести не к чему».
+    // Держится у этой роли, а не у ядра приёма: ядро не знает ни профиля, ни маршрута (его
+    // зависимостей ровно десять), а своей копии сверки нигде, кроме гейта, быть не должно.
+    // Вызывается сразу после CatchUpChildChatAsync на обоих входах приёма (TurnIntake).
+    internal string? ChildTurnRefusalFor(string ownerId, Session session)
+        => _childGate.TurnRefusalFor(ownerId, session, DateTimeOffset.UtcNow);
 
     private async Task<bool> RepinOneChildChatAsync(string sessionId, string ownerId, Func<ChildRepinTarget?> liveTarget)
     {

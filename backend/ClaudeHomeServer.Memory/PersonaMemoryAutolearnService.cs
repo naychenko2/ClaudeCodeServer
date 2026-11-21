@@ -82,6 +82,23 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
             return Task.CompletedTask;
         }
 
+        // Детский чат (Б16d, решение Андрея 19.11 п.5, ADR-041 ред.7): память персоны на уроках
+        // ребёнка не учится вовсе — ни чтения истории, ни LLM. Выжимки урока не должны оседать в
+        // памяти тьютора и всплывать в его взрослых чатах. Признак — метка детского пространства,
+        // закреплённая при создании чата (Session.cs:541), та же точка, что у ChildModeGate/ChildRoute:
+        // любой чат ребёнка (уроков, правил) её несёт; отдельной метки предмета для этого не нужно.
+        // Проверка здесь, до чтения персоны: независимо от persona.MemoryEnabled — куратор может
+        // включить память тьютору, но на детских чатах она всё равно молчит. Recall у детского
+        // хода выключен отдельно (KM-B6c2, PersonaRecallContributor.IsEnabled) — это его парная
+        // половина на write-path.
+        if (session.ChildSpace is not null)
+        {
+            var total = Interlocked.Increment(ref _skipped);
+            _log.LogDebug("autolearn: персона {Persona}, сессия {Session} — пропуск (детский чат), всего пропусков {Total}",
+                session.PersonaId, session.Id, total);
+            return Task.CompletedTask;
+        }
+
         var persona = _personas.GetByIdInternal(session.PersonaId);
         if (persona is null || !persona.MemoryEnabled) return Task.CompletedTask;
 

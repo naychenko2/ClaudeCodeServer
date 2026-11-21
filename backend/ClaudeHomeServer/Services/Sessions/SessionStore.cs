@@ -573,6 +573,11 @@ public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource, Acces
     public string? ResolveOwnerId(Session s) =>
         s.ProjectId is not null ? _projects.GetById(s.ProjectId)?.OwnerId : s.OwnerId;
 
+    // Чат проекта-предмета ребёнка (Б8d): признак — у проекта (ProjectCapabilities.IsChildSubject),
+    // а не метка чата; чат вне проекта и осиротевший проектный — не предмет.
+    internal bool InChildSubjectProject(Session s) =>
+        s.ProjectId is not null && ProjectCapabilities.IsChildSubject(_projects.GetById(s.ProjectId));
+
     // Видимость сессии человеку — Core-точка SessionAccess.CanSee (та же, что у GetOwnedVisible
     // и шлюзов редакторов S2d-1d): приватный проектный чат не виден даже владельцу проекта
     // (решение 28.10). Проект резолвится по сессии: осиротевший проектный чат не виден

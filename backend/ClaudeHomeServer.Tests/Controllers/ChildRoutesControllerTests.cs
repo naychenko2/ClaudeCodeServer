@@ -74,26 +74,22 @@ public class ChildRoutesControllerTests : IClassFixture<ChildRoutesControllerTes
         route.GetProperty("models").EnumerateArray().Select(m => m.GetProperty("id").GetString()!).ToList();
 
     [Fact]
-    public async Task Get_ТолькоЗаписиСКлючомБезТокена_ВПорядкеПула()
+    public async Task Get_ВсеЗаписиПула_ВПорядкеПула()
     {
         var root = await GetAsync(_admin);
         var keys = RoutesOf(root).Select(r => r.GetProperty("providerKey").GetString()!).ToList();
 
-        // Инвариант: в списке нет ни одной записи с OAuthToken. Запись без ключа в пул не входит
-        // вообще (Enabled=false) — здесь она и не нужна. Порядок — порядок пула, не сортировка.
+        // По И2″ (решение 25) маршрутом годится любая запись пула: токен, ключ или оба.
+        // Порядок — порядок пула, не сортировка.
         var poolKeys = RoutesOf(root).Where(r => r.GetProperty("kind").GetString() == "pool")
             .Select(r => r.GetProperty("providerKey").GetString()!).ToList();
-        poolKeys.Should().Equal(_pool.All
-            .Where(s => !string.IsNullOrWhiteSpace(s.ApiKey) && string.IsNullOrWhiteSpace(s.OAuthToken))
-            .Select(s => s.Key));
-        keys.Should().Contain("kids-api");
-        keys.Should().NotContain("oauth-sub");
-        keys.Should().NotContain("both-keys");
+        poolKeys.Should().Equal(_pool.All.Select(s => s.Key));
+        keys.Should().Contain(new[] { "kids-api", "oauth-sub", "both-keys" });
 
         foreach (var r in RoutesOf(root).Where(r => r.GetProperty("kind").GetString() == "pool"))
         {
             r.GetProperty("priced").GetBoolean().Should().BeTrue();
-            r.GetProperty("requiresAck").GetBoolean().Should().BeFalse("пул — Anthropic, согласие не нужно");
+            r.GetProperty("requiresAck").GetBoolean().Should().BeTrue("по И2″ согласие профиля нужно любому маршруту, включая пул");
         }
     }
 

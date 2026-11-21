@@ -59,6 +59,13 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
         public sealed record Completed(string Reply, long DurationMs, double? CostUsd) : SendOutcome;
         /// <summary>wait=none или таймаут — ход продолжается (как 202 running).</summary>
         public sealed record Running : SendOutcome;
+        /// <summary>
+        /// Ход отклонён на приёме ядром (Х-W4-73, дефект 358bfe10): ход детского чата
+        /// запускает только его владелец-ребёнок (тот же отказ, что у хаб-пути). Ничего не
+        /// началось — ни хода, ни очереди, ни реплики в ленте получателя; текст принадлежит
+        /// вызывающему, он и просил ход (как 409 child_turn_owner_only контроллера).
+        /// </summary>
+        public sealed record ChildTurnRefused(string Reason) : SendOutcome;
     }
 
     /// <summary>
@@ -148,11 +155,12 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
         catch (InvalidOperationException) { return new SendOutcome.NotFound(); }
 
         // Квота списана авансом, а сообщение не дошло (дубль, переполнение очереди, занято
-        // ожиданием человека) — возвращаем единицу: иначе наивные ретраи агента выжигали
+        // ожиданием человека, отказано на приёме — ход детского чата только его
+        // владельца-ребёнка) — возвращаем единицу: иначе наивные ретраи агента выжигали
         // бы MaxWakeups без единого реального хода. Принятое в очередь (не дубль) не
         // рефандим — доставка по концу хода ход поднимет.
         if (wakeSpent && result is SendAndWaitResult.Queued { Duplicate: true }
-            or SendAndWaitResult.QueueFull or SendAndWaitResult.Busy)
+            or SendAndWaitResult.QueueFull or SendAndWaitResult.Busy or SendAndWaitResult.Refused)
             sessions.RefundTeamWakeup(sessionId);
 
         // Явный тип: у switch-выражения без целевого типа общего типа веток нет (CS8506,
@@ -165,6 +173,9 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
             SendAndWaitResult.QueueFull f => new SendOutcome.QueueFull(f.Limit),
             SendAndWaitResult.Completed c => new SendOutcome.Completed(
                 c.Result.Reply, c.Result.DurationMs, c.Result.CostUsd),
+            // Х-W4-73 (дефект 358bfe10): отказ ядра не проваливается в Running — иначе
+            // вызывающий ждал бы хода, которого никогда не будет, и не знал бы почему.
+            SendAndWaitResult.Refused r => new SendOutcome.ChildTurnRefused(r.Reason),
             _ => new SendOutcome.Running(),
         };
 

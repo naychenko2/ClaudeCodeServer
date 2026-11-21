@@ -45,6 +45,14 @@ public sealed class ProjectMembershipService(
     public const string LocalProject = "local_project";
     public const string SwitchDisabled = "shared_projects_disabled";
 
+    /// <summary>
+    /// Код отказа ручных операций членства над проектом-предметом (Б14b, ADR-041 ред. 6,
+    /// решение 62, разрез §12 «Чего куратору нельзя»): его состав кураторов меняется только
+    /// из профиля ребёнка (синхронизация Б14a) — Add/ChangeRole/Remove/Leave отвечают этим
+    /// 409 для любого вызывающего, включая владельца-ребёнка и куратора.
+    /// </summary>
+    public const string ManagedByChildProfile = "managed_by_child_profile";
+
     /// <summary>Добавить участника по точному username (регистр не важен, как при входе).</summary>
     public async Task<MembershipResult> AddAsync(
         string callerId, string projectId, string? username, ProjectRole role, CancellationToken ct = default)
@@ -54,6 +62,15 @@ public sealed class ProjectMembershipService(
 
         var denied = RequireOwner(callerId, projectId, out var project);
         if (denied is not null) return denied;
+
+        // Б14b (решение 62): членство проекта-предмета пишет только синхронизация Б14a —
+        // ручное приглашение закрыто для всех, включая владельца-ребёнка: его кураторский
+        // список — в ChildProfile.GuardianUserIds, не в этих ручках. Порядок — после
+        // RequireOwner: куратор (не владелец) отсекается здесь же 403'ом и до границы не
+        // доходит; для него та же граница стоит в ChangeRole/Remove/Drop, где проверка
+        // идёт до ownership.
+        if (ProjectCapabilities.IsChildSubject(project))
+            return SubjectProjectRefusal();
 
         if (!gate.FlagOn(callerId))
             return new(409, FlagDisabled,
@@ -132,7 +149,12 @@ public sealed class ProjectMembershipService(
     public async Task<MembershipResult> ChangeRoleAsync(
         string callerId, string projectId, string memberUserId, ProjectRole role)
     {
-        var denied = RequireOwner(callerId, projectId, out _);
+        // Б14b (решение 62): роль куратора предмета — Editor из профиля (решение 60),
+        // ручная смена роли в проекте-предмете — 409 для любого вызывающего.
+        var denied = RequireSubjectProject(projectId);
+        if (denied is not null) return denied;
+
+        denied = RequireOwner(callerId, projectId, out _);
         if (denied is not null) return denied;
         if (role is not (ProjectRole.Editor or ProjectRole.Reader))
             return new(400, "invalid_role", "Роль участника — редактор или читатель.");
@@ -171,6 +193,11 @@ public sealed class ProjectMembershipService(
         var project = projects.GetById(projectId);
         var role = ProjectAccess.Check(project, callerId);
         if (role is null) return new(404, "not_found", "Не найдено.");
+        // Б14b (решение 62): из проекта-предмета не «выходят» — его список правит
+        // синхронизация профиля (Б14a). Отказ — до owner_cannot_leave: для владельца-
+        // ребёнка ответ — граница фичи, а не обычное «владелец не покидает свой проект».
+        if (ProjectCapabilities.IsChildSubject(project))
+            return SubjectProjectRefusal();
         if (role == ProjectRole.Owner)
             return new(400, "owner_cannot_leave", "Владелец не может покинуть свой проект.");
         return await DropAsync(projectId, callerId);
@@ -185,6 +212,13 @@ public sealed class ProjectMembershipService(
 
     private async Task<MembershipResult> DropAsync(string projectId, string memberUserId)
     {
+        // Б14b (решение 62): Remove и Leave пишут через этот метод — отказ стоит здесь
+        // один раз, до любой записи; вызывается и после RequireOwner (Remove), и после
+        // собственной проверки видимости (Leave). Синхронизация Б14a этот метод НЕ зовёт:
+        // её путь — SyncSubjectProjectMembersAsync, без проверки (решение 62: пишет только она).
+        var denied = RequireSubjectProject(projectId);
+        if (denied is not null) return denied;
+
         Project updated;
         lock (_lock)
         {
@@ -211,6 +245,80 @@ public sealed class ProjectMembershipService(
         // продолжали бы работу ради того, кому она уже не достаётся.
         sessions.StopChatsOfRevokedMember(projectId, memberUserId);
         return new(200, Project: updated);
+    }
+
+    /// <summary>
+    /// Запись членства для синхронизации кураторов проекта-предмета (Б14a, ADR-041 ред. 6,
+    /// решения 61–62): desired — опекуны профиля ребёнка с ролью Editor, остальных в списке
+    /// нет. Проверок приглашения здесь нет по построению (флага сторон, git'а, «приглашает
+    /// только владелец»): ACL проекта-предмета правит только синхронизация, ручные ручки на
+    /// неё отвечают 409 (решение 62). Инвариант сохранён: владелец в Members не пишется — его
+    /// роль выводится из OwnerId (ProjectMember.cs:7). Флаг shared-projects и рубильник
+    /// сервер за человека НЕ включает (решение 61: это его экспериментальная настройка).
+    /// Живые строки сохраняются со своей датой (повторный обход без правки профиля — no-op);
+    /// снятый опекун — не FormerMember: он не покидал проект сам и в чатах предмета не писал
+    /// (решение 63), следа «больше не в проекте» над его сообщениями здесь быть не может.
+    /// Чтение-проверка-запись — под тем же _lock, что у Add/Drop. Хаб-следствия те же, что
+    /// у обычных операций («то же широковещание», решение 61): отозванных выкидываем из
+    /// групп (RevokeHubAccessAsync), список обновляем project_members_changed ровно один раз
+    /// на обход — при пустом desired без прежних участников события нет (ничего не изменилось).
+    /// Проекта нет (удалён под параллельной правкой) — ничего не синхронизируем.
+    /// </summary>
+    internal async Task SyncSubjectProjectMembersAsync(string childId, string projectId,
+        IReadOnlyCollection<string> guardianUserIds, CancellationToken ct = default)
+    {
+        Project updated;
+        List<string> revoked;
+        lock (_lock)
+        {
+            var project = projects.GetById(projectId);
+            if (project is null) return;
+            var desired = guardianUserIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal)
+                .Where(id => id != project.OwnerId) // владелец в Members не пишется — инвариант модели
+                .ToList();
+            var before = project.Members ?? [];
+            var members = before.ToList();
+            members.RemoveAll(m => !desired.Contains(m.UserId));
+            foreach (var userId in desired)
+            {
+                var existing = members.FirstOrDefault(m => m.UserId == userId);
+                if (existing is not null)
+                {
+                    // Роль куратора — Editor (решение 60): живая строка доводится до неё
+                    // без смены даты (смены роли человек в проекте-предмете не делал).
+                    if (existing.Role != ProjectRole.Editor)
+                        members[members.IndexOf(existing)] = new ProjectMember
+                        {
+                            UserId = existing.UserId, Role = ProjectRole.Editor,
+                            AddedAt = existing.AddedAt, AddedBy = existing.AddedBy,
+                        };
+                    continue;
+                }
+                // AddedBy — ребёнок-владелец: сервер пишет ACL по его профилю, владельца
+                // приглашает не другой человек (состав строки — тот же, что у ручного Add).
+                members.Add(new ProjectMember
+                {
+                    UserId = userId, Role = ProjectRole.Editor, AddedAt = DateTime.UtcNow, AddedBy = childId,
+                });
+            }
+            var finalIds = new HashSet<string>(members.Select(m => m.UserId), StringComparer.Ordinal);
+            var beforeIds = new HashSet<string>(before.Select(m => m.UserId), StringComparer.Ordinal);
+            var roleChanged = members.Any(m =>
+                before.FirstOrDefault(o => o.UserId == m.UserId)?.Role != m.Role);
+            if (beforeIds.SetEquals(finalIds) && !roleChanged)
+                return; // состав и роли те же — запись и широковещание не нужны (идемпотентный обход)
+            revoked = before.Select(m => m.UserId).Where(id => !finalIds.Contains(id)).ToList();
+            updated = projects.SetMembers(projectId, members);
+        }
+        // Отзыв снятых — тот же путь, что у Drop (Revoke сам широковещает список на каждого);
+        // без отзывов — одно project_members_changed на обход (тот же порядок, что у Add/ChangeRole).
+        foreach (var userId in revoked)
+            await RevokeHubAccessAsync(projectId, userId, updated);
+        if (revoked.Count == 0)
+            await hub.Clients.Group("project_" + projectId)
+                .SendAsync("project_members_changed", new { projectId });
     }
 
     /// <summary>
@@ -247,6 +355,17 @@ public sealed class ProjectMembershipService(
         await hub.Clients.Group("user_" + memberUserId).SendAsync("project_access_revoked",
             new { projectId, ownerDisplayName });
     }
+
+    // Б14b (решение 62): проект-предмет — членство пишет только синхронизация профиля
+    // (Б14a), ручные операции отвечают 409 для любого вызывающего. Отсутствие — не отказ:
+    // отсутствия проекта здесь нет (GetById → null → не проект-предмет), его 404 остаётся
+    // у RequireOwner/Check — существование не раскрываем.
+    private MembershipResult? RequireSubjectProject(string projectId) =>
+        ProjectCapabilities.IsChildSubject(projects.GetById(projectId)) ? SubjectProjectRefusal() : null;
+
+    private static MembershipResult SubjectProjectRefusal() =>
+        new(409, ManagedByChildProfile,
+            "Участники проекта-предмета определяются профилем ребёнка: состав правит синхронизация профиля, вручную его менять нельзя.");
 
     // Не видит проекта — 404 (существование не раскрываем), видит, но не владелец — 403
     private MembershipResult? RequireOwner(string callerId, string projectId, out Project project)

@@ -43,13 +43,13 @@ public class BackupPathsTests
 
     // Каталог материалов предмета (К2c, разрез «Знания репетитора» §2): данные ребёнка —
     // опись, оригиналы и извлечённый текст. В архив по умолчанию (исключений ShouldInclude
-    // для него нет) и не секретный (в реестре секретов его нет). Сторож: имя корня — из
-    // константы стора, её же читает RootFromConfig; переименование корня покраснило бы
-    // и этот тест, и чтение стора.
+    // для него нет) и не секретный (в реестре секретов его нет). Стор, который его писал,
+    // удалён (Х-W4-28, решение 68), сторож остаётся: каталог мог остаться на диске —
+    // оставшиеся данные обязаны доехать в архив.
     [Fact]
     public void МатериалыПредмета_ПопадаютВАрхив_ИНеСекреты()
     {
-        var root = ClaudeHomeServer.Services.ChildMode.ChildSubjectMaterialsStore.DirName;
+        var root = "child-subjects"; // бывший DirName удалённого стора
         BackupPaths.ShouldInclude($"{root}/kid-a/math/materials.json").Should().BeTrue();
         BackupPaths.ShouldInclude($"{root}/kid-a/math/files/m_000000000001.pdf").Should().BeTrue();
         BackupPaths.ShouldInclude($"{root}/kid-a/math/text/m_000000000001.txt").Should().BeTrue();

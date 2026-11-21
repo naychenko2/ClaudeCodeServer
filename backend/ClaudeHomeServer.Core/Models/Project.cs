@@ -103,6 +103,11 @@ public class Project
     // Смена при существующих чатах запрещена (409). Nullable-поле: старые записи
     // projects.json читаются серверными, BackupSchema.Version не двигается.
     public string? DeviceId { get; set; }
+    // Предмет ребёнка (детский режим, ADR-041): id ChildSubject, к которому привязан проект.
+    // Единственная точка правды связи (у ChildSubject поля ProjectId нет). Что можно проекту-предмету —
+    // только через ProjectCapabilities.ChildSubject, инлайновых проверок не заводим.
+    public string? ChildSubjectId { get; set; }
+    [JsonIgnore] public bool IsChildSubject => !string.IsNullOrEmpty(ChildSubjectId);
     // Вид проекта; обычный в файл не пишется — projects.json остаётся прежним
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public ProjectKind Kind { get; set; } = ProjectKind.Regular;

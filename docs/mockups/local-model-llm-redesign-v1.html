@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вкладка LLM · v1 «Сначала ферма»</title>
+<style>
+/* Значения только из frontend/src/lib/theme.css; сырые значения живут лишь в этом блоке токенов. */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5; --c-overlay:rgba(23,19,15,.42);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22); --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-press:inset 0 1px 3px rgba(60,50,35,.12);
+}
+[data-theme="dark"] { color-scheme:dark;
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18; --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-track:#453F37;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33; --c-overlay:rgba(0,0,0,.62);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55); --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-press:inset 0 1px 4px rgba(0,0,0,.38);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--c-bg-main); color:var(--c-text-primary); font-family:"Hanken Grotesk","Segoe UI",system-ui,sans-serif; font-size:13px; line-height:1.45; }
+button, summary { font:inherit; }
+button { color:inherit; touch-action:manipulation; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.bar { position:sticky; top:0; z-index:10; display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.bar h1 { flex:1; min-width:230px; margin:0; color:var(--c-text-heading); font-family:"PT Serif",Georgia,serif; font-size:22px; font-weight:600; }
+.tog { display:flex; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:10px; }
+.tog button { min-height:32px; padding:4px 12px; border:0; border-radius:8px; background:transparent; color:var(--c-text-secondary); cursor:pointer; }
+.tog button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-press); }
+.tog button:focus-visible, button:focus-visible, summary:focus-visible { outline:0; box-shadow:var(--shadow-focus); }
+.wrap { max-width:1120px; margin:0 auto; padding:24px 24px 64px; }
+.note { max-width:84ch; margin:0 0 16px; color:var(--c-text-secondary); }
+.note b { color:var(--c-text-heading); }
+.board { display:flex; align-items:flex-start; gap:24px; flex-wrap:wrap; }
+.demo { flex:0 1 auto; min-width:0; }
+.cap { margin:0 0 8px; color:var(--c-text-muted); font-size:11px; font-weight:700; }
+.panel { width:380px; max-width:100%; overflow:hidden; background:var(--c-bg-panel); border:1px solid var(--c-border-light); border-radius:14px; box-shadow:var(--shadow-island); }
+.phead { height:40px; display:flex; align-items:center; gap:6px; padding:0 8px 0 12px; background:var(--c-bg-inset); border-bottom:1px solid var(--c-border-light); }
+.phead b { color:var(--c-text-heading); font-size:13px; white-space:nowrap; }
+.phead .close { margin-left:auto; color:var(--c-text-muted); font-size:18px; }
+.tabs { display:flex; gap:2px; margin-left:auto; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.tabs span { padding:3px 7px; border-radius:7px; color:var(--c-text-muted); font-size:11px; }
+.tabs .on { background:var(--c-accent-light); color:var(--c-accent); font-weight:700; }
+.scroll { max-height:760px; overflow:auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
+.seg { display:flex; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:10px; }
+.seg button { flex:1; min-width:0; min-height:32px; border:0; border-radius:8px; background:transparent; color:var(--c-text-muted); font-size:11px; font-weight:600; cursor:pointer; }
+.seg button.on { background:var(--c-accent-light); color:var(--c-accent); }
+.seg button:hover, .tog button:hover { color:var(--c-text-heading); }
+.linkrow:hover, summary:hover { background:var(--c-bg-selected); }
+.model { display:flex; align-items:center; gap:8px; }
+.model b { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--c-text-heading); font-family:"JetBrains Mono",monospace; font-size:13px; }
+.pill { display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:999px; background:var(--c-success-bg); color:var(--c-success-text); font-size:11px; font-weight:700; white-space:nowrap; }
+.pill i { width:7px; height:7px; border-radius:50%; background:var(--c-success); }
+.sub { margin-top:-8px; color:var(--c-text-muted); font-size:11px; }
+.card { padding:12px; background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:12px; }
+.sect { display:flex; align-items:center; gap:8px; margin:0 0 10px; color:var(--c-text-secondary); font-size:11px; font-weight:700; }
+.sect .right { margin-left:auto; color:var(--c-text-muted); font-weight:400; }
+.kpis { display:grid; grid-template-columns:1fr 1fr; gap:12px 8px; }
+.kpi .n { color:var(--c-text-heading); font-family:"JetBrains Mono",monospace; font-size:18px; font-weight:700; line-height:1.2; }
+.kpi .n small { color:var(--c-text-muted); font-size:11px; font-weight:400; }
+.kpi .l { margin-top:2px; color:var(--c-text-secondary); font-size:11px; }
+.kpi.warn .n { color:var(--c-warning-text); }
+.chart { display:block; width:100%; height:132px; }
+.chart .grid { stroke:var(--c-border-light); }
+.chart .line { fill:none; stroke:var(--c-accent); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.chart .area { fill:var(--c-accent); opacity:.1; }
+.chart .cache { fill:none; stroke:var(--c-info); stroke-width:1.5; stroke-dasharray:4 3; }
+.chart text { fill:var(--c-text-muted); font-family:"JetBrains Mono",monospace; font-size:9px; }
+.legend { display:flex; gap:12px; flex-wrap:wrap; margin-top:4px; color:var(--c-text-muted); font-size:11px; }
+.legend i { display:inline-block; width:10px; height:3px; margin-right:4px; border-radius:2px; vertical-align:middle; background:var(--c-accent); }
+.legend .ci { background:var(--c-info); }
+.windows { display:inline-flex; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:8px; }
+.windows span { padding:2px 6px; border-radius:6px; color:var(--c-text-muted); font-size:10px; }
+.windows .on { background:var(--c-bg-white); color:var(--c-text-heading); }
+.chart-current .sum { margin-bottom:8px; color:var(--c-text-secondary); font-size:12px; }
+.chart-current .sum b { color:var(--c-text-heading); font-family:"JetBrains Mono",monospace; }
+.chart-current .lbl { display:flex; justify-content:space-between; margin:8px 0 2px; color:var(--c-text-secondary); font-size:11px; font-weight:600; }
+.chart-current svg { display:block; width:100%; height:auto; }
+.chart-current .grid { stroke:var(--c-border-light); }
+.chart-current .line { fill:none; stroke:var(--c-accent); stroke-width:1.75; stroke-linecap:round; stroke-linejoin:round; }
+.chart-current .area { fill:var(--c-accent); opacity:.12; }
+.chart-current .used { fill:var(--c-text-muted); opacity:.18; }
+.chart-current .prefix { fill:none; stroke:var(--c-success); stroke-width:1.75; }
+.chart-current .ram { fill:none; stroke:var(--c-info); stroke-width:1.25; }
+.chart-current .avg { stroke:var(--c-text-secondary); stroke-dasharray:4 3; }
+.chart-current text { fill:var(--c-text-muted); font-family:"JetBrains Mono",monospace; font-size:11px; }
+.chart-current .time { display:flex; justify-content:space-between; margin-top:4px; padding-right:28px; color:var(--c-text-muted); font-family:"JetBrains Mono",monospace; font-size:11px; }
+.who { display:flex; flex-direction:column; margin:0 -6px -4px; }
+.wr { display:flex; align-items:center; gap:8px; min-height:36px; padding:6px; border-radius:8px; }
+.wr:hover { background:var(--c-bg-selected); }
+.av { width:24px; height:24px; flex:0 0 24px; display:flex; align-items:center; justify-content:center; border-radius:50%; background:var(--c-accent-muted); color:var(--c-text-heading); font-size:10px; font-weight:700; }
+.wr .nm { flex:1; min-width:0; }
+.wr .nm b, .wr .nm span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wr .nm b { color:var(--c-text-heading); font-size:12px; }
+.wr .nm span { color:var(--c-text-muted); font-size:11px; }
+.speed { color:var(--c-text-secondary); font-family:"JetBrains Mono",monospace; font-size:11px; white-space:nowrap; }
+.linkrow { display:flex; align-items:center; gap:8px; width:100%; min-height:40px; padding:8px 10px; border:1px solid var(--c-border-light); border-radius:10px; background:var(--c-bg-white); cursor:pointer; text-align:left; }
+.linkrow .dot { width:7px; height:7px; border-radius:50%; background:var(--c-success); }
+.linkrow span:nth-child(2) { flex:1; color:var(--c-text-secondary); font-size:12px; }
+.linkrow .mono { color:var(--c-text-heading); font-size:11px; }
+.linkrow .arrow { color:var(--c-text-muted); }
+details { overflow:hidden; background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:12px; }
+summary { display:flex; align-items:center; gap:8px; min-height:40px; padding:8px 12px; color:var(--c-text-heading); cursor:pointer; list-style:none; font-size:12px; font-weight:600; }
+summary::-webkit-details-marker { display:none; }
+summary .chev { margin-left:auto; color:var(--c-text-muted); transition:transform .15s ease-out; }
+details[open] summary .chev { transform:rotate(180deg); }
+summary .meta { color:var(--c-text-muted); font-size:11px; font-weight:400; }
+.detail-body { padding:0 12px 12px; border-top:1px solid var(--c-border-light); }
+.detail-body h4 { margin:12px 0 6px; color:var(--c-text-secondary); font-size:11px; }
+.kv { display:flex; justify-content:space-between; gap:12px; padding:4px 0; color:var(--c-text-secondary); font-size:12px; }
+.kv .v { color:var(--c-text-heading); font-family:"JetBrains Mono",monospace; font-weight:600; white-space:nowrap; }
+.cloudrow { padding:10px 0; border-top:1px solid var(--c-border-light); }
+.cloudrow:first-of-type { border-top:0; }
+.cloudrow .name { color:var(--c-text-heading); font-size:12px; font-weight:600; }
+.cloudrow .provider { color:var(--c-text-muted); font-size:11px; }
+.cloudnums { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:8px; }
+.cloudnums .n { color:var(--c-text-heading); font-family:"JetBrains Mono",monospace; font-size:14px; font-weight:700; }
+.cloudnums .l { color:var(--c-text-muted); font-size:10px; }
+.hint { margin:8px 0 0; color:var(--c-text-muted); font-size:11px; }
+.phone { width:360px; max-width:100%; height:740px; position:relative; overflow:hidden; border:1px solid var(--c-border); border-radius:18px; background:var(--c-bg-main); }
+.phone .fake { padding:20px 16px; color:var(--c-text-muted); }
+.phone .overlay { position:absolute; inset:0; background:var(--c-overlay); }
+.sheet { position:absolute; inset:auto 0 0; max-height:92%; display:flex; flex-direction:column; overflow:hidden; background:var(--c-bg-panel); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); }
+.grab { width:36px; height:4px; flex:0 0 auto; margin:8px auto 2px; border-radius:999px; background:var(--c-track); }
+.sheet .phead { background:transparent; }
+.sheet .mobile-tabs { flex:0 0 auto; display:flex; gap:2px; margin:8px 12px 0; padding:2px; background:var(--c-bg-selected); border-radius:10px; }
+.mobile-tabs span { flex:1; padding:9px 2px; border-radius:8px; color:var(--c-text-muted); text-align:center; font-size:10px; }
+.mobile-tabs .on { background:var(--c-accent-light); color:var(--c-accent); font-weight:700; }
+.sheet .scroll { max-height:none; }
+.sheet .seg button, .sheet summary { min-height:44px; }
+.sheet .wr { min-height:44px; }
+.spec { margin-top:32px; max-width:100%; border-collapse:collapse; font-size:12px; }
+.spec th, .spec td { padding:8px 10px; border:1px solid var(--c-border); text-align:left; vertical-align:top; }
+.spec th { background:var(--c-bg-panel); color:var(--c-text-heading); }
+.spec code { padding:1px 4px; border-radius:6px; background:var(--c-bg-inset); font-family:"JetBrains Mono",monospace; font-size:11px; }
+@media (max-width:600px) { .bar { padding:12px 16px; } .bar h1 { font-size:18px; } .wrap { padding:16px 0 48px; } .demo { width:100%; } .panel { width:100%; } .scroll { max-height:none; } .note, .wrap > h2, .spec { margin-left:12px; margin-right:12px; } .spec { width:calc(100% - 24px); table-layout:fixed; } .spec td { overflow-wrap:anywhere; } }
+@media (prefers-reduced-motion:reduce) { summary .chev { transition:none; } }
+</style>
+</head>
+<body>
+<header class="bar"><h1>v1 · Сначала ферма</h1><div class="tog" id="theme"><button class="on" data-t="light">Светлая</button><button data-t="dark">Тёмная</button></div></header>
+<main class="wrap">
+<p class="note"><b>Один ответ на первом экране:</b> жива ли локальная модель, есть ли очередь и насколько быстро она отвечает. Три карточки «Сейчас / Скорость / Скорость ответа» объединены в одну. Облако не конкурирует с фермой: сравнение свёрнуто в последней строке.</p>
+<div class="board">
+<section class="demo"><p class="cap">ДЕСКТОП · панель 380 px · прокрутка внутри</p>
+<div class="panel">
+  <div class="phead"><b>Локальные модели</b><div class="tabs"><span class="on">LLM</span><span>Медиа</span><span>Стенды</span><span>Встречи</span></div><span class="close">×</span></div>
+  <div class="scroll">
+    <div class="seg"><button class="on">Flash-Next</button><button>Gemma 4</button></div>
+    <div class="model"><b>Qwen3.8-27B</b><span class="pill"><i></i>Работает</span></div>
+    <div class="sub">vLLM · 2 карты, TP=2 · обновлено 2 с назад</div>
+    <section class="card"><h3 class="sect">Сейчас на ферме <span class="right">локально</span></h3>
+      <div class="kpis">
+        <div class="kpi"><div class="n">2</div><div class="l">запроса идут</div></div>
+        <div class="kpi"><div class="n">0</div><div class="l">ждут в очереди</div></div>
+        <div class="kpi"><div class="n">38 <small>ток/с</small></div><div class="l">пока пишет · 1 мин</div></div>
+        <div class="kpi"><div class="n">42 <small>ток/с</small></div><div class="l">скорость ответа · 5 мин</div></div>
+      </div>
+    </section>
+    <section class="card"><h3 class="sect">Нагрузка и кэш <span class="right windows"><span class="on">5 мин</span><span>15 мин</span><span>1 ч</span></span></h3>
+      <div class="chart-current">
+        <div class="sum">в среднем <b>38 ток/с</b> · пик <b>46</b> · кэш <b>87 %</b></div>
+        <div class="lbl">Выработка, ток/с</div>
+        <svg viewBox="0 0 340 96" aria-label="Выработка, токенов в секунду"><line class="grid" x1="0" x2="312" y1="0" y2="0"/><line class="grid" x1="0" x2="312" y1="48" y2="48"/><line class="grid" x1="0" x2="312" y1="96" y2="96"/><path class="area" d="M0 96 L0 62 L26 56 L52 60 L78 44 L104 50 L130 38 L156 42 L182 30 L208 37 L234 26 L260 32 L286 22 L312 34 L312 96 Z"/><polyline class="line" points="0,62 26,56 52,60 78,44 104,50 130,38 156,42 182,30 208,37 234,26 260,32 286,22 312,34"/><line class="avg" x1="0" x2="312" y1="48" y2="48"/><text x="338" y="9" text-anchor="end">50</text><text x="338" y="52" text-anchor="end">25</text><text x="338" y="96" text-anchor="end">0</text></svg>
+        <div class="lbl">Кэш, %</div>
+        <svg viewBox="0 0 340 64" aria-label="Попадания в кэш"><line class="grid" x1="0" x2="312" y1="0" y2="0"/><line class="grid" x1="0" x2="312" y1="32" y2="32"/><line class="grid" x1="0" x2="312" y1="64" y2="64"/><path class="used" d="M0 64 L0 24 L52 28 L104 20 L156 26 L208 18 L260 22 L312 16 L312 64 Z"/><polyline class="prefix" points="0,18 52,16 104,20 156,12 208,14 260,10 312,12"/><polyline class="ram" points="0,58 52,56 104,59 156,54 208,57 260,53 312,55"/><text x="338" y="9" text-anchor="end">100</text><text x="338" y="36" text-anchor="end">50</text><text x="338" y="64" text-anchor="end">0</text></svg>
+        <div class="legend"><span><i style="background:var(--c-success)"></i>попадания</span><span><i class="ci"></i>из RAM</span><span>▧ занято</span></div>
+        <div class="lbl"><span>Вытеснения</span><span>не было</span></div>
+        <div class="time"><span>−5 мин</span><span>сейчас</span></div>
+      </div>
+    </section>
+    <section class="card"><h3 class="sect">Кто сейчас на модели <span class="right">2</span></h3>
+      <div class="who"><div class="wr"><span class="av">РС</span><span class="nm"><b>Рефакторинг сторожа памяти</b><span>AI Home</span></span><span class="speed">38 ток/с</span></div>
+      <div class="wr"><span class="av">КЗ</span><span class="nm"><b>Кузьма: тесты ImageEditor</b><span>AI Home</span></span><span class="speed">читает</span></div></div>
+    </section>
+    <button class="linkrow"><span class="dot"></span><span>Видеокарты</span><span class="mono">68° · 64°</span><span class="arrow">Стенды →</span></button>
+    <details>
+      <summary>Точные метрики локальной модели <span class="meta">TTFT · медианы</span><span class="chev">⌄</span></summary>
+      <div class="detail-body"><h4>Скорость ответа</h4>
+        <div class="kv"><span>Медиана по запросам · 5 мин</span><span class="v">39 ток/с</span></div>
+        <div class="kv"><span>Медиана по запросам · 1 ч</span><span class="v">36 ток/с</span></div>
+        <h4>Время до первого токена</h4>
+        <div class="kv"><span>Медиана · 5 мин</span><span class="v">0,8 с</span></div>
+        <div class="kv"><span>p90 · 5 мин</span><span class="v">1,7 с</span></div>
+        <div class="kv"><span>Чтение промпта с ожиданием</span><span class="v">1 240 ток/с</span></div>
+        <p class="hint">Открывается по запросу; на первом экране эти шесть строк не дублируют основные показатели.</p>
+      </div>
+    </details>
+    <details id="cloud">
+      <summary>Сравнить с облаком <span class="meta">3 модели · за сутки</span><span class="chev">⌄</span></summary>
+      <div class="detail-body">
+        <div class="cloudrow"><div class="name">Claude Sonnet 5.5</div><div class="provider">Anthropic</div><div class="cloudnums"><div><div class="n">71</div><div class="l">ток/с сквозная</div></div><div><div class="n">68</div><div class="l">медиана</div></div><div><div class="n">24</div><div class="l">ходов</div></div></div></div>
+        <div class="cloudrow"><div class="name">GPT-5.2</div><div class="provider">OpenAI</div><div class="cloudnums"><div><div class="n">64</div><div class="l">ток/с сквозная</div></div><div><div class="n">61</div><div class="l">медиана</div></div><div><div class="n">18</div><div class="l">ходов</div></div></div></div>
+        <div class="cloudrow"><div class="name">Gemini 3 Pro</div><div class="provider">Google</div><div class="cloudnums"><div><div class="n">58</div><div class="l">ток/с сквозная</div></div><div><div class="n">55</div><div class="l">медиана</div></div><div><div class="n">11</div><div class="l">ходов</div></div></div></div>
+        <p class="hint">Сессионная скорость по нашим ходам за последние 24 часа. У локальной модели выше — окна 5 минут и 1 час, поэтому значения сравниваем по смыслу, а не как точный забег.</p>
+      </div>
+    </details>
+  </div>
+</div></section>
+<section class="demo"><p class="cap">МОБИЛА · 360 CSS px · нижний лист</p>
+<div class="phone"><div class="fake">Чат проекта AI Home<br><br>Лента сообщений</div><div class="overlay"></div><div class="sheet"><div class="grab"></div>
+  <div class="phead"><b>Локальные модели</b><span class="close">×</span></div>
+  <div class="mobile-tabs"><span class="on">LLM</span><span>Медиа</span><span>Стенды</span><span>Встречи</span></div>
+  <div class="scroll">
+    <div class="seg"><button class="on">Flash-Next</button><button>Gemma 4</button></div>
+    <div class="model"><b>Qwen3.8-27B</b><span class="pill"><i></i>Работает</span></div><div class="sub">vLLM · 2 карты, TP=2 · 2 с назад</div>
+    <section class="card"><h3 class="sect">Сейчас на ферме</h3><div class="kpis"><div class="kpi"><div class="n">2</div><div class="l">запроса идут</div></div><div class="kpi"><div class="n">0</div><div class="l">ждут в очереди</div></div><div class="kpi"><div class="n">38 <small>ток/с</small></div><div class="l">пока пишет · 1 мин</div></div><div class="kpi"><div class="n">42 <small>ток/с</small></div><div class="l">ответ · 5 мин</div></div></div></section>
+    <section class="card"><h3 class="sect">Нагрузка и кэш</h3><div class="chart-current"><div class="sum">в среднем <b>38 ток/с</b> · пик <b>46</b> · кэш <b>87 %</b></div><div class="lbl">Выработка, ток/с</div><svg viewBox="0 0 312 96"><line class="grid" x1="0" x2="312" y1="48" y2="48"/><path class="area" d="M0 96 L0 62 L52 60 L104 50 L156 42 L208 37 L260 32 L312 34 L312 96 Z"/><polyline class="line" points="0,62 52,60 104,50 156,42 208,37 260,32 312,34"/></svg><div class="lbl">Кэш, %</div><svg viewBox="0 0 312 64"><line class="grid" x1="0" x2="312" y1="32" y2="32"/><path class="used" d="M0 64 L0 24 L104 20 L208 18 L312 16 L312 64 Z"/><polyline class="prefix" points="0,18 52,16 104,20 156,12 208,14 260,10 312,12"/><polyline class="ram" points="0,58 52,56 104,59 156,54 208,57 260,53 312,55"/></svg><div class="legend"><span><i style="background:var(--c-success)"></i>попад.</span><span><i class="ci"></i>RAM</span><span>▧ занято</span></div><div class="lbl"><span>Вытеснения</span><span>не было</span></div><div class="time"><span>−5 мин</span><span>сейчас</span></div></div></section>
+    <section class="card"><h3 class="sect">Кто сейчас на модели <span class="right">2</span></h3><div class="who"><div class="wr"><span class="av">РС</span><span class="nm"><b>Рефакторинг сторожа памяти</b><span>AI Home</span></span><span class="speed">38 ток/с</span></div><div class="wr"><span class="av">КЗ</span><span class="nm"><b>Кузьма: тесты ImageEditor</b><span>AI Home</span></span><span class="speed">читает</span></div></div></section>
+    <button class="linkrow"><span class="dot"></span><span>Видеокарты</span><span class="mono">68° · 64°</span><span class="arrow">→</span></button>
+    <details><summary>Точные метрики <span class="chev">⌄</span></summary><div class="detail-body"><div class="kv"><span>TTFT, медиана</span><span class="v">0,8 с</span></div></div></details>
+    <details><summary>Сравнить с облаком <span class="meta">3</span><span class="chev">⌄</span></summary><div class="detail-body"><p class="hint">Три облачные модели · за последние 24 часа.</p></div></details>
+  </div>
+</div></div></section>
+</div>
+<h2>Спецификация этого варианта</h2>
+<table class="spec"><tr><th>Место</th><th>Решение и токены</th></tr>
+<tr><td>Первый экран</td><td>Только выбранный локальный движок: статус, объединённая карточка KPI, график, чаты и ссылка на «Стенды». Облачных чисел выше конца локального сценария нет.</td></tr>
+<tr><td>Объединённая карточка</td><td><code>C.bgWhite</code>, <code>C.borderLight</code>, <code>R.xl</code>, <code>SP.md</code>. Числа <code>FONT.mono FS.xl</code>, подписи <code>FS.xs C.textSecondary</code>; очередь &gt; 0 — <code>C.warningText</code>.</td></tr>
+<tr><td>График</td><td>Текущий <code>ThroughputChart</code> переносится без изменений: состав полей, серии, оси, считывание, высота и <code>WindowToggle</code> сохраняются. Меняется только его место относительно соседних блоков.</td></tr>
+<tr><td>Раскрытия</td><td>Нативный disclosure; в реализации — общий компонент раскрываемой секции, если он уже есть, иначе добавить примитив в <code>ui/</code>, а не собирать кнопку из div. Summary 40 px desktop / 44 px mobile; hover <code>C.bgSelected</code>, focus <code>SHADOW.focus</code>.</td></tr>
+<tr><td>Облако</td><td>Последний блок, закрыт по умолчанию; состояние — <code>cc_local_llm_cloud_open</code>. Пустое окно — та же закрытая строка с подписью «нет ходов за сутки», без пустого тела.</td></tr>
+<tr><td>Мобила</td><td>Нижний лист <code>R.sheet</code>, <code>SHADOW.sheet</code>; KPI 2×2, график и список не выходят за 360 CSS px, все цели ≥ 40 px. Тёмная тема — теми же переменными, новых значений нет.</td></tr></table>
+</main>
+<script>
+document.getElementById('theme').addEventListener('click', e => {
+  const b = e.target.closest('button[data-t]'); if (!b) return;
+  document.documentElement.dataset.theme = b.dataset.t;
+  document.querySelectorAll('#theme button').forEach(x => x.classList.toggle('on', x === b));
+});
+</script>
+</body>
+</html>

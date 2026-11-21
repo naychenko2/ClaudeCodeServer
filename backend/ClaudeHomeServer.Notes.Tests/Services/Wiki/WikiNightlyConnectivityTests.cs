@@ -108,7 +108,7 @@ public class WikiNightlyConnectivityTests : IDisposable
 
     private WikiNightlyService Sut(Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze,
         ILogger<WikiNightlyService>? log = null,
-        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
+        Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             analyze, _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag,
             () => _now, null, _keeper, judge);
@@ -174,6 +174,9 @@ public class WikiNightlyConnectivityTests : IDisposable
     [Fact]
     public async Task Итог_НовыеИзолированы_ConnectivityOkFalse()
     {
+        // Живая база: связанный старый корпус (Б упоминает А), K1 корпуса заметно выше допуска.
+        WritePage("Старая А");
+        WritePage("Старая Б", "Обсудили Старая А.");
         await Sut(Analyze(() =>
         {
             WritePage("Альфа");
@@ -182,7 +185,47 @@ public class WikiNightlyConnectivityTests : IDisposable
 
         var r = Last();
         r.NewConnectivity!.K1.Should().Be(0);
-        r.ConnectivityOk.Should().BeFalse("K1 новых 0 % ниже линии корпуса минус 10 п. п.");
+        r.CorpusConnectivity!.Pages.Should().Be(3, "корпус — сущность фикстуры и две старые, новые не входят");
+        r.CorpusConnectivity.K1.Should().BeApproximately(2.0 / 3, 1e-9);
+        r.ConnectivityOk.Should().BeFalse("K1 новых 0 % ниже K1 корпуса минус 10 п. п.");
+    }
+
+    [Fact]
+    public async Task Итог_БазаПуста_ConnectivityOkNull_НеTrue()
+    {
+        File.Delete(PagePath("Сущность"));
+        var log = new RecordingLog();
+        await Sut(Analyze(() => WritePage("Альфа")), log).RunNightTickAsync(_now);
+
+        var r = Last();
+        r.NewConnectivity.Should().NotBeNull();
+        r.CorpusConnectivity.Should().BeNull("старых страниц знаний нет");
+        r.ConnectivityOk.Should().BeNull("«не измерено», а не true");
+        log.Rows.Select(x => x.Message).Should().Contain(m => m.Contains("корпус K1 —"));
+    }
+
+    [Fact]
+    public void MeasureConnectivity_КорпусБезНовых_ОдинЗамерСтрогоПоСтарымСтраницам()
+    {
+        // Сторож «новые в базу не входят»: Pages корпуса = старые страницы знаний, K1 корпуса
+        // равен отдельному Measure по ним на том же снимке.
+        var before = new Dictionary<string, string>(StringComparer.Ordinal);
+        WritePage("Старая А");
+        WritePage("Старая Б", "Обсудили Старая А.");
+        foreach (var f in Directory.GetFiles(Path.Combine(Root(), "pages", Dir)))
+            before[Dir + Path.GetFileName(f)] = File.ReadAllText(f);
+        WritePage("Новая В");
+        var after = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var f in Directory.GetFiles(Path.Combine(Root(), "pages", Dir)))
+            after[Dir + Path.GetFileName(f)] = File.ReadAllText(f);
+
+        var (nw, _, corpus) = WikiNightlyService.MeasureConnectivity(before, after);
+
+        nw!.Pages.Should().Be(1);
+        corpus!.Pages.Should().Be(before.Count, "база = все страницы знаний минус новые");
+        var drafts = after.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => new WikiGate.Draft(kv.Key, kv.Value)).ToList();
+        var direct = WikiConnectivity.Measure(drafts, [.. before.Keys]);
+        corpus.K1.Should().Be(direct.K1);
     }
 
     [Fact]
@@ -223,7 +266,7 @@ public class WikiNightlyConnectivityTests : IDisposable
         {
             WritePage("Порядок работ");
             WritePage("Порядок встреч", "Обсудили Порядок работ.");
-        }), judge: (o, root, ct) =>
+        }), judge: (o, root, _, ct) =>
         {
             atJudge = PagesHash();
             return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null));

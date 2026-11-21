@@ -191,7 +191,7 @@ public sealed class WikiIngestService
 
     private static Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? ToJudgeSweep(
         WikiJudgeSweep? judge) =>
-        judge is null ? null : (owner, root, ct) => judge.RunAsync(owner, root, ct);
+        judge is null ? null : (owner, root, ct) => judge.RunAsync(owner, root, null, ct);
 
     /// <summary>Поставить заявку в очередь и дождаться её исхода. Две одновременные заявки
     /// одного источника — один прогон (вторая получает результат первой). Отказ любой

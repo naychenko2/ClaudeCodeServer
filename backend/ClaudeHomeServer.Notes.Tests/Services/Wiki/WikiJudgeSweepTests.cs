@@ -180,6 +180,38 @@ public class WikiJudgeSweepTests : IDisposable
         res.FirstFailure.Should().BeNull();
     }
 
+    // ─── M1: добор ночи — только пакеты из набора id ─────────────────────────────────────
+
+    [Fact]
+    public async Task НаборId_РешаетТолькоНазванныйПакет_НеНазванныйОстаётсяБезВердикта()
+    {
+        // Мутация: убрать пропуск `onlyPackageIds is not null && !Contains` в RunOwnedAsync — красный.
+        await WriteViaKeeper(Page2Path, BasePage2);
+        var named = NewPackage([Supersede(0, "Первый план: перенести сборку на Linux")]);
+        var other = NewPackage([SupersedeOnPage2(0, "Второй план: собрать на второй машине")],
+            "session:chat-2#m1-9");
+        var llm = new FakeJudge(VerdictsJson((0, true, "подтверждено")));
+
+        var res = await Sut(llm).RunAsync(User, Root(), new HashSet<string> { named });
+
+        res.Calls.Should().Be(1, "вне набора пакет не получает вызова");
+        Read(named).Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanAccepted);
+        Read(other).Operations[0].JudgeDecision.Should().BeNull("пакет вне набора — второй попытки за ночь нет");
+        Read(other).Operations[0].JudgeAttempts.Should().Be(0, "счётчик попыток операции вне набора не тронут");
+    }
+
+    [Fact]
+    public async Task ПустойНабор_НиОдногоВызова_NullЭтоПолныйПроход()
+    {
+        var id = NewPackage([Supersede(0, "Первый план: перенести сборку на Linux")]);
+        var llm = new FakeJudge(VerdictsJson((0, true, "подтверждено")));
+
+        (await Sut(llm).RunAsync(User, Root(), new HashSet<string>())).Calls.Should().Be(0);
+        Read(id).Operations[0].JudgeDecision.Should().BeNull();
+
+        (await Sut(llm).RunAsync(User, Root(), null)).Calls.Should().Be(1, "null — полный проход, как раньше");
+    }
+
     // ─── c2: ручной режим не зовёт модель и не трогает файл; «личное» допущено ─────────
 
     [Fact]
@@ -439,7 +471,7 @@ public class WikiJudgeSweepTests : IDisposable
         var cts = new CancellationTokenSource();
         var llm = new FakeJudge(VerdictsJson((0, true, "этот ответ не будет прочитан"))) { CancelWith = cts };
 
-        var res = await Sut(llm).RunAsync(User, Root(), cts.Token);
+        var res = await Sut(llm).RunAsync(User, Root(), null, cts.Token);
 
         res.Calls.Should().Be(1, "вызов был начат — факт вызова остаётся");
         res.Deferred.Should().Be(0, "отмена — не отказ: попытка группе не засчитана");
@@ -540,13 +572,13 @@ public class WikiJudgeSweepTests : IDisposable
         ReasonCode = reasonCode,
     };
 
-    private string NewPackage(WikiPackage.Operation[] ops)
+    private string NewPackage(WikiPackage.Operation[] ops, string sourceRef = "session:chat-1#m1-9")
     {
         var pkg = new WikiPackage
         {
             Id = WikiPackageStore.NewId(),
             Section = Section,
-            Sources = [new WikiPackage.SourceRef("session", "session:chat-1#m1-9")],
+            Sources = [new WikiPackage.SourceRef("session", sourceRef)],
             Operations = ops,
             Status = WikiPackage.StatusChecking,
         };

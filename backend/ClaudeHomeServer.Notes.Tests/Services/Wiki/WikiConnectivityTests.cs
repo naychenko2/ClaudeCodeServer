@@ -175,7 +175,7 @@ public class WikiConnectivityTests
         f.Page(TopicB, TopicTitleB);
         var after = f.Snapshot.ToDictionary(d => d.Path, d => d.Content, StringComparer.Ordinal);
 
-        var (stNew, stSection) = WikiNightlyService.MeasureConnectivity(before, after);
+        var (stNew, stSection, _) = WikiNightlyService.MeasureConnectivity(before, after);
 
         var sectionPaths = f.Snapshot.Select(d => d.Path).ToList(); // раздел p1 тронут целиком
         var direct = WikiConnectivity.Measure(f.Snapshot, [TopicB]);

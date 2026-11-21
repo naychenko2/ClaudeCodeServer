@@ -86,7 +86,7 @@ public class WikiNightlyMergeTests : IDisposable
     private void EnableMerge() => _config["Wiki:MergeProposals"] = "true";
 
     private WikiNightlyService Sut(ILogger<WikiNightlyService>? log = null,
-        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
+        Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             (o, c, e, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
                 WikiChatIngestService.OutcomeNothingNew, null, [])),
@@ -96,7 +96,7 @@ public class WikiNightlyMergeTests : IDisposable
     private WikiNightlyService.NightResult Last() => WikiNightlyService.ReadLast(Root()).Should().NotBeNull().And.Subject
         as WikiNightlyService.NightResult ?? throw new InvalidOperationException();
 
-    private void AddOpenPackage(string tag)
+    private string AddOpenPackage(string tag)
     {
         var pkg = new WikiPackage
         {
@@ -118,6 +118,7 @@ public class WikiNightlyMergeTests : IDisposable
         };
         WikiPackageStore.Create(Root(), pkg).Ok.Should().BeTrue();
         WikiPackageStore.Transition(Root(), pkg.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
+        return pkg.Id;
     }
 
     private List<WikiPackage> MergePackages() => WikiPackageStore.List(Root()).Packages
@@ -135,21 +136,26 @@ public class WikiNightlyMergeTests : IDisposable
     }
 
     [Fact]
-    public async Task Тумблер_Включён_ПакетMerge_ДоСудьи_ВоВходящих()
+    public async Task Тумблер_Включён_ПакетMerge_ПослеПолногоПрохода_ДоборТолькоПоНему()
     {
         WriteDuplicatePair();
         EnableMerge();
         var log = new RecordingLog();
-        List<WikiPackage>? seenByJudge = null;
-        var sut = Sut(log, judge: (o, root, ct) =>
+        var calls = new List<(IReadOnlySet<string>? Only, int Merge)>();
+        var sut = Sut(log, judge: (o, root, only, ct) =>
         {
-            seenByJudge = MergePackages();
-            return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null));
+            calls.Add((only, MergePackages().Count));
+            return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(1, 0.01m, 1, 0, 0, 0, null));
         });
 
         await sut.RunNightTickAsync(_now);
 
-        seenByJudge.Should().ContainSingle("порядок: окна → merge → судья — судья видит предложение");
+        calls.Should().HaveCount(2, "полный проход, затем добор");
+        calls[0].Only.Should().BeNull("первый проход — полный");
+        calls[0].Merge.Should().Be(0, "порядок: окна → судья → merge — полный проход merge-пакетов ещё не видит");
+        calls[1].Only.Should().BeEquivalentTo(new[] { MergePackages().Single().Id }, "добор — ровно по merge-пакету ночи");
+        Last().JudgeCalls.Should().Be(2, "счётчики двух проходов складываются");
+        Last().JudgeApplied.Should().Be(2);
         var pkg = MergePackages().Single();
         pkg.Status.Should().Be(WikiPackage.StatusProposed);
         pkg.Author.Should().Be(WikiPackage.AuthorAi);
@@ -165,7 +171,7 @@ public class WikiNightlyMergeTests : IDisposable
     }
 
     [Fact]
-    public async Task ДвенадцатьСтраницОдногоРаздела_ТриПакета_СтрокаДоСудьи()
+    public async Task ДвенадцатьСтраницОдногоРаздела_ТриПакета_СтрокаПередДобором()
     {
         // 6 пар «дубль» (A — 1 утверждение, B — 2): Pick берёт ≤ 3 на раздел.
         string[] stems = ["замок вишневый", "река мутная", "поле зелёное", "город старый", "лес тёмный", "гора высокая"];
@@ -176,8 +182,8 @@ public class WikiNightlyMergeTests : IDisposable
         }
         EnableMerge();
         var log = new RecordingLog();
-        var sut = Sut(log, judge: (o, root, ct) => Task.FromResult(
-            new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, "судья-сбой-для-порядка")));
+        var sut = Sut(log, judge: (o, root, only, ct) => Task.FromResult(
+            new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, only is null ? null : "добор-сбой")));
 
         await sut.RunNightTickAsync(_now);
 
@@ -187,9 +193,125 @@ public class WikiNightlyMergeTests : IDisposable
         Last().MergeProposed.Should().Be(3);
         var messages = log.Rows.Select(x => x.Message).ToList();
         var merge = messages.FindIndex(m => m.Contains("предложения merge — создано 3"));
-        var judge = messages.FindIndex(m => m.Contains("проход судьи не доведён"));
+        var catchUp = messages.FindIndex(m => m.Contains("добор-сбой"));
         merge.Should().BeGreaterThanOrEqualTo(0);
-        judge.Should().BeGreaterThan(merge, "строка merge-предложений раньше строки судьи");
+        catchUp.Should().BeGreaterThan(merge, "строка добора — после merge-предложений; FirstFailure пишется по каждому проходу");
+    }
+
+    [Fact]
+    public async Task Гейт_СчитаетОткрытыеПослеСудьи_ХвостЧатовНеЗапираетMerge()
+    {
+        // Суть M1: 15 открытых до судьи, судья закрыл их — merge предлагается. До M1 гейт видел 15 и закрывался.
+        WriteDuplicatePair();
+        EnableMerge();
+        IReadOnlySet<string>? second = null;
+        var ids = new List<string>();
+        for (var i = 0; i < WikiNightlyService.MergeOpenLimit; i++)
+            ids.Add(AddOpenPackage("o" + i));
+        var sut = Sut(judge: (o, root, only, ct) =>
+        {
+            if (only is null)
+                foreach (var id in ids)
+                    WikiPackageStore.Transition(Root(), id, WikiPackage.StatusRejected).Ok.Should().BeTrue();
+            else
+                second = only;
+            return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null));
+        });
+
+        await sut.RunNightTickAsync(_now);
+
+        MergePackages().Should().ContainSingle();
+        second.Should().BeEquivalentTo(new[] { MergePackages().Single().Id }, "добор — ровно по id созданных merge-пакетов");
+        Last().MergeProposed.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task СуммыДвухПроходовСудьи_ВИтогеИЖурнале_ПакетыПослеДобораНеМенялись()
+    {
+        WriteDuplicatePair();
+        EnableMerge();
+        var log = new RecordingLog();
+        var calls = 0;
+        var openAtSecond = -1;
+        var sut = Sut(log, judge: (o, root, only, ct) =>
+        {
+            if (++calls == 1)
+                return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(2, 0.03m, 1, 1, 0, 1, null));
+            openAtSecond = WikiPackageStore.List(Root()).Packages.Count;
+            return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(3, 0.02m, 2, 0, 1, 2, null));
+        });
+
+        await sut.RunNightTickAsync(_now);
+
+        var r = Last();
+        r.JudgeCalls.Should().Be(5);
+        r.JudgeCostUsd.Should().Be(0.05m);
+        r.JudgeApplied.Should().Be(3);
+        r.JudgeRejected.Should().Be(1);
+        r.JudgeDeferred.Should().Be(1);
+        r.CodeRejected.Should().Be(3);
+        log.Rows.Select(x => x.Message).Should().Contain(m => m.Contains("на судье 3/1/1") && m.Contains("отклонено кодом 3") && m.Contains("судья 5 выз."));
+        WikiPackageStore.List(Root()).Packages.Count.Should().Be(openAtSecond, "после последнего прохода судьи ночь пакетов не пишет");
+    }
+
+    [Fact]
+    public async Task СудьяЛежит_ОткрытыхМало_MergeНеПредлагается_ДобораНет_ИтогНеПадает()
+    {
+        // Открытых 5 < MergeOpenLimit: счёт merge не закрывает — отличает гейт по FirstFailure.
+        // Мутация: убрать `&& fullSweepFailure is null` в блоке merge — пакет создаётся, добор идёт.
+        WriteDuplicatePair();
+        EnableMerge();
+        for (var i = 0; i < 5; i++)
+            AddOpenPackage("o" + i);
+        var calls = 0;
+        var sut = Sut(judge: (o, root, only, ct) =>
+        {
+            calls++;
+            return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, "судья недоступен"));
+        });
+
+        await sut.RunNightTickAsync(_now);
+
+        calls.Should().Be(1, "merge 0 — добора нет");
+        MergePackages().Should().BeEmpty();
+        Last().MergeProposed.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task СудьяЖив_ОткрытыхМало_MergeПредлагается()
+    {
+        WriteDuplicatePair();
+        EnableMerge();
+        for (var i = 0; i < 5; i++)
+            AddOpenPackage("o" + i);
+        var sut = Sut(judge: (o, root, only, ct) =>
+            Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null)));
+
+        await sut.RunNightTickAsync(_now);
+
+        MergePackages().Should().ContainSingle();
+        Last().MergeProposed.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task СудьяЖив_ОткрытыхПятнадцать_ГейтПоСчётуЗакрыт()
+    {
+        WriteDuplicatePair();
+        EnableMerge();
+        for (var i = 0; i < WikiNightlyService.MergeOpenLimit; i++)
+            AddOpenPackage("o" + i);
+        var calls = 0;
+        var sut = Sut(judge: (o, root, only, ct) =>
+        {
+            calls++;
+            return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null));
+        });
+
+        await sut.RunNightTickAsync(_now);
+
+        calls.Should().Be(1);
+        MergePackages().Should().BeEmpty();
+        Last().MergeProposed.Should().Be(0);
     }
 
     [Fact]
@@ -292,7 +414,7 @@ public class WikiNightlyMergeTests : IDisposable
             if (n == 1) AddOpenPackage("manual");
         });
 
-        created.Should().Be(1, "второй пакет упёрся в лимит, добавленный ручным разбором");
+        created.Should().HaveCount(1, "второй пакет упёрся в лимит, добавленный ручным разбором");
         WikiPackageStore.CountOpen(Root()).Should().BeLessThanOrEqualTo(WikiNightlyService.MergeOpenLimit);
     }
 

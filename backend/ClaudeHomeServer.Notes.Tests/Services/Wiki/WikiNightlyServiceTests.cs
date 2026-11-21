@@ -132,17 +132,17 @@ public class WikiNightlyServiceTests : IDisposable
         ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null,
         ClaudeHomeServer.Services.Composition.INotificationSender? notifier = null,
         ILogger<WikiNightlyService>? log = null,
-        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
+        Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             analyze ?? Done(), _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, flags ?? _flag,
             () => _now, notifier, _keeper, judge);
 
     // Фейк прохода судьи (J-J4): точка запуска и перенос её счётчиков проверяются без облачной
     // модели — числа фикстуры приходят в итог ровно как их вернул проход.
-    private static Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> Judge(
+    private static Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> Judge(
         int applied = 0, int rejected = 0, int deferred = 0, int codeRejected = 0, int calls = 0,
         decimal cost = 0m, string? firstFailure = null) =>
-        (owner, root, ct) => Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(
+        (owner, root, _, ct) => Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(
             calls, cost, applied, rejected, deferred, codeRejected, firstFailure));
 
     private Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done(
@@ -169,7 +169,7 @@ public class WikiNightlyServiceTests : IDisposable
     // log — захват журнала для тестов строки итога (J-O1); без него — тихий SUT, как раньше.
     // judge — фейк точки (а) (проход судьи в конце), midJudge — фейк точки (б) в настоящей цепочке.
     private WikiNightlyService RealSut(ILogger<WikiNightlyService>? log = null,
-        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null,
+        Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null,
         Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? midJudge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             (o, c, _, ct) => RealIngest(midJudge).AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly),
@@ -1521,8 +1521,8 @@ public class WikiNightlyServiceTests : IDisposable
                 lock (gate) midCalls++;
                 return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null));
             };
-        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> end =
-            (owner, root, ct) =>
+        Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> end =
+            (owner, root, _, ct) =>
             {
                 lock (gate) endCalls++;
                 return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(2, 0.04m, 2, 0, 0, 0, null));

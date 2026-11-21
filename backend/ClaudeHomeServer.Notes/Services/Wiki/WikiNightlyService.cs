@@ -169,8 +169,9 @@ public sealed partial class WikiNightlyService : BackgroundService
     /// там нет, J-W2). Поля A6 (StrippedLinks, NewConnectivity, SectionConnectivity, ConnectivityOk):
     /// StrippedLinks — ссылки, снятые валидатором у модели за проход (сумма ChatResult), NewConnectivity —
     /// связность новых страниц знаний ночи, SectionConnectivity — всех страниц знаний тронутых разделов,
-    /// ConnectivityOk — K1 новых ≥ BaselineK1 − BaselineK1Slack (null — новых страниц не было); у
-    /// старого итога все четыре null — «не измерено», а не «0 %». MergeProposed (C6) — число пакетов
+    /// ConnectivityOk — K1 новых ≥ K1 корпуса (CorpusConnectivity) − BaselineK1Slack (null — новых страниц
+    /// не было или база пуста); CorpusConnectivity — живая база: все страницы знаний минус новые ночи, тот же
+    /// замер на том же снимке; у старого итога все пять null — «не измерено», а не «0 %». MergeProposed (C6) — число пакетов
     /// merge, созданных этой ночью; 0 — тумблер Wiki:MergeProposals выключен или предлагать нечего; null — подбор упал (и старый итог). В файле итога поля аддитивны: старый итог (без поля)
     /// читается нулями, старый Manual — false, Executors — null: «не измерено», а не «ни одного
     /// исполнителя не было» (читать его пустым нельзя — это разные вещи).</summary>
@@ -184,21 +185,15 @@ public sealed partial class WikiNightlyService : BackgroundService
         int Stage2Refused = 0, string? FirstStage2Refusal = null,
         IReadOnlyList<NightExecutorStat>? Executors = null,
         int? StrippedLinks = null, ConnectivityStat? NewConnectivity = null,
-        ConnectivityStat? SectionConnectivity = null, bool? ConnectivityOk = null, int? MergeProposed = null);
+        ConnectivityStat? SectionConnectivity = null, bool? ConnectivityOk = null, int? MergeProposed = null,
+        ConnectivityStat? CorpusConnectivity = null);
 
     /// <summary>Связность среза страниц знаний (A6, ADR-039 р.13): Pages — сколько страниц измерено,
     /// K0 — прежняя средняя степень (mentions + mentionedHere + backlinks), K1 — доля со связью
     /// «тема ↔ тема» (критерий ночи), K2 — доля с резолвящейся [[…]] на страницу знаний.</summary>
     public sealed record ConnectivityStat(int Pages, double K0, double K1, double K2);
 
-    /// <summary>K1 корпуса при выбранном MinScore = 11 (отчёт T0, .cc-attachments/wiki-q2-topic/
-    /// report.md, §3: «вся вики (337)» 0,404; индекс «По теме» — по видимым разделам, как при
-    /// показе: так считал T0 и так считает Measure). ConnectivityOk — K1 новых страниц ночи не ниже
-    /// этой линии минус BaselineK1Slack (новые страницы не должны быть изолированнее корпуса).
-    /// При смене MinScore или состава корпуса константу перемерить (шаг T0).</summary>
-    public const double BaselineK1 = 0.404;
-
-    /// <summary>Допуск ConnectivityOk к BaselineK1 — 10 п. п. (разрез 20.11, §2).</summary>
+    /// <summary>Допуск ConnectivityOk к K1 корпуса (живой базы) — 10 п. п. (разрез 20.11, §2).</summary>
     public const double BaselineK1Slack = 0.10;
 
     /// <summary>Счётчики одного названного исполнителя прохода (W6a): что он сделал в этой ночи.
@@ -239,7 +234,7 @@ public sealed partial class WikiNightlyService : BackgroundService
     // Проход судьи (J-J4, точка «а»): тот же приём шва Func-делегатом, что у _analyze — точка
     // запуска проверяется без настоящей облачной модели. null (тест без судьи) — прохода судьи нет,
     // поля итога нулевые.
-    private readonly Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? _judge;
+    private readonly Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? _judge;
     private readonly Func<DateTimeOffset> _clock;
     private readonly string _dataDir;
 
@@ -253,7 +248,7 @@ public sealed partial class WikiNightlyService : BackgroundService
             // для последовательного прохода без исполнителей.
             (owner, chat, engine, ct) => ingest.AnalyzeAsync(owner, chat, ct, LocalActionCatalog.WikiNightly, engine),
             llm, config, log, flags, clock: null, notifications: notifications, keeper: keeper,
-            judge: (owner, root, ct) => judge.RunAsync(owner, root, ct))
+            judge: (owner, root, only, ct) => judge.RunAsync(owner, root, only, ct))
     {
     }
 
@@ -268,7 +263,7 @@ public sealed partial class WikiNightlyService : BackgroundService
         ICheapTextRunner llm, IConfiguration config, ILogger<WikiNightlyService> log,
         Composition.IFeatureFlagGate? flags, Func<DateTimeOffset>? clock,
         Composition.INotificationSender? notifications = null, WikiKeeper? keeper = null,
-        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null)
+        Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null)
     {
         _keeper = keeper;
         _sessions = sessions;
@@ -434,18 +429,19 @@ public sealed partial class WikiNightlyService : BackgroundService
         // ссылки, снятые у модели. Нет замера (старый итог, ранний выход) — части нет.
         if (r.NewConnectivity is { } nc)
         {
-            template.Append("; связность: новые K1 {NewK1}, тело K2 {SectionK2}, прежняя степень {NewK0}; ссылок снято у модели {Stripped}");
+            template.Append("; связность: новые K1 {NewK1}, тело K2 {SectionK2}, прежняя степень {NewK0}; ссылок снято у модели {Stripped}, корпус K1 {CorpusK1}");
             args.Add(Percent(nc.K1));
             args.Add(r.SectionConnectivity is { } sc ? Percent(sc.K2) : "—");
             args.Add(nc.K0.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
             args.Add(r.StrippedLinks ?? 0);
+            args.Add(r.CorpusConnectivity is { } cc ? Percent(cc.K1) : "—");
         }
         else if (r.StrippedLinks is { } sl)
         {
             template.Append("; связность: новых страниц нет; ссылок снято у модели {Stripped}");
             args.Add(sl);
         }
-        // Предложения merge (C6): часть только когда пакеты созданы (отдельная строка до судьи — в RunPassAsync).
+        // Предложения merge (C6): часть только когда пакеты созданы (отдельная строка после полного прохода судьи — в RunPassAsync).
         if (r.MergeProposed is > 0 and var mp)
         {
             template.Append("; предложено merge {MergeProposed}");

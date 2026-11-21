@@ -119,15 +119,15 @@ public class WikiNightlyNotifyTests : IDisposable
     private WikiNightlyService Sut(
         Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>>? analyze,
         INotificationSender? notifier, RecordingLog log,
-        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
+        Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             analyze ?? Done(), _llm, _config, log, _flag, () => _now,
             notifier, _keeper, judge);
 
     // Фейк прохода судьи (J-J4): сводка в уведомлении проверяется без облачной модели.
-    private static Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> Judge(
+    private static Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> Judge(
         int applied = 0, int rejected = 0, int deferred = 0, int codeRejected = 0, int calls = 0, decimal cost = 0m) =>
-        (owner, root, ct) => Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(
+        (owner, root, _, ct) => Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(
             calls, cost, applied, rejected, deferred, codeRejected, null));
 
     private static Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done() =>

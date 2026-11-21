@@ -113,7 +113,7 @@ public sealed partial class WikiNightlyService
         string? firstDropReason = null;
         // Снятые у модели ссылки (A6, хвост 26): сумма по разобранным чатам.
         var strippedLinks = 0;
-        ConnectivityStat? newConn = null, sectionConn = null;
+        ConnectivityStat? newConn = null, sectionConn = null, corpusConn = null;
         bool? connOk = null;
         // Предложенные merge (C6): 0 — тумблер выключен или предлагать нечего; null — подбор упал.
         int? mergeProposed = 0;
@@ -398,24 +398,6 @@ public sealed partial class WikiNightlyService
             outcome = OutcomeError;
         }
 
-        // Предложения merge (C6, ADR-039 р.13): после окон и ДО судьи — судья в этом же проходе
-        // решает только что созданные пакеты. За тумблером Wiki:MergeProposals (по умолчанию выкл);
-        // ночь без доверия к итогу (ошибка, выключили посреди) пакетов не создаёт. Догона нет.
-        // Сбой подбора итог не роняет: поле остаётся null, как у замера связности.
-        if (MergeProposalsEnabled() && outcome is not (OutcomeError or OutcomeDisabledMidway))
-        {
-            try
-            {
-                mergeProposed = await Task.Run(() => ProposeMergesForRoot(root), ct).ConfigureAwait(false);
-                LogInfoSafe("Ночной разбор {Owner}: предложения merge — создано {Count}", ownerId, mergeProposed);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                mergeProposed = null;
-                LogWarnSafe("Ночной разбор {Owner}: предложения merge не созданы: {Reason}", ownerId, ex.Message);
-            }
-        }
-
         // Точка запуска (а) (J-J4): проход судьи после разбора чатов — под тем же замком владельца
         // (его держит RunOwnerAsync/StartManual вокруг RunOwnerPassAsync) и до записи
         // keeper/nightly-last.json: его счётчики попадают в тот же файл, ту же строку журнала и то
@@ -424,27 +406,46 @@ public sealed partial class WikiNightlyService
         // самого прохода судьи (J-J3a) с его точкой (б) в очереди заявок разбора: двойного вызова
         // модели на пакет нет — судья берёт только нерешённые спорные операции. Мёртвый локальный
         // маршрут ночи к нему не относится: это другое место (wiki-judge), его выбирает админ.
+        string? fullSweepFailure = null;
         if (_judge is not null)
         {
-            var sweep = await _judge(ownerId, root, ct).ConfigureAwait(false);
-            judgeCalls = sweep.Calls;
-            judgeCost = sweep.CostUsd;
-            judgeApplied = sweep.Applied;
-            judgeRejected = sweep.Rejected;
-            judgeDeferred = sweep.Deferred;
-            codeRejected = sweep.CodeRejected;
-            // Сам проход судьи исключений не бросает; его FirstFailure — единственный способ
-            // узнать о несделанном, и он в журнале.
-            if (sweep.FirstFailure is not null)
-                LogWarnSafe("Ночной разбор {Owner}: проход судьи не доведён: {Reason}", ownerId, sweep.FirstFailure);
+            var full = await _judge(ownerId, root, null, ct).ConfigureAwait(false);
+            AddSweep(full);
+            fullSweepFailure = full.FirstFailure;
         }
+        // Предложения merge (C6, ADR-039 р.13, M1): ПОСЛЕ полного прохода судьи — гейт MergeOpenLimit
+        // считает открытые уже после его решений, иначе нерешённый хвост самих чатов запирал merge.
+        // Созданные пакеты решает добор судьи только по их id (ниже). За тумблером Wiki:MergeProposals
+        // (по умолчанию выкл); ночь без доверия к итогу (ошибка, выключили посреди) пакетов не создаёт.
+        // Сбой подбора итог не роняет: поле остаётся null, как у замера связности.
+        // Полный проход судьи не доведён (FirstFailure) — merge не предлагаем вовсе: без вердиктов
+        // пакеты упали бы человеку во «Входящие», а добор шёл бы по недоступному судье.
+        if (MergeProposalsEnabled() && outcome is not (OutcomeError or OutcomeDisabledMidway) && fullSweepFailure is null)
+        {
+            try
+            {
+                var mergeIds = await Task.Run(() => ProposeMergesForRoot(root), ct).ConfigureAwait(false);
+                mergeProposed = mergeIds.Count;
+                LogInfoSafe("Ночной разбор {Owner}: предложения merge — создано {Count}", ownerId, mergeProposed);
+                // Добор судьи — ТОЛЬКО по merge-пакетам этой ночи: отложенные операции чатов не получают
+                // второй попытки за ночь (MaxAttempts). После него ночь ничего не пишет, кроме итога.
+                if (_judge is not null && mergeIds.Count > 0)
+                    AddSweep(await _judge(ownerId, root, mergeIds.ToHashSet(StringComparer.Ordinal), ct).ConfigureAwait(false));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                mergeProposed = null;
+                LogWarnSafe("Ночной разбор {Owner}: предложения merge не созданы: {Reason}", ownerId, ex.Message);
+            }
+        }
+
         // Связность (A6): после судьи, до записи итога; страницы только читаются (инвариант «ночь
         // после судьи ничего не пишет»), сбой замера итог не роняет — поля остаются null.
         try
         {
-            (newConn, sectionConn) = await Task.Run(() => MeasureConnectivity(pagesBefore, ReadPageSnapshot(root)), ct)
+            (newConn, sectionConn, corpusConn) = await Task.Run(() => MeasureConnectivity(pagesBefore, ReadPageSnapshot(root)), ct)
                 .ConfigureAwait(false);
-            connOk = newConn is null ? null : newConn.K1 >= BaselineK1 - BaselineK1Slack;
+            connOk = newConn is null || corpusConn is null ? null : newConn.K1 >= corpusConn.K1 - BaselineK1Slack;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -452,12 +453,26 @@ public sealed partial class WikiNightlyService
         }
         return Result(outcome);
 
+        // Счётчики судьи складываются по двум проходам (полный и добор merge); сам проход исключений
+        // не бросает, его FirstFailure — единственный способ узнать о несделанном, и он в журнале.
+        void AddSweep(WikiJudgeSweep.JudgeSweepResult sweep)
+        {
+            judgeCalls += sweep.Calls;
+            judgeCost += sweep.CostUsd;
+            judgeApplied += sweep.Applied;
+            judgeRejected += sweep.Rejected;
+            judgeDeferred += sweep.Deferred;
+            codeRejected += sweep.CodeRejected;
+            if (sweep.FirstFailure is not null)
+                LogWarnSafe("Ночной разбор {Owner}: проход судьи не доведён: {Reason}", ownerId, sweep.FirstFailure);
+        }
+
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
             overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual, dropped, firstDropReason,
             judgeCalls, judgeCost, judgeApplied, judgeRejected, judgeDeferred, codeRejected,
             stage2Refused, firstStage2Refusal, ExecutorStats(),
             StrippedLinks: strippedLinks, NewConnectivity: newConn, SectionConnectivity: sectionConn, ConnectivityOk: connOk,
-            MergeProposed: mergeProposed);
+            MergeProposed: mergeProposed, CorpusConnectivity: corpusConn);
 
         // Счётчики итога по исполнителям (W6a): порядок — как список стора. Движок, которому ни
         // одного чата не досталось (не был готов, был занят), в списке есть с нулями: владельцу
@@ -786,7 +801,9 @@ public sealed partial class WikiNightlyService
     // Связность новых страниц знаний ночи (появились между снимками) и всех страниц знаний
     // тронутых разделов (раздел новой или изменённой страницы). Страницы знаний — не карточки
     // источника и не хроники. Новых страниц нет — NewConnectivity null (ConnectivityOk тогда null).
-    internal static (ConnectivityStat? New, ConnectivityStat? Section) MeasureConnectivity(
+    // Corpus — живая база вердикта: все страницы знаний МИНУС новые ночи (тот же снимок и тот же
+    // MeasurePages, чтобы df был один); пустая база — null (ConnectivityOk тогда null).
+    internal static (ConnectivityStat? New, ConnectivityStat? Section, ConnectivityStat? Corpus) MeasureConnectivity(
         IReadOnlyDictionary<string, string> before, IReadOnlyDictionary<string, string> after)
     {
         var drafts = after.OrderBy(kv => kv.Key, StringComparer.Ordinal)
@@ -800,9 +817,13 @@ public sealed partial class WikiNightlyService
             .ToHashSet(StringComparer.Ordinal);
         var sectionPaths = knowledge.Where(d => touched.Contains(WikiSections.Parse(d.Path))).Select(d => d.Path).ToList();
 
+        var newSet = newPaths.ToHashSet(StringComparer.Ordinal);
+        var corpusPaths = knowledge.Where(d => !newSet.Contains(d.Path)).Select(d => d.Path).ToList();
+
         // Один замер по объединению срезов (новые страницы входят в тронутые разделы), результат
-        // раскладывается по двум срезам: memo групп общий, второй проход не нужен.
-        var stats = WikiConnectivity.MeasurePages(drafts, [.. newPaths.Union(sectionPaths, StringComparer.Ordinal)]);
+        // раскладывается по трём срезам: memo групп общий, второй проход не нужен.
+        var stats = WikiConnectivity.MeasurePages(drafts,
+            [.. newPaths.Union(sectionPaths, StringComparer.Ordinal).Union(corpusPaths, StringComparer.Ordinal)]);
         ConnectivityStat? Stat(List<string> paths)
         {
             if (paths.Count == 0)
@@ -810,7 +831,7 @@ public sealed partial class WikiNightlyService
             var m = WikiConnectivity.Aggregate(paths.Where(stats.ContainsKey).Select(p => stats[p]));
             return m.Count == 0 ? null : new ConnectivityStat(m.Count, m.K0, m.K1, m.K2);
         }
-        return (Stat(newPaths), Stat(sectionPaths));
+        return (Stat(newPaths), Stat(sectionPaths), Stat(corpusPaths));
     }
 
     // ── предложения merge (C6, ADR-039 р.13) ──────────────────────────────────────────────
@@ -823,10 +844,10 @@ public sealed partial class WikiNightlyService
         string.Equals(_config["Wiki:MergeProposals"], "true", StringComparison.OrdinalIgnoreCase);
 
     // Подбор пар по снимку pages/ и создание пакетов. Идёт под замком владельца (Running).
-    private int ProposeMergesForRoot(string root)
+    private IReadOnlyList<string> ProposeMergesForRoot(string root)
     {
         if (WikiPackageStore.CountOpen(root) >= MergeOpenLimit)
-            return 0;
+            return [];
         var pages = ReadPageSnapshot(root)
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
             .Select(kv => new WikiGate.Draft(kv.Key, kv.Value)).ToList();
@@ -844,7 +865,7 @@ public sealed partial class WikiNightlyService
         // Принятые человеком (adopt) страницы сливать нельзя — применение их откажет; кладём в карантин
         // (только для A). Журнал нечитаем — fail-closed: предложений нет.
         if (WikiApplyService.ReadAdoptedPages(root) is not { } adopted)
-            return 0;
+            return [];
         quarantined.UnionWith(adopted);
         var pairs = WikiMergeCandidates.Pick(pages, open, quarantined);
         // Pick допускает B, ставшую A другой пары (цепочка A→B→C, цикл): применение второго пакета
@@ -866,10 +887,10 @@ public sealed partial class WikiNightlyService
     /// <summary>Пакеты op merge (Page = A, Target = B, код merge_proposal, решение inbox) по парам
     /// подбора. Лимит открытых перепроверяется перед КАЖДЫМ созданием: между созданиями ручной
     /// «Разобрать» мог добавить пакеты. afterCreate — шов теста гонки (вызывается после каждого
-    /// созданного пакета). Возвращает число созданных.</summary>
-    internal static int ProposeMerges(string root, IReadOnlyList<(string A, string B)> pairs, Action<int>? afterCreate = null)
+    /// созданного пакета). Возвращает id созданных пакетов.</summary>
+    internal static IReadOnlyList<string> ProposeMerges(string root, IReadOnlyList<(string A, string B)> pairs, Action<int>? afterCreate = null)
     {
-        var created = 0;
+        var created = new List<string>();
         foreach (var (a, b) in pairs)
         {
             if (WikiPackageStore.CountOpen(root) >= MergeOpenLimit)
@@ -888,8 +909,8 @@ public sealed partial class WikiNightlyService
             }
             if (!WikiPackageStore.Transition(root, package.Id, WikiPackage.StatusProposed).Ok)
                 continue;
-            created++;
-            afterCreate?.Invoke(created);
+            created.Add(package.Id);
+            afterCreate?.Invoke(created.Count);
         }
         return created;
     }

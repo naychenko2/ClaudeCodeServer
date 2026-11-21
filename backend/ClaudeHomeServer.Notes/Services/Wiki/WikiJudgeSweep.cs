@@ -144,7 +144,8 @@ public sealed class WikiJudgeSweep
     /// вызова. Исключений наружу нет; ct — остановка прохода (остановка службы, закрытие
     /// окна): вызов, прерванный отменой, не карает попытки группе (отмена — не отказ модели),
     /// новых вызовов не начинается.</summary>
-    public async Task<JudgeSweepResult> RunAsync(string ownerId, string root, CancellationToken ct = default)
+    public async Task<JudgeSweepResult> RunAsync(string ownerId, string root,
+        IReadOnlySet<string>? onlyPackageIds = null, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(ownerId))
             return new JudgeSweepResult(0, 0m, 0, 0, 0, 0, "владелец пустой");
@@ -176,7 +177,7 @@ public sealed class WikiJudgeSweep
             await sem.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                return await RunOwnedAsync(ownerId, ownRoot, counters, ct).ConfigureAwait(false);
+                return await RunOwnedAsync(ownerId, ownRoot, onlyPackageIds, counters, ct).ConfigureAwait(false);
             }
             finally
             {
@@ -194,7 +195,7 @@ public sealed class WikiJudgeSweep
     }
 
     private async Task<JudgeSweepResult> RunOwnedAsync(string ownerId, string root,
-        SweepCounters counters, CancellationToken ct)
+        IReadOnlySet<string>? onlyPackageIds, SweepCounters counters, CancellationToken ct)
     {
         // 1. Ручной режим: выключатель «Применять без ревью» выключен — ни одного вызова,
         // ни одной записи (мера 7: всё как раньше, решает человек).
@@ -205,6 +206,9 @@ public sealed class WikiJudgeSweep
         {
             if (ct.IsCancellationRequested)
                 break;
+            // Добор ночи (M1): решаем только названные пакеты; null — полный проход.
+            if (onlyPackageIds is not null && !onlyPackageIds.Contains(candidate.Id))
+                continue;
             if (candidate.Status != WikiPackage.StatusProposed || candidate.Author != WikiPackage.AuthorAi)
                 continue;
             if (!candidate.Operations.Any(IsUndecidedContested))

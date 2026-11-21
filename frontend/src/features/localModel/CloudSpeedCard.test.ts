@@ -235,7 +235,7 @@ describe('закрытая строка «Сравнить с облаком» (
   // после закрытого раскрытия локальных метрик. Мутация «поднять облако над метриками» краснит.
   it('секция — последней строкой: после локальных метрик под их закрытием', () => {
     const html = renderTab({ data, cloudSpeed: cloudState() });
-    const metrics = headAt(html, '>Точные метрики локальной модели</span>');
+    const metrics = headAt(html, '>Точные метрики</span>');
     const speedAnswer = headAt(html, '>Скорость ответа</h3>');
     const cloud = headAt(html, '>Сравнить с облаком</span>');
     expect(metrics).toBeLessThan(cloud);

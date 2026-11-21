@@ -658,14 +658,16 @@ describe('карточка «Скорость ответа» (llm-F2)', () => {
     expect(html).toContain('Время до первого токена');
   });
 
-  // Ф-3: карточки переехали под закрытие «Точные метрики локальной модели» — порядок
+  // Ф-3: карточки переехали под закрытие «Точные метрики» — порядок
   // внутри него прежний («Скорость», затем сквозная), а само раскрытие — после графика
   // (макет v1 .html:194–205). Мутация «вернуть метрики над графиком» краснит.
   it('обе карточки — под закрытием «Точных метрик», оно — после графика', () => {
     const html = renderTab({ data: withAnswer() });
     expect(pos(html, '>Скорость</h3>')).toBeLessThan(pos(html, '>Скорость ответа</h3>'));
-    expect(pos(html, '>Нагрузка и кэш</h3>')).toBeLessThan(pos(html, 'Точные метрики локальной модели'));
-    expect(pos(html, 'Точные метрики локальной модели')).toBeLessThan(pos(html, '>Скорость</h3>'));
+    // Якорь с тегом: «Точные метрики» входит и в подсказку облака («…в раскрытии
+    // „Точные метрики локальной модели“»), голый текст взял бы её, а не строку раскрытия.
+    expect(pos(html, '>Нагрузка и кэш</h3>')).toBeLessThan(pos(html, '>Точные метрики</span>'));
+    expect(pos(html, '>Точные метрики</span>')).toBeLessThan(pos(html, '>Скорость</h3>'));
   });
 
   it('окна — по ключу ответа, а не по порядку в нём: 5m остаётся заглавным', () => {
@@ -836,7 +838,7 @@ describe('порядок вкладки v1 и закрытые точные ме
     const chart = head(html, '>Нагрузка и кэш</h3>');
     const who = head(html, '>Кто сейчас на модели</h3>');
     const gpus = head(html, '>Видеокарты</span>');
-    const metrics = head(html, '>Точные метрики локальной модели</span>');
+    const metrics = head(html, '>Точные метрики</span>');
     const cloudCard = head(html, '>Сравнить с облаком</span>');
     expect(kpi).toBeLessThan(chart);
     expect(chart).toBeLessThan(who);
@@ -852,7 +854,7 @@ describe('порядок вкладки v1 и закрытые точные ме
     const who = head(html, '>Кто сейчас на модели</h3>');
     const video = head(html, '>Видеокарта · Video</h3>');
     const duty = head(html, '>Дежурство</h3>');
-    const metrics = head(html, '>Точные метрики локальной модели</span>');
+    const metrics = head(html, '>Точные метрики</span>');
     const cloudCard = head(html, '>Сравнить с облаком</span>');
     expect(who).toBeLessThan(video);
     expect(video).toBeLessThan(duty);
@@ -863,11 +865,12 @@ describe('порядок вкладки v1 и закрытые точные ме
   it('метрики закрыты по умолчанию: aria-expanded=false, тело display:none', () => {
     const html = renderTab({ data: data(), cloudSpeed: cloud });
     const { document: d } = parseHTML(`<!doctype html><body>${html}</body>`);
-    const btn = Array.from(d.querySelectorAll('button')).find(b => (b.textContent ?? '').includes('Точные метрики локальной модели'));
+    const btn = Array.from(d.querySelectorAll('button')).find(b => (b.textContent ?? '').includes('Точные метрики'));
     expect(btn).toBeTruthy();
     expect(btn!.getAttribute('aria-expanded')).toBe('false');
-    // приписка строки — по макету v1 (.html:195)
-    expect(btn!.textContent ?? '').toContain('TTFT · медианы');
+    // приписка строки — полная, по решению Майи (21.11): смысл строки читается сам,
+    // а не только в коротком заголовке
+    expect(btn!.textContent ?? '').toContain('Локальная модель · TTFT · медианы');
     const body = d.getElementById(btn!.getAttribute('aria-controls') ?? '');
     expect(body).toBeTruthy();
     expect(body!.getAttribute('style') ?? '').toContain('display:none');
@@ -877,7 +880,7 @@ describe('порядок вкладки v1 и закрытые точные ме
 
   it('клик открывает метрики полными: промпт, обе скорости, запросы, медианы и TTFT', () => {
     const { host, root } = mountTab({ data: data(), cloudSpeed: cloud });
-    const btn = Array.from(host.querySelectorAll('button')).find(b => (b.textContent ?? '').includes('Точные метрики локальной модели'));
+    const btn = Array.from(host.querySelectorAll('button')).find(b => (b.textContent ?? '').includes('Точные метрики'));
     expect(btn).toBeTruthy();
     expect(btn!.getAttribute('aria-expanded')).toBe('false');
     const bodyId = btn!.getAttribute('aria-controls') ?? '';
@@ -910,8 +913,8 @@ describe('порядок вкладки v1 и закрытые точные ме
   });
 
   // Заголовок KPI-карточки — по его тексту, а не по тексту всей секции (R-Ф-3р):
-  // «локальн…» входит в легитимные строки вкладки («Точные метрики локальной
-  // модели», «локальной модели» в подсказках) и красил бы тест при целом
+  // «локальн…» входит в легитимные строки вкладки (приписка «Локальная модель · …»,
+  // «локальной модели» в подсказках) и красил бы тест при целом
   // исправном инварианте.
   function kpiHead(html: string): Element {
     const { document: d } = parseHTML(`<!doctype html><body>${html}</body>`);

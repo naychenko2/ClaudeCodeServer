@@ -30,7 +30,9 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-disclosure-s
 
 export interface DisclosureSectionProps {
   title: string;
-  // Приписка справа от названия: «TTFT · медианы», «3 модели · за сутки».
+  // Приписка справа от названия: «Локальная модель · TTFT · медианы», «3 модели · за сутки».
+  // Длинная приписка переносится на вторую строку, а не обрезается (решение Майи 21.11):
+  // полный смысл обязан читаться и в узкой колонке, и на мобиле.
   meta?: string;
   // Управляемое состояние: его держит потребитель (в v1 — localStorage панели).
   open: boolean;
@@ -129,23 +131,32 @@ const headBase = {
   border: 'none', textAlign: 'left', fontFamily: 'inherit',
 } as const;
 
+// Название держит одну строку и усечено многоточием — но полный текст доступен
+// подсказкой (конвенция проекта: title у усечённого текста, как у приписки).
 const titleSpan = (title: string) => (
-  <span style={{
-    flex: '0 1 auto', minWidth: 0,
-    fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  }}>
+  <span
+    title={title}
+    style={{
+      flex: '0 1 auto', minWidth: 0,
+      fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
+      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    }}
+  >
     {title}
   </span>
 );
 
+// Приписка — перенос по словам, без многоточия: flexShrink: 0 и nowrap давали ей
+// собственную ширину и обрезку, когда строка не помещалась (дефект b45ceaa6).
+// minWidth: 0 обязателен: без него flex-элемент не сужается ниже содержимого и
+// переноса не происходит вовсе.
 const metaSpan = (meta?: string) => (meta ? (
   <span
     title={meta}
     style={{
-      flexShrink: 0,
+      flex: '1 1 auto', minWidth: 0,
       fontSize: FS.xs, fontWeight: 400, color: C.textMuted,
-      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      whiteSpace: 'normal', overflowWrap: 'break-word',
     }}
   >
     {meta}

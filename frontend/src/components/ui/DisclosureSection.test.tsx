@@ -43,7 +43,7 @@ function Harness({ open: initialOpen = false, isMobile = false, withBody = true,
 }) {
   const [open, setOpen] = useState(initialOpen);
   return createElement(DisclosureSection, {
-    title: 'Точные метрики локальной модели',
+    title: 'Точные метрики',
     meta,
     open,
     onToggle: () => setOpen(o => !o),
@@ -99,12 +99,34 @@ describe('DisclosureSection: контракт раскрытия', () => {
     const host = await render({ open: true, meta: 'TTFT · медианы' });
     const b = head(host);
     expect(b.tagName).toBe('BUTTON');
-    expect(b.textContent).toContain('Точные метрики локальной модели');
+    expect(b.textContent).toContain('Точные метрики');
     expect(b.textContent).toContain('TTFT · медианы');
     const bodyId = b.getAttribute('aria-controls');
     expect(bodyId, 'aria-controls указывает на id тела').toBeTruthy();
     expect(body(host).getAttribute('id'), 'тело носит этот id').toBe(bodyId);
     expect(body(host).getAttribute('aria-labelledby'), 'регион подписан заголовком').toBe(b.getAttribute('id'));
+  });
+
+  // Ф-6 (дефект b45ceaa6): приписка не обрезается — она переносится. Мутации «вернуть
+  // приписке nowrap + ellipsis» и «убрать у неё minWidth: 0» краснят этот тест.
+  it('длинная приписка переносится, а не обрезается; усечённый заголовок несёт подсказку', async () => {
+    const META = 'Локальная модель · TTFT · медианы';
+    const host = await render({ open: true, meta: META });
+    const spans = Array.from(head(host).querySelectorAll('span')) as HTMLElement[];
+    const metaEl = spans.find(s => (s.textContent ?? '').includes('TTFT'));
+    expect(metaEl, 'приписки в строке нет').toBeTruthy();
+    // смысл строки целиком — в её тексте: обрезка многоточием сняла бы его ещё в разметке
+    expect(metaEl!.textContent, 'приписка усечена — полного смысла в узкой колонке нет').toBe(META);
+    expect(metaEl!.style.whiteSpace, 'приписка не переносится по словам').not.toBe('nowrap');
+    expect(metaEl!.style.textOverflow, 'у приписки осталась обрезка многоточием').not.toBe('ellipsis');
+    // без minWidth: 0 flex-элемент не сужается ниже содержимого — переноса не будет вовсе
+    expect(Number.parseFloat(metaEl!.style.minWidth), 'приписка не сужается — переноса не произойдёт').toBe(0);
+
+    // заголовок остаётся в одну строку с многоточием, но полный текст доступен подсказкой
+    const titleEl = spans.find(s => (s.textContent ?? '').includes('Точные метрики'));
+    expect(titleEl, 'заголовка в строке нет').toBeTruthy();
+    expect(titleEl!.style.whiteSpace, 'заголовок — одна строка').toBe('nowrap');
+    expect(titleEl!.getAttribute('title'), 'у усечённого заголовка нет подсказки').toBe('Точные метрики');
   });
 
   it('без children — статичная закрытая строка: ни кнопки, ни chevron, ни пустого тела', async () => {
@@ -113,7 +135,7 @@ describe('DisclosureSection: контракт раскрытия', () => {
     expect(host.querySelector('[aria-expanded]'), 'нет переключателя').toBeFalsy();
     expect(host.querySelector('svg'), 'нет chevron').toBeFalsy();
     expect(host.querySelector('[role=region]'), 'нет пустого тела').toBeFalsy();
-    expect(host.textContent).toContain('Точные метрики локальной модели');
+    expect(host.textContent).toContain('Точные метрики');
     expect(host.textContent).toContain('нет ходов за сутки');
   });
 

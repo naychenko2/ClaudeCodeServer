@@ -54,6 +54,22 @@
   Значения машинно-специфичны — правило расчёта в
   [deploy/systemd/README.md](../../deploy/systemd/README.md).
 
+  **Ходы локальных моделей — в своём slice** (`Execution:Isolation:LocalModelSlice`; нет
+  ключа — выводится из `Slice`: `ccs-agents.slice` → `ccs-agents-local.slice`, то есть
+  `ccs.slice/ccs-agents.slice/ccs-agents-local.slice`; пустая строка — отдельного slice нет).
+  Метку ставит `ProcessSpec.LocalModel` (провайдер хода `IsLocal`; ходы чатов и one-shot CLI).
+  Потолок памяти родителя наследуется, а заморозить локальные ходы можно отдельно: бенч,
+  забирающий все слоты локального движка, морозит **только** `ccs-agents-local.slice`.
+  Морозить весь `ccs-agents.slice` нельзя: systemd отказывает в новом scope
+  («Cannot start frozen unit», а `--quiet` прячет это от сервера), и встают все чаты,
+  `git` панели «Файлы» и опросы сторожей. Так было 21.11: CLI выходил с кодом 1 без единой
+  строки, а сервер читал это как «эндпоинт недоступен» и гнал цепочку фолбэка по всем
+  провайдерам. Заморозку сервер видит до запуска (`IProcessLauncher.LocalModelsPaused`:
+  `cgroup.freeze` самого slice или любого предка, `CgroupSlices.IsFrozen`). Локальный ход
+  получает `TurnFailureText.LocalModelsPaused` без шага цепочки и без кулдауна (облачный
+  сосед запрещён линией ADR-007, как и у «занято»), а one-shot — `LocalEngineBusyException`.
+  Облачные ходы идут как обычно.
+
   **Реюз узлов сборки внутри хода и гашение scope** (`Execution:Isolation:BuildNodeReuse`,
   дефолт true). Scope именуется `--unit=ccs-run-<pid бэкенда в hex>-<guid>.scope`
   (отпечаток владельца — для сторожа сирот, см. ниже; ширина hex постоянна, поэтому

@@ -60,4 +60,9 @@ public sealed record ProcessSpec
     // изоляции это уже так (соль рукопожатия + остановка scope), поэтому метку читает раннер
     // только ВНЕ scope: там он ставит запреты LocalProcessRunner.BuildIsolationEnv.
     public bool PrivateBuildNodes { get; init; }
+    // Ход на локальной модели (провайдер IsLocal): local-раннер под изоляцией кладёт процесс
+    // в IsolationOptions.LocalModelSlice, а не в общий Slice — чтобы заморозка локальных
+    // моделей (бенч на всех слотах движка) не задевала облачные ходы. Остальные раннеры поле
+    // не читают.
+    public bool LocalModel { get; init; }
 }

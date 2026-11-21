@@ -132,14 +132,15 @@ public class LocalTurnGateTests
         .AddInMemoryCollection(new Dictionary<string, string?> { ["ClaudeSubscriptions:acc-a:OAuthToken"] = "t" }).Build());
 
     private Turn NewTurn(LocalEngineBusyTracker gate, LlmProviderRegistry providers, string[]? chain = null,
-        Action<ServerMessage>? beforeRecord = null)
+        Action<ServerMessage>? beforeRecord = null, IProcessLauncher? launcher = null,
+        string model = LocalModel, string provider = Local)
     {
-        var session = new Session { Model = LocalModel, Provider = Local };
+        var session = new Session { Model = model, Provider = provider };
         var inner = new FakeInner(session);
         var outList = new List<ServerMessage>();
         var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
             msg => { beforeRecord?.Invoke(msg); lock (outList) outList.Add(msg); return Task.CompletedTask; },
-            Pool(), providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            Pool(), providers, Path.GetTempPath(), launcher: launcher, initialProfileRoot: null,
             isChildTurn: () => false,
             effectiveChain: chain is null ? null : () => chain,
             health: _health, egressRetryDelay: TimeSpan.FromMilliseconds(10), localGate: gate);
@@ -158,6 +159,58 @@ public class LocalTurnGateTests
             await Task.Delay(10);
         }
         throw new TimeoutException($"не дождались: {what}");
+    }
+
+    // Лаунчер, у которого slice локальных ходов заморожен (бенч забрал слоты движка)
+    private sealed class PausedLauncher : IProcessLauncher
+    {
+        public bool IsSandboxed => false;
+        public bool TargetIsWindows => false;
+        public IPathMapper Paths => IdentityPathMapper.Instance;
+        public string ClaudeCliCommand => "claude";
+        public string HostTempDir => Path.GetTempPath();
+        public string? McpApiUrlOverride => null;
+        public System.Diagnostics.Process Start(ProcessSpec spec) => throw new InvalidOperationException("не должен звать");
+        public void Kill(System.Diagnostics.Process process, string? turnId = null) { }
+        public int EstimateCommandLineLength(ProcessSpec spec) => 0;
+        public bool LocalModelsPaused => true;
+    }
+
+    [Fact]
+    public async Task ЛокальныеНаПаузе_ErrorLocalModelsPaused_БезПодменыКулдаунаИОчереди()
+    {
+        var gate = new LocalEngineBusyTracker(_clock);
+        var providers = Providers(3, 8, "00:15:00");
+        // Облачный сосед в цепочке есть, но ходить к нему нельзя (линия ADR-007)
+        var t = NewTurn(gate, providers, [LocalModel, "glm-5.2"], launcher: new PausedLauncher());
+
+        await t.Sut.SendMessageAsync("ход");
+        await WaitForAsync(() => t.Downstream().OfType<ResultMessage>().Any(), "терминал хода");
+
+        t.Inner.Attempts.Should().BeEmpty("на паузе CLI не запускается");
+        var down = t.Downstream();
+        down.OfType<ErrorMessage>().Single().Text.Should().Be(TurnFailureText.LocalModelsPaused);
+        down.OfType<ResultMessage>().Single().Subtype.Should().Be("error");
+        down.OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+        _health.IsUnavailable(Local).Should().BeFalse("пауза провайдера не помечает");
+        gate.ActiveFor(Local).Should().Be(0);
+        gate.QueuedFor(Local).Should().Be(0, "в очередь допуска ход на паузе не встаёт");
+    }
+
+    [Fact]
+    public async Task ЛокальныеНаПаузе_ОблачныйХодИдётКакОбычно()
+    {
+        var gate = new LocalEngineBusyTracker(_clock);
+        var t = NewTurn(gate, Providers(3, 8, "00:15:00"), launcher: new PausedLauncher(),
+            model: "glm-5.2", provider: "glm");
+
+        await t.Sut.SendMessageAsync("ход");
+        await WaitForAsync(() => t.Started, "облачный ход стартовал");
+        t.FinishOk();
+        await WaitForAsync(() => t.Downstream().OfType<ResultMessage>().Any(), "терминал хода");
+
+        t.Downstream().OfType<ErrorMessage>().Should().BeEmpty();
+        t.Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("success");
     }
 
     [Fact]

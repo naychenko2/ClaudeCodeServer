@@ -1228,6 +1228,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // (LocalModelTurnMeter) нужна копия потока запросов, а та доступна только на пути шлюза.
     // Флаг есть, а шлюз выключен — ход идёт напрямую (чат не должен падать из-за костыля),
     // дефект/метрики при этом не компенсируются.
+    // Прогон идёт на локальной модели (провайдер IsLocal) — метка ProcessSpec.LocalModel
+    internal bool IsLocalModelRun() => _providers?.ResolveByModel(EffectiveModel)?.IsLocal == true;
+
     internal bool UseServerGateway()
     {
         var provider = _providers?.ResolveByModel(EffectiveModel);
@@ -4996,6 +4999,7 @@ public class ClaudeSession : ILlmSessionAdapter
             ClearEnv = TurnClearEnv(childSnapshot),
             RedirectStdin = true,
             TurnId = _currentTurnId,
+            LocalModel = IsLocalModelRun(),
         };
         // EstimateCommandLineLength — единственная точка учёта обвязки раннера, и она
         // ОБЯЗАНА вернуть число. Если кидает (ThrowingRuntimeLauncher в тесте BareArgs или
@@ -5223,6 +5227,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     // может не наступить (дочерние node-процессы MCP наследуют и держат pipe). Без него
                     // обрыв хода зависает в «ожидании» без диагностики (инцидент P27).
                     EnableRaisingEvents = true,
+                    // Ход локальной модели — в свой slice изоляции: его заморозка (бенч на всех
+                    // слотах движка) не задевает облачные ходы (инцидент 21.11)
+                    LocalModel = IsLocalModelRun(),
                 });
             }
             catch

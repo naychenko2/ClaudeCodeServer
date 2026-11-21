@@ -797,6 +797,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // новой постановки в очередь, чтобы ход не занимал место дважды.
                 attemptSlot?.Dispose();
                 attemptSlot = null;
+                // Локальные модели на паузе (slice локальных ходов заморожен): systemd не создаст
+                // scope и CLI умрёт на старте молча — без проверки это читалось как «эндпоинт
+                // недоступен» и гнало цепочку по всем провайдерам (инцидент 21.11). Отказ — до
+                // очереди допуска: ждать в ней нечего, слот занимать незачем.
+                if (_launcher is { LocalModelsPaused: true } && _providers?.GetByKey(currentKey) is { IsLocal: true })
+                {
+                    LogWarn($"Локальные модели на паузе (slice заморожен) — ход на «{currentModel}» / «{currentKey}» "
+                        + "не запущен, цепочку не идём.");
+                    turnOutcome = "local_paused";
+                    await FailLocalPausedAsync(turn);
+                    return;
+                }
                 if (_localGate is not null && _providers?.GetByKey(currentKey) is { IsLocal: true } gated)
                 {
                     LocalTurnAdmission admission;
@@ -1962,6 +1974,24 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     // Финал «локальный движок занят»: гейт допуска не пустил ход. Форма как у FailLocalDownAsync,
     // но без кулдауна провайдера и без шагов цепочки — движок жив, он просто загружен.
+    // Финал «локальные модели на паузе»: форма как у FailLocalBusyAsync — без кулдауна и шагов
+    // цепочки, ход не запускался, повтор безопасен.
+    private async Task FailLocalPausedAsync(FallbackTurn turn)
+    {
+        List<ServerMessage> held;
+        lock (turn.Sync)
+        {
+            held = [.. turn.Held];
+            turn.Held.Clear();
+            turn.Settled = true;
+        }
+
+        await _downstream(new ErrorMessage(TurnFailureText.LocalModelsPaused, ExpectResultFollows: true));
+        await _downstream(new ResultMessage("error", 0, 0, null, null));
+        foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
+            await _downstream(m);
+    }
+
     private async Task FailLocalBusyAsync(FallbackTurn turn, int running, LocalTurnRefusal refusal)
     {
         List<ServerMessage> held;

@@ -122,6 +122,55 @@ public class LocalProcessRunnerIsolationTests
             "dummy", "--print", "a b");
     }
 
+    // Ход локальной модели уходит в дочерний slice: его морозит бенч, облачные ходы и служебные
+    // запуски остаются в общем (инцидент 21.11 — заморозка общего slice уронила все чаты)
+    [Fact]
+    public void ЛокальнаяМодель_ВДочернийSlice_ОстальныеВОбщий()
+    {
+        using var _ = Bus(present: true);
+
+        var local = Build(Spec() with { LocalModel = true }, On()).psi.ArgumentList;
+        var cloud = Build(Spec(), On()).psi.ArgumentList;
+
+        local.Should().Contain("--slice=ccs-agents-local.slice").And.NotContain("--slice=ccs-agents.slice");
+        cloud.Should().Contain("--slice=ccs-agents.slice").And.NotContain("--slice=ccs-agents-local.slice");
+    }
+
+    [Fact]
+    public void ЛокальнаяМодель_ОтдельныйSliceВыключен_ОбщийSlice()
+    {
+        using var _ = Bus(present: true);
+        var options = new IsolationOptions { Enabled = true, Slice = "ccs-agents.slice", LocalModelSlice = null };
+
+        Build(Spec() with { LocalModel = true }, options).psi.ArgumentList
+            .Should().Contain("--slice=ccs-agents.slice");
+    }
+
+    [Theory]
+    [InlineData(null, null, "ccs-agents-local.slice")]          // ключей нет — вывод из дефолтного Slice
+    [InlineData("my-pool.slice", null, "my-pool-local.slice")]  // вывод из заданного Slice
+    [InlineData(null, "bench-free.slice", "bench-free.slice")]  // явное значение
+    [InlineData(null, "", null)]                                // явно пусто — отдельного slice нет
+    public void LocalModelSlice_ИзКонфига(string? slice, string? localSlice, string? expected)
+    {
+        var values = new Dictionary<string, string?>();
+        if (slice is not null) values["Execution:Isolation:Slice"] = slice;
+        if (localSlice is not null) values["Execution:Isolation:LocalModelSlice"] = localSlice;
+        var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+
+        IsolationOptions.FromConfig(config).LocalModelSlice.Should().Be(expected);
+    }
+
+    [Fact]
+    public void Оценка_ЛокальнаяМодель_УчитываетДлинуСвоегоSlice()
+    {
+        var options = On();
+        var cloud = LocalProcessRunner.EstimateCommandLineLength(Spec(), options, SystemdRun);
+        var local = LocalProcessRunner.EstimateCommandLineLength(Spec() with { LocalModel = true }, options, SystemdRun);
+
+        local.Should().Be(cloud + "-local".Length);
+    }
+
     // Свойство не наследуется от slice к scope, поэтому ставится в каждый scope — независимо от
     // того, заданы ли пределы памяти (HOST-3).
     [Fact]

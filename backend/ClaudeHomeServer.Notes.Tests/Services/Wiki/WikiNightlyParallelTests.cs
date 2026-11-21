@@ -111,7 +111,7 @@ public class WikiNightlyParallelTests : IDisposable
 
     private WikiNightlyService Sut(
         Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze,
-        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
+        Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             analyze, _llm, _config, NullLogger<WikiNightlyService>.Instance, _flag,
             () => _now, null, _keeper, judge);
@@ -156,8 +156,8 @@ public class WikiNightlyParallelTests : IDisposable
     }
 
     // Фейк шва судьи (а): фиксирует момент вызова (полёт слотов) и названный корень.
-    private Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> JudgeProbe() =>
-        (owner, root, ct) =>
+    private Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> JudgeProbe() =>
+        (owner, root, _, ct) =>
         {
             lock (_judgeCalls) _judgeCalls.Add((OpenSlots(), root));
             return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null));
@@ -518,7 +518,7 @@ public class WikiNightlyParallelTests : IDisposable
         AddChat("c1", SectionA, ageMinutes: 10);
         OpenDisputedPackage();
         var judge = new WikiJudgeSweep(_llm, _apply, _config);
-        var sut = Sut(GateDone(null), (owner, root, ct) => judge.RunAsync(owner, root, ct));
+        var sut = Sut(GateDone(null), (owner, root, only, ct) => judge.RunAsync(owner, root, only, ct));
 
         await Tick(sut);
 

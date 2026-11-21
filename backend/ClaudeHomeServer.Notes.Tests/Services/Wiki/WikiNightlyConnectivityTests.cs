@@ -108,7 +108,7 @@ public class WikiNightlyConnectivityTests : IDisposable
 
     private WikiNightlyService Sut(Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze,
         ILogger<WikiNightlyService>? log = null,
-        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
+        Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             analyze, _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag,
             () => _now, null, _keeper, judge);
@@ -266,7 +266,7 @@ public class WikiNightlyConnectivityTests : IDisposable
         {
             WritePage("Порядок работ");
             WritePage("Порядок встреч", "Обсудили Порядок работ.");
-        }), judge: (o, root, ct) =>
+        }), judge: (o, root, _, ct) =>
         {
             atJudge = PagesHash();
             return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null));

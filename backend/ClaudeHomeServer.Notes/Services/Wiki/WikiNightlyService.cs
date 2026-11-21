@@ -234,7 +234,7 @@ public sealed partial class WikiNightlyService : BackgroundService
     // Проход судьи (J-J4, точка «а»): тот же приём шва Func-делегатом, что у _analyze — точка
     // запуска проверяется без настоящей облачной модели. null (тест без судьи) — прохода судьи нет,
     // поля итога нулевые.
-    private readonly Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? _judge;
+    private readonly Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? _judge;
     private readonly Func<DateTimeOffset> _clock;
     private readonly string _dataDir;
 
@@ -248,7 +248,7 @@ public sealed partial class WikiNightlyService : BackgroundService
             // для последовательного прохода без исполнителей.
             (owner, chat, engine, ct) => ingest.AnalyzeAsync(owner, chat, ct, LocalActionCatalog.WikiNightly, engine),
             llm, config, log, flags, clock: null, notifications: notifications, keeper: keeper,
-            judge: (owner, root, ct) => judge.RunAsync(owner, root, ct))
+            judge: (owner, root, only, ct) => judge.RunAsync(owner, root, only, ct))
     {
     }
 
@@ -263,7 +263,7 @@ public sealed partial class WikiNightlyService : BackgroundService
         ICheapTextRunner llm, IConfiguration config, ILogger<WikiNightlyService> log,
         Composition.IFeatureFlagGate? flags, Func<DateTimeOffset>? clock,
         Composition.INotificationSender? notifications = null, WikiKeeper? keeper = null,
-        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null)
+        Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null)
     {
         _keeper = keeper;
         _sessions = sessions;
@@ -441,7 +441,7 @@ public sealed partial class WikiNightlyService : BackgroundService
             template.Append("; связность: новых страниц нет; ссылок снято у модели {Stripped}");
             args.Add(sl);
         }
-        // Предложения merge (C6): часть только когда пакеты созданы (отдельная строка до судьи — в RunPassAsync).
+        // Предложения merge (C6): часть только когда пакеты созданы (отдельная строка после полного прохода судьи — в RunPassAsync).
         if (r.MergeProposed is > 0 and var mp)
         {
             template.Append("; предложено merge {MergeProposed}");

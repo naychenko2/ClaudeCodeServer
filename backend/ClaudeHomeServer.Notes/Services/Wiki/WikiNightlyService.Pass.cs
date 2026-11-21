@@ -398,24 +398,6 @@ public sealed partial class WikiNightlyService
             outcome = OutcomeError;
         }
 
-        // Предложения merge (C6, ADR-039 р.13): после окон и ДО судьи — судья в этом же проходе
-        // решает только что созданные пакеты. За тумблером Wiki:MergeProposals (по умолчанию выкл);
-        // ночь без доверия к итогу (ошибка, выключили посреди) пакетов не создаёт. Догона нет.
-        // Сбой подбора итог не роняет: поле остаётся null, как у замера связности.
-        if (MergeProposalsEnabled() && outcome is not (OutcomeError or OutcomeDisabledMidway))
-        {
-            try
-            {
-                mergeProposed = await Task.Run(() => ProposeMergesForRoot(root), ct).ConfigureAwait(false);
-                LogInfoSafe("Ночной разбор {Owner}: предложения merge — создано {Count}", ownerId, mergeProposed);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                mergeProposed = null;
-                LogWarnSafe("Ночной разбор {Owner}: предложения merge не созданы: {Reason}", ownerId, ex.Message);
-            }
-        }
-
         // Точка запуска (а) (J-J4): проход судьи после разбора чатов — под тем же замком владельца
         // (его держит RunOwnerAsync/StartManual вокруг RunOwnerPassAsync) и до записи
         // keeper/nightly-last.json: его счётчики попадают в тот же файл, ту же строку журнала и то
@@ -426,18 +408,32 @@ public sealed partial class WikiNightlyService
         // маршрут ночи к нему не относится: это другое место (wiki-judge), его выбирает админ.
         if (_judge is not null)
         {
-            var sweep = await _judge(ownerId, root, ct).ConfigureAwait(false);
-            judgeCalls = sweep.Calls;
-            judgeCost = sweep.CostUsd;
-            judgeApplied = sweep.Applied;
-            judgeRejected = sweep.Rejected;
-            judgeDeferred = sweep.Deferred;
-            codeRejected = sweep.CodeRejected;
-            // Сам проход судьи исключений не бросает; его FirstFailure — единственный способ
-            // узнать о несделанном, и он в журнале.
-            if (sweep.FirstFailure is not null)
-                LogWarnSafe("Ночной разбор {Owner}: проход судьи не доведён: {Reason}", ownerId, sweep.FirstFailure);
+            AddSweep(await _judge(ownerId, root, null, ct).ConfigureAwait(false));
         }
+        // Предложения merge (C6, ADR-039 р.13, M1): ПОСЛЕ полного прохода судьи — гейт MergeOpenLimit
+        // считает открытые уже после его решений, иначе нерешённый хвост самих чатов запирал merge.
+        // Созданные пакеты решает добор судьи только по их id (ниже). За тумблером Wiki:MergeProposals
+        // (по умолчанию выкл); ночь без доверия к итогу (ошибка, выключили посреди) пакетов не создаёт.
+        // Сбой подбора итог не роняет: поле остаётся null, как у замера связности.
+        if (MergeProposalsEnabled() && outcome is not (OutcomeError or OutcomeDisabledMidway))
+        {
+            try
+            {
+                var mergeIds = await Task.Run(() => ProposeMergesForRoot(root), ct).ConfigureAwait(false);
+                mergeProposed = mergeIds.Count;
+                LogInfoSafe("Ночной разбор {Owner}: предложения merge — создано {Count}", ownerId, mergeProposed);
+                // Добор судьи — ТОЛЬКО по merge-пакетам этой ночи: отложенные операции чатов не получают
+                // второй попытки за ночь (MaxAttempts). После него ночь ничего не пишет, кроме итога.
+                if (_judge is not null && mergeIds.Count > 0)
+                    AddSweep(await _judge(ownerId, root, mergeIds.ToHashSet(StringComparer.Ordinal), ct).ConfigureAwait(false));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                mergeProposed = null;
+                LogWarnSafe("Ночной разбор {Owner}: предложения merge не созданы: {Reason}", ownerId, ex.Message);
+            }
+        }
+
         // Связность (A6): после судьи, до записи итога; страницы только читаются (инвариант «ночь
         // после судьи ничего не пишет»), сбой замера итог не роняет — поля остаются null.
         try
@@ -451,6 +447,20 @@ public sealed partial class WikiNightlyService
             LogWarnSafe("Ночной разбор {Owner}: замер связности не удался: {Reason}", ownerId, ex.Message);
         }
         return Result(outcome);
+
+        // Счётчики судьи складываются по двум проходам (полный и добор merge); сам проход исключений
+        // не бросает, его FirstFailure — единственный способ узнать о несделанном, и он в журнале.
+        void AddSweep(WikiJudgeSweep.JudgeSweepResult sweep)
+        {
+            judgeCalls += sweep.Calls;
+            judgeCost += sweep.CostUsd;
+            judgeApplied += sweep.Applied;
+            judgeRejected += sweep.Rejected;
+            judgeDeferred += sweep.Deferred;
+            codeRejected += sweep.CodeRejected;
+            if (sweep.FirstFailure is not null)
+                LogWarnSafe("Ночной разбор {Owner}: проход судьи не доведён: {Reason}", ownerId, sweep.FirstFailure);
+        }
 
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
             overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual, dropped, firstDropReason,
@@ -816,7 +826,6 @@ public sealed partial class WikiNightlyService
             var m = WikiConnectivity.Aggregate(paths.Where(stats.ContainsKey).Select(p => stats[p]));
             return m.Count == 0 ? null : new ConnectivityStat(m.Count, m.K0, m.K1, m.K2);
         }
-
         return (Stat(newPaths), Stat(sectionPaths), Stat(corpusPaths));
     }
 
@@ -830,10 +839,10 @@ public sealed partial class WikiNightlyService
         string.Equals(_config["Wiki:MergeProposals"], "true", StringComparison.OrdinalIgnoreCase);
 
     // Подбор пар по снимку pages/ и создание пакетов. Идёт под замком владельца (Running).
-    private int ProposeMergesForRoot(string root)
+    private IReadOnlyList<string> ProposeMergesForRoot(string root)
     {
         if (WikiPackageStore.CountOpen(root) >= MergeOpenLimit)
-            return 0;
+            return [];
         var pages = ReadPageSnapshot(root)
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
             .Select(kv => new WikiGate.Draft(kv.Key, kv.Value)).ToList();
@@ -851,7 +860,7 @@ public sealed partial class WikiNightlyService
         // Принятые человеком (adopt) страницы сливать нельзя — применение их откажет; кладём в карантин
         // (только для A). Журнал нечитаем — fail-closed: предложений нет.
         if (WikiApplyService.ReadAdoptedPages(root) is not { } adopted)
-            return 0;
+            return [];
         quarantined.UnionWith(adopted);
         var pairs = WikiMergeCandidates.Pick(pages, open, quarantined);
         // Pick допускает B, ставшую A другой пары (цепочка A→B→C, цикл): применение второго пакета
@@ -873,10 +882,10 @@ public sealed partial class WikiNightlyService
     /// <summary>Пакеты op merge (Page = A, Target = B, код merge_proposal, решение inbox) по парам
     /// подбора. Лимит открытых перепроверяется перед КАЖДЫМ созданием: между созданиями ручной
     /// «Разобрать» мог добавить пакеты. afterCreate — шов теста гонки (вызывается после каждого
-    /// созданного пакета). Возвращает число созданных.</summary>
-    internal static int ProposeMerges(string root, IReadOnlyList<(string A, string B)> pairs, Action<int>? afterCreate = null)
+    /// созданного пакета). Возвращает id созданных пакетов.</summary>
+    internal static IReadOnlyList<string> ProposeMerges(string root, IReadOnlyList<(string A, string B)> pairs, Action<int>? afterCreate = null)
     {
-        var created = 0;
+        var created = new List<string>();
         foreach (var (a, b) in pairs)
         {
             if (WikiPackageStore.CountOpen(root) >= MergeOpenLimit)
@@ -895,8 +904,8 @@ public sealed partial class WikiNightlyService
             }
             if (!WikiPackageStore.Transition(root, package.Id, WikiPackage.StatusProposed).Ok)
                 continue;
-            created++;
-            afterCreate?.Invoke(created);
+            created.Add(package.Id);
+            afterCreate?.Invoke(created.Count);
         }
         return created;
     }

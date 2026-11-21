@@ -1,6 +1,6 @@
 // Вкладка «LLM» панели «Локальные модели», порядок v1 «Сначала ферма»: жива ли модель →
 // четыре KPI фермы → нагрузка и кэш → кто на модели → что с картами → «Дежурство» →
-// точные метрики (закрыты) → облачное сравнение (последним)
+// точные метрики (закрыты) → облачное сравнение (последней закрытой строкой)
 // (макет docs/mockups/local-model-llm-redesign-v1.html, строки 165–215; спека
 // docs/mockups/local-model-llm-redesign-proposal.md, §v1).
 //
@@ -30,7 +30,7 @@
 //   движок на Video может быть и vLLM (LocalEngines:<name>:MetricsEngine) — у него
 //   prompt-время включает очередь, а ступенчатая модель счётчиков к нему не относится.
 
-import { type CSSProperties, useState } from 'react';
+import { type CSSProperties, useCallback, useRef, useState } from 'react';
 import { AlertTriangle, CirclePause, Plug, FolderOpen, Unplug } from 'lucide-react';
 import { C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import { Button, DisclosureSection, EmptyState, InlineSegmented } from '../../components/ui';
@@ -42,7 +42,7 @@ import {
   answerSpeedMedianHint, answerSpeedTpsHint, answerSpeedWindowLabel, formatGpuMem, formatPower, formatSec,
   formatSince, formatTps, formatUpdatedAt, GEN_SPEED_HINT, gpuCountLabel, notReportedText, whoRows,
   standDot, standHint, statusPill, TTFT_MEDIAN_HINT, TTFT_P90_HINT, WHO_SPEED_HINT,
-  CLOUD_SPEED_REQUESTS_HINT, CLOUD_SPEED_WINDOW_LABEL, cloudSpeedCardHint, cloudSpeedMedianHint,
+  CLOUD_SPEED_NO_TTFT_HINT, CLOUD_SPEED_REQUESTS_HINT, CLOUD_SPEED_WINDOW_LABEL, cloudSpeedMedianHint,
   cloudSpeedTpsHint,
   type StatusTone, type WhoRow,
 } from './format';
@@ -371,43 +371,117 @@ function AnswerSpeedCard({ data }: { data: LocalModelStats }) {
   );
 }
 
-// === «Облачные модели: скорость ответа» ===
+// === «Сравнить с облаком» — последней ЗАКРЫТОЙ строкой вкладки (Ф-4) ===
 // Числа облака — сессионная скорость по нашей нагрузке за сутки (не per-request,
-// как у локальной карточки выше): определение разное, и подсказка говорит это прямо.
-// 403 (не админ) — карточка не показывается вовсе; пустое окно — спокойная строка.
+// как у локальных метрик выше): определение разное, и подсказка тела говорит это прямо.
+// 403 (не админ) и отсутствие снимка опроса — секции нет вовсе. Пустое окно — та же
+// закрытая строка с подписью «нет ходов за сутки», без кнопки и пустого тела.
 const CLOUD_GRID: CSSProperties = {
   display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))', gap: SP.sm,
 };
 const CLOUD_ROW: CSSProperties = {
   borderTop: `1px solid ${C.borderLight}`, paddingTop: SP.sm, marginTop: SP.sm,
 };
+// Подпись разницы окон — явная и в закрытой строке, и в теле (макет .html:212):
+// локальные метрики выше — окна 5 мин / 1 ч, облако — сессионные сутки.
+const CLOUD_WINDOW_HINT = 'Окна разные: у локальных метрик выше — 5 минут и час, здесь — последние 24 часа. Сравниваем по смыслу, а не как точный забег.';
+// Приписка закрытой строки: «моделей: N · за сутки» — нейтральная форма без
+// склонений («3 модели» / «1 моделей» разъезжаются; та же цена, что у «запросов в окне: N»).
+const cloudMeta = (n: number) => `моделей: ${n} · за сутки`;
 
-function CloudAnswerSpeedCard({ state }: { state: CloudAnswerSpeedState }) {
-  if (state.forbidden) return null;
-  const data = state.data;
-  const models = data?.models ?? [];
-  const minTokens = data?.minTokensForMedian;
+// Ключ раскрытия облака — выбор человека, переживает перезаход (спека §v1, строка 126;
+// макет .html:239): '1' — открыто, всё остальное — закрыто. Чтение и запись — с
+// try/catch (паттерн loadTab/changeTab в LocalModelPanel): в приватном режиме
+// исключение не выходит наружу, раскрытие продолжает работать в памяти.
+const CLOUD_OPEN_KEY = 'cc_local_llm_cloud_open';
+function readCloudOpen(): boolean {
+  try {
+    return localStorage.getItem(CLOUD_OPEN_KEY) === '1';
+  } catch { /* приватный режим: закрыто, состояние живёт в памяти */ }
+  return false;
+}
+
+// Тело = ПОЛНОЕ прежнее содержимое карточки облака (спека §v1, строка 125): все
+// модели, провайдеры, три числа, подсказки и подпись окна. Внешняя рамка Card внутрь
+// раскрытия не вкладывается — shell DisclosureSection уже несёт рамку (макет .html:208).
+function CloudBody({ data }: { data: NonNullable<CloudAnswerSpeedState['data']> }) {
+  const models = data.models ?? [];
+  const minTokens = data.minTokensForMedian;
   return (
-    <Card title="Облачные модели: скорость ответа" hint={cloudSpeedCardHint()}>
-      {models.length === 0
-        ? <UnloadedNote text="Нет данных: за сутки не было ни одного хода облачной модели." />
-        : models.map(m => (
-          <div key={`${m.provider}/${m.model}`} style={CLOUD_ROW}>
-            <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>{m.model}</div>
-            <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>{m.provider}</div>
-            <div style={{ ...CLOUD_GRID, marginTop: SP.sm }}>
-              {asCell(m.endToEndTps, formatTps, 'сквозная скорость', cloudSpeedTpsHint())}
-              {asCell(m.medianTps, formatTps, 'медиана по ходам', cloudSpeedMedianHint(minTokens))}
-              {asCell(m.requests, n => String(n), 'ходов за сутки', CLOUD_SPEED_REQUESTS_HINT)}
-            </div>
+    <>
+      {models.map(m => (
+        <div key={`${m.provider}/${m.model}`} style={CLOUD_ROW}>
+          <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>{m.model}</div>
+          <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>{m.provider}</div>
+          <div style={{ ...CLOUD_GRID, marginTop: SP.sm }}>
+            {asCell(m.endToEndTps, formatTps, 'сквозная скорость', cloudSpeedTpsHint())}
+            {asCell(m.medianTps, formatTps, 'медиана по ходам', cloudSpeedMedianHint(minTokens))}
+            {asCell(m.requests, n => String(n), 'ходов за сутки', CLOUD_SPEED_REQUESTS_HINT)}
           </div>
-        ))}
+        </div>
+      ))}
       {/* Подпись окна статична: окно — последние 24 часа, его считает бэкенд; дата-пара
           «за 19.11 — 20.11» была бы неправдой (хвост ревью aa8af844, п.1) */}
       <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm }}>
         {CLOUD_SPEED_WINDOW_LABEL}
       </div>
-    </Card>
+      <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs, lineHeight: 1.45 }}>
+        {CLOUD_WINDOW_HINT}
+      </div>
+      {/* Прежде эта фраза была хинтом заголовка карточки; у закрытой строки своего
+          хинта нет — честное «TTFT у облака не меряем» остаётся видимым текстом тела */}
+      <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs, lineHeight: 1.45 }}>
+        {CLOUD_SPEED_NO_TTFT_HINT}
+      </div>
+    </>
+  );
+}
+
+// Скелетон первого ответа облака — только внутри открытого тела (спека «Состояния
+// всех вариантов», строка 112): закрытая ферма им не блокируется. Тот же C.bgInset
+// и та же пульсация, что у TextTabSkeleton; reduced-motion — статично.
+function CloudSkeleton() {
+  const reduced = usePrefersReducedMotion();
+  const pulse: CSSProperties = reduced ? {} : { animation: 'ccs-lm-skeleton 1.4s ease-in-out infinite' };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, paddingTop: SP.md }} aria-hidden>
+      <div style={{ background: C.bgInset, borderRadius: R.sm, height: 14, width: '55%', ...pulse }} />
+      <div style={{ background: C.bgInset, borderRadius: R.sm, height: 44, ...pulse }} />
+      <div style={{ background: C.bgInset, borderRadius: R.sm, height: 14, width: '70%', ...pulse }} />
+    </div>
+  );
+}
+
+function CloudCompareSection({ state, open, onToggle, isMobile }: {
+  state: CloudAnswerSpeedState; open: boolean; onToggle: () => void; isMobile: boolean;
+}) {
+  if (state.forbidden) return null;
+  const data = state.data;
+  // Пустое окно (снимок есть, моделей нет) — статичная закрытая строка: без кнопки,
+  // chevron и пустого тела (тот же статичный режим DisclosureSection, children === null).
+  // Нулевые скорости не рисовать — здесь их и нет вовсе.
+  if (data && (data.models ?? []).length === 0) {
+    return (
+      <DisclosureSection title="Сравнить с облаком" meta="нет ходов за сутки" open={false} onToggle={onToggle} isMobile={isMobile}>
+        {null}
+      </DisclosureSection>
+    );
+  }
+  return (
+    <DisclosureSection
+      title="Сравнить с облаком"
+      // Припиской закрытой строки бывает только факт снимка («моделей: N · за сутки»);
+      // без снимка сказать нечего — пустой meta, не пояснение про окна в этой строке
+      // (разница окон остаётся в теле, где она и нужна).
+      meta={data ? cloudMeta((data.models ?? []).length) : undefined}
+      open={open}
+      onToggle={onToggle}
+      isMobile={isMobile}
+    >
+      {data
+        ? <CloudBody data={data} />
+        : state.loading ? <CloudSkeleton /> : <UnloadedNote text="Нет данных: за сутки не было ни одного хода облачной модели." />}
+    </DisclosureSection>
   );
 }
 
@@ -799,6 +873,20 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
   // того, какое состояние вкладки рисуется.
   const [metricsOpen, setMetricsOpen] = useState(false);
 
+  // «Сравнить с облаком» — закрыто по умолчанию; сохранённый выбор ('1') открывает
+  // при монтировании. Следующее значение — от актуального ref-зеркала, а не из
+  // замыкания рендера: два клика до ререндера дают два реальных переключения, и
+  // финальные aria-expanded и значение ключа совпадают (запись синхронная,
+  // блокировок и вторых таймеров нет).
+  const [cloudOpen, setCloudOpen] = useState(readCloudOpen);
+  const cloudOpenRef = useRef(cloudOpen);
+  const toggleCloud = useCallback(() => {
+    const next = !cloudOpenRef.current;
+    cloudOpenRef.current = next;
+    setCloudOpen(next);
+    try { localStorage.setItem(CLOUD_OPEN_KEY, next ? '1' : '0'); } catch { /* приватный режим: состояние живёт в памяти */ }
+  }, []);
+
   // Переключатель — над ЛЮБЫМ состоянием вкладки, а не только над стендом
   // (дефект b129c182): упал один стенд — уйти на другой надо из интерфейса, а не
   // через F5. Условие видимости то же, что раньше (список + обработчик; сам
@@ -869,10 +957,10 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
             <AnswerSpeedCard data={data} />
           </div>
         </DisclosureSection>
-        {/* Облачное сравнение — последней строкой вкладки (макет .html:206–214): сначала
-            локальное (per-request), затем облачное (сессионная) — определения разные.
-            Её сворачивание в закрытую строку — следующий шаг (Ф-4), здесь карточка прежняя. */}
-        {cloudSpeed ? <CloudAnswerSpeedCard state={cloudSpeed} /> : null}
+        {/* Облачное сравнение — последней ЗАКРЫТОЙ строкой вкладки (Ф-4, макет .html:206–214):
+            сначала локальное (per-request), затем облачное (сессионная) — определения разные.
+            Состояние раскрытия — localStorage вкладки; опрос облака не меняется. */}
+        {cloudSpeed ? <CloudCompareSection state={cloudSpeed} open={cloudOpen} onToggle={toggleCloud} isMobile={isMobile} /> : null}
       </div>
     </>
   );

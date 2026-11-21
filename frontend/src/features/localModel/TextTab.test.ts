@@ -794,7 +794,7 @@ describe('порядок вкладки v1 и закрытые точные ме
     const who = head(html, '>Кто сейчас на модели</h3>');
     const gpus = head(html, 'Видеокарты');
     const metrics = head(html, 'Точные метрики локальной модели');
-    const cloudCard = head(html, '>Облачные модели: скорость ответа</h3>');
+    const cloudCard = head(html, 'Сравнить с облаком');
     expect(kpi).toBeLessThan(chart);
     expect(chart).toBeLessThan(who);
     expect(who).toBeLessThan(gpus);
@@ -810,7 +810,7 @@ describe('порядок вкладки v1 и закрытые точные ме
     const video = head(html, 'Видеокарта · Video');
     const duty = head(html, '>Дежурство</h3>');
     const metrics = head(html, 'Точные метрики локальной модели');
-    const cloudCard = head(html, '>Облачные модели: скорость ответа</h3>');
+    const cloudCard = head(html, 'Сравнить с облаком');
     expect(who).toBeLessThan(video);
     expect(video).toBeLessThan(duty);
     expect(duty).toBeLessThan(metrics);

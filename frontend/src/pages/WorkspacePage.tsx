@@ -510,7 +510,7 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, sessionId));
     window.dispatchEvent(new Event('cc-pending-project-chat'));
   };
-  const childHeaderData: ChildLessonHeaderData = { subject: activeSubject, viewers: activeSubject?.viewers };
+  const childHeaderData: ChildLessonHeaderData = { subject: activeSubject, viewers: activeSubject?.viewers, time: childEff ?? undefined };
   const childProps: ChildWorkspaceProps | undefined = childSurface ? {
     features: childSurface.composerFeatures,
     feedKinds: childSurface.feedKinds,

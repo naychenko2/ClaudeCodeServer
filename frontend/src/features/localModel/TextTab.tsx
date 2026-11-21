@@ -213,23 +213,6 @@ function YieldBanner({ data }: { data: LocalModelStats }) {
   );
 }
 
-// === KPI-число: крупное моно-значение с подписью ===
-// Крупные числа — FONT.mono FS.xl 700; warn — C.warningText, только когда значение
-// тревожное. title — подсказка к самому числу: что это и с чем сравнивать (тексты
-// подсказок — format.ts). В этой вкладке его использует «Скорость»; KPI «Сейчас на
-// ферме» живут своей карточкой FarmKpiCard (своих копий здесь нет).
-function Kpi({ value, unit, label, note, warn, title }: { value: string; unit?: string; label: string; note?: string; warn?: boolean; title?: string }) {
-  return (
-    <div>
-      <div title={title} style={{ fontFamily: FONT.mono, fontSize: FS.xl, fontWeight: 700, lineHeight: 1.2, color: warn ? C.warningText : C.textHeading }}>
-        {value}{unit && <small style={{ fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}> {unit}</small>}
-      </div>
-      <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xxs }}>{label}</div>
-      {note && <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>{note}</div>}
-    </div>
-  );
-}
-
 // Ключевое отличие уступки от аварии (макет §4): при 'yielded' метрики молчат, но это
 // не отказ — модель выгружена. «Сейчас»/«Скорость» показывают спокойную строку
 // C.textMuted, а не нули и не красное: ноль — это значение, а выгруженной модели
@@ -247,8 +230,52 @@ function isLlamaServer(data: LocalModelStats): boolean {
   return data.engine === 'llama-server';
 }
 
+// === Плоские строки метрик внутри раскрытия «Точные метрики локальной модели» ===
+// Решение Майи (21.11, после ревью R-Ф-3, п.2): внутри раскрытия — плоские строки .kv
+// на всех ширинах, без рамки, фона и скругления Card: shell раскрытия уже несёт границу
+// группы, а карточка в карточке — лишняя вложенность и шум, особенно на мобиле
+// (макет .html:194–205). Заголовки и все поля — прежние; убрана только внешняя обёртка.
+const NO_DATA = 'нет данных';
+const METRIC_HEAD: CSSProperties = {
+  margin: 0, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary,
+};
+const METRIC_ROW: CSSProperties = {
+  display: 'flex', justifyContent: 'space-between', gap: SP.md, padding: `${SP.xs}px 0`,
+};
+const METRIC_LABEL: CSSProperties = { fontSize: FS.sm, color: C.textSecondary, minWidth: 0 };
+// Значение — моно, на той же строке, что подпись (макет .kv .v). Нет значения —
+// спокойная «нет данных» (не «—»: здесь человек должен прочесть, что данных нет).
+const METRIC_VALUE: CSSProperties = {
+  fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 600, lineHeight: 1.3,
+  color: C.textHeading, whiteSpace: 'nowrap',
+};
+const METRIC_VALUE_EMPTY: CSSProperties = { fontFamily: FONT.mono, fontSize: FS.sm, color: C.textMuted };
+
+// Одна строка метрики: подпись слева, значение справа. Хинт поясняет число (тот же,
+// что у KPI); приписка — под значением, справа (число запросов относится к числу).
+const metricRow = (
+  label: string,
+  value: number | null | undefined,
+  fmt: (n: number) => string,
+  hint?: string,
+  note?: string,
+) => {
+  const has = value != null && Number.isFinite(value);
+  return (
+    <>
+      <div style={METRIC_ROW}>
+        <span style={METRIC_LABEL}>{label}</span>
+        <span title={hint} style={has ? METRIC_VALUE : METRIC_VALUE_EMPTY}>
+          {has ? fmt(value as number) : NO_DATA}
+        </span>
+      </div>
+      {note ? <div style={{ fontSize: FS.xs, color: C.textMuted, textAlign: 'right' }}>{note}</div> : null}
+    </>
+  );
+};
+
 // === «Скорость»: генерация и чтение промпта, ток/с на поток, «сейчас» (окно ~60 с) ===
-// Два KPI — «сейчас» (genPerStream/prefillPerStream, как чувствует отдельный чат).
+// Две строки — «сейчас» (genPerStream/prefillPerStream, как чувствует отдельный чат).
 // Среднее и пик за окно графика — ТОЛЬКО у графика (дубль под KPI убран).
 // «Чтение промпта С ОЖИДАНИЕМ»: знаменатель — время prefill запроса от старта до
 // первого токена, а оно включает ожидание очереди шагов, поэтому величина ниже
@@ -256,45 +283,44 @@ function isLlamaServer(data: LocalModelStats): boolean {
 // заблуждение — это про vLLM на любом стенде; у llama-server prompt_seconds_total —
 // чистое время чтения, там слово было бы неправдой.
 function SpeedCard({ data }: { data: LocalModelStats }) {
-  if (data.status === 'yielded') {
-    return <Card title="Скорость"><UnloadedNote text="Нет данных, пока модель выгружена. Последнее значение — на графике слева от разрыва." /></Card>;
-  }
-  if (data.speed == null) {
-    return <Card title="Скорость"><NotReported data={data} /></Card>;
-  }
   return (
-    <Card title="Скорость">
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm }}>
-        {/* Имя говорит, что это НЕ та величина, с которой сверяют облачные оценки
-            (для них — карточка «Скорость ответа» ниже): «пока пишет» = только время
-            генерации, без ожидания слота и чтения промпта */}
-        <Kpi
-          value={formatTps(data.speed.genPerStream)}
-          label="скорость генерации (пока пишет), ток/с, за последнюю минуту"
-          title={GEN_SPEED_HINT}
-        />
-        {/* «с ожиданием» — по типу движка: у vLLM prompt-время включает очередь шагов
-            (на любом стенде); у llama-server prompt_seconds_total — чистое время чтения,
-            очередь в него не входит, слово было бы неправдой (макет §3) */}
-        <Kpi value={formatTps(data.speed.prefillPerStream)} label={isLlamaServer(data)
-          ? 'чтение промпта, ток/с, за последнюю минуту'
-          : 'чтение промпта с ожиданием, ток/с, за последнюю минуту'} />
-      </div>
-    </Card>
+    <section>
+      <h3 style={METRIC_HEAD}>Скорость</h3>
+      {data.status === 'yielded' ? (
+        <UnloadedNote text="Нет данных, пока модель выгружена. Последнее значение — на графике слева от разрыва." />
+      ) : data.speed == null ? (
+        <NotReported data={data} />
+      ) : (
+        <>
+          {/* Имя говорит, что это НЕ та величина, с которой сверяют облачные оценки
+              (для них — раздел «Скорость ответа» ниже): «пока пишет» = только время
+              генерации, без ожидания слота и чтения промпта */}
+          {metricRow('скорость генерации (пока пишет), ток/с, за последнюю минуту', data.speed.genPerStream, formatTps, GEN_SPEED_HINT)}
+          {/* «с ожиданием» — по типу движка: у vLLM prompt-время включает очередь шагов
+              (на любом стенде); у llama-server prompt_seconds_total — чистое время чтения,
+              очередь в него не входит, слово было бы неправдой (макет §3) */}
+          {metricRow(isLlamaServer(data)
+            ? 'чтение промпта, ток/с, за последнюю минуту'
+            : 'чтение промпта с ожиданием, ток/с, за последнюю минуту', data.speed.prefillPerStream, formatTps)}
+        </>
+      )}
+    </section>
   );
 }
 
 // === «Скорость ответа»: сквозное определение, как у облачных оценок ===
-// (фича llm-answer-speed, docs/features/llm-answer-speed-spec.md): заглавное число —
-// сквозная скорость за 5 минут (окно, как у OpenRouter), рядом — за час; ниже — медианы
+// (фича llm-answer-speed, docs/features/llm-answer-speed-spec.md): первые строки —
+// сквозная скорость за 5 минут (окно, как у OpenRouter), затем — за час; ниже — медианы
 // по запросам и время до первого токена (медиана и p90) по тем же окнам.
 // Окна берутся ПО КЛЮЧУ из ответа ('5m'/'1h'), а не по индексу: порядок в ответе не
 // значим; окна нет — строки нет (выдуманного окна не придумываем).
 // Нет данных — спокойная строка «нет данных», а не нули: ноль — это измеренное значение,
 // а здесь измерять было нечего (у выгруженной модели — тот же тон, что у «Скорости»).
-const NO_DATA = 'нет данных';
 const AS_CELL_LABEL: CSSProperties = { fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs };
-const AS_GRID: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm };
+// Подписи окон в строках — из format.ts (единый источник), а не рукописные:
+// переименование окна в одном месте меняет и строки, и подсказки.
+const AS_5M = answerSpeedWindowLabel('5m');
+const AS_1H = answerSpeedWindowLabel('1h');
 
 // Значение с подписью и подсказкой: есть число — моно, нет — спокойная «нет данных»
 // (не «—»: здесь человек должен прочесть, что данных нет, а не гадать по прочерку).
@@ -321,53 +347,36 @@ function AnswerSpeedCard({ data }: { data: LocalModelStats }) {
   const minTokens = answer?.minTokensForMedian;
   const w5 = windows.find(w => w.window === '5m');
   const w1h = windows.find(w => w.window === '1h');
-  if (data.status === 'yielded') {
-    return <Card title="Скорость ответа"><UnloadedNote text="Нет данных, пока модель выгружена." /></Card>;
-  }
   const hasAny = windows.some(w => w.endToEndTps != null || w.medianTps != null || w.medianTtftSec != null || w.p90TtftSec != null);
-  if (!answer || windows.length === 0 || !hasAny) {
-    return <Card title="Скорость ответа"><UnloadedNote text="Нет данных: сквозной скорости ещё не измерено." /></Card>;
-  }
-  // Число запросов в окне — подписью под заглавным числом: оно говорит, насколько
+  // Число запросов в окне — припиской под значением: оно говорит, насколько
   // оценка опорная. Форма нейтральная (число после двоеточия): «N запросов» разъезжается
   // на 1 и 21, а таблица склонений ради этой строки не стоит.
   const requestsNote = (n?: number) => (
-    n != null && Number.isFinite(n)
-      ? <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>запросов в окне: {n}</div>
-      : null
+    n != null && Number.isFinite(n) ? `запросов в окне: ${n}` : undefined
   );
-  const head = (w: typeof w5, key: string) => {
-    const name = answerSpeedWindowLabel(key);
-    return (
-      <div>
-        {asCell(w?.endToEndTps, formatTps, name, answerSpeedTpsHint(name), true)}
-        {requestsNote(w?.requests)}
-      </div>
-    );
-  };
-  const median = (w: typeof w5, key: string) => {
-    const name = answerSpeedWindowLabel(key);
-    return asCell(w?.medianTps, formatTps, `медиана по запросам, ${name}`, answerSpeedMedianHint(name, minTokens));
-  };
-  const ttft = (w: typeof w5, key: string) => {
-    const name = answerSpeedWindowLabel(key);
-    return (
-      <div>
-        <div style={{ fontSize: FS.xs, color: C.textMuted }}>{name}</div>
-        <div style={{ ...AS_GRID, marginTop: SP.xxs }}>
-          {asCell(w?.medianTtftSec, formatSec, 'медиана', TTFT_MEDIAN_HINT)}
-          {asCell(w?.p90TtftSec, formatSec, 'p90', TTFT_P90_HINT)}
-        </div>
-      </div>
-    );
-  };
   return (
-    <Card title="Скорость ответа">
-      <div style={AS_GRID}>{head(w5, '5m')}{head(w1h, '1h')}</div>
-      <div style={{ ...AS_GRID, marginTop: SP.md }}>{median(w5, '5m')}{median(w1h, '1h')}</div>
-      <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.md }}>Время до первого токена</div>
-      <div style={{ ...AS_GRID, marginTop: SP.sm }}>{ttft(w5, '5m')}{ttft(w1h, '1h')}</div>
-    </Card>
+    <section>
+      <h3 style={METRIC_HEAD}>Скорость ответа</h3>
+      {data.status === 'yielded' ? (
+        <UnloadedNote text="Нет данных, пока модель выгружена." />
+      ) : !answer || windows.length === 0 || !hasAny ? (
+        <UnloadedNote text="Нет данных: сквозной скорости ещё не измерено." />
+      ) : (
+        <>
+          {metricRow(`сквозная скорость ответа, ${AS_5M}`, w5?.endToEndTps, formatTps, answerSpeedTpsHint(AS_5M), requestsNote(w5?.requests))}
+          {metricRow(`сквозная скорость ответа, ${AS_1H}`, w1h?.endToEndTps, formatTps, answerSpeedTpsHint(AS_1H), requestsNote(w1h?.requests))}
+          {metricRow(`медиана по запросам, ${AS_5M}`, w5?.medianTps, formatTps, answerSpeedMedianHint(AS_5M, minTokens))}
+          {metricRow(`медиана по запросам, ${AS_1H}`, w1h?.medianTps, formatTps, answerSpeedMedianHint(AS_1H, minTokens))}
+          {/* TTFT — группой под своей подписью: строки одного окна идут подряд,
+              5 мин раньше часа (тот же порядок, что был в сетке) */}
+          <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.md }}>Время до первого токена</div>
+          {metricRow(`время до первого токена, медиана, ${AS_5M}`, w5?.medianTtftSec, formatSec, TTFT_MEDIAN_HINT)}
+          {metricRow(`время до первого токена, p90, ${AS_5M}`, w5?.p90TtftSec, formatSec, TTFT_P90_HINT)}
+          {metricRow(`время до первого токена, медиана, ${AS_1H}`, w1h?.medianTtftSec, formatSec, TTFT_MEDIAN_HINT)}
+          {metricRow(`время до первого токена, p90, ${AS_1H}`, w1h?.p90TtftSec, formatSec, TTFT_P90_HINT)}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -942,9 +951,10 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
         {named ? <DutyBlock data={data} isMobile={isMobile} onOpenMedia={onOpenMedia} /> : null}
         {/* «Точные метрики локальной модели» — закрытое по умолчанию раскрытие (v1):
             содержимое — ПОЛНЫЕ «Скорость» и «Скорость ответа», без урезания полей
-            (спека §v1, строка 125). Тело смонтировано и в закрытом состоянии (display:none,
-            как в AccordionSection) — содержимое карточек не пересобирается при открытии,
-            раскрытие ничего не перезапускает. */}
+            (спека §v1, строка 125), — плоскими строками без Card-обёрток (решение Майи,
+            макет .html:194–205): границу группы несёт shell раскрытия. Тело смонтировано
+            и в закрытом состоянии (display:none, как в AccordionSection) — содержимое
+            не пересобирается при открытии, раскрытие ничего не перезапускает. */}
         <DisclosureSection
           title="Точные метрики локальной модели"
           meta="TTFT · медианы"
@@ -952,10 +962,8 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
           onToggle={() => setMetricsOpen(v => !v)}
           isMobile={isMobile}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, paddingTop: SP.md }}>
-            <SpeedCard data={data} />
-            <AnswerSpeedCard data={data} />
-          </div>
+          <SpeedCard data={data} />
+          <AnswerSpeedCard data={data} />
         </DisclosureSection>
         {/* Облачное сравнение — последней ЗАКРЫТОЙ строкой вкладки (Ф-4, макет .html:206–214):
             сначала локальное (per-request), затем облачное (сессионная) — определения разные.

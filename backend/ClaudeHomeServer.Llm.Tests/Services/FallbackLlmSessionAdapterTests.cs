@@ -341,6 +341,13 @@ public class FallbackLlmSessionAdapterTests
     // ушёл бы на claude-2. Ожидание: один запуск CLI, провайдер не меняется, финал — ошибка.
     // Мутация «убрать isChildTurn: из вызова фабрики» красит тест: childTurn=false,
     // ротация стартует вторым процессом.
+    //
+    // Скрипт живёт и ПОСЛЕ result (второе чтение stdin), как настоящий CLI: если он выходит
+    // в тот же миг, что печатает result, событие Exited от ОС иногда опережает чтение последней
+    // строки stdout (под нагрузкой параллельных шардов) — попытка решается как ProcessGone,
+    // поздний result проходит downstream уже после вердикта, и в потоке два ResultMessage
+    // (флак быстрых тестов предгейта 21.11). Пока процесс жив, гонки нет: его убивает
+    // уборка теста.
     private static string WriteChild429CliScript(string dir)
     {
         var resultLine = """{"type":"result","subtype":"success","duration_ms":1,"num_turns":1,"result":"","is_error":true,"api_error_status":429}""";
@@ -354,7 +361,9 @@ public class FallbackLlmSessionAdapterTests
                 + "set \"L=!L:\"=#!\"\r\n"
                 + "for /f \"tokens=8 delims=#\" %%U in (\"!L!\") do set \"U=%%U\"\r\n"
                 + "echo {\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"x\"},\"uuid\":\"!U!\",\"isReplay\":true}\r\n"
-                + "echo " + resultLine + "\r\n";
+                + "echo " + resultLine + "\r\n"
+                // Держим процесс до уборки теста: EOF stdin — выход (см. комментарий к тесту)
+                + "set \"L=\"\r\n:hold\r\nset /p L=\r\nif not \"!L!\"==\"\" goto hold\r\n";
             script = Path.Combine(dir, "fake-cli-429.cmd");
             File.WriteAllText(script, text, System.Text.Encoding.ASCII);
         }
@@ -364,7 +373,9 @@ public class FallbackLlmSessionAdapterTests
                 + "read -r L\n"
                 + "U=$(printf '%s' \"$L\" | sed 's/.*\"uuid\":\"\\([^\"]*\\)\".*/\\1/')\n"
                 + "echo \"{\\\"type\\\":\\\"user\\\",\\\"message\\\":{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"x\\\"},\\\"uuid\\\":\\\"$U\\\",\\\"isReplay\\\":true}\"\n"
-                + "echo '" + resultLine + "'\n";
+                + "echo '" + resultLine + "'\n"
+                // Держим процесс до уборки теста: глотаем stdin до EOF — выход (см. комментарий к тесту)
+                + "while read -r L; do :; done\n";
             script = Path.Combine(dir, "fake-cli-429.sh");
             File.WriteAllText(script, text, System.Text.Encoding.ASCII);
         }

@@ -183,6 +183,11 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         // ожидания: нет свободного слота — отказ, и вызывающий идёт по своей цепочке (то же
         // «не лезем в занятый движок», что и LocalActionRouter.LocalBlockedByTurn).
         using var localSlot = TryEnterLocal(model);
+        // Локальные модели на паузе (slice заморожен): scope не создастся, CLI умрёт молча —
+        // отказываем сразу тем же исключением, что и занятый движок: вызывающие уже умеют
+        // идти по нему дальше по своей цепочке
+        if (launcher.LocalModelsPaused && llmProviders.ResolveByModel(model) is { IsLocal: true } paused)
+            throw new LocalEngineBusyException(paused.Key);
 
         var (env, poolSubKey) = ResolveEnv(model);
 
@@ -203,6 +208,8 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             ClearEnv = llmProviders.EnvKeysToClear,
             StdioEncoding = new UTF8Encoding(false),
             TurnId = turnId,
+            // Локальная модель — в slice локальных ходов (его морозит бенч, облачные живут)
+            LocalModel = llmProviders.ResolveByModel(model)?.IsLocal == true,
         });
 
         // Чтение вывода запускаем ДО записи промпта — иначе на большом промпте

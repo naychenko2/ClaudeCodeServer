@@ -15,6 +15,13 @@ public sealed class IsolationOptions
     // app.slice, и ccs.slice с app.slice — сиблинги под user@<uid>.service. Итог тот же:
     // scope агента вне cgroup прода.
     public string Slice { get; init; } = "ccs-agents.slice";
+    // Slice ходов на ЛОКАЛЬНОЙ модели (провайдер IsLocal). Дефолт — дочерний к Slice
+    // («ccs-agents.slice» → «ccs-agents-local.slice» = ccs.slice/ccs-agents.slice/
+    // ccs-agents-local.slice): потолок памяти родителя наследуется, а заморозить его можно
+    // отдельно — бенч, забирающий все слоты локального движка, морозит только локальные ходы,
+    // облачные чаты и служебные запуски (git, сторожа) живут (инцидент 21.11: заморозка всего
+    // Slice уронила все чаты сервера). null — отдельного slice нет, локальные ходы в Slice.
+    public string? LocalModelSlice { get; init; } = DeriveLocalModelSlice("ccs-agents.slice");
     // Пределы памяти scope. MemoryMax — OOM внутри scope (ядро убивает самый большой процесс,
     // ход живёт). MemoryHigh — дроссель; под systemd-oomd его НЕ ставить: стойло в reclaim
     // считается PSI-давлением, суммируется вверх до user@<uid>.service и oomd убивает scope
@@ -56,10 +63,19 @@ public sealed class IsolationOptions
         // Запрет держался только на комментарии в документации, а такой запрет не держится
         // вовсе: значение возвращается в конфиг при первом же подозрении на «зависает сборка».
         if (!string.IsNullOrWhiteSpace(memoryHigh)) Console.Error.WriteLine(MemoryHighWarning);
+        var slice = config["Execution:Isolation:Slice"] is { Length: > 0 } s ? s : "ccs-agents.slice";
+        // Ключа нет — slice выводится из Slice; ключ задан пустым — отдельного slice нет
+        var localSlice = config["Execution:Isolation:LocalModelSlice"] switch
+        {
+            null => DeriveLocalModelSlice(slice),
+            "" => null,
+            var v => v,
+        };
         return new IsolationOptions
         {
             Enabled = config.GetValue("Execution:Isolation:Enabled", false),
-            Slice = config["Execution:Isolation:Slice"] is { Length: > 0 } s ? s : "ccs-agents.slice",
+            Slice = slice,
+            LocalModelSlice = localSlice,
             MemoryHigh = memoryHigh,
             MemoryMax = config["Execution:Isolation:MemoryMax"],
             SystemdRunPath = config["Execution:Isolation:SystemdRunPath"],
@@ -100,6 +116,11 @@ public sealed class IsolationOptions
         }
         return null;
     }
+
+    // «x.slice» → «x-local.slice» (дочерний slice по правилу дефиса systemd); не похоже на
+    // имя slice — null: лучше общий slice, чем отказ systemd-run на каждом локальном ходе.
+    internal static string? DeriveLocalModelSlice(string slice) =>
+        CgroupSlices.SlicePath(slice) is null ? null : slice[..^".slice".Length] + "-local.slice";
 
     // Имя, похожее на systemd-юнит сервиса: суффикс `.service` и только символы
     // [A-Za-z0-9:_.@-] (пробел, «/», «*» и прочие — сомнительно). Цена ошибки: невалидное

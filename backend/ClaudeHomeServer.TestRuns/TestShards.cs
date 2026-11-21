@@ -238,18 +238,8 @@ public static class AdaptiveShards
         }
     }
 
-    // Путь slice в cgroupfs по правилу systemd: дефис — уровень иерархии,
-    // «ccs-agents.slice» → «ccs.slice/ccs-agents.slice». Не похоже на имя slice — null
-    internal static string? SlicePath(string slice)
-    {
-        if (!slice.EndsWith(".slice", StringComparison.Ordinal)) return null;
-        var name = slice[..^".slice".Length];
-        if (name.Length == 0 || name.Contains('/') || name.Contains("..") || name.StartsWith('-') || name.EndsWith('-'))
-            return null;
-        var parts = name.Split('-');
-        if (parts.Any(p => p.Length == 0)) return null;
-        return string.Join('/', parts.Select((_, i) => string.Join('-', parts[..(i + 1)]) + ".slice"));
-    }
+    // Путь slice в cgroupfs — единое правило Core (CgroupSlices.SlicePath)
+    internal static string? SlicePath(string slice) => Services.Execution.CgroupSlices.SlicePath(slice);
 
     // Каталог и его предки до корня cgroupfs включительно
     private static IEnumerable<string> Ancestors(string node, string root)

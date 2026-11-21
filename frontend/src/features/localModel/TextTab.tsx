@@ -836,7 +836,7 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         {/* v1: первый экран отвечает на один вопрос — жива ли модель, есть ли очередь
             и насколько быстро она отвечает (макет .html:169–176) */}
-        <FarmKpiCard data={data} />
+        <FarmKpiCard data={data} isMobile={isMobile} />
         <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
         {/* «Кто сейчас на модели» — одна карточка: main без мест, named — чаты своего
             снимка и места из duty.callsNow (F3) */}

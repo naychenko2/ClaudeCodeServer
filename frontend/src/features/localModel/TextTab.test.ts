@@ -865,4 +865,16 @@ describe('порядок вкладки v1 и закрытые точные ме
     act(() => { root.unmount(); });
     host.remove();
   });
+
+  it('подпись «локально» — только на десктопе: через TextTab с isMobile=true её нет (Ф-3р)', () => {
+    // Обвязка (вердикт R-Ф-3): сам FarmKpiCard прячет правую подпись по своему prop'у
+    // (FarmKpiCard.tsx:83), но вкладка обязана передать isMobile — иначе десктопная
+    // подпись рендерится и на мобиле. Инвариант проверяется рендером через TextTab,
+    // а не напрямую через компонент: защищена обвязка, а не только компонент.
+    const mobile = sectionHtml(renderTab({ data: data(), isMobile: true }), 'Сейчас на ферме') ?? '';
+    expect(mobile).not.toBe('');
+    expect(mobile).not.toContain('локально');
+    const desktop = sectionHtml(renderTab({ data: data(), isMobile: false }), 'Сейчас на ферме') ?? '';
+    expect(desktop).toContain('локально');
+  });
 });

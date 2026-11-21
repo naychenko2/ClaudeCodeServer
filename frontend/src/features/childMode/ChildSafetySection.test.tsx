@@ -36,8 +36,8 @@ vi.stubGlobal('Node', win.Node);
 vi.stubGlobal('Event', win.Event);
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-import { ChildSafetySection } from './ChildSafetySection';
-import type { ChildRoute, ChildSettingsGuardian } from './types';
+import { ChildSafetySection, type ChildSettingsGuardianRow } from './ChildSafetySection';
+import type { ChildRoute } from './types';
 
 // Тот же состав, что отдаёт GET /api/admin/child-routes: пул первым, затем провайдеры
 // (ChildRoutesController.cs:27-28). Для чата правил — весь список (api.md:376, решение 25).
@@ -69,7 +69,10 @@ const ACKED_AT = '2026-11-18T12:00:00';
 const BREAKER_TITLE = 'Рубильник общих проектов на сервере выключен';
 
 interface MountProps {
-  guardians: ChildSettingsGuardian[];
+  guardians: ChildSettingsGuardianRow[];
+  // Г2: кандидаты пикера. Без них mount не отдаёт разделу onGuardiansChange — read-only
+  // контракт (вызывающий передаёт их вместе).
+  guardianCandidates?: string[];
   sharedProjectsInstanceEnabled?: boolean;
   userNames?: Record<string, string>;
   acknowledge: boolean | null;
@@ -86,6 +89,7 @@ const base = (over: Partial<MountProps> = {}): MountProps => ({
 
 let ackActions: boolean[] = [];
 let routeChanges: { providerKey: string; model: string }[] = [];
+let guardianActions: string[][] = [];
 
 async function mount(props: MountProps) {
   const host = doc.createElement('div');
@@ -93,6 +97,7 @@ async function mount(props: MountProps) {
   const root = createRoot(host as unknown as HTMLElement);
   ackActions = [];
   routeChanges = [];
+  guardianActions = [];
   const render = (p: MountProps) =>
     createElement(ChildSafetySection, {
       ...p,
@@ -100,6 +105,10 @@ async function mount(props: MountProps) {
       // действия, и тест проверяет именно его.
       onAcknowledgeChange: (v: boolean) => { ackActions.push(v); },
       onRouteChange: (n: { providerKey: string; model: string }) => { routeChanges.push(n); },
+      // копит действия по опекунам: целый новый список id на каждое действие
+      ...(p.guardianCandidates !== undefined
+        ? { onGuardiansChange: (ids: string[]) => { guardianActions.push(ids); } }
+        : {}),
     });
   await act(async () => { root.render(render(props)); });
   return {
@@ -139,6 +148,12 @@ const changeSelect = async (el: Element, v: string) => {
 };
 const pickerAck = (host: HTMLElement) =>
   rootEl(host).querySelector('[data-testid="child-route-picker"] [role="checkbox"]') as HTMLElement | null;
+
+// Г2: контролы редактора опекунов
+const addSelect = (host: HTMLElement) => selectByLabel(host, 'Добавить опекуна');
+const addBtn = (host: HTMLElement) => rootEl(host).querySelector('[data-testid="guardian-add-btn"]') as HTMLButtonElement | null;
+const removeBtn = (host: HTMLElement, id: string) =>
+  rootEl(host).querySelector(`[data-testid="guardian-remove-${id}"]`) as HTMLElement | null;
 
 describe('ChildSafetySection', () => {
   it('согласие: текст — все шесть пунктов решения 26 и галка', async () => {
@@ -268,6 +283,89 @@ describe('ChildSafetySection', () => {
     const { host } = await mount(base({ guardians: [] }));
     expect(hasText(rootEl(host), 'Опекунов нет')).toBe(true);
     expect(rootEl(host).querySelector('[data-testid="guardians-list"]')).toBeNull();
+  });
+
+  it('редактор (Г2): пикер предлагает кандидатов без текущих; «Добавить» — целый новый список, полный цикл', async () => {
+    const m = await mount(base({
+      guardians: [{ userId: 'u-1', sharedProjectsFlag: true }],
+      userNames: { 'u-1': 'Ольга', 'u-2': 'Петя', 'u-3': 'Катя' },
+      // u-1 уже опекун — в списке его нет (защита раздела, даже если вызывающий не просёл)
+      guardianCandidates: ['u-2', 'u-3', 'u-1'],
+    }));
+    const sel = addSelect(m.host);
+    expect(sel, 'пикер «Добавить опекуна»').not.toBeNull();
+    // значения без placeholder ('' — «Выбери пользователя», не кандидат)
+    expect(options(sel!).filter(Boolean), 'кандидаты: id, имена — из userNames').toEqual(['u-2', 'u-3']);
+    const btn = addBtn(m.host)!;
+    expect(btn.disabled, 'без выбора кнопка гасится').toBe(true);
+    await changeSelect(sel!, 'u-2');
+    expect(addBtn(m.host)!.disabled, 'с выбором — живая').toBe(false);
+    await act(async () => { addBtn(m.host)!.click(); });
+    expect(guardianActions, 'целый список: текущий как есть, новый в конец').toEqual([['u-1', 'u-2']]);
+    // полный цикл: черновик родителя → новый список в разделе
+    await m.apply({ guardians: [{ userId: 'u-1', sharedProjectsFlag: true }, { userId: 'u-2' }] });
+    expect(rootEl(m.host).querySelector('[data-testid="guardian-u-2"]'), 'строка добавленного').not.toBeNull();
+    expect(hasText(rootEl(m.host), 'Петя'), 'по имени, не по id').toBe(true);
+  });
+
+  it('редактор (Г2): «Убрать» — список без него; порядок остальных сохраняется', async () => {
+    const m = await mount(base({
+      guardians: [{ userId: 'u-1', sharedProjectsFlag: true }, { userId: 'u-2', sharedProjectsFlag: false }],
+      userNames: { 'u-1': 'Ольга', 'u-2': 'Петя' },
+      guardianCandidates: ['u-3'],
+    }));
+    const rm = removeBtn(m.host, 'u-1');
+    expect(rm, 'кнопка убрать у строки').not.toBeNull();
+    await act(async () => { rm!.click(); });
+    expect(guardianActions).toEqual([['u-2']]);
+  });
+
+  it('редактор (Г2): добавленный до сохранения — без флага: ни бейджей, ни «Включите…», только «после сохранения»', async () => {
+    const m = await mount(base({
+      guardians: [{ userId: 'u-1', sharedProjectsFlag: true }, { userId: 'u-2' }],
+      userNames: { 'u-1': 'Ольга', 'u-2': 'Петя' },
+      guardianCandidates: ['u-3'],
+    }));
+    const row = rootEl(m.host).querySelector('[data-testid="guardian-u-2"]') as HTMLElement;
+    expect(row.textContent, 'нет бейджа «нужен флаг»').not.toContain('нужен флаг');
+    expect(row.textContent, 'нет совета «Включите…»').not.toContain('Включите shared-projects');
+    expect(row.querySelector('[data-testid="guardian-flag-unknown-u-2"]'), 'строка про сохранение').not.toBeNull();
+    // известный флаг прежних строк не меняется
+    expect(hasText(rootEl(m.host), 'shared-projects включён'), 'бейдж известного флага').toBe(true);
+  });
+
+  it('редактор (Г2): пустой список + кандидаты — пикер тут: админ делает себя опекуном', async () => {
+    const m = await mount(base({
+      guardians: [],
+      userNames: { 'u-1': 'Андрей' },
+      guardianCandidates: ['u-1'],
+    }));
+    expect(hasText(rootEl(m.host), 'Опекунов нет'), 'empty-state остаётся').toBe(true);
+    expect(addSelect(m.host), 'пикер при пустом списке').not.toBeNull();
+    await changeSelect(addSelect(m.host)!, 'u-1');
+    await act(async () => { addBtn(m.host)!.click(); });
+    expect(guardianActions, 'первый опекун').toEqual([['u-1']]);
+  });
+
+  it('редактор (Г2): некого добавлять — пикера нет, пустой список остаётся читаемым', async () => {
+    const m = await mount(base({
+      guardians: [{ userId: 'u-1', sharedProjectsFlag: true }],
+      userNames: { 'u-1': 'Ольга' },
+      guardianCandidates: ['u-1'], // единственный кандидат уже опекун
+    }));
+    expect(rootEl(m.host).querySelector('[data-testid="guardian-add"]'), 'пикера нет').toBeNull();
+    expect(hasText(rootEl(m.host), 'Добавить некого'), 'строка-причина').toBe(true);
+    expect(hasText(rootEl(m.host), 'Ольга'), 'список читаем').toBe(true);
+  });
+
+  it('редактор (Г2): без правки (нет кандидатов и действия) — пикера и кнопок убрать нет (read-only контракт)', async () => {
+    const m = await mount(base({
+      guardians: [{ userId: 'u-1', sharedProjectsFlag: true }],
+      userNames: { 'u-1': 'Ольга' },
+    }));
+    expect(rootEl(m.host).querySelector('[data-testid="guardian-add"]'), 'пикера нет').toBeNull();
+    expect(removeBtn(m.host, 'u-1'), 'кнопки убрать нет').toBeNull();
+    expect(hasText(rootEl(m.host), 'Ольга'), 'список по-прежнему показан').toBe(true);
   });
 
   it('на мобиле (360) и с выключенным режимом сохранения: галка ≥ 40px и гасится', async () => {

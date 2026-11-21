@@ -47,6 +47,8 @@ const { usersFixture } = vi.hoisted(() => ({
     { id: 'u-papa', username: 'Папа', role: 'admin', createdAt: '2026-01-01T00:00:00Z', executionEnvironment: 'local' },
     { id: 'u-liza', username: 'Лиза', role: 'user', createdAt: '2026-02-01T00:00:00Z', executionEnvironment: 'container' },
     { id: 'u-mira', username: 'Мира', role: 'user', createdAt: '2026-03-01T00:00:00Z', executionEnvironment: 'container' },
+    // Г2: ещё один ребёнок (включён подтверждённым снимком) — в кандидаты опекунов не входит
+    { id: 'u-tim', username: 'Тим', role: 'user', createdAt: '2026-04-01T00:00:00Z', executionEnvironment: 'container' },
   ],
 }));
 vi.mock('../lib/api', () => ({
@@ -181,6 +183,21 @@ async function typeIn(el: HTMLInputElement, value: string) {
 }
 const btnByText = (label: string) =>
   Array.from(doc.querySelectorAll('button')).find((b) => (b.textContent ?? '').trim() === label) as HTMLElement;
+
+// Г2: поле пикера опекунов — по подписи Field (тот же путь, что selectByLabel в
+// ChildSafetySection.test); React-props onChange нативного select (linkedom не умеет select-события)
+const guardianSelect = () => {
+  const w = windowRoot()!;
+  const lbl = Array.from(w.querySelectorAll('label')).find((l) => (l.textContent ?? '').includes('Добавить опекуна'));
+  return (lbl?.parentElement?.querySelector('select') ?? null) as Element | null;
+};
+// значения опций без placeholder ('' — «Выбери пользователя», не кандидат)
+const selectValues = (sel: Element) => Array.from(sel.querySelectorAll('option')).map((o) => o.getAttribute('value')).filter(Boolean);
+const changeSelect = async (el: Element, v: string) => {
+  const key = Object.keys(el).find((k) => k.startsWith('__reactProps$'));
+  const props = key ? (el as unknown as Record<string, unknown>)[key] as { onChange?: (e: { target: { value: string } }) => void } : undefined;
+  await act(async () => { props?.onChange?.({ target: { value: v } }); });
+};
 
 // Живой профиль Лизы (форма контракта окна, Ф2a): предмет, окно времени, опекун-куратор с
 // флагом общих проектов, согласие на риск — теми и проверяем, что в окно дошёл профиль
@@ -417,5 +434,88 @@ describe('UserManagementModal: вход в окно настроек (Ф2f, сл
     expect(windowRoot(), 'окна нет').toBeNull();
     expect(row('u-liza'), 'список на месте').toBeTruthy();
     expect(getCalls.length, 'пока окно открыто — новых чтений нет').toBe(before);
+  });
+});
+
+describe('UserManagementModal: редактор опекунов (Г2)', () => {
+  // Тим — второй ребёнок фикстуры: включён подтверждённым снимком (тот же профиль, что у Лизы).
+  const timResp: Resp = { profile: { ...lizaProfile, guardianUserIds: [] }, tutorPersonaId: 'p-tim-tutor' };
+
+  it('пикер предлагает только не-детских: Мира да; Лиза (сама), Тим (ребёнок) и Папа (уже опекун) — нет; «Добавить»+«Сохранить» — целое тело с согласием', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    // Профиль без согласия (false + снятая пара): true в теле тогда — работа патча правки,
+    // а не унаследованное значение ответа (с true-фикстурой эта проверка ничего не проверяла).
+    fixed.set('u-liza', {
+      profile: { ...lizaProfile, acknowledgeRouteRisk: false, routeRiskAcknowledgedAt: null, routeRiskAcknowledgedBy: null },
+      tutorPersonaId: 'p-liza-tutor',
+    });
+    fixed.set('u-tim', timResp);
+    await mountModal();
+    await clickSettle(openBtnIn(row('u-liza')!)!);
+    await clickTab('Безопасность');
+    const w = windowRoot()!;
+    const sel = guardianSelect();
+    expect(sel, 'пикер в разделе').not.toBeNull();
+    expect(selectValues(sel!), 'кандидаты — без детей, без себя, без текущих опекунов').toEqual(['u-mira']);
+
+    await changeSelect(sel!, 'u-mira');
+    await clickSettle(w.querySelector('[data-testid="guardian-add-btn"]') as HTMLElement);
+    const rowMira = w.querySelector('[data-testid="guardian-u-mira"]') as HTMLElement;
+    expect(rowMira, 'строка добавленного — до сохранения').not.toBeNull();
+    expect(rowMira.textContent, 'по имени, не по id').toContain('Мира');
+    expect(rowMira.querySelector('[data-testid="guardian-flag-unknown-u-mira"]'), 'флаг неизвестен — строка про сохранение').not.toBeNull();
+
+    // «Сохранить» — PUT из живого черновика: заменён только список, остальной профиль целой
+    const saveBtn = doc.querySelector('[data-testid="child-settings-save"]') as HTMLButtonElement;
+    expect(saveBtn.disabled, 'есть несохранённое — кнопка живая').toBe(false);
+    await clickSettle(saveBtn);
+    expect(putCalls.length, 'один PUT').toBe(1);
+    const body = putCalls[0].body as ChildSettingsProfile;
+    expect(body.guardianUserIds, 'порядок: текущий + новый в конец').toEqual(['u-papa', 'u-mira']);
+    expect(body.acknowledgeRouteRisk, 'правка опекунов — с согласием (постановка Г2)').toBe(true);
+    expect(body.subjects, 'предмет не затёрт').toEqual(lizaProfile.subjects);
+    expect(body.spaces, 'окно времени не затёрто').toEqual(lizaProfile.spaces);
+    expect(body.providerKey).toBe('anthropic-api-kids');
+    expect(body.model, 'маршрут не затёрт').toBe('sonnet');
+  });
+
+  it('«Убрать» + отказ guardian_not_found: серверный текст в окне, изменённый список не пропал молча', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    fixed.set('u-liza', lizaResp);
+    putAnswers = [httpErr(400, 'guardian_not_found', 'Среди опекунов есть id несуществующего пользователя.')];
+    await mountModal();
+    await clickSettle(openBtnIn(row('u-liza')!)!);
+    await clickTab('Безопасность');
+    const w = windowRoot()!;
+    await changeSelect(guardianSelect()!, 'u-mira');
+    await clickSettle(w.querySelector('[data-testid="guardian-add-btn"]') as HTMLElement);
+    const rm = w.querySelector('[data-testid="guardian-remove-u-papa"]') as HTMLElement;
+    expect(rm, 'кнопка убрать у строки').not.toBeNull();
+    await clickSettle(rm);
+    await clickSettle(doc.querySelector('[data-testid="child-settings-save"]') as HTMLElement);
+    expect(putCalls.length).toBe(1);
+    expect((putCalls[0].body as ChildSettingsProfile).guardianUserIds, 'тело — изменённый список').toEqual(['u-mira']);
+    const err = w.querySelector('[data-testid="child-settings-save-error"]');
+    expect(err, 'отказ в открытом окне').not.toBeNull();
+    expect(err!.textContent).toContain('Среди опекунов есть id несуществующего пользователя.');
+    const wAfter = windowRoot()!;
+    expect(wAfter.querySelector('[data-testid="guardian-u-mira"]'), 'добавленный не пропал молча').not.toBeNull();
+    expect(wAfter.querySelector('[data-testid="guardian-u-papa"]'), 'убранный вернулся бы только повтором действия').toBeNull();
+  });
+
+  it('«Убрать» + «Сохранить» — тело без него; ответ сервера становится списком окна', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    fixed.set('u-liza', lizaResp);
+    await mountModal();
+    await clickSettle(openBtnIn(row('u-liza')!)!);
+    await clickTab('Безопасность');
+    const w = windowRoot()!;
+    await clickSettle(w.querySelector('[data-testid="guardian-remove-u-papa"]') as HTMLElement);
+    await clickSettle(doc.querySelector('[data-testid="child-settings-save"]') as HTMLElement);
+    expect(putCalls.length).toBe(1);
+    expect((putCalls[0].body as ChildSettingsProfile).guardianUserIds).toEqual([]);
+    const wAfter = windowRoot()!;
+    expect(wAfter.querySelector('[data-testid="guardian-u-papa"]'), 'списка нет — он по ответу').toBeNull();
+    expect(wAfter.textContent, 'empty-state по ответу').toContain('Опекунов нет');
   });
 });

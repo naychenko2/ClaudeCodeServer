@@ -4,7 +4,9 @@
 // даёт «нет данных» в своей ячейке, ноль не подставляется и остальные KPI не скрываются;
 // при 'yielded' все четыре ячейки — «нет данных», а не нули снимка; очередь > 0 красит
 // только число (C.warningText), подпись остаётся обычной; правая подпись заголовка
-// «локально» — на десктопе (isMobile=false) и отсутствует на мобиле (isMobile=true).
+// «локально» — на десктопе (isMobile=false), приглушённая C.textMuted без caps и
+// жирности заголовка, и отсутствует на мобиле (isMobile=true); единицы скорости —
+// отдельным span мелким шрифтом (макет .kpi .n small: C.textMuted 11px 400).
 // DOM-паттерн — как TextTab.test.ts: linkedom + createRoot, mount с размонтированием.
 
 import { describe, expect, it, vi } from 'vitest';
@@ -83,6 +85,14 @@ describe('FarmKpiCard — «Сейчас на ферме»', () => {
     const labelStyle = cs[0].lastElementChild?.getAttribute('style') ?? '';
     expect(labelStyle).toContain('font-size:11px');
     expect(labelStyle).toContain('var(--c-text-secondary)');
+    // единицы скорости — мелким шрифтом по макету (.kpi .n small): приглушённые, 11px,
+    // вес 400; число при этом остаётся моно FS.xl 700 (проверено выше по cs[0])
+    const unit = cs[2].firstElementChild?.querySelector('span');
+    expect(unit?.textContent, 'единиц скорости нет отдельным span').toBe(' ток/с');
+    const unitStyle = unit?.getAttribute('style') ?? '';
+    expect(unitStyle).toContain('font-size:11px');
+    expect(unitStyle).toContain('font-weight:400');
+    expect(unitStyle).toContain('var(--c-text-muted)');
     unmount();
   });
 
@@ -121,7 +131,9 @@ describe('FarmKpiCard — «Сейчас на ферме»', () => {
     expect(cs[3].textContent).toContain('нет данных');
     // остальные KPI на месте: их значение не скрывается чужим отсутствием
     expect(cs[1].textContent).toContain('1');
-    expect(host.innerHTML).not.toMatch(/0\s*ток\/с/);
+    // отсутствующая скорость не подставлена как «0 ток/с» — по тексту самих клеток,
+    // а не по innerHTML карточки
+    for (const c of [cs[2], cs[3]]) expect(c.textContent ?? '').not.toMatch(/0\s*ток\/с/);
     unmount();
   });
 
@@ -151,7 +163,12 @@ describe('FarmKpiCard — «Сейчас на ферме»', () => {
     const rightStyle = right?.getAttribute('style') ?? '';
     expect(rightStyle).toContain('margin-left:auto');
     expect(rightStyle).toContain('font-size:11px');
-    expect(rightStyle).toContain('var(--c-text-secondary)');
+    // цвет — приглушённый, как .right макета (строка 74), а не цвет заголовка
+    expect(rightStyle).toContain('var(--c-text-muted)');
+    // вес и трансформация — свои (400 / none): без них подпись унаследовала бы
+    // жирность и caps заголовка (R-Ф-2р п.2)
+    expect(rightStyle).toContain('font-weight:400');
+    expect(rightStyle).toContain('text-transform:none');
     unmount();
     // мобила (макет строка 224): подписи нет — ни в заголовке, ни где-либо в карточке
     const m = mountCard(FULL, true);
@@ -164,7 +181,8 @@ describe('FarmKpiCard — «Сейчас на ферме»', () => {
     const cs = cells(host);
     expect(cs.length).toBe(4);
     for (const c of cs) expect(c.textContent).toContain('нет данных');
-    expect(host.innerHTML).not.toMatch(/0запросов|0ток\/с/);
+    // ни одна клетка не несёт «0 запросов» / «0 ток/с» — по тексту самих клеток
+    for (const c of cs) expect(c.textContent ?? '').not.toMatch(/0\s*(запросов|ток\/с)/);
     unmount();
   });
 });

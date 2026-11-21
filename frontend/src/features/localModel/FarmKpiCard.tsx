@@ -6,8 +6,10 @@
 // генерации «сейчас» и сквозная скорость ответа за 5 минут.
 //
 // Числа — FONT.mono FS.xl 700 C.textHeading (тот же облик, что у `Kpi` в TextTab);
-// подписи — FS.xs C.textSecondary (макет .kpi .l). Отсутствующее, null или неfinite
-// значение — «нет данных» только в своей ячейке: ноль — это измеренное значение,
+// единицы скорости (« ток/с») — отдельным span мелким шрифтом (макет .kpi .n small,
+// строка 77: C.textMuted 11px 400); подписи — FS.xs C.textSecondary (макет .kpi .l).
+// Отсутствующее, null или неfinite значение — «нет данных» только в своей ячейке:
+// ноль — это измеренное значение,
 // а здесь измерять было нечего; остальные KPI при этом не скрываются. При
 // status === 'yielded' метрик живых нет вовсе — все четыре ячейки «нет данных»,
 // включая нули, которые несёт снимок выгруженной модели.
@@ -25,8 +27,9 @@ const NO_DATA = 'нет данных';
 // C.borderLight, R.xl, SP.md; заголовок 11 / 700 / uppercase / C.textSecondary.
 // Правая подпись заголовка «локально» — только на десктопе (макет строка 169;
 // в мобильной версии, строка 224, подписи нет): прижимается к краю margin-left:auto,
-// размер и цвет — по постановке (FS.xs C.textSecondary), вес 400 и textTransform
-// none — чтобы не наследовал caps и жирность заголовка (как .right макета, строка 74).
+// цвет — приглушённый C.textMuted (макет .right, строка 74; та же конвенция мелких
+// приписок, что в TextTab.tsx:642), размер FS.xs, вес 400 и textTransform none —
+// чтобы не наследовал caps и жирность заголовка.
 const CARD: CSSProperties = {
   background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md,
 };
@@ -36,22 +39,26 @@ const HEAD: CSSProperties = {
   letterSpacing: '0.06em', color: C.textSecondary,
 };
 const HEAD_RIGHT: CSSProperties = {
-  marginLeft: 'auto', fontSize: FS.xs, color: C.textSecondary, fontWeight: 400, textTransform: 'none',
+  marginLeft: 'auto', fontSize: FS.xs, color: C.textMuted, fontWeight: 400, textTransform: 'none',
 };
 // Сетка 2×2 (макет .kpis: row-gap 12, column-gap 8)
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: `${SP.md}px ${SP.sm}px` };
 const LABEL: CSSProperties = { fontSize: FS.xs, color: C.textSecondary, marginTop: SP.xxs };
+// Единицы скорости — мелким шрифтом по макету (.kpi .n small, строка 77): приглушённый
+// C.textMuted, FS.xs, вес 400; само число остаётся моно FS.xl 700.
+const UNIT: CSSProperties = { fontSize: FS.xs, fontWeight: 400, color: C.textMuted };
 
-// Значение с подписью: есть число — моно FS.xl 700 (warn — C.warningText), нет —
-// спокойная «нет данных» (не «—»: здесь человек должен прочесть, что данных нет).
-function KpiCell({ value, label, warn }: { value: string | null; label: string; warn?: boolean }) {
+// Значение с подписью: есть число — моно FS.xl 700 (warn — C.warningText), единицы
+// (если есть) — отдельным span по UNIT; нет — спокойная «нет данных» (не «—»: здесь
+// человек должен прочесть, что данных нет).
+function KpiCell({ value, unit, label, warn }: { value: string | null; unit?: string; label: string; warn?: boolean }) {
   const has = value != null;
   return (
     <div>
       <div style={has
         ? { fontFamily: FONT.mono, fontSize: FS.xl, fontWeight: 700, lineHeight: 1.2, color: warn ? C.warningText : C.textHeading }
         : { fontFamily: FONT.mono, fontSize: FS.sm, color: C.textMuted }}>
-        {has ? value : NO_DATA}
+        {has ? <>{value}{unit ? <span style={UNIT}>{unit}</span> : null}</> : NO_DATA}
       </div>
       <div style={LABEL}>{label}</div>
     </div>
@@ -66,8 +73,13 @@ function num(v: number | null | undefined): string | null {
 
 // Окна скорости ответа берутся ПО КЛЮЧУ '5m' (их порядок в ответе не значим —
 // types.ts: «окна — строки '5m' и '1h', их порядок в ответе не значим»).
-function tps(v: number | null | undefined): string | null {
-  return v != null && Number.isFinite(v) ? formatTps(v) : null;
+// Формат скорости остаётся у formatTps («38 ток/с», format.ts:25); здесь он только
+// разрывается на число и единицы — по макету единицы печатаются мельче числа.
+function tps(v: number | null | undefined): { num: string; unit: string } | null {
+  if (v == null || !Number.isFinite(v)) return null;
+  const s = formatTps(v);
+  const i = s.lastIndexOf(' ');
+  return i <= 0 ? { num: s, unit: '' } : { num: s.slice(0, i), unit: s.slice(i) };
 }
 
 // isMobile — опционален с дефолтом false: вызывающий код в TextTab (Ф-3, параллельная
@@ -78,14 +90,16 @@ export function FarmKpiCard({ data, isMobile = false }: { data: LocalModelStats;
   // всех вариантов», Yielded: «KPI … пишут отсутствие данных, а не нули»).
   const yielded = data.status === 'yielded';
   const w5 = data.answerSpeed?.windows.find(w => w.window === '5m');
+  const gen = yielded ? null : tps(data.speed?.genPerStream);
+  const answer5m = yielded ? null : tps(w5?.endToEndTps);
   return (
     <section style={CARD}>
       <h3 style={HEAD}>Сейчас на ферме{!isMobile && <span style={HEAD_RIGHT}>локально</span>}</h3>
       <div style={GRID}>
         <KpiCell value={yielded ? null : num(data.running)} label="запросов идёт" />
         <KpiCell value={yielded ? null : num(data.waiting)} label="ждут в очереди" warn={!yielded && (data.waiting ?? 0) > 0} />
-        <KpiCell value={yielded ? null : tps(data.speed?.genPerStream)} label="пока пишет · 1 мин" />
-        <KpiCell value={yielded ? null : tps(w5?.endToEndTps)} label="скорость ответа · 5 мин" />
+        <KpiCell value={gen?.num ?? null} unit={gen?.unit} label="пока пишет · 1 мин" />
+        <KpiCell value={answer5m?.num ?? null} unit={answer5m?.unit} label="скорость ответа · 5 мин" />
       </div>
     </section>
   );

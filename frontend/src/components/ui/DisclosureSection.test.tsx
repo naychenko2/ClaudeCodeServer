@@ -2,7 +2,8 @@
 // а не косметику: закрытое начальное состояние, переключение по клику через onToggle
 // потребителя, aria-expanded/aria-controls и связь региона, статичная строка без
 // children (пустое облачное окно), высоты 40/44, приглушение движения по
-// prefers-reduced-motion.
+// prefers-reduced-motion, привязка отклика focus/hover (класс заголовка + инжект
+// стиля этого класса).
 //
 // Окружение — node + linkedom, как в соседних .test.tsx (SidebarSection.test.tsx):
 // matchMedia здесь нужен только на запросе reduced motion — сам примитив ширину
@@ -140,5 +141,16 @@ describe('DisclosureSection: контракт раскрытия', () => {
     expect(chevron(calm).style.transform, 'поворот остаётся').toContain('rotate(180deg)');
     expect(chevron(calm).style.transition, 'reduced-motion: движение выключено').toBe('none');
     reducedMotion = false;
+  });
+
+  it('отклик focus/hover привязан к заголовку: класс на кнопке и стиль класса в документе (R-Ф-1)', async () => {
+    // Инлайн-стиль не различает таб и мышь, поэтому :focus-visible/:active живут в
+    // инжект-стиле модуля; без класса на кнопке или без этого стиля отклика нет вовсе.
+    const host = await render({ open: true });
+    expect(head(host).getAttribute('class'), 'класса заголовка на кнопке нет').toContain('cc-disclosure-head');
+    const style = doc.getElementById('cc-disclosure-style');
+    expect(style, 'инжекта стиля заголовка нет').not.toBeNull();
+    expect(style!.textContent).toContain('.cc-disclosure-head:focus-visible{');
+    expect(style!.textContent).toContain('.cc-disclosure-head:active{');
   });
 });

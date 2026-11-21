@@ -3,7 +3,8 @@
 // КЛЮЧУ (при перевёрнутом порядке массива); отсутствующее / null / неfinite значение
 // даёт «нет данных» в своей ячейке, ноль не подставляется и остальные KPI не скрываются;
 // при 'yielded' все четыре ячейки — «нет данных», а не нули снимка; очередь > 0 красит
-// только число (C.warningText), подпись остаётся обычной.
+// только число (C.warningText), подпись остаётся обычной; правая подпись заголовка
+// «локально» — на десктопе (isMobile=false) и отсутствует на мобиле (isMobile=true).
 // DOM-паттерн — как TextTab.test.ts: linkedom + createRoot, mount с размонтированием.
 
 import { describe, expect, it, vi } from 'vitest';
@@ -31,11 +32,11 @@ import type { LocalModelStats } from './api';
 
 // Монтирует карточку и оставляет дерево живым (для чтения клеток сетки);
 // unmount() снимает его из body — следующий mount не наследует чужое дерево.
-function mountCard(data: LocalModelStats): { host: Element; unmount: () => void } {
+function mountCard(data: LocalModelStats, isMobile = false): { host: Element; unmount: () => void } {
   const host = doc.createElement('div');
   doc.body.appendChild(host);
   const root = createRoot(host);
-  act(() => { root.render(createElement(FarmKpiCard, { data })); });
+  act(() => { root.render(createElement(FarmKpiCard, { data, isMobile })); });
   return { host, unmount: () => { act(() => { root.unmount(); }); host.remove(); } };
 }
 
@@ -137,6 +138,25 @@ describe('FarmKpiCard — «Сейчас на ферме»', () => {
     expect(cs[1].textContent).toContain('0');
     expect(host.innerHTML).not.toContain('NaN');
     unmount();
+  });
+
+  it('правая подпись «локально»: есть на десктопе, нет на мобиле', () => {
+    // десктоп (макет строка 169): подпись в заголовке, прижата к краю, FS.xs C.textSecondary
+    const { host, unmount } = mountCard(FULL, false);
+    const head = host.querySelector('h3');
+    expect(head?.textContent).toContain('Сейчас на ферме');
+    expect(head?.textContent).toContain('локально');
+    const right = head?.lastElementChild;
+    expect(right?.textContent).toBe('локально');
+    const rightStyle = right?.getAttribute('style') ?? '';
+    expect(rightStyle).toContain('margin-left:auto');
+    expect(rightStyle).toContain('font-size:11px');
+    expect(rightStyle).toContain('var(--c-text-secondary)');
+    unmount();
+    // мобила (макет строка 224): подписи нет — ни в заголовке, ни где-либо в карточке
+    const m = mountCard(FULL, true);
+    expect(m.host.innerHTML).not.toContain('локально');
+    m.unmount();
   });
 
   it("'yielded' — все четыре ячейки «нет данных», нули снимка не подставлены", () => {

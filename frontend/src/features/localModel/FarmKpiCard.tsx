@@ -23,12 +23,20 @@ const NO_DATA = 'нет данных';
 
 // Оболочка та же, что у карточек вкладки (TextTab.tsx: Card): C.bgWhite,
 // C.borderLight, R.xl, SP.md; заголовок 11 / 700 / uppercase / C.textSecondary.
+// Правая подпись заголовка «локально» — только на десктопе (макет строка 169;
+// в мобильной версии, строка 224, подписи нет): прижимается к краю margin-left:auto,
+// размер и цвет — по постановке (FS.xs C.textSecondary), вес 400 и textTransform
+// none — чтобы не наследовал caps и жирность заголовка (как .right макета, строка 74).
 const CARD: CSSProperties = {
   background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md,
 };
 const HEAD: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: SP.sm,
   margin: 0, marginBottom: SP.sm, fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: '0.06em', color: C.textSecondary,
+};
+const HEAD_RIGHT: CSSProperties = {
+  marginLeft: 'auto', fontSize: FS.xs, color: C.textSecondary, fontWeight: 400, textTransform: 'none',
 };
 // Сетка 2×2 (макет .kpis: row-gap 12, column-gap 8)
 const GRID: CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: `${SP.md}px ${SP.sm}px` };
@@ -62,14 +70,17 @@ function tps(v: number | null | undefined): string | null {
   return v != null && Number.isFinite(v) ? formatTps(v) : null;
 }
 
-export function FarmKpiCard({ data }: { data: LocalModelStats }) {
+// isMobile — опционален с дефолтом false: вызывающий код в TextTab (Ф-3, параллельная
+// задача) уже есть без него; на мобиле вызывающий обязан передать isMobile={isMobile},
+// иначе десктопная подпись окажется в листе.
+export function FarmKpiCard({ data, isMobile = false }: { data: LocalModelStats; isMobile?: boolean }) {
   // Выгруженная модель: метрик живых нет — ни очередей, ни скоростей (спека §«Состояния
   // всех вариантов», Yielded: «KPI … пишут отсутствие данных, а не нули»).
   const yielded = data.status === 'yielded';
   const w5 = data.answerSpeed?.windows.find(w => w.window === '5m');
   return (
     <section style={CARD}>
-      <h3 style={HEAD}>Сейчас на ферме</h3>
+      <h3 style={HEAD}>Сейчас на ферме{!isMobile && <span style={HEAD_RIGHT}>локально</span>}</h3>
       <div style={GRID}>
         <KpiCell value={yielded ? null : num(data.running)} label="запросов идёт" />
         <KpiCell value={yielded ? null : num(data.waiting)} label="ждут в очереди" warn={!yielded && (data.waiting ?? 0) > 0} />

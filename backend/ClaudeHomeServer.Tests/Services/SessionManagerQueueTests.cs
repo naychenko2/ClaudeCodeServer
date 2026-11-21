@@ -527,7 +527,9 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     public async Task RemapModels_ПерепиcываетТолькоМоделиИзКарты()
     {
         var stale = await MkSessionWithModelAsync("stale", "glm-5.2[1m]");
-        var air = await MkSessionWithModelAsync("air", "glm-4.5-air");
+        // Чистка каталога 21.11.2026: запись glm-4.5-air → glm-4.7 удалена из карты как
+        // выработанная — вторым источником берём glm-5.1 (тоже алиас 5.3 из карты)
+        var mid = await MkSessionWithModelAsync("mid", "glm-5.1");
         var preset = await MkSessionWithModelAsync("preset", "preset:" + Guid.NewGuid());
         var unknown = await MkSessionWithModelAsync("unknown", "glm-5-turbo");
         var empty = await MkSessionWithModelAsync("empty", null);
@@ -536,7 +538,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         _sut.RemapModels(GlmModelAliasMigration.Map).Should().Be(2);
 
         stale.Model.Should().Be("glm-5.3[1m]");
-        air.Model.Should().Be("glm-4.7");
+        mid.Model.Should().Be("glm-5.3");
         preset.Model.Should().Be(presetBefore, "ссылка на пресет — не id модели");
         unknown.Model.Should().Be("glm-5-turbo", "незнакомая модель остаётся как была");
         empty.Model.Should().BeNull();

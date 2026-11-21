@@ -43,7 +43,9 @@ public class GlmCatalogTests
 
         // glm-5.3-flash добавлена 28.08.2026 под weak-слот (фоновые one-shot): в отличие от
         // 5.2/4.5-air она отвечает сама собой, а не алиасом на 5.3/4.7.
-        ids.Should().Equal("glm-5.3", "glm-5.3[1m]", "glm-5.3-flash", "glm-4.7");
+        // Чистка каталога 21.11.2026: glm-4.7 убрана (вся линейка ниже 5.3 ушла, QueryModelsApi
+        // выключен) — живой id остаётся только как алиас z.ai, кураторски его не держим.
+        ids.Should().Equal("glm-5.3", "glm-5.3[1m]", "glm-5.3-flash");
     }
 
     // Ради этого всё и затевалось: суффикс окна должен доезжать до CLI числом 1M
@@ -99,6 +101,8 @@ public class GlmCatalogTests
         var ids = config.GetSection("CheapHttpSources:glm:Models").GetChildren()
             .Select(m => m["Id"]).ToList();
 
-        ids.Should().Equal("glm-5.3", "glm-5.3-flash", "glm-4.7");
+        // Чистка каталога 21.11.2026: glm-4.7 убрана и отсюда — прямой REST знает только
+        // кураторские id, пинов на 4.7 в сторе нет (см. GlmModelAliasMigration).
+        ids.Should().Equal("glm-5.3", "glm-5.3-flash");
     }
 }

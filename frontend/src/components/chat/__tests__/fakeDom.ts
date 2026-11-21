@@ -10,7 +10,7 @@ class FNode {
   nodeName = '#text';
   nodeValue = '';
   id = '';
-  private _tc = '';
+  _tc = '';
   get textContent() { return this._tc; }
   set textContent(v: string) {
     this._tc = v;
@@ -109,8 +109,6 @@ class FNode {
     walk(this);
     return out;
   }
-  // Элементные потомки (как DOM-children): centerOffset и др. итерируют root.children
-  get children(): FNode[] { return this.childNodes.filter(c => c.nodeType === 1); }
   // options <select> — option-потомки в порядке документа: React updateOptions перебирает
   // их при установке выбранного значения (setInitialProperties/updateWrapper), и без этого
   // геттера любой Select падает в тесте на «reading 'length' of undefined». .value/.selected
@@ -174,7 +172,7 @@ class FDoc {
     return el;
   }
   createTextNode(text: string) {
-    const t = new FNode(this) as FNode & { _tc?: string };
+    const t = new FNode(this);
     t.nodeType = 3;
     t.nodeValue = text;
     t._tc = text;
@@ -229,9 +227,9 @@ export function uninstallFakeDom() {
 
 // ── Рендер + поиск узлов ──
 export function mount(node: ReactElement): { root: Root; container: FNode } {
-  const doc = (globalThis as { document: FDoc }).document;
+  const doc = (globalThis as unknown as { document: FDoc }).document;
   const container = doc.createElement('div');
-  const root = createRoot(container);
+  const root = createRoot(container as unknown as Parameters<typeof createRoot>[0]);
   act(() => { root.render(node); });
   return { root, container };
 }

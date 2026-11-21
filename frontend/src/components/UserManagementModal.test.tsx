@@ -441,10 +441,10 @@ describe('UserManagementModal: редактор опекунов (Г2)', () => {
   // Тим — второй ребёнок фикстуры: включён подтверждённым снимком (тот же профиль, что у Лизы).
   const timResp: Resp = { profile: { ...lizaProfile, guardianUserIds: [] }, tutorPersonaId: 'p-tim-tutor' };
 
-  it('пикер предлагает только не-детских: Мира да; Лиза (сама), Тим (ребёнок) и Папа (уже опекун) — нет; «Добавить»+«Сохранить» — целое тело с согласием', async () => {
+  it('пикер предлагает только не-детских: Мира да; Лиза (сама), Тим (ребёнок) и Папа (уже опекун) — нет; «Добавить»+«Сохранить» — целое тело, согласие не тронут', async () => {
     setAllFlags({ [FLAGS.childMode]: true });
-    // Профиль без согласия (false + снятая пара): true в теле тогда — работа патча правки,
-    // а не унаследованное значение ответа (с true-фикстурой эта проверка ничего не проверяла).
+    // Профиль без согласия (false + снятая пара): false в теле — унаследованное значение
+    // черновика, а не работа патча правки (с true-фикстурой эта строка ничего не проверяла бы).
     fixed.set('u-liza', {
       profile: { ...lizaProfile, acknowledgeRouteRisk: false, routeRiskAcknowledgedAt: null, routeRiskAcknowledgedBy: null },
       tutorPersonaId: 'p-liza-tutor',
@@ -465,18 +465,44 @@ describe('UserManagementModal: редактор опекунов (Г2)', () => {
     expect(rowMira.textContent, 'по имени, не по id').toContain('Мира');
     expect(rowMira.querySelector('[data-testid="guardian-flag-unknown-u-mira"]'), 'флаг неизвестен — строка про сохранение').not.toBeNull();
 
-    // «Сохранить» — PUT из живого черновика: заменён только список, остальной профиль целой
+    // «Сохранить» — PUT из живого черновика: заменён только список, согласие и остальной профиль целые
     const saveBtn = doc.querySelector('[data-testid="child-settings-save"]') as HTMLButtonElement;
     expect(saveBtn.disabled, 'есть несохранённое — кнопка живая').toBe(false);
     await clickSettle(saveBtn);
     expect(putCalls.length, 'один PUT').toBe(1);
     const body = putCalls[0].body as ChildSettingsProfile;
     expect(body.guardianUserIds, 'порядок: текущий + новый в конец').toEqual(['u-papa', 'u-mira']);
-    expect(body.acknowledgeRouteRisk, 'правка опекунов — с согласием (постановка Г2)').toBe(true);
+    expect(body.acknowledgeRouteRisk, 'снятая галка правкой опекунов не перезаписана (Г2-д1б)').toBe(false);
     expect(body.subjects, 'предмет не затёрт').toEqual(lizaProfile.subjects);
     expect(body.spaces, 'окно времени не затёрто').toEqual(lizaProfile.spaces);
     expect(body.providerKey).toBe('anthropic-api-kids');
     expect(body.model, 'маршрут не затёрт').toBe('sonnet');
+  });
+
+  it('отзыв + опекун: снятая в сессии галка согласия и добавление опекуна — тело несёт false, не принудительное true (Г2-д1б)', async () => {
+    setAllFlags({ [FLAGS.childMode]: true });
+    // Живое согласие в ответе (true + пара момента и автора): отзыв — снятие галки в окне,
+    // не фикстурой: сценарий потери явного отзыва правкой списка.
+    fixed.set('u-liza', lizaResp);
+    await mountModal();
+    await clickSettle(openBtnIn(row('u-liza')!)!);
+    await clickTab('Безопасность');
+    const w = windowRoot()!;
+
+    // Явный отзыв: снятие галки согласия (onAcknowledgeChange → патч acknowledgeRouteRisk: false)
+    const ack = w.querySelector('[role="checkbox"][aria-label="Я понимаю риски и беру их на себя"]') as HTMLElement;
+    expect(ack.getAttribute('aria-checked'), 'согласие из снимка стоит').toBe('true');
+    await clickSettle(ack);
+
+    // Правка опекунов после отзыва: добавление Мире в конец
+    await changeSelect(guardianSelect()!, 'u-mira');
+    await clickSettle(w.querySelector('[data-testid="guardian-add-btn"]') as HTMLElement);
+
+    await clickSettle(doc.querySelector('[data-testid="child-settings-save"]') as HTMLElement);
+    expect(putCalls.length, 'один PUT').toBe(1);
+    const body = putCalls[0].body as ChildSettingsProfile;
+    expect(body.guardianUserIds, 'список изменён').toEqual(['u-papa', 'u-mira']);
+    expect(body.acknowledgeRouteRisk, 'явный отзыв не стёрт правкой опекунов').toBe(false);
   });
 
   it('«Убрать» + отказ guardian_not_found: серверный текст в окне, изменённый список не пропал молча', async () => {

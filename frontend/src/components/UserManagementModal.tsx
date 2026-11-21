@@ -493,14 +493,11 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
               guardians={(d.profile.guardianUserIds ?? []).map(
                 (id) => (d.profile.guardians ?? []).find((g) => g.userId === id) ?? { userId: id })}
               guardianCandidates={guardianCandidates(settingsUser.id)}
-              onGuardiansChange={(ids) => d.patch({
-                guardianUserIds: ids,
-                // Правка опекунов всегда с согласием (постановка Г2): при живом согласии слияние
-                // стора оставляет его как есть (UserStore.cs:704-711 — повторный PUT с тем же
-                // флагом пару не переставляет), при снятом — ставит; без true отказанный профиль
-                // с рискованным маршрутом не прошёл бы валидатор (route_risk_unacknowledged).
-                acknowledgeRouteRisk: true,
-              })}
+              // Г2-д1б: правка опекунов патчит только список. Согласие — не её часть: это
+              // осознанный акт админа отдельной галкой (onAcknowledgeChange), явный отзыв
+              // не должен стираться правкой списка; живую пару согласия слияние стора и так
+              // не двигает (UserStore.cs:704-711).
+              onGuardiansChange={(ids) => d.patch({ guardianUserIds: ids })}
               sharedProjectsInstanceEnabled={d.profile.sharedProjectsInstanceEnabled}
               userNames={userNames}
               acknowledge={d.profile.acknowledgeRouteRisk ?? null}

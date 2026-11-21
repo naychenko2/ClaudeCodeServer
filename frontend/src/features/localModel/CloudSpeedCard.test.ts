@@ -89,9 +89,10 @@ function cloudHead(host: ReturnType<typeof mountTab>['host']): Element {
 }
 
 // Фрагмент облака: от его строки до конца вкладки — облако последней позицией (Ф-4),
-// дальше его содержимого нет.
+// дальше его содержимого нет. Якорь — с закрывающим тегом (тот же образец п.1):
+// голый текст дал бы ложный срез на любом упоминании фразы вне строки.
 function cloudHtml(html: string): string {
-  const from = html.indexOf('Сравнить с облаком');
+  const from = html.indexOf('>Сравнить с облаком</span>');
   return from < 0 ? '' : html.slice(from);
 }
 
@@ -241,13 +242,14 @@ describe('закрытая строка «Сравнить с облаком» (
     expect(speedAnswer).toBeLessThan(cloud);
   });
 
-  it('подсказки тела: определение, Artificial Analysis, не сравнимо с локальной, TTFT', () => {
+  it('подсказки тела: определение, Artificial Analysis, отсылка к локальным метрикам, TTFT', () => {
     const html = cloudOf({ data, cloudSpeed: cloudState() });
     expect(html).toContain('сквозная скорость облачной модели за сутки');
     expect(html).toContain('duration_api_ms');
     expect(html).toContain('Определение сессионное');
     expect(html).toContain('Artificial Analysis');
-    expect(html).toContain('не сравнимо');
+    // отсылка по решению Майи от 21.11: не на карточку «Скорость ответа», а в раскрытие
+    expect(html).toContain('Локальные метрики для сравнения смотрите в раскрытии „Точные метрики локальной модели“');
     expect(html).toContain('время до первого токена у облачных моделей CCS не меряет');
     expect(html).toContain('не короче 32 токенов');
   });

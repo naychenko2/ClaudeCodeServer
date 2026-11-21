@@ -5797,6 +5797,20 @@ public class ClaudeSession : ILlmSessionAdapter
             return new ErrorMessage(
                 "Процесс модели завершился во время хода — ответ не был получен",
                 Details: $"{TurnErrorClassifier.LocalFileMissingMarker} {stderrTail}");
+        // Транскрипт resume не найден (exit=1 на старте, stderr несёт канонический маркер CLI
+        // «No conversation found with session ID»): смена пары «модель × подписка» не лечит —
+        // --resume идёт тем же отсутствующим файлом, цепочка крутилась бы впустую (инцидент
+        // 21.11: 5 попыток за 12 с в чатах отключённой подписки). Сырой stderr уходит в
+        // Details: классификатор даёт ResumeTranscriptMissing (без фолбэка), человек читает
+        // TurnFailureText.ResumeTranscriptMissing. Гейт turnGotEvent — как у «file not found»:
+        // CLI валидирует --resume до старта хода, маркер на уже начавшемся ходе — цитата из
+        // чужого stderr, и такой обрыв классифицируется как обычно (Unreachable).
+        if (!turnGotEvent
+            && stderrTail is not null
+            && stderrTail.Contains(TurnFailureText.NoConversationMarker, StringComparison.OrdinalIgnoreCase))
+            return new ErrorMessage(
+                "Процесс модели завершился во время хода — ответ не был получен",
+                Details: stderrTail);
         return new ErrorMessage("Процесс модели завершился во время хода — ответ не был получен");
     }
 

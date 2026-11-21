@@ -182,8 +182,11 @@ public static class TurnFailureText
         + "Транскрипт CLI удалён или остался на другой машине (у локального проекта он живёт только на его устройстве). "
         + "Продолжить с прежним контекстом нельзя — начните новый чат.";
 
-    // Маркер отказа CLI в result.errors: «No conversation found with session ID: <id>»
-    private const string NoConversationMarker = "No conversation found with session ID";
+    // Маркер отказа CLI «разговор для --resume не найден»: «No conversation found with session ID: <id>».
+    // Приходит двумя каналами: в result.errors (subtype error_during_execution — разбирает
+    // ForResultErrors ниже) и в stderr при выходе с exit=1 до первого события (сырой текст
+    // разбирает TurnErrorClassifier — подпись маркера одна на оба канала).
+    public const string NoConversationMarker = "No conversation found with session ID";
 
     // Человеческий текст по списку result.errors CLI (subtype error_during_execution): null —
     // среди ошибок нет распознанной, показывать как есть

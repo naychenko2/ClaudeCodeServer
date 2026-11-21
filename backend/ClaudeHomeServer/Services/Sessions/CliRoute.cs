@@ -115,18 +115,29 @@ public sealed class CliRoute
     // (включая "claude", если задана с токеном) — claude-profiles/sub-{key}; ключ CLI-провайдера
     // — claude-profiles/{key}; иначе (локальный Claude — пул пуст, или provider не задан) —
     // пользовательский ~/.claude без оверрайда. Зеркалит выбор env хода в ClaudeSession
-    // (BuildOAuthCliEnv / BuildCliEnv). ХОСТОВАЯ раскладка: у container-пользователя профиль
+    // (BuildOAuthCliEnv / BuildCliEnv). ХОСТОВАЯ раскладка: у container-владельца профиль
     // переписывается на песочный, поэтому ходить сюда напрямую нельзя — только через
     // ConfigRootFor(ownerId, key), который знает обе раскладки.
+    //
+    // Подписка может быть уже ОТКЛЮЧЕННОЙ (токен снят, записи в живых All нет) или удалённой
+    // из конфига при оставшемся профиле: транскрипты чатов этого ключа лежат в sub-{key}, и
+    // источник переноса/поиска обязан резолвиться туда, а не в ~/.claude — иначе авто-фейловер
+    // не находит транскрипт, а --resume у чата навсегда сломан «No conversation found»
+    // (инцидент 21.11: 401 чат отключённой подписки claude-3). Для ЗАПУСКА CLI отключённый
+    // ключ не используется: TryPoolFailover уводит ход на живую подписку ДО старта процесса,
+    // а env хода (BuildOAuthCliEnv) накладывается только на записи All.
     private string ConfigRootForProvider(string? providerKey)
     {
         if (string.IsNullOrEmpty(providerKey))
             return _providers.UserProfileDir;
         if (_providers.GetByKey(providerKey) is not null)
             return _providers.GetProfileDir(providerKey);
-        if (_pool.All.Any(s => s.Key == providerKey && s.Enabled))
+        if (_pool.IsConfigured(providerKey))
             return _providers.GetProfileDir("sub-" + providerKey);
-        return _providers.UserProfileDir;
+        // Запись удалена из конфига, но профиль sub-{key} существует на диске — тоже ключ
+        // подписки (лучше найти исходник переноса, чем промахнуться мимо него)
+        var removedRoot = _providers.GetProfileDir("sub-" + providerKey);
+        return Directory.Exists(removedRoot) ? removedRoot : _providers.UserProfileDir;
     }
 
     // Корень профиля CLI С УЧЁТОМ СРЕДЫ владельца. У container-пользователя ход идёт в
@@ -197,17 +208,27 @@ public sealed class CliRoute
         }
     }
 
-    // Авто-фейловер пула подписок: аккаунт чата исчерпан, а в пуле есть здоровая
-    // альтернатива — тихо перевозим транскрипт в её профиль и меняем Session.Provider.
-    // Для пользователя незаметно: та же модель, тот же эндпоинт, та же предоплаченная
-    // подписка. Сторонние провайдеры сюда не входят — другая модель/качество/оплата,
-    // это только явная миграция (MigrateProviderAsync + карточка-предложение).
+    // Авто-фейловер пула подписок: аккаунт чата недоступен (исчерпан, отключён — токен снят,
+    // записи больше нет), а в пуле есть здоровая альтернатива — тихо перевозим транскрипт в
+    // её профиль и меняем Session.Provider. Для пользователя незаметно: та же модель, тот же
+    // эндпоинт, та же предоплаченная подписка. Сторонние провайдеры сюда не входят — другая
+    // модель/качество/оплата, это только явная миграция (MigrateProviderAsync + карточка-
+    // предложение).
     internal void TryPoolFailover(string sessionId, SessionEntry entry)
     {
         if (_providers.ResolveByModel(entry.Info.Model) is not null) return; // сторонний — не пул
         if (!_pool.HasExtra) return;
         var current = entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey;
-        if (!_pool.IsExhausted(current)) return;
+        // Отключённая подписка (запись без токена) и удалённая (записи нет, но профиль
+        // sub-{key} с транскриптами остался) — те же фейловер-случаи, что исчерпание: запуск
+        // CLI на таком ключе молча уйдёт в ~/.claude (BuildOAuthCliEnv не наложится), а
+        // --resume не найдёт транскрипт — «No conversation found» на каждом ходе чата
+        // (инцидент 21.11: 401 чат отключённой claude-3). Локальный вход (PrimaryKey без
+        // записи в конфиге) — НЕ фейловер-случай: он работает через ~/.claude сам по себе.
+        var disabled = _pool.IsConfigured(current) && !_pool.All.Any(s => s.Key == current);
+        var removed = !_pool.IsConfigured(current) && current != ClaudeSubscriptionPool.PrimaryKey
+            && Directory.Exists(_providers.GetProfileDir("sub-" + current));
+        if (!_pool.IsExhausted(current) && !disabled && !removed) return;
         var pick = _pool.Pick(entry.Info.Model);
         if (pick == current || _pool.IsExhausted(pick)) return; // переключаться некуда
 
@@ -236,9 +257,12 @@ public sealed class CliRoute
         }
 
         entry.Info.Provider = pick;
+        // Живой адаптер держит корень профиля старого ключа: без пометки следующий ход пошёл бы
+        // в профиль недоступной подписки — EnsureProcessAsync пересоздаст адаптер с новым корнем
+        if (entry.Process is not null) entry.AdapterStale = true;
         entry.Info.UpdatedAt = DateTime.UtcNow;
         _store.SaveSessions();
-        Console.WriteLine($"[SessionManager] Чат {sessionId} переключён на подписку «{pick}» (лимит «{current}»)");
+        Console.WriteLine($"[SessionManager] Чат {sessionId} переключён на подписку «{pick}» (аккаунт «{current}» недоступен)");
         DeferredRun.FireAndForget(_store.BroadcastAsync(sessionId, new ProviderSwitchedMessage(pick, Auto: true)),
             $"broadcast provider_switched ({sessionId})");
     }

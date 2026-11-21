@@ -14,6 +14,16 @@ public sealed class LocalProcessRunner : IProcessLauncher
     public string HostTempDir => Path.GetTempPath();
     public string? McpApiUrlOverride => null;
 
+    public bool LocalModelsPaused
+    {
+        get
+        {
+            var options = IsolationOptions.Instance;
+            if (!options.Enabled || TargetIsWindows) return false;
+            return CgroupSlices.IsFrozen(options.LocalModelSlice ?? options.Slice);
+        }
+    }
+
     public Process Start(ProcessSpec spec)
     {
         var options = IsolationOptions.Instance;
@@ -78,7 +88,7 @@ public sealed class LocalProcessRunner : IProcessLauncher
         if (options.Enabled && !string.IsNullOrEmpty(systemdRun))
         {
             total = systemdRun.Length + CmdlineEstimate.ArgCost(exePath);
-            foreach (var a in WrapperArgs(options, ScopeUnitPlaceholder)) total += CmdlineEstimate.ArgCost(a);
+            foreach (var a in WrapperArgs(options, ScopeUnitPlaceholder, spec.LocalModel)) total += CmdlineEstimate.ArgCost(a);
         }
         else total = exePath.Length;
         foreach (var a in spec.Args) total += CmdlineEstimate.ArgCost(a);
@@ -179,7 +189,7 @@ public sealed class LocalProcessRunner : IProcessLauncher
 
         var exeArgs = psi.ArgumentList.ToList();
         psi.ArgumentList.Clear();
-        foreach (var a in WrapperArgs(options, unit)) psi.ArgumentList.Add(a);
+        foreach (var a in WrapperArgs(options, unit, spec.LocalModel)) psi.ArgumentList.Add(a);
         psi.ArgumentList.Add(psi.FileName);
         foreach (var a in exeArgs) psi.ArgumentList.Add(a);
         psi.FileName = systemdRunPath!;
@@ -233,15 +243,19 @@ public sealed class LocalProcessRunner : IProcessLauncher
     internal static IEnumerable<string> WrapperArgs(IsolationOptions options) =>
         WrapperArgs(options, ScopeUnitPlaceholder);
 
-    internal static IEnumerable<string> WrapperArgs(IsolationOptions options, string unit)
+    internal static IEnumerable<string> WrapperArgs(IsolationOptions options, string unit, bool localModel = false)
     {
+        // Ход локальной модели — в свой slice (см. IsolationOptions.LocalModelSlice)
+        var slice = localModel && !string.IsNullOrWhiteSpace(options.LocalModelSlice)
+            ? options.LocalModelSlice
+            : options.Slice;
         yield return "--user";
         yield return "--scope";
         yield return "--quiet";
         yield return "--collect";
         yield return $"--unit={unit}";
-        if (!string.IsNullOrWhiteSpace(options.Slice))
-            yield return $"--slice={options.Slice}";
+        if (!string.IsNullOrWhiteSpace(slice))
+            yield return $"--slice={slice}";
         if (!string.IsNullOrWhiteSpace(options.MemoryHigh))
             yield return $"--property=MemoryHigh={options.MemoryHigh}";
         if (!string.IsNullOrWhiteSpace(options.MemoryMax))

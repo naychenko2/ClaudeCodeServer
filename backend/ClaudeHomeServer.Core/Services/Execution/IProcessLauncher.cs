@@ -34,4 +34,9 @@ public interface IProcessLauncher
     // TurnPromptAssembler.ApplyBudget сравнивает результат с CmdlineLimit, чтобы стартовать
     // ход или отказать заранее с PromptOverflowException (ревью dc641949, волна 3).
     int EstimateCommandLineLength(ProcessSpec spec);
+    // Ходы на локальной модели сейчас запустить нельзя: их slice изоляции заморожен
+    // (systemctl --user freeze — бенч забрал слоты движка). systemd отказывает в новом scope
+    // молча (systemd-run --quiet, exit 1), поэтому спрашиваем ДО запуска. Только local-раннер
+    // под изоляцией: песочница и устройство в этот slice не ходят.
+    bool LocalModelsPaused => false;
 }

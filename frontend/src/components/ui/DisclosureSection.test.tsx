@@ -109,24 +109,34 @@ describe('DisclosureSection: контракт раскрытия', () => {
 
   // Ф-6 (дефект b45ceaa6): приписка не обрезается — она переносится. Мутации «вернуть
   // приписке nowrap + ellipsis» и «убрать у неё minWidth: 0» краснят этот тест.
-  it('длинная приписка переносится, а не обрезается; усечённый заголовок несёт подсказку', async () => {
+  // Ф-6р (major R-Ф-6): и заголовок не усечётся — flex '0 1 auto' + ellipsis делили бы
+  // нехватку строки по flex-basis, и заголовок терял бы долю ширины, даже помещаясь
+  // целиком («Точные метрик…»). Мутация «вернуть заголовку flex 0 1 auto + ellipsis»
+  // краснит этот тест.
+  it('длинная приписка переносится, а не обрезается; заголовок не усечён', async () => {
     const META = 'Локальная модель · TTFT · медианы';
     const host = await render({ open: true, meta: META });
     const spans = Array.from(head(host).querySelectorAll('span')) as HTMLElement[];
     const metaEl = spans.find(s => (s.textContent ?? '').includes('TTFT'));
     expect(metaEl, 'приписки в строке нет').toBeTruthy();
-    // смысл строки целиком — в её тексте: обрезка многоточием сняла бы его ещё в разметке
+    // смысл строки целиком — в её тексте: text-overflow обрезает только визуально,
+    // DOM-текст при нём остаётся полным — поэтому держим сам перенос, не ellipsis
     expect(metaEl!.textContent, 'приписка усечена — полного смысла в узкой колонке нет').toBe(META);
     expect(metaEl!.style.whiteSpace, 'приписка не переносится по словам').not.toBe('nowrap');
     expect(metaEl!.style.textOverflow, 'у приписки осталась обрезка многоточием').not.toBe('ellipsis');
-    // без minWidth: 0 flex-элемент не сужается ниже содержимого — переноса не будет вовсе
+    // minWidth: 0 нужен, чтобы опуститься ниже самого длинного слова: без него flex-элемент
+    // не сужается меньше min-content (длиннейшего слова) — в узкой колонке он торчал бы,
+    // а не переносился
     expect(Number.parseFloat(metaEl!.style.minWidth), 'приписка не сужается — переноса не произойдёт').toBe(0);
 
-    // заголовок остаётся в одну строку с многоточием, но полный текст доступен подсказкой
+    // инвариант R-Ф-6: заголовок целое — ни усечения, ни подсказки-компенсации
     const titleEl = spans.find(s => (s.textContent ?? '').includes('Точные метрики'));
     expect(titleEl, 'заголовка в строке нет').toBeTruthy();
-    expect(titleEl!.style.whiteSpace, 'заголовок — одна строка').toBe('nowrap');
-    expect(titleEl!.getAttribute('title'), 'у усечённого заголовка нет подсказки').toBe('Точные метрики');
+    expect(titleEl!.textContent, 'заголовок усечён в разметке').toBe('Точные метрики');
+    expect(titleEl!.style.flexShrink, 'заголовок усекаем: разрешён сжатие').toBe('0');
+    expect(titleEl!.style.textOverflow, 'заголовок обрезан многоточием').not.toBe('ellipsis');
+    expect(titleEl!.style.whiteSpace, 'заголовок задан как принудительная однострочная').not.toBe('nowrap');
+    expect(titleEl!.style.overflow, 'заголовок скрыт при переполнении').not.toBe('hidden');
   });
 
   it('без children — статичная закрытая строка: ни кнопки, ни chevron, ни пустого тела', async () => {

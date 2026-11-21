@@ -131,17 +131,15 @@ const headBase = {
   border: 'none', textAlign: 'left', fontFamily: 'inherit',
 } as const;
 
-// Название держит одну строку и усечено многоточием — но полный текст доступен
-// подсказкой (конвенция проекта: title у усечённого текста, как у приписки).
+// Инвариант строки раскрытия (R-Ф-6): смысл читается самими её словами — заголовок
+// целое, приписка переносится. title не усечём: при flex '0 1 auto' усечение
+// делилось бы по flex-basis (auto = ширина однострочного содержимого), и заголовок
+// терял бы долю ширины даже когда целиком помещается — «Точные метрик…» при полной
+// приписке (дефект, закрытый Ф-6). flexShrink: 0: заголовок держит свою ширину;
+// вся нехватка строки — на перенос приписки (metaSpan ниже). Longhand вместо
+// шортхенда flex: так же и в браузере (basis по умолчанию auto), но читается тестом.
 const titleSpan = (title: string) => (
-  <span
-    title={title}
-    style={{
-      flex: '0 1 auto', minWidth: 0,
-      fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    }}
-  >
+  <span style={{ flexGrow: 0, flexShrink: 0, fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>
     {title}
   </span>
 );

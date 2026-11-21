@@ -406,16 +406,21 @@ public sealed partial class WikiNightlyService
         // самого прохода судьи (J-J3a) с его точкой (б) в очереди заявок разбора: двойного вызова
         // модели на пакет нет — судья берёт только нерешённые спорные операции. Мёртвый локальный
         // маршрут ночи к нему не относится: это другое место (wiki-judge), его выбирает админ.
+        string? fullSweepFailure = null;
         if (_judge is not null)
         {
-            AddSweep(await _judge(ownerId, root, null, ct).ConfigureAwait(false));
+            var full = await _judge(ownerId, root, null, ct).ConfigureAwait(false);
+            AddSweep(full);
+            fullSweepFailure = full.FirstFailure;
         }
         // Предложения merge (C6, ADR-039 р.13, M1): ПОСЛЕ полного прохода судьи — гейт MergeOpenLimit
         // считает открытые уже после его решений, иначе нерешённый хвост самих чатов запирал merge.
         // Созданные пакеты решает добор судьи только по их id (ниже). За тумблером Wiki:MergeProposals
         // (по умолчанию выкл); ночь без доверия к итогу (ошибка, выключили посреди) пакетов не создаёт.
         // Сбой подбора итог не роняет: поле остаётся null, как у замера связности.
-        if (MergeProposalsEnabled() && outcome is not (OutcomeError or OutcomeDisabledMidway))
+        // Полный проход судьи не доведён (FirstFailure) — merge не предлагаем вовсе: без вердиктов
+        // пакеты упали бы человеку во «Входящие», а добор шёл бы по недоступному судье.
+        if (MergeProposalsEnabled() && outcome is not (OutcomeError or OutcomeDisabledMidway) && fullSweepFailure is null)
         {
             try
             {

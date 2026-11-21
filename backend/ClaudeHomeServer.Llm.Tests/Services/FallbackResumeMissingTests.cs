@@ -161,7 +161,7 @@ public class FallbackResumeMissingTests
     }
 
     [Fact]
-    public void ProcessDeath_МаркерВStderrУходитВDetails_НоТолькоДоПервогоСобытия()
+    public void ProcessDeath_МаркерВStderrУходитВDetails_НезависимоОтСобытийХода()
     {
         // До первого события хода маркер обязан доехать до Details: классификатор работает
         // с сырым текстом, Text («Процесс модели завершился…») маркер не несёт
@@ -170,12 +170,16 @@ public class FallbackResumeMissingTests
             stderrTail: StderrNoConversation, turnGotEvent: false);
         early.Details.Should().Be(StderrNoConversation, "сырой stderr — единственный носитель маркера");
 
-        // Ход уже начался: CLI валидирует --resume на старте, поздний маркер — цитата
-        // чужого stderr, обрыв классифицируется как обычно (Unreachable)
+        // Инцидент 21.11: все 5 попыток умирали с gotEvent=True — CLI выдаёт system/hook-события
+        // раньше проверки --resume, и гейт по turnGotEvent прятал маркер из Details →
+        // Unreachable → цепочка. Маркер канонический (CLI пишет его только про --resume):
+        // Details несёт его и на начавшемся ходе, классификатор даёт ResumeTranscriptMissing
         var late = ClaudeSession.ProcessDeathMessage(
             pendingControlResponse: false, exitCode: 1, disposing: false,
             stderrTail: StderrNoConversation, turnGotEvent: true);
-        late.Details.Should().BeNull("на начавшемся ходе маркер не канал классификации");
+        late.Details.Should().Be(StderrNoConversation, "маркер канонический — несём и при turnGotEvent");
+        TurnErrorClassifier.Classify(new TurnAttemptOutcome { HasResult = false, ErrorText = late.Details! })
+            .Should().Be(FallbackErrorClass.ResumeTranscriptMissing);
     }
 
     [Fact]

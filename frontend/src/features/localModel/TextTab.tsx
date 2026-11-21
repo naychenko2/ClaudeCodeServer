@@ -1,6 +1,8 @@
-// Вкладка «LLM» панели «Локальные модели»: сверху вниз — жива ли модель →
-// очередь → как быстро → нагрузка и кэш → что с картами → кто на ней
-// (макет docs/mockups/local-model-stats-panel.html, раздел «Спецификация для Киры»).
+// Вкладка «LLM» панели «Локальные модели», порядок v1 «Сначала ферма»: жива ли модель →
+// четыре KPI фермы → нагрузка и кэш → кто на модели → что с картами → «Дежурство» →
+// точные метрики (закрыты) → облачное сравнение (последним)
+// (макет docs/mockups/local-model-llm-redesign-v1.html, строки 165–215; спека
+// docs/mockups/local-model-llm-redesign-proposal.md, §v1).
 //
 // Состояния: notConnected — пустое состояние с кнопкой в «Поставщики моделей»;
 // down — баннер «не отвечает с HH:MM» + последние данные приглушённые (opacity .55,
@@ -28,10 +30,10 @@
 //   движок на Video может быть и vLLM (LocalEngines:<name>:MetricsEngine) — у него
 //   prompt-время включает очередь, а ступенчатая модель счётчиков к нему не относится.
 
-import { type CSSProperties } from 'react';
+import { type CSSProperties, useState } from 'react';
 import { AlertTriangle, CirclePause, Plug, FolderOpen, Unplug } from 'lucide-react';
 import { C, FONT, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
-import { Button, EmptyState, InlineSegmented } from '../../components/ui';
+import { Button, DisclosureSection, EmptyState, InlineSegmented } from '../../components/ui';
 import { requestOpenModelsSpend } from '../../lib/modelProvidersNav';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelEngine, LocalModelEngineName, LocalModelStats } from './api';
@@ -46,6 +48,7 @@ import {
 } from './format';
 import type { CloudAnswerSpeedState } from './useCloudAnswerSpeed';
 import { DutyBlock } from './DutyBlock';
+import { FarmKpiCard } from './FarmKpiCard';
 import { useAllProjects } from '../projects/useAllProjects';
 import { HwLinkRow } from './HwLinkRow';
 import { ThroughputChart, WindowToggle, type Window } from './ThroughputChart';
@@ -210,9 +213,11 @@ function YieldBanner({ data }: { data: LocalModelStats }) {
   );
 }
 
-// === «Сейчас»: идут / ждут ===
-// Крупные числа — FONT.mono FS.xl 700; «ждут» — warning, только когда > 0.
-// title — подсказка к самому числу: что это и с чем сравнивать (тексты подсказок — format.ts)
+// === KPI-число: крупное моно-значение с подписью ===
+// Крупные числа — FONT.mono FS.xl 700; warn — C.warningText, только когда значение
+// тревожное. title — подсказка к самому числу: что это и с чем сравнивать (тексты
+// подсказок — format.ts). В этой вкладке его использует «Скорость»; KPI «Сейчас на
+// ферме» живут своей карточкой FarmKpiCard (своих копий здесь нет).
 function Kpi({ value, unit, label, note, warn, title }: { value: string; unit?: string; label: string; note?: string; warn?: boolean; title?: string }) {
   return (
     <div>
@@ -231,23 +236,6 @@ function Kpi({ value, unit, label, note, warn, title }: { value: string; unit?: 
 // приписывать ноль запросов нечестно.
 function UnloadedNote({ text }: { text: string }) {
   return <p style={{ margin: 0, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{text}</p>;
-}
-
-function NowCard({ data }: { data: LocalModelStats }) {
-  if (data.status === 'yielded') {
-    return <Card title="Сейчас"><UnloadedNote text="Модель выгружена — запросов к ней нет." /></Card>;
-  }
-  if (data.running == null || data.waiting == null) {
-    return <Card title="Сейчас"><NotReported data={data} /></Card>;
-  }
-  return (
-    <Card title="Сейчас">
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP.sm }}>
-        <Kpi value={String(data.running)} label="запросов идёт" />
-        <Kpi value={String(data.waiting)} label="ждут в очереди" warn={data.waiting > 0} />
-      </div>
-    </Card>
-  );
 }
 
 // «Семантика llama-server» — модель отсчётов движка: prompt-время чистое (очереди в
@@ -805,6 +793,12 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
   // без него карточки нет (не-админу карточка и не положена).
   cloudSpeed?: CloudAnswerSpeedState;
 }) {
+  // «Точные метрики локальной модели» — закрыты по умолчанию: первый экран отвечает
+  // на главный вопрос без чтения всех метрик (спека §v1, строки 50–52). Состояние
+  // держит вкладка; хук — над ранними return: порядок хуков не должен зависеть от
+  // того, какое состояние вкладки рисуется.
+  const [metricsOpen, setMetricsOpen] = useState(false);
+
   // Переключатель — над ЛЮБЫМ состоянием вкладки, а не только над стендом
   // (дефект b129c182): упал один стенд — уйти на другой надо из интерфейса, а не
   // через F5. Условие видимости то же, что раньше (список + обработчик; сам
@@ -840,28 +834,45 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
       <StatusRow data={data} />
       <StatusSubline data={data} named={named} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
-        <NowCard data={data} />
-        <SpeedCard data={data} />
-        {/* «Скорость ответа» — сразу после «Скорости»: сквозная оценка (та, с которой
-            сверяют облачные) идёт за справочной «пока пишет» */}
-        <AnswerSpeedCard data={data} />
-        {/* Облачная карточка — после локальной «Скорости ответа»: сначала локальная
-            (per-request), затем облачная (сессионная) — определения разные */}
-        {cloudSpeed ? <CloudAnswerSpeedCard state={cloudSpeed} /> : null}
+        {/* v1: первый экран отвечает на один вопрос — жива ли модель, есть ли очередь
+            и насколько быстро она отвечает (макет .html:169–176) */}
+        <FarmKpiCard data={data} />
         <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
+        {/* «Кто сейчас на модели» — одна карточка: main без мест, named — чаты своего
+            снимка и места из duty.callsNow (F3) */}
+        <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} named={named} />
         {/* Видеокарты: основной стенд — строка-ссылка на «Стенды» (хост CCS, только
             админ); второй движок — своя карточка Video, ссылка на «Стенды» была бы неправдой */}
         {named
           ? <VideoCard data={data} />
           : <GpusCard data={data} onOpenHardware={onOpenHardware} />}
-        {/* «Кто сейчас на модели» — одна карточка: main без мест, named — чаты своего
-            снимка и места из duty.callsNow (F3) */}
-        <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} named={named} />
-        {/* «Дежурство» — последний блок стенда на Video (макет §3/§5): только у выбранного
+        {/* «Дежурство» — последний ЛОКАЛЬНЫЙ блок перед вторичными раскрытиями
+            (спека «Состояния всех вариантов», строка 119): только у выбранного
             второй движок; без duty блока нет — DutyBlock сам возвращает null (DutyBlock.tsx:222).
             Внешний guard по data.duty повторял это условие и маскировал в тестах условие
             движка (R-F5) — оставлено единственное условие: движок */}
         {named ? <DutyBlock data={data} isMobile={isMobile} onOpenMedia={onOpenMedia} /> : null}
+        {/* «Точные метрики локальной модели» — закрытое по умолчанию раскрытие (v1):
+            содержимое — ПОЛНЫЕ «Скорость» и «Скорость ответа», без урезания полей
+            (спека §v1, строка 125). Тело смонтировано и в закрытом состоянии (display:none,
+            как в AccordionSection) — содержимое карточек не пересобирается при открытии,
+            раскрытие ничего не перезапускает. */}
+        <DisclosureSection
+          title="Точные метрики локальной модели"
+          meta="TTFT · медианы"
+          open={metricsOpen}
+          onToggle={() => setMetricsOpen(v => !v)}
+          isMobile={isMobile}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, paddingTop: SP.md }}>
+            <SpeedCard data={data} />
+            <AnswerSpeedCard data={data} />
+          </div>
+        </DisclosureSection>
+        {/* Облачное сравнение — последней строкой вкладки (макет .html:206–214): сначала
+            локальное (per-request), затем облачное (сессионная) — определения разные.
+            Её сворачивание в закрытую строку — следующий шаг (Ф-4), здесь карточка прежняя. */}
+        {cloudSpeed ? <CloudAnswerSpeedCard state={cloudSpeed} /> : null}
       </div>
     </>
   );

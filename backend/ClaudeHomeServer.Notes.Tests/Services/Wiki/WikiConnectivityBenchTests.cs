@@ -22,8 +22,8 @@ namespace ClaudeHomeServer.Tests.Services;
 //   живёт внутри одного Measure — индекс строится один раз на каждый набор видимых
 //   разделов (TopicIndexCache), а не на страницу и не один на весь снимок (после A6-1);
 //   второй прогон платит сборку индексов заново: кеша между вызовами Measure нет;
-// - K0/K1/K2 тем же Measure, что у ночного итога (A6), и сверка K1 с BaselineK1 = 0,404
-//   (константа ночного критерия, WikiNightlyService.BaselineK1).
+// - K0/K1/K2 тем же Measure, что у ночного итога (A6); K1 корпуса пишется в артефакт
+//   (живая база вердикта ConnectivityOk считается в ночи, константы больше нет).
 //
 // Артефакт (json) — в WIKI_QA_OUT (по умолчанию <корень>/.cc-attachments/wiki-q2-qa1):
 // числа замера, чтобы отчёт QA опирался на фактический прогон, а не на пересказ.
@@ -89,9 +89,7 @@ public class WikiConnectivityBenchTests
             k1 = warm.K1,
             k2 = warm.K2,
             linkedShare = warm.LinkedShare,
-            baselineK1 = WikiNightlyService.BaselineK1,
             baselineK1Slack = WikiNightlyService.BaselineK1Slack,
-            k1DeltaToBaseline = warm.K1 - WikiNightlyService.BaselineK1,
             topicShareGlobalIndex = TopicShare(drafts, knowledge, globalIndex: true),
             topicShareSectionIndex = TopicShare(drafts, knowledge, globalIndex: false),
         };
@@ -108,14 +106,12 @@ public class WikiConnectivityBenchTests
         Assert.InRange(warm.K0, 0, 100);
         Assert.InRange(warm.K1, 0, 1);
         Assert.InRange(warm.K2, 0, 1);
-        // Индекс — по видимым разделам, как при показе: K1 боевого кода сходится с T0 (0,404).
-        Assert.InRange(warm.K1, WikiNightlyService.BaselineK1 - 0.02, WikiNightlyService.BaselineK1 + 0.02);
     }
 
-    // Диагностика BaselineK1: доля страниц знаний, у которых есть хотя бы один «по теме»-сосед,
+    // Диагностика K1 корпуса: доля страниц знаний, у которых есть хотя бы один «по теме»-сосед,
     // при ГЛОБАЛЬНОМ индексе снимка (так считал продукт до доработки A6-1: один индекс на весь
     // снимок; теперь запрещён) и при индексе СВОЕГО РАЗДЕЛА (так считала приёмка T0, откуда
-    // взята константа BaselineK1 = 0,404). Разница индексов — разный df (N и df), а значит
+    // была взята прежняя константа K1 = 0,404). Разница индексов — разный df (N и df), а значит
     // разный отбор редких основ и разные рёбра.
     private static double TopicShare(List<WikiGate.Draft> drafts, List<string> knowledge, bool globalIndex)
     {

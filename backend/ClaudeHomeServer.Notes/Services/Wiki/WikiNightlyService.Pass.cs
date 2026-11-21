@@ -113,7 +113,7 @@ public sealed partial class WikiNightlyService
         string? firstDropReason = null;
         // Снятые у модели ссылки (A6, хвост 26): сумма по разобранным чатам.
         var strippedLinks = 0;
-        ConnectivityStat? newConn = null, sectionConn = null;
+        ConnectivityStat? newConn = null, sectionConn = null, corpusConn = null;
         bool? connOk = null;
         // Предложенные merge (C6): 0 — тумблер выключен или предлагать нечего; null — подбор упал.
         int? mergeProposed = 0;
@@ -442,9 +442,9 @@ public sealed partial class WikiNightlyService
         // после судьи ничего не пишет»), сбой замера итог не роняет — поля остаются null.
         try
         {
-            (newConn, sectionConn) = await Task.Run(() => MeasureConnectivity(pagesBefore, ReadPageSnapshot(root)), ct)
+            (newConn, sectionConn, corpusConn) = await Task.Run(() => MeasureConnectivity(pagesBefore, ReadPageSnapshot(root)), ct)
                 .ConfigureAwait(false);
-            connOk = newConn is null ? null : newConn.K1 >= BaselineK1 - BaselineK1Slack;
+            connOk = newConn is null || corpusConn is null ? null : newConn.K1 >= corpusConn.K1 - BaselineK1Slack;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -457,7 +457,7 @@ public sealed partial class WikiNightlyService
             judgeCalls, judgeCost, judgeApplied, judgeRejected, judgeDeferred, codeRejected,
             stage2Refused, firstStage2Refusal, ExecutorStats(),
             StrippedLinks: strippedLinks, NewConnectivity: newConn, SectionConnectivity: sectionConn, ConnectivityOk: connOk,
-            MergeProposed: mergeProposed);
+            MergeProposed: mergeProposed, CorpusConnectivity: corpusConn);
 
         // Счётчики итога по исполнителям (W6a): порядок — как список стора. Движок, которому ни
         // одного чата не досталось (не был готов, был занят), в списке есть с нулями: владельцу
@@ -786,7 +786,9 @@ public sealed partial class WikiNightlyService
     // Связность новых страниц знаний ночи (появились между снимками) и всех страниц знаний
     // тронутых разделов (раздел новой или изменённой страницы). Страницы знаний — не карточки
     // источника и не хроники. Новых страниц нет — NewConnectivity null (ConnectivityOk тогда null).
-    internal static (ConnectivityStat? New, ConnectivityStat? Section) MeasureConnectivity(
+    // Corpus — живая база вердикта: все страницы знаний МИНУС новые ночи (тот же снимок и тот же
+    // MeasurePages, чтобы df был один); пустая база — null (ConnectivityOk тогда null).
+    internal static (ConnectivityStat? New, ConnectivityStat? Section, ConnectivityStat? Corpus) MeasureConnectivity(
         IReadOnlyDictionary<string, string> before, IReadOnlyDictionary<string, string> after)
     {
         var drafts = after.OrderBy(kv => kv.Key, StringComparer.Ordinal)
@@ -800,9 +802,13 @@ public sealed partial class WikiNightlyService
             .ToHashSet(StringComparer.Ordinal);
         var sectionPaths = knowledge.Where(d => touched.Contains(WikiSections.Parse(d.Path))).Select(d => d.Path).ToList();
 
+        var newSet = newPaths.ToHashSet(StringComparer.Ordinal);
+        var corpusPaths = knowledge.Where(d => !newSet.Contains(d.Path)).Select(d => d.Path).ToList();
+
         // Один замер по объединению срезов (новые страницы входят в тронутые разделы), результат
-        // раскладывается по двум срезам: memo групп общий, второй проход не нужен.
-        var stats = WikiConnectivity.MeasurePages(drafts, [.. newPaths.Union(sectionPaths, StringComparer.Ordinal)]);
+        // раскладывается по трём срезам: memo групп общий, второй проход не нужен.
+        var stats = WikiConnectivity.MeasurePages(drafts,
+            [.. newPaths.Union(sectionPaths, StringComparer.Ordinal).Union(corpusPaths, StringComparer.Ordinal)]);
         ConnectivityStat? Stat(List<string> paths)
         {
             if (paths.Count == 0)
@@ -810,7 +816,8 @@ public sealed partial class WikiNightlyService
             var m = WikiConnectivity.Aggregate(paths.Where(stats.ContainsKey).Select(p => stats[p]));
             return m.Count == 0 ? null : new ConnectivityStat(m.Count, m.K0, m.K1, m.K2);
         }
-        return (Stat(newPaths), Stat(sectionPaths));
+
+        return (Stat(newPaths), Stat(sectionPaths), Stat(corpusPaths));
     }
 
     // ── предложения merge (C6, ADR-039 р.13) ──────────────────────────────────────────────

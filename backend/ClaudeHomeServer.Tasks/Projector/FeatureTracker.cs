@@ -197,6 +197,8 @@ internal static class FeatureTracker
         return issues;
     }
 
-    private static bool HasNoReviewLabel(TaskItem t) =>
+    // Единый предикат метки «без-ревью»: им пользуются и сверка (unreviewed), и учёт шагов
+    // (FeatureStepAccounting) — второй копии нет.
+    internal static bool HasNoReviewLabel(TaskItem t) =>
         t.Labels.Any(l => l is not null && string.Equals(l.Trim(), NoReviewLabel, StringComparison.OrdinalIgnoreCase));
 }

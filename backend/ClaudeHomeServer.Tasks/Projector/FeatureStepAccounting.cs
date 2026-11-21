@@ -325,6 +325,7 @@ internal static class FeatureStepAccounting
         // Порядок ключей хвоста — тот же, что у Chains (порядок шагов учёта): вызывающий видит
         // те же цепочки в том же порядке, что и лента шагов.
         var closedTailKeys = new List<string>();
+        var noReviewKeys = new HashSet<string>(StepKeyComparer);
         int withdrawnAtMerge = 0;
         var personasByLane = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (key, groupTasks) in groups)
@@ -384,8 +385,13 @@ internal static class FeatureStepAccounting
                 || ordered.Any(t => t.Role == TaskRoles.Step && t.Verification?.Verdict == TaskVerdicts.Withdrawn);
             bool reworkOpen = ordered.Any(t => t.Role == TaskRoles.Rework && t.Status != TaskItemStatus.Done);
             bool allDone = ordered.All(t => t.Status == TaskItemStatus.Done);
+            // «Сдан без ревью»: метка на шапке цепочки (на доработке она не действует), всё сдано,
+            // открытой доработки нет и витков нет вовсе — при любом витке метка ничего не решает.
+            // Предикат метки общий со сверкой трекера.
+            bool noReview = !withdrawn && allDone && !reworkOpen && featureRounds.Count == 0
+                && FeatureTracker.HasNoReviewLabel(head);
 
-            // Корзина (взаимоисключающие): снят → принят → в работе → на ревью.
+            // Корзина (взаимоисключающие): снят → принят → сдан без ревью → в работе → на ревью.
             string bucket, outcome, status;
             if (withdrawn)
             {
@@ -394,6 +400,10 @@ internal static class FeatureStepAccounting
             else if (FeatureProjector.IsAcceptance(lastVerdict) && !reworkOpen)
             {
                 bucket = Accepted; outcome = "accepted"; status = "принят";
+            }
+            else if (noReview)
+            {
+                bucket = Accepted; outcome = "accepted"; status = "сдан без ревью";
             }
             else if (!allDone || lastVerdict == TaskVerdicts.Returned)
             {
@@ -423,7 +433,9 @@ internal static class FeatureStepAccounting
             // Принятие: момент закрытия последнего витка-принятия — ровно того, что признал шаг
             // (lastVerdict выше). Только у принятого шага; виток закрыт всегда (инвариант
             // TaskManager: вердикт только у Done-задачи), поэтому дата есть.
-            DateTime? acceptedAt = outcome == Accepted ? featureRounds[^1].CompletedAt : null;
+            // «Сдан без ревью» витков не имеет — момент принятия = закрытие последней задачи цепочки.
+            DateTime? acceptedAt = noReview ? ordered.Max(t => t.CompletedAt)
+                : outcome == Accepted ? featureRounds[^1].CompletedAt : null;
 
             // «В master» — ортогональный признак, не корзина: все задачи цепочки сданы СТРОГО до
             // закрытия мержа ([.., mergedAt)); у мержа с reviewOf — только перечисленные. Снятый
@@ -454,9 +466,12 @@ internal static class FeatureStepAccounting
             // и незакрытая задача — живая работа, её здесь нет. По корзинам это ровно Review/pending
             // и Work/returned. Снятие «при мерже» — тот же источник, что решил снятие выше
             // (последний виток-снятие либо задача-шаг), но с Origin = merge_tail.
-            if (!followUp && allDone && !reworkOpen && !withdrawn
+            // «Сданный без ревью» шаг (метка) — уже в Accepted, в хвост не идёт: иначе при мерже его
+            // «снимут» и испортят долю «смержено без ревью».
+            if (!followUp && allDone && !reworkOpen && !withdrawn && !noReview
                 && (lastVerdict is null || lastVerdict == TaskVerdicts.Returned))
                 closedTailKeys.Add(key);
+            if (!followUp && noReview) noReviewKeys.Add(key);
             if (!followUp && withdrawn && (
                     lastVerdict == TaskVerdicts.Withdrawn && rounds.Count > 0
                     && rounds[^1].Verification?.Origin == TaskVerificationOrigins.MergeTail
@@ -542,6 +557,8 @@ internal static class FeatureStepAccounting
             // Снятых при мерже (Origin = merge_tail) — часть Withdrawn, не пятая корзина: доля
             // «смержено без ревью» считается отдельно от снятых по существу (§8.3).
             WithdrawnAtMerge = withdrawnAtMerge,
+            // Подмножество Accepted (как InMaster): знаменатель не меняется.
+            NoReview = noReviewKeys.Count,
             BaselineTotal = baselineTotal,
             FollowUpTotal = followUpTotal,
             FollowUpAccepted = followUpAccepted,

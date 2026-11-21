@@ -587,6 +587,9 @@ public sealed class FeatureStepProgress
     // Снятых при мерже (вердикт withdrawn с Origin = merge_tail): часть Withdrawn, ортогональный
     // корзинам счётчик — доля «смержено без ревью», отделённая от снятых по существу (§8.3).
     public int WithdrawnAtMerge { get; init; }
+    // Шаги, засчитанные «сданными без ревью» (метка «без-ревью» на шапке, витков нет): подмножество
+    // Accepted (как InMaster), знаменатель не меняется; у доработок после мержа не считается.
+    public int NoReview { get; init; }
 }
 
 // Состояния фичи (FeatureRun.State) — единая точка правды: 11 значений, camelCase (как в JSON).

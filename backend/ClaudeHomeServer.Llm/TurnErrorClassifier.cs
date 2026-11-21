@@ -69,6 +69,13 @@ public enum FallbackErrorClass
     // 2026-10-16: Opus → MiniMax-M3 без спроса, журнал ccs.service 06:37:51–53). Маркер ставит
     // ClaudeSession в Details ErrorMessage (LocalFileMissingMarker) — как ProcessKilledMarker.
     LocalFileMissing,
+    // CLI не нашёл разговор для --resume («No conversation found with session ID», exit=1 до
+    // первого события, маркер в stderr). Транскрипт убран плановой уборкой CLI или лежит в
+    // другом профиле/на другой машине. Смена пары «модель × подписка» не лечит: resume идёт
+    // тем же отсутствующим файлом, цепочка крутилась бы впустую (инцидент 21.11: 5 попыток
+    // за 12 с в чатах отключённой подписки). Фолбэк не запускается, ход завершается честной
+    // ошибкой (TurnFailureText.ResumeTranscriptMissing).
+    ResumeTranscriptMissing,
 }
 
 // Итог одной попытки хода глазами потока событий адаптера. Всё, что нужно
@@ -221,6 +228,13 @@ public static class TurnErrorClassifier
             || (!outcome.HasResult && LooksLocalFileMissing(outcome.ErrorText)))
             return FallbackErrorClass.LocalFileMissing;
 
+        // Транскрипт resume не найден (exit=1 до первого события, маркер CLI в stderr) — тоже
+        // ДО ветки "без result → Unreachable": смена пары «модель × подписка» resume не лечит
+        // (ход идёт тем же отсутствующим файлом), цепочка гонялась бы впустую (инцидент 21.11:
+        // 5 попыток за 12 с в чатах отключённой подписки). Честная ошибка хода с текстом
+        // TurnFailureText.ResumeTranscriptMissing.
+        if (LooksResumeTranscriptMissing(outcome.ErrorText)) return FallbackErrorClass.ResumeTranscriptMissing;
+
         // Процесс умер без result — любой обрыв потока, включая посреди начатого ответа
         if (!outcome.HasResult) return FallbackErrorClass.Unreachable;
 
@@ -321,6 +335,8 @@ public static class TurnErrorClassifier
         // Файл аргумента не найден: не идёт в ProviderSwitchedMessage (фолбэк не запускается),
         // но имя полезно для лога/паспорта хода и для будущих подсказок.
         FallbackErrorClass.LocalFileMissing => "local_file_missing",
+        // Транскрипт resume не найден: фолбэк не запускается, имя — для лога/паспорта хода.
+        FallbackErrorClass.ResumeTranscriptMissing => "resume_transcript_missing",
         _ => null,
     };
 
@@ -513,6 +529,14 @@ public static class TurnErrorClassifier
     // это ровно пропавший per-run файл, а не содержательный отказ провайдера.
     private static bool LooksLocalFileMissing(string? value) =>
         value is not null && value.Contains("file not found", StringComparison.OrdinalIgnoreCase);
+
+    // Транскрипт resume не найден: CLI пишет отказ в stderr («No conversation found with
+    // session ID: <id>») и выходит с exit=1 до первого события. Маркер канонический и
+    // сверхспецифичный; тот же текст в result.errors разбирает TurnFailureText.ForResultErrors
+    // (подпись маркера одна — TurnFailureText.NoConversationMarker).
+    private static bool LooksResumeTranscriptMissing(string? text) =>
+        text is not null
+        && text.Contains(TurnFailureText.NoConversationMarker, StringComparison.OrdinalIgnoreCase);
 
     private static bool LooksUnreachable(string? value)
     {

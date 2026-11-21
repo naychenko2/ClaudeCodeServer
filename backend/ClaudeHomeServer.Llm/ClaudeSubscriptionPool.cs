@@ -74,6 +74,14 @@ public class ClaudeSubscriptionPool
     private readonly IReadOnlyList<ClaudeSubscriptionConfig> _subscriptions;
     private readonly UsageService? _usage;
 
+    // Все КОНФИГУРИРОВАННЫЕ ключи секции — включая отключённые (токен снят, но запись с
+    // DisplayName/Tier осталась). Нужны потребителям за пределами ротации: резолву профиля
+    // CLI (CliRoute.ConfigRootForProvider — транскрипты чатов отключённой подписки лежат
+    // в sub-{key} и должны находиться для переноса) и авто-фейловеру (CliRoute.TryPoolFailover —
+    // запускать CLI на отключённом ключе нельзя). Не-подписочные ключи секции (SoftThreshold,
+    // WarmupOnStartup) сюда не входят: у них нет ни токена, ни DisplayName/Tier.
+    private readonly HashSet<string> _configuredKeys = new(StringComparer.Ordinal);
+
     // Версия состояния пула: растёт на каждом изменении (исчерпание, auth, пометки моделей).
     // Для инвалидации кэша /api/usage: блок подписок в ответе (InRotation/Utilization/Exhausted/
     // UnavailableModels/цель роутинга) меняется только когда меняется состояние пула.
@@ -125,9 +133,14 @@ public class ClaudeSubscriptionPool
             // — равноправный участник пула, включая "claude". Не-подписочные ключи секции
             // (SoftThreshold, WarmupOnStartup, комментарии) не биндятся в объект и отсекаются по
             // Enabled=false. Пул пуст (ни одной подписки) => используется локальный Claude (Pick).
+            // Подписочная запись узнаётся по способу входа ИЛИ метаданным аккаунта: отключение
+            // подписки — снятие токена при оставшейся записи (DisplayName/Tier), и такой ключ
+            // обязан остаться в _configuredKeys (см. комментарий у поля).
             var cfg = child.Get<ClaudeSubscriptionConfig>();
             if (cfg is null) continue;
             cfg.Key = child.Key;
+            if (cfg.Enabled || !string.IsNullOrWhiteSpace(cfg.DisplayName) || !string.IsNullOrWhiteSpace(cfg.Tier))
+                _configuredKeys.Add(cfg.Key);
             if (cfg.Enabled)
                 list.Add(cfg);
         }
@@ -171,6 +184,13 @@ public class ClaudeSubscriptionPool
 
     /// <summary>Все настроенные дополнительные подписки</summary>
     public IReadOnlyList<ClaudeSubscriptionConfig> All => _subscriptions;
+
+    /// <summary>Ключ задан в секции ClaudeSubscriptions записью-подпиской — в том числе отключённой?</summary>
+    /// В отличие от <see cref="All"/>, охватывает и записи с снятым токеном (Enabled=false):
+    /// транскрипты их чатов всё ещё лежат в профиле sub-{key}. Читают резолв профиля CLI
+    /// (CliRoute.ConfigRootForProvider) и авто-фейловер (CliRoute.TryPoolFailover); ротация
+    /// (Pick/IsExhausted/…) отключенные ключи не видит — они не в All.
+    public bool IsConfigured(string key) => _configuredKeys.Contains(key);
 
     /// <summary>Есть ли хотя бы одна дополнительная подписка</summary>
     public bool HasExtra => _subscriptions.Count > 0;

@@ -723,6 +723,10 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
 
         if (entry.Info.ChildSpace is not null && _store.ResolveOwnerId(entry.Info) is { } childOwner)
             await _settings.CatchUpChildChatAsync(sessionId, childOwner);
+        // Аккаунт чата могли исчерпать/отключить, пока он простаивал: перед подъёмом процесса —
+        // тот же тихий фейловер пула, что и в SendDirectAsync (инвариант: адаптер поднимается
+        // только со здоровым ключом подписки)
+        _process.TryPoolFailover(sessionId, entry);
         await _process.EnsureProcessAsync(sessionId, entry);
         entry.Accumulator?.SetPersona(entry.Info.PersonaId);
 

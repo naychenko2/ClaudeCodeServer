@@ -1032,6 +1032,20 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     return;
                 }
 
+                // Транскрипт resume не найден («No conversation found with session ID», exit=1 до
+                // первого события): смена пары «модель × подписка» не лечит — resume идёт тем же
+                // отсутствующим файлом, цепочка крутилась бы впустую (инцидент 21.11: 5 попыток
+                // за 12 с в чатах отключённой подписки). Честная ошибка хода, пара не меняется,
+                // кулдаун провайдеру не ставим (вендор ни при чём).
+                if (cls == FallbackErrorClass.ResumeTranscriptMissing)
+                {
+                    LogWarn($"Транскрипт resume не найден ({Info.Id}, «{currentModel}» × «{currentKey}»): "
+                        + "фолбэк не запускаем, пара не меняется");
+                    turnOutcome = "failed";
+                    await FailLocalCauseAsync(turn, end, TurnFailureText.ResumeTranscriptMissing);
+                    return;
+                }
+
                 // ОТКАЗ ВЫХОДА В СЕТЬ, а не отказ провайдера. Unreachable покрывает два корня,
                 // и лечатся они противоположно: мёртвый эндпоинт вендора чинится сменой пары
                 // «модель × подписка», а мёртвый ОБЩИЙ канал наружу — не чинится ничем, кроме

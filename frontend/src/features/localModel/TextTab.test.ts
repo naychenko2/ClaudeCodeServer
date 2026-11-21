@@ -6,12 +6,16 @@
 // (нейтральный тон, не нули), карточка Video и «места сервера» вместо чатов, блок
 // «Дежурство» (только у выбранного второй движок; без duty — пустого: блок сам
 // возвращает null; без арбитра — строка «Арбитр не подключён»), совместная карточка
-// «Кто сейчас на модели» второго стенда: чаты дорожки + места из duty.callsNow (F3).
+// «Кто сейчас на модели» второго стенда: чаты дорожки + места из duty.callsNow (F3),
+// порядок вкладки v1 «Сначала ферма» (KPI → график → чаты → карты → «Дежурство» →
+// закрытые точные метрики → облако) и само закрытие: по умолчанию закрыто, клик
+// открывает полные «Скорость» и «Скорость ответа».
 // Рендер — через linkedom (как tasks/acceptanceBlock.test.ts); ResizeObserver
 // стабится: ThroughputChart меряет им свою ширину.
 
 import { describe, expect, it, vi } from 'vitest';
 import { parseHTML } from 'linkedom';
+import { SP } from '../../lib/design';
 
 const { window: win, document: doc } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
 vi.stubGlobal('window', win);
@@ -76,6 +80,30 @@ function clickSegment(host: ReturnType<typeof mountTab>['host'], label: string):
   const btn = Array.from(host.querySelectorAll('button')).find(b => (b.textContent ?? '').trim() === label);
   if (!btn) throw new Error(`сегмент «${label}» не найден в разметке`);
   act(() => { btn.click(); });
+}
+
+// Разметка одной карточки: от её заголовка до первого закрывающего </section>.
+// Якорь берётся с тегом: «>Нагрузка и кэш</h3>», «>Видеокарты</span>» — голый текст
+// заголовка находит не тот блок: та же подстрока живёт в чужих строках (aria-label
+// строки «Видеокарты» несёт её целиком), а соседний заголовок может быть её началом
+// («Нагрузка» — начало «Нагрузка и кэш»). У заголовка с правым span («Сейчас на
+// ферме» + «локально») хвост меняется по ширине, поэтому там якорь только
+// открывающий — «>Сейчас на ферме» (R-Ф-3).
+function sectionHtml(html: string, anchor: string): string | null {
+  const from = html.indexOf(anchor);
+  if (from < 0) return null;
+  const to = html.indexOf('</section>', from);
+  return html.slice(from, to < 0 ? html.length : to);
+}
+
+// Верхний отступ из inline-стиля элемента: явный margin-top или первое значение
+// шортхенда margin; свойства нет — отступ 0 (для guard'а границы группы, Ф-5р).
+function topMarginPx(style: string): number {
+  const one = style.match(/(?:^|;)margin-top:\s*([^;]+)/);
+  if (one) return parseFloat(one[1]) || 0;
+  const all = style.match(/(?:^|;)margin:\s*([^;]+)/);
+  if (!all) return 0;
+  return parseFloat(all[1].trim().split(/\s+/)[0]) || 0;
 }
 
 // История с кэш-содержанием и вытеснениями: на ней видно и разницу main/gemma —
@@ -271,13 +299,32 @@ describe('поля из unsupported не рендерятся (c2)', () => {
 });
 
 describe('состояние «уступила карту» (макет §4)', () => {
-  it('нейтральный баннер и спокойные «Сейчас»/«Скорость» — не нули и не красное', () => {
+  it('нейтральный баннер; KPI и «Скорость» — «нет данных», не нули и не красное', () => {
     const html = renderTab({ data: mockEngineStats('yielded'), engine: 'gemma' });
     expect(html).toContain('Уступила карту');
     expect(html).toContain('Модель уступила карту — это по плану.');
-    expect(html).toContain('Модель выгружена — запросов к ней нет.');
+    // KPI выгруженной модели: все четыре ячейки «нет данных» — ни нулей её снимка
+    // (running/waiting = 0), ни живых скоростей фикстуры (genPerStream = 21).
+    // Спека «Состояния всех вариантов», Yielded: «KPI … пишут отсутствие данных, а не нули».
+    const kpi = sectionHtml(html, '>Сейчас на ферме') ?? '';
+    expect(kpi).not.toBe('');
+    expect(kpi.split('нет данных').length - 1).toBe(4);
+    // «ни нулей, ни живых скоростей» — по тексту самих значений. По сырой innerHTML
+    // такие проверки пусты: единицы скорости — отдельный span (FarmKpiCard.tsx:61),
+    // и «21 ток/с» в разметке нет даже при живом числе (тот же вывод, что R-Ф-2 п.3).
+    // Клетки — прямые дети грида, значение — первый его ребёнок (как cells() в
+    // FarmKpiCard.test.ts:47): «нет данных» в каждой, ни нуля, ни живой скорости.
+    const { document: d } = parseHTML(`<!doctype html><body>${html}</body>`);
+    const h3 = Array.from(d.querySelectorAll('h3')).find(h => (h.textContent ?? '').includes('Сейчас на ферме'));
+    expect(h3).toBeTruthy();
+    const cells = Array.from(h3!.parentElement?.querySelectorAll('div[style*="grid-template-columns"] > div') ?? []);
+    expect(cells.length).toBe(4);
+    for (const c of cells) {
+      expect(c.firstElementChild?.textContent ?? '').toContain('нет данных');
+    }
+    // «Скорость» и «Скорость ответа» — под закрытием: тело смонтировано и в закрытом
+    // состоянии (display:none), поэтому их спокойная строка по-прежнему в разметке
     expect(html).toContain('Нет данных, пока модель выгружена.');
-    expect(html).not.toContain('запросов идёт');
     // уступка не приглушается (приглушение — только авария)
     expect(html).not.toContain('grayscale');
   });
@@ -592,6 +639,13 @@ describe('карточка «Скорость ответа» (llm-F2)', () => {
   };
   const withAnswer = () => ({ ...mockLocalModelStats('working'), answerSpeed: ANSWER_SPEED });
   const pos = (html: string, s: string) => html.indexOf(s);
+  // Бросок по отсутствующему якорю (R-Ф-8): без него отсутствие даёт −1 и сравнение
+  // −1 < x проходит молча (та же ловушка, что описана в блоке «порядок вкладки»).
+  function head(html: string, anchor: string): number {
+    const i = html.indexOf(anchor);
+    if (i < 0) throw new Error(`нет якоря «${anchor}» в разметке`);
+    return i;
+  }
 
   it('числа из ответа: сквозная, медианы и TTFT по обоим окнам, с подписями окон', () => {
     const html = renderTab({ data: withAnswer() });
@@ -611,10 +665,21 @@ describe('карточка «Скорость ответа» (llm-F2)', () => {
     expect(html).toContain('Время до первого токена');
   });
 
-  it('карточка — сразу после «Скорости», до графика', () => {
+  // Ф-3: карточки переехали под закрытие «Точные метрики» — порядок
+  // внутри него прежний («Скорость», затем сквозная), а само раскрытие — после графика
+  // (макет v1 .html:194–205). Мутация «вернуть метрики над графиком» краснит.
+  it('обе карточки — под закрытием «Точных метрик», оно — после графика', () => {
     const html = renderTab({ data: withAnswer() });
-    expect(pos(html, '>Скорость</h3>')).toBeLessThan(pos(html, '>Скорость ответа</h3>'));
-    expect(pos(html, '>Скорость ответа</h3>')).toBeLessThan(pos(html, '>Нагрузка и кэш</h3>'));
+    expect(head(html, '>Скорость</h3>')).toBeLessThan(head(html, '>Скорость ответа</h3>'));
+    // Якорь с тегом и почему он устойчив (R-Ф-8): та же фраза есть в подсказке облака
+    // (CLOUD_SPEED_DEFINITION_HINT, format.ts:461-462), но там она обведена типографскими
+    // кавычками — «…смотрите в раскрытии „Точные метрики“.», — поэтому «>Точные метрики</span>»
+    // с ней не совпадёт: ни в title-атрибуте ячейки, ни в видимом span (перенос подсказки
+    // в span — мутация, тест зелёный). Инвариант: подсказка облака не должна
+    // попасть в текстовый узел, оканчивающийся на «Точные метрики», а якорь обязан
+    // оставаться тегосодержащим.
+    expect(head(html, '>Нагрузка и кэш</h3>')).toBeLessThan(head(html, '>Точные метрики</span>'));
+    expect(head(html, '>Точные метрики</span>')).toBeLessThan(head(html, '>Скорость</h3>'));
   });
 
   it('окна — по ключу ответа, а не по порядку в нём: 5m остаётся заглавным', () => {
@@ -696,6 +761,19 @@ describe('карточка «Скорость ответа» (llm-F2)', () => {
     expect(html).toContain('Нет данных, пока модель выгружена.');
     expect(html).not.toContain('42 ток/с');
   });
+
+  // Ф-5р (вердикт R-Ф-5): границу группы несёт отступ, а не рамка. Тело
+  // DisclosureSection не даёт верхнего паддинга (0 SP.md SP.md), а снятая обёртка-грид
+  // нёс gap/paddingTop — верхний отступ заголовка группы возвращает его (макет
+  // .detail-body h4 { margin: 12px 0 6px }). Мутация «вернуть margin: 0» краснит.
+  it('граница группы: заголовки «Скорость» и «Скорость ответа» отделены сверху ≥ SP.md', () => {
+    const html = renderTab({ data: withAnswer() });
+    for (const title of ['Скорость', 'Скорость ответа']) {
+      const head = html.match(new RegExp(`<h3[^>]*style="([^"]*)"[^>]*>${title}<\\/h3>`));
+      expect(head, `заголовок «${title}» с inline-стилем не найден`).toBeTruthy();
+      expect(topMarginPx(head![1])).toBeGreaterThanOrEqual(SP.md);
+    }
+  });
 });
 
 // llm-F2 §4: формулу скорости в строке «Кто сейчас» не меняем — подсказка обязана
@@ -719,5 +797,153 @@ describe('подсказка скорости в строке «Кто сейч�
     const d = { ...mockLocalModelStats('working'), chats: [{ own: true, sessionId: 's-1', title: 'Чат', phase: 'reading' as const }] };
     const html = renderTab({ data: d });
     expect(html).not.toContain(HINT_PREFIX);
+  });
+});
+
+// Ф-3 (v1 «Сначала ферма»: спека §v1 строка 50, макет .html:169–214): порядок вкладки —
+// KPI фермы → график → чаты → карты → «Дежурство» (только named) → закрытые точные
+// метрики → облако последним. Мутации: «вернуть метрики над графиком» краснит первый
+// тест; «поставить облако перед «Дежурством»» — первый и второй; «не поднимать display
+// тела при открытии» — четвёртый.
+describe('порядок вкладки v1 и закрытые точные метрики (Ф-3)', () => {
+  const ANSWER = {
+    windows: [
+      { window: '5m', endToEndTps: 42.1, medianTps: 46.0, medianTtftSec: 6.4, p90TtftSec: 14.2, requests: 402 },
+      { window: '1h', endToEndTps: 41.3, medianTps: 45.1, medianTtftSec: 6.2, p90TtftSec: 13.8, requests: 4804 },
+    ],
+    minTokensForMedian: 32,
+  };
+  const CLOUD = {
+    from: '2026-11-19T18:51:00Z', to: '2026-11-20T18:51:00Z', minTokensForMedian: 32,
+    models: [{ provider: 'claude', model: 'claude-sonnet-5-5', endToEndTps: 38.2, medianTps: 41.0, requests: 57, outputTokens: 412000, apiMs: 10785000 }],
+  };
+  // hardware — поле админа: без него строки-ссылки «Видеокарты» нет (ADR-030), а по
+  // порядку v1 она обязана стоять между чатами и метриками
+  const HW = {
+    level: 'ok' as const,
+    gpus: [
+      { uuid: 'gpu-0', memTempC: 68, level: 'ok' as const, powerCap: false, thermal: false },
+      { uuid: 'gpu-1', memTempC: 64, level: 'ok' as const, powerCap: false, thermal: false },
+    ],
+  };
+  const data = () => ({ ...mockLocalModelStats('busy'), history: historyWithKv(), answerSpeed: ANSWER, hardware: HW });
+  const cloud = { data: CLOUD, loading: false, forbidden: false };
+
+  // Якорь с тегом (R-Ф-3): «>Видеокарты</span>», а не «Видеокарты» — голый текст
+  // нашёл бы aria-label той же строки; «>Нагрузка и кэш</h3>», а не «Нагрузка» —
+  // соседний заголовок может быть её началом. Бросок по отсутствующему якорю
+  // обязателен: без него отсутствие даёт −1 и сравнение −1 < x проходит молча.
+  function head(html: string, anchor: string): number {
+    const i = html.indexOf(anchor);
+    if (i < 0) throw new Error(`нет якоря «${anchor}» в разметке`);
+    return i;
+  }
+  function card(html: string, anchor: string): string {
+    const s = sectionHtml(html, anchor);
+    if (s == null) throw new Error(`нет карточки «${anchor}» в разметке`);
+    return s;
+  }
+
+  it('main: KPI → график → чаты → видеокарты → метрики → облако, без «Дежурства»', () => {
+    const html = renderTab({ data: data(), cloudSpeed: cloud });
+    const kpi = head(html, '>Сейчас на ферме');
+    const chart = head(html, '>Нагрузка и кэш</h3>');
+    const who = head(html, '>Кто сейчас на модели</h3>');
+    const gpus = head(html, '>Видеокарты</span>');
+    const metrics = head(html, '>Точные метрики</span>');
+    const cloudCard = head(html, '>Сравнить с облаком</span>');
+    expect(kpi).toBeLessThan(chart);
+    expect(chart).toBeLessThan(who);
+    expect(who).toBeLessThan(gpus);
+    expect(gpus).toBeLessThan(metrics);
+    expect(metrics).toBeLessThan(cloudCard);
+    // «Дежурство» — только у второго движка (условие движка при перестановке сохранено)
+    expect(html).not.toContain('>Дежурство</h3>');
+  });
+
+  it('named: VideoCard и «Дежурство» — последние локальные блоки перед метриками и облаком', () => {
+    const html = renderTab({ data: mockEngineStats('yielded'), engine: 'gemma', cloudSpeed: cloud });
+    const who = head(html, '>Кто сейчас на модели</h3>');
+    const video = head(html, '>Видеокарта · Video</h3>');
+    const duty = head(html, '>Дежурство</h3>');
+    const metrics = head(html, '>Точные метрики</span>');
+    const cloudCard = head(html, '>Сравнить с облаком</span>');
+    expect(who).toBeLessThan(video);
+    expect(video).toBeLessThan(duty);
+    expect(duty).toBeLessThan(metrics);
+    expect(metrics).toBeLessThan(cloudCard);
+  });
+
+  it('метрики закрыты по умолчанию: aria-expanded=false, тело display:none', () => {
+    const html = renderTab({ data: data(), cloudSpeed: cloud });
+    const { document: d } = parseHTML(`<!doctype html><body>${html}</body>`);
+    const btn = Array.from(d.querySelectorAll('button')).find(b => (b.textContent ?? '').includes('Точные метрики'));
+    expect(btn).toBeTruthy();
+    expect(btn!.getAttribute('aria-expanded')).toBe('false');
+    // приписка строки — полная, по решению Майи (21.11): смысл строки читается сам,
+    // а не только в коротком заголовке
+    expect(btn!.textContent ?? '').toContain('Локальная модель · TTFT · медианы');
+    const body = d.getElementById(btn!.getAttribute('aria-controls') ?? '');
+    expect(body).toBeTruthy();
+    expect(body!.getAttribute('style') ?? '').toContain('display:none');
+    // закрытая карточка KPI не дублирует то, что под закрытием: медианы и TTFT — только внутри
+    expect(sectionHtml(html, '>Сейчас на ферме') ?? '').not.toContain('медиана по запросам');
+  });
+
+  it('клик открывает метрики полными: промпт, обе скорости, запросы, медианы и TTFT', () => {
+    const { host, root } = mountTab({ data: data(), cloudSpeed: cloud });
+    const btn = Array.from(host.querySelectorAll('button')).find(b => (b.textContent ?? '').includes('Точные метрики'));
+    expect(btn).toBeTruthy();
+    expect(btn!.getAttribute('aria-expanded')).toBe('false');
+    const bodyId = btn!.getAttribute('aria-controls') ?? '';
+    act(() => { btn!.click(); });
+    expect(btn!.getAttribute('aria-expanded')).toBe('true');
+    const body = doc.getElementById(bodyId);
+    expect(body).toBeTruthy();
+    // открыто: display:none снят (тело смонтировано и в закрытом состоянии — тот же
+    // смысл, что в AccordionSection: закрытие не останавливает живущее в нём)
+    expect(body!.getAttribute('style') ?? '').not.toContain('display:none');
+    const after = host.innerHTML;
+    const speed = card(after, '>Скорость</h3>');
+    expect(speed).toContain('21 ток/с');
+    expect(speed).toContain('860 ток/с');
+    expect(speed).toContain('чтение промпта с ожиданием');
+    expect(speed).not.toContain('нет данных');
+    const answer = card(after, '>Скорость ответа</h3>');
+    expect(answer).toContain('42 ток/с');
+    expect(answer).toContain('41 ток/с');
+    expect(answer).toContain('46 ток/с');
+    expect(answer).toContain('45 ток/с');
+    expect(answer).toContain('запросов в окне: 402');
+    expect(answer).toContain('запросов в окне: 4804');
+    expect(answer).toContain('6,4 с');
+    expect(answer).toContain('14,2 с');
+    expect(answer).toContain('6,2 с');
+    expect(answer).toContain('13,8 с');
+    act(() => { root.unmount(); });
+    host.remove();
+  });
+
+  // Заголовок KPI-карточки — по его тексту, а не по тексту всей секции (R-Ф-3р):
+  // «локальн…» входит в легитимные строки вкладки (приписка «Локальная модель · …»,
+  // «локальной модели» в подсказках) и красил бы тест при целом
+  // исправном инварианте.
+  function kpiHead(html: string): Element {
+    const { document: d } = parseHTML(`<!doctype html><body>${html}</body>`);
+    const h = Array.from(d.querySelectorAll('h3')).find(x => (x.textContent ?? '').includes('Сейчас на ферме'));
+    if (!h) throw new Error('заголовок «Сейчас на ферме» не найден в разметке');
+    return h;
+  }
+
+  it('подпись «локально» — только на десктопе: через TextTab с isMobile=true её нет (Ф-3р)', () => {
+    // Обвязка (вердикт R-Ф-3): сам FarmKpiCard прячет правую подпись по своему prop'у
+    // (FarmKpiCard.tsx:97), но вкладка обязана передать isMobile — иначе десктопная
+    // подпись рендерится и на мобиле. Инвариант проверяется рендером через TextTab,
+    // а не напрямую через компонент: защищена обвязка, а не только компонент.
+    const mobile = kpiHead(renderTab({ data: data(), isMobile: true }));
+    expect(mobile.textContent ?? '').not.toContain('локальн');
+    // десктоп: правый span — последний ребёнок заголовка (образец FarmKpiCard.test.ts:161)
+    const desktop = kpiHead(renderTab({ data: data(), isMobile: false }));
+    expect(desktop.lastElementChild?.textContent ?? '').toBe('локально');
   });
 });

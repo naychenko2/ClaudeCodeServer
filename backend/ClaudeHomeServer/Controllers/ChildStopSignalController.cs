@@ -35,8 +35,11 @@ public class ChildStopSignalController(
         var sessionId = string.IsNullOrWhiteSpace(req?.SessionId) ? null : req!.SessionId;
         if (sessionId is not null)
         {
+            // Чужой, не детский и несуществующий — одно тело 404 (существование не раскрываем).
+            // Урок Б9b — чат проекта-предмета, поэтому ProjectId здесь не признак «не детский»:
+            // граница одна — ChildSpace (тот же, что у Voice в ChildChatsController и у Б9d).
             var chat = sessions.GetOwnedVisible(sessionId, UserId);
-            if (chat is null || chat.ProjectId is not null || chat.ChildSpace is null)
+            if (chat is null || chat.ChildSpace is null)
                 return Error(404, "chat_not_found", "Чат не найден.");
         }
 

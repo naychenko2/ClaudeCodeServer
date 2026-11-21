@@ -144,6 +144,13 @@ internal sealed class TurnLaunchContextFactory
             project?.RootPath, project?.SystemPrompt, permissionRules,
             accumulator, runId, enqueueBypass, events, cliConfigRoot, transcriptOnServer);
 
+    // Вердикт запуска хода ребёнка вне сборки контекста (И10, дефект a771ca12): ровно тот состав,
+    // что проверяет Compose ниже, — для вызывающих, которым он нужен ДО прикосновения к процессу.
+    // Таких один: ручная компакция (TurnProcessHost.CompactAsync) — она не проходит через приём
+    // хода, где вердикт спрашивают штатно (TurnIntake); при живом процессе Compose не зовётся вовсе.
+    internal string? ChildTurnRefusalFor(string? ownerId, Session session)
+        => _builtin.ChildGate.TurnRefusalFor(ownerId, session, DateTimeOffset.UtcNow);
+
     private LlmSessionContext Compose(Session session, string? ownerId, Project? project,
         string rootPath, string? mainRootPath, string? rawSystemPrompt,
         Func<IReadOnlyList<PermissionRule>>? permissionRules, TurnAccumulator accumulator, long runId,
@@ -152,8 +159,18 @@ internal sealed class TurnLaunchContextFactory
     {
         // И1-бис (ADR-041): последний рубеж детского режима. Поля чата ребёнка сверяются с профилем
         // ДО сборки любого контекста; расхождение — ход не стартует, тихой подстановки нет.
+        // Тип отказа — ChildRouteRefusedException: его текст доезжает до человека через
+        // TurnFailureText.ForException как есть, поэтому здесь формируется честный текст
+        // ребёнка (доработка ревью Б4b, п.3): «взрослым отправлено уведомление» — только когда
+        // кому уходить (опекуны в профиле); иначе — «попроси взрослого открыть настройки».
+        // Решение — по профилю, а не по факту рассылки: она асинхронна (подписка на событии
+        // гейта), а текст формируется здесь, синхронно. Текст сверки (внутреннее имя причины,
+        // его ребёнок не видит) остаётся на исключении в Reason: для журнала и разбора.
         if (_builtin.ChildGate.LaunchMismatch(ownerId, session) is { } mismatch)
-            throw new InvalidOperationException("Детский режим: ход не запущен — " + mismatch);
+            // ownerId здесь заведомо непустой: LaunchMismatch пустому владельцу отвечает null
+            // (ChildModeGate.cs:108); «?? ""» — только форма для компилятора, PolicyFor на пустом — null.
+            throw new ChildRouteRefusedException(
+                ChildRoute.RefusedTextFor(_builtin.ChildGate.PolicyFor(ownerId ?? "")), mismatch);
         // И3 (ADR-041, KM-B5d): вне окна, сверх дневного лимита пространства и сверх бюджета новый
         // ход ребёнка не стартует. Место — здесь, а не на входах: через Compose идут и SendMessage
         // хаба, и автопродолжение после рестарта (BuildForReconnect), и ретраи, и цикл «до готово»

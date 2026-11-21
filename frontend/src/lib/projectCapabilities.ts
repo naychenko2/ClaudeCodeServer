@@ -19,6 +19,10 @@ import type {
 import { ProjectFeature } from '../types';
 import { agentSupports, relaySupports, type ProjectRoute } from './deviceAgentRoutes';
 import { isPersonalFilesId, personalFilesSupports } from '../features/files/personalFiles';
+// Тип ключа панели — только для сигнатуры projectPanelKeysAllowed: цепь фильтров
+// (workspaceKeysFor → здесь → childWorkspaceKeys) типизирована PanelKey по всей длине.
+// Тип-импорт, рантайм-связи с pages/ нет.
+import type { PanelKey } from '../pages/workspace/panelCatalog';
 
 // Состав групп возможностей — зеркало ProjectFeatures.FileBound/Platform/ServerContent
 // на бэке. Менять синхронно с ProjectFeatures.cs при расширении.
@@ -206,6 +210,86 @@ export function isLocalProject(project: Project | null | undefined): boolean {
   // без сравнения с null и без double-bang шаблон не ловит — ловит только формы,
   // указанные в самом тесте сторожа.
   return project?.deviceId ? true : false;
+}
+
+// Профиль «проект-предмет» (детский режим, ADR-041; Б8a ddde23597 + правка b22a0aa9c).
+// Фронт получает его СУЖЕННОЙ МАТРИЦЕЙ: у проекта-предмета бэк отдаёт группы с
+// урезанным составом features — files=[Files], platform без FileWatcher/Memory,
+// serverContent=[Knowledge], transcript off (для куратора и ребёнка одинаково: матрица —
+// функция проекта, а не зрителя). Отдельный флаг capabilities.childSubject бэк присылает,
+// но рельса по нему не фильтрует: держится на составе features — том же способе, что
+// весь этот файл (панель спрашивает свой ключ).
+const SUBJECT_FILE_FEATURES: ProjectFeatureKey[] = [ProjectFeature.Files];
+const SUBJECT_PLATFORM_FEATURES: ProjectFeatureKey[] = [
+  ProjectFeature.Chat,
+  ProjectFeature.History,
+  ProjectFeature.Tasks,
+  ProjectFeature.Personas,
+  ProjectFeature.Notes,
+  ProjectFeature.Costs,
+  ProjectFeature.Tts,
+];
+const SUBJECT_SERVER_CONTENT_FEATURES: ProjectFeatureKey[] = [ProjectFeature.Knowledge];
+
+// Матрица «проект-предмет» — зеркало таблицы ProjectChildSubjectProfile бэка
+// (ProjectCapabilities.ForChildSubject, правка b22a0aa9c). Её НЕ подставляют живому
+// проекту: живая матрица приходит с бэка, она — точка правды (ADR-016 §4). Это точка,
+// где фронт знает состав профиля: тесты собирают предмет отсюда, и расхождение живой
+// матрицы с этим зеркалом краснеет тестом, а не молча меняет рельсу.
+// Personas в platform включён намеренно: репетитор — проектная персона-руководитель
+// (ADR-041 ред. 7), куратор правит её в предмете (Б16a–c).
+export function childSubjectCapabilities(): ProjectCapabilitiesView {
+  return {
+    host: 'server',
+    deviceId: null,
+    files: makeServerGroup(SUBJECT_FILE_FEATURES),
+    platform: makeServerGroup(SUBJECT_PLATFORM_FEATURES),
+    serverContent: makeServerGroup(SUBJECT_SERVER_CONTENT_FEATURES),
+    transcript: makeServerGroup([]),
+    exec: { available: true, reason: null },
+  };
+}
+
+// Панель → возможность матрицы. Пары есть у панелей содержимого проекта: их видимость
+// решает матрица, и в проекте-предмете они остаются ровно с теми ключами, что бэк
+// оставил группе (в предмете off: git→«Изменения», Docs→«Документация», CodeGraph→«Граф»,
+// Dossiers→«История решений», Skills→«Навыки», Terminal→«Терминал», DevServers→«Сервисы»).
+// «Команда» (Personas) в предмете остаётся: репетитор — проектная персона-руководитель,
+// куратор правит её (Б16a–c).
+// Вне таблицы — панели без матричного гейта: перечень с обоснованием каждой живёт в
+// ОДНОМ месте — allow-list сторожа объявления (__tests__/projectCapabilities.test.ts,
+// PANELS_WITHOUT_MATRIX_GATE); сторож проверяет обе стороны: каждый ключ реестра
+// WORKSPACE_KEYS заявлен (в карте или в allow-list) и каждая позиция allow-list —
+// живой ключ реестра (по образцу PANELS_WITHOUT_GATE в panelSubsystems.test.ts).
+// Экспортирована для сторожа объявления PANEL_FEATURE в тесте (единственный
+// читатель карты вне этого файла).
+export const PANEL_FEATURE: Record<string, ProjectFeatureKey> = {
+  files: ProjectFeature.Files,
+  changes: ProjectFeature.Git,
+  docs: ProjectFeature.Docs,
+  knowledge: ProjectFeature.Knowledge,
+  graph: ProjectFeature.CodeGraph,
+  team: ProjectFeature.Personas,
+  skills: ProjectFeature.Skills,
+  terminal: ProjectFeature.Terminal,
+  preview: ProjectFeature.DevServers,
+  // «История решений» — живой ProjectFeature.Dossiers: в предмете его нет в группе
+  // serverContent (бэк оставил [Knowledge]) — панель off вместе с группой.
+  dossiers: ProjectFeature.Dossiers,
+};
+
+// Набор панелей, который разрешает матрица данного проекта: пары PANEL_FEATURE —
+// через isFeatureAvailable (тот же путь, что у самих панелей), ключи без пары
+// остаются. Тип — PanelKey по всей цепи: generic сохраняет тип вызывающего
+// (StaticPanelKey[] → StaticPanelKey[]), кастов у вызывающих не требует; композиция
+// workspaceKeysFor ∩ projectPanelKeysAllowed ∩ childWorkspaceKeys (wiring — Ф1f)
+// компилируется без TS2345.
+export function projectPanelKeysAllowed<K extends PanelKey>(project: Project | null | undefined, keys: readonly K[]): K[] {
+  return keys.filter(k => {
+    const feature = PANEL_FEATURE[k];
+    if (!feature) return true; // вне таблицы — матрицей не гейтится
+    return isFeatureAvailable(project, feature);
+  });
 }
 
 // Хук для компонентов: стабильная обёртка над getProjectCapabilities. Сейчас без

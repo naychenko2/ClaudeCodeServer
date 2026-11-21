@@ -50,8 +50,9 @@ vi.mock('./api', () => ({
 
 const { ChildHintsPanel } = await import('./ChildHintsPanel');
 
-// Дословный текст info-плашки из макета kids-shell-v2.html (panelBody).
-const SENT_TEXT = 'Папе пришёл сигнал, что нужна помощь. Ваш разговор он не читает. Ты ни в чём не виновата.';
+// Текст info-плашки — по карточке Ф1i (решение Андрея 19.11: куратор видит уроки ребёнка
+// дословно, поэтому обещания «ваш разговор он не читает» ребёнку больше нет).
+const SENT_TEXT = 'Папе пришёл сигнал, что тебе нужна помощь. Ты ни в чём не виновата.';
 const RETRY_TEXT = 'Не получилось отправить, попробуй ещё раз';
 
 const httpErr = (status: number, code?: string) =>
@@ -129,13 +130,21 @@ describe('ChildHintsPanel: лесенка', () => {
 });
 
 describe('ChildHintsPanel: сигнал «Мне неприятно»', () => {
-  it('202: вместо кнопки — info-плашка дословно из макета; необработанных rejection нет', async () => {
+  it('202: вместо кнопки — info-плашка; необработанных rejection нет', async () => {
     const { host } = await mount(1);
     await click(signalButton(host)!);
     expect(calls).toEqual(['chat-1']);
     await settle(() => pending.get(0)!.resolve({ accepted: true }));
     expect(host.innerHTML).toContain(SENT_TEXT);
     expect(signalButton(host)).toBeNull();
+  });
+
+  it('текст после сигнала честный: папа видит уроки — обещания «он не читает» нет', async () => {
+    const { host } = await mount(1);
+    await click(signalButton(host)!);
+    await settle(() => pending.get(0)!.resolve({ accepted: true }));
+    expect(host.innerHTML).toContain('Папе пришёл сигнал, что тебе нужна помощь.');
+    expect(host.innerHTML).not.toMatch(/не читает|Ваш разговор/);
   });
 
   it('429 too_frequent: то же состояние, что при 202 — сигнал уже ушёл', async () => {

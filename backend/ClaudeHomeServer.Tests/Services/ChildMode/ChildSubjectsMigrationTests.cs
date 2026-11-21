@@ -3,14 +3,16 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Tests.Helpers;
+using ClaudeHomeServer.Services.Composition;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services.ChildMode;
 
-// Засев трёх предметов волны 1 существующим профилям детей (Т1b, срез §1) и досев предмета
-// старым детским чатам (Т1b2).
+// Засев трёх предметов волны 1 существующим профилям детей (Т1b, срез §1), досев предмета
+// старым детским чатам (Т1b2) и миграция предметов волн 2–3 в проекты-предметы (Б17b,
+// ADR-041 ред. 7, решение 75).
 // Контракт профилей: пустой Subjects → math/russian/english в порядке плиток, маршрут — из
 // профиля; непустой не трогается; второй прогон — без изменений (идемпотентность состоянием,
 // маркера нет); обычный пользователь не трогается; исключение стора — лог, старт идёт;
@@ -18,13 +20,28 @@ namespace ClaudeHomeServer.Tests.Services.ChildMode;
 // Контракт чатов: ChildSpace без предмета → math; чат с заданным предметом и не-детский чат —
 // без изменений; UpdatedAt не двигается; чат, создающийся параллельно с досевом, своим
 // предметом не затирается.
-// Фикстура — общий хост ядра сессий: миграции нужны оба стора (users.json и sessions.json).
+// Контракт Б17b (после Б17c): непомеченный предмет → проект (маркер) + маркер Migrated;
+// руководителя ставит провижер Б17a, миграция старую персону не переносит (полей предмета нет);
+// повтор — 0 изменений (снимки сторов равны); гонка с провижером того же ключа — ровно один
+// руководитель; сбой записи маркера — общий catch MigrateSubjectAsync: исключения из старта
+// нет, остальные предметы дотягиваются до своего провижна, повторный провижен исключён;
+// старые уроки не тронуты вовсе. Копия материалов в «Для репетитора/» снята
+// Х-W4-19 (хвост решения 68): данных нет — каталога child-subjects нет ни на проде, ни на
+// стендах (Х-W4-18), тест на неё и его кейс сняты вместе с ней; покрытие общего catch
+// возвращено в Х-W4-28 на новом моделировании сбоя (каталог на пути users.json).
+// Фикстура — общий хост ядра сессий: миграции нужны оба стора (users.json и sessions.json),
+// а Б17b — ещё сторы персон/проектов и резолвер домов.
 public class ChildSubjectsMigrationTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly SessionCoreTestHost _host;
     private readonly UserStore _users;
     private readonly SessionManager _sessions;
+    private readonly PersonaManager _personas;
+    private readonly ProjectManager _projects;
+    private readonly UserHomeResolver _homes;
+    private readonly ChildSubjectProjectProvisioner _subjectProjects;
+    private readonly ChildTutorProvisioner _tutors;
     private readonly ChildSubjectsMigration _sut;
     private readonly string _childId;
     private readonly string _adultId;
@@ -37,6 +54,14 @@ public class ChildSubjectsMigrationTests : IDisposable
         _host = SessionCoreTestHost.Build(_tempDir);
         _users = _host.Services.GetRequiredService<UserStore>();
         _sessions = _host.Manager;
+        _personas = _host.Services.GetRequiredService<PersonaManager>();
+        _projects = _host.Services.GetRequiredService<ProjectManager>();
+        _homes = _host.Services.GetRequiredService<UserHomeResolver>();
+        _subjectProjects = new ChildSubjectProjectProvisioner(_users, _projects, _homes,
+            NullLogger<ChildSubjectProjectProvisioner>.Instance);
+        _tutors = new ChildTutorProvisioner(_users, _personas,
+            _host.Services.GetRequiredService<ISessionBroadcaster>(), _subjectProjects, _projects,
+            null, NullLogger<ChildTutorProvisioner>.Instance);
         _adultId = _users.GetFirst()!.Id; // дефолтный admin пустого стора — обычный пользователь
         _childId = _users.Add("kid.subjects", "kid-pw-123456", "user").Id;
         // Профиль ребёнка с маршрутом пишет админ (его PUT — KM-B1e); здесь — прямо в стор.
@@ -48,7 +73,8 @@ public class ChildSubjectsMigrationTests : IDisposable
             Model = "sonnet",
         };
 
-        _sut = new ChildSubjectsMigration(_users, _sessions, NullLogger<ChildSubjectsMigration>.Instance);
+        _sut = new ChildSubjectsMigration(_users, _sessions, _subjectProjects, _personas, _projects,
+            NullLogger<ChildSubjectsMigration>.Instance);
     }
 
     public void Dispose()
@@ -64,7 +90,7 @@ public class ChildSubjectsMigrationTests : IDisposable
     // ======== Первый проход: засев предметов профиля (Т1b) ========
 
     [Fact]
-    public async Task StartAsync_ПустойПрофиль_ЗасеваетТриПредмета_ВПорядкеПлиток_СМаршрутомПрофиля()
+    public async Task StartAsync_ПустойПрофиль_ЗасеваетТриПредмета_ВПорядкеПлиток()
     {
         await _sut.StartAsync(CancellationToken.None);
 
@@ -80,14 +106,7 @@ public class ChildSubjectsMigrationTests : IDisposable
         subjects[2].Label.Should().Be("Английский");
         subjects[2].Glyph.Should().Be("Ab");
         subjects[2].Color.Should().Be("success");
-        // Маршрут — из профиля: засев своего маршрута не выдумывает
-        subjects.Should().AllSatisfy(s =>
-        {
-            s.TutorPersonaId.Should().Be("tutor-1");
-            s.ProviderKey.Should().Be("claude");
-            s.Model.Should().Be("sonnet");
-            s.Enabled.Should().BeTrue();
-        });
+        subjects.Should().AllSatisfy(s => s.Enabled.Should().BeTrue());
 
         // Обычный пользователь не трогается: засев — только детям
         _users.GetById(_adultId)!.ChildMode.Should().BeNull();
@@ -248,6 +267,169 @@ public class ChildSubjectsMigrationTests : IDisposable
             "созданный параллельно чат досевом не перезаписывается");
         created.ChildSubject.Should().Be("english");
     }
+
+    // ======== Третий проход: миграция предметов волн 2–3 (Б17b, решение 75) ========
+
+    [Fact]
+    public async Task Migration_ПредметВолны2_ПроектИМаркер_СтарыеУрокиНеТронуты()
+    {
+        SeedLegacySubject("biology", "Окружающий мир");
+        var lesson = await MkChildChatAsync("old-lesson", subject: "biology");
+
+        await _sut.StartAsync(CancellationToken.None);
+
+        // 1. Проект-предмета: маркер и владелец — сам ребёнок (Б8b).
+        var project = SubjectProjectOf(_childId, "biology");
+        project.Should().NotBeNull();
+        project!.OwnerId.Should().Be(_childId);
+
+        // 2. Предмет помечен перенесённым.
+        _users.GetById(_childId)!.ChildMode!.Subjects.Single(s => s.Id == "biology")
+            .Migrated.Should().BeTrue();
+
+        // Старый урок не перенесён в проект и приватности не получил (решение Андрея 19.11);
+        // метка предмета на нём осталась — он «старый урок только для чтения» (отказ Б9a).
+        var stored = _sessions.GetById(lesson.Id)!;
+        stored.ProjectId.Should().BeNull();
+        stored.PrivateToUserId.Should().BeNull();
+        stored.ChildSubject.Should().Be("biology");
+    }
+
+    [Fact]
+    public async Task Migration_ПовторныйСтарт_НольИзменений()
+    {
+        SeedLegacySubject("biology", "Окружающий мир");
+
+        await _sut.StartAsync(CancellationToken.None);
+        SubjectProjectOf(_childId, "biology").Should().NotBeNull();
+
+        // Снимки двух сторов — до второго прогона (пути сторов — из той же
+        // регистрации, что в бою: dataDir/personas.json, DataPath=projects.json).
+        var usersBefore = File.ReadAllText(Path.Combine(_tempDir, "users.json"));
+        var projectsBefore = File.ReadAllText(Path.Combine(_tempDir, "projects.json"));
+
+        await _sut.StartAsync(CancellationToken.None);
+
+        // Идемпотентность по маркеру: ни один стор не переписан —
+        // счётчик изменений ровно 0 (лог «перенесено предметов» во втором проходе не печатается).
+        File.ReadAllText(Path.Combine(_tempDir, "users.json")).Should().Be(usersBefore);
+        File.ReadAllText(Path.Combine(_tempDir, "projects.json")).Should().Be(projectsBefore,
+            "повторный проход проект не переписывает");
+        _users.GetById(_childId)!.ChildMode!.Subjects.Single(s => s.Id == "biology")
+            .Migrated.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Migration_ГонкаСПровижеромТогоЖеПредмета_РовноОдинРуководитель()
+    {
+        // Миграция на старте и одновременная точка записи предмета (PUT профиля / создание
+        // урока зовут ChildTutorProvisioner — та же точка, что за контроллером). Замки
+        // провижнера и миграции — один статический словарь по ключу childId:subjectId,
+        // поэтому предмет провится ровно одним из них. Мутация «снять лок в MigrateSubjectAsync»
+        // (gate.WaitAsync/Release) краснеет здесь: оба проходят быстрый путь одновременно,
+        // провижер создаёт свою персону-руководителя, миграция приводит старого тьютора и
+        // ставит маркер — оба одновременно создают проект-предмет.
+        // Однопоточный прогон гонку не ловит: до первой yield-точки оба в своей критической
+        // секции по очереди, поэтому Task.Run обязателен (тот же приём, что EnsureAsync_Parallel).
+        for (var iter = 0; iter < 20; iter++)
+        {
+            var childId = _users.Add("kid.race" + iter, "race-pw-123456", "user").Id;
+            _users.GetById(childId)!.ChildMode = new ChildProfile
+            {
+                Enabled = true, TutorPersonaId = "t", ProviderKey = "claude", Model = "sonnet",
+            };
+            SeedLegacySubjectFor(childId, "math", "Математика");
+
+            // Task.Run с async-лямбдой, возвращающим Task<T>, даёт Task<Task<T>> — прогон
+            // «успешно» завершался бы без работы миграции. Здесь — Task.Run(async…)+await
+            // в WhenAll: задача разворачивается, и оба конкурента реально идут.
+            var migration = Task.Run(async () => await _sut.MigrateSubjectAsync(childId, "math"));
+            var provision = Task.Run(async () => await _tutors.EnsureSubjectTutorAsync(childId, "math"));
+            var all = Task.WhenAll(migration, provision);
+            (await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(30)))).Should().Be(all,
+                $"гонка {iter} не завершилась");
+
+            var project = SubjectProjectOf(childId, "math");
+            project.Should().NotBeNull("ровно один проект-предмета");
+            var lead = _projects.GetById(project!.Id)!.DefaultPersonaId;
+            lead.Should().NotBeNull("руководитель стоит");
+            _personas.Get(lead!, childId).Should().NotBeNull("руководитель — живая персона этого ребёнка");
+            _personas.GetByOwner(childId).Count(p => p.Scope == PersonaScope.Project && p.ProjectId == project.Id)
+                .Should().Be(1, "проект-предмет не несёт второй проектной персоны");
+        }
+    }
+
+    [Fact]
+    public async Task Migration_СбойЗаписиМаркера_ИсключенияНаружуНет_ОстальныеПровиты_ПовторБезДубля()
+    {
+        // Покрытие общего catch MigrateSubjectAsync (ChildSubjectsMigration.cs:171) — хвост
+        // ревью Глеба Х-W4-19: прежний кейс моделировал сбой копированием материалов и был снят
+        // вместе с копией. Сбой моделируется как в тестах провижнера: каталог на пути файла —
+        // File.Move в JsonFileStore.Save (JsonFileStore.cs:332) бросает на обеих платформах,
+        // здесь — на записи MarkChildSubjectMigrated (UserStore.cs:731). Catch обязан держать:
+        // исключение из Start не выходит (по умолчанию .NET гасит хост по отказавшему
+        // IHostedService), цикл дотягивает остальные предметы до их провижна — сбой записи
+        // одного не останавливает перенос остальных.
+        // Полусостояние стора тест не прячет: поле Migrated ставится до Save (UserStore.cs:739),
+        // поэтому в памяти предмета оба помечены, на диске — нет (каталог на пути users.json
+        // цел, стор не переписан). После рестарта процесса авторитетен диск: предметы без
+        // маркера, и следующий старт повторит их с начала.
+        SeedLegacySubject("biology", "Окружающий мир");
+        SeedLegacySubject("history", "История");
+        var usersPath = Path.Combine(_tempDir, "users.json"); // путь ResolveUsersFilePath (UserStore.cs:55-60)
+        File.Delete(usersPath);
+        Directory.CreateDirectory(usersPath);
+
+        var act = () => _sut.StartAsync(CancellationToken.None);
+        await act.Should().NotThrowAsync(
+            "сбой шага — лог и false: старт продолжается, хост не гасится");
+
+        // Диск: ни одна запись маркера не прошла — каталог на пути стора цел.
+        Directory.Exists(usersPath).Should().BeTrue("стор не переписан: запись маркера не прошла");
+        // Оба предмета дотянуты до своего шага: сбой записи первого не оборвал цикл —
+        // проекты обоих провиты ровно по разу (Ensure прошёл до отказавшей записи).
+        SubjectProjectOf(_childId, "biology").Should().NotBeNull();
+        SubjectProjectOf(_childId, "history").Should().NotBeNull();
+        _projects.GetByOwner(_childId).Count(p => p.IsChildSubject).Should().Be(2);
+        // В памяти предмета оба помечены (полусостояние, абзац выше) — поэтому повторный
+        // проход пропускает их по маркеру: второго провижна и второго проекта нет.
+        _users.GetById(_childId)!.ChildMode!.Subjects.Should().AllSatisfy(s => s.Migrated.Should().BeTrue());
+        await _sut.StartAsync(CancellationToken.None);
+        _projects.GetByOwner(_childId).Count(p => p.IsChildSubject).Should().Be(2,
+            "повтор по маркеру — без второго проекта");
+    }
+
+    [Fact]
+    public async Task Migration_ПредметУжеПровитБ17a_РуководительНеПодменяется()
+    {
+        // Предмет, уже провитый живой точкой записи (Б17a: проект + персона-руководитель):
+        // миграция руководителя не трогает — DefaultPersonaId остаётся точкой правды.
+        SeedLegacySubject("biology", "Окружающий мир");
+        var provisioned = await _tutors.EnsureSubjectTutorAsync(_childId, "biology");
+        provisioned.Should().NotBeNull();
+        var lead = provisioned!.Value.Id;
+
+        await _sut.StartAsync(CancellationToken.None);
+
+        var project = SubjectProjectOf(_childId, "biology")!;
+        _projects.GetById(project.Id)!.DefaultPersonaId.Should().Be(lead,
+            "живой руководитель — точка правды, миграция его не подменяет");
+    }
+
+    // ── помощники Б17b ──
+
+    // Предмет волн 2–3 после Б17c: только плитка (старые поля репетитора и модели сняты).
+    private void SeedLegacySubject(string subjectId, string label)
+        => SeedLegacySubjectFor(_childId, subjectId, label);
+
+    private void SeedLegacySubjectFor(string childId, string subjectId, string label) =>
+        _users.GetById(childId)!.ChildMode!.Subjects.Add(new ChildSubject
+        {
+            Id = subjectId, Label = label, Glyph = "Ом", Color = "accent",
+        });
+
+    private Project? SubjectProjectOf(string childId, string subjectId) =>
+        _projects.GetByOwner(childId).FirstOrDefault(p => p.IsChildSubject && p.ChildSubjectId == subjectId);
 
     // ======== Помощники ========
 

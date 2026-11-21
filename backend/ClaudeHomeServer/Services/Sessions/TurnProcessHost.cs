@@ -241,6 +241,14 @@ public sealed class TurnProcessHost
     // больше ни одному телу этой роли он не нужен, S3-5) — защита от рассинхрона UI там же.
     internal async Task CompactAsync(string sessionId, SessionEntry entry)
     {
+        // И10 (дефект a771ca12, п.в): /compact — тоже ход, а приём хода его не спрашивает: этот путь
+        // мимо TurnIntake. Без этой точки при живом процессе сворачивание пошло бы на недопустимом
+        // маршруте, при мёртвом EnsureProcessAsync бросил бы ChildRouteRefusedException в хаб.
+        // Отказ — тот же тип с детским текстом точки отказа (его читает TurnFailureText как есть);
+        // для взрослого вердикт нулевой (политики нет), поведение прежнее.
+        if (_store.ResolveOwnerId(entry.Info) is { } owner
+            && _factory.ChildTurnRefusalFor(owner, entry.Info) is { } refusal)
+            throw new Llm.ChildRouteRefusedException(refusal);
         await EnsureProcessAsync(sessionId, entry);
         entry.Accumulator?.SetPersona(entry.Info.PersonaId);
 

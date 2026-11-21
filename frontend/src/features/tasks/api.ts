@@ -53,6 +53,12 @@ export const tasksApi = {
       return request<Task[]>(`/tasks${q ? `?${q}` : ''}`, { live: true });
     },
     listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`, { live: true }),
+    // Детская версия той же ручки (дефект a6ba38a0, Б20d разрез §14.4): ребёнку бэк отвечает обёрткой
+    // { tasks, viewers } ([ChildAllowed], TasksController.cs:65-93); взрослому — плоский список выше.
+    // Форма выбирается по вызывающему на сервере, а не по URL: методу звать только из детского контекста.
+    // live: per-owner ответ, та же причина, что у listByProject.
+    listByProjectForChild: (projectId: string) =>
+      request<{ tasks: Task[]; viewers: string[] }>(`/projects/${encodeURIComponent(projectId)}/tasks`, { live: true }),
     // Поиск по названию/описанию/меткам на сервере (по ПОЛНОМУ описанию, которого нет
     // в облегчённом списке); элементы ответа — облегчённые, нужны id совпавших
     // live: ключ кэша зависит от текста запроса — без live каждый ввод оставлял бы новую запись в IndexedDB

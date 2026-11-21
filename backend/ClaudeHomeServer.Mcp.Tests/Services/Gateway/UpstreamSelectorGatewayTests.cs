@@ -294,7 +294,8 @@ public class UpstreamSelectorGatewayTests
         var adult = selector.StartTurn(tokens, "adult", "chat", "device", "claude-opus-5-5");
 
         sub.Token.Should().BeNull("подписку ребёнку шлюз не выдаёт");
-        sub.FailureText.Should().Be(ChildRoute.RefusedText);
+        // Отказ шлюза события child/route-refusal не публикует — текст без обещания уведомления.
+        sub.FailureText.Should().Be(ChildRoute.RefusedTextNoGuardians);
         prov.Token.Should().NotBeNull("провайдерский маршрут ребёнку разрешён");
         adult.Token.Should().NotBeNull("взрослого гейт не трогает");
     }

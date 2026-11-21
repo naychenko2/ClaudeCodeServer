@@ -24,6 +24,13 @@ namespace ClaudeHomeServer.Tests.Services.Memory;
 /// Третий контроль (W4-A2, решение Андрея от 12.11): чат редактора общего проекта — тот же
 /// живой пайплайн. Авто-память проектной персоны — поведение персоны, а не правка человеком:
 /// она пополняется и из чатов редактора, а запись уходит под ключом арендатора (persona.OwnerId).
+///
+/// Детские тесты (Б16d, решение Андрея 19.11 п.5, ADR-041 ред.7): чат ребёнка память не учит,
+/// независимо от persona.MemoryEnabled (куратор может включить память тьютору). Признак —
+/// метка детского пространства (Session.ChildSpace), та же точка, что у ChildModeGate/ChildRoute;
+/// проверка в OnSessionMessageAsync, до чтения истории и персоны — парная половина выключенного
+/// recall у детского хода (KM-B6c2). Positive-контроль «ОбщийЧат»/«ЧатРедактора» (та же персона)
+/// держит пайплайн живым: нули детских тестов не тривиальны.
 /// </summary>
 public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
 {
@@ -139,6 +146,65 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
 
         await AwaitNoSignal(_sessions.HistoryRead.Task, NegativeWait,
             "пустой PrivateToUserId — тот же fail-closed: до чтения истории дело не доходит");
+        _sessions.HistoryCalls.Should().Be(0);
+        _cheap.Calls.Should().Be(0);
+    }
+
+    // --- Детский чат (Б16d): память персоны на уроках ребёнка не учится, независимо от
+    // persona.MemoryEnabled. Тот же приём, что у приватного чата: проверка в OnSessionMessageAsync,
+    // до чтения истории и персоны. Positive-контроль «ОбщийЧат»/«ЧатРедактора» (та же персона)
+    // доказывает живой пайплайн — нули ниже не тривиальны. ---
+
+    [Fact]
+    public async Task ДетскийЧатУроков_АвтообучениеНеЗапускается_ИсторияILlmНоль()
+    {
+        await _sut.StartAsync(CancellationToken.None);
+        // Чат «Уроков»: метка пространства и предмет закреплены при создании (Session.cs:541,548).
+        // Приватности нет (PrivateToUserId null) — отсечься должен именно детским признаком: без
+        // него пайплайн дошёл бы до LLM (персона MemoryEnabled=true по умолчанию, содержательный
+        // ход) — проверено мутацией. Чат вне проекта (ProjectId null) — как настоящий детский чат.
+        var session = new Session
+        {
+            Id = "s-child", PersonaId = PersonaId,
+            ChildSpace = ChildSpaces.Lessons, ChildSubject = "russian",
+        };
+        _sessions.History =
+        [
+            new StoredUserMessage(new string('а', 450)),
+            new StoredTextMessage(new string('б', 300)),
+        ];
+
+        await _observer.Handler(session, Result);
+
+        await AwaitNoSignal(_sessions.HistoryRead.Task, NegativeWait,
+            "детский чат не должен дойти до чтения истории");
+        _sessions.HistoryCalls.Should().Be(0, "детский чат отсекается ДО чтения истории");
+        _cheap.Calls.Should().Be(0,
+            "детский чат не должен доходить ни до истории, ни до платного LLM");
+        _memory.List(Owner, PersonaId, null).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ДетскийЧатБезПредмета_ТожеПропуск_ПризнакПоПространствуANеПоПредмету()
+    {
+        await _sut.StartAsync(CancellationToken.None);
+        // Детский чат без закреплённого предмета: метка пространства есть, ChildSubject null.
+        // Отсечка ключуется по ChildSpace — та же точка, что у ChildModeGate/ChildRoute, — а не по
+        // предмету: реализация на ChildSubject пропустила бы этот чат (сторож от такой правки).
+        var session = new Session
+        {
+            Id = "s-child-nosubj", PersonaId = PersonaId, ChildSpace = ChildSpaces.Lessons,
+        };
+        _sessions.History =
+        [
+            new StoredUserMessage(new string('а', 450)),
+            new StoredTextMessage(new string('б', 300)),
+        ];
+
+        await _observer.Handler(session, Result);
+
+        await AwaitNoSignal(_sessions.HistoryRead.Task, NegativeWait,
+            "детский чат без предмета тоже отсекается по метке пространства");
         _sessions.HistoryCalls.Should().Be(0);
         _cheap.Calls.Should().Be(0);
     }

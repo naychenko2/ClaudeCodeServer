@@ -44,6 +44,9 @@ public class ChildProfileSerializationTests
         WarnMinutes = 5,
         RulesAgreedAt = new DateTime(2026, 11, 17, 10, 30, 0, DateTimeKind.Utc),
         RulesSummary = "Уроки — по будням в окнах, время считает сердцебиение, неприятно — кнопка.",
+        // Согласие на риск маршрутов (ADR-041 ред. 4, решение 26) — пара профиля: момент и автор.
+        RouteRiskAcknowledgedAt = new DateTimeOffset(2026, 11, 18, 9, 0, 0, TimeSpan.Zero),
+        RouteRiskAcknowledgedBy = "u-dad",
     };
 
     [Fact]
@@ -76,22 +79,18 @@ public class ChildProfileSerializationTests
     public void ПредметыПереживаютКругСПорядкомПлиток()
     {
         // Порядок Subjects = порядок плиток на главной (срез §1): круг сериализации обязан
-        // вернуть и порядок, и каждое поле предмета, включая Enabled=false и согласие админа.
+        // вернуть и порядок, и каждое поле предмета, включая Enabled=false и маркеры переноса.
         var profile = FullProfile();
         profile.Subjects =
         [
             new ChildSubject
             {
                 Id = "literature", Label = "Литература", Glyph = "Аа", Color = "rose",
-                TutorPersonaId = "p-tutor-lit", ProviderKey = "anthropic-api-kids", Model = "sonnet",
             },
             new ChildSubject
             {
                 Id = "world", Label = "Окружающий мир", Glyph = "♣", Color = "success",
-                TutorPersonaId = "p-tutor-world", ProviderKey = "deepseek", Model = "deepseek-chat",
-                RouteAcknowledgedAt = new DateTime(2026, 11, 17, 12, 0, 0, DateTimeKind.Utc),
-                RouteAcknowledgedBy = "u-dad",
-                Enabled = false,
+                Enabled = false, Migrated = true, KnowledgeMoved = true,
             },
         ];
         var original = new User { Username = "kid", ChildMode = profile };
@@ -103,47 +102,40 @@ public class ChildProfileSerializationTests
         restored.ChildMode!.Subjects[0].Id.Should().Be("literature", "порядок списка = порядок плиток");
         restored.ChildMode!.Subjects[1].Id.Should().Be("world");
         restored.ChildMode!.Subjects.Should().BeEquivalentTo(
-            profile.Subjects, "предмет (глиф, цвет, маршрут, согласие, Enabled=false) обязан вернуться по всем полям");
+            profile.Subjects, "предмет (глиф, цвет, Enabled=false, маркеры) обязан вернуться по всем полям");
     }
 
     [Fact]
-    public void ПредметБезПривязкиЗнаний_ЧитаетсяСNull()
+    public void СтарыйПредметСПолямиМаршрута_ЧитаетсяАЛишниеПоляИгнорируются()
     {
-        // Запись users.json до появления привязки (К1a): ключа "Knowledge" в json нет —
-        // аддитивное поле читается с null, без миграции формата, BackupSchema.Version не двигается.
-        const string legacy = """{"Id":"u1","Username":"kid","ChildMode":{"Subjects":[{"Id":"world","Label":"Окружающий мир","Enabled":true}]}}""";
+        // Б17c: поля предмета TutorPersonaId/ProviderKey/Model/RouteAcknowledged* сняты. Старая запись
+        // users.json с ними читается без исключения (неизвестные ключи игнорируются), плитка цела.
+        const string legacy = """{"Id":"u1","Username":"kid","ChildMode":{"Subjects":[{"Id":"world","Label":"Окружающий мир","Glyph":"♣","Color":"info","TutorPersonaId":"p-old","ProviderKey":"deepseek","Model":"deepseek-chat","RouteAcknowledgedAt":"2026-11-17T12:00:00Z","RouteAcknowledgedBy":"u-dad","Enabled":true}]}}""";
 
         var user = JsonSerializer.Deserialize<User>(legacy, UsersJson)!;
 
-        user.ChildMode!.Subjects[0].Knowledge.Should().BeNull("аддитивное поле: старый профиль читается без привязки");
+        var subject = user.ChildMode!.Subjects.Should().ContainSingle().Subject;
+        subject.Id.Should().Be("world");
+        subject.Label.Should().Be("Окружающий мир");
+        subject.Enabled.Should().BeTrue();
+        subject.KnowledgeMoved.Should().BeFalse("привязки знаний в старой записи не было");
+        JsonSerializer.Serialize(subject, UsersJson).Should().NotContain("p-old", "снятые поля обратно не пишутся");
     }
 
     [Fact]
-    public void ПривязкаЗнанийПереживаетКругВсемиТремяПолями()
+    public void СтарыйПредметСПривязаннойБазой_ПомечаетсяKnowledgeMoved()
     {
-        // К1a: id датасета, автор и момент привязки — все три поля обязаны вернуться после
-        // круга users.json; сама привязка (допустимость датасета) — проверка К1b/К3, не здесь.
-        var profile = FullProfile();
-        profile.Subjects =
-        [
-            new ChildSubject
-            {
-                Id = "math", Label = "Математика", Glyph = "×÷", Color = "info",
-                ProviderKey = "anthropic-api-kids", Model = "sonnet",
-                Knowledge = new ChildSubjectKnowledge(
-                    "dify-ds-math", "u-dad", new DateTime(2026, 11, 17, 12, 0, 0, DateTimeKind.Utc)),
-            },
-        ];
-        var original = new User { Username = "kid", ChildMode = profile };
+        // Б17c: поле Knowledge снято; факт привязки (старое поле в JSON) остаётся пометкой
+        // «перенесите материалы в папку» — сам датасет не хранится.
+        const string legacy = """{"Id":"u1","Username":"kid","ChildMode":{"Subjects":[{"Id":"math","Label":"Математика","Glyph":"×÷","Color":"info","Enabled":true,"Knowledge":{"DatasetId":"dify-ds-math","AttachedByUserId":"u-dad","AttachedAt":"2026-11-17T12:00:00Z"}}]}}""";
 
-        var restored = JsonSerializer.Deserialize<User>(
-            JsonSerializer.Serialize(original, UsersJson), UsersJson)!;
+        var user = JsonSerializer.Deserialize<User>(legacy, UsersJson)!;
+        user.ChildMode!.Subjects[0].KnowledgeMoved.Should().BeTrue();
 
-        var knowledge = restored.ChildMode!.Subjects[0].Knowledge;
-        knowledge.Should().NotBeNull();
-        knowledge!.DatasetId.Should().Be("dify-ds-math");
-        knowledge.AttachedByUserId.Should().Be("u-dad");
-        knowledge.AttachedAt.Should().Be(new DateTime(2026, 11, 17, 12, 0, 0, DateTimeKind.Utc));
+        var json = JsonSerializer.Serialize(user, UsersJson);
+        json.Should().NotContain("dify-ds-math", "id датасета не хранится");
+        JsonSerializer.Deserialize<User>(json, UsersJson)!.ChildMode!.Subjects[0].KnowledgeMoved
+            .Should().BeTrue("пометка переживает круг");
     }
 
     [Fact]
@@ -157,6 +149,22 @@ public class ChildProfileSerializationTests
 
         user.ChildMode.Should().NotBeNull();
         user.ChildMode!.Subjects.Should().BeEmpty("аддитивное поле: старый профиль читается с Subjects=[]");
+    }
+
+    [Fact]
+    public void СтарыйПрофильБезСогласияПрофиля_ЧитаетсяСNullПарой()
+    {
+        // Запись users.json до решения 26: ключей "RouteRiskAcknowledged*" в ней нет — чтение не
+        // бросает, согласия профиля нет (оба поля null: половины согласия не бывает). Прежние поля
+        // предмета (Б17c — сняты) читаются и игнорируются. Миграции нет, BackupSchema.Version не двигается.
+        const string legacy = """{"Id":"u1","Username":"kid","ChildMode":{"Enabled":true,"TutorPersonaId":"p-tutor","ProviderKey":"deepseek","Model":"deepseek-v4-pro","Subjects":[{"Id":"math","Label":"Математика","Glyph":"Аа","Color":"info","ProviderKey":"deepseek","Model":"deepseek-v4-pro","Enabled":true,"RouteAcknowledgedAt":"2026-11-18T09:00:00Z","RouteAcknowledgedBy":"u-dad"}],"WarnMinutes":5}}""";
+
+        var user = JsonSerializer.Deserialize<User>(legacy, UsersJson)!;
+
+        user.ChildMode.Should().NotBeNull();
+        user.ChildMode!.RouteRiskAcknowledgedAt.Should().BeNull("старая запись без новых ключей: согласия профиля нет");
+        user.ChildMode.RouteRiskAcknowledgedBy.Should().BeNull();
+        user.ChildMode.Subjects[0].Id.Should().Be("math", "поля маршрута предмета сняты (Б17c), плитка читается");
     }
 
     [Fact]

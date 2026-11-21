@@ -21,9 +21,11 @@ public class ChildRoutesController(ClaudeSubscriptionPool? pool, LlmProviderRegi
 {
     // GET /api/admin/child-routes →
     //   { routes: [{ providerKey, kind: "pool"|"cloud"|"local", label, priced, requiresAck, models: [{ id, label }] }] }
-    // pool — запись пула с API-ключом (модели Anthropic, согласия не нужно); cloud — LlmProviders
-    // IsLocal=false (только модели с ценой: без неё бюджет И3 не ограничивает; нужно согласие админа);
-    // local — LlmProviders IsLocal=true (priced=false: «бюджет не тратится», нужно согласие админа).
+    // pool — запись пула с API-ключом (модели Anthropic); cloud — LlmProviders
+    // IsLocal=false (только модели с ценой: без неё бюджет И3 не ограничивает);
+    // local — LlmProviders IsLocal=true (priced=false: «бюджет не тратится»).
+    // По И2″ (ADR-041 ред. 4) согласие профиля нужно ЛЮБОМУ маршруту (requiresAck=true у всех), отказ без него
+    // даёт ChildModeGate при запуске. Это список для пикера, а не запуск хода, поэтому отбор идёт с acknowledged: true.
     // Порядок: записи пула в порядке конфига (как экран «Расход»), затем провайдеры. Каталог Claude —
     // из кэша ModelCatalogService (та же цена, что у ModelsController.Get).
     [HttpGet]
@@ -43,7 +45,7 @@ public class ChildRoutesController(ClaudeSubscriptionPool? pool, LlmProviderRegi
             foreach (var sub in pool.All)
             {
                 var models = claudeModels
-                    .Where(m => ChildRoute.Evaluate(sub.Key, m.Value, acknowledged: false, pool, providers) is
+                    .Where(m => ChildRoute.Evaluate(sub.Key, m.Value, acknowledged: true, pool, providers) is
                         { Kind: ChildRouteKind.Pool })
                     .Select(m => (object)new { id = m.Value, label = m.DisplayName })
                     .ToList();
@@ -55,7 +57,7 @@ public class ChildRoutesController(ClaudeSubscriptionPool? pool, LlmProviderRegi
                     kind = "pool",
                     label = string.IsNullOrWhiteSpace(sub.DisplayName) ? sub.Key : sub.DisplayName,
                     priced = true,
-                    requiresAck = false,
+                    requiresAck = true,
                     models,
                 });
             }
@@ -63,9 +65,7 @@ public class ChildRoutesController(ClaudeSubscriptionPool? pool, LlmProviderRegi
 
         foreach (var p in providers.All)
         {
-            // acknowledged: true — согласие здесь не отбор, а флаг requiresAck: отбирается всё, что
-            // пройдёт при сохранении с acknowledgeRouteRisk.
-            var models = p.Models
+                        var models = p.Models
                 .Where(m => ChildRoute.Evaluate(p.Key, m.Id, acknowledged: true, pool, providers) is
                     { Kind: ChildRouteKind.Provider })
                 .Select(m => (object)new { id = m.Id, label = string.IsNullOrWhiteSpace(m.DisplayName) ? m.Id : m.DisplayName })

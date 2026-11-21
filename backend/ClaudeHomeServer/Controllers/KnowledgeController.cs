@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
 
@@ -41,12 +42,23 @@ public class KnowledgeController(
     // Проект запроса; доступ проверил [ProjectScope] (чужой — 404)
     private Project? GetScopedProject(string projectId) => projects.GetById(projectId);
 
+    // ── детская граница чтения («Знаний», Б20a, ADR-041 ред. 8 решение 81) ──────────
+    // Ребёнку открыты ровно эти две ручки (список и поиск) и ровно своего проекта-предмета.
+    // Сама граница — в одной точке, ChildSubjectAccess (Х-W4-47): «ребёнок ли» по стору,
+    // «свой ли это предмет» и отказ not_child_subject. Прочие ручки класса (индексация, теги,
+    // удаление) [ChildAllowed] не имеют намеренно: ребёнок базу не наполняет и не правит —
+    // её наполняет синк папки (решение 66), и гейт И1 отсекает их до тела ручки.
+
     // GET /api/projects/{id}/knowledge — статус БЗ + список документов
+    // Ребёнку: [ChildAllowed] + «свой проект-предмет» (решение 81); взрослому — без изменений.
+    [ChildAllowed]
     [HttpGet]
     public async Task<IActionResult> GetStatus(string projectId)
     {
         var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
+        if (ChildSubjectAccess.IsChild(HttpContext, UserId) && !ChildSubjectAccess.IsOwnSubjectProject(p, UserId))
+            return ChildSubjectAccess.NotOwnSubject("Знания");
 
         var wk = workspaceStore.GetByPath(p.RootPath);
         if (string.IsNullOrEmpty(wk?.DifyDatasetId))
@@ -77,11 +89,16 @@ public class KnowledgeController(
     }
 
     // GET /api/projects/{id}/knowledge/search — семантический поиск по базе знаний проекта
+    // Ребёнку: [ChildAllowed] + «свой проект-предмет» (решение 81); взрослому — без изменений.
+    [ChildAllowed]
     [HttpGet("search")]
     public async Task<IActionResult> Search(string projectId, [FromQuery] string q = "", [FromQuery] int topK = 8)
     {
         var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
+        // Детская проверка — до пустой ветки q: чужой проект остаётся отказан и без запроса
+        if (ChildSubjectAccess.IsChild(HttpContext, UserId) && !ChildSubjectAccess.IsOwnSubjectProject(p, UserId))
+            return ChildSubjectAccess.NotOwnSubject("Знания");
 
         if (string.IsNullOrWhiteSpace(q))
             return Ok(new { items = Array.Empty<object>() });

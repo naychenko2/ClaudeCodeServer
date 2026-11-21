@@ -1,5 +1,5 @@
 // Детский режим: тонкий клиент ручек /api/child/* и админских ручек профиля, предметов и
-// репетиторов (PUT child-profile, child-subjects/{id}/tutor, child-tutors/*, child-routes).
+// репетиторов (PUT child-profile, child-subjects/{id}/tutor, PUT child-tutors/{id}, child-routes).
 // Контракт — docs/adr/ADR-041-child-mode.md, раздел «Контракт /api/child/*» (бэк обязан
 // совпасть с тем же разделом). В lib/api.ts НЕ подключается (у файла бюджет строк,
 // apiFileBudget.test.ts): потребители импортируют childApi напрямую.
@@ -11,11 +11,10 @@ import type { Persona } from '../../types';
 import type {
   ChildAttachmentRejectCode,
   ChildChatListItem,
-  ChildProfile,
   ChildRoute,
+  ChildSettingsProfile,
+  ChildSettingsResponse,
   ChildStatus,
-  ChildSubjectMaterial,
-  ChildSubjectMaterialUploaded,
   ChildSubjectView,
   ChildTutorPatch,
 } from './types';
@@ -35,6 +34,30 @@ export class ChildAttachmentRejectedError extends Error {
 }
 
 const ATTACHMENT_REJECT_CODES: ChildAttachmentRejectCode[] = ['too_large', 'unsupported_type', 'pdf_no_text', 'empty_file'];
+
+// Единственное пространство режима (ADR-041, «Общие правила»): «lessons». Держится здесь:
+// «новый урок» не должно знать, какой подставить space — это свойство режима, а не вызывающего.
+const LESSONS_SPACE = 'lessons';
+
+// «Эту папку видят: …» (Б14а, решение 64): имена кураторов-опекунов живого профиля в его
+// порядке, DisplayName иначе username (ChildSubjectsController: поле viewers ответа и его
+// селектор имён). Список один на
+// профиль — одинаковый для всех его предметов. Пустой — никого: строку не рисуем вовсе
+// (записка Майи к макету kids-project-screen: пустого «Эту папку видят:» не бывает).
+export type ChildSubjectViewers = string[];
+
+// Предмет глазами клиента: плитка ChildSubjectView плюс то, что добавляет к ней ответ
+// GET /api/child/subjects (viewers — поле ответа ChildSubjectsController).
+// enabled в ответе детской ручки нет — там только включённые (тот же контроллер,
+// фильтр .Where(s is { Enabled: true }));
+// явный false приходит оттуда, где полный список предметов уже есть (окно настроек Ф2),
+// и док проектов-предметов скрывает его сам: правило решения 84
+// («выключенный предмет в доке не показывается») живёт в одном месте, а не в каждом
+// вызывающем.
+export type ChildSubjectWithViewers = ChildSubjectView & {
+  viewers?: ChildSubjectViewers;
+  enabled?: boolean;
+};
 
 export const childApi = {
   // GET /api/child/status — снимок окон/лимитов (старшая причина по порядку И3).
@@ -62,6 +85,13 @@ export const childApi = {
       body: JSON.stringify({ subject }),
     }),
 
+  // «Новый урок» — ЕДИНСТВЕННАЯ точка создания детского чата на фронте (ADR-041 ред. 8,
+  // решение 84: «новый урок — кнопка нового чата проекта, которая у ребёнка зовёт
+  // POST /api/child/spaces/{space}/chat»). Space берётся отсюда: вызывающий называет
+  // только предмет. Ответ и отказы — те же, что у spaceChat (400 unknown_subject,
+  // 403 subject_disabled, 409 с code = state).
+  createLesson: (subjectId: string) => childApi.spaceChat(LESSONS_SPACE, subjectId),
+
   // GET /api/child/spaces/{space}/chats — детские чаты пространства, новые сверху.
   // live и signal — по тем же причинам, что у status.
   spaceChats: (space: string, opts?: { signal?: AbortSignal }) =>
@@ -71,11 +101,12 @@ export const childApi = {
     ),
 
   // GET /api/child/subjects — проекция репетиторов ребёнка: только включённые предметы,
-  // в порядке профиля (И5); без промпта, маршрута и голоса. Порядок не переставляем.
+  // в порядке профиля (И5); без промпта, маршрута и голоса, но с viewers — именами
+  // кураторов для строки «Эту папку видят: …» (Б14а). Порядок не переставляем.
   // live — проекция per-owner, а ключ IDB-кэша — по URL, общий для владельцев (тот же
   // повод, что у live у status). Отказы 403 not_child / 503 policy_unavailable — на error.body.
-  getSubjects: async (opts?: { signal?: AbortSignal }): Promise<ChildSubjectView[]> => {
-    const r = await request<{ subjects: ChildSubjectView[] }>('/child/subjects', {
+  getSubjects: async (opts?: { signal?: AbortSignal }): Promise<ChildSubjectWithViewers[]> => {
+    const r = await request<{ subjects: ChildSubjectWithViewers[] }>('/child/subjects', {
       live: true,
       signal: opts?.signal,
     });
@@ -135,23 +166,42 @@ export const childApi = {
       body: JSON.stringify({ sessionId }),
     }),
 
-  // GET /api/users/{id}/child-profile — живой профиль для админского редактора (Д1, дефект 06201244):
-  // ответ той же формы, что у PUT: { profile, tutorPersonaId }; профиля нет — profile: null
-  // (UsersController.GetChildProfile). Только админ — та же политика, что у PUT (AdminByStore).
-  // live: редактор обязан черновить текущий профиль сервера — прошлая копия из офлайн-кэша ровно
-  // тем и опасна, что сохранение затрёт живой профиль (тот же дефект, который исправляется);
-  // офлайн-фолбэк здесь значил бы «показать то, чего уже может не быть». Отказы 404 user_not_found /
-  // 403 — на status и error.body.code, как у putProfile.
-  getProfile: (userId: string) =>
-    request<{ profile: ChildProfile | null; tutorPersonaId: string }>(`/users/${encodeURIComponent(userId)}/child-profile`, {
+  // ── Окно настроек ребёнка (Ф2a, ручка Б4a) ──────────────────────────────────
+  // Все три — admin + AdminByStore, без [ChildAllowed]: ребёнок свои настройки не правит
+  // (сторож ChildModeEndpointGuardTests). Отказы — { code, message } на status и error.body.code,
+  // как у putChildProfile ниже.
+
+  // PUT /api/users/{id}/child-mode { enabled } — узкая ручка галки «детский режим» (ADR-041
+  // ред. 4 решение 30): тела профиля нет. Включение заводит профиль «не настроен» (без предметов,
+  // маршрутов и тьютора) и ничего не провит: повторный вызов включённого режима — идемпотентный
+  // 200 без записи; выключенный возвращается с сохранёнными настройками. Выключение — профиль
+  // остаётся с enabled: false. Ответ — та же форма, что у child-profile. Отказы: 404 user_not_found,
+  // 400 not_container (среда исполнения — не песочница), 500 profile_not_saved.
+  setChildMode: (userId: string, enabled: boolean) =>
+    request<ChildSettingsResponse>(`/users/${encodeURIComponent(userId)}/child-mode`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  // GET /api/users/{id}/child-profile — живой профиль для окна настроек. live: окно чернит
+  // текущий профиль сервера — офлайн-копия означала бы «сохранить поверх того, чего уже может
+  // не быть». Отказ 404 user_not_found.
+  getChildProfile: (userId: string) =>
+    request<ChildSettingsResponse>(`/users/${encodeURIComponent(userId)}/child-profile`, {
       live: true,
     }),
 
-  // PUT /api/users/{id}/child-profile — только админ ([Authorize(Roles="admin")] + AdminByStore,
-  // без [ChildAllowed]); { enabled: false } — выключение режима. Отказы 400 not_container/
-  // provider_not_api_key/invalid_window/invalid_space/guardian_not_found — на error.body.code.
-  putProfile: (userId: string, profile: ChildProfile | { enabled: false }) =>
-    request<{ profile: ChildProfile; tutorPersonaId: string }>(`/users/${encodeURIComponent(userId)}/child-profile`, {
+  // PUT /api/users/{id}/child-profile — единственная ручка записи профиля (решение 12/30):
+  // тело — ChildSettingsProfile (предмет — только плитка, без маршрута и репетитора);
+  // { enabled: false } — выключение режима с сохранением настроек. Согласие профиля трёхзначно
+  // в теле: отсутствие поля или null — «не трогать», false — явный отзыв; клиент ничего не
+  // подставляет сам (false вместо отсутствующего поля отозвал бы живое согласие).
+  // Отказы валидатора — на error.body.code: not_container, provider_not_api_key, model_not_concrete,
+  // model_unpriced, model_not_on_plan, model_not_of_provider, route_risk_unacknowledged,
+  // invalid_space, invalid_window, subject_id_invalid, subject_label_invalid, subject_glyph_invalid,
+  // subject_color_invalid, guardian_not_found (ChildProfileValidator).
+  putChildProfile: (userId: string, profile: ChildSettingsProfile | { enabled: false }) =>
+    request<ChildSettingsResponse>(`/users/${encodeURIComponent(userId)}/child-profile`, {
       method: 'PUT',
       body: JSON.stringify(profile),
     }),
@@ -180,89 +230,13 @@ export const childApi = {
   // PUT /api/users/{id}/child-tutors/{personaId} — правка характера репетитора и списков
   // «Обязательно / Никогда» (редакция 2 §12, редакция 3 §22): частичный патч, null-поле не трогает.
   // Ответ — обновлённая персона. Отказы 404 tutor_not_found / 400 rules_too_long, voice_invalid /
-  // 500 tutor_update_failed — на error.body.code, как у putProfile (персона проверяется как
+  // 500 tutor_update_failed — на status и error.body.code (персона проверяется как
   // репетитор ЭТОГО ребёнка, включая репетитора выключенного предмета).
   putTutor: (userId: string, personaId: string, patch: ChildTutorPatch) =>
     request<Persona>(`/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}`, {
       method: 'PUT',
       body: JSON.stringify(patch),
     }),
-
-  // Аватар репетитора (Т2c2, путь И5 №12): тот же PersonasCrudService, что у аватаров персон,
-  // но владелец расхода — вызывающий админ, не ребёнок (бюджет ребёнка аватар не съедает).
-  // Отказы 404 tutor_not_found / 400 avatar_files_missing, image_invalid / 502 avatar_generation_failed /
-  // 503 image_generation_off — на error.body.code (ChildTutorsController.cs:174-284).
-  tutorAvatar: {
-    // Генерация галереи кандидатов (аватар не меняется до явного select). timeoutMs — под
-    // серверный бюджет генерации, тот же, что у personasApi.generateAvatar (personas/api.ts:161-169).
-    generate: (userId: string, personaId: string, opts?: { prompt?: string; count?: number }) =>
-      request<{ candidates: string[] }>(
-        `/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar/generate`,
-        {
-          method: 'POST',
-          // JSON.stringify выбрасывает undefined — поля шлём только заданные (форма GenerateAvatarRequest)
-          body: JSON.stringify({ prompt: opts?.prompt?.trim() || undefined, count: opts?.count }),
-          timeoutMs: 400_000,
-        },
-      ),
-    // Загрузка своего аватара: original + кропнутый квадрат + параметры кропа (multipart, та же
-    // форма, что у personasApi.uploadAvatar: 400 avatar_files_missing/image_invalid — на error.body).
-    upload: (userId: string, personaId: string, original: File, cropped: Blob, crop: { scale: number; offsetX: number; offsetY: number }) => {
-      const form = new FormData();
-      form.append('original', original, original.name || 'original');
-      form.append('cropped', cropped, 'avatar.jpg');
-      form.append('crop', JSON.stringify(crop));
-      return request<Persona>(
-        `/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar/upload`,
-        { method: 'POST', body: form, timeoutMs: 60_000 },
-      );
-    },
-    // Выбор сохранённого кандидата — он становится аватаром (ответ — обновлённая персона).
-    select: (userId: string, personaId: string, file: string) =>
-      request<Persona>(
-        `/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar/select`,
-        { method: 'POST', body: JSON.stringify({ file }) },
-      ),
-  },
-
-  // Материалы предмета (К5a, разрез §2 + решение 24): ручки только админские — ребёнок
-  // отбивается классовой ролью контроллера раньше детского гейта (класс без [ChildAllowed],
-  // ChildSubjectMaterialsController.cs:39-42). Отказы — { code, message }, как у putProfile:
-  // 404 child_not_found/subject_not_found, 413 too_large/subject_full, 415 unsupported_type,
-  // 422 pdf_no_text/docx_no_text/image_no_text, 503 ocr_unavailable, 500 storage_error —
-  // на error.body.code (обёртки нет: текст отказа — серверный, его показывают как есть).
-  materials: {
-    // GET /api/users/{id}/child-subjects/{subjectId}/materials — опись строк в порядке
-    // загрузки, массив без обёртки, содержимого файлов в нём нет никогда. Без live: ключ кэша
-    // содержит {id} — коллизии между владельцами нет (в отличие от детских ручек без id в пути),
-    // офлайн-копия списка — легальный фолбэк (тот же признак, что у knowledgeBases.list).
-    list: (userId: string, subjectId: string) =>
-      request<ChildSubjectMaterial[]>(
-        `/users/${encodeURIComponent(userId)}/child-subjects/${encodeURIComponent(subjectId)}/materials`,
-      ),
-
-    // POST …/materials — multipart, поле `file` (та же форма, что у uploadAttachment; имя File
-    // доходит до сервера — по нему опись несёт подпись). Ответ 201: строка описи + preview.
-    // Запрос долгий: распознавание страницы — до 3 мин (потолок сервера BusyWaitSec 120 +
-    // PageTimeoutSec 60, LlmGatewayOptions.cs:69-72), а дефолтный таймаут request — 30 с
-    // (offline.ts:396): он резал бы загрузку на середине. Дефолт перекрывается потолком
-    // сервера с запасом (тот же приём, что у генерации аватара).
-    upload: (userId: string, subjectId: string, file: File) => {
-      const form = new FormData();
-      form.append('file', file);
-      return request<ChildSubjectMaterialUploaded>(
-        `/users/${encodeURIComponent(userId)}/child-subjects/${encodeURIComponent(subjectId)}/materials`,
-        { method: 'POST', body: form, timeoutMs: 200_000 },
-      );
-    },
-
-    // DELETE …/materials/{materialId} — 204 без тела; 404 material_not_found — на error.body.code.
-    remove: (userId: string, subjectId: string, materialId: string) =>
-      request<void>(
-        `/users/${encodeURIComponent(userId)}/child-subjects/${encodeURIComponent(subjectId)}/materials/${encodeURIComponent(materialId)}`,
-        { method: 'DELETE' },
-      ),
-  },
 };
 
 // URL аватара репетитора — одна точка построения (И5: GET /api/personas/{id}/avatar, [ChildAllowed],
@@ -274,23 +248,3 @@ export function tutorAvatarUrl(personaId: string, accessToken?: string): string 
   return accessToken ? `${base}?access_token=${encodeURIComponent(accessToken)}` : base;
 }
 
-// URL аватара и кандидатов репетитора для АДМИНСКОЙ карточки (Т4e, Т2c3): общие /api/personas/*
-// админу персону ребёнка не отдают — ProjectScope ищет персону по арендатору, админ чужой
-// арендатор, ответ 404. Репетитора читает админская ручка той же пары (id + personaId), что
-// правит его: GET /api/users/{id}/child-tutors/{personaId}/avatar[?size=] и …/avatar/candidate/{file}.
-// size — ступень миниатюры (тот же путь, что у persona avatarUrl); токен — в ?access_token=
-// (заголовок <img> не шлёт). Эти два — единственные пути картинок в карточке репетитора.
-export function childTutorAvatarUrl(userId: string, personaId: string, size?: number, accessToken?: string): string {
-  const base = `/api/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar`;
-  return withQuery(base, { ...(size && size > 0 ? { size: String(size) } : {}), ...(accessToken ? { access_token: accessToken } : {}) });
-}
-
-export function childTutorCandidateUrl(userId: string, personaId: string, file: string, accessToken?: string): string {
-  const base = `/api/users/${encodeURIComponent(userId)}/child-tutors/${encodeURIComponent(personaId)}/avatar/candidate/${encodeURIComponent(file)}`;
-  return withQuery(base, accessToken ? { access_token: accessToken } : {});
-}
-
-function withQuery(base: string, params: Record<string, string>): string {
-  const q = new URLSearchParams(params).toString();
-  return q ? `${base}?${q}` : base;
-}

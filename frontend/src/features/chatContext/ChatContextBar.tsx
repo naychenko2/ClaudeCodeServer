@@ -16,6 +16,7 @@ import { AttachPicker } from '../../components/chat/AttachPicker';
 import { basename, middleEllipsis } from '../../lib/paths';
 import { showToast } from '../../lib/toast';
 import { useTasks } from '../../lib/tasks';
+import { useMe } from '../../lib/defaultPersona';
 import {
   loadChatContext, removeFromChatContext, replaceChatContextEntry, useChatContext, contextKey,
 } from '../../lib/chatContext';
@@ -62,6 +63,9 @@ export function ChatContextBar({ projectId, sessionId, variant, active, onOpen, 
   const list = useChatContext(sessionId);
   // Заголовки задач берём из общего стора: там же они обновляются при переименовании
   const tasks = useTasks();
+  // Ребёнку запись в контекст закрыта (ручка PUT без [ChildAllowed], 403): он только читает —
+  // «Убрать», «Указать заново…» и крестик ему не показываем
+  const canWrite = !useMe().isChild;
   const [allMenu, setAllMenu] = useState<DOMRect | null>(null);
   const [missMenu, setMissMenu] = useState<{ anchor: DOMRect; entry: SessionContextEntry } | null>(null);
   // Диалог «Указать заново…» для ненайденного материала
@@ -107,17 +111,17 @@ export function ChatContextBar({ projectId, sessionId, variant, active, onOpen, 
       : e.type === 'task' ? label : e.id;
     const open = (rect: DOMRect) => {
       // Ненайденный материал открывать нечем — предлагаем убрать или переуказать
-      if (e.missing) setMissMenu({ anchor: rect, entry: e });
+      if (e.missing) { if (canWrite) setMissMenu({ anchor: rect, entry: e }); }
       else onOpen(e);
     };
     return (
       <div key={contextKey(e.type, e.id)} style={base}
         title={title}
         onClick={ev => open((ev.currentTarget as HTMLElement).getBoundingClientRect())}
-        onContextMenu={ev => {
+        onContextMenu={canWrite ? ev => {
           ev.preventDefault();
           setMissMenu({ anchor: (ev.currentTarget as HTMLElement).getBoundingClientRect(), entry: e });
-        }}
+        } : undefined}
       >
         {entryIcon(e)}
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -125,7 +129,7 @@ export function ChatContextBar({ projectId, sessionId, variant, active, onOpen, 
         </span>
         {/* Крестик — только у активной вкладки: в чипах счёт идёт на пиксели,
             и удаление там живёт в меню «⋯» и в контекстном меню чипа */}
-        {isActive && (
+        {isActive && canWrite && (
           <IconButton
             size="xs"
             onClick={ev => { ev.stopPropagation(); remove(e); }}
@@ -175,20 +179,20 @@ export function ChatContextBar({ projectId, sessionId, variant, active, onOpen, 
               isMobile={isMobile}
               onClick={() => {
                 setAllMenu(null);
-                if (e.missing) setMissMenu({ anchor: allMenu, entry: e }); else onOpen(e);
+                if (e.missing) { if (canWrite) setMissMenu({ anchor: allMenu, entry: e }); } else onOpen(e);
               }}
-              action={{
+              action={canWrite ? {
                 icon: <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
                 title: 'Убрать из контекста',
                 onClick: () => { setAllMenu(null); remove(e); },
-              }}
+              } : undefined}
             />
           ))}
         </Menu>
       )}
 
       {/* Ненайденный материал — молча не чистим: человек решает сам */}
-      {missMenu && (
+      {missMenu && canWrite && (
         <Menu anchor={missMenu.anchor} minWidth={220} maxHeight={160} onClose={() => setMissMenu(null)}>
           <MenuItem
             icon={<X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}

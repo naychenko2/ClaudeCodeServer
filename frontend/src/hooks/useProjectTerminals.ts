@@ -5,18 +5,27 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as terminalApi from '../lib/terminalSignalr';
 
-export function useProjectTerminals(projectId: string) {
+// opts.disabled — экрану не нужны терминалы вовсе (детская поверхность: панели «Терминал»
+// нет в снимке, а хаб /hubs/terminal без [ChildAllowed] → 403). Признак знает вызывающий,
+// хук его не выдумывает: опция сверху, как opts у useProjectServices.
+export function useProjectTerminals(projectId: string, opts?: { disabled?: boolean }) {
   const [terminals, setTerminals] = useState<terminalApi.TerminalInfo[]>([]);
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
+  // opts новый объект на каждый рендер — в deps и эффект идёт флаг, не объект
+  const disabled = opts?.disabled ?? false;
 
   const refresh = useCallback(async () => {
     try { setTerminals(await terminalApi.listTerminals(projectId)); } catch { /* офлайн */ }
   }, [projectId]);
 
-  // Список держим всегда: он нужен и панельке терминала, и бейджам рельсы.
-  // (В WorkspacePage в deps эффекта сидел ещё leftTab — лишний refresh при смене
-  // вкладки; refresh идемпотентен, сюда эту зависимость не тянем.)
+  // Список держит весь экран, которому он нужен: и панелька терминала, и бейджи рельсы
+  // живут на нём. (В WorkspacePage в deps эффекта сидел ещё leftTab — лишний refresh при
+  // смене вкладки; refresh идемпотентен, сюда эту зависимость не тянем.)
+  // disabled — экрану терминалов нет вовсе (детская поверхность): эффект не ставится,
+  // ни первичного refresh, ни подписки — оба поднимают связь с /hubs/terminal
+  // (listTerminals → ensureConnected), ребёнку она не нужна и не разрешена (Х-W4-34).
   useEffect(() => {
+    if (disabled) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- подписка на обновления терминалов и первичный refresh
     void refresh();
     return terminalApi.onTerminalMessage(msg => {
@@ -25,7 +34,7 @@ export function useProjectTerminals(projectId: string) {
         setTerminals(prev => prev.map(t => t.id === msg.terminalId ? { ...t, name: msg.name ?? t.name } : t));
       }
     });
-  }, [refresh]);
+  }, [refresh, disabled]);
 
   const create = useCallback(async () => {
     try {

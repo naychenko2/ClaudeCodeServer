@@ -7,7 +7,8 @@ namespace ClaudeHomeServer.Tests.Services.Access;
 
 /// <summary>
 /// Core-примитив доступа (S0-1 + S1-1): роль по владению проектом и по списку участников
-/// (Editor/Reader), матрица прав от роли (читатель не пишет), видимость чата = доступ к его
+/// (Editor/Reader), матрица прав от роли (читатель не пишет; правка персон проекта —
+/// ConfigurePersonas, у редактора только в проекте-предмете, Б16a), видимость чата = доступ к его
 /// проекту (проектный чат) / владение самим чатом (чат вне проекта). Плюс контракт поля
 /// Project.Members в projects.json: без участников поля в JSON нет.
 /// </summary>
@@ -26,6 +27,15 @@ public class ProjectAccessTests
     {
         var project = OwnedProject();
         project.Members = [.. members.Select(m => new ProjectMember { UserId = m.UserId, Role = m.Role, AddedBy = OwnerId })];
+        return project;
+    }
+
+    // Проект-предмета ребёнка (ADR-041): связь — маркер ChildSubjectId, владелец — ребёнок,
+    // куратор — участник-редактор (Б14)
+    private static Project SubjectProject(params (string UserId, ProjectRole Role)[] members)
+    {
+        var project = SharedProject(members);
+        project.ChildSubjectId = "math";
         return project;
     }
 
@@ -144,6 +154,49 @@ public class ProjectAccessTests
         ProjectAccess.Can(project, ReaderId, ProjectRight.Configure).Should().BeFalse();
         ProjectAccess.Can(project, EditorId, ProjectRight.Configure).Should().BeFalse();
         ProjectAccess.Can(project, OtherId, ProjectRight.WriteContent).Should().BeFalse();
+    }
+
+    // --- Б16a (ADR-041 ред. 7, находка 1): право ConfigurePersonas и числа ProjectRight
+
+    [Fact]
+    public void МатрицаПрав_ConfigurePersonas_КураторПредметаИВладелец_РедакторОбычногоПроектаНет()
+    {
+        var subject = SubjectProject((EditorId, ProjectRole.Editor), (ReaderId, ProjectRole.Reader));
+
+        // Куратор проекта-предмета: персону-репетитора правит, проект — нет
+        ProjectAccess.Can(subject, EditorId, ProjectRight.ConfigurePersonas).Should().BeTrue();
+        ProjectAccess.Can(subject, EditorId, ProjectRight.Configure).Should().BeFalse();
+
+        // Владелец предмета (ребёнок) — все права, как и прежде
+        ProjectAccess.Can(subject, OwnerId, ProjectRight.ConfigurePersonas).Should().BeTrue();
+        ProjectAccess.Can(subject, OwnerId, ProjectRight.Configure).Should().BeTrue();
+
+        // Читатель предмета и чужой — ни того, ни другого; null-проекта право не касается
+        ProjectAccess.Can(subject, ReaderId, ProjectRight.ConfigurePersonas).Should().BeFalse();
+        ProjectAccess.Can(subject, ReaderId, ProjectRight.Configure).Should().BeFalse();
+        ProjectAccess.Can(subject, OtherId, ProjectRight.ConfigurePersonas).Should().BeFalse();
+        ProjectAccess.Can(null, OwnerId, ProjectRight.ConfigurePersonas).Should().BeFalse();
+
+        // Обычный общий проект: право равно Configure — только владелец, редактор его не получает
+        var ordinary = SharedProject((EditorId, ProjectRole.Editor), (ReaderId, ProjectRole.Reader));
+        ProjectAccess.Can(ordinary, OwnerId, ProjectRight.ConfigurePersonas).Should().BeTrue();
+        ProjectAccess.Can(ordinary, EditorId, ProjectRight.ConfigurePersonas).Should().BeFalse();
+        ProjectAccess.Can(ordinary, ReaderId, ProjectRight.ConfigurePersonas).Should().BeFalse();
+
+        // Предмет без участников (кураторов ещё нет): править персону некому, кроме владельца
+        ProjectAccess.Can(SubjectProject(), EditorId, ProjectRight.ConfigurePersonas).Should().BeFalse();
+    }
+
+    [Fact]
+    public void МатрицаПрав_ЧислаProjectRight_СнимкаНеСдвинуты()
+    {
+        // Новый член — только в конце enum: прежние числа не двигаются (снимок до шага Б16a)
+        ((int)ProjectRight.Read).Should().Be(0);
+        ((int)ProjectRight.Write).Should().Be(1);
+        ((int)ProjectRight.RunTurn).Should().Be(2);
+        ((int)ProjectRight.Configure).Should().Be(3);
+        ((int)ProjectRight.WriteContent).Should().Be(4);
+        ((int)ProjectRight.ConfigurePersonas).Should().Be(5);
     }
 
     // --- S1-1: поле Members в projects.json — без участников поля нет (round-trip стора)

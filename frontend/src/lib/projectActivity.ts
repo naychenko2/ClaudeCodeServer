@@ -6,6 +6,7 @@ import { hasUnread, subscribeReadState } from './chatReadState';
 import { loadChatFilters, matchChatFilter } from './chatFilters';
 import { onMessage, onReconnected } from './signalr';
 import { bgWorkPresenceSnapshot, subscribeAgentsPresence } from './agentsPresence';
+import { getMeSnapshot } from './defaultPersona';
 import { startVisiblePoll, throttleRefetch } from './visiblePoll';
 
 // Стор активности проектов для переключателя в сайдбаре (флаг sidebar-project-switcher):
@@ -245,6 +246,11 @@ function recompute() {
 }
 
 function fetchNow() {
+  // Ребёнок не опрашивает сводку: /api/home/summary — взрослая ручка без [ChildAllowed]
+  // (инвентаризация X-W4-36: ребёнку был 403 из слушателя воркспейса). Гейт в единственной
+  // точке запроса: к fetchNow ведут и поллер start(), и троттл сообщений, и onReconnected,
+  // и refreshProjectActivity — дальше них ни один путь не спросит (X-W4-37).
+  if (getMeSnapshot().isChild) return;
   api.home.summary(20)
     .then(d => {
       _lastSummary = { active: d.active, recent: d.recent };

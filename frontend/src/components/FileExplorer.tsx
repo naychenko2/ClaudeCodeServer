@@ -42,6 +42,7 @@ const MD_CONVERTIBLE = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'ppt
 const isMdConvertible = (name: string) => MD_CONVERTIBLE.has((name.split('.').pop() ?? '').toLowerCase());
 import { copyMarkdown } from '../lib/selectionScope';
 import { useGitState, ensureGit } from '../lib/git';
+import { useMe } from '../lib/defaultPersona';
 import { useOnline } from '../hooks/useOnline';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { useFileContextMenu } from '../features/chatContext/useFileContextMenu';
@@ -861,7 +862,11 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // кроме него. ===
   const [onlyChanged, setOnlyChanged] = useState<boolean>(() => initial?.onlyChanged ?? false);
   const gitState = useGitState(project.id);
-  useEffect(() => { ensureGit(project.id); }, [project.id]);
+  // Ребёнок не опрашивает git панели: GitController без [ChildAllowed] (решение 77: git
+  // у проекта-предмета выключен), и сам экран уже гасит ensureGit для кружка рельсы
+  // (WorkspacePage). Панель — второй вызывающий, тот же гейт по Me.isChild (X-W4-37).
+  const me = useMe();
+  useEffect(() => { if (me.isChild) return; ensureGit(project.id); }, [project.id, me.isChild]);
   const isRepo = gitState.status?.isRepo ?? false;
 
   // Наборы изменённых путей из git-статуса: файлы + папки на пути к ним (для фильтра дерева)

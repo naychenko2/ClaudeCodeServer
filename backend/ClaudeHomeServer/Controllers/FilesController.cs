@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Git;
@@ -31,7 +32,12 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // S3-3b (разрез 4bc3d04f §3): журнал правок человека (S3-3) — зовётся после УСПЕШНОЙ записи/
     // удаления/переноса файла. В DI он всегда (Program.cs:438-439); опциональным оставлен как
     // остальные необязательные зависимости контроллера: бесхостовые тесты собирают его напрямую.
-    IHumanEditJournal? humanEdits = null) : ControllerBase
+    IHumanEditJournal? humanEdits = null,
+    // Б11b (решения 56/89/90): общий писатель загрузки в папку предмета. Зарегистрирован
+    // всегда (Program.cs); опционален, как остальные необязательные зависимости контроллера:
+    // тесты, собирающие его напрямую, не обязаны его нести. Нет его — детская загрузка отказана 503,
+    // а не идёт взрослым путём: без писателя у неё нет ни типа, ни метра папки, ни копии.
+    ClaudeHomeServer.Services.ChildMode.ChildTextCopyService? childFiles = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -112,12 +118,70 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             throw new UnauthorizedAccessException("В вики пишет только Хранитель");
     }
 
+    // --- Детская граница рельсы «Файлы» (И8; ADR-041 ред. 5–6, решения 53/56/65) -------------
+    // Работает только над проектом-предметом: его владелец — ребёнок (провижнер предмета,
+    // ChildSubjectProjectProvisioner.EnsureSubjectProject), поэтому актёр пути выводится из
+    // роли в этом проекте: владелец — Child, участник-опекун с ролью Editor — Curator. Инлайновых
+    // маркеров предмета здесь нет: признак читается единой точкой ProjectCapabilities.
+    // Вердикт даёт та же ChildPathPolicy, что и решению разрешения инструмента хода (Б10b) —
+    // второй копии правил ни у одного потребителя нет. Hidden → 404 («нет такого файла», тот же
+    // приём, что чужое private-вложение), Deny → 403 с причиной. Чужой ребёнку проект-предмет
+    // до этой границы не доходит: per-owner [ProjectScope] отказывает его по праву раньше.
+    private const string ChildPathErrorCode = "child_path";
+
+    // Актёр пути; null — проект не проект-предмета: детской проверки нет, обычные права.
+    private ChildActor? ChildSubjectActor(string projectId) =>
+        ClaudeHomeServer.Models.ProjectCapabilities.IsChildSubject(projects.GetById(projectId))
+            ? CallerIsProjectOwner(projectId) ? ChildActor.Child : ChildActor.Curator
+            : null;
+
+    // Отказ по пути (И8) или null — можно продолжать. relPath — тот же относительный путь,
+    // который передают ручки: ChildPathPolicy разрешает его от корня предмета сама, поэтому
+    // здесь нет ни SafeJoin, ни своей канонизации — одна точка на весь путь. Пустой путь
+    // ручки означает саму папку предмета: она читается и перечисляется, но не пишется и не
+    // удаляется — тот же вердикт, что для любого другого пути.
+    private IActionResult? ChildPathDenied(string projectId, string? relPath, ChildPathOp op)
+    {
+        if (ChildSubjectActor(projectId) is not { } actor) return null;
+        return ChildPathDenied(GetRoot(projectId), relPath, actor, op);
+    }
+
+    private IActionResult? ChildPathDenied(string root, string? relPath, ChildActor actor, ChildPathOp op)
+    {
+        var decision = ChildPathPolicy.Decide(actor, op, string.IsNullOrEmpty(relPath) ? "." : relPath!, root);
+        return decision.Verdict switch
+        {
+            ChildPathVerdict.Allow => null,
+            ChildPathVerdict.Hidden => NotFound(),
+            _ => StatusCode(403, new { error = decision.Reason ?? "Вне папки предмета", code = ChildPathErrorCode }),
+        };
+    }
+
+    // Записи, которых ребёнку не есть («Для репетитора/», защищённые имена на любой глубине):
+    // в ответе нет ни имён, ни их количества — тот же приём, что с чужим private-поддеревом в
+    // List/Tree/Search. .ccs-text/ остаётся: текстовую копию ребёнок читает (решение 67).
+    private IEnumerable<FileEntry> ChildVisibleOnly(string root, ChildActor? actor, IEnumerable<FileEntry> entries) =>
+        actor is not { } a ? entries
+            : entries.Where(e => ChildPathPolicy.Decide(a, ChildPathOp.List, e.Path, root).Verdict != ChildPathVerdict.Hidden);
+
+    // Архив ребёнка (И8): в zip корня или папки предмета идёт только то, что Read разрешено той
+    // же границей, — Hidden и Deny в архив не попадают ни одной записью. Имя записи relative
+    // к упакованной папке, поэтому к нему добавляется её префикс от корня предмета: решение
+    // всегда по полному пути, как во всех остальных точках.
+    private static Func<string, bool> ChildZipOnly(string root, string folder)
+    {
+        var rel = Path.GetRelativePath(root, folder).Replace('\\', '/');
+        var prefix = rel == "." ? "" : rel + "/";
+        return entry => ChildPathPolicy.Decide(ChildActor.Child, ChildPathOp.Read, prefix + entry, root).Verdict == ChildPathVerdict.Allow;
+    }
+
     // Проставляет состояние синхронизации (direct/inherited/null) каждой записи
     private IEnumerable<FileEntry> Annotate(string projectId, IEnumerable<FileEntry> entries) =>
         entries.Select(e => e with { Synced = sync.GetSyncState(projectId, e.Path) });
 
     [HttpGet]
     [ProjectScope]
+    [ChildAllowed]
     public IActionResult List(string projectId, [FromQuery] string path = "")
     {
         try
@@ -127,8 +191,12 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // не дают — ни имён, ни id автора, ни количества. Без JWT — пустая строка: любое private
             // закрыто (fail-closed, как IsForeign по пустому id). Свой private — как раньше.
             if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
+            // И8: ребёнку не видна папка «Для репетитора/» и защищённые имена — ни списком, ни
+            // количеством (решение 65); названный такой путь — 404, как чужое private.
+            if (ChildPathDenied(projectId, path, ChildPathOp.List) is { } child) return child;
             var p = GetProject(projectId);
-            return Ok(Annotate(projectId, files.List(p.RootPath, path, p.ShowHiddenFiles, UserId ?? "")));
+            return Ok(Annotate(projectId, ChildVisibleOnly(p.RootPath, ChildSubjectActor(projectId),
+                files.List(p.RootPath, path, p.ShowHiddenFiles, UserId ?? ""))));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
@@ -138,6 +206,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
     [HttpGet("tree")]
     [ProjectScope]
+    [ChildAllowed]
     public IActionResult Tree(string projectId, [FromQuery] string path = "", [FromQuery] bool? showHidden = null)
     {
         try
@@ -147,8 +216,12 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // фильтр по записям стоит в FileService.Tree до рекурсии: чужое поддерево не съедает
             // слоты своих по TreeMaxEntries
             if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
+            // И8: то же, что для List — «Для репетитора/» и защищённые имена не входят ни в
+            // дерево, ни в его счёт (решение 65).
+            if (ChildPathDenied(projectId, path, ChildPathOp.List) is { } child) return child;
             var p = GetProject(projectId);
-            return Ok(Annotate(projectId, files.Tree(p.RootPath, path, showHidden ?? p.ShowHiddenFiles, UserId ?? "")));
+            return Ok(Annotate(projectId, ChildVisibleOnly(p.RootPath, ChildSubjectActor(projectId),
+                files.Tree(p.RootPath, path, showHidden ?? p.ShowHiddenFiles, UserId ?? ""))));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
@@ -158,16 +231,25 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
     [HttpGet("search")]
     [ProjectScope]
+    [ChildAllowed]
     public IActionResult Search(string projectId, [FromQuery] string q = "")
     {
         // S2d-6b-2: зритель передаётся в поиск — чужие private-вложения не попадают в выдачу
         // ни именем, ни количеством (фильтр в FileService.Search, до потолка выдачи).
-        try { return Ok(Annotate(projectId, files.Search(GetRoot(projectId), q, UserId))); }
+        // И8: то же для скрытых ребёнку папок — поиск по своей папки корню разрешён, выдачи
+        // «Для репетитора/» и защищённых имён нет (решение 65).
+        try
+        {
+            if (ChildPathDenied(projectId, "", ChildPathOp.List) is { } child) return child;
+            return Ok(Annotate(projectId, ChildVisibleOnly(GetRoot(projectId), ChildSubjectActor(projectId),
+                files.Search(GetRoot(projectId), q, UserId))));
+        }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
     [HttpGet("content")]
     [ProjectScope]
+    [ChildAllowed]
     public async Task<IActionResult> GetContent(string projectId, [FromQuery] string path, [FromQuery] string? featureId = null, [FromQuery] string? sessionId = null, [FromQuery] string? taskId = null)
     {
         try
@@ -176,6 +258,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // линия по корню проекта; после резолва дерева гейт повторяется по фактическому
             // корню операции (TAIL-ROOTS-GATE, см. IsForeignPrivate)
             if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
+            // И8: ребёнку не читается «Для репетитора/» и защищённые имена — 404, как чужое
+            // private. У проекта-предмета нет git (профиль ProjectCapabilities), поэтому ветки
+            // featureId/sessionId/taskId ведут тот же корень предмета — граница стоит до них.
+            if (ChildPathDenied(projectId, path, ChildPathOp.Read) is { } child) return child;
             var p = GetProject(projectId);
             // W4-5B2 (п.5.2): ?featureId= остаётся СТРОГИМ: чтение из проверенного дерева
             // эпика по правилу TreeRootForAsync, без поиска по чужим деревьям (тест
@@ -545,6 +631,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // WriteContentDoorsGuardTests.
     [HttpPut("content")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
+    [ChildAllowed]
     public async Task<IActionResult> SaveContent(string projectId, [FromQuery] string path, [FromBody] SaveContentRequest req, [FromQuery] string? taskId = null)
     {
         try
@@ -558,6 +645,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // S2d-6b-5 (дефект e5d55007): запись в чужое private — 404 до любого эффекта:
             // до проверки пути и до замка. Обе ветки (с If-Match и без) — за гейтом.
             if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
+            // И8: «Материалы/» и «Для репетитора/» — только чтение (ребёнку и репетитору),
+            // настройки CLI и служебное — закрыты всем, включая куратора (решения 53/65).
+            if (ChildPathDenied(projectId, path, ChildPathOp.Write) is { } child) return child;
             var root = GetRoot(projectId);
             if (IsDirectoryPath(root, path)) return NotFound();
 
@@ -942,12 +1032,15 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // S2c-8: на WriteContent (см. правило у SaveContent).
     [HttpPost("create")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
+    [ChildAllowed]
     public IActionResult CreateFile(string projectId, [FromBody] CreateFileRequest req)
     {
         try
         {
             // S2d-6b-5: создание файла в чужом private — 404 до создания
             if (ForeignPrivateDenied(GetRoot(projectId), req.Path) is { } denied) return denied;
+            // И8: та же граница записи, что у SaveContent (решения 53/65) — до любого эффекта.
+            if (ChildPathDenied(projectId, req.Path, ChildPathOp.Write) is { } child) return child;
             var root = GetRoot(projectId);
             files.CreateFile(root, req.Path, req.Content ?? "");
             RecordHumanEdit(projectId, root, req.Path);   // S3-3b: коллизия имени — выше, до этой строки
@@ -963,6 +1056,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // см. Delete).
     [HttpPost("mkdir")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
+    [ChildAllowed]
     public IActionResult CreateDir(string projectId, [FromBody] PathRequest req)
     {
         // S2d-6b-5: каталог под чужим автором — 404 до CreateDirectory. Сам контейнер
@@ -970,6 +1064,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         try
         {
             if (ForeignPrivateDenied(GetRoot(projectId), req.Path) is { } denied) return denied;
+            // И8: папка «Материалы/» или «Для репетитора/» уже есть и не создаётся заново,
+            // скрытые и защищённые имена закрыты всем (решения 53/65).
+            if (ChildPathDenied(projectId, req.Path, ChildPathOp.Write) is { } child) return child;
             files.CreateDirectory(GetRoot(projectId), req.Path);
             return Ok();
         }
@@ -988,6 +1085,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // затирается: оно переезжает целиком, поэтому п.2 здесь не нужен.
     [HttpPost("rename")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
+    [ChildAllowed]
     public async Task<IActionResult> Rename(string projectId, [FromBody] RenameRequest req)
     {
         try
@@ -1000,6 +1098,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             if (ForeignPrivateDenied(GetRoot(projectId), req.NewPath) is { } dNew) return dNew;
             if (PrivateContainerDenied(GetRoot(projectId), req.OldPath) is { } cOld) return cOld;
             if (PrivateContainerDenied(GetRoot(projectId), req.NewPath) is { } cNew) return cNew;
+            // И8: перенос — запись в новый путь и изменение старого: оба судятся границей
+            // (перенос в «Материалы/» или в защищённое имя — 403), до замков и до эффекта.
+            if (ChildPathDenied(projectId, req.OldPath, ChildPathOp.Write) is { } cOldPath) return cOldPath;
+            if (ChildPathDenied(projectId, req.NewPath, ChildPathOp.Write) is { } cNewPath) return cNewPath;
             var root = GetRoot(projectId);
             var absOld = FileService.SafeJoinPublic(root, req.OldPath);
             var absNew = FileService.SafeJoinPublic(root, req.NewPath);
@@ -1073,6 +1175,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // Revert остаётся на Write, у редактора его нет.
     [HttpDelete]
     [ProjectScope(Right = ProjectRight.WriteContent)]
+    [ChildAllowed]
     // Секция destructive: на делегированном ходу агент не удаляет данные (раньше — срезанием
     // секции из состава инструментов wsp, что перезапускало процесс CLI со всеми MCP)
     [DenyOnDelegatedTurn("Удаление файлов")]
@@ -1086,12 +1189,16 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // Гейт — до ветки файл/папка, до замка, до files.Delete.
             if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             if (PrivateContainerDenied(GetRoot(projectId), path) is { } container) return container;
+            // И8: удаление — изменение пути, судится той же границей (Hidden → 404, Deny → 403).
+            // Актёр передаётся в саму операцию: снимок в корзину — только ребёнку (решение 54).
+            var childActor = ChildSubjectActor(projectId);
+            if (ChildPathDenied(projectId, path, ChildPathOp.Delete) is { } child) return child;
             var root = GetRoot(projectId);
             if (IsDirectoryPath(root, path))
                 return CallerIsProjectOwner(projectId)
-                    ? await DeleteUnderLockAsync(projectId, root, path, ifMatch: null)
+                    ? await DeleteUnderLockAsync(projectId, root, path, ifMatch: null, childActor)
                     : StatusCode(403, new { error = "Удаление папки — только владелец проекта", code = ProjectScopeAttribute.ErrorCode });
-            return await DeleteUnderLockAsync(projectId, root, path, RequestIfMatch());
+            return await DeleteUnderLockAsync(projectId, root, path, RequestIfMatch(), childActor);
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (FileNotFoundException) { return NotFound(); }
@@ -1103,7 +1210,8 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // F-4 (п.2): перед сверкой версии — отказ редактору на незакоммиченном файле (он важнее:
     // If-Match здесь о версии, а отказа причина — в праве на чужую правку). Ветка папки доходит
     // сюда только от владельца (гейт в Delete), для неё проверка проходит по построению.
-    private async Task<IActionResult> DeleteUnderLockAsync(string projectId, string root, string path, string? ifMatch)
+    private async Task<IActionResult> DeleteUnderLockAsync(string projectId, string root, string path, string? ifMatch,
+        ChildActor? childActor = null)
     {
         var abs = FileService.SafeJoinPublic(root, path);
         var sem = LockFor(abs);
@@ -1120,19 +1228,68 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // S3-3b: файл — своим путём; папка (до неё доходит только владелец) — списком её
             // файлов, снятых до удаления: путь папки в pathspec затянул бы и чужую работу.
             var inner = Directory.Exists(abs) ? FilesUnderDir(abs) : null;
+            // Корзина ребёнка (решение 54): удаление в рельсе ребёнка обратимо — прежняя версия
+            // идёт в .ccs-trash/ ДО удаления. Файл — своим снимком; папка (до неё доходит только
+            // владелец) — снимком каждого своего файла (тот же порядок, что у RecordDeletedDir).
+            // Опекун (Curator) и обычный проект удаляют без снимка: корзина — механизм ребёнка и
+            // репетитора, не взрослого. Id записей — в ответе: по ним же идёт POST restore.
+            var trashed = childActor == ChildActor.Child ? ChildSnapshotsBeforeDelete(root, path, abs) : null;
             files.Delete(root, path);
             if (inner is null) RecordHumanEdit(projectId, root, path);
             else RecordDeletedDir(projectId, root, inner);
-            return NoContent();
+            return trashed is { Count: > 0 } ids ? Ok(new { trashed = ids }) : NoContent();
         }
         finally { sem.Release(); }
     }
 
+    // Снимки в корзину перед удалением ребёнка (решение 54): файл — своим путём, папка — каждым
+    // файлом под ней (пути относительные, как их ждёт ChildTrash). Пустой список — защищать нечем:
+    // нового файла нет. Снимок не отменяет удаление и не откладывается: он под тем же замком пути,
+    // что и сама операция, — иначе между снимком и удалением в файл мог бы вернуться другой.
+    private List<string> ChildSnapshotsBeforeDelete(string root, string path, string abs)
+    {
+        var rels = Directory.Exists(abs) ? FilesUnderDir(abs).Select(p => RelOf(root, p)).ToList() : [path];
+        var ids = new List<string>();
+        foreach (var rel in rels)
+            if (ChildTrash.Snapshot(root, rel, UserId) is { } id) ids.Add(id);
+        return ids;
+    }
+
+    // POST restore (решение 56): вернуть запись .ccs-trash/ на её исходный путь. Id — тот, что
+    // отдал DELETE ребёнка. Записи нет — 404, как чужого файла (существование записи не раскрываем
+    // до своей проверки). Путь записи судится той же границей И8, что и обычная запись: вернуть в
+    // «Материалы/» или в защищённое имя нельзя. На занятое имя текущий файл уходит в корзину
+    // первым — это делает сам ChildTrash.Restore (решение 54), здесь для этого нет ветки.
+    [HttpPost("restore")]
+    [ProjectScope(Right = ProjectRight.WriteContent)]
+    [ChildAllowed]
+    public IActionResult RestoreFromTrash(string projectId, [FromBody] RestoreFromTrashRequest req)
+    {
+        try
+        {
+            var root = GetRoot(projectId);
+            var entry = ChildTrash.List(root)
+                .FirstOrDefault(e => string.Equals(e.Id, req.EntryId, StringComparison.Ordinal));
+            if (entry is null) return NotFound(new { error = "Записи в корзине нет" });
+            if (ChildPathDenied(projectId, entry.OriginalPath, ChildPathOp.Write) is { } child) return child;
+            return ChildTrash.Restore(root, entry.Id)
+                ? Ok(new { restored = entry.OriginalPath })
+                : NotFound(new { error = "Записи в корзине нет" });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
+
     // S2c-8: на WriteContent (см. правило у SaveContent).
+    // Б11b (ADR-041 ред. 6, решения 56/89/90): открыто ребёнку ([ChildAllowed]) над его
+    // проектом-предметом: путь судится той же ChildPathPolicy, что остальные ручки рельсы,
+    // запись идёт через общего писателя папки предмета. Взрослый маршрут не меняется.
     [HttpPost("upload")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
+    [ChildAllowed]
     [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
-    public async Task<IActionResult> Upload(string projectId, [FromQuery] string path = "", IFormFile? file = null)
+    public async Task<IActionResult> Upload(string projectId, [FromQuery] string path = "", IFormFile? file = null,
+        CancellationToken ct = default)
     {
         if (file == null || file.Length == 0)
             return BadRequest(new { error = "Файл не выбран или пустой" });
@@ -1150,6 +1307,11 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // S2d-6b-5 (дефект e5d55007): каталог назначения под чужим private — 404 до
             // SafeJoin/CreateDirectory: отказанная загрузка не должна создавать каталог назначения
             if (ForeignPrivateDenied(root, relativePath) is { } foreign) return foreign;
+
+            // И8 (решение 56): ребёнок в своей папке предмета — та же граница, что у остальных
+            // ручек рельсы, до записи: «Материалы/» и «Для репетитора/» закрыты ему для записи,
+            // в .ccs-text/ пишет только сервер. Тело отказа — общее с ними (ChildPathDenied).
+            if (ChildPathDenied(projectId, relativePath, ChildPathOp.Write) is { } childDenied) return childDenied;
 
             // S2c-10 (хвост ревью R-S2c-8, карточка 1ac0075a п.1): та же дверь, что у SaveContent:
             // замок на путь, If-Match по тому же контракту, запись через временный файл. Без замка
@@ -1172,6 +1334,13 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                     var current = IsEtaggableText(root, relativePath, safePath) ? CanonicalSha256OfTextFile(safePath) : null;
                     if (current != ifMatch) return Conflict(FileConflictBodyFor(root, relativePath, safePath, current));
                 }
+                // Б11b: загрузка ребёнка — через общего писателя (решения 56/89/90), под этим
+                // же замком пути: совпадение имени остаётся правилом этой ручки (перезапись
+                // существующего файла; каталог на имени — 409 «exists»). Метр папки и запись
+                // писатель держит под своим замком корня предмета.
+                if (ChildSubjectActor(projectId) == ChildActor.Child)
+                    return await UploadChildAsync(projectId, root, relativePath, file, ct);
+
                 // Х-10 (тот же класс, что починен в личном маршруте Х-7, коммит 2a7899b74):
                 // имя занято каталогом — File.Move в атомарной записи бросает IOException,
                 // раньше это выходило 500. Тот же 409 «exists», что у create/rename. Ловуем
@@ -1187,12 +1356,52 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
+    // Путь ребёнка в папку предмета (Б11b): тип по сигнатуре, размер файла, метр папки и
+    // текстовая копия — в общем писателе; здесь — только его коды и журнал правки.
+    // requireText=false: файла без текстовой копии это не отменяет (его читает оригинал, а
+    // копию дописывает к уроку фильтр хаба — в ответе она только признак). Ответ — путь
+    // оригинала на диске и его вид: расширение писатель приводит к типу, поэтому путь
+    // ответа и файл на диске не расходятся.
+    private async Task<IActionResult> UploadChildAsync(string projectId, string root, string relativePath,
+        IFormFile file, CancellationToken ct)
+    {
+        if (childFiles is null)
+            return StatusCode(503, new { code = ChildTextCopyService.CodeStorageError, error = ChildLimitTexts.Uncheckable });
+
+        using var ms = new MemoryStream();
+        await file.CopyToAsync(ms, ct);
+        var bytes = ms.ToArray();
+        if (bytes.Length == 0) return BadRequest(new { error = "Файл пустой" });
+
+        var res = await childFiles.SaveAsync(
+            root, relativePath, bytes, childFiles.MaxAttachmentBytes(), requireText: false, ct);
+
+        if (!res.Accepted)
+            return res.Code switch
+            {
+                ChildTextCopyService.CodeTooLarge =>
+                    StatusCode(413, new { code = ChildTextCopyService.CodeTooLarge, error = "Файл больше разрешённого." }),
+                ChildTextCopyService.CodeFolderLimit =>
+                    StatusCode(413, new { code = ChildTextCopyService.CodeFolderLimit, error = "В этой папке уже всё занято. Позови взрослого." }),
+                ChildTextCopyService.CodeUnsupportedType =>
+                    StatusCode(415, new { code = ChildTextCopyService.CodeUnsupportedType, error = "Такой файл нельзя приложить." }),
+                ChildTextCopyService.CodeExists => Conflict(new { error = "exists" }),
+                _ => StatusCode(503, new { code = ChildTextCopyService.CodeStorageError, error = "Записать не получилось. Попробуй ещё раз или позови взрослого." }),
+            };
+
+        // Журнал — по фактическому пути: расширение писатель приводит к определённому типу,
+        // карточка правки должна показывать то, что легло на диск.
+        RecordHumanEdit(projectId, root, res.Path!);
+        return Ok(new { path = res.Path, kind = res.Kind, textCopy = res.TextCopy });
+    }
+
     // Шаг B2a: у stream тот же необязательный ?sessionId= и тот же резолв дерева, что у
     // content: заявленное дерево чата — анкер локатора, «его нет» — поиск по main и
     // остальным worktree. Чужой/несуществующий чат — 404 (общая GetOwnedSession). Без
     // параметра — прежнее поведение: корень проекта.
     [HttpGet("stream")]
     [ProjectScope]
+    [ChildAllowed]
     public async Task<IActionResult> Stream(string projectId, [FromQuery] string path, [FromQuery] string? sessionId = null, [FromQuery] string? taskId = null)
     {
         // FS-B1b: sessionId и taskId — два разных анкера; оба сразу — неоднозначно (в отличие
@@ -1203,6 +1412,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         {
             // S2d-6b-2: поток отдаёт содержимое файла — читающая ручка (тот же 404, что у content)
             if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
+            // И8: картинка или PDF из «Для репетитора/» ребёнку не отдаётся — тот же 404, что у
+            // скрытого имени в content.
+            if (ChildPathDenied(projectId, path, ChildPathOp.Read) is { } child) return child;
             string abs;
             if (!string.IsNullOrEmpty(taskId))
             {
@@ -1288,6 +1500,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // Служебные каталоги в архив не попадают; слишком большая папка — 413 с причиной.
     [HttpGet("zip")]
     [ProjectScope]
+    [ChildAllowed]
     public async Task<IActionResult> Zip(string projectId, [FromQuery] string path = "")
     {
         try
@@ -1296,6 +1509,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // Чужое приватное вложение и контейнер .cc-attachments — 404, как у соседних читающих ручек;
             // корень проекта (пустой путь) — законный вход, служебные каталоги из него исключает FolderZip
             if (ForeignPrivateDenied(project.RootPath, path) is { } denied) return denied;
+            // И8: архив папки «Для репетитора/» или защищённого имени ребёнку не отдаётся — 404,
+            // как сама папка в List/Tree.
+            if (ChildPathDenied(projectId, path, ChildPathOp.List) is { } child) return child;
             if (!string.IsNullOrWhiteSpace(path.Trim('/', '\\')) && PrivateContainerDenied(project.RootPath, path) is { } container) return container;
             var folder = SafePath.Join(project.RootPath, path);
             if (!Directory.Exists(folder)) return NotFound();
@@ -1306,12 +1522,17 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 : Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
             // Сверх лимита параллельных сборок — 429, а не очередь: каждая сборка держит до 2 ГБ во временной папке
             if (!await FolderZip.BuildSlot.WaitAsync(0)) return StatusCode(429, new { error = "Уже собираются другие архивы — повторите позже" });
+            // И8, сам архив: граница выше не пустила архив скрытой папки, но FolderZip обходит
+            // всю — архив корня предмета унёс бы ребёнку «Для репетитора/», корзину и защищённые
+            // имена. Каждая запись судится той же ChildPathPolicy (Read): архив ребёнка — ровно
+            // то, что ему видно в дереве. Куратор и обычный проект архивируются как раньше.
+            var zipInclude = ChildSubjectActor(projectId) == ChildActor.Child ? ChildZipOnly(project.RootPath, folder) : null;
             FolderZip.Result zip;
             try
             {
                 // Сборка уходит с потока запроса; отмена загрузки клиентом обрывает её — файл до 2 ГБ не дособирается зря
                 var ct = HttpContext.RequestAborted;
-                zip = await Task.Run(() => FolderZip.Build(folder, ct), ct);
+                zip = await Task.Run(() => FolderZip.Build(folder, ct, zipInclude), ct);
             }
             finally { FolderZip.BuildSlot.Release(); }
             if (zip.Skipped > 0)

@@ -331,7 +331,9 @@ public record RedactedThinkingMessage() : ServerMessage("redacted_thinking");
 // Action — признак предлагаемого действия под карточкой ошибки. Значения: "window-1m-drop"
 // (POST /api/chats/{id}/window-1m/drop): суффикс [1m] не срезается автоматически, и снять
 // его можно только явной кнопкой человека; "change-companion" — ход отклонён, потому что
-// проект ушёл из сферы персоны (PersonaZone.ChangeCompanionAction).
+// проект ушёл из сферы персоны (PersonaZone.ChangeCompanionAction); "child-route-refusal" —
+// ход ребёнка отклонён маршрутом (ChildRoute.RefusalAction): по этой метке фронт показывает
+// ребёнку текст отказа как есть, не подменяя его общей плашкой.
 // null — действия нет, карточка остаётся обычной ошибкой. Сравнение по строке, а не по
 // тексту ошибки: формулировка в TurnFailureText может меняться, а признак — нет.
 public record ErrorMessage(string Text, bool ExpectResultFollows = false, string? Details = null, string? Action = null)

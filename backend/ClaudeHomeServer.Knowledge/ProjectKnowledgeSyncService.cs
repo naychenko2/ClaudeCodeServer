@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Core.Telemetry;
 
@@ -119,12 +120,15 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
             var changed = await BootstrapDocsAsync(wk);
             var datasetId = wk.DifyDatasetId!;
             var hints = (changedPaths ?? []).Select(NormalizeHint).Where(p => p.Length > 0).ToList();
+            // Исключения проекта-предмета — свойство папки (её базы знаний), а не одного вызова:
+            // один маркер на весь дифф (Б13a)
+            var childSubject = IsChildSubjectRoot(rootPath);
 
             foreach (var path in wk.Docs!.Keys.ToList())
             {
                 try
                 {
-                    if (await SyncOneAsync(wk, datasetId, path, hints)) changed++;
+                    if (await SyncOneAsync(wk, datasetId, path, hints, childSubject)) changed++;
                 }
                 catch (Exception ex)
                 {
@@ -148,9 +152,24 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
         finally { _syncLock.Release(); }
     }
 
-    private async Task<bool> SyncOneAsync(WorkspaceKnowledge wk, string datasetId, string path, List<string> hints)
+    private async Task<bool> SyncOneAsync(WorkspaceKnowledge wk, string datasetId, string path, List<string> hints, bool childSubject)
     {
         var docRef = wk.Docs![path];
+
+        // Отслеживаемый файл проекта-предмета вышел за пределы его базы знаний — перенесён в
+        // «Для репетитора/» или в скрытую папку (Б13a): документ удаляем, как у удалённого файла.
+        // Проверка до хеша: живой файл вне индекса предмета не должен ни переиндексироваться,
+        // ни «мигрировать» под исключённое имя.
+        if (childSubject && IsExcludedFromSubjectIndex(path))
+        {
+            if (!string.IsNullOrEmpty(docRef.DocId))
+                try { await _knowledge.DeleteDocumentAsync(datasetId, docRef.DocId); }
+                catch (Exception ex) { _logger.LogDebug(ex, "Удаление документа файла вне индекса предмета {Path}", path); }
+            wk.Docs.Remove(path);
+            wk.DocumentTags?.Remove(path);
+            return true;
+        }
+
         var hash = TryComputeHash(wk.RootPath, path);
         if (hash is not null)
         {
@@ -160,7 +179,7 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
         }
 
         // Файл исчез: возможно перенесён — ищем среди изменившихся путей файл с тем же содержимым
-        var (newPath, newHash) = FindMoveTarget(wk, docRef, hints);
+        var (newPath, newHash) = FindMoveTarget(wk, docRef, hints, childSubject);
         if (newPath is not null)
         {
             MigrateTags(wk, path, newPath);
@@ -205,8 +224,12 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
     public async Task<(string DatasetId, DifyDocumentInfo Document)> IndexPathAsync(
         Project project, string username, string relativePath)
     {
-        var datasetId = await _knowledge.EnsureDatasetAsync(project, username);
         var path = Normalize(relativePath);
+        // Файл вне базы знаний предмета — отказ до создания датасета; тот же канал, что у
+        // неподдерживаемого формата (KnowledgeController → 400)
+        if (ProjectCapabilities.IsChildSubject(project) && IsExcludedFromSubjectIndex(path))
+            throw new InvalidOperationException("Файл не входит в базу знаний предмета");
+        var datasetId = await _knowledge.EnsureDatasetAsync(project, username);
 
         await _syncLock.WaitAsync();
         try
@@ -380,12 +403,14 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
 
     // Кандидат переноса: среди изменившихся путей — существующий неотслеживаемый файл
     // с тем же хешем содержимого
-    private (string? Path, string? Hash) FindMoveTarget(WorkspaceKnowledge wk, WorkspaceDocRef docRef, List<string> hints)
+    private (string? Path, string? Hash) FindMoveTarget(WorkspaceKnowledge wk, WorkspaceDocRef docRef, List<string> hints, bool childSubject)
     {
         if (string.IsNullOrEmpty(docRef.Hash)) return (null, null);
         foreach (var cand in hints)
         {
             if (wk.Docs!.ContainsKey(cand) || !KnowledgeService.IsKnowledgeIndexable(cand)) continue;
+            // В исключённую папку предмета документ не «переезжает» — он удаляется (Б13a)
+            if (childSubject && IsExcludedFromSubjectIndex(cand)) continue;
             var hash = TryComputeHash(wk.RootPath, cand);
             if (hash == docRef.Hash) return (cand, hash);
         }
@@ -428,6 +453,45 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
 
     private static string Normalize(string path) =>
         (path ?? "").Replace('\\', '/').Trim().TrimStart('/');
+
+    // База знаний этой папки — база знаний проекта-предмета? Тот же маркер, что у детского
+    // режима, прочитанный из единой точки (ProjectCapabilities.IsChildSubject), и та же граница
+    // папки, что у остальных потребителей синка (GetByRootPath в ListTargets/BroadcastAsync).
+    // Общая с предметом папка делит один датасет — исключения действуют и для неё: иначе ключи
+    // репетитора нашлись бы ребёнку поиском по этому датасету.
+    private bool IsChildSubjectRoot(string rootPath) =>
+        _projects.GetByRootPath(rootPath).Any(p => ProjectCapabilities.IsChildSubject(p));
+
+    // Исключения проекта-предмета (Б13a, ADR-041 ред. 6 §12 «Знания и картинки», доработка
+    // решением 91): в индекс предмета идут файлы ребёнка, «Материалы/» и текстовые копии
+    // этих путей (их читает ребёнок, решение 67); не идут «Для репетитора/» (ключи ответов
+    // репетитора) и всё скрытое — «.ccs-trash/», «.cc-attachments/», «.claude/» и любой
+    // сегмент с точкой. Копия судится по своему оригиналу через ChildPathPolicy.OriginalOf
+    // (тот же разворот, что в политике путей, — дефект 64996f49: без него копия ключа
+    // репетитора «.ccs-text/Для репетитора/k.pdf.txt» попадала в поиск «Знаний» ребёнка):
+    // не копия (null) — исключена (fail-closed); дальше — те же правила по оригиналу.
+    // «.ccs-text» как папка значима только на верхнем уровне: копия на глубине
+    // («Заметки/.ccs-text/x.txt») — обычный скрытый сегмент. Глубина — как у ChildPathPolicy:
+    // «Для репетитора» — только верхний уровень (вложенная папка с тем же именем — обычная
+    // папка ребёнка), скрытые сегменты — на любой глубине. Имена — по тому же сравнению,
+    // что у политики (OrdinalIgnoreCase); кириллица этих имён в NFD не разлагается — стабильна.
+    private static bool IsExcludedFromSubjectIndex(string normalizedPath)
+    {
+        if (normalizedPath.StartsWith(ChildPathPolicy.TextDir + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            var original = ChildPathPolicy.OriginalOf(normalizedPath);
+            if (original is null) return true;
+            normalizedPath = original;
+        }
+        var segments = normalizedPath.Split('/');
+        if (segments[0].Equals(ChildPathPolicy.TutorDir, StringComparison.OrdinalIgnoreCase))
+            return true;
+        foreach (var seg in segments)
+        {
+            if (seg.Length > 0 && seg[0] == '.') return true;
+        }
+        return false;
+    }
 
     // Путь-хинт «что менялось» для детекта переноса: вложения чата (AttachmentsDir)
     // отбрасываем — иначе документ базы знаний мог бы «переехать» на файл сообщения

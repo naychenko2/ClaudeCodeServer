@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
@@ -56,6 +57,7 @@ public class ChildStopSignalTests : IClassFixture<ChildStopSignalTests.Hosts>
     private SessionManager Sessions => _hosts.Services.GetRequiredService<SessionManager>();
     private NotificationStore Store => _hosts.Services.GetRequiredService<NotificationStore>();
     private UserStore Users => _hosts.Services.GetRequiredService<UserStore>();
+    private ProjectManager Projects => _hosts.Services.GetRequiredService<ProjectManager>();
 
     public ChildStopSignalTests(Hosts hosts)
     {
@@ -80,13 +82,18 @@ public class ChildStopSignalTests : IClassFixture<ChildStopSignalTests.Hosts>
         var to = local.AddHours(2).ToString("HH:mm", CultureInfo.InvariantCulture);
         var put = await _admin.PutAsJsonAsync($"/api/users/{id}/child-profile", new
         {
-            enabled = true, providerKey = KidsKey, model = "sonnet",
+            enabled = true, acknowledgeRouteRisk = true, providerKey = KidsKey, model = "sonnet",
             guardianUserIds = guardians ?? [],
             spaces = new Dictionary<string, object> { ["lessons"] = new { windows = new[] { new { from, to } }, dailyMinutes = 40 } },
             dailyBudgetUsd = 2, monthlyBudgetUsd = 40,
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
         ChildTestSubjects.Seed(_hosts.Services, id);
+        // Живой маршрут репетитора (И10): модель урока — модель персоны-руководителя проекта-
+        // предмета, её назначение здесь (тот же фикстур, что NewChild в ChildChatsControllerTests).
+        // Без него штатный POST урока после Б9b даёт 409 subject_not_ready.
+        (_hosts.Services.GetRequiredService<LocalActionOverridesStore>()
+            .Set(LocalActionCatalog.ChatPersona, "sonnet")).Should().BeTrue();
         var profile = Users.GetById(id)!.ChildMode!;
         profile.RulesAgreedAt = new DateTime(2026, 11, 17, 10, 0, 0, DateTimeKind.Utc);
         profile.RulesSummary = "правила";
@@ -199,6 +206,54 @@ public class ChildStopSignalTests : IClassFixture<ChildStopSignalTests.Hosts>
 
         status.Should().Be(HttpStatusCode.NotFound);
         code.Should().Be("chat_not_found");
+        (await StopSignals(AdminId)).Count.Should().Be(before, "отказ до рассылки");
+    }
+
+    // ── Б9e: урок в проекте-предмете (Б9b) — граница та же, что у Voice: ChildSpace, не ProjectId ──
+
+    [Fact]
+    public async Task Кнопка_УрокПроектаПредмета_202_ОдноУведомлениеБезПроекта()
+    {
+        var guardian = await NewUser("kss-lesson-g", child: false);
+        var child = await NewUser("kss-lesson-kid", child: true, guardians: [guardian]);
+        var client = As("kss-lesson-kid");
+        var sid = await CreateChat(client);
+
+        // предусловие: после Б9b урок — чат проекта-предмета; без этого тест не про границу Б9e
+        var chat = Sessions.GetOwnedVisible(sid, child)!;
+        chat.ProjectId.Should().NotBeNull("урок Б9b — чат проекта-предмета");
+        ProjectCapabilities.IsChildSubject(Projects.GetById(chat.ProjectId!)).Should().BeTrue();
+        chat.ChildSpace.Should().Be(ChildSpaces.Lessons);
+
+        var adminBefore = (await StopSignals(AdminId)).Count;
+
+        var (status, raw, _) = await Post(client, new { sessionId = sid });
+
+        status.Should().Be(HttpStatusCode.Accepted, "граница — ChildSpace; ProjectId урока не признак «не детский»");
+        JsonSerializer.Deserialize<JsonElement>(raw).GetProperty("accepted").GetBoolean().Should().BeTrue();
+        (await StopSignals(AdminId)).Count.Should().Be(adminBefore + 1);
+        var forGuardian = await StopSignals(guardian);
+        forGuardian.Should().ContainSingle("ровно одно уведомление опекуну");
+        forGuardian[0].Url.Should().BeNullOrEmpty();
+        forGuardian[0].SessionId.Should().BeNullOrEmpty();
+        forGuardian[0].ProjectId.Should().BeNullOrEmpty("проект урока не уходит в уведомление");
+    }
+
+    [Fact]
+    public async Task Кнопка_ЧужойРебёнокУрокаПроектаПредмета_404ОдинаковоеТело()
+    {
+        await NewUser("kss-l-first", child: true);
+        await NewUser("kss-l-second", child: true);
+        var lesson = await CreateChat(As("kss-l-first"));
+        var before = (await StopSignals(AdminId)).Count;
+
+        var other = await Post(As("kss-l-second"), new { sessionId = lesson });
+        var missing = await Post(As("kss-l-second"), new { sessionId = "no-such-chat" });
+
+        other.Status.Should().Be(HttpStatusCode.NotFound);
+        other.Code.Should().Be("chat_not_found");
+        missing.Status.Should().Be(HttpStatusCode.NotFound);
+        missing.Raw.Should().Be(other.Raw, "чужой урок и несуществующий чат — одно тело");
         (await StopSignals(AdminId)).Count.Should().Be(before, "отказ до рассылки");
     }
 

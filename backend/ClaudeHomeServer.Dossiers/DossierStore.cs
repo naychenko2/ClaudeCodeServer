@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // «{username}:dossiers:{projectName}» (дифф по хешам, дебаунс) для будущего семантического
 // recall (этап 2); без Dify — REST-фильтры (Find) работают полнотекстово прямо по стору,
 // graceful degradation не требуется отдельно. Эталон структуры — TeamMemoryService.
-public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposable
+public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDossierProjectCleaner, IDisposable
 {
     private sealed class KnowledgeState
     {

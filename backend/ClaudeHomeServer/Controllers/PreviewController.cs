@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.ProjectServices;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -51,10 +52,27 @@ public class PreviewController : ControllerBase
 
     private IActionResult Result(ProjectServicesResult r) => StatusCode(r.Status, r.Body);
 
+    // ── детская граница списка сервисов (Х-W4-31, дефект d7c8477b) ────────────────────
+    // Ребёнку открыта ровно одна ручка класса — список сервисов своего проекта-предмета:
+    // прямой доступ к взрослому опросу панели «Сервисы» закрыт всем, кроме своего предмета,
+    // по образцу «Знаний» (решение 81): [ChildAllowed] + «свой ли это предмет» внутри ручки.
+    // Сама граница — в одной точке, ChildSubjectAccess (Х-W4-47). Остальные ручки класса
+    // (start/stop/active/external, launch.json) метки не имеют намеренно: их отсекает сам
+    // гейт И1 до тела. Панель «Сервисы» ребёнку не открыта (решение 77) — метка здесь не про
+    // панель, а про закрытие прямого обращения.
+
     /// <summary>Список запускаемых сервисов проекта (инференс из манифестов + сохранённые) с runtime-статусом.</summary>
+    [ChildAllowed]
     [HttpGet("/api/projects/{projectId}/services")]
-    public async Task<IActionResult> Services(string projectId) =>
-        ScopedProject(projectId) is { } project ? Result(await _api.ServicesAsync(project, UserId)) : Forbid();
+    public async Task<IActionResult> Services(string projectId)
+    {
+        // Детская проверка — до ScopedProject: ребёнок-участник чужого проекта при рубильнике
+        // общих проектов доходит до тела — отказ здесь решает детская граница, а не права.
+        if (ChildSubjectAccess.IsChild(HttpContext, UserId)
+            && !ChildSubjectAccess.IsOwnSubjectProject(_projects.GetById(projectId), UserId))
+            return ChildSubjectAccess.NotOwnSubject("Сервисы");
+        return ScopedProject(projectId) is { } project ? Result(await _api.ServicesAsync(project, UserId)) : Forbid();
+    }
 
     /// <summary>Показать в превью сервис, поднятый вне продукта (порт — из конфигурации, не от клиента).</summary>
     [HttpPost("/api/projects/{projectId}/preview/active-external")]

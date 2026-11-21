@@ -34,18 +34,35 @@ public static class ChildProfileValidator
         if (user.ExecutionEnvironment != ExecutionEnvironments.Container)
             return new("not_container", "Детский режим включается только пользователям со средой исполнения container.");
 
-        // Ход ребёнка никогда не идёт по подписке (ADR-041 §4): маршрут профиля (чат правил) — только
-        // запись пула с API-ключом и Anthropic-моделью, без согласий: тот же ChildRoute.Evaluate, что на
-        // запуске. Пустой providerKey — тот же отказ: он ни в какую запись не резолвится.
-        if (RouteReject(ChildRoute.Evaluate(req.ProviderKey, req.Model, acknowledged: false, pool, providers),
-                "профиля", req.ProviderKey, forPool: true) is { } profileRoute)
-            return profileRoute;
+        // Согласие на риск маршрутов — одно на профиль ребёнка (ADR-041 ред. 4, решение 26):
+        // трёхзначный acknowledgeRouteRisk в теле — true «поставить», отсутствие поля «не трогать»,
+        // false «отзывать». Здесь, до записи, действительным считается живое согласие профиля, только
+        // если тело его прямо не отзывает: решение о самой паре (момент и автор) — под замком стора
+        // (UserStore.SetChildProfile), здесь только то, чем проверять маршруты этого тела.
+        var consent = req.AcknowledgeRouteRisk switch
+        {
+            true => true,
+            false => false,
+            _ => user.ChildMode?.RouteRiskAcknowledgedAt is not null,
+        };
+
+        // Маршрут профиля — тот, что несёт чат правил (тот же ChildRoute.Evaluate, что на запуске).
+        // Профиль без маршрутов («не настроен») допустим: пустые providerKey и model не резолвятся
+        // ни в какую запись, а нечитаемый профиль уже закрыт политикой (ChildModePolicy.IsValid →
+        // DenyAll, уроки и чат правил не стартуют). Отказывать при включении — значило бы запрещать
+        // настройку по частям: админ не смог бы сохранить лимиты, ещё не выбрав поставщика.
+        if (!string.IsNullOrWhiteSpace(req.ProviderKey) || !string.IsNullOrWhiteSpace(req.Model))
+        {
+            if (RouteReject(ChildRoute.Evaluate(req.ProviderKey, req.Model, consent, pool, providers),
+                    "профиля", req.ProviderKey) is { } profileRoute)
+                return profileRoute;
+        }
 
         if (ValidateSpaces(req.Spaces) is { } spaceError) return spaceError;
 
         // Предметы (Т2a, разрез §2): проверяется только то, что есть в теле — PUT без subjects
         // (null) не перечёркивает список: живые предметы сохраняет стор (SetChildProfile).
-        if (ValidateSubjects(req.Subjects, user, pool, providers) is { } subjectError) return subjectError;
+        if (ValidateSubjects(req.Subjects) is { } subjectError) return subjectError;
 
         // Опекун — реальный пользователь: уведомление стоп-сигнала и кабинет волны 2
         // должны указывать на живую учётку, а не в пустоту.
@@ -87,18 +104,10 @@ public static class ChildProfileValidator
     // Предметы (Т2a, разрез §2): id — тот же slug и уникальность, что у политики SubjectsValid
     // (ChildModePolicy.cs:46): валидатор пишет те же ключи в стор, и дубль сделал бы ребёнка
     // DenyAll. label 1..40, глиф 1..3, цвет — ключ из ChildSubject.ColorKeys (палитра живёт
-    // на фронте, здесь — только ключ). Маршрут предмета (Т5a, И2′) — ChildRoute.Evaluate: тот же
-    // отбор, что у запуска хода и ручки списка маршрутов; коды 400 — RouteReject. Согласие админа на
-    // не-Anthropic маршрут — acknowledgeRouteRisk в теле трёхзначный (Х1): true — согласие сейчас; поля нет —
-    // живое согласие того же предмета при том же providerKey (при смене providerKey оно не переживает:
-    // сброс делает стор под замком); false — отзыв: живое согласие не засчитывается и отказа «нет согласия»
-    // нет — предмет сохраняется не согласованным, 400 даст запуск хода.
-    private static Reject? ValidateSubjects(List<ChildSubjectDto>? subjects, User user,
-        ClaudeSubscriptionPool pool, LlmProviderRegistry providers)
+    // на фронте, здесь — только ключ). Предмет — только плитка: маршрута и репетитора в нём нет
+    // (Б17c, они в проекте-предмете), поэтому и согласия на маршрут предмета не бывает.
+    private static Reject? ValidateSubjects(List<ChildSubjectDto>? subjects)
     {
-        var live = user.ChildMode?.Subjects?.Where(x => x is not null)
-            .GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var subject in subjects ?? [])
         {
@@ -115,96 +124,33 @@ public static class ChildProfileValidator
                 return new("subject_glyph_invalid", $"Глиф предмета «{id}» — от 1 до 3 символов.");
             if (!ChildSubject.ColorKeys.Contains(subject.Color ?? "", StringComparer.Ordinal))
                 return new("subject_color_invalid", $"Цвет предмета «{id}» вне палитры: допустимы {string.Join(", ", ChildSubject.ColorKeys)}.");
-            var liveSubject = live is not null && live.TryGetValue(id, out var ls) ? ls : null;
-            // acknowledgeRouteRisk трёхзначный (Х1, ревью Т5a): true — согласие сейчас; поля нет — живое
-            // согласие того же предмета при том же providerKey; false — ОТЗЫВ: живое согласие не
-            // засчитывается даже при том же providerKey. Отказа «нет согласия» на false нет: предмет
-            // сохраняется «не согласованным», а 400 даст запуск хода (ChildRoute.Resolve читает
-            // RouteAcknowledgedAt). Прочие отказы маршрута — как были.
-            var revoked = subject.AcknowledgeRouteRisk == false;
-            var acknowledged = !revoked && (subject.AcknowledgeRouteRisk == true
-                || (liveSubject is { RouteAcknowledgedAt: not null } && liveSubject.ProviderKey == subject.ProviderKey));
-            var decision = ChildRoute.Evaluate(subject.ProviderKey, subject.Model, acknowledged, pool, providers);
-            if (revoked && decision.Refusal == ChildRouteRefusal.RiskUnacknowledged) continue;
-            if (RouteReject(decision, $"предмета «{id}»", subject.ProviderKey, forPool: false) is { } routeReject)
-                return routeReject;
         }
         return null;
     }
 
-    // Отказ ChildRoute → код 400 ADR-041 ред. 2. NoRoute: у профиля — «не запись пула с ключом»,
-    // у предмета — не пул и не включённый провайдер.
-    private static Reject? RouteReject(ChildRouteDecision decision, string what, string? providerKey, bool forPool) =>
+    // Отказ ChildRoute → код 400 ADR-041 ред. 4. Текст один для профиля и предмета: маршрут
+    // ребёнка — любой маршрут реестра взрослых (решение 25), поэтому и «что не так» у них одно:
+    // ключ не резолвится ни в запись пула с API-ключом, ни в включённый провайдер.
+    private static Reject? RouteReject(ChildRouteDecision decision, string what, string? providerKey) =>
         decision.Refusal switch
         {
             null => null,
-            ChildRouteRefusal.NoRoute => new("provider_not_api_key", forPool
-                ? $"Провайдер {what} должен быть записью пула подписок с API-ключом."
-                : $"Провайдер {what} должен быть записью пула с API-ключом или включённым провайдером моделей."),
+            ChildRouteRefusal.NoRoute => new("provider_not_api_key",
+                $"Провайдер {what} должен быть записью пула с API-ключом или включённым провайдером моделей."),
             ChildRouteRefusal.ModelNotConcrete => new("model_not_concrete",
                 $"Модель {what} должна быть конкретной: без tier:*, preset:*, default и claude."),
             ChildRouteRefusal.ModelUnpriced => new("model_unpriced",
                 $"У облачной модели {what} не задана цена: без неё бюджет ребёнка не ограничивает расход."),
+            // Модель не тянется планом подписки (Б1а, pool.SupportsModel): запись есть, но её тариф
+            // эту модель не поддерживает — это не «нет такой записи» и не «нет согласия».
+            ChildRouteRefusal.ModelNotOnPlan => new("model_not_on_plan",
+                $"Модель {what} недоступна на плане этой подписки «{providerKey}»."),
             ChildRouteRefusal.RiskUnacknowledged => new("route_risk_unacknowledged",
-                $"Маршрут {what} не Anthropic: нужно явное согласие администратора (acknowledgeRouteRisk)."),
+                $"Маршрут {what} не Anthropic: нужно согласие на профиле ребёнка (acknowledgeRouteRisk)."),
             ChildRouteRefusal.ModelNotOfProvider => new("model_not_of_provider",
                 $"Модель {what} не принадлежит поставщику «{providerKey}»."),
             _ => new("provider_not_api_key", $"Маршрут {what} не принят."),
         };
-
-    /// <summary>
-    /// Привязка базы знаний к предмету (К1b, разрез §1/§3). Зовётся после Validate: id предметов
-    /// — ключи сличения с сохранённой привязкой. Проверяется только НОВОЙ datasetId против
-    /// ЖИВОГО профиля: тот же id — поле ставит живое слияние стора (прежние автор и момент),
-    /// и повторный PUT не зависит от того, жив ли датасет сейчас (его допустимость на каждом
-    /// вызове — К3). null/пустой datasetId в теле — привязка снимается, не проверяется.
-    /// Отказ — один код и для «нет такого», и для «нельзя привязать»: фронт не различает их,
-    /// админу одинаково подсказать, что база не подходит.
-    /// caller — тот, кто привязывает (адмен ручки), а не ребёнок: «своя» база бывает только у
-    /// вызывающего. liveKnowledge — id предмета → DatasetId живого профиля (предметов без
-    /// привязки в словаре нет); datasets — id → логическое имя датасета из свежего списка Dify.
-    /// </summary>
-    public static Reject? ValidateSubjectKnowledge(
-        ChildProfileDto req,
-        User caller,
-        IUserStore users,
-        IReadOnlyDictionary<string, string> liveKnowledge,
-        IReadOnlyDictionary<string, string>? datasets)
-    {
-        var adminUsername = caller.Username;
-        // Имена ВСЕХ пользователей, включая других адменов: предикат считает имя «глобальной»
-        // базы, если её владельца нет в others (KnowledgeAccess.cs:41) — пропуск адмена-соседа
-        // выдал бы его чужую базу общей для всех.
-        var others = users.GetAll()
-            .Select(u => u.Username)
-            .Where(u => !string.IsNullOrWhiteSpace(u) && !u.Equals(adminUsername, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        foreach (var subject in req.Subjects ?? [])
-        {
-            var requested = subject?.Knowledge?.DatasetId;
-            if (string.IsNullOrWhiteSpace(requested)) continue;
-            if (liveKnowledge.TryGetValue(subject!.Id ?? "", out var stored) && stored == requested) continue;
-
-            // Пустой adminUsername — не «чужая/своя», здесь нельзя определить даже владельца:
-            // отказ до вызова предиката (тот же приём, что с пустым именем датасета ниже).
-            if (string.IsNullOrWhiteSpace(adminUsername))
-                return new("knowledge_unavailable", "Не удалось определить владельца, привязывающего базу знаний.");
-
-            // Нет свежего списка Dify при новом datasetId — вертикаль «Знаний» или Dify не дали
-            // ответа: тот же отказ, что у вызывающего до проверки (early exit контроллера).
-            if (datasets is null)
-                return new("knowledge_unavailable", "Проверить базу знаний нельзя: сервис знаний недоступен.");
-
-            // Имя пустое — ни своей, ни чужой её не назвать: предикат не зовём.
-            if (!datasets.TryGetValue(requested, out var name) || string.IsNullOrWhiteSpace(name))
-                return new("dataset_not_attachable", $"База знаний «{requested}» не найдена среди доступных датасетов или не может быть привязана к предмету.");
-
-            if (!KnowledgeAccess.IsTutorAttachable(name, adminUsername, others))
-                return new("dataset_not_attachable", $"База знаний «{name}» не может быть привязана к предмету: допустимы только общая (без префикса) или своя самостоятельная.");
-        }
-        return null;
-    }
 
     // [GeneratedRegex] не нужен: проверка редкая (тот же приём, что у SubjectId в политике).
     private static readonly System.Text.RegularExpressions.Regex SubjectIdRegex = new(@"^[a-z0-9-]{1,32}\z");
@@ -229,36 +175,41 @@ public record ChildProfileDto(
     decimal? DailyBudgetUsd,
     decimal? MonthlyBudgetUsd,
     int? WarnMinutes,
-    bool? ResetRules);
-// Предмет в wire-контракте (Т2a): ОДНА запись на вход и на ответ — осознанно: поля ответа
-// (tutorPersonaId, attachedAt, routeAcknowledgedAt) читаются в теле как отсутствие, вторая
-// запись добавила бы второй контракт без нового смысла; поля не убирать — они поля ответа.
-// Персоны-тьютора во ВХОДЕ нет по смыслу — его пишет только SetChildSubjectTutor (Т2b);
-// поле существует только в ответе и живёт в сторе: PUT-слияние берёт его по Id из живого
-// профиля (UserStore.SetChildProfile), значение из тела не читается никогда.
+    bool? ResetRules,
+    // Согласие админа на риск маршрутов (ADR-041 ред. 4, решение 26): ОДНО на профиль ребёнка,
+    // покрывает все предметы и чат правил, сменой модели или поставщика не сбрасывается.
+    // Из ВХОДА читается только флаг: true — поставить, поля нет — не трогать, false — отозвать.
+    // Момент и автор — поля сервера: их пишет живое слияние стора под замком, из тела они не
+    // читаются никогда (тот же приём, что с тьютором и привязкой знания). В ответе
+    // acknowledgeRouteRisk = «согласие стоит», routeRiskAcknowledgedAt — момент.
+    bool? AcknowledgeRouteRisk = null,
+    // Поля только ответа (Б4a, ADR-041 ред. 4 решение 30): из тела не читаются никогда,
+    // в ответе — всегда. Автор согласия (решение 26): окно показывает, кто его дал —
+    // прежде автор оставался только в сторе.
+    DateTimeOffset? RouteRiskAcknowledgedAt = null,
+    string? RouteRiskAcknowledgedBy = null,
+    // Готовность опекунов к механизму общих проектов (ADR-041 ред. 6 решение 60): кураторы
+    // проектов-предметов — опекуны с флагом shared-projects. Окно прямо скажет, у кого включить
+    // флаг; сервер флаг за человека не включает.
+    List<ChildGuardianDto>? Guardians = null,
+    // Рубильник инстанса SharedProjects:Enabled (SharedProjectsGate): без него флаги опекунов
+    // ничего не открывают.
+    bool? SharedProjectsInstanceEnabled = null);
+// Предмет в wire-контракте: плитка (Б17c — без маршрута, репетитора, знаний и согласия:
+// их несёт проект-предмет). KnowledgeMoved — только поле ответа: у предмета была привязана база
+// знаний, материалы надо перенести в папку проекта-предмета; из тела не читается.
 public record ChildSubjectDto(
     string? Id,
     string? Label,
     string? Glyph,
     string? Color,
-    string? ProviderKey,
-    string? Model,
     bool? Enabled,
-    string? TutorPersonaId,
-    // Привязка базы знаний (К1b): из ВХОДА принимается только datasetId. Автор и момент —
-    // поля сервера (их ставит живое слияние стора по живому значению), attachedAt в теле
-    // не читается никогда: тот же приём, что с tutorPersonaId выше. null — привязка снимается.
-    ChildSubjectKnowledgeDto? Knowledge,
-    // Согласие админа на не-Anthropic маршрут (Т5a, И2′): из ВХОДА читается только флаг; момент и автор
-    // — поля сервера (RouteAcknowledgedAt/By пишет живое слияние стора, из тела не читаются никогда).
-    // В ответе acknowledgeRouteRisk = «согласие стоит», routeAcknowledgedAt — момент.
-    bool? AcknowledgeRouteRisk = null,
-    DateTime? RouteAcknowledgedAt = null);
-// Wire-форма привязки (К1b): id датасета Dify + момент, поставленный сервером.
-// AttachedByUserId живёт только в сторе (ChildSubjectKnowledge) и наружу не отдаётся.
-public record ChildSubjectKnowledgeDto(string? DatasetId, DateTime? AttachedAt);
+    bool? KnowledgeMoved = null);
 public record ChildSpaceLimitsDto(List<ChildTimeWindowDto>? Windows, int? DailyMinutes);
 public record ChildTimeWindowDto(string? From, string? To, List<int>? Weekdays);
+// Опекун профиля в ответе (Б4a): sharedProjectsFlag — пользовательский флаг shared-projects
+// без учёта рубильника инстанса (SharedProjectsGate.FlagOn); порядок — как guardianUserIds.
+public record ChildGuardianDto(string UserId, bool SharedProjectsFlag);
 // Ответ 200 ручки №10: { profile, tutorPersonaId }. Profile — null только когда профиля нет
 // (выключение пользователя, который им и не был); при включении — всегда целый.
 public record ChildProfileResponse(ChildProfileDto? Profile, string TutorPersonaId);

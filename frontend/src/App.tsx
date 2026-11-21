@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense, createElement } from 'react'
-import type { Project, AuthState } from './types'
+import { BookOpen } from 'lucide-react'
+import type { Project, AuthState, ChildSurface } from './types'
 import { C } from './lib/design'
+import { ICON_SIZE, ICON_STROKE } from './components/ui/icons'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
 import { WorkspacePage } from './pages/WorkspacePage'
-import { ChildWorkspace } from './features/childMode/ChildWorkspace'
+import type { ChildSubjectWithViewers } from './features/childMode/api'
 import type { HubTabValue } from './components/HubTabs'
 import { moduleIdOf, subsystemKeyOf, subsystemTabValue } from './components/HubTabs'
 import { ModuleScreen } from './components/modules/ModuleScreen'
@@ -27,6 +29,7 @@ import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHe
 import { initConnectivity, invalidateTokenCache, readStoredToken, readStoredUserId } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
 import { LoadingScreen } from './components/ui/LoadingScreen'
+import { EmptyState } from './components/ui/EmptyState'
 import { SubsystemDisabledState } from './components/SubsystemDisabledState'
 import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
@@ -183,6 +186,13 @@ export default function App() {
   // ProjectListPage по этому снимку. Снимок гасится любым переходом в проект или раздел:
   // он объясняет внезапный выход, а не постоянная плашка.
   const [accessNotice, setAccessNotice] = useState<{ projectId: string; ownerDisplayName?: string | null } | null>(null)
+  // Детская поверхность (Ф1f, ADR-041 ред. 8, решение 76): копия поля childSurface из me-ответа.
+  // Живёт только в детском маршруте: undefined = не ребёнок (взрослый экран как раньше);
+  // null = детский профиль без снимка — WorkspacePage рисует «нет связи», а не взрослый набор.
+  const [childSurface, setChildSurface] = useState<ChildSurface | null | undefined>(undefined)
+  // Предметов у ребёнка нет (профиль не настроен админом): это редкий, но названный случай —
+  // ребёнку нужен спокойный текст, а не вечно идущая загрузка
+  const [childNoSubjects, setChildNoSubjects] = useState(false)
 
   // Активная вкладка хаба — вне открытого проекта. Стартовый экран — дашборд «Домой»:
   // hash-диплинк приоритетнее, а без hash всегда открывается 'home'. Ключ HUB_TAB_KEY
@@ -526,9 +536,13 @@ export default function App() {
         // Стор дефолт-персоны/онбординга — от него живут приглашение первого входа
         // и резолвер аватаров
         if (me) setMeFromServer(me)
-        // Детский профиль: дальше только детская оболочка — взрослые загрузки (модели, модули,
-        // таймзона, MF-remote подсистем) ребёнку не нужны и вне allow-list ADR-041
-        if (me?.isChild) return
+        // Детский профиль: дальше только детская поверхность — взрослые загрузки (модели, модули,
+        // таймзона, MF-remote подсистем) ребёнку не нужны и вне allow-list ADR-041. Снимок
+        // поверхности прикладывается тем же ответом (решение 76) — его несёт детский WorkspacePage
+        if (me?.isChild) {
+          setChildSurface(me.childSurface ?? null)
+          return
+        }
         // Имя могли поправить в профиле после логина — подхватываем без перевхода
         const fresh = me?.displayName?.trim() || undefined
         setAuth(prev => (prev && prev.displayName !== fresh ? { ...prev, displayName: fresh } : prev))
@@ -589,6 +603,8 @@ export default function App() {
       resetCacheWarnOnLogout()
       resetWallOwner()
       setPersonasChildMode(false) // детская оболочка могла не успеть размонтироваться
+      setChildSurface(undefined) // снимок поверхности прежнего ребёнка не должен течь следующему входу
+      setChildNoSubjects(false)
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
       runLogoutResets() // сторы модулей (персонажи «Картинок» и др.) прежнего пользователя
       resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки (Х-6)
@@ -828,6 +844,35 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- реагируем на смену id, а не объекта: эффект сам зовёт setProject(fresh), включение project дало бы цикл перезапросов
   }, [auth, online, project?.id, adultBlocked])
 
+  // Детские проекты (Ф1f, решение 84): ребёнок идёт в штатный маршрут проекта-предмета.
+  // Штатный список возвращает только его проекты-предметы (Б21: [ChildAllowed] + детская
+  // проверка), по умолчанию — первый предмет: проект ребёнок не выбирает. Восстановленный
+  // OPEN_PROJECT_KEY держится, только если он в списке (та же сверка, что у взрослого выше),
+  // иначе — первый. Пустой список — профиль ребёнка не настроен: это названный текст, а не
+  // вечно идущая загрузка.
+  useEffect(() => {
+    if (!auth || authChecking || !me.isChild || !online) return
+    let cancelled = false
+    api.projects.list()
+      .then(list => {
+        if (cancelled) return
+        const fresh = project ? list.find(p => p.id === project.id) : undefined
+        const target = fresh ?? list[0] ?? null
+        if (target) {
+          localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(target))
+          setProject(target)
+          setChildNoSubjects(false)
+        } else {
+          localStorage.removeItem(OPEN_PROJECT_KEY)
+          setProject(null)
+          setChildNoSubjects(true)
+        }
+      })
+      .catch(() => { /* сервер недоступен — остаёмся на том, что есть в хранилище */ })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- та же модель, что у взрослой сверки: по смене id, а не объекта
+  }, [auth, authChecking, me.isChild, online, project?.id])
+
   // Watcher: сервер уведомил об изменении файлов проекта → инкрементальный ре-синк офлайн-кэша
   useEffect(() => onFilesChanged(({ projectId }) => { syncProjectFiles(projectId) }), [])
 
@@ -966,6 +1011,17 @@ export default function App() {
     localStorage.setItem(HUB_TAB_KEY, 'projects')
     setHubTab('projects')
     openProject(p)
+  }
+  // Детский док (Ф1f, решение 84): открыть предмет = открыть его проект-предмета. Список —
+  // детский (Б21: только свои включённые предметы), поиск по ключу предмета; проекта в списке
+  // нет (предмет выключили или удалили из профиля) — док никуда не ведёт.
+  const openSubjectProject = (subject: ChildSubjectWithViewers) => {
+    api.projects.list()
+      .then(list => {
+        const p = list.find(x => x.childSubjectId === subject.id)
+        if (p) openProject(p)
+      })
+      .catch(() => { /* офлайн — док никуда не ведёт */ })
   }
   // Явный выход из открытого проекта к списку проектов (кнопка «К проектам» в сайдбаре)
   const goToProjects = () => {
@@ -1418,6 +1474,8 @@ export default function App() {
     resetCacheWarnOnLogout() // пороги кэша прежнего владельца — см. cc-unauthorized выше
     resetWallOwner()
     setPersonasChildMode(false)
+    setChildSurface(undefined) // см. cc-unauthorized выше: снимок прежнего ребёнка не течёт следующему входу
+    setChildNoSubjects(false)
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
     runLogoutResets() // сторы модулей (персонажи «Картинок» и др.) прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки
@@ -1465,13 +1523,22 @@ export default function App() {
     );
   }
 
-  // Детский режим: только детская оболочка. Взрослые экраны, уведомления, поиск и
-  // плавающие слои не монтируются вовсе (KM-F10)
+  // Детский режим (Ф1f, ADR-041 ред. 8): ребёнок идёт в штатный маршрут WorkspacePage
+  // проекта-предмета — отдельной детской оболочки больше нет. Взрослые экраны, уведомления,
+  // поиск и плавающие слои не монтируются вовсе (KM-F10, гейт isChild до эффектов App).
+  // Предмет ещё не разрешён — нейтральная загрузка; предметов нет (профиль не настроен) —
+  // спокойный текст ребёнку, а не вечно идущая загрузка.
   if (auth && !authChecking && me.isChild) {
     return (
       <>
         <UpdatePrompt />
-        <ChildWorkspace auth={auth} onLogout={logout} />
+        {project ? (
+          <WorkspacePage key={project.id} project={project} onProjectUpdated={handleOpenProjectUpdated} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} childSurface={childSurface} onOpenSubjectProject={openSubjectProject} />
+        ) : childNoSubjects ? (
+          <EmptyState icon={<BookOpen size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />} title="Предметов пока нет" subtitle="Попроси маму или папу настроить твои предметы." />
+        ) : (
+          <LoadingScreen hint="Открываю предметы" />
+        )}
       </>
     )
   }

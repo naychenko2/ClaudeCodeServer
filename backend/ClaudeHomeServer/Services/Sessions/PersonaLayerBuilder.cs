@@ -409,11 +409,16 @@ public sealed class PersonaLayerBuilder
     // Сессия нужна для правила «координатор не пишет код сам» (режим «Командная реализация»):
     // у чата-штаба поверх прав персоны запрещены инструменты правки файлов — работа идёт
     // задачами на исполнителей, а не руками координатора.
-    // Встроенные инструменты CLI, закрытые ребёнку поверх пустого --tools. Имена — из набора,
-    // принимаемого CLI (тот же перечень держит OneShotClaudeRunner); неизвестные CLI имена в запретах
-    // роняют запуск, поэтому список короткий и проверенный.
+    // Встроенные инструменты CLI, закрытые ребёнку поверх его разрешающего --tools. Имена — из
+    // набора, принимаемого CLI (тот же перечень держит OneShotClaudeRunner); неизвестные CLI имена
+    // в запретах роняют запуск, поэтому список короткий и проверенный.
+    // Файловых инструментов ребёнка (Read/Glob/Grep/Write/Edit — ChildBuiltinTools) здесь НЕТ:
+    // они явно разрешены списком --tools, и запрет на них — не право детского слоя, а право
+    // персоны/этапа (И10: поля персоны только вычитают). Названный здесь ChildBuiltinTools, он
+    // доходил бы до CLI противоречием --tools/--disallowedTools и требовал снятия whole списком
+    // (прежний Except в ClaudeSession), которое молча съедало и настоящий запрет персоны.
     internal static readonly string[] ChildDisallowedBuiltins =
-        ["Bash", "Read", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Skill"];
+        ["Bash", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Skill"];
 
     internal IReadOnlyList<string>? BuildExtraDisallowed(string? ownerId, Persona? persona, Session session)
     {

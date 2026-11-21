@@ -15,6 +15,7 @@
 // поллингом каждые 5с), подписчики уведомляются через useSyncExternalStore.
 import { useSyncExternalStore } from 'react';
 import { api } from './api';
+import { getMeSnapshot } from './defaultPersona';
 import { isOnline } from './offline';
 
 const KEY_PREFIX = 'cc_chat_read_';
@@ -123,6 +124,13 @@ function syncReadToServer(chatId: string): void {
 }
 
 function sendMarkRead(chatId: string): void {
+  // Ребёнок не шлёт отметку на бэк: /api/chats/{id}/read — взрослая ручка без
+  // [ChildAllowed] (дефект cc43582b: ребёнок на ленте урока получал 403); синк
+  // между устройствами ребёнку не нужен. Гейт в единственной точке запроса: к
+  // sendMarkRead ведут и leading-вызов, и trailing-дослов таймера — дальше них
+  // ни один путь не спросит (K9d). Локальная отметка (localStorage, бейджи)
+  // работает как раньше: гейт только на серверный синк.
+  if (getMeSnapshot().isChild) return;
   const prev = syncState.get(chatId);
   syncState.set(chatId, { sentAt: Date.now(), timer: prev?.timer ?? null });
   // Гард заведомого офлайна — против шумной OfflineError; прочие ошибки глотаем:

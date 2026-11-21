@@ -163,11 +163,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         var usageKey = session.TaskExecution || session.TaskId is not null ? LocalActionCatalog.TasksExecutor
             : !string.IsNullOrWhiteSpace(session.PersonaId) ? LocalActionCatalog.ChatPersona
             : LocalActionCatalog.ChatNew;
-        // И2′: у ребёнка модель — явная модель предмета (профиля); назначение места ChatPersona её не
-        // переопределяет (тот же резолв, что EffectiveModel в ClaudeSession).
         var childSnapshot = context.ChildPolicyProvider?.Invoke();
-        var childModel = childSnapshot is null ? null : ChildRoute.ExplicitModelFor(childSnapshot, session);
-        string? ResolveModel() => childModel ?? _assignments?.Resolve(usageKey, session.Model, turnOwnerId) ?? session.Model;
+        string? ResolveModel() => _assignments?.Resolve(usageKey, session.Model, turnOwnerId) ?? session.Model;
         provider ??= _providers.ResolveByModel(ResolveModel());
 
         // Guard согласованности пары «модель × провайдер»: модель — единственный источник
@@ -183,8 +180,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             if (provider.Key != byModelKey)
             {
                 // И2′: пара ребёнка не самолечится и пул подписок не спрашивается (Pick) — отказ, как И1-бис.
+                // Текст без обещания: этот отказ события не публикует — уведомления не будет никогда.
                 if (childSnapshot is not null)
-                    throw new ChildRouteRefusedException(ChildRoute.RefusedText);
+                    throw new ChildRouteRefusedException(ChildRoute.RefusedTextNoGuardians);
                 _log?.LogWarning(
                     "Сессия {SessionId}: рассогласованная пара Model={Model} × Provider={Provider} — исправлена по модели на {FixedProvider}",
                     session.Id, effectiveModel ?? session.Model, session.Provider, byModelKey);

@@ -310,25 +310,66 @@ public class FallbackLlmSessionAdapterTests
         inner.Info.MessageCount.Should().Be(1);
     }
 
-    // Детский ход: ротации подписок нет — урок ребёнка никогда не идёт по подписке (И2′).
-    // Взрослый ход на тех же условиях (тест выше) ротируется на acc-b; ребёнок — получает ошибку,
-    // Info.Provider не меняется, вторая подписка не пробуется.
+    // Детский ход: ротация пула внутри хода разрешена (решение Андрея, ADR-041: при лимите урок
+    // на один ход отвечает соседним аккаунтом того же пула), но чат остаётся на закреплении:
+    // после хода Provider возвращается исходной подписке, транскрипт копируется обратно в её
+    // профиль. Взрослый ход на тех же условиях (тест выше) остаётся на новой подписке — для него
+    // тихая ротация не откатывается (тест «ТихаяРотацияПула…»).
     [Fact]
-    public async Task Ошибка429_ДетскийХод_РотацииПодпискиНет_ПровайдерНеМеняется()
+    public async Task Ошибка429_ДетскийХод_РотацияПула_ПослеХодаВозвратНаЗакрепление()
     {
-        var pool = BuildPool("acc-a", "acc-b");
-        var (sut, inner) = BuildSut(pool, isChildTurn: () => true);
-        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
-        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_kidrot_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a", "acc-b");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-kid-rot";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var accAFile = Path.Combine(baseDir, "claude-profiles", "sub-acc-a", "projects", flat, csid + ".jsonl");
+            var accBFile = Path.Combine(baseDir, "claude-profiles", "sub-acc-b", "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            File.WriteAllText(accAFile, "QUESTION");
 
-        await sut.SendMessageAsync("помоги с уроком");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid, OwnerId = "kid" };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => true,
+                effectiveChain: () => new[] { "sonnet" });
+            inner.Sink = sut.HandleMessageAsync;
+            // acc-a — 429 → тихая ротация на acc-b (копия acc-a→acc-b). acc-b — успех + ответ CLI.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(accBFile, "\nANSWER");
+                inner.Emit(Success());
+            });
 
-        inner.Attempts.Should().ContainSingle("у ребёнка нет ротации подписок");
-        inner.Attempts[0].Provider.Should().Be("acc-a");
-        inner.Info.Provider.Should().Be("acc-a", "провайдер хода ребёнка не уходит на подписку");
-        pool.IsExhausted("acc-b").Should().BeFalse();
-        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+            await sut.SendMessageAsync("помоги с уроком");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "возврат на закрепление (restore в finally)");
+
+            inner.Attempts.Should().HaveCount(2, "ротация пула ребёнку разрешена внутри хода");
+            inner.Attempts[0].Provider.Should().Be("acc-a");
+            inner.Attempts[1].Provider.Should().Be("acc-b", "следующая попытка идёт на соседнем аккаунте того же пула");
+            pool.IsExhausted("acc-a").Should().BeTrue("подписка с 429 помечается исчерпанной");
+            Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty(
+                "ротация внутри одного пула — тихая, маркера в ленте нет");
+            // Чат остаётся на закреплении: Provider возвращён, модель та же — отличие от взрослого хода.
+            session.Provider.Should().Be("acc-a", "после хода ребёнок возвращается на закреплённый аккаунт");
+            session.Model.Should().Be("sonnet");
+            // Транскрипт в исходном профиле: свежий ответ скопирован обратно из acc-b в acc-a —
+            // следующий ход на --resume найдёт его там.
+            File.ReadAllText(accAFile).Should().Contain("QUESTION");
+            File.ReadAllText(accAFile).Should().Contain("ANSWER",
+                "после детского хода транскрипт возвращён в закреплённый профиль");
+            File.ReadAllText(accBFile).Should().Contain("ANSWER");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
     }
 
     // --- Проводка фабрики: признак ребёнка для адаптера (LlmSessionAdapterFactory, isChildTurn) ---
@@ -337,10 +378,15 @@ public class FallbackLlmSessionAdapterTests
     // (isChildTurn: () => claudeSession.IsChildTurn). Здесь адаптер собран ФАБРИКОЙ:
     // внутренний — живой ClaudeSession, его CLI подменён скриптом, печатающим result с
     // api_error_status=429 (паттерн ClaudeSessionDiedEmptyRetryTests: эхо user-сообщения с
-    // тем же uuid, затем result). Пул из двух записей (HasExtra) — без запрета И2′ ребёнок
-    // ушёл бы на claude-2. Ожидание: один запуск CLI, провайдер не меняется, финал — ошибка.
-    // Мутация «убрать isChildTurn: из вызова фабрики» красит тест: childTurn=false,
-    // ротация стартует вторым процессом.
+    // тем же uuid, затем result). Счётчик рядом со скриптом: ПЕРВЫЙ запуск печатает 429,
+    // каждый следующий — успех. Пул из двух записей (HasExtra). Ожидание: второй запуск
+    // (ротация пула ребёнку разрешена), финал — успех, провайдер чата возвращён на закрепление.
+    // Мутация «снять || childTurn в finally» красит тест: провайдер остаёт на claude-2;
+    // мутация «вернуть !childTurn в условие ротации» тоже красит: второй запуск не случается,
+    // финал — ошибка.
+    // Успешный result — с текстом в поле result: пустой result читается ClaudeSession как
+    // «пустой ответ» (DiedEmpty-логика, метка numTurns=1 при пустом result), и на нагруженном
+    // прогоне класса это добавляло флейк.
     //
     // Скрипт живёт и ПОСЛЕ result (второе чтение stdin), как настоящий CLI: если он выходит
     // в тот же миг, что печатает result, событие Exited от ОС иногда опережает чтение последней
@@ -350,7 +396,8 @@ public class FallbackLlmSessionAdapterTests
     // уборка теста.
     private static string WriteChild429CliScript(string dir)
     {
-        var resultLine = """{"type":"result","subtype":"success","duration_ms":1,"num_turns":1,"result":"","is_error":true,"api_error_status":429}""";
+        var errLine = """{"type":"result","subtype":"success","duration_ms":1,"num_turns":1,"result":"","is_error":true,"api_error_status":429}""";
+        var okLine = """{"type":"result","subtype":"success","duration_ms":1,"num_turns":1,"result":"ok","is_error":false}""";
         string script;
         if (OperatingSystem.IsWindows())
         {
@@ -361,7 +408,7 @@ public class FallbackLlmSessionAdapterTests
                 + "set \"L=!L:\"=#!\"\r\n"
                 + "for /f \"tokens=8 delims=#\" %%U in (\"!L!\") do set \"U=%%U\"\r\n"
                 + "echo {\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"x\"},\"uuid\":\"!U!\",\"isReplay\":true}\r\n"
-                + "echo " + resultLine + "\r\n"
+                + "if exist \"%~dp0turn.count\" (echo " + okLine + ") else (type nul>\"%~dp0turn.count\" & echo " + errLine + ")\r\n"
                 // Держим процесс до уборки теста: EOF stdin — выход (см. комментарий к тесту)
                 + "set \"L=\"\r\n:hold\r\nset /p L=\r\nif not \"!L!\"==\"\" goto hold\r\n";
             script = Path.Combine(dir, "fake-cli-429.cmd");
@@ -373,9 +420,13 @@ public class FallbackLlmSessionAdapterTests
                 + "read -r L\n"
                 + "U=$(printf '%s' \"$L\" | sed 's/.*\"uuid\":\"\\([^\"]*\\)\".*/\\1/')\n"
                 + "echo \"{\\\"type\\\":\\\"user\\\",\\\"message\\\":{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"x\\\"},\\\"uuid\\\":\\\"$U\\\",\\\"isReplay\\\":true}\"\n"
-                + "echo '" + resultLine + "'\n"
-                // Держим процесс до уборки теста: глотаем stdin до EOF — выход (см. комментарий к тесту)
-                + "while read -r L; do :; done\n";
+                + "C=\"$(dirname \"$0\")/turn.count\"\n"
+                + "if [ -f \"$C\" ]; then echo '" + okLine + "'; else : > \"$C\"; echo '" + errLine + "'; fi\n"
+                // Живём после result, как настоящий CLI между ходами. Иначе мгновенная смерть
+                // процесса под нагрузкой класса опережает дочитывание stdout: Exited раньше
+                // котировок, попытка resolves'ится ProcessGone, и поздний result чужой попытки
+                // добавляет гонку (флейк StartCount в прогоне класса).
+                + "sleep 2\n";
             script = Path.Combine(dir, "fake-cli-429.sh");
             File.WriteAllText(script, text, System.Text.Encoding.ASCII);
         }
@@ -422,7 +473,7 @@ public class FallbackLlmSessionAdapterTests
     }
 
     [Fact]
-    public async Task ПроводкаФабрики_ДетскийХодНа429_РотацииПодпискиНет_ОдинЗапускCli()
+    public async Task ПроводкаФабрики_ДетскийХодНа429_РотацияПула_ВозвратНаЗакрепление()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "ccs_fb_child429_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -450,10 +501,12 @@ public class FallbackLlmSessionAdapterTests
             ChildPolicyProvider: () => new ChildPolicySnapshot("kid", new ChildProfile
             {
                 Enabled = true, ProviderKey = "kids-api", Model = "sonnet",
+                // Согласие профиля на маршрут (И2″, решение 26): без него ChildRoute refuse'ит
+                // запуск — уроки не стартуют вовсе.
+                RouteRiskAcknowledgedAt = DateTimeOffset.UtcNow,
                 Subjects = [new ChildSubject
                 {
                     Id = "math", Label = "Математика", Enabled = true,
-                    ProviderKey = "kids-api", Model = "sonnet",
                 }],
             }, false));
         var session = new Session
@@ -467,13 +520,16 @@ public class FallbackLlmSessionAdapterTests
             var sut = factory.Create(session, context);
             await sut.SendMessageAsync("помоги с уроком");
             await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+            await WaitForAsync(() => !((FallbackLlmSessionAdapter)sut).FallbackTurnActive, "возврат на закрепление");
 
-            launcher.StartCount.Should().Be(1,
-                "у ребёнка нет ротации подписок: второй попытки на другой подписке не было");
-            session.Provider.Should().Be("kids-api", "провайдер хода ребёнка не уходит на подписку");
-            Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+            launcher.StartCount.Should().Be(2,
+                "первый аккаунт дал 429 — вторая попытка на соседнем аккаунте пула (ротация ребёнку разрешена)");
+            session.Provider.Should().Be("kids-api",
+                "после хода ребёнок возвращается на закреплённый аккаунт, а не остаётся на claude-2");
+            Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty(
+                "ротация внутри одного пула — тихая");
             Downstream().OfType<ResultMessage>().Should().ContainSingle()
-                .Which.Subtype.Should().Be("error", "429 без ротации — честная ошибка хода");
+                .Which.Subtype.Should().Be("success", "соседний аккаунт ответил — ход состоялся");
             await sut.DisposeAsync();
         }
         finally
@@ -485,6 +541,248 @@ public class FallbackLlmSessionAdapterTests
             }
             try { Directory.Delete(tempDir, recursive: true); } catch { /* уже удалён */ }
         }
+    }
+
+    // --- Возврат ребёнка на закрепление: конкурентность (Б1c, И2″ «чат остаётся на закреплении») ---
+
+    // Два хода одного детского чата подряд. Второй доставлен ПОСЛЕ финального result первого —
+    // в том самом окне между SettleAsync и finally, где обратный перенос транскрипта ещё идёт
+    // (файл подмены держится exclusive-хендлом — та же картина, что с незакрытым durable-хвостом
+    // CLI, инцидент 2026-08-10). Доставка уходит в requeue (EnqueueBypass) и стартует только
+    // после конца оркестрации: второй ход видит закреплённые Provider/Model и транскрипт в
+    // исходном профиле — restore завершён до освобождения слота хода (_turn снимается в finally
+    // только после restore и переноса). Мутация «освободить слот до restore» красит замеры
+    // insideDone: в момент сигнала оркестрации Provider ещё подменный, ANSWER ещё в acc-b.
+    [Fact]
+    public async Task ДетскийХод_ВторойХодВоВремяRestore_СтартуетНаЗакреплении_СТранскриптомВИсходномПрофиле()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_kid2turn_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        FileStream? held = null;
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a", "acc-b");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-kid-2turn";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var accAFile = Path.Combine(baseDir, "claude-profiles", "sub-acc-a", "projects", flat, csid + ".jsonl");
+            var accBFile = Path.Combine(baseDir, "claude-profiles", "sub-acc-b", "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            File.WriteAllText(accAFile, "QUESTION");
+
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid, OwnerId = "kid" };
+            var inner = new FakeInnerAdapter(session);
+            var requeued = 0;
+            string? providerAtDone = null, modelAtDone = null, transcriptAtStart = null;
+            FallbackLlmSessionAdapter sut = null!;
+            sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => true,
+                effectiveChain: () => new[] { "sonnet" },
+                // Серверная Pending в тесте — счётчик requeue: доставленный под активной
+                // оркестацией ход не идёт в _inner, а ждёт конца оркестрации (production-путь).
+                enqueueBypass: (id, text, paths, depth, sup) => { lock (_downstream) requeued++; return Task.CompletedTask; },
+                // Сигнал конца оркестрации (drain Pending): состояние чата замеряется ровно здесь —
+                // на старте второго хода, сразу после освобождения слота.
+                orchestrationDone: id =>
+                {
+                    lock (_downstream)
+                    {
+                        providerAtDone = session.Provider;
+                        modelAtDone = session.Model;
+                        transcriptAtStart = File.ReadAllText(accAFile);
+                    }
+                    _ = sut.SendMessageAsync("второй урок");
+                });
+            inner.Sink = sut.HandleMessageAsync;
+            // acc-a — 429 → тихая ротация на acc-b (копия acc-a→acc-b). acc-b — успех + ответ CLI,
+            // и файл подмены держится exclusive-хендлом: обратный перенос в finally упрётся в
+            // занятый файл и будет его ждать (бэкоф), окно restore открыто.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(accBFile, "\nANSWER");
+                held = new FileStream(accBFile, FileMode.Open, FileAccess.Read, FileShare.None);
+                inner.Emit(Success());
+            });
+            // Попытка второго хода — успех на закреплённой паре.
+            inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+            await sut.SendMessageAsync("первый урок");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result первого хода");
+
+            // Доставка второго хода — в окно между SettleAsync и finally: оркестрация ещё держит
+            // слот (обратный перенос ждёт освобождения файла). Ход обязан уйти в requeue, а не в _inner.
+            await sut.SendMessageAsync("второй урок");
+            lock (_downstream) requeued.Should().Be(1, "доставка под активной оркестрацией возвращается в серверную очередь");
+            inner.Attempts.Should().HaveCount(2, "второй ход ждёт конца оркестрации и ещё не подавался");
+
+            // Отпускаем файл подмены — обратный перенос доходит на ближайшем ретрае, restore
+            // завершается, слот освобождается, requeued-ход стартует (внутри orchestrationDone).
+            held!.Dispose();
+            await WaitForAsync(() => inner.Attempts.Count >= 3, "старт второго хода после restore");
+
+            providerAtDone.Should().Be("acc-a", "второй ход стартует на закреплённом провайдере, а не на подписке");
+            modelAtDone.Should().Be("sonnet");
+            transcriptAtStart.Should().Contain("QUESTION");
+            transcriptAtStart.Should().Contain("ANSWER", "к старту второго хода транскрипт уже перенесён в исходный профиль");
+            inner.Attempts[2].Should().Be(("acc-a", "sonnet"), "попытка второго хода идёт на закреплённой паре");
+            Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+        }
+        finally
+        {
+            held?.Dispose();
+            if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true);
+        }
+    }
+
+    // Сбой переноса транскрипта при детском restore: файл подмены недоступен для чтения к моменту
+    // обратного переноса (диск/занятый файл — та же природа, что в взрослом тесте «ПровалОбратного
+    // Переноса»). Чат всё равно возвращается на закрепление, провал не роняет ход и не проходит
+    // молча: Warning с id сессии в логе, наружу — штатный success без необработанного исключения.
+    [Fact]
+    public async Task ДетскийХод_ПровалПереносаПриRestore_ЗакреплениеВозвращено_ИсключениеНаружуНеИдёт()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_kidfail_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        // Механизм сбоя переноса — доступ к файлу (chmod), он же на Linux и на Windows
+        // (File.SetAccessControl на NTFS); на других ОС тест не имеет смысла.
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+        string? accBFile = null;
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a", "acc-b");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-kid-fail";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var accAFile = Path.Combine(baseDir, "claude-profiles", "sub-acc-a", "projects", flat, csid + ".jsonl");
+            accBFile = Path.Combine(baseDir, "claude-profiles", "sub-acc-b", "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            File.WriteAllText(accAFile, "QUESTION");
+
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid, OwnerId = "kid" };
+            var inner = new FakeInnerAdapter(session);
+            var spy = new SpyLogger();
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => true,
+                effectiveChain: () => new[] { "sonnet" }, log: spy);
+            inner.Sink = sut.HandleMessageAsync;
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(accBFile, "\nANSWER");
+                // К моменту обратного переноса файл подмены недоступен для чтения: доступ к файлу
+                // закрыт (chmod 000 / deny-all на NTFS) — сам open источника даёт IOException
+                // (UnauthorizedAccessException), ретрай бьётся до потолка (8 с) и провал уходит
+                // в TryMigrate как false с причиной.
+                DenyFileAccess(accBFile);
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("помоги с уроком");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Ход не роняется: результат доставлен успехом, поля чата возвращены на закрепление —
+            // несмотря на то, что транскрипт перенести не удалось.
+            Downstream().OfType<ResultMessage>().Should().ContainSingle()
+                .Which.Subtype.Should().Be("success");
+            session.Provider.Should().Be("acc-a", "провал переноса не отменяет возврата на закрепление");
+            session.Model.Should().Be("sonnet");
+            // Провал не прошёл молча: Warning с id сессии и признаком обратного переноса.
+            spy.Entries.Should().Contain(e => e.Level == LogLevel.Warning
+                && e.Message.Contains("Обратный перенос") && e.Message.Contains(csid),
+                "провал обратного переноса пишется в лог с id сессии");
+        }
+        finally
+        {
+            // Закрытый доступ к файлу мешает рекурсивному удалению — возвращаем права до чистки.
+            if (accBFile is not null) { try { AllowFileAccess(accBFile); } catch { /* уже убрано */ } }
+            if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true);
+        }
+    }
+
+    // Доступ к файлу закрыт для всех (open даёт IOException) и снова открыт — для теста
+    // «провал переноса при restore». На Linux — mode 000, на Windows — deny-all access rule.
+    private static void DenyFileAccess(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var fi = new FileInfo(path);
+            var acl = fi.GetAccessControl();
+            acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                System.Security.Principal.WindowsIdentity.GetCurrent().Name,
+                System.Security.AccessControl.FileSystemRights.FullControl,
+                System.Security.AccessControl.AccessControlType.Deny));
+            fi.SetAccessControl(acl);
+        }
+        else
+        {
+            File.SetUnixFileMode(path, UnixFileMode.None);
+        }
+    }
+
+    private static void AllowFileAccess(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var fi = new FileInfo(path);
+            var acl = fi.GetAccessControl();
+            acl.RemoveAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                System.Security.Principal.WindowsIdentity.GetCurrent().Name,
+                System.Security.AccessControl.FileSystemRights.FullControl,
+                System.Security.AccessControl.AccessControlType.Deny));
+            fi.SetAccessControl(acl);
+        }
+        else
+        {
+            File.SetUnixFileMode(path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    // Устаревший ответ: событие завершения хода (turn/completed) выходит ПОСЛЕ restore — его
+    // подписчик (SessionManager пишет TurnRunLog; тест читает состояние чата в момент события)
+    // не может застать подменённый Provider и переписать чат обратно на подмену. Паспорт при
+    // этом несёт фактическую пару попытки (FinalProvider — куда ход реально дошёл) — диагностика
+    // не путается с состоянием чата. Мутация «опубликовать конец хода до restore» красит
+    // providerAtEvent: в момент события Provider ещё подменный.
+    [Fact]
+    public async Task ДетскийХод_СобытиеЗавершенияПослеRestore_НеВозвращаетЧатНаПодмену()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var bus = new TurnEventBus();
+        string? providerAtEvent = null;
+        TurnRunPassport? passport = null;
+        var done = new ManualResetEventSlim();
+        var (sut, inner) = BuildSut(pool, isChildTurn: () => true, events: bus);
+        // Состояние чата в момент события — то, что видит подписчик (SessionManager по нему
+        // писал бы TurnRunLog/персист): если бы событие шло до restore, здесь был бы «acc-b».
+        bus.OnNotification<TurnCompleted>(e =>
+        {
+            providerAtEvent = inner.Info.Provider;
+            passport = e.Passport;
+            done.Set();
+            return Task.CompletedTask;
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("помоги с уроком");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+        done.Wait(TimeSpan.FromSeconds(30)).Should().BeTrue("turn/completed дошёл до подписчика");
+
+        providerAtEvent.Should().Be("acc-a",
+            "в момент события завершения чат уже на закреплении — подписчик не может вернуть его на подмену");
+        passport!.FinalProvider.Should().Be("acc-b",
+            "паспорт хода остаётся диагностикой фактической пары: он берётся до restore");
     }
 
     // --- Окно 1M недоступно (блокер ревью волны 3) ---

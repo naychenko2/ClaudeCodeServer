@@ -25,14 +25,12 @@ public class ChildModeMcpGuardTests : IClassFixture<ChildModeMcpGuardTests.Hosts
 
     public ChildModeMcpGuardTests(Hosts host) => _host = host;
 
-    // Заморожено: два сервера — tutor (К3, ADR-041 «Редакция 3»): три инструмента материалов
+    // Заморожено: два сервера — tutor (К3, ADR-041 «Редакция 3», Б17c): один инструмент поиска по материалам
     // предмета, и widgets (К9, разрез «Знания репетитора» §8 п.1): один инструмент widget_show.
     // Студия волны 2 добавит сюда пары осознанной правкой.
     private static readonly (string Server, string Tool)[] FrozenAllowList =
     [
         ("tutor", "search_materials"),
-        ("tutor", "list_materials"),
-        ("tutor", "read_material"),
         ("widgets", "widget_show"),
     ];
 

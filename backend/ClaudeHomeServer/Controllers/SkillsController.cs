@@ -147,11 +147,11 @@ public class SkillsController(
             IReadOnlyList<SkillSuggestion> result;
             if (!string.IsNullOrWhiteSpace(req.PersonaId))
             {
-                // Навыки — библиотека владельца (разрез §3.2, B5): право Configure по персоне.
+                // Навыки — библиотека владельца (разрез §3.2, B5): право ConfigurePersonas по персоне.
                 // id в DTO — [ProjectScope] его не видит, резолв здесь; ключ подборки —
                 // арендатор персоны, а не вызывающий (иначе контекст персоны читался бы
                 // редактором общего проекта).
-                var scope = access.ResolvePersona(UserId, req.PersonaId, ProjectRight.Configure);
+                var scope = access.ResolvePersona(UserId, req.PersonaId, ProjectRight.ConfigurePersonas);
                 if (scope is null) return PersonaConfigureDenied(req.PersonaId);
                 result = await suggest.SuggestForPersonaAsync(scope.TenantOwnerId, req.PersonaId, ct);
             }
@@ -184,13 +184,13 @@ public class SkillsController(
 
     // --- Установить навык персоне: глобальная установка + привязка (Skill) ---
 
-    // Навыки — библиотека владельца (разрез §3.2, B5): право Configure по персоне. Проектной
+    // Навыки — библиотека владельца (разрез §3.2, B5): право ConfigurePersonas по персоне. Проектной
     // персоне общего проекта навык ставит только её владелец (он же владелец проекта):
     // редактору и читателю — 403 «Только владелец проекта», постороннему — 404 (существование
     // чужой персоны не подтверждаем). Ключ записи — арендатор из RequestScope: привязка
     // валидируется и пишется по владельцу персоны (ValidateAsync/UpdateBindings), а не по
     // вызывающему.
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.ConfigurePersonas)]
     [HttpPost("api/personas/{id}/skills")]
     public async Task<IActionResult> InstallForPersona(string id, [FromBody] InstallForPersonaRequest req,
         CancellationToken ct)

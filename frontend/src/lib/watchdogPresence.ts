@@ -96,13 +96,21 @@ const stateSnapshot = () => _state;
 const sessionsSnapshot = () => _state.sessions;
 const projectsSnapshot = () => _state.projects;
 
+// Подписка, которая не подписывается: экрану стор не нужен, и он не должен поднимать
+// его первичный снимок (GET /api/watchdogs — взрослая ручка, ребёнку 403, Х-W4-34).
+const noopSubscribe = () => () => {};
+
 /**
  * Чаты ({ sessions }) и проекты ({ projects }) владельца с АКТИВНЫМИ сторожами. Пустые
  * множества — сторожей нет нигде. Кто ждёт чего именно — знает только бэкенд: наружу
  * выставляется сам факт ожидания.
+ *
+ * opts.disabled — экрану presence не нужна вовсе (детская поверхность: ни бейджей, ни
+ * точек). Признак знает вызывающий; отключённый вызов не подписывается и не поднимает
+ * снимок — стор стартует только реальными потребителями.
  */
-export function useWatchdogPresence(): WatchdogPresence {
-  return useSyncExternalStore(subscribe, stateSnapshot, stateSnapshot);
+export function useWatchdogPresence(opts?: { disabled?: boolean }): WatchdogPresence {
+  return useSyncExternalStore(opts?.disabled ? noopSubscribe : subscribe, stateSnapshot, stateSnapshot);
 }
 
 /** Ждёт ли в этом чате активный сторож прямо сейчас. */

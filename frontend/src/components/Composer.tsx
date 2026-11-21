@@ -57,13 +57,18 @@ import { primeAudio } from '../lib/tts';
 import { isMicKeyboardFallback } from '../lib/voiceInput';
 import { talkDiag, talkDiagSave } from '../lib/talkDiag';
 import { VOICE_STYLE_TALK, VOICE_STYLE_DIGEST, type VoiceStyle } from '../lib/voiceStyle';
-import { ChildComposer } from '../features/childMode/ChildComposer';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
 
 export interface ComposerProps {
-  // 'child' — детский вариант (KM-F8): поле, отправка, «+», чип вложения, «Читать вслух»;
-  // остальное скрыто. Не задан — взрослый композер без изменений
-  variant?: 'child';
+  // ADR-041 ред. 8 (разрез §14.5): детский набор возможностей штатного композера —
+  // ChildModeAllowList.ComposerFeatures ("text", "attachFromSubject", "voiceInput", "askUserAnswer").
+  // При наличии показывается только то, чей ключ в списке (default-deny: неизвестный ключ —
+  // тоже скрыто): поле текста, «+» (родитель открывает папку предмета), кнопка голосового
+  // ввода. Всё вне списка — модель и поставщик, режимы, «/» и «@», цикл «до готово»,
+  // отдельное дерево, команда, быстрые фразы, режим разговора — скрыто. askUserAnswer —
+  // ответы на «вопросы с кнопками» AskUserQuestion: они живут в ленте (AskQuestionView, Б19),
+  // в композере у этого ключа нет своей кнопки. Не задан — взрослый композер без изменений.
+  childFeatures?: string[];
   // Подписи чипов вложений вместо имени файла из пути (детский вариант: у PDF путь ведёт на извлечённый .txt)
   attachmentLabels?: Record<string, string>;
   // Ключ чата — под него хранится черновик недовведённого текста
@@ -636,8 +641,13 @@ function AdultComposer({
   onReplaceAttachments,
   focusSignal,
   auroraColorHex,
+  childFeatures,
   executorTask = null,
 }: ComposerProps) {
+  // Детский набор (ADR-041 ред. 8): фича показывается, только если её ключ в списке
+  // (default-deny). childSet === null — взрослый композер: ни один гейт ниже не действует.
+  const childSet = childFeatures ? new Set(childFeatures) : null;
+  const childHas = (k: string) => childSet?.has(k) ?? false;
   const asstName = useAssistantName();
   const addressee = dativeName(asstName);
   // Черновик per-session. Composer смонтирован с key={sessionId} (см. ChatPanel), поэтому
@@ -812,9 +822,10 @@ function AdultComposer({
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
   const skillWordStartRef = useRef(0);
-  // Autocomplete @упоминаний персон — включён всегда; isGroupChat нужен для ранжирования участников
+  // Autocomplete @упоминаний персон: у взрослого — включён всегда; у детского набора — выключен
+  // (списка персон ребёнку нет). isGroupChat нужен для ранжирования участников
   const isGroupChat = (participantIds?.length ?? 0) > 1;
-  const mentionsActive = true;
+  const mentionsActive = !childSet;
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const mentionWordStartRef = useRef(0);
@@ -843,7 +854,8 @@ function AdultComposer({
   const [teamOpen, setTeamOpen] = useState(false);
   const [teamMech, setTeamMech] = useState<TeamMechanicId | null>(null);
   const [teamSettings, setTeamSettings] = useState<TeamMechanicSettings>(DEFAULT_TEAM_SETTINGS);
-  const canDiscuss = !!sessionId && !onboarding;
+  // «Обсудить с командой» — взрослая механика: у детского набора её нет вовсе
+  const canDiscuss = !!sessionId && !onboarding && !childSet;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Флаг «последнее изменение text пришло из голосовой диктовки». В useEffect по text
   // проверяется: если стоит — докручиваем textarea до конца. Флаг, а не ветка в эффекте
@@ -905,7 +917,10 @@ function AdultComposer({
   // собеседник (с B2), модель (только в C)
   const compactStrip = rightForm === 'C';
   const widePickers = rightForm === 'A-wide';
-  const rightWidth = layout.rightWidth;
+  // У ребёнка правой группы нет вовсе (ни модели, ни собеседника — см. рендер полосы):
+  // её номинал в бюджете — фантом, который на узкой полосе выталкивает «＋» из ряда.
+  // Ребёнку — честный ноль; взрослому — как раньше
+  const rightWidth = childSet ? 0 : layout.rightWidth;
   const compactTeamPill = layout.compactTeamPill;
   const autoChipVisible = layout.autoChipVisible;
   const loopInMenu = layout.loopInMenu;
@@ -1019,7 +1034,7 @@ function AdultComposer({
     while (wordStart >= 0 && newText[wordStart] !== ' ' && newText[wordStart] !== '\n') wordStart--;
     wordStart++;
     const word = newText.slice(wordStart, cursorPos);
-    if (skills.length > 0 && word.startsWith('/')) {
+    if (!childSet && skills.length > 0 && word.startsWith('/')) {
       skillWordStartRef.current = wordStart;
       setSkillQuery(word.slice(1));
       setShowSkillsDropdown(true);
@@ -1494,7 +1509,8 @@ function AdultComposer({
   useEffect(() => { setSuggestionDismissed(false); }, [promptSuggestion]);
   // Подсказка — следующее сообщение агенту: в режиме подсистемы («Картинка») поле держит
   // свой текст, и подсказка легла бы поверх промпта модели
-  const suggestionVisible = !!promptSuggestion && !activeMode && text.trim() === '' && !suggestionDismissed && !isGenerating && !isListening;
+  // Подсказка следующего сообщения — взрослая возможность (key в детском наборе нет)
+  const suggestionVisible = !childSet && !!promptSuggestion && !activeMode && text.trim() === '' && !suggestionDismissed && !isGenerating && !isListening;
   const acceptSuggestion = useCallback(() => {
     if (!promptSuggestion) return;
     setText(promptSuggestion);
@@ -1623,13 +1639,17 @@ function AdultComposer({
       ))}
     </>
   );
-  const attachButton = (
+  // «＋»: у ребёнка — только вложение из папки предмета (key "attachFromSubject"): меню
+  // create-ярлыков и «с компьютера мимо папки» ему нет — onAttach родителя открывает папку
+  // предмета. У взрослого — как раньше: с ярлыками «Картинка/Звук/Видео» это меню, без них — прикрепляет сразу
+  const attachAsMenu = !childSet && stripShortcuts.length > 0;
+  const attachButton = !childSet || childHas('attachFromSubject') ? (
     <button
-      onClick={stripShortcuts.length > 0
+      onClick={attachAsMenu
         ? (e) => setPlusMenu((e.currentTarget as HTMLElement).getBoundingClientRect())
         : onAttach}
-      title={plusButtonTitle(stripShortcuts)}
-      aria-haspopup={stripShortcuts.length > 0 ? 'menu' : undefined}
+      title={childSet ? 'Прикрепить файл' : plusButtonTitle(stripShortcuts)}
+      aria-haspopup={attachAsMenu ? 'menu' : undefined}
       style={{
         width: lipBtn, height: lipBtn, borderRadius: R.pill, border: 'none', background: 'none',
         cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
@@ -1638,13 +1658,13 @@ function AdultComposer({
     >
       <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
-  );
+  ) : null;
   // Меню «＋»: на десктопе карточка у кнопки, на телефоне шторка — как у переключателя полос
   const plusMenuNode = plusMenu && (isMobile
     ? <Modal title="Добавить" onClose={closePlus}><div style={{ display: 'flex', flexDirection: 'column' }}>{plusItems}</div></Modal>
     : <Menu anchor={plusMenu} onClose={closePlus} minWidth={260} maxWidth={340} maxHeight={260}>{plusItems}</Menu>);
 
-  const slashButton = skills.length > 0 ? (
+  const slashButton = !childSet && skills.length > 0 ? (
     <button
       onClick={handleSlashButton}
       title="Выбрать скилл"
@@ -1747,7 +1767,7 @@ function AdultComposer({
   const toggleWorkLoopSafe = onToggleWorkLoop
     ? () => { void Promise.resolve(onToggleWorkLoop()).catch(() => {}); }
     : undefined;
-  const loopButton = onToggleWorkLoop && !loopActive ? (
+  const loopButton = !childSet && onToggleWorkLoop && !loopActive ? (
     <button
       onClick={toggleWorkLoopSafe}
       title="Цикл «до готово»: агент работает итерациями, пока не отчитается о завершении, затем верификационный ход"
@@ -1764,7 +1784,7 @@ function AdultComposer({
   ) : null;
   // Пилюля цикла «до готово» НЕ рендерится, если она ушла в «⋯» (loopInMenu) — там её
   // место занимает строка-свитч с тем же действием (toggleWorkLoopSafe)
-  const loopPill = !loopInMenu && onToggleWorkLoop && loopActive && workLoop ? (
+  const loopPill = !childSet && !loopInMenu && onToggleWorkLoop && loopActive && workLoop ? (
     <ModePill
       isMobile={isMobile}
       icon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
@@ -1789,7 +1809,7 @@ function AdultComposer({
   // Режим «Командная реализация»: бейдж стадии + чип «Авто». Если бейдж целиком ушёл
   // в «⋯» (krInMenu на предельной ступени) — здесь его не рендерим, в «⋯» будет строка
   // с sublabel состояния
-  const teamImplementBadge = !krInMenu && teamImplement && onToggleTeamImplementAuto && onDisableTeamImplement ? (
+  const teamImplementBadge = !childSet && !krInMenu && teamImplement && onToggleTeamImplementAuto && onDisableTeamImplement ? (
     <TeamImplementBadge
       state={teamImplement}
       chatMode={mode}
@@ -1822,7 +1842,7 @@ function AdultComposer({
     : worktreeActive
       ? `Чат работает в отдельном дереве (ветка ${worktreeBranch}) — нажми, чтобы вернуть в проект`
       : 'Отдельное дерево: чат работает в изолированном git worktree на своей ветке';
-  const worktreeButton = onToggleWorktree ? (
+  const worktreeButton = !childSet && onToggleWorktree ? (
     <button
       onClick={worktreeToggleDisabled ? undefined : onToggleWorktree}
       disabled={worktreeToggleDisabled}
@@ -1880,7 +1900,9 @@ function AdultComposer({
     </div>
   );
 
-  const inputArea = talkActive ? loopArea : isListening ? (
+  // Поле текста — key "text": без него в детском наборе поля нет вовсе (default-deny);
+  // взрослый (childSet === null) — всегда. Зоны разговора/записи у ребёнка не достигаются
+  const inputArea = (!childSet || childHas('text')) ? (talkActive ? loopArea : isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
       <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
       <span style={{ fontSize: 13, color: C.dangerText, fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
@@ -1974,7 +1996,7 @@ function AdultComposer({
       </FieldBadge>
     )}
     </div>
-  );
+  )) : null;
 
   // Постоянные разрешения чата. Живут в меню режима прав: там человек решает, о чём
   // его спрашивают, — значит и «уже не спрашивают про Bash» должно быть видно здесь,
@@ -1982,7 +2004,8 @@ function AdultComposer({
   const autoAllow = autoAllowTools ?? [];
   const autoAllowTitle = autoAllow.length > 0 ? ` · без вопроса: ${autoAllow.join(', ')}` : '';
 
-  const modeButton = (
+  // Селектор режимов (⚡📋❓) — взрослый: у детского набора его нет
+  const modeButton: React.ReactNode = childSet ? null : (
     <div ref={modeRef} style={{ position: 'relative', flexShrink: 0 }}>
       <button
         onClick={() => {
@@ -2155,7 +2178,8 @@ function AdultComposer({
 
   // Быстрые фразы: попап у кнопки слева от микрофона. Якорь — rect самой кнопки
   // (Menu развернёт карточку вверх, композер стоит у нижней кромки)
-  const phrasesButton = (
+  // Быстрые фразы — взрослая возможность: у детского набора её нет (key в allow-list нет)
+  const phrasesButton: React.ReactNode = childSet ? null : (
     <button
       type="button"
       onClick={e => setPhrasesAnchor(e.currentTarget.getBoundingClientRect())}
@@ -2174,7 +2198,8 @@ function AdultComposer({
     </button>
   );
 
-  const micButton = hasSpeech ? (
+  // Голосовой ввод (диктовка) — key "voiceInput": без него в детском наборе кнопки нет
+  const micButton = hasSpeech && (!childSet || childHas('voiceInput')) ? (
     <button
       type="button"
       onClick={startMic}
@@ -2197,7 +2222,9 @@ function AdultComposer({
   // её вместе с голосовым режимом. Отдельного тумблера озвучки (Volume2/VolumeX) больше нет.
   // Три состояния читаются цветом: выключено — нейтральная плашка, режим включён без петли —
   // светлый accent, петля активна — заливка accent
-  const voiceButton = onToggleVoiceMode ? (
+  // Режим разговора (петля «сказал → ответ вслух») — взрослый: у детского набора его нет.
+  // Голосовой ввод (диктовка) — отдельная кнопка micButton, key "voiceInput"
+  const voiceButton = !childSet && onToggleVoiceMode ? (
     <button
       type="button"
       // «Голос» — настройка только владельца проекта (QA-P1F): участнику неактивна
@@ -2235,7 +2262,7 @@ function AdultComposer({
   // voiceButton, потому что и вид, и смысл другие — не тумблер режима, а аварийный выход
   // (глушит чтение, прерывает ход, выходит из режима). Стиль повторяет «Стоп» генерации:
   // одинаковое действие должно выглядеть одинаково
-  const talkStopButton = onToggleVoiceMode ? (
+  const talkStopButton = !childSet && onToggleVoiceMode ? (
     <button
       type="button"
       onClick={handleVoiceButton}
@@ -2340,7 +2367,7 @@ function AdultComposer({
 
   // Единый селектор собеседника (персона или .md-агент). Доступен и в начатом чате:
   // смена по ходу разговора разрешена (персона-слой пересобирается каждый ход).
-  const companionSelector = canPickCompanion && (personas.length > 0 || agents.length > 0) && onCompanionChange ? (
+  const companionSelector = !childSet && canPickCompanion && (personas.length > 0 || agents.length > 0) && onCompanionChange ? (
     <CompanionSelector
       personas={personas}
       agents={agents}
@@ -2371,7 +2398,8 @@ function AdultComposer({
   // меню его собственный список выбора выглядел бы вложенным меню.
   // eslint-disable-next-line react-hooks/refs -- кнопки не refs: taint от onClick-обработчиков, читающих refs только в событиях
   const collapsible = [
-    { key: 'attach', node: attachButton, item: { key: 'attach', icon: <Plus size={16} strokeWidth={ICON_STROKE} />, label: 'Прикрепить файл', sublabel: 'Добавить файл к сообщению', onClick: onAttach } },
+    // Запись attach — по факту кнопки: без ключа attachFromSubject её нет ни в ряду, ни в меню
+    attachButton && { key: 'attach', node: attachButton, item: { key: 'attach', icon: <Plus size={16} strokeWidth={ICON_STROKE} />, label: 'Прикрепить файл', sublabel: 'Добавить файл к сообщению', onClick: onAttach } },
     slashButton && { key: 'slash', node: slashButton, item: { key: 'slash', icon: <span style={{ fontFamily: FONT.mono, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>/</span>, label: 'Вставить скилл', sublabel: 'Список навыков через «/»', onClick: handleSlashButton } },
     loopButton && { key: 'loop', node: loopButton, item: { key: 'loop', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»', sublabel: 'Повторять итерациями, пока не готово', toggle: loopActive, onClick: () => toggleWorkLoopSafe?.() } },
     worktreeButton && { key: 'worktree', node: worktreeButton, item: { key: 'worktree', icon: <FolderGit2 size={16} strokeWidth={ICON_STROKE} />, label: 'Отдельное дерево', sublabel: worktreeToggleDisabled ? (worktreeActive ? `Включено · ${worktreeBranch} · идёт ход…` : 'Пока идёт ход, недоступно') : (worktreeActive ? `Включено · ${worktreeBranch}` : 'Чат в изолированном git worktree'), toggle: worktreeActive, disabled: worktreeToggleDisabled, onClick: () => { if (!worktreeToggleDisabled) void onToggleWorktree?.(); } } },
@@ -2398,7 +2426,9 @@ function AdultComposer({
 
   const visibleCount = useToolbarOverflow({
     stripRef,
-    leftBlock: STRIP_LEFT_NOMINAL[isMobile ? 'm' : 'd'],
+    // У ребёнка нет ни modeButton, ни бейджей, ни правой группы: несжимаемых блоков в его
+    // полосе нет вовсе — резервировать их номиналы значит выталкивать «＋» на узкой ширине
+    leftBlock: childSet ? 0 : STRIP_LEFT_NOMINAL[isMobile ? 'm' : 'd'],
     badgesWidth,
     rightWidth,
     // Считаем только показанные: скрытых в ряду нет вовсе
@@ -2414,7 +2444,9 @@ function AdultComposer({
     // A-wide/A/B/B2) — левая полоса остаётся в ряду целиком, а правая группа сама
     // сжимается по собственной лестнице. Только когда правая ушла в полностью иконочную
     // форму C — левые начинают уезжать в «⋯» по обычному бюджету
-    forceAllVisible: rightForm !== 'C',
+    // Ребёнку сворачивать не во что: меню «⋯» ему не строится, а его кнопки — только
+    // разрешённые набором, они обязаны оставаться в ряду
+    forceAllVisible: !!childSet || rightForm !== 'C',
   });
   // Запасной клапан переполнения badgesRef отключён (этап 2): раньше он ловил обрезку
   // через overflow:hidden на самом блоке (scrollWidth > clientWidth). После снятия
@@ -2486,7 +2518,8 @@ function AdultComposer({
   const stripKeys = new Set(shownCollapsible.slice(0, visibleCount).map(c => c.key));
   const hiddenItems: OverflowItem[] = [
     ...collapsible.map(c => ({ ...c.item, action: visAction(c.key) })),
-    ...shortcutOverflowItems(stripShortcuts, stripKeys.has('attach')),
+    // create-ярлыки («Картинка/Звук/Видео») — взрослый состав меню: у детского набора их нет
+    ...(!childSet ? shortcutOverflowItems(stripShortcuts, stripKeys.has('attach')) : []),
     ...activeModeItems,
   ];
 
@@ -2652,7 +2685,9 @@ function AdultComposer({
           и сияние в момент речи — включил утром, вернулся вечером, ответ заговорил.
           Текст следует за стилем: он объясняет, что именно прозвучит, а выбирать тут
           нечего — стиль выводится из ширины экрана */}
-      {voiceMode && !talkActive && !workLoop?.active && !teamMech && (
+      {/* У детского набора строки нет: режимом разговора ребёнок не управляет (key "voiceMode"
+          в allow-list нет) — напоминать о режиме, которого ребёнку не дали, нечестно */}
+      {!childSet && voiceMode && !talkActive && !workLoop?.active && !teamMech && (
         <VoiceStatusRow
           icon={digestVoice
             ? <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
@@ -2690,8 +2725,9 @@ function AdultComposer({
         </div>
       )}
 
-      {/* Чипы подсистем (слот composer-chip): вклад сам решает, рисоваться ли */}
-      {slotChips.length > 0 && (
+      {/* Чипы подсистем (слот composer-chip): вклад сам решает, рисоваться ли.
+          У детского набора их нет: ни одной подсистемной фичи в allow-list нет */}
+      {!childSet && slotChips.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, padding: `0 ${SP.xxs}px` }}>
           {slotChips.map(c => (
             <Fragment key={c.name}>{c.render?.({ projectId: project?.id ?? null, sessionId, isMobile: !!isMobile, modeId: activeMode ? modeId : null })}</Fragment>
@@ -2793,12 +2829,14 @@ function AdultComposer({
       {/* Скрытое ctx-меню правого клика: без триггера, открывается внешним сигналом.
           Живёт отдельно от «⋯»: тот показывает состав ряда, а жест обязан давать
           доступ ко ВСЕМ кнопкам независимо от ширины полосы */}
-      {!isMobile && hiddenItems.length > 0 && (
+      {/* Ребёнку — ни ctx-меню, ни «⋯»: в его единственном пункте был бы дубль «Прикрепить
+          файл» и глазик видимости — ключей этих контролов в детском allow-list нет */}
+      {!childSet && !isMobile && hiddenItems.length > 0 && (
         <ToolbarOverflowMenu items={hiddenItems} title="Все действия"
           renderTrigger={() => null}
           openTrigger={{ counter: ctxOpen, anchor: ctxAnchorRef.current }} />
       )}
-      {hiddenItems.length > 0 && (
+      {!childSet && hiddenItems.length > 0 && (
         // Этап 2: triggerTitle динамический — если в меню есть активные (toggle=true)
         // строки, подсказываем, что внутри живое состояние, а не просто свёрнутые
         // кнопки. Иначе «Ещё» безобидно, но человек думает, что там пусто
@@ -2823,8 +2861,9 @@ function AdultComposer({
         {teamImplementBadge}
         {loopPill}
       </div>
-      {/* Правая группа: «модель · усилие» → собеседник, прижаты к правому краю */}
-      {(onModelChange || companionSelector) && (
+      {/* Правая группа: «модель · усилие» → собеседник, прижаты к правому краю.
+          У детского набора её нет вовсе: ни модели, ни поставщика, ни собеседника */}
+      {!childSet && (onModelChange || companionSelector) && (
         <div ref={rightRef} style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>
           {onModelChange && (
             <ComposerModelPicker
@@ -2879,5 +2918,7 @@ function AdultComposer({
 }
 
 export function Composer(props: ComposerProps) {
-  return props.variant === 'child' ? <ChildComposer {...props} /> : <AdultComposer {...props} />;
+  // Ф1g: детская оболочка удалена — детский композера больше нет, ребёнок идёт через
+  // штатный Composer с childFeatures (Ф1c/Ф1j)
+  return <AdultComposer {...props} />;
 }

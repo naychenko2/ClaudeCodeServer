@@ -60,7 +60,12 @@ public static class FolderZip
     // Файлы папки для архива: исключённые каталоги и символические ссылки пропускаются —
     // по ссылке обход увёл бы за пределы проекта. Облачные reparse point (OneDrive)
     // ссылками не считаются и в архив попадают. Пути — относительные от folder, через «/».
-    public static List<(string FullPath, string EntryName)> Collect(string folder, CancellationToken ct = default)
+    // includeFile — фильтр самой записи (имя архивной записи, относительный путь от folder):
+    // false — файл в архив не кладётся и не считается ни в MaxFiles, ни в MaxTotalBytes
+    // (отсечённое чужому потребителю не занимает его потолок). Нужен границы ребёнка:
+    // архив корня предмета не должен нести то, что ребёнку не видно ни одной ручкой (И8).
+    public static List<(string FullPath, string EntryName)> Collect(string folder, CancellationToken ct = default,
+        Func<string, bool>? includeFile = null)
     {
         var result = new List<(string, string)>();
         long total = 0;
@@ -86,12 +91,14 @@ public static class FolderZip
                     continue;
                 }
                 var file = (FileInfo)info;
+                var entryName = Path.GetRelativePath(folder, file.FullName).Replace('\\', '/');
+                if (includeFile is not null && !includeFile(entryName)) continue;
                 total += file.Length;
                 if (result.Count + 1 > MaxFiles)
                     throw new TooLargeException($"В папке больше {MaxFiles} файлов — архивом её не скачать");
                 if (total > MaxTotalBytes)
                     throw new TooLargeException("Папка больше 2 ГБ (считаются исходные, несжатые байты) — архивом её не скачать");
-                result.Add((file.FullName, Path.GetRelativePath(folder, file.FullName).Replace('\\', '/')));
+                result.Add((file.FullName, entryName));
             }
         }
         return result;
@@ -101,9 +108,9 @@ public static class FolderZip
     // Файл, пропавший или занятый между обходом и упаковкой, пропускается и считается в
     // Skipped. Открываем источник ДО CreateEntry, так что пропуск открытия не оставляет
     // пустой записи; сбой посреди копирования — редкость, и запись тогда остаётся усечённой.
-    public static Result Build(string folder, CancellationToken ct = default)
+    public static Result Build(string folder, CancellationToken ct = default, Func<string, bool>? includeFile = null)
     {
-        var entries = Collect(folder, ct);
+        var entries = Collect(folder, ct, includeFile);
         var tmp = Path.Combine(Path.GetTempPath(), $"ccs-zip-{Guid.NewGuid():N}.zip");
         var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None,
             81920, FileOptions.DeleteOnClose);

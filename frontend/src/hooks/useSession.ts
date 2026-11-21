@@ -6,6 +6,7 @@ import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
 import { applyHistoryReply, cursorQuery, type HistoryCursor } from '../lib/historyTail';
 import { denialCodeOf, denialTextOf } from '../features/projects/members/participantGate';
+import { getMeSnapshot } from '../lib/defaultPersona';
 import { applyServerMessage, normalizeHistory, serverHistoryNewer, resolveCardsFromHistory, adoptServerHistory, historyTurnFinished, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
@@ -86,7 +87,12 @@ async function loadHistory(sid: string, projectId?: string): Promise<unknown[]> 
   // обязательный аргумент applyHistoryReply с F3-S2a
   let replyBytes = 0;
   const onBytes = (n: number) => { replyBytes = n; };
-  const reply = await (projectId
+  // Ребёнку проектная ручка /projects/.../history запрещена (403, дефект 30a7ded3):
+  // разрешённая — /chats/{id}/history (ChatsController.GetHistory, [ChildAllowed],
+  // тот же контракт хвоста after/fp). Ручка выбирается по снимку «я», а не пропом —
+  // тот же образец, что lib/chatContext.ts:53. Взрослый путь (с projectId → sessions,
+  // без него → chats) не меняется.
+  const reply = await (projectId && !getMeSnapshot().isChild
     ? api.sessions.getHistoryTail(projectId, sid, q, onBytes)
     : api.chats.getHistoryTail(sid, q, onBytes));
   const applied = applyHistoryReply(prev, q, reply, replyBytes);

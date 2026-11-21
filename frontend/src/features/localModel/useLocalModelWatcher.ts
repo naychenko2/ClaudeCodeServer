@@ -18,6 +18,7 @@ import {
   fetchLocalModelEngines, fetchLocalModelStats,
   type LocalModelEngine, type LocalModelEngineName, type LocalModelStats,
 } from './api';
+import { useMe } from '../../lib/defaultPersona';
 
 // === Стор состояния второго движка для точки рельса (Ф6) ===
 // Последний снимок именованного движка (LocalEngines, например Gemma на Video) из лёгкого
@@ -77,14 +78,20 @@ export function startEngineStatePolling(
 }
 
 export function useLocalModelWatcher(isAdmin: boolean): void {
+  // Ребёнок не опрашивает ни одной из двух ручек сторожа (/stats и /stats/media не
+  // детские — инвентаризация X-W4-36, ребёнку был 403 каждые 60 с). Признак детства
+  // существующий (Me.isChild, как в TasksPanel X-W4-35): ребёнку source=null —
+  // useLocalModelConfiguredPolling при null не стартует вовсе (X-W4-37).
+  const { isChild } = useMe();
   useEffect(() => { setLocalModelAdmin(isAdmin); }, [isAdmin]);
-  // Админ — /stats, не-админ — /stats/media
-  useLocalModelConfiguredPolling(configuredSource(isAdmin));
-  // Состояние второй модели — только админу: точка на значке тоже только для него
+  // Админ — /stats, не-админ — /stats/media; ребёнку — никакого опроса
+  useLocalModelConfiguredPolling(isChild ? null : configuredSource(isAdmin));
+  // Состояние второй модели — только админу: точка на значке тоже только для него;
+  // ребёнок не опрашивает движки тоже (та же ручка закрыта ему)
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAdmin || isChild) return;
     return startEngineStatePolling();
-  }, [isAdmin]);
+  }, [isAdmin, isChild]);
   // Подписка страницы на сторы (значение не нужно — нужен ререндер, чтобы рельса
   // перечитала геттеры): configured, роль и состояние второй движок
   useLocalModelConfigured();

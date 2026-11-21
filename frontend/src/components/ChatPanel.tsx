@@ -1,6 +1,6 @@
 import { setAudioFocus } from '../lib/audioFocus';
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
-import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore } from 'lucide-react';
+import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore, Lightbulb } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { ProjectFeature } from '../types';
 import { featureReason, isLocalProject, useProjectFeature } from '../lib/projectCapabilities';
@@ -13,6 +13,8 @@ import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
 import { denialTextOf, guardTurnAction, ownerDecisionDeniedReason, ownerSettingsDeniedReason, turnDeniedReason } from '../features/projects/members/participantGate';
 import { canChangeCompanion } from '../features/personas/personaRights';
+import { filterChildFeed, CHILD_TURN_ERROR_TEXT } from '../features/childMode/childFeedFilter';
+import { ChildLessonHeader, type ChildLessonHeaderData } from '../features/childMode/ChildLessonHeader';
 import { useMe } from '../lib/defaultPersona';
 import { isArchivedChat } from '../lib/chatFilters';
 import { archiveApi } from '../api/chats';
@@ -67,12 +69,12 @@ import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
-import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
+import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, ChildFeedContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
 import { useFeatureRuns } from '../lib/featureRuns';
 import { useFeaturesIndex, featureOf } from '../lib/featuresIndex';
-import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
+import { Modal, ModalActions, ConfirmDialog, Button, Notice } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
 import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from './chat/timeline';
@@ -173,6 +175,23 @@ interface Props {
   // (ChatsPage.chats, WorkspacePage.sessions, wallStore.chats); нового запроса
   // к серверу не заводим
   availableChatIds?: Set<string>;
+  // Детский набор композера (Ф1c/Ф1j, ADR-041 ред. 8, разрез §14.5): снимок
+  // surface.composerFeatures. Панель не решает по нему ничего и отдаёт его Composer'у
+  // как есть (его проп childFeatures): при наличии — детский композер default-deny.
+  // Не передан — взрослый композер как раньше.
+  childFeatures?: string[];
+  // Детский режим (Ф1d, ADR-041 ред. 8, разрез §14.5): белый список видов ленты —
+  // снимок surface.feedKinds, его кладёт владелец экрана (WorkspacePage для ребёнка).
+  // При наличии лента строится через filterChildFeed: только эти виды, сбои хода —
+  // спокойная плашка (тот же текст, что в ChildLessonChat), карточки правки и
+  // технические события — вне ленты. Не передан — взрослая лента как раньше.
+  childFeedKinds?: string[];
+  // Детская шапка урока (Ф1h, решение Андрея 19.11): данные для ChildLessonHeader —
+  // предмет открытого чата и имена кураторов (viewers предмета, Б14a). Их собирает
+  // владелец экрана: он же грузит предметы ребёнка (childApi.getSubjects, Ф1e).
+  // При childFeedKinds вместо взрослой ChatHeaderBar рисуется детская шапка урока:
+  // аватар и имя репетитора, метка предмета и постоянная строка «Уроки видит …».
+  childHeader?: ChildLessonHeaderData;
 }
 
 // Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
@@ -246,7 +265,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
+export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds, childFeatures, childFeedKinds, childHeader }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, liveContextTokens, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send: rawSend, allowPermission: rawAllowPermission, denyPermission: rawDenyPermission, allowAlways: rawAllowAlways, answerQuestion: rawAnswerQuestion, respondPlan: rawRespondPlan, respondTeamPlan: rawRespondTeamPlan, respondTeamEscalation: rawRespondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Участник общего проекта не запускает ходы и не отвечает агенту (бэк откажет): все входы
   // вне композера идут через гейт в точке отправки, а не каждый со своей проверкой
@@ -680,18 +699,28 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   const isGroupChat = participantPersonas.length > 1;
   // Есть ли уже ходы — назначать/менять персону можно только у пустого чата (бэкенд иначе 400)
   // Персоны, доступные в контексте чата (глобальные + этого проекта) — для селектора,
-  // пилюль пустого состояния и форка. Грузим всегда: смена собеседника разрешена и по
-  // ходу разговора, а на пустом списке селектор не рисуется вовсе — раньше из-за этого
-  // в начатом чате без персоны выбрать её было негде.
+  // пилюль пустого состояния и форка. Грузим на каждый открытый взрослый чат: смена
+  // собеседника разрешена и по ходу разговора, а на пустом списке селектор не рисуется
+  // вовсе — раньше из-за этого в начатом чате без персоны выбрать её было негде.
+  // Ребёнку список не грузится вообще (гейт в эффекте ниже).
+  // Снимок «я» — один на весь экран: у запросов этой ленты гейт стоит в месте опроса,
+  // а не в рендере (И11, паттерн конвейера): ребёнку взрослая ручка отвечает 403,
+  // поэтому запрос к ней не уходит вовсе. Тот же приём, что у ensureGit в FileExplorer
+  // и у стора персон (lib/personas.ts:53).
+  const me = useMe();
   const [ctxPersonas, setCtxPersonas] = useState<Persona[]>([]);
   useEffect(() => {
+    // Ребёнку список персон не нужен вовсе: ряд «Поговорить с…» пустого состояния и
+    // селектор собеседника в композере — вне детской поверхности (И11, решение 82),
+    // а GET /api/personas без [ChildAllowed] ответил бы 403.
+    if (me.isChild) return;
     if (!online) return;
     let alive = true;
     api.personas.list({ scope: 'context', projectId: project?.id })
       .then(list => { if (alive) setCtxPersonas(list); })
       .catch(() => { /* персоны — необязательная фича */ });
     return () => { alive = false; };
-  }, [online, project?.id]);
+  }, [online, project?.id, me.isChild]);
 
   // W3-F1i (матрица §3.2, правило W3-B4b): участник общего проекта меняет собеседника
   // только в своём чате (автор — session.createdByUserId). Решение — только
@@ -699,7 +728,6 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // проект (myRole нет) и чат вне проекта — без гейта, как раньше. Пока /me не пришёл,
   // фронт не знает, кто «я», — свой чат редактора временно закрыт (fail-closed:
   // без своей id утверждать авторство нечем; сервер всё равно отказал бы в чужом)
-  const me = useMe();
   const companionLocked = !canChangeCompanion(project, session, me.userId ?? '');
 
   // Назначить/сменить/снять собеседника чата: персона либо .md-агент — взаимоисключающе
@@ -773,6 +801,9 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
 
   const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
   useEffect(() => {
+    // «Инициализировать проект» — CTA взрослого пустого состояния; ребёнку оно не
+    // монтируется (Х-W4-79), поэтому и опрос файлов ради него не уходит (И11).
+    if (me.isChild) return;
     // Для чата вне проекта файлов нет — баннер CLAUDE.md не показываем
     const projectId = project?.id;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- guard: без проекта баннер CLAUDE.md не нужен
@@ -780,7 +811,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     api.files.list(projectId)
       .then(files => setHasCLAUDEmd(files.some(f => !f.isDirectory && f.name === 'CLAUDE.md')))
       .catch(() => setHasCLAUDEmd(true)); // при ошибке не показываем баннер
-  }, [project?.id]);
+  }, [project?.id, me.isChild]);
 
   // Точная стоимость генераций fal.ai: requestId → списанная сумма (для подписи под медиа).
   // Источник — fal_cost-элементы ленты (backend опрашивает billing-events). Дедуп по requestId.
@@ -827,11 +858,15 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // Переключатель живёт в «Модели и расход» (только админ); оттуда же приходит событие
   // смены, чтобы открытые чаты не ждали перезагрузки
   useEffect(() => {
+    // Ребёнку стоимость Claude не показывается (детская лента её не рисует), а GET /settings
+    // без [ChildAllowed] ответил бы 403 — ни запрос, ни подписка на событие смены не нужны
+    // вовсе (И11, паттерн конвейера: гейт в месте опроса, как у персон выше).
+    if (me.isChild) return;
     api.settings.get().then(s => { if (s?.claudeBilling) setClaudeBilling(s.claudeBilling); }).catch(() => {});
     const onChange = (e: Event) => setClaudeBilling((e as CustomEvent<ClaudeBilling>).detail);
     window.addEventListener('cc-claude-billing-changed', onChange);
     return () => window.removeEventListener('cc-claude-billing-changed', onChange);
-  }, []);
+  }, [me.isChild]);
 
   const [mode, setMode] = useState<Mode>(session.mode);
   // Выбор режима сразу уезжает в сессию: иначе он жил бы только в состоянии этой вкладки
@@ -2206,6 +2241,58 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
 
   // Группировка — O(n) с постройкой карт по всей ленте (useMemo).
   const renderedItems = useMemo((): RenderedNode[] => {
+    // Детская лента (Ф1d, ADR-041 ред. 8, разрез §14.5): при childFeedKinds — только
+    // виды из белого списка (filterChildFeed), бои хода — одна спокойная плашка на
+    // подрядный ряд (тот же текст, что в ChildLessonChat). Взрослые конструкции
+    // (блоки действий, workflow-карточки, error-группы по дням, exec-коннектор) над
+    // детской лентой не строятся: их виды опущены фильтром, а мета-карты (turnMeta,
+    // batchByIndex, execZone) ребёнку не показываются. start остаётся индексом item —
+    // окно рендера и jumpToEscalation работают в той же координате.
+    if (childFeedKinds) {
+      const feed = filterChildFeed(items, childFeedKinds);
+      const childNodes: RenderedNode[] = [];
+      // К9g-d (дефект ab12ca2d, QA-6) → К9g-d2 (вердикт R-К9g-d, robustness): текст отказа
+      // (plateText) — обещание ребёнку, и общая плашка сбоя не дублирует его в том же блоке
+      // отказа. Блок (рекомендация Глебы): подрядные плашки, разделённые только pending-
+      // сообщениями (user_message); текст ассистента/успешный result разрывают блок.
+      // Прежнее правило («отказ в фиду гасит общие везде») после первого отказа в чате
+      // гасло навсегда каждый новый сбой хода: сообщение ребёнка висело без ответа и без
+      // плашки. Инвариант: отказ не дублируется общей плашкой своего хода; общая плашка
+      // другого хода жива.
+      const isPendingGap = (e: (typeof feed)[number]) => !e.plate && e.item.kind === 'user_message';
+      const blockId = new Map<number, number>(); // индекс feed → его блок (маркер — позиция разрыва)
+      const blockRefusal = new Set<number>(); // блоки, в которых есть плашка с plateText
+      let curBlock = -1;
+      feed.forEach((e, k) => {
+        if (!e.plate && !isPendingGap(e)) { curBlock = k; return; } // текст/успешный result — новый блок
+        const id = curBlock === -1 ? (curBlock = k) : curBlock;
+        blockId.set(k, id);
+        if (e.plate && e.plateText) blockRefusal.add(id);
+      });
+      feed.forEach(({ item, i, plate, plateText }, k) => {
+        if (plate) {
+          if (!plateText && blockRefusal.has(blockId.get(k)!)) return; // отказ своего хода — общая плашка не дублирует
+          const prev = feed[k - 1];
+          // Подрядные плашки одного вида — одна плашка (К9g-d2, MINOR R-К9g-д): сравнение
+          // всегда истинно для общей — соседний отказ уже погасил её строкой выше,
+          // рядом с отказом остаётся только отказ
+          if (prev?.plate && Boolean(prev.plateText) === Boolean(plateText)) return;
+          childNodes.push({
+            start: i,
+            node: (
+              <div key={`ce-${i}`} data-child-turn-error="">
+                {/* Отказ маршрута (К9g, дефект 5f7854e7): его текст — обещание ребёнку,
+                    показываем как есть (plateText от filterChildFeed); прочие сбои — общая плашка */}
+                <Notice tone="warning" icon={Lightbulb} role="alert">{plateText ?? CHILD_TURN_ERROR_TEXT}</Notice>
+              </div>
+            ),
+          });
+          return;
+        }
+        childNodes.push({ start: i, node: <div key={itemKey(item, i)} data-feed-index={i}>{renderItem(item, i)}</div> });
+      });
+      return childNodes;
+    }
     // Display-лента = сама items: индексы обязаны совпадать с items (по ним ходят
     // turnMeta, turnBoundaries, batchByIndex, execZone). Ошибки прошлых дней рисуются
     // группой через errorGroups — карту «индекс → error_group» и набор гашеных индексов.
@@ -2574,7 +2661,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
-  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sphereOf, sessionBusy, toolLivenessCtx, turnBoundaries, mediaVisibility, errorGroups, teamImplementState, session.id]);
+  }, [items, renderItem, childFeedKinds, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sphereOf, sessionBusy, toolLivenessCtx, turnBoundaries, mediaVisibility, errorGroups, teamImplementState, session.id]);
 
   // Прыжок из баннера к карточке: лента режется окном (WINDOW_FIRST=50), и нужный
   // узел за пределами видимой области физически отсутствует в DOM — простой
@@ -2705,7 +2792,14 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
       contextBar={contextBar}
     />
   );
-  const headerBar = (
+  // Детский режим (Ф1h, решение Андрея 19.11, разрез §16): при childFeedKinds шапка
+  // целиком детская — FeatureChatCard и ChatHeaderBar не монтируются вовсе: их действия
+  // (переименование, архив, расход, фича) ребёнку не чем не служат. Данные шапки —
+  // от владельца экрана (он грузит предметы и их viewers, Ф1e); без них шапка —
+  // имя чата без метки предмета (тот же случай, что закрытый/до-предметный чат).
+  const headerBar = childFeedKinds ? (
+    <ChildLessonHeader subject={childHeader?.subject ?? null} viewers={childHeader?.viewers} title={session.name || 'Новый урок'} isMobile={!!isMobile} />
+  ) : (
     <FeatureChatCard
       sessionId={session.id}
       projectId={session.projectId ?? null}
@@ -2841,7 +2935,8 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
         {/* Empty state: приветствие персоны (если задано) + сам empty state с рядом
             персон «Поговорить с…» и пилюлями настройки будущего чата. Собственный
             greetingBubble (гейт онбординга) заменяет пустую ленту целиком */}
-        {items.length === 0 && !isHistoryLoading && online && (
+        {/* Ребёнку (childFeedKinds) взрослый empty state с NewChatSetup не монтируется (Х-W4-79) */}
+        {items.length === 0 && !isHistoryLoading && online && !childFeedKinds && (
           greetingBubble ?? (
             <>
               {personaGreeting}
@@ -2874,7 +2969,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
           </>
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}><SpeakingItemContext.Provider value={speakingItem}><ToolLivenessContext.Provider value={toolLivenessCtx}>{visibleNodes}</ToolLivenessContext.Provider></SpeakingItemContext.Provider></TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}><SpeakingItemContext.Provider value={speakingItem}><ToolLivenessContext.Provider value={toolLivenessCtx}><ChildFeedContext.Provider value={!!childFeedKinds}>{visibleNodes}</ChildFeedContext.Provider></ToolLivenessContext.Provider></SpeakingItemContext.Provider></TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {/* Карточка «Готовит план…»: стадия планирования идёт минутами (потолок
             планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).
@@ -3207,6 +3302,8 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
             // ни того, ни другого нет — оранжевый токен внутри композера
             auroraColorHex={activeSpeaker?.color ?? (project ? projectMainColor(project) : undefined)}
             executorTask={executorTask}
+            // Детский набор (Ф1j): как есть — детский композер решает по нему сам Composer (Ф1c)
+            childFeatures={childFeatures}
           />
           </div>
         </div>

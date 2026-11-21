@@ -250,6 +250,51 @@ describe('ChildRulesOnboarding: пять шагов в порядке макет
   });
 });
 
+// Шаг «Что видит папа» и строка о сигнале на шаге 4: тексты должны быть правдой —
+// куратор видит все уроки ребёнка дословно (решение Андрея 19.11). Формулировки карточек —
+// по постановке Ф1i.
+describe('ChildRulesOnboarding: честные тексты о том, что видит папа', () => {
+  // Дойти до нужного шага теми же кнопками, что видит ребёнок.
+  async function toStep(n: number) {
+    await mount('agree');
+    for (const label of nextLabels('agree').slice(0, n - 1)) {
+      const b = buttonByText(label);
+      expect(b, `кнопка «${label}» на своём шаге`).toBeTruthy();
+      await click(b!);
+    }
+    expect(titleText()).toContain(CHILD_RULES_STEPS[n - 1]);
+  }
+
+  it('«Папа видит» — уроки целиком, время и предметы', async () => {
+    await toStep(3);
+    const html = doc.body.innerHTML;
+    expect(html).toContain('Твои уроки целиком — что ты пишешь и что отвечает помощник');
+    expect(html).toContain('Сколько времени ты занималась');
+    expect(html).toContain('Какие предметы и темы ты проходила');
+  });
+
+  it('«Папа не видит» — одна строка про черновики: «Ваши сообщения» и «Ошибки по одной» убраны', async () => {
+    await toStep(3);
+    const html = doc.body.innerHTML;
+    expect(html).toContain('Черновики, которые ты не отправила');
+    expect(html).not.toContain('Ваши сообщения');
+    expect(html).not.toContain('Ошибки по одной');
+  });
+
+  it('на шаге «Что видит папа» нет обещания, что папа не читает разговор', async () => {
+    await toStep(3);
+    expect(doc.body.innerHTML).not.toMatch(/не читает|Ваш разговор/);
+  });
+
+  it('на шаге «Если что-то не так» строка о сигнале не обещает, что папа не читает разговор', async () => {
+    await toStep(4);
+    const html = doc.body.innerHTML;
+    expect(html).toContain('Папа узнаёт, что тебе нужна помощь.');
+    expect(html).not.toMatch(/не читает|Ваш разговор/);
+    expect(html).toContain('Ты ни в чём не виновата');
+  });
+});
+
 describe('ChildRulesOnboarding: согласие', () => {
   it('«Договорились» активна только при обеих отметках', async () => {
     await mount('agree');

@@ -445,12 +445,23 @@ public sealed class TurnCompletion : ITurnMessageSink
                             return;
                         if (limit == LimitRecordOutcome.Exhausted && entry is not null)
                         {
-                            // Сразу перевозим чат на здоровый аккаунт пула — кнопка «Повторить»
-                            // упавшего хода пойдёт уже через него. Если переключиться некуда,
-                            // а ход реально отбит — предлагаем сторонний провайдер карточкой.
-                            _route.TryPoolFailover(sessionId, entry);
-                            if (m.Status == "rejected")
-                                await _providerMigration.OfferProviderFallbackAsync(sessionId, m.ResetsAt);
+                            // Ребёнку (И2″, ADR-041 ред. 4, разрез §1 строка 9) — только пометка
+                            // пула выше (LimitRecorder.Record): аккаунт исчерпан, но детский чат
+                            // НЕ переводим на другой аккаунт и карточку «Продолжить на…» не
+                            // предлагаем. Маршрут ребёнка — запись предмета, а не ротация пула:
+                            // тихий перевод уводил бы детский чат с закреплённого маршрута на
+                            // случайный аккаунт. Признак ребёнка — та же точка, что остальной
+                            // детский код хода (:247, :624): entry.Info.ChildSpace, инлайнового
+                            // if по роли не заводим.
+                            if (entry.Info.ChildSpace is null)
+                            {
+                                // Сразу перевозим чат на здоровый аккаунт пула — кнопка «Повторить»
+                                // упавшего хода пойдёт уже через него. Если переключиться некуда,
+                                // а ход реально отбит — предлагаем сторонний провайдер карточкой.
+                                _route.TryPoolFailover(sessionId, entry);
+                                if (m.Status == "rejected")
+                                    await _providerMigration.OfferProviderFallbackAsync(sessionId, m.ResetsAt);
+                            }
                         }
                     }
                     break;
@@ -621,7 +632,9 @@ public sealed class TurnCompletion : ITurnMessageSink
                 // взрослым без доступа к переписке. Сам маркер из ленты и истории уже вырезан тем же
                 // StripTeamProtocolMarkers. Не await: рассылка не должна держать read-loop адаптера,
                 // падение подписчика шина гасит сама.
-                if (entry.Info.ChildSpace is not null && entry.Info.OwnerId is { Length: > 0 } childId
+                // Резолвер владельца, а не Info.OwnerId: урок репетитора — чат проекта-предмета,
+                // у которого OwnerId null по контракту (Б9f) — прямой read отбрасывал бы каждый урок.
+                if (entry.Info.ChildSpace is not null && _store.ResolveOwnerId(entry.Info) is { Length: > 0 } childId
                     && TeamProtocolMarkers.HasStopSignalMarker(turnText))
                     _ = _turnEvents?.PublishAsync(new Turn.ChildStopSignalMarker(
                         new Turn.TurnContext(sessionId, childId, entry.LastTurnSeq, 0, entry.Info.ProjectId)));

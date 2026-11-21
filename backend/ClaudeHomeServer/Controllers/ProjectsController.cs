@@ -8,6 +8,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.ChildMode;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
@@ -23,7 +24,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, TaskExecutionService executor, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, SphereManager spheres, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null, ClaudeHomeServer.Services.ImageEditor.IProjectTrainingPhotoCleaner? trainingPhotos = null) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, ProjectEventLogService events, TeamMemoryService teamMemory, KnowledgeService knowledge, PersonaManager personas, SphereManager spheres, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ProjectDeletionService deletion, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -54,7 +55,9 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // OwnerId — часть контракта (ревью F2): фронтовые гейты «только владелец» читают
         // поле; API отдаёт проекты запросившего и общие, где он участник: OwnerId — владелец, не обязательно запросивший
         var shared = ProjectMembersView.Summary(p, UserId, users);
-        return new { p.Id, p.OwnerId, Members = shared.Members, MyRole = shared.MyRole, OwnerUsername = shared.OwnerUsername, OwnerDisplayName = shared.OwnerDisplayName, FormerMembers = shared.FormerMembers, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.SubjectRegistry, p.SubjectsSweepSince, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.HandsEnabled, HandsRefusal = HandsToggleRefusal(p, device), Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device), FolderNotice = folderNotice };
+        // ChildSubjectId — маркер проекта-предмета (Б8a): им фронт находит предмет
+        // («Новый урок», шапка урока); у обычного проекта — null, как в модели.
+        return new { p.Id, p.OwnerId, Members = shared.Members, MyRole = shared.MyRole, OwnerUsername = shared.OwnerUsername, OwnerDisplayName = shared.OwnerDisplayName, FormerMembers = shared.FormerMembers, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.SubjectRegistry, p.SubjectsSweepSince, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.HandsEnabled, HandsRefusal = HandsToggleRefusal(p, device), Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, p.ChildSubjectId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device), FolderNotice = folderNotice };
     }
 
     // Можно ли включить руки проекта (ADR-016 §7): матрица без тумблера самого проекта —
@@ -133,15 +136,61 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return Ok(new { parts });
     }
 
-    [HttpGet]
-    public IActionResult GetAll() => Ok(projects.GetAccessible(UserId).Select(WithCount));
+    // ── детская граница чтения проектов (Б21, ADR-041 ред. 8, решение 84) ──────────
+    // Ребёнку открыты ровно список и карточка: «док проектов» ребёнка — штатный док с фильтром
+    // «свои проекты-предметы» (решение 84), поэтому DTO тот же взрослый, новых полей нет.
+    // Прочие ручки класса (создание, правка, удаление, настройки, значок, фон, режим) [ChildAllowed]
+    // не имеют намеренно: проекты ребёнка заводит и правит только взрослый (провизер предметов,
+    // куратор профиля), их отсекает сам гейт И1 до тела ручки.
 
+    // Ребёнок ли текущий владелец и что разрешает его профиль — та же точка правды, что у гейта И1:
+    // IChildModePolicy по стору, а не по claim (образец ChatsController.CurrentOwnerIsChild,
+    // хвост ревью R-KM-B6f). DenyAll/нечитаемый профиль — не ребёнок здесь: такого ребёнка сам гейт
+    // не пускает к телу эндпоинта (403 child_mode, ChildModeGateMiddleware.cs:37). Без DI-скопа
+    // (бесхостовые тесты этого контроллера) — не ребёнок: детские запросы к не-размеченным
+    // ручкам сюда всё равно не доходят — их отсекает тот же гейт.
+    private (string ChildId, ChildProfile Profile)? ChildScope() =>
+        HttpContext.RequestServices?.GetService<IChildModePolicy>()?.For(UserId)
+            is { DenyAll: false, Profile: { } profile } snapshot ? (snapshot.OwnerId, profile) : null;
+
+    // «Свой проект-предмета включённого предмета» (решение 84): маркер из единой точки его чтения
+    // (ProjectCapabilities.IsChildSubject) + владение самим ребёнком + предмет есть в профиле и
+    // включён («выключенный предмет в доке не показывается»). Предмет, удалённый из профиля, в док
+    // не отдаём так же: плитки о нём нет, а док отражает плитки (тот же охват, что у проекции
+    // ChildSubjectsController.Subjects: только включённые предметы). Ключ предмета сравнивается
+    // OrdinalIgnoreCase — как во всех местах, читающих ключ предмета (ChildModeGate.cs:134,
+    // ChildSubjectsController.cs:57).
+    private static bool IsOwnEnabledSubjectProject(Project p, string childId, ChildProfile profile) =>
+        ProjectCapabilities.IsChildSubject(p) && p.OwnerId == childId
+        && (profile.Subjects ?? []).Any(s => s is { Enabled: true }
+            && string.Equals(s.Id, p.ChildSubjectId, StringComparison.OrdinalIgnoreCase));
+
+    [ChildAllowed]
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        // Ребёнку — только его проекты-предметы включённых предметов; «владение» — на GetByOwner,
+        // как во всех местах владения. Взрослый путь — без изменений.
+        if (ChildScope() is (string childId, var profile))
+            return Ok(projects.GetByOwner(childId)
+                .Where(p => IsOwnEnabledSubjectProject(p, childId, profile))
+                .Select(WithCount));
+        return Ok(projects.GetAccessible(UserId).Select(WithCount));
+    }
+
+    [ChildAllowed]
     [HttpGet("{id}")]
     [ProjectScope(Key = "id")]
     public IActionResult GetById(string id)
     {
         var p = projects.GetById(id);
         if (p is null) return NotFound();
+        // Чужой или обычный проект ребёнку — тот же 404, что «не найдено»: проекты ребёнка —
+        // только его проекты-предметы, существование остального ему не раскрываем. Видимость
+        // чужого (участник + SharedProjects) здесь не помогает: ProjectScope её пропускает,
+        // отказывает эта проверка.
+        if (ChildScope() is (string childId, var profile) && !IsOwnEnabledSubjectProject(p, childId, profile))
+            return NotFound();
         return Ok(WithCount(p));
     }
 
@@ -417,28 +466,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // (docs/architecture/knowledge.md). Соседа по папке каскад не трогает сам.
         if (oldKnowledgeRoot is not null && ProjectCapabilities.KnowledgeRoot(moved) is null)
         {
-            await DropKnowledgeIfOrphanAsync(oldKnowledgeRoot);
+            await deletion.DropKnowledgeIfOrphanAsync(oldKnowledgeRoot, TenantId);
             // Заметки notes/ серверной папки выпали из источников — вычистить их из индекса
             notesKb?.QueueSync(TenantId);
         }
         return Ok(WithCount(moved, folderNotice));
-    }
-
-    // База знаний серверной папки: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для
-    // проектов в одной папке — чистим, только если папка больше никем не используется
-    private async Task DropKnowledgeIfOrphanAsync(string knowledgeRoot)
-    {
-        if (projects.GetByRootPath(knowledgeRoot).Count > 0) return;
-        var wk = wkStore.GetByPath(knowledgeRoot);
-        if (wk is null) return;
-        if (!string.IsNullOrEmpty(wk.DifyDatasetId))
-        {
-            try { await knowledge.DeleteDatasetAsync(wk.DifyDatasetId); }
-            catch { /* датасет мог быть удалён в Dify — снимаем только запись */ }
-            await hub.Clients.Group("user_" + UserId)
-                .SendAsync("message", new KnowledgeChangedMessage("deleted", wk.DifyDatasetId));
-        }
-        wkStore.Delete(knowledgeRoot);
     }
 
     // Тумблер рук локального проекта (ADR-016 §7). Включение — только когда матрица пускает
@@ -540,75 +572,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         var p = projects.GetById(id);
         if (p is null) return NotFound();
-        // W4-HOLD-N (хвост R-N п.3): страховка до зачистки задач: удалённый вместе с проектом
-        // эпик на паузе больше ни «снялся», ни «встал» — его шаги остались бы с замороженным
-        // сроком навсегда. Чистим все двери удаления до DeleteByProject.
-        foreach (var t in tasks.GetByOwner(TenantId).Where(t => t.ProjectId == id))
-            executor.RestoreFrozenChatsBeforeDelete(t);
-        projects.Delete(id);
-        tasks.DeleteByProject(id);
-        // Память команды проекта: локальные сторы + Dify-датасет (best-effort — уборка не должна ронять удаление)
-        try { await teamMemory.DeleteProjectTeamMemoryAsync(TenantId, id); }
-        catch { /* удаление проекта не зависит от уборки памяти команды */ }
-        // Паспорта изменений проекта: локальный стор + Dify-датасет (best-effort, тот же образец)
-        try { await dossiers.DeleteProjectDossiersAsync(TenantId, id); }
-        catch { /* удаление проекта не зависит от уборки паспортов */ }
-        // Обучающие фото персонажей для LoRA (биометрия): шов Core, нет подсистемы ImageEditor — пропуск
-        try { trainingPhotos?.PurgeProject(TenantId, id); }
-        catch (Exception ex) { logger.LogWarning(ex, "Не удалось убрать обучающие фото проекта {ProjectId}", id); }
-
-        // Worktree чатов проекта: сессии при удалении проекта НЕ удаляются (осознанно),
-        // но их деревья без проекта — мусор на диске и записи в .git/worktrees главной репы.
-        // Явный обход обязателен — автокаскада сессий нет. Best-effort + force: судьба
-        // незакоммиченных правок решена удалением самого проекта.
-        // Сносим только СВОИ деревья (WorktreeOwned): чужие/общие (привязанные) и старые (без
-        // признака) не трогаем, если на тот же нормализованный путь не ссылается другой живой чат.
-        // Деревья локального проекта живут на устройстве — серверному git до них не дотянуться
-        foreach (var s in sessions.GetByProject(id).Where(s => s.WorktreePath is not null
-                     && ProjectCapabilityGuard.Allows(p, ProjectCapabilityArea.FileBound)).ToList())
-        {
-            var wt = s.WorktreePath!;
-            var removeTree = s.WorktreeOwned
-                && !sessions.GetAll().Any(e => e.Id != s.Id && e.WorktreePath is string other
-                    && WorkspaceKnowledgeStore.NormalizePath(other) == WorkspaceKnowledgeStore.NormalizePath(wt));
-            if (removeTree)
-            {
-                try { await git.WorktreeRemoveAsync(p.OwnerId, p.RootPath, wt, force: true); }
-                catch { /* дерево могло быть удалено руками — запись подчистит prune */ }
-            }
-        }
-
-        // Слоты ревью волн проекта (detached-деревья рядом с деревьями чатов): сносим все разом —
-        // они покрывают и слоты снесённых выше деревьев волн, и осиротевшие. Локальному проекту
-        // слоты не выдаются, а серверный git до его дерева не дотянется
-        if (ProjectCapabilities.FilesOnServer(p)
-            && HttpContext.RequestServices.GetService<ReviewTreePool>() is { } reviewPool)
-        {
-            try { await reviewPool.RemoveSlotsOfProjectAsync(p.OwnerId, p); }
-            catch (Exception ex) { logger.LogWarning(ex, "Слоты ревью проекта {ProjectId} не снесены", id); }
-        }
-
-        // База знаний проекта: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для
-        // проектов в одной папке — чистим, только если RootPath больше никем не используется
-        if (ProjectCapabilities.KnowledgeRoot(p) is { } deletedKnowledgeRoot)
-            await DropKnowledgeIfOrphanAsync(deletedKnowledgeRoot);
-
-        // Заметки notes/ проекта выпали из alive-set — вычистить их из «{user}:notes» сразу,
-        // не дожидаясь следующей несвязанной правки заметок
-        notesKb?.QueueSync(TenantId);
-
-        // Проектные персоны осиротели вместе с проектом — каскад: память (стор + Dify-датасет),
-        // сама персона (файлы сабагента снимет OnPersonaDeleted), событие фронту
-        foreach (var persona in personas.GetByOwner(TenantId)
-                     .Where(x => PersonaZone.IsProjectTeam(x, id)).ToList())
-        {
-            try { await personaMemory.DeletePersonaAsync(persona.Id); }
-            catch { /* память персоны — best-effort */ }
-            personas.Delete(persona.Id, TenantId);
-            await hub.Clients.Group("user_" + UserId)
-                .SendAsync("message", new PersonasChangedMessage("deleted", persona.Id));
-        }
-
+        await deletion.DeleteAsync(p);
         return NoContent();
     }
 

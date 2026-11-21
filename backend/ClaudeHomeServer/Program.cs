@@ -618,31 +618,39 @@ builder.Services.AddSingleton(sp => new ChildLimitsCalculator(
     sp.GetRequiredService<IUserStore>(),
     sp.GetRequiredService<IConfiguration>(),
     sp.GetRequiredService<ILogger<ChildLimitsCalculator>>()));
-// Провижн персоны-тьютора ребёнка (KM-B1d, ADR-041): «Помощник» с ключом в
-// ChildProfile.TutorPersonaId. Вызывается только точками записи детского профиля (KM-B1e).
+// Провижн проекта-предмета ребёнка (Б8b, ADR-041 ред. 5, разрез §11.1): папка
+// {дом}/{Предметы}/{subjectId}, связь — маркер ChildSubjectId. Зовёт его провижер предмета
+// (Б17a) и будущая миграция (Б17b).
+builder.Services.AddSingleton<ChildSubjectProjectProvisioner>();
+// Единая уборка проекта (Б8e): зовут ручка DELETE проекта и каскад удаления ребёнка.
+builder.Services.AddSingleton<ProjectDeletionService>();
+// Синхронизация кураторов (Б14a, ADR-041 ред. 6, решение 61): опекуны профиля → Members
+// проектов-предметов (Editor). Реализация заглушки IChildSubjectCuratorSync — резолвится
+// в провижер предмета опциональным параметром; вторая точка вызова — PUT child-profile
+// (UsersController). Зарегистрировать до провижера: читаемость порядка, не требование DI.
+builder.Services.AddSingleton<ChildCuratorSync>();
+// Провижнер предмета ребёнка (Б17a, ADR-041 ред. 7): проект → проектная персона →
+// руководитель (DefaultPersonaId) → кураторы (ChildCuratorSync, Б14a). Тьютор профиля
+// (до Б17c) — прежним контрактом. Вызывается только точками записи детского профиля (KM-B1e).
 builder.Services.AddSingleton<ChildTutorProvisioner>();
-// Каталог материалов предмета (разрез «Знания репетитора» §2, К2a): data/child-subjects/
-// {childId}/{subjectId}/ — опись, оригиналы и извлечённый текст. Пишет его ручка админа (К2b),
-// читает тулсет репетитора (К3). MarkitdownService регистрирует AddDocs ниже по файлу:
-// синглтон резолвится лениво — порядок строк при резолве не важен.
-builder.Services.AddSingleton(sp => new ChildSubjectMaterialsStore(
-    ChildSubjectMaterialsStore.RootFromConfig(sp.GetRequiredService<IConfiguration>()),
-    sp.GetRequiredService<MarkitdownService>(),
-    sp.GetRequiredService<IConfiguration>(),
-    // Шов-делегат живого владельца (ревью КИ1b): запись под семафором проверяет, что id ещё
-    // в стору пользователей — снесённый каталог ребёнка не должен воскреснуть после минуты
-    // OCR. Именно пользователя, не «ребёнка с включённым режимом»: выключенный детский
-    // режим каталог не сносит, и отменять загрузку из-за него не за чем.
-    id => sp.GetRequiredService<IUserStore>().GetById(id) is not null,
-    // Шов OCR (КИ1a): форвардер LlmSubsystem на единственный LocalOcrService.
+// Общий писатель загрузки в папку предмета (Б11b, ADR-041 ред. 6, решения 56/89/90): один на
+// все ручки — `upload` рельсы зовёт его сейчас, дальше ручка №8 урока (Б11b2) и OCR картинки
+// (Б13c). MarkitdownService резолвится лениво (AddDocs ниже по файлу).
+builder.Services.AddSingleton<ChildTextCopyService>();
+// Фоновые текстовые копии картинок папки предмета (Б13c, решение 67): исполнитель очереди
+// писателя; ILocalPageOcr резолвится при старте хоста — к тому времени LlmSubsystem ниже
+// по файлу зарегистрирован.
+builder.Services.AddHostedService(sp => new ChildImageOcrBackfill(
+    sp.GetRequiredService<ProjectManager>(),
+    sp.GetRequiredService<ChildTextCopyService>(),
     sp.GetRequiredService<ILocalPageOcr>(),
-    // Растр — необязательно: вертикаль Images отключаемая, без неё картинка отказана
-    // как ocr_unavailable (GetService, не GetRequiredService).
-    sp.GetService<IImageRaster>(),
-    sp.GetRequiredService<ILogger<ChildSubjectMaterialsStore>>()));
+    sp.GetRequiredService<ILogger<ChildImageOcrBackfill>>()));
 // Стоп-сигнал ребёнка → уведомление взрослым без текста переписки (KM-B6d, ADR-041 решение 1).
 builder.Services.AddSingleton<ChildStopSignalService>();
 builder.Services.AddHostedService<ChildStopSignalSubscriber>();
+// Отказ маршрута урока → уведомление кураторам с причиной (Б4b, ADR-041 ред. 7): подписчик
+// на событии ChildModeGate (тот же шов через шину, что у стоп-сигнала; ядро нотификатора не знает).
+builder.Services.AddHostedService<ChildRouteRefusalNotifier>();
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),

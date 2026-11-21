@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import type { Project, Task, TaskStatus } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { api } from '../../lib/api';
 import { EmptyState } from '../../components/EmptyState';
 import { Button } from '../../components/ui/Button';
 import { IconSegmented, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
@@ -118,6 +119,13 @@ function groupByDate(tasks: Task[]): Group[] {
 export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardMode, onBoardMode, onEditColumns, groupTab: groupTabProp, onGroupTab, filters: filtersProp, onFilters: onFiltersProp }: Props) {
   const allTasks = useTasks();
   const [loading, setLoading] = useState(true);
+  // Детская доска (дефект a6ba38a0, Б20d): задачи живого проекта-предмета живут локальным состоянием
+  // панели — глобальный стор держит взрослый список GET /api/tasks, а ребёнку он закрыт (403), и
+  // страница его ребёнку не загружает (WorkspacePage.tsx:893). null — ещё не загружено, [] — пусто.
+  const [childTasks, setChildTasks] = useState<Task[] | null>(null);
+  // Отказ детской ручки: пустая доска без сигнала хуже понятной ошибки; счётчик — «Повторить»
+  const [childError, setChildError] = useState(false);
+  const [childReload, setChildReload] = useState(0);
   // Группировка списка: управляемая сверху (cc-panels) или локальная (старый сайдбар)
   const [localGroupTab, setLocalGroupTab] = useState<GroupTab>('status');
   const groupTab = groupTabProp ?? localGroupTab;
@@ -161,14 +169,29 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
 
   useEffect(() => {
     let alive = true;
+    if (me.isChild) {
+      // Ребёнок: только разрешённая детская ручка GET /api/projects/{id}/tasks ([ChildAllowed],
+      // TasksController.cs:65-93); взрослая GET /api/tasks ребёнку закрыта гейтом И1 → 403
+      // (дефект a6ba38a0). Ответ — обёртка { tasks, viewers }: панель берёт только tasks,
+      // «Эту доску видят» — не её строка (несёт детская шапка урока, ChildLessonHeader).
+      setChildError(false);
+      api.tasks.listByProjectForChild(project.id)
+        .then(r => { if (alive) setChildTasks(r.tasks); })
+        .catch(() => { if (alive) { setChildTasks([]); setChildError(true); } });
+      return () => { alive = false; };
+    }
     ensureTasksLoaded().finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, []);
+  }, [me.isChild, project.id, childReload]);
 
+  // Детский список — из локального состояния панели, взрослый — из общего стора; проекция по
+  // проекту и группировка после этого — общие для обеих веток
   const tasks = useMemo(
-    () => allTasks.filter(t => t.projectId === project.id),
-    [allTasks, project.id],
+    () => (me.isChild ? childTasks ?? [] : allTasks).filter(t => t.projectId === project.id),
+    [me.isChild, childTasks, allTasks, project.id],
   );
+  // «Загрузка…» у ребёнка живёт по своему запросу: взрослый флаг loading в детской ветке не ставится
+  const isLoading = me.isChild ? childTasks === null : loading;
   // Фильтры применяются ДО группировки (работают в обеих — «Список» и «По дате»).
   // В режиме доски не применяются: там свой BoardToolbar.
   const filteredTasks = useMemo(
@@ -322,10 +345,19 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
               <BoardToolbar layout="sidebar" groupOptions={PROJECT_GROUP_OPTIONS} onEditColumns={onEditColumns} people={people} />
             </div>
           )
-        ) : loading ? (
+        ) : isLoading ? (
           <div style={{ padding: 24, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans, fontSize: 13 }}>
             Загрузка…
           </div>
+        ) : me.isChild && childError ? (
+          // Детская ручка отказала: не молчаливая пустая доска, а понятная ошибка с повтором
+          <EmptyState
+            compact
+            icon={<SearchX size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+            title="Не удалось загрузить задачи"
+            subtitle="Проверьте соединение и попробуйте ещё раз."
+            action={<Button variant="secondary" size="sm" onClick={() => { setChildTasks(null); setChildReload(n => n + 1); }}>Повторить</Button>}
+          />
         ) : tasks.length === 0 ? (
           // Задач в проекте нет вовсе — тот же примитив пустого состояния, что у
           // остальных панелей (чаты, документы). Кнопки создания тут нет — «Новая
@@ -387,6 +419,9 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
           defaultProjectId={project.id}
           onCreated={(task, configure) => {
             setShowCreate(false);
+            // Детская доска живёт локальным списком, а createTask кладёт задачу в глобальный стор —
+            // добавляем созданную сразу (без дубля по id), иначе её видно только после перемонтирования
+            if (me.isChild) setChildTasks(prev => prev?.some(t => t.id === task.id) ? prev : [...(prev ?? []), task]);
             // «Создать и настроить» — открыть карточку сразу в редактировании;
             // просто «Создать» — остаёмся на месте, задача появляется в списке
             if (configure) onSelect(task, true);

@@ -8,6 +8,17 @@
 //        (дебаунс ~500 мс), чужие не трогает; фича выключена — событие проигнорировано.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// К9b: тест ставит снимок «я» (setMeFromServer) — его wireRealtime зовёт onMessage,
+// а настоящий signalr в среде node не может построить соединение ('/hubs/session' без базы).
+// Сами тесты live-режима вызывают handleTaskChanged напрямую, через подписку не идут.
+vi.mock('./signalr', () => ({
+  onMessage: vi.fn(() => () => {}),
+  onReconnected: vi.fn(() => () => {}),
+  joinUser: vi.fn(),
+  joinProject: vi.fn(),
+}));
+
 import {
   __test,
   setTurnPlanMode,
@@ -22,8 +33,9 @@ import { MAX_CHATS } from '../features/wall/wallStore';
 import { api } from './api';
 import { upsertTaskLocal } from './tasks';
 import { setAllFlags } from './featureFlags';
+import { clearMe, setMeFromServer } from './defaultPersona';
 import type { FeatureRun } from '../types/featureRun';
-import type { Task } from '../types';
+import type { Me, Task } from '../types';
 
 // ── Фикстуры ─────────────────────────────────────────────────────────────────
 
@@ -202,6 +214,41 @@ describe('Перф-2 B2: троттлинг и дедуп запросов аг�
     const b = __test.fetchRuns('T');
     expect(a).toBe(b);
     await a;
+    expect(getFeaturesSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── К9b: ребёнок не опрашивает GET /api/tasks/features?sessionId (дефект cc43582b) ──
+
+describe('К9b: ребёнок не опрашивает фичи чата', () => {
+  let getFeaturesSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    __test.reset();
+    getFeaturesSpy = vi.spyOn(api.tasks, 'getFeatures').mockResolvedValue([]);
+  });
+  afterEach(() => {
+    getFeaturesSpy.mockRestore();
+    clearMe();
+    __test.reset();
+  });
+
+  it('ребёнок: два вызова подряд не зовут api ни разу и не оставляют записей в _inflight', async () => {
+    setMeFromServer({ userId: 'u-child', isChild: true } as Me);
+    const a = __test.fetchRuns('T');
+    const b = __test.fetchRuns('T');
+    expect(getFeaturesSpy).not.toHaveBeenCalled();
+    // гейт стоит ДО записи в _inflight: реестр пуст, повторный вызов не «делится» чужим fetch
+    expect(__test.inflight().size).toBe(0);
+    // стор остаётся пустым (как «фич у чата нет»): разрешённый пустой список, без исключения
+    await expect(a).resolves.toEqual([]);
+    await expect(b).resolves.toEqual([]);
+    expect(__test.snapshotFor('T').length).toBe(0);
+  });
+
+  it('взрослый: спрашивает как прежде', async () => {
+    setMeFromServer({ userId: 'u-adult', isChild: false } as Me);
+    await __test.fetchRuns('T');
     expect(getFeaturesSpy).toHaveBeenCalledTimes(1);
   });
 });

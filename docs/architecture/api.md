@@ -43,6 +43,7 @@ GET                 /api/history/day/{date}                       → { date, it
 GET                 /api/history/new-count            ?since=iso  → { count } (новые коммиты во всех проектах после даты; для бейджа)
 GET                 /api/feature-flags                → { definitions[], values{} }  (реестр + эффективные значения юзера)
 PUT                 /api/feature-flags/{key}          { enabled } → { values{} }      (override per-user; ключ валидируется по каталогу)
+PUT                 /api/users/{id}/child-mode        { enabled } → { profile, tutorPersonaId }  (галка «детский режим»; только admin; раздел «Детский режим: окно настроек»)
 GET                 /api/subsystem-modules            → { items[{ id, remoteUrl, exposedModule }] }  (MF-remote подсистем; remoteUrl с ?v={хеш remoteEntry.js на диске} — меняется с каждой сборкой модуля, сам remoteEntry.js отдаётся no-cache, /{имя}-remote/assets/** — immutable)
 GET                 /api/modules                      → { items[] }  (внешние YARP-модули; remoteEntry с ?v= — хеш файла из нашей статики, иначе версия манифеста)
 PUT                 /api/auth/timezone                { timeZone }  (IANA-зона устройства — для напоминаний)
@@ -336,6 +337,43 @@ DELETE              /api/personal/chats/{sid}/files                ?path=
 Отказы: `400 invalid_path` (абсолютный путь, `..`, `\`, символическая ссылка; для save-from-url — не-медиальная папка),
 `409 exists` (имя занято), `413 file_too_large` (превышен объём загрузки), `409 personal_scope_folder_unavailable`,
 `404 file_not_found`, `404 notes_unavailable`, `400 no_file`/`bad_url`, `502 fetch_failed`.
+
+## Детский режим: окно настроек ребёнка (ADR-041)
+
+Галка «детский режим» остаётся в «Управлении пользователями», всё остальное — в окне настроек
+ребёнка. Полный контракт — [ADR-041](../adr/ADR-041-child-mode.md) (решение 30, «API окна
+настроек ребёнка»); здесь — ручки и поля, добавленные для окна (Б4a). Все ручки окна:
+`[Authorize(Roles="admin")]` + политика `AdminByStore`, без `[ChildAllowed]` — ребёнок свои
+настройки не правит (сторож `ChildModeEndpointGuardTests`).
+
+```
+PUT  /api/users/{id}/child-mode    { enabled } → { profile, tutorPersonaId } | 400 not_container | 404 user_not_found | 500 profile_not_saved
+GET  /api/users/{id}/child-profile               → { profile, tutorPersonaId } | 404 user_not_found
+PUT  /api/users/{id}/child-profile { ChildProfileDto } → та же форма (отказы — коды таблицы ADR)
+```
+
+`PUT child-mode` — узкая ручка галки, без тела профиля:
+- `enabled=true`: профиля нет — заводится «не настроен» (без предметов, маршрутов и тьютора):
+  политика fail-closed, ребёнку не открывается ничего, пока админ не настроил занятия
+  (`ChildModePolicy` → DenyAll). Профиль включён — идемпотентный 200 без записи: галка не стирает
+  выставленное. Профиль выключен — возвращается с сохранёнными настройками (смена галки их не
+  пересоздаёт). Запись — под замком стора: два одновременных запроса дают один профиль.
+- `enabled=false` — как раньше: профиль остаётся с `Enabled=false`, настройки сохраняются.
+- `not_container` — среда ребёнка песочница (И2/И4); среда исполнения фиксируется после
+  появления чатов (`PUT /api/users/{id}`), поэтому локальный пользователь с чатами не будет
+  включён никогда.
+
+Новые поля `GET child-profile` (окно говорит прямо, сервер за человека не решает):
+- `profile.routeRiskAcknowledgedBy` — автор согласия на риск маршрута (вместе с
+  `routeRiskAcknowledgedAt`, решение 26);
+- `profile.guardians[]` — `{ userId, sharedProjectsFlag }` по каждому опекуну профиля: включён ли
+  у него флаг `shared-projects` — куратором проекта-предмета опекун становится механизмом общих
+  проектов (ADR-041 ред. 6, решение 60);
+- `profile.sharedProjectsInstanceEnabled` — рубильник инстанса `SharedProjects:Enabled`: без него
+  флаги опекунов ничего не открывают. Окно показывает, у кого включить флаг; сам флаг включает
+  человек (`PUT /api/feature-flags/{key}`), сервер — нет.
+
+`child-routes` — только для чата правил (как есть).
 
 ## Контекст чата (ADR-023)
 

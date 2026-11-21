@@ -47,11 +47,77 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         "GET api/chats/{id}/history",
         // Чтение картинки-вложения чата для миниатюры (KM-B7, ADR-041 ручка №12); у ребёнка — только свой ChildSpace-чат
         "GET api/chats/{id}/attachments/raw",
+        // «Контекст» своего урока — только чтение (Б20c, ADR-041 ред. 8 решение 78): контекст и
+        // сохранённые файлы; детская проверка «чат свой и детский» — в Scope контроллера. Записи
+        // (PUT primary, POST/DELETE refs, сброс) метки не имеют намеренно: строку контекста
+        // задают редакторы медиа, которых у ребёнка нет, — их добирает ChildToken_OnEveryEndpointWithoutChildAllowed_IsRefused.
+        "GET api/chats/{sessionId}/context",
+        "GET api/chats/{sessionId}/context/saved-files",
         // Проекция репетиторов (KM-T1e, разрез §4 №3–4): список плиток включённых предметов и
         // аватар репетитора; сама аватар-ручка дополнительно проверяет «это репетитор этого
         // ребёнка» — чужая персона даёт 404 уже внутри ручки
         "GET api/child/subjects",
         "GET api/personas/{id}/avatar",
+        // «Заметки» ребёнка (Б20b, ADR-041 ред. 8, разрез §14.2): ровно CRUD notes/ его
+        // проекта-предмета. Всё остальное вертикали (граф, бэклинки, перенос между источниками,
+        // папки, аннотации, дневниковая, AI-ручки, вики) остаётся закрытым: внутри этих пяти
+        // ребёнку отказывает источник и путь (403 child_source / child_path), а не гейт.
+        "GET api/notes",
+        "GET api/notes/{id}",
+        "POST api/notes",
+        "PUT api/notes/{id}",
+        "DELETE api/notes/{id}",
+        // Чтение «Знаний» своего проекта-предмета (Б20a, ADR-041 ред. 8 решение 81): статус/список
+        // и поиск базы; детская проверка «проект — проект-предмета этого ребёнка» — в контроллере,
+        // индексация/теги/удаление этого класса ребёнку не открыты (базу наполняет синк папки)
+        "GET api/projects/{projectId}/knowledge",
+        "GET api/projects/{projectId}/knowledge/search",
+        // «Задачи» ребёнка (Б20d, ADR-041 ред. 8, разрез §14.4): доска своего проекта-предмета
+        // (список с полем viewers), создание только себе, правка/закрытие/удаление только своих.
+        // Детские проверки «ребёнок ли / свой ли предмет» — в общей точке ChildSubjectAccess,
+        // правила задач — в ChildTaskScope (TasksController). Закрытые по
+        // замыслу метки не имеют: запуск исполнителя, предгейт, ai-ручки, линия фичи, колонки
+        // доски (PUT api/projects/{projectId}/board-columns) — их отсекает гейт И1 до тела.
+        "GET api/projects/{projectId}/tasks",
+        "POST api/projects/{projectId}/tasks",
+        "PUT api/tasks/{taskId}",
+        "DELETE api/tasks/{taskId}",
+        // «Проекты» ребёнка (Б21, ADR-041 ред. 8, решение 84): «док проектов» ребёнка — штатный док
+        // с фильтром «свои проекты-предметы»: ровно список и карточка, и только свои проекты-предметы
+        // включённых предметов профиля (детская проверка — в контроллере; чужой/обычный проект — 404).
+        // Прочие ручки класса (создание, правка, удаление, настройки, значок, фон, режим, builtin-prompt,
+        // effective-prompt, events, team-memory) метки не имеют намеренно: проекты ребёнка заводит и
+        // правит только взрослый — их отсекает гейт И1 до тела.
+        "GET api/projects",
+        "GET api/projects/{id}",
+        // Список чатов и список сервисов (Х-W4-31, дефект d7c8477b): прямой доступ ребёнка к
+        // взрослым page-level опросам закрыт всем, кроме своего проекта-предмета — метка +
+        // «свой ли предмет» внутри ручки (тот же образец, что «Знания», решение 81). Чужой или
+        // обычный проект — 403 not_child_subject (не child_mode: отказ решает проверка тела).
+        // Прочие ручки классов (создание/правка/удаление чата, persona, context, icon-batch;
+        // start/stop/active/external, launch.json) метки не имеют — их отсекает гейт И1 до тела.
+        "GET api/projects/{projectId}/sessions",
+        "GET api/projects/{projectId}/services",
+        // Рельса «Файлы» проекта-предмета (Б11a, ADR-041 ред. 5–6, решения 53/54/56/65):
+        // читающие и пишущие двери FilesController над проектом-предметом; каждая судит путь
+        // ChildPathPolicy (для обычного проекта — обычные права). Закрытыми остаются diff,
+        // revert, changed-by, save-from-url, locate, office-*, document-* — их нет в этом
+        // списке, и ChildToken_OnEveryEndpointWithoutChildAllowed_IsRefused их добирает.
+        // upload дописан Б11b (решения 56/89/90): загрузка ребёнка идёт через общий писатель
+        // папки предмета (ChildTextCopyService), тип/размер/метр решаются в нём.
+        "GET api/projects/{projectId}/files",
+        "GET api/projects/{projectId}/files/tree",
+        "GET api/projects/{projectId}/files/search",
+        "GET api/projects/{projectId}/files/content",
+        "PUT api/projects/{projectId}/files/content",
+        "POST api/projects/{projectId}/files/create",
+        "POST api/projects/{projectId}/files/mkdir",
+        "POST api/projects/{projectId}/files/rename",
+        "POST api/projects/{projectId}/files/upload",
+        "DELETE api/projects/{projectId}/files",
+        "POST api/projects/{projectId}/files/restore",
+        "GET api/projects/{projectId}/files/stream",
+        "GET api/projects/{projectId}/files/zip",
         // Health-пинг (хвост дельта-ревью R-KM-F10): probeHealth фронта шлёт GET /api/health
         // со своим токеном; ответ — пустой 204, данных нет
         "GET,HEAD api/health",
@@ -211,12 +277,15 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         (await resp.Content.ReadAsStringAsync()).Should().NotContain("child_mode");
     }
 
+    // Пример «обычной» ручки перенесён с /api/projects (Б21, ADR-041 ред. 8 решение 84: список и
+    // карточка проектов получили [ChildAllowed]): builtin-prompt — читающая ручка того же класса
+    // без метки, ей гейт отвечает 403 до тела.
     [Fact]
     public async Task ChildToken_OnPlainEndpoint_Gets403ChildMode()
     {
         SetChild();
         using var client = ChildClient();
-        var resp = await client.GetAsync("/api/projects");
+        var resp = await client.GetAsync("/api/projects/builtin-prompt");
         resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await resp.Content.ReadAsStringAsync()).Should().Contain("child_mode");
     }

@@ -22,12 +22,13 @@ vi.mock('../chatReadState', () => ({
   subscribeReadState: vi.fn(() => () => {}),
 }));
 
-import type { HomeSessionInfo } from '../../types';
+import type { HomeSessionInfo, Me } from '../../types';
 import { api } from '../api';
 import { __resetAgentsPresence } from '../agentsPresence';
 import { hasUnread } from '../chatReadState';
+import { clearMe, setMeFromServer } from '../defaultPersona';
 import {
-  __subscribeActivity, __projectAggSnapshot, __chatAggSnapshot, __rootChatAggSnapshot, __resetProjectActivity, foldChatActivity,
+  __subscribeActivity, __projectAggSnapshot, __chatAggSnapshot, __rootChatAggSnapshot, __resetProjectActivity, foldChatActivity, refreshProjectActivity,
 } from '../projectActivity';
 
 function chat(id: string, status: string, projectId = 'p1'): HomeSessionInfo {
@@ -160,5 +161,39 @@ describe('foldChatActivity', () => {
     const m = new Map([['cur', 'waiting'], ['b', 'unread']] as const);
     expect(foldChatActivity(m, 'cur')).toBe('unread');
     expect(foldChatActivity(new Map([['cur', 'working']] as const), 'cur')).toBeNull();
+  });
+});
+
+// X-W4-37: детская поверхность не дёргает взрослый /api/home/summary (без [ChildAllowed]
+// ребёнку был 403 из слушателя воркспейса). Гейт — в fetchNow, единственной точке запроса;
+// здесь проверяется путь слушателя (refreshProjectActivity), он же общий для поллера,
+// троттла сообщений и reconnect: дальше них ничего не спросится.
+describe('projectActivity: ребёнок не опрашивает сводку (X-W4-37)', () => {
+  it('ребёнок: refreshProjectActivity не даёт запроса даже после троттл-паузы', async () => {
+    vi.useFakeTimers();
+    try {
+      summary([], [chat('c1', 'active')]);
+      setMeFromServer({ userId: 'u-child', isChild: true } as Me);
+      refreshProjectActivity();
+      await vi.advanceTimersByTimeAsync(2000); // троттл 1.5 с + запас
+      expect(api.home.summary).not.toHaveBeenCalled();
+    } finally {
+      clearMe();
+      vi.useRealTimers();
+    }
+  });
+
+  it('взрослый: refreshProjectActivity спрашивает как прежде', async () => {
+    vi.useFakeTimers();
+    try {
+      summary([], [chat('c1', 'active')]);
+      setMeFromServer({ userId: 'u-adult', isChild: false } as Me);
+      refreshProjectActivity();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(api.home.summary).toHaveBeenCalledTimes(1);
+    } finally {
+      clearMe();
+      vi.useRealTimers();
+    }
   });
 });

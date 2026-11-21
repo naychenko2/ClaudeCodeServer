@@ -2,6 +2,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
@@ -84,7 +85,9 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
     }
 
     /// <summary>
-    /// Профиль, который И1-бис проходит: тьютор/поставщик/модель — те же, что у ChildChat ниже.
+    /// Профиль, который И1-бис проходит: аккаунт и модель — те же, что у живого маршрута
+    /// ChildChat ниже (модель руководителя проекта-предмета в фикстуре равна модели профиля);
+    /// тьютор профиля остаётся точкой сверки только для чата правил.
     /// </summary>
     private static ChildProfile Profile(
         int? dailyMinutes = 60,
@@ -102,8 +105,7 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
             Model = "sonnet",
             Subjects = [new ChildSubject
             {
-                Id = "russian", Label = "Русский язык", Glyph = "Аа", Color = "info",
-                TutorPersonaId = "tutor-1", ProviderKey = "pool-key", Model = "sonnet", Enabled = true,
+                Id = "russian", Label = "Русский язык", Glyph = "Аа", Color = "info", Enabled = true,
             }],
             Spaces =
             {
@@ -116,6 +118,7 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
             DailyBudgetUsd = dailyBudgetUsd,
             WarnMinutes = warn,
             RulesAgreedAt = rulesAgreed ? new DateTime(2026, 11, 16, 10, 0, 0, DateTimeKind.Utc) : null,
+            RouteRiskAcknowledgedAt = ChildTestSubjects.ConsentAt, RouteRiskAcknowledgedBy = ChildTestSubjects.ConsentBy,
         };
     }
 
@@ -127,19 +130,67 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
         return user.Id;
     }
 
-    /// <summary>Детский чат, который проходит И1-бис: закреплённые поля равны профилю.</summary>
-    private static Session ChildChat(string ownerId, string? childSpace = "lessons", string? onboardingKind = null) => new()
+    /// <summary>
+    /// Проект-предмета ребёнка и его руководитель с явной моделью — прямая запись того, что в
+    /// бою провизнит Б17a (та же форма, что в ChildLaunchPinTests.SeedSubjectProject): маркер
+    /// ChildSubjectId, DefaultPersonaId = репетитор. Модель руководителя — единственный источник
+    /// живого маршрута урока (решение 71), поэтому она равна модели чата в фикстуре.
+    /// </summary>
+    private (string ProjectId, string LeaderId) SeedSubjectProject(string childId, string subjectId)
+    {
+        var sp = _host.Services;
+        var root = Path.Combine(_tempDir, "subject-" + subjectId);
+        // Create с createDirectory: false папку требует существующую, а не создаёт.
+        Directory.CreateDirectory(root);
+        var projects = sp.GetRequiredService<ProjectManager>();
+        var project = projects.Create("Предмет " + subjectId, root, childId, childId,
+            createDirectory: false, childSubjectId: subjectId);
+        var tutor = sp.GetRequiredService<PersonaManager>().Create(childId, "Репетитор " + subjectId,
+            null, null, null, "sonnet", null, PersonaScope.Project, project.Id, null, null, memoryEnabled: false);
+        projects.SetDefaultPersona(project.Id, tutor.Id);
+        return (project.Id, tutor.Id);
+    }
+
+    /// <summary>
+    /// Живой урок (Б9b): чат проекта-предмета этого ребёнка, персона — руководитель проекта,
+    /// маршрут — живая модель руководителя на аккаунте профиля. Та же форма, что у зелёного
+    /// ChildChatsControllerTests.NewChild и ChildLaunchPinTests.Lesson: без неё И1-бис
+    /// отказывает «старый урок только для чтения» и до И3 дело не доходит.
+    /// Чат правил (onboardingKind) — вне проекта и сверяется с полями профиля (ChildModeGate.cs:223):
+    /// его персона — тьютор профиля, проекта у него быть не может (ChildModeGate.cs:156).
+    /// </summary>
+    private static Session ChildChat(string ownerId, string projectId, string leaderId,
+        string? onboardingKind = null) => new()
+    {
+        Id = "s-" + Guid.NewGuid().ToString("N"),
+        OwnerId = ownerId,
+        PersonaId = onboardingKind is null ? leaderId : "tutor-1",
+        Provider = "pool-key",
+        Model = "sonnet",
+        ProjectId = onboardingKind is null ? projectId : null,
+        Mode = ChildModeLaunch.RequiredMode,
+        ChildSpace = "lessons",
+        ChildSubject = onboardingKind is null ? "russian" : null,
+        OnboardingKind = onboardingKind,
+    };
+
+    /// <summary>
+    /// Чат без пространства — синтетическая битая запись: её И1-бис сверяет с полями профиля
+    /// (LiveRouteOf: пустой ChildSpace — та же ветка, что у чата правил, ChildModeGate.cs:223),
+    /// поэтому персона/модель здесь — тьютор профиля, а не руководитель проекта; проект — свой,
+    /// иначе сверка снимает «старый урок» раньше калькулятора.
+    /// </summary>
+    private static Session SpacelessChild(string ownerId, string projectId) => new()
     {
         Id = "s-" + Guid.NewGuid().ToString("N"),
         OwnerId = ownerId,
         PersonaId = "tutor-1",
         Provider = "pool-key",
         Model = "sonnet",
-        ProjectId = null,
+        ProjectId = projectId,
         Mode = ChildModeLaunch.RequiredMode,
-        ChildSpace = childSpace,
-        ChildSubject = onboardingKind is null ? "russian" : null,
-        OnboardingKind = onboardingKind,
+        ChildSpace = null,
+        ChildSubject = "russian",
     };
 
     /// <summary>
@@ -147,11 +198,12 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
     /// пустой, шва Spend — несущая нулевой расход: отсутствующая шва сама дала бы budget_exhausted).
     /// Возвращает и ownerId ребёнка, которого добавила.
     /// </summary>
-    private (TurnLaunchContextFactory Factory, string OwnerId) Build(
+    private (TurnLaunchContextFactory Factory, string OwnerId, string ProjectId, string LeaderId) Build(
         ChildProfile profile, IOwnerSpendReader? spend = null, bool withoutCalculator = false,
         IChildModePolicy? calcPolicy = null, ILogger<ChildModeGate>? gateLog = null)
     {
         var ownerId = AddChild(profile);
+        var (projectId, leaderId) = SeedSubjectProject(ownerId, "russian");
         _ = _host.CreateClient();
         var sp = _host.Services;
         var calc = new ChildLimitsCalculator(calcPolicy ?? _policy, _usage, spend ?? new FixedSpend(0m, 0m), _users,
@@ -161,7 +213,12 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
             }).Build(),
             NullLogger<ChildLimitsCalculator>.Instance);
         var (pool, llm) = ChildRouteKit.For("pool-key");
-        var gate = new ChildModeGate(_policy, withoutCalculator ? null : calc, gateLog, pool, llm);
+        // Живой маршрут урока (И10, Б9a): реестр проектов, стор персон и резолвер модели — тот же
+        // состав, что в боевом ядре; без них сверка И1-бис не пускает урок («урок не в
+        // проекте-предмете»), и до расчёта лимитов И3 дело не доходит.
+        var gate = new ChildModeGate(_policy, withoutCalculator ? null : calc, gateLog, pool, llm,
+            sp.GetRequiredService<ProjectManager>(), sp.GetRequiredService<PersonaManager>(),
+            sp.GetRequiredService<ModelAssignmentResolver>());
         // BuiltinMcpContexts строим заново — со своим гейтом; остальное берём из DI как есть
         var builtin = new BuiltinMcpContexts(
             sp.GetRequiredService<McpEndpoint>(), sp.GetRequiredService<FeatureFlagService>(),
@@ -176,7 +233,7 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
             sp.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>(),
             sp.GetRequiredService<SessionStore>(),
             sp.GetRequiredService<Lazy<ITurnMessageSink>>(), sp.GetRequiredService<Lazy<ITurnStarter>>());
-        return (factory, ownerId);
+        return (factory, ownerId, projectId, leaderId);
     }
 
     private static void LaunchNew(TurnLaunchContextFactory f, Session s) =>
@@ -237,9 +294,9 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
             "budget_exhausted" => (Profile(dailyBudgetUsd: 1m), new FixedSpend(2m, 2m)),
             _ => (Profile(rulesAgreed: false), null),
         };
-        var (factory, ownerId) = Build(profile, spend);
+        var (factory, ownerId, projectId, leaderId) = Build(profile, spend);
 
-        var act = () => LaunchNew(factory, ChildChat(ownerId));
+        var act = () => LaunchNew(factory, ChildChat(ownerId, projectId, leaderId));
         act.Should().Throw<InvalidOperationException>().WithMessage(text, $"отказ {state} — детским текстом");
     }
 
@@ -249,8 +306,8 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
         // 60 минут остатка — ok; 5 минут при пороге 5 — warn: предупреждение, не отказ.
         foreach (var (daily, expected) in new[] { (60, "ok"), (5, "warn") })
         {
-            var (factory, ownerId) = Build(Profile(dailyMinutes: daily));
-            var act = () => LaunchNew(factory, ChildChat(ownerId));
+            var (factory, ownerId, projectId, leaderId) = Build(Profile(dailyMinutes: daily));
+            var act = () => LaunchNew(factory, ChildChat(ownerId, projectId, leaderId));
             act.Should().NotThrow($"{expected}: остаток {daily} мин при пороге 5 не останавливает ход");
         }
     }
@@ -260,8 +317,8 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
     [Fact]
     public void ПравилаНеСогласованы_ЧатОнбордингаПравил_ХодИдёт()
     {
-        var (factory, ownerId) = Build(Profile(rulesAgreed: false));
-        var act = () => LaunchNew(factory, ChildChat(ownerId, onboardingKind: OnboardingKinds.ChildRules));
+        var (factory, ownerId, projectId, leaderId) = Build(Profile(rulesAgreed: false));
+        var act = () => LaunchNew(factory, ChildChat(ownerId, projectId, leaderId, onboardingKind: OnboardingKinds.ChildRules));
         act.Should().NotThrow("rules_pending не блокирует чат, который эти правила и согласовывает");
     }
 
@@ -274,8 +331,8 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
         var profile = state == "time_up"
             ? Profile(dailyMinutes: 0, rulesAgreed: false)
             : Profile(window: Window(120, 180), rulesAgreed: false);
-        var (factory, ownerId) = Build(profile);
-        var act = () => LaunchNew(factory, ChildChat(ownerId, onboardingKind: OnboardingKinds.ChildRules));
+        var (factory, ownerId, projectId, leaderId) = Build(profile);
+        var act = () => LaunchNew(factory, ChildChat(ownerId, projectId, leaderId, onboardingKind: OnboardingKinds.ChildRules));
         act.Should().Throw<InvalidOperationException>()
             .WithMessage(state == "time_up" ? TimeUpText : OutOfWindowText,
                 "исключение одно: отсутствие согласия; окно и дневной лимит действуют и на него");
@@ -286,8 +343,8 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
     [Fact]
     public void АвтопродолжениеПослеРестарта_ПриTimeUp_ХодНеСтартует()
     {
-        var (factory, ownerId) = Build(Profile(dailyMinutes: 0));
-        var act = () => LaunchReconnect(factory, ChildChat(ownerId));
+        var (factory, ownerId, projectId, leaderId) = Build(Profile(dailyMinutes: 0));
+        var act = () => LaunchReconnect(factory, ChildChat(ownerId, projectId, leaderId));
         act.Should().Throw<InvalidOperationException>().WithMessage(TimeUpText);
     }
 
@@ -296,16 +353,16 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
     {
         // «Входить некуда» — правило самого калькулятора (пустой ключ пространства = вне окна):
         // детский чат без ChildSpace — fail-closed, а не ход без лимитов.
-        var (factory, ownerId) = Build(Profile());
-        var act = () => LaunchNew(factory, ChildChat(ownerId, childSpace: null));
+        var (factory, ownerId, projectId, leaderId) = Build(Profile());
+        var act = () => LaunchNew(factory, SpacelessChild(ownerId, projectId));
         act.Should().Throw<InvalidOperationException>().WithMessage(OutOfWindowText);
     }
 
     [Fact]
     public void СверхДневногоБюджета_ВОткрытомОкне_ХодНеСтартует()
     {
-        var (factory, ownerId) = Build(Profile(dailyBudgetUsd: 1m), new FixedSpend(2m, 2m));
-        var act = () => LaunchNew(factory, ChildChat(ownerId));
+        var (factory, ownerId, projectId, leaderId) = Build(Profile(dailyBudgetUsd: 1m), new FixedSpend(2m, 2m));
+        var act = () => LaunchNew(factory, ChildChat(ownerId, projectId, leaderId));
         act.Should().Throw<InvalidOperationException>().WithMessage(BudgetText);
     }
 
@@ -314,16 +371,16 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
     [Fact]
     public void КалькулятораНет_ХодНеСтартует_ТекстомUncheckable()
     {
-        var (factory, ownerId) = Build(Profile(), withoutCalculator: true);
-        var act = () => LaunchNew(factory, ChildChat(ownerId));
+        var (factory, ownerId, projectId, leaderId) = Build(Profile(), withoutCalculator: true);
+        var act = () => LaunchNew(factory, ChildChat(ownerId, projectId, leaderId));
         act.Should().Throw<InvalidOperationException>().WithMessage(ChildLimitTexts.Uncheckable);
     }
 
     [Fact]
     public void КалькуляторБросаетИсключение_ХодНеСтартует_ТекстомUncheckable()
     {
-        var (factory, ownerId) = Build(Profile(), calcPolicy: new ThrowingPolicy());
-        var act = () => LaunchNew(factory, ChildChat(ownerId));
+        var (factory, ownerId, projectId, leaderId) = Build(Profile(), calcPolicy: new ThrowingPolicy());
+        var act = () => LaunchNew(factory, ChildChat(ownerId, projectId, leaderId));
         act.Should().Throw<InvalidOperationException>().WithMessage(ChildLimitTexts.Uncheckable,
             "технический текст исключения ребёнку не уходит");
     }
@@ -336,9 +393,9 @@ public sealed class ChildLaunchLimitsTests : IClassFixture<ChildLaunchLimitsTest
         // Тот же сбой расчёта, что выше, но с фейковым логгером на гейте: отказ ребёнку
         // не меняется, причина становится видимой на сервере (LogWarning в catch гейта).
         var log = new RecordingLogger();
-        var (factory, ownerId) = Build(Profile(), calcPolicy: new ThrowingPolicy(), gateLog: log);
+        var (factory, ownerId, projectId, leaderId) = Build(Profile(), calcPolicy: new ThrowingPolicy(), gateLog: log);
 
-        var act = () => LaunchNew(factory, ChildChat(ownerId));
+        var act = () => LaunchNew(factory, ChildChat(ownerId, projectId, leaderId));
         act.Should().Throw<InvalidOperationException>().WithMessage(ChildLimitTexts.Uncheckable);
 
         // В журнале — id владельца и тип исключения; текста отказа ребёнку там нет.

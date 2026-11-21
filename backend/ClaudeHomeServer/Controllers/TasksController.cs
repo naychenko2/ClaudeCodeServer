@@ -22,6 +22,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
+using ClaudeHomeServer.Services.ChildMode;
+
 namespace ClaudeHomeServer.Controllers;
 
 // Задачи внутри проекта
@@ -41,7 +43,10 @@ public class ProjectTasksController(
     // подбора нет (прямая сборка без DI в тестах); в боевом хосте его регистрирует tasks.
     WorkflowRecommender? workflowRecommender = null,
     // Лог нужен только отказу фона (сам сбой модели логирует рекомендатель): null — без лога.
-    ILogger<ProjectTasksController>? log = null) : ControllerBase
+    ILogger<ProjectTasksController>? log = null,
+    // Б20d (разрез §14.4): имена кураторов для строки «Эту доску видят: …» на детской доске.
+    // null — прямой сборки без DI нет: поле viewers остаётся пустым (имён выдумывать нечем).
+    UserStore? users = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -55,11 +60,16 @@ public class ProjectTasksController(
     // Проект запроса; доступ проверил [ProjectScope] (чужой — 404)
     private Project? OwnProject(string projectId) => projects.GetById(projectId);
 
+    // Б20d (разрез §14.4): ребёнку открыта доска своего проекта-предмета — все задачи на ней,
+    // включая поставленные куратором; чужой проект отказан внутри ручки (not_child_subject).
+    // Взрослому — без изменений.
+    [ChildAllowed]
     [HttpGet]
     [ProjectScope]
     public IActionResult GetAll(string projectId)
     {
-        if (OwnProject(projectId) is null) return NotFound();
+        var project = OwnProject(projectId);
+        if (project is null) return NotFound();
         // Список — облегчённый (без Description/ResultMarkdown); полная карточка — GET /api/tasks/{id}.
         // S2c-9: задачи проекта, вызываемые не владельцем, — через единую проекцию участника TaskView
         // (те же поля, что в его карточке, минус тяжёлый текст). «Владелец или участник» берётся из
@@ -69,22 +79,40 @@ public class ProjectTasksController(
         // Маска чужих приватных чатов (S2d-4b) — обе роли: задачи проекта вызываются и владельцем,
         // и участником, а чужой приватный чат не видит никто из них, кроме его автора.
         var audience = ChatAudience.Viewer(UserId);
-        return Ok(tasks.GetByProject(projectId)
+        var items = tasks.GetByProject(projectId)
             .Select(t => TaskView.MaskForeignChats(
                 asMember ? TaskView.ForMemberListItem(t) : TaskListItem.From(t), sessions, projects, audience))
-            .ToList());
+            .ToList();
+        // «Эту доску видят: …» (решение 64, та же точка правды, что у ChildSubjectsController.Viewers):
+        // имена кураторов живого профиля ребёнка. Поле негде нести в списке задач, поэтому ответ
+        // ребёнка — обёртка { tasks, viewers }; взрослый ответ остаётся списком без изменений.
+        if (ChildSubjectAccess.IsChild(HttpContext, UserId))
+        {
+            if (!ChildSubjectAccess.IsOwnSubjectProject(project, UserId)) return ChildSubjectAccess.NotOwnSubject("Задачи");
+            return Ok(new { tasks = items, viewers = ChildTaskScope.CuratorNames(users, UserId) });
+        }
+        return Ok(items);
     }
 
     // Задача в общий проект (F2-T1, разрез §2.1 «править задачи» — владелец и редактор): право
     // WriteContent, то же, что у остального записывания задач проекта; читатель — 403
     // project_scope («нет права на запись», форма ProjectScopeAttribute), посторонний — 404.
     // Право Write участнику остаётся закрытым (замок ProjectAccessService не открыт).
+    // Б20d (разрез §14.4): ребёнок создаёт задачи только себе и только в своём проекте-предмете;
+    // запрещённые поля (персона/исполнитель/фича/план/дерево) — 400 до любой записи.
+    [ChildAllowed]
     [HttpPost]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateTaskRequest req)
     {
         var project = OwnProject(projectId);
         if (project is null) return NotFound();
+        var isChild = ChildSubjectAccess.IsChild(HttpContext, UserId);
+        if (isChild)
+        {
+            if (!ChildSubjectAccess.IsOwnSubjectProject(project, UserId)) return ChildSubjectAccess.NotOwnSubject("Задачи");
+            if (ChildTaskScope.CreateDenied(req) is { } deniedField) return ChildTaskScope.FieldDenied(deniedField);
+        }
         // Арендатор проекта — ключ записи его задач (F2-T1): тот же источник, что у
         // RequestScope.TenantOwnerId, который разрешил [ProjectScope] до действия.
         var tenantId = project.OwnerId!;
@@ -167,8 +195,13 @@ public class ProjectTasksController(
         // приватным чатом участника: ни id, ни название этого чата в ответ не идут. Запись стора не правится.
         // Состав полей — по владению записью, как в пути чтения (S2c-9): открытая редактору
         // дверь записи не должна отдавать ему то, чего ему не отдаёт GET.
-        return Ok(TaskView.MaskForeignChats(TaskView.ForWrite(task, UserId),
-            sessions, projects, ChatAudience.Viewer(UserId)));
+        // Б20d (критерий c1): детское создание — 201 Created с тем же телом: контракт детской
+        // доски новый (форма ответа тоже отличается), статус REST-корректен созданию. Взрослый
+        // путь не тронут (200, существующие тесты).
+        var masked = TaskView.MaskForeignChats(TaskView.ForWrite(task, UserId),
+            sessions, projects, ChatAudience.Viewer(UserId));
+        // Created(uri, value) требует uri действия — у этой ручки его нет, статус ставится напрямую
+        return isChild ? StatusCode(StatusCodes.Status201Created, masked) : Ok(masked);
     }
 }
 
@@ -610,11 +643,21 @@ public class TasksController(
         };
     }
 
+    // Б20d (разрез §14.4): ребёнок правит, закрывает и возобновляет только свою задачу (созданную
+    // им) и не поднимает её до персоны/исполнителя/фичи/плана/дерева. Чужая задача — 403 до любой
+    // записи; уже удалённая — 404 прежним NotFound (тот же порядок, что у TaskDeleteDenied:
+    // отсутствие раньше авторства).
+    [ChildAllowed]
     [HttpPut("{taskId}")]
     public async Task<IActionResult> Update(string taskId, [FromBody] UpdateTaskRequest req)
     {
         var task = tasks.GetById(taskId);
         if (task is null) return NotFound();
+        if (ChildSubjectAccess.IsChild(HttpContext, UserId))
+        {
+            if (!ChildTaskScope.IsOwnTask(task, UserId)) return ChildTaskScope.ForeignTask();
+            if (ChildTaskScope.UpdateDenied(req) is { } deniedField) return ChildTaskScope.FieldDenied(deniedField);
+        }
         // Правка, статус, колонка (перетаскивание), подзадачи и порядок — право WriteContent
         // по проекту задачи (F2-T1): редактор может, читателю 403, невидимому 404.
         if (TaskActionDenied(task, ProjectRight.WriteContent) is { } denied) return denied;
@@ -2098,11 +2141,16 @@ public class TasksController(
         };
     }
 
+    // Б20d (разрез §14.4): ребёнку — только его задачи (созданные им); чужая — 403. Порядок тот же,
+    // что у TaskDeleteDenied: отсутствие — 404 раньше авторства.
+    [ChildAllowed]
     [HttpDelete("{taskId}")]
     public async Task<IActionResult> Delete(string taskId)
     {
         var task = tasks.GetById(taskId);
         if (task is null) return NotFound();
+        if (ChildSubjectAccess.IsChild(HttpContext, UserId) && !ChildTaskScope.IsOwnTask(task, UserId))
+            return ChildTaskScope.ForeignTask();
         // Удаление необратимо: автор задачи или её владелец (F2-T1, по образцу чатов).
         if (TaskDeleteDenied(task) is { } denied) return denied;
 
@@ -2221,4 +2269,100 @@ public static class TaskCreateJson
         PropertyNameCaseInsensitive = true,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
+}
+
+// Детская граница «Задач» (Б20d, ADR-041 ред. 8, разрез §14.4): единая точка правил для
+// ProjectTasksController (доска) и TasksController (операции по id). Ребёнку: доска своего
+// проекта-предмета (все задачи, включая поставленные куратором), создание только себе
+// (assignee=me без персоны/исполнителя/фичи/плана/дерева — любое из этих полей 400),
+// правка/закрытие/удаление только своих (созданных им, createdByUserId == ребёнок).
+// Закрыто самого шага: запуск исполнителя, workflow, колонки доски — у этих ручек [ChildAllowed]
+// нет намеренно, их отсекает гейт И1 (сторож ChildModeEndpointGuardTests).
+// «Ребёнок ли», «свой ли это проект-предмета» и отказ not_child_subject — в общей точке границы,
+// ChildSubjectAccess (Х-W4-47); здесь остаются только правила самих задач.
+public static class ChildTaskScope
+{
+    // Чужая задача ребёнку: не автор (ср. not_task_author у удаления взрослого — там владелец
+    // может; ребёнок — нет, поэтому отдельный код).
+    public const string ForeignCode = "child_task_foreign";
+    public const string FieldsCode = "child_task_fields";
+
+    // «Своя задача» — созданная этим ребёнком (признак ставит сервер в Create:
+    // CreatedByActorUserId = вызывающий). Автор неизвестен (null) — не своя: тот же fail-closed,
+    // что у TaskAuthorGate.
+    public static bool IsOwnTask(TaskItem task, string childId) =>
+        task.CreatedByUserId == childId;
+
+    // Запрещённые поля создания (разрез §14.4: «без персоны, исполнителя, фичи и плана»):
+    // assignee≠me, персона (исполнителя и постановщика), блок фичи и плана целиком, дерево,
+    // привязка к чату исполнителя (исполнитель ребёнку закрыт гейтом И1 — закрыто и поле).
+    // Имя первого запрещённого поля или null. Остальные поля (срок, приоритет, колонка, повтор,
+    // подзадачи, метки) — обычная задача ребёнку разрешена.
+    public static string? CreateDenied(CreateTaskRequest req) =>
+        req.Assignee == TaskItemAssignee.Claude ? "assignee"
+        : NonEmpty(req.PersonaId) ? "personaId"
+        : NonEmpty(req.CreatedByPersonaId) ? "createdByPersonaId"
+        : NonEmpty(req.FeatureId) ? "featureId"
+        : NonEmpty(req.Role) ? "role"
+        : NonEmpty(req.StepRef) ? "stepRef"
+        : NonEmpty(req.Lane) ? "lane"
+        : NonEmpty(req.StageId) ? "stageId"
+        : req.ReviewOf is { Count: > 0 } ? "reviewOf"
+        : req.PlanSteps is { Count: > 0 } ? "planSteps"
+        : req.Acceptance is { Count: > 0 } ? "acceptance"
+        : NonEmpty(req.WorktreePath) ? "worktreePath"
+        : NonEmpty(req.WorktreeBranch) ? "worktreeBranch"
+        : NonEmpty(req.LinkedSessionId) ? "linkedSessionId"
+        : null;
+
+    // Те же запреты при правке — иначе «без исполнителя/фичи» обходился бы одним PUT.
+    // В Update empty string = «снять» (для задачи ребёнка это и так пусто) — не отказ;
+    // отказывает непустое значение. assigneeUserId — человек-исполнитель: ребёнок не ставит
+    // исполнителя даже себе (тот же смысл, что «без исполнителя» при создании).
+    // linkedSessionId — та же закрытая запись, что при создании.
+    // projectId — исключение из «пусто = снять»: пустая строка здесь не снятие поля, а
+    // «сделать личной», а guid — перенос в другой проект; оба уносят задачу с доски предмета
+    // (находка 2 ревью R-B20d), поэтому отказывает любое переданное значение (не-null),
+    // не только непустое. Не менять поле — не слать поле вовсе (null).
+    public static string? UpdateDenied(UpdateTaskRequest req) =>
+        req.Assignee == TaskItemAssignee.Claude ? "assignee"
+        : NonEmpty(req.AssigneeUserId) ? "assigneeUserId"
+        : NonEmpty(req.PersonaId) ? "personaId"
+        : NonEmpty(req.FeatureId) ? "featureId"
+        : NonEmpty(req.Role) ? "role"
+        : NonEmpty(req.StepRef) ? "stepRef"
+        : NonEmpty(req.Lane) ? "lane"
+        : req.ReviewOf is { Count: > 0 } ? "reviewOf"
+        : req.PlanSteps is { Count: > 0 } ? "planSteps"
+        : req.Acceptance is { Count: > 0 } ? "acceptance"
+        : NonEmpty(req.WorktreePath) ? "worktreePath"
+        : NonEmpty(req.WorktreeBranch) ? "worktreeBranch"
+        : NonEmpty(req.LinkedSessionId) ? "linkedSessionId"
+        : req.ProjectId is not null ? "projectId"
+        : null;
+
+    private static bool NonEmpty(string? s) => !string.IsNullOrWhiteSpace(s);
+
+    // Имена кураторов для строки «Эту доску видят: …» — опекуны живого профиля ребёнка в его
+    // порядке, без дубликатов; DisplayName, иначе username (дословно та же точка, что у
+    // ChildSubjectsController.Viewers, Б14a/решение 64). Снесённый аккаунт без имени в строку
+    // не попадает; стора без (прямая сборка без DI) — пустой список, а не выдуманные имена.
+    public static List<string> CuratorNames(UserStore? users, string childId) =>
+        users?.GetById(childId)?.ChildMode is { } profile
+            ? (profile.GuardianUserIds ?? [])
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal)
+                .Select(id => users.GetById(id))
+                .Where(u => u is not null)
+                .Select(u => u!.DisplayName ?? u.Username)
+                .ToList()
+            : [];
+
+    public static ObjectResult ForeignTask() =>
+        new(new { code = ForeignCode, message = "Можно править, закрывать и удалять только свои задачи." })
+        { StatusCode = StatusCodes.Status403Forbidden };
+
+    public static JsonResult FieldDenied(string field) =>
+        new(new { code = FieldsCode, field, message = $"Задачу себе нельзя ставить с полем {field}." })
+        { StatusCode = StatusCodes.Status400BadRequest };
 }

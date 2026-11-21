@@ -19,11 +19,17 @@
 //
 // Лукап featureOf(sessionId): фичи, к которым принадлежит чат (по chats всех
 // загруженных срезов), с ролью чата в каждой; дубли по featureId сняты.
+//
+// Ребёнок (getMeSnapshot().isChild) не зовёт api.tasks.featuresIndex ни одним
+// путём: индекс фич — взрослая ручка без [ChildAllowed] (дефект cc43582b: на ленте
+// урока ребёнку был 403). Гейт в точках запроса — scheduleRefetch и обе ветки
+// 0→1 (К9c); у ребёнка индекс пустой, featureOf → [], индикатор не взводится.
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
 import { onMessage } from './signalr';
 import { getTaskById } from './tasks';
+import { getMeSnapshot } from './defaultPersona';
 import type { FeaturesIndex, FeatureIndexFeature, FeatureChatLink } from '../types/featureIndex';
 import type { ServerMessage } from '../types';
 
@@ -198,6 +204,11 @@ export function featureOf(sessionId: string | null): FeatureOfEntry[] {
 // Дебаунс 1,5 с на проект (контракт Ф1): всплеск task_changed → один перезапрос.
 const REFETCH_DEBOUNCE_MS = 1500;
 function scheduleRefetch(projectKey: string) {
+  // Ребёнок не опрашивает индекс фич: GET /api/tasks/features/index — взрослая
+  // ручка без [ChildAllowed] (дефект cc43582b). Гейт в единственной точке
+  // live-перезапроса: к scheduleRefetch ведёт только handleTaskChanged —
+  // дальше него ни один перезапрос не уйдёт (К9c).
+  if (getMeSnapshot().isChild) return;
   if (_pending.has(projectKey)) return;
   _pending.set(projectKey, setTimeout(() => {
     _pending.delete(projectKey);
@@ -298,7 +309,11 @@ export function useFeaturesIndex(projectId: string | null): FeaturesIndex {
     _activeCount.set(projectKey, prev + 1);
     // Начало загрузки — только когда первый потребитель приходит
     // (0→1): один запрос на проект, а не на каждую карточку.
-    if (prev === 0) {
+    // Ребёнок не стучится в индекс (тот же гейт, что в scheduleRefetch, дефект
+    // cc43582b): обе ветки 0→1 — фоновый перезапрос поверх кэша и первичная
+    // загрузка с индикатором — закрыты до nextSeq/setLoading; индекс ребёнка
+    // остаётся пустым, индикатор не взводится (К9c).
+    if (prev === 0 && !getMeSnapshot().isChild) {
       const seq = nextSeq(projectKey);
       if (_cache.has(projectKey)) {
         // Срез прошнего визита сразу живой; фоновый перезапрос тихо обновит его.

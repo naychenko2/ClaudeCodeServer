@@ -27,6 +27,7 @@ import {
   gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitFetch, gitPull, gitCheckout, gitCreateBranch,
   gitStashPush, gitStashPop, gitStashDrop, clearGitError, gitSetAutoCommit, gitSaveNow, gitInit,
 } from '../lib/git';
+import { useMe } from '../lib/defaultPersona';
 import { splitPath, relTime, fileChatBadge, fileMatchesChatFilter, countChatFilter } from '../lib/gitFormat';
 import type { ChatFilterMode } from '../lib/gitFormat';
 import { useIsTouch } from '../lib/breakpoints';
@@ -318,13 +319,17 @@ function GitChangesRailBody({ project, onOpenDiff, onOpenFile, onOpenCommit, act
   }, []);
   const compactActions = railW > 0 && railW < ACTION_LABELS_MIN_W;
 
-  // Загрузка стора + стека незапушенных + remote при монтировании панели
+  // Загрузка стора + стека незапушенных + remote при монтировании панели.
+  // Ребёнок git не опрашивает: GitController без [ChildAllowed] (решение 77); панель —
+  // второй вызывающий, тот же гейт по Me.isChild, что у FileExplorer/useGitChip (X-W4-60).
+  const me = useMe();
   useEffect(() => {
+    if (me.isChild) return;
     ensureGit(project.id);
     void loadUnpushedLog(project.id);
     void loadGitRemote(project.id);
     void loadGitStash(project.id);
-  }, [project.id]);
+  }, [project.id, me.isChild]);
 
   // Документный режим (авто-коммит после хода ИИ): историю ведёт сервер, и ручная
   // фиксация пользователю не нужна — панель открывается на ветке, а не на «Не
@@ -357,10 +362,13 @@ function GitChangesRailBody({ project, onOpenDiff, onOpenFile, onOpenCommit, act
     [status]);
 
   // Полная история ветки — грузим лениво при выборе скоупа ветки (потом держится
-  // свежей через realtime: onGitStatusChanged перечитывает лог, если он был загружен)
+  // свежей через realtime: onGitStatusChanged перечитывает лог, если он был загружен).
+  // Ребёнок не спрашивает: GitController без [ChildAllowed] (решение 77) — тот же гейт
+  // Me.isChild, что у mount-эффекта выше (X-W4-60).
   useEffect(() => {
+    if (me.isChild) return;
     if (activeScope === 'branch') void loadGitLog(project.id);
-  }, [activeScope, project.id]);
+  }, [activeScope, project.id, me.isChild]);
 
   // Скоуп ветки показывает уже опубликованные коммиты: незапушенные живут в нижнем
   // списке отдельными скоупами — не дублируем их здесь
@@ -450,8 +458,15 @@ function GitChangesRailBody({ project, onOpenDiff, onOpenFile, onOpenCommit, act
     try { await gitSaveNow(project.id); } finally { setSavingNow(false); }
   };
 
-  // Ветки: список грузим лениво при открытии меню, чекаут — только на другую ветку
-  const openBranchMenu = (rect: DOMRect) => { if (!branchMenu) void loadGitBranches(project.id); setBranchMenu(v => v ? null : rect); };
+  // Ветки: список грузим лениво при открытии меню, чекаут — только на другую ветку.
+  // Ребёнок не открывает меню вовсе: branches без [ChildAllowed], а пустое меню
+  // висело бы «Загрузка…» вечно (тот же гейт Me.isChild, что выше).
+  const openBranchMenu = (rect: DOMRect) => { if (me.isChild) return; if (!branchMenu) void loadGitBranches(project.id); setBranchMenu(v => v ? null : rect); };
+  // Обмен с remote: тот же паттерн, что у меню веток выше — кнопки остаются на месте
+  // ряда (ряд не прыгает), но нажатие ничего не зовёт: git/fetch и git/pull без
+  // [ChildAllowed], клик стоил ребёнку 403 (X-W4-64, дефект cccc47ad).
+  const handleFetch = () => { if (me.isChild) return; void gitFetch(project.id); };
+  const handlePull = () => { if (me.isChild) return; void gitPull(project.id); };
   const doCheckout = (name: string) => { onScopeChange?.(); void gitCheckout(project.id, name); };
   const handleCheckout = (name: string) => {
     setBranchMenu(null);
@@ -1478,11 +1493,11 @@ function GitChangesRailBody({ project, onOpenDiff, onOpenFile, onOpenCommit, act
           {/* Габарит кнопок ряда — ровно ROW_H, как у капсулы слева и строк скоупов выше */}
           {canRemote && <>
           <IconButton size="xs" title="Проверить обновления (fetch)" disabled={st.busy}
-            style={{ width: ROW_H, height: ROW_H }} onClick={() => void gitFetch(project.id)}>
+            style={{ width: ROW_H, height: ROW_H }} onClick={handleFetch}>
             <RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
           <IconButton size="xs" title="Забрать и слить (pull)" disabled={st.busy}
-            style={{ width: ROW_H, height: ROW_H }} onClick={() => void gitPull(project.id)}>
+            style={{ width: ROW_H, height: ROW_H }} onClick={handlePull}>
             <ArrowDownToLine size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
           {/* Публикация — с подписью, тем же примитивом и размером, что «Зафиксировать»

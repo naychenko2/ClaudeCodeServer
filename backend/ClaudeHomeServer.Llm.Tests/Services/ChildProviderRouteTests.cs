@@ -12,6 +12,7 @@ using ClaudeHomeServer.Services.Skills;
 using FluentAssertions;
 using FluentAssertions.Execution;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -25,6 +26,8 @@ public class ChildProviderRouteTests : IDisposable
 
     private const string CloudModel = "deepseek-chat";
     private const string LocalModel = "qwen3.8-27b";
+    // Облачная модель без цены: шаг цепочки, который фильтр ребёнка обязан выбросить (решение 27).
+    private const string FreeModel = "free-model";
 
     public void Dispose()
     {
@@ -82,6 +85,20 @@ public class ChildProviderRouteTests : IDisposable
         return dir;
     }
 
+    // Настоящий сборщик env песочницы (DockerProcessRunner.BuildTurnEnv) для зеркала профиля:
+    // тот же образец, что Runner() в ChildRouteTests.
+    private static DockerProcessRunner SandboxRunner()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(Path.GetTempPath(), "ccs-child-sandbox-" + Guid.NewGuid().ToString("N"), "projects.json"),
+            // WorkingDirectory захваченного spec лежит в temp — маппинг песочницы обязан его знать,
+            // иначе BuildDockerExecArgs падает на -w ещё до env-части.
+            ["Sandbox:ProjectsRoot"] = Path.GetTempPath(),
+        }).Build();
+        return new DockerProcessRunner(new SandboxManager(config, NullLogger<SandboxManager>.Instance), "kid");
+    }
+
     private IConfiguration Config(string dir) => new ConfigurationBuilder().AddInMemoryCollection(
         new Dictionary<string, string?>
         {
@@ -98,18 +115,27 @@ public class ChildProviderRouteTests : IDisposable
             ["LlmProviders:local-qwen:Models:0:Id"] = LocalModel,
             [$"{ClaudeSubscriptionPool.Section}:kids-api:ApiKey"] = "sk-ant-kids",
             [$"{ClaudeSubscriptionPool.Section}:claude-2:OAuthToken"] = "oauth-sub-2",
+            // Запись пула только с setup-tokenом: форма маршрута из решения 25.
+            [$"{ClaudeSubscriptionPool.Section}:kids-oauth:OAuthToken"] = "oauth-kids",
+            // Облачный провайдер без цены: его модели годны как маршрут, но не как шаг цепочки.
+            ["LlmProviders:freemodel:ApiKey"] = "sk-free",
+            ["LlmProviders:freemodel:AnthropicBaseUrl"] = "https://free.example.com",
+            ["LlmProviders:freemodel:Models:0:Id"] = FreeModel,
         }).Build();
 
-    private static ChildPolicySnapshot Snapshot(string providerKey, string model, bool acknowledged = true) =>
+    // Согласие профиля на маршрут (И2″) стоит в фикстуре: без него ChildRoute отказывает на старте
+    // хода ещё до аргументов, и тесты проверяли бы отсутствие согласия, а не маршрут.
+    private static ChildPolicySnapshot Snapshot(string providerKey, string model) =>
         new("kid", new ChildProfile
         {
             Enabled = true, ProviderKey = providerKey, Model = model,
+            RouteRiskAcknowledgedAt = new DateTimeOffset(2026, 11, 18, 10, 0, 0, TimeSpan.Zero),
+            RouteRiskAcknowledgedBy = "parent-1",
             Subjects =
             [
                 new ChildSubject
                 {
-                    Id = "math", Label = "Математика", Enabled = true, ProviderKey = providerKey, Model = model,
-                    RouteAcknowledgedAt = acknowledged ? new DateTime(2026, 11, 17, 10, 0, 0, DateTimeKind.Utc) : null,
+                    Id = "math", Label = "Математика", Enabled = true,
                 },
             ],
         }, false);
@@ -180,16 +206,42 @@ public class ChildProviderRouteTests : IDisposable
     }
 
     // Пул-блок: Info.Provider указывает на подписочную запись пула — ребёнку её учётка не накладывается.
+    // Чат правил: маршрут — поля профиля (kids-api), а не Info.Provider («claude-2»).
     [Fact]
     public async Task ХодРебёнка_ПулБлокНеИсполняется_УчёткаПодпискиПулаНеДоезжает()
     {
-        var r = await LaunchAsync(Snapshot("kids-api", "sonnet"), KidSession("claude-2", "sonnet"));
+        var rulesChat = KidSession("claude-2", "sonnet");
+        rulesChat.OnboardingKind = OnboardingKinds.ChildRules;
+        var r = await LaunchAsync(Snapshot("kids-api", "sonnet"), rulesChat);
 
         r.Spec.Should().NotBeNull();
         using var scope = new AssertionScope();
         r.Spec!.Env!["ANTHROPIC_API_KEY"].Should().Be("sk-ant-kids");
         r.Spec.Env.Values.Should().NotContain("oauth-sub-2");
         r.Spec.Env.Should().NotContainKey("CLAUDE_CODE_OAUTH_TOKEN");
+    }
+
+    // Запись пула только с setup-tokenом (решение 25): env детского хода несёт токен самой записи,
+    // хостовый API-ключ и чужие токены в него не доезжают. Профиль записи изолированный «sub-{key}»,
+    // а у песочницы-ребёнка RewriteProfileEnv переписывает его на профиль ребёнка ({childId}/…).
+    [Fact]
+    public async Task ХодРебёнка_ЗаписьПулаСетапТокен_ТокенЗаписиИПрофильПесочницыРебёнка()
+    {
+        var r = await LaunchAsync(Snapshot("kids-oauth", "sonnet"), KidSession("kids-oauth", "sonnet"));
+
+        r.Spec.Should().NotBeNull("запись пула с setup-tokenом — допустимый маршрут ребёнка");
+        using var scope = new AssertionScope();
+        r.Spec!.Env!["CLAUDE_CODE_OAUTH_TOKEN"].Should().Be("oauth-kids");
+        r.Spec.Env.Should().NotContainKey("ANTHROPIC_API_KEY", "хостовый API-ключ детского хода не касается");
+        r.Spec.Env.Values.Should().NotContain("sk-ant-kids").And.NotContain("oauth-sub-2");
+        // Зеркало песочницы: реальные аргументы контейнерного запуска (BuildDockerExecArgs →
+        // BuildTurnEnv) несут профиль записи уже песочным профилем ребёнка.
+        var execArgs = SandboxRunner().BuildDockerExecArgs(r.Spec);
+        var envArgs = Enumerable.Range(0, execArgs.Count - 1)
+            .Where(i => execArgs[i] == "-e")
+            .Select(i => execArgs[i + 1])
+            .ToList();
+        envArgs.Should().Contain($"CLAUDE_CONFIG_DIR={SandboxManager.ProfilesMount}/kid/sub-kids-oauth");
     }
 
     // BareMode: ни одного аргумента BuildBareModeArgs и нет --system-prompt-file на локальном провайдере с BareMode.
@@ -212,9 +264,10 @@ public class ChildProviderRouteTests : IDisposable
         r.Session.LastBareModeApplied.Should().BeTrue();
     }
 
-    // Явная модель предмета — первый шаг: назначение места ChatPersona её не переопределяет.
+    // Модель чата ребёнка (её закрепил запуск по персоне проекта-предмета, Б17c: явной модели
+    // предмета нет) — явная модель для резолва места: назначение ChatPersona её не переопределяет.
     [Fact]
-    public async Task ХодРебёнка_НазначениеМестаНеПереопределяетМодельПредмета()
+    public async Task ХодРебёнка_НазначениеМестаНеПереопределяетМодельЧата()
     {
         var dir = NewTempDir("ccs-child-assign-");
         var config = Config(dir);
@@ -223,20 +276,22 @@ public class ChildProviderRouteTests : IDisposable
         store.Set(LocalActionCatalog.ChatPersona, LocalModel).Should().BeTrue();
         var resolver = new ModelAssignmentResolver(new NoTiers(), store, providers: providers);
 
-        var r = await LaunchAsync(Snapshot("deepseek", CloudModel), KidSession("deepseek", model: null), resolver);
+        var r = await LaunchAsync(Snapshot("deepseek", CloudModel), KidSession("deepseek", CloudModel), resolver);
 
         using var scope = new AssertionScope();
         r.Session.EffectiveTurnModel.Should().Be(CloudModel);
-        r.Spec.Should().NotBeNull("модель предмета осталась облачной, маршрут совпал");
+        r.Spec.Should().NotBeNull("модель чата осталась облачной, маршрут совпал");
         r.Spec!.Env!["ANTHROPIC_BASE_URL"].Should().Be("https://api.deepseek.com/anthropic");
     }
 
-    // Фолбэк ADR-007: цепочка из одной модели у каждого вида маршрута.
+    // Цепочка ребёнка (решение 27): первый шаг — явная модель маршрута у каждого его вида;
+    // дальше — хвост слотов (после него решит фильтр), стартовое закрепление не сдвигается.
     [Theory]
     [InlineData("kids-api", "sonnet")]
+    [InlineData("kids-oauth", "sonnet")]
     [InlineData("deepseek", CloudModel)]
     [InlineData("local-qwen", LocalModel)]
-    public async Task ХодРебёнка_ЦепочкаИзОднойМодели_УКаждогоВидаМаршрута(string providerKey, string model)
+    public async Task ХодРебёнка_ЦепочкаНачинаетсяСМоделиМаршрута_УКаждогоВидаМаршрута(string providerKey, string model)
     {
         var dir = NewTempDir("ccs-child-chain-");
         var config = Config(dir);
@@ -246,12 +301,35 @@ public class ChildProviderRouteTests : IDisposable
 
         var r = await LaunchAsync(Snapshot(providerKey, model), KidSession(providerKey, model), resolver);
 
-        r.Session.EffectiveTurnChain.Should().Equal(model);
+        r.Session.EffectiveTurnChain.Should().StartWith(model);
+    }
+
+    // Фильтр цепочки ребёнка (решение 27): облачные шаги без цены из неё выпадают — на них бюджет
+    // И3 молча перестал бы ограничивать. Первый шаг (модель маршрута) остаётся: цепочка не пустеет.
+    [Fact]
+    public async Task ХодРебёнка_Цепочка_ОблачныйШагБезЦеныВыпадает()
+    {
+        var dir = NewTempDir("ccs-child-chain-free-");
+        var config = Config(dir);
+        var providers = new LlmProviderRegistry(config);
+        var store = new LocalActionOverridesStore(config);
+        // Инстанс-слот — облако без цены: ResolveChain допишет его после модели маршрута,
+        // фильтр ребёнка обязан его выбросить.
+        var resolver = new ModelAssignmentResolver(new AllTiers(), store, providers: providers);
+
+        var r = await LaunchAsync(Snapshot("kids-api", "sonnet"), KidSession("kids-api", "sonnet"), resolver);
+
+        r.Session.EffectiveTurnChain.Should().Equal("sonnet");
     }
 
     private sealed class NoTiers : ITierModelResolver
     {
         public string? TierModel(ModelTier tier) => tier == ModelTier.Strong ? "claude-fable-5-2" : "claude-opus-5-5";
+    }
+
+    private sealed class AllTiers : ITierModelResolver
+    {
+        public string? TierModel(ModelTier tier) => FreeModel;
     }
 
     // Фабрика: рассогласованная пара ребёнка не самолечится и пул не спрашивается.
@@ -289,7 +367,8 @@ public class ChildProviderRouteTests : IDisposable
 
         var act = () => factory.Create(session, context);
 
-        act.Should().Throw<ChildRouteRefusedException>().WithMessage(ChildRoute.RefusedText);
+        // Фабрика — внутренняя точка: события отказа она не публикует, текст без обещания.
+        act.Should().Throw<ChildRouteRefusedException>().WithMessage(ChildRoute.RefusedTextNoGuardians);
         pool.PickCalls.Should().Be(0, "пул подписок ребёнку не спрашивается");
         session.Provider.Should().Be("deepseek", "пара не самолечится");
     }

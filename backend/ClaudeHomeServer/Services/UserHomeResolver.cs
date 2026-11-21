@@ -77,6 +77,30 @@ public sealed class UserHomeResolver : ClaudeHomeServer.Services.Composition.IHo
         return Path.Combine(basePath, username);
     }
 
+    // === Папка предмета ребёнка (детский режим, ADR-041 ред. 5, разрез §11.1) ===
+    // Единственное место сборки пути проекта-предмета: {дом}/{Предметы}/{subjectId}.
+    // Дом — общий Resolve (база по среде + прослойка {логин} или override): папка предмета
+    // следует дому ребёнка — у container-пользователя она внутри Sandbox:ProjectsRoot,
+    // т.е. в песочнице /projects/{логин}/Предметы/{subjectId}. Единственное место сборки
+    // в продуктовом коде: провижер Б8b и все будущие потребители берут путь только отсюда.
+    public const string SubjectFolderName = "Предметы";
+
+    public string? SubjectHome(string? username, string? executionEnvironment, string? subjectId)
+    {
+        if (string.IsNullOrWhiteSpace(subjectId)) return null;
+        // subjectId обязан быть ОДНИМ сегментом: slug ChildSubject [a-z0-9-]{1,32} (валидатор Т2a)
+        // им и является. Границу здесь держит не только валидатор: «..» SafePath.Join схлопал бы
+        // в сам дом (Join разрешает путь, равный корню, SafePath.cs:34) — папка предмета стала бы
+        // всем домом ребёнка; «a/b» добавил бы прослойку, которой в контракте пути нет. Отказ —
+        // null: провижер (Б8b) трактует его как «база не настроена», проекта нет.
+        if (subjectId == "." || subjectId == ".." ||
+            subjectId.Contains('/') || subjectId.Contains('\\')) return null;
+        var home = Resolve(username, executionEnvironment);
+        if (home is null) return null;
+        // SafePath.Join — примитив защиты путей: результат гарантированно внутри дома.
+        return SafePath.Join(home, SubjectFolderName + "/" + subjectId);
+    }
+
     // Сообщение о ненастроенной базе — тексты исторические, зависят от среды пользователя
     public static string NotConfiguredMessage(string? executionEnvironment) =>
         executionEnvironment == ExecutionEnvironments.Container

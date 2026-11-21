@@ -37,10 +37,12 @@ public interface IChildModeGate
     string? LaunchMismatch(string? ownerId, Session session);
 
     /// <summary>
-    /// Живой маршрут предмета чата «Уроков» (репетитор, поставщик, модель из записи предмета в профиле)
-    /// для догона отложенного перезакрепления на старте хода. null — владелец не ребёнок, профиль не
-    /// читается, чат не «Уроков», предмет закрыт или <c>ChildRoute</c> маршрут не принимает. Та же
-    /// запись и тот же вердикт, что у <see cref="LaunchMismatch"/> (общий хелпер, второго места правды нет).
+    /// Живой маршрут предмета чата «Уроков» для догона отложенного перезакрепления на старте хода:
+    /// репетитор — руководитель проекта-предмета, модель — развёрнутая модель этой персоны (И10,
+    /// решение 71); проекта-предмета ещё нет — записанные поля предмета (переходная ветка до Б17c).
+    /// null — владелец не ребёнок, профиль не читается, чат не «Уроков», предмет закрыт, репетитора
+    /// нет или <c>ChildRoute</c> маршрут не принимает; причина отказа — в журнале. Та же точка
+    /// развёртки и тот же вердикт, что у <see cref="LaunchMismatch"/>: второй места правды нет.
     /// </summary>
     ChildRepinTarget? LiveRouteFor(string? ownerId, Session session);
 
@@ -54,6 +56,22 @@ public interface IChildModeGate
     /// Исключение калькулятора наружу не отдаётся: оно становится этим текстом (fail-closed).
     /// </summary>
     string? LaunchLimitRefusal(string? ownerId, Session session, DateTimeOffset now);
+
+    /// <summary>
+    /// Единый вердикт запуска хода ребёнка, спрашиваемый НА КАЖДОМ ходу (И10, дефект a771ca12):
+    /// сверка И1-бис + состояние И3 — тот же состав, что проверяет сборка контекста
+    /// (<see cref="LaunchMismatch"/> и <see cref="LaunchLimitRefusal"/> в Compose), но до всякого
+    /// прикосновения к процессу. Возвращает детский текст отказа либо null (не ребёнок, всё сошлось,
+    /// состояние ok/warn). Зовётся после догона (он приводит закреплённые поля к живому маршруту)
+    /// и независимо от того, жив процесс: при живом EnsureProcessCoreAsync выходит раньше Compose
+    /// (TurnProcessHost.cs:189), и без этой точки ни И1-бис, ни И3 не спрашивались бы вовсе.
+    /// Отказ живого маршрута урока публикуется здесь же (тот же LogRefusal, что у
+    /// <see cref="LiveRouteFor"/>): обещание «взрослым отправлено уведомление» в тексте держится
+    /// ровно этой публикацией; для чата правил (которая точка события не публикует) — текст без
+    /// обещания. Дедуп нотификатора по (ребёнок, предмет, причина) делает повторную публикацию
+    /// того же отказа молчание-как-была: уведомления она не удваивает.
+    /// </summary>
+    string? TurnRefusalFor(string? ownerId, Session session, DateTimeOffset now);
 
     /// <summary>
     /// Снимок политики владельца (null — обычный пользователь). Нужен запуску хода, чтобы CLI читал
@@ -71,14 +89,12 @@ public interface IChildModeGate
 /// отдельно (ADR-041, «Последствия»), гейт под список уже есть.
 /// Расширение списка — осознанная правка сторожа ChildModeMcpGuardTests.
 /// </summary>
-public static class ChildModeAllowList
+public static partial class ChildModeAllowList
 {
     public static readonly IReadOnlySet<(string Server, string Tool)> Pairs =
         new HashSet<(string, string)>
         {
             ("tutor", "search_materials"),
-            ("tutor", "list_materials"),
-            ("tutor", "read_material"),
             ("widgets", "widget_show"),
         };
 

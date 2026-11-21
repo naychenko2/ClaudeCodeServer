@@ -1402,4 +1402,93 @@ public class FeatureStepProgressTests
         var epic2 = Feature();
         FeatureProjector.Build(epic2, [epic2, Step("s1", "A", 1)], T0.AddDays(1)).StepProgress.BaselineTotal.Should().BeNull();
     }
+
+    // ─── Метка «без-ревью» в учёте шагов (Х-W4-44) ─────────────────────────────────────────────
+
+    private static TaskItem NoReviewStep(string id, string stepRef, int minute, TaskItemStatus status = TaskItemStatus.Done)
+    {
+        var t = Step(id, stepRef, minute, status);
+        t.Labels = [FeatureTracker.NoReviewLabel];
+        return t;
+    }
+
+    // c1: метка на шапке, всё сдано, витков нет → Accepted / «сдан без ревью», NoReview = 1,
+    // в закрытом хвосте шага нет; acceptedAt = закрытие последней задачи, waitingSince = null.
+    [Fact]
+    public void БезРевью_МеткаВсёСданоВитковНет_AcceptedСданБезРевьюНеВХвосте()
+    {
+        var tasks = new[] { Feature(), Plan("p", 0, ("A", "back")), NoReviewStep("s1", "A", 1) };
+
+        var acct = Account(tasks);
+
+        var chain = acct.Chains.Single();
+        chain.Outcome.Should().Be("accepted");
+        chain.Status.Should().Be("сдан без ревью");
+        chain.AcceptedAt.Should().Be(T0.AddMinutes(2));
+        chain.WaitingSince.Should().BeNull();
+        acct.Progress.Accepted.Should().Be(1);
+        acct.Progress.NoReview.Should().Be(1);
+        acct.Progress.Total.Should().Be(1, "NoReview — подмножество Accepted, знаменатель не меняется");
+        acct.Progress.ClosedTail.Should().Be(0);
+        acct.ClosedTailKeys.Should().BeEmpty();
+    }
+
+    // c2: витки есть — метка ничего не решает: returned → Work, открытый виток → Review / «идёт».
+    [Fact]
+    public void БезРевью_ВиткиЕсть_МеткаНеДействует()
+    {
+        var returned = Account(NoReviewStep("s1", "A", 1), Verdict("r1", TaskRoles.Review, TaskVerdicts.Returned, 5, "s1"));
+        returned.Chains.Single().Outcome.Should().Be("returned");
+        returned.Progress.Work.Should().Be(1);
+        returned.Progress.NoReview.Should().Be(0);
+
+        var open = Account(NoReviewStep("s1", "A", 1), Verdict("r1", TaskRoles.Review, null, 5, "s1"));
+        open.Chains.Single().Outcome.Should().Be("running");
+        open.Chains.Single().Status.Should().Be("идёт");
+        open.Progress.Review.Should().Be(1);
+        open.Progress.NoReview.Should().Be(0);
+    }
+
+    // c3: метка только на доработке — как без метки («ждёт ревью», хвост).
+    [Fact]
+    public void БезРевью_МеткаТолькоНаДоработке_КакБезМетки()
+    {
+        var w = Rework("w1", "A", 3);
+        w.Labels = [FeatureTracker.NoReviewLabel];
+
+        var acct = Account(Step("s1", "A", 1), w);
+
+        acct.Chains.Single().Outcome.Should().Be("pending");
+        acct.Progress.NoReview.Should().Be(0);
+        acct.ClosedTailKeys.Should().Equal("A");
+    }
+
+    // Метка есть, но шаг ещё не сдан или есть открытая доработка — не «сдан без ревью».
+    [Fact]
+    public void БезРевью_ШагНеСдан_ИлиДоработкаОткрыта_НеЗасчитывается()
+    {
+        Account(NoReviewStep("s1", "A", 1, TaskItemStatus.InProgress)).Progress.NoReview.Should().Be(0);
+        Account(NoReviewStep("s1", "A", 1), Rework("w1", "A", 3, status: TaskItemStatus.InProgress))
+            .Progress.NoReview.Should().Be(0);
+    }
+
+    // c5: фича из принятых и «сданных без ревью» шагов → PlanDone, решения о хвосте нет.
+    [Fact]
+    public void БезРевью_ПринятыеИСданныеБезРевью_PlanDoneИХвостаНет()
+    {
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("A", "back"), ("B", "back")),
+            Step("s1", "A", 1), Verdict("r1", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s1"),
+            NoReviewStep("s2", "B", 2),
+        };
+
+        var run = Run(tasks);
+
+        run.StepProgress.PlanState.Should().Be(FeatureStepAccounting.PlanDone);
+        run.StepProgress.Accepted.Should().Be(2);
+        run.StepProgress.NoReview.Should().Be(1);
+        run.StepProgress.ClosedTail.Should().Be(0);
+        FeatureProjector.BuildMergeRisks(run.StepProgress, 0).Should().NotContain(r => r.Kind == FeatureMergeRiskKinds.Tail);
+    }
 }

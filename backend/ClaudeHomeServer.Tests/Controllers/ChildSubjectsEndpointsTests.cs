@@ -50,6 +50,11 @@ public class ChildSubjectsEndpointsTests : IClassFixture<ChildSubjectsEndpointsT
         var user = _users.FindByUsername(TestWebApplicationFactory.SecondUsername)!;
         var childId = user.Id;
 
+        // Фикстура общая на класс: проекты-предметы прежних тестов не должны подсовывать руководителей.
+        var projectStore = _factory.Services.GetRequiredService<ProjectManager>();
+        foreach (var stale in projectStore.GetByOwner(childId).Where(p => p.IsChildSubject).ToList())
+            projectStore.Delete(stale.Id);
+
         var profileTutor = MakeTutor(childId, "Помощник", withAvatar: true);
         var tutorOf = new Dictionary<string, string>();
         var list = new List<ChildSubject>();
@@ -57,10 +62,10 @@ public class ChildSubjectsEndpointsTests : IClassFixture<ChildSubjectsEndpointsT
         {
             var persona = MakeTutor(childId, $"Репетитор {label}", withAvatar);
             tutorOf[id] = persona.Id;
+            SeedSubjectProject(childId, id, persona.Id);
             list.Add(new ChildSubject
             {
-                Id = id, Label = label, Glyph = "Аа", Color = "info",
-                TutorPersonaId = persona.Id, ProviderKey = "key", Model = "sonnet", Enabled = enabled,
+                Id = id, Label = label, Glyph = "Аа", Color = "info", Enabled = enabled,
             });
         }
 
@@ -75,6 +80,18 @@ public class ChildSubjectsEndpointsTests : IClassFixture<ChildSubjectsEndpointsT
         return new ChildSetup(childId,
             _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword),
             profileTutor.Id, tutorOf);
+    }
+
+    // Проект-предмета ребёнка с руководителем (Б17c: репетитор плитки — Project.DefaultPersonaId).
+    private string SeedSubjectProject(string childId, string subjectId, string? leaderId)
+    {
+        var projects = _factory.Services.GetRequiredService<ProjectManager>();
+        var root = Path.Combine(Path.GetTempPath(), "ccs-kidsubj-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root); // Create с createDirectory: false папку требует существующей
+        var project = projects.Create("Предмет " + subjectId, root, childId, childId, createDirectory: false,
+            childSubjectId: subjectId);
+        if (leaderId is not null) projects.SetDefaultPersona(project.Id, leaderId);
+        return project.Id;
     }
 
     private Persona MakeTutor(string childId, string name, bool withAvatar)
@@ -265,9 +282,14 @@ public class ChildSubjectsEndpointsTests : IClassFixture<ChildSubjectsEndpointsT
         var setup = SetupChild(
             ("math", "Математика", true, false),   // ключ «удалённой» персоны: живой с таким id нет
             ("hist", "История", true, false));     // ключ персоны другого владельца
-        var user = _users.FindByUsername(TestWebApplicationFactory.SecondUsername)!;
-        user.ChildMode!.Subjects[0].TutorPersonaId = Guid.NewGuid().ToString("N");
-        user.ChildMode.Subjects[1].TutorPersonaId = foreignId;
+        // Руководители проектов-предметов указывают на «удалённую» персону и на персону другого владельца
+        var projects = _factory.Services.GetRequiredService<ProjectManager>();
+        var child = _users.FindByUsername(TestWebApplicationFactory.SecondUsername)!;
+        foreach (var (subjectId, danglingLeader) in new[] { ("math", Guid.NewGuid().ToString("N")), ("hist", foreignId) })
+        {
+            var project = projects.GetByOwner(child.Id).First(p => p.ChildSubjectId == subjectId);
+            projects.SetDefaultPersona(project.Id, danglingLeader);
+        }
 
         var resp = await setup.Child.GetAsync("/api/child/subjects");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -277,6 +299,45 @@ public class ChildSubjectsEndpointsTests : IClassFixture<ChildSubjectsEndpointsT
         subjects[0].GetProperty("tutor").ValueKind.Should().Be(JsonValueKind.Null);
         subjects[1].GetProperty("id").GetString().Should().Be("hist");
         subjects[1].GetProperty("tutor").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    // ── viewers — строка «Эту папку видят: …» (Б14a, решение 64) ────────────
+
+    // Имена читаются из профиля (одна точка правды, решение 61), в его порядке;
+    // снесённый аккаунт в строку не попадает. Мутация «viewers из Members проекта»:
+    // краснеет здесь — в этой фикстуре проектов-предметов нет вовсе, и viewers из
+    // проекта был бы пустым при живых опекунах профиля.
+    [Fact]
+    public async Task Subjects_ViewersИменаОпекуновПрофиля()
+    {
+        var setup = SetupChild(("math", "Математика", true, false), ("nature", "Окружающий мир", true, false));
+        var user = _users.FindByUsername(TestWebApplicationFactory.SecondUsername)!;
+        var adminId = _users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var second = _users.Add("cur-endpoint", "cur-pw-123456", "user").Id;
+        var ghost = Guid.NewGuid().ToString("N"); // аккаунта с таким id в сторе нет
+        user.ChildMode!.GuardianUserIds = [adminId, second, ghost];
+
+        var resp = await setup.Child.GetAsync("/api/child/subjects");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var subjects = (await JsonAsync(resp)).GetProperty("subjects");
+
+        var viewers = subjects[0].GetProperty("viewers");
+        viewers.GetArrayLength().Should().Be(2, "несуществующему опекуну имя выдумывать нечем");
+        viewers[0].GetString().Should().Be(TestWebApplicationFactory.TestUsername);
+        viewers[1].GetString().Should().Be("cur-endpoint");
+        // Список один на профиль — одинаковый для всех плиток
+        subjects[1].GetProperty("viewers").GetArrayLength().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Subjects_БезОпекунов_ViewersПустой()
+    {
+        var setup = SetupChild(("math", "Математика", true, false));
+
+        var resp = await setup.Child.GetAsync("/api/child/subjects");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var subjects = (await JsonAsync(resp)).GetProperty("subjects");
+        subjects[0].GetProperty("viewers").GetArrayLength().Should().Be(0);
     }
 
     // ── GET /api/personas/{id}/avatar + [ChildAllowed] ──────────────────────

@@ -1173,7 +1173,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // не получит его повторно ни по rate-limit, ни по unreachable (инцидент 2026-08-10:
                 // kimi-k3). Запись наблюдения выше использует тот же реальный размер.
                 var ctx = ContextEstimate();
-                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, ref chainIndex, ctx, childTurn);
+                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, ref chainIndex, ctx);
                 if (next is null)
                 {
                     // Всё исчерпано (или запасных вариантов не было) — честная ошибка. P29: финал
@@ -1302,10 +1302,17 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             //     копируем транскрипт обратно в профиль исходного провайдера. Источник копии —
             //     _profileRoot (профиль ПОСЛЕДНЕЙ пары: шаг цепочки прошёл, а за ним тихая ротация
             //     сменила подписку — именно там лежит свежий ответ).
+            //   • Ребёнок (childTurn): Provider восстанавливаем ВСЕГДА, даже если за ход была только
+            //     тихая ротация подписки (решение Андрея, ADR-041: при лимите урок на один ход
+            //     отвечает соседним аккаунтом цепочки, после хода чат возвращается на закреплённый
+            //     маршрут; тихого перевода ребёнка на другой аккаунт нет). Транскрипт при этом
+            //     копируется обратно — между песочными профилями этого же ребёнка (ResolveRootFor
+            //     выводит их через SandboxAwareRoot), иначе --resume следующего хода не увидел бы
+            //     ответ, записанный в профиль подписки.
             var modelRestored = false;
             var providerRestored = false;
             if (Info.Model == appliedModel) { Info.Model = origModel; modelRestored = true; }
-            if (anyProviderSwitch)
+            if (anyProviderSwitch || childTurn)
             {
                 if (Info.Provider == appliedProvider)
                 {
@@ -1322,8 +1329,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     providerRestored = true;
                 }
             }
-            // Без смены типа поставщика (!anyProviderSwitch): Provider оставляем — аккаунт, на
-            // котором прошёл ход, хранит свежий транскрипт. providerRestored остаётся false.
+            // Без смены типа поставщика и без детского хода (!anyProviderSwitch && !childTurn):
+            // Provider оставляем — аккаунт, на котором прошёл ход, хранит свежий транскрипт.
+            // providerRestored остаётся false.
             //
             // (Minor 4) Заметка о видимости для клиента: новое значение Info.Provider персистится
             // (ниже), но в ленте событие об этом НЕ идёт — тихая ротация по решению владельца
@@ -1476,11 +1484,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Уровень 1: другая подписка того же пула (та же модель). Далее — следующий шаг цепочки
     // (ADR-007 §4). null — кандидатов не осталось (цепочки нет либо она исчерпана). Без цепочки
     // (одноэлементная/пустая) после пула автоподбора нет — финальный сбой.
-    // childTurn без умолчания: единственный вызывающий передаёт его явно. Дефолт false для
-    // нового вызывающего молча разрешил бы ребёнку ротацию подписок (запрет И2′).
     private FallbackTarget? ResolveNextTarget(FallbackErrorClass cls, AttemptEnd end,
         HashSet<(string Model, string Key)> attempted, string model, string currentKey,
-        IReadOnlyList<string> chain, ref int chainIndex, int contextEstimate, bool childTurn)
+        IReadOnlyList<string> chain, ref int chainIndex, int contextEstimate)
     {
         var modelForPool = string.IsNullOrWhiteSpace(model) ? null : model;
         var isNativeClaude = _providers?.ResolveByModel(modelForPool) is null;
@@ -1518,9 +1524,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // ContextOverflow обходим уровень 1: окно — свойство МОДЕЛИ, не подписки. Другая подписка
         // того же аккаунта-пула несёт ту же модель с тем же окном и упадёт так же — гонять её
         // бессмысленно. Сразу к шагу цепочки, где может быть модель с бóльшим окном.
-        // Ребёнок (childTurn): ротации подписок нет вовсе — Pick не знает о ребёнке и увёл бы
-        // Info.Provider на подписку.
-        if (!childTurn && isNativeClaude && _pool.HasExtra && cls != FallbackErrorClass.ContextOverflow)
+        // Ребёнок (childTurn): ротация подписок разрешена внутри хода (решение Андрея, ADR-041:
+        // при лимите урок на один ход отвечает соседним аккаунтом того же пула). Чат при этом
+        // остаётся на закреплении: restore в finally возвращает Provider ребёнку ВСЕГДА
+        // (anyProviderSwitch || childTurn) и переносит транскрипт обратно — для него тихая
+        // ротация временна, в отличие от взрослого хода, где она остаётся.
+        if (isNativeClaude && _pool.HasExtra && cls != FallbackErrorClass.ContextOverflow)
         {
             // SessionManager.TryPoolFailover по rate_limit_event мог уже переключить чат
             // (транскрипт перенесён им) — тогда не мигрируем повторно и не шлём второй маркер

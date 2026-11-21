@@ -1,7 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ChildMode;
 using Microsoft.AspNetCore.SignalR;
 
@@ -9,19 +8,22 @@ namespace ClaudeHomeServer.Hubs;
 
 /// <summary>
 /// Гейт И1 на хабах (ADR-041): глобальный <see cref="IHubFilter"/> рядом с ProjectCapabilityHubFilter.
-/// Ребёнку (по <see cref="IChildModePolicy"/>, а не по claim) разрешены только SendMessage и
-/// подписка/присоединение к своему чату. Хабы terminal и devices закрыты на negotiate гейтом
-/// REST-слоя: у них нет [ChildAllowed], поэтому ребёнок не доходит до подключения.
-/// Профиль с DenyAll не пускает никуда.
+/// Ребёнку (по <see cref="IChildModePolicy"/>, а не по claim) разрешены только SendMessage, ответ на
+/// карточку вопроса (AnswerQuestion) и подписка/присоединение к своему чату. Хабы terminal и devices
+/// закрыты на negotiate гейтом REST-слоя: у них нет [ChildAllowed], поэтому ребёнок не доходит до
+/// подключения. Профиль с DenyAll не пускает никуда.
 /// У SendMessage ребёнка <c>mode</c> и <c>auto</c> игнорируются: режим подставляется из профиля (KM-B3a);
-/// <c>attachedPaths</c> фильтруются по <c>Session.Attachments</c> этого чата (правило ручки №12).
+/// <c>attachedPaths</c> — пути папки предмета этого чата (И8, решение 57): их судит
+/// <see cref="ChildPathPolicy"/> (одна точка правды), Deny/Hidden — путь отбрасывается, вызов не падает.
 /// </summary>
 public sealed class ChildHubFilter : IHubFilter
 {
     // Allow-list методов SessionHub для ребёнка. Join*/Leave* — подписки на группы своего чата и
-    // личную комнату; JoinUser сам сверяет userId со своим.
+    // личную комнату; JoinUser сам сверяет userId со своим. AnswerQuestion — ответ на карточку
+    // AskUserQuestion этого же хода (решение 10: инструмент в списке ребёнка есть, Б19): только
+    // для своего чата, как SendMessage и Interrupt.
     internal static readonly string[] AllowedMethods =
-        ["SendMessage", "Interrupt", "JoinSession", "LeaveSession", "JoinUser", "LeaveUser"];
+        ["SendMessage", "Interrupt", "JoinSession", "LeaveSession", "JoinUser", "LeaveUser", "AnswerQuestion"];
 
     private const int SessionIdArg = 0;
     private const int AttachedPathsArg = 2;
@@ -39,7 +41,7 @@ public sealed class ChildHubFilter : IHubFilter
                 throw new HubException("child_mode");
 
             // Ребёнку — только свои детские чаты (владелец + ChildSpace); остальные — child_mode
-            if (name is "SendMessage" or "Interrupt" or "JoinSession"
+            if (name is "SendMessage" or "Interrupt" or "JoinSession" or "AnswerQuestion"
                 && !IsOwnChildChat(invocationContext, snapshot.OwnerId))
                 throw new HubException("child_mode");
 
@@ -77,10 +79,8 @@ public sealed class ChildHubFilter : IHubFilter
         }
     }
 
-    // SendMessage(sessionId, text, attachedPaths, mode, auto): attachedPaths → только учтённые в чате,
-    // mode → null, auto → false. Пути читает сервер (AttachmentInliner), поэтому пропускаем лишь
-    // записанные в Session.Attachments: точное совпадение после нормализации формы (слеши, ведущий «/»),
-    // SafePath.Join от корня чата и не чужое private-вложение — как в ручке чтения №12.
+    // SendMessage(sessionId, text, attachedPaths, mode, auto): mode → null, auto → false;
+    // attachedPaths — пути папки предмета этого чата (решение 57), см. FilterAttachedPaths.
     internal static object?[] SanitizeSendMessageArgs(IReadOnlyList<object?> arguments,
         SessionManager? sessions, string ownerId)
     {
@@ -95,6 +95,15 @@ public sealed class ChildHubFilter : IHubFilter
         return args;
     }
 
+    // И8 / решение 57: «вложения в урок — путём проекта, как у взрослого». Каждый путь судит
+    // ChildPathPolicy — та же функция, что решение разрешения хода и рельса «Файлы»: граница
+    // папки предмета этого чата (с канонизацией SafePath.Canonical: «..» и симлинки), «Материалы/»
+    // на чтение, «Для репетитора/» и любое скрытое — вне. Deny и Hidden — путь отбрасывается,
+    // вызов не падает: лишний путь не повод отказывать сообщение. Офис и PDF подменяются своей
+    // текстовой копией (TextCopyIfExists), если она есть.
+    // Путь судится как присланный: относительный резолвится от папки предмета, абсолютный остаётся
+    // абсолютным и отказывается как чужой — TrimStart('/') его молча превратил бы в путь внутри
+    // папки (шапка SafePath: на Linux «/etc/passwd» стал бы «etc/passwd»).
     private static List<string>? FilterAttachedPaths(IEnumerable<string> paths, SessionManager? sessions,
         string sessionId, string ownerId)
     {
@@ -102,14 +111,37 @@ public sealed class ChildHubFilter : IHubFilter
         var result = new List<string>();
         foreach (var raw in paths)
         {
-            var rel = (raw ?? "").Replace('\\', '/').TrimStart('/');
-            if (rel.Length == 0 || !sessions.IsRecordedAttachment(sessionId, rel)) continue;
-            if (PrivateAttachments.IsForeign(rel, ownerId)) continue;
-            try { SafePath.Join(root, rel); }
-            catch (Exception) { continue; }
-            result.Add(rel);
+            // Разделители только выравниваются в «/» (тот же приём, что у TextCopyPath в ходе);
+            // пустое — не путь.
+            var rel = (raw ?? "").Replace('\\', '/');
+            if (rel.Length == 0) continue;
+            if (!ChildPathPolicy.Decide(ChildActor.Child, ChildPathOp.Read, rel, root).Allowed) continue;
+            result.Add(TextCopyIfExists(root, rel) ?? rel);
         }
         return result.Count == 0 ? null : result;
+    }
+
+    // Офис и PDF в урок встраиваются текстом (решение 57): копия — та же форма, что у всех
+    // остальных: ChildPathPolicy.TextCopyOf (решение 90) — «.ccs-text/» с сохранённым
+    // расширением оригинала, та же функция, что подсказка модели для картинки
+    // (ClaudeSession.TextCopyPath, решение 67) и та же папка, которую читает синк предмета
+    // (ProjectKnowledgeSyncService). Копии нет — остаётся исходный путь: AttachmentInliner
+    // отдаст о нём пометку «бинарный/документ», отказа нет.
+    private static readonly HashSet<string> TextCopyExts =
+        new(StringComparer.OrdinalIgnoreCase) { ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx" };
+
+    private static string? TextCopyIfExists(string root, string rel)
+    {
+        // Путь уже лежит под «.ccs-text/» — копия сама: второй копии не ищем, путь остаётся
+        // как есть (OriginalOf — обратная к TextCopyOf; проверка по первому сегменту шире:
+        // ловит и кривые формы, не являющиеся копией).
+        if (ChildPathPolicy.OriginalOf(rel) is not null ||
+            rel.StartsWith(ChildPathPolicy.TextDir + "/", StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (!TextCopyExts.Contains(Path.GetExtension(rel))) return null;
+        var copy = ChildPathPolicy.TextCopyOf(rel);
+        try { return File.Exists(SafePath.Join(root, copy)) ? copy : null; }
+        catch (Exception) { return null; }
     }
 
     // Пустой владелец при JWT-хабе — fail-closed (For("") дал бы null, «не ребёнок»).

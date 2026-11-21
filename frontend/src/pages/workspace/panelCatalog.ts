@@ -22,6 +22,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
+import type { ChildSurface } from '../../features/account/types';
 import { GEN_PANEL_KEYS } from '../../lib/genPanelKeys';
 import { SUBSYSTEMS } from '../../lib/subsystems';
 
@@ -299,6 +300,22 @@ export function workspaceKeysFor(isEnabled: (key: string) => boolean): PanelKey[
     const sub = PANEL_SUBSYSTEM[k];
     return !sub || isEnabled(sub);
   });
+}
+
+// Детская часть набора рельсы: ключи экрана ∩ childSurface.panels (ADR-041 ред. 8,
+// решение 76; разрез §14.1). Default-deny: ключа нет в снимке — панели нет; пустой
+// снимок — пустой набор, не взрослый. Порядок — входящих ключей (порядок рельсы),
+// а не снимка: снимок — множество разрешённого, а не раскладка.
+//
+// Чистая функция: surface приходит с me-ответом (его разбирает useChildSurface, Ф1a),
+// здесь только пересечение. Пересечение с матрицей проекта — не здесь: матрица —
+// функция проекта, а не зрителя (ChildModeAllowList о том же), и вызывающий соединяет
+// их сам: workspaceKeysFor ∩ матрица ∩ childWorkspaceKeys (wiring — Ф1f).
+// Ключи вне реестра (семейство plugin:*) в снимок не заводятся — пересечение их
+// не пропускает, отдельной проверки плагин-синтаксиса здесь не нужно.
+export function childWorkspaceKeys(keys: PanelKey[], surface: ChildSurface): PanelKey[] {
+  const allowed = new Set(surface.panels);
+  return keys.filter(k => allowed.has(k));
 }
 
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)

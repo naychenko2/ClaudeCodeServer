@@ -1,15 +1,21 @@
 import { useState, useEffect } from 'react';
-import { AlertTriangle, ChevronDown, ChevronRight, Lock, Plus, Trash2 } from 'lucide-react';
+import { Lock, Plus, Settings, Trash2 } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { api } from '../lib/api';
 import { C, R, FONT, SHADOW, MODAL_W, SP, FS } from '../lib/design';
-import { Modal, ModalActions, TextField, Button, Notice, SegmentedControl } from './ui';
+import { Modal, ModalActions, TextField, Button, Checkbox, SegmentedControl } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useIsMobile } from '../lib/breakpoints';
 import { FLAGS, useFeature } from '../lib/featureFlags';
-import { ChildProfileEditor } from '../features/childMode/ChildProfileEditor';
+// Ф2f: вход в окно настроек ребёнка. Каркас (Ф2b) и три раздела (Ф2c–Ф2e) собираются здесь:
+// «Управление пользователями» — единственный вызывающий окна и единственное место, где список
+// имён пользователей уже есть (контракт каркаса: имена даёт вызывающий, не вторая копия запроса).
+import { ChildSettingsWindow } from '../features/childMode/ChildSettingsWindow';
+import { ChildSubjectsSection } from '../features/childMode/ChildSubjectsSection';
+import { ChildTimeSection, type ChildTimeValues } from '../features/childMode/ChildTimeSection';
+import { ChildSafetySection } from '../features/childMode/ChildSafetySection';
 import { childApi } from '../features/childMode/api';
-import type { ChildProfile } from '../features/childMode/types';
+import type { ChildRoute, ChildSettingsProfile } from '../features/childMode/types';
 
 interface Props {
   currentUserId?: string;
@@ -86,13 +92,26 @@ type Dialog =
   | { kind: 'delete'; user: UserProfile }
   | { kind: 'resetPassword'; user: UserProfile };
 
-// Состояние детского профиля одного пользователя в этой сессии модалки (Д1, дефект 06201244):
-// снимок приходит только из GET (или из ответа сохранения здесь — это тот же ответ сервера).
-// До снимка редактор не монтируется: с пустым черновиком он затёр бы живой профиль.
-type ProfileState =
-  | { status: 'loading' }
-  | { status: 'error'; text: string }
-  | { status: 'loaded'; profile: ChildProfile | null; tutorPersonaId: string };
+// Ф2f: состояние галки «Детский режим» одного пользователя. Список пользователей детский режим
+// не отдаёт (UserDto в UsersController), поэтому при открытии модалки состояние читается
+// GET child-profile по каждому пользователю песочницы: галка обязана показывать состояние
+// сервера, а не угадывать его. loaded — снимок пришёл (profile null = выключен);
+// busy — PUT child-mode в пути (галка гасится на время запроса); error — текст отказа GET или PUT,
+// показывается под галкой.
+interface ChildRowState {
+  loaded: boolean;
+  enabled: boolean;
+  busy: boolean;
+  error: string;
+}
+
+// Текст отказа — серверный message как есть (тот же порядок, что у rejectText каркаса окна:
+// формулировки по кодам держит сервер). Своего текста нет — нейтральный минимум: пустая
+// строка сделала бы отказ невидимым.
+const rejectText = (e: unknown): string => {
+  const m = (e as { body?: { message?: string } } | null)?.body?.message;
+  return (typeof m === 'string' ? m.trim() : '') || 'Не получилось. Попробуйте ещё раз.';
+};
 
 export function UserManagementModal({ currentUserId, onClose }: Props) {
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -103,115 +122,145 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
   // Флаг child-mode прячет только этот интерфейс включения (ADR-041): ограничения ребёнка
   // зависят только от его профиля, выключенный флаг не снимает ни одного запрета.
   const childModeUi = useFeature(FLAGS.childMode);
-  // Живой профиль каждого пользователя по id (Д1): список пользователей childProfile не отдаёт,
-  // он читается отдельным GET при раскрытии раздела. Ключ — user.id: ответ для прежнего
-  // пользователя не попадает в чужое состояние (тот же приём, что сверка user.id в save).
-  const [profileStates, setProfileStates] = useState<Record<string, ProfileState>>({});
-  // Какие разделы раскрыты в этой сессии. По умолчанию свёрнуты: на десятке пользователей
-  // десяток открытых редакторов утащил бы строки (R-KM-F12, минор 3, решение Софьи).
-  const [childOpen, setChildOpen] = useState<Record<string, boolean>>({});
+  // Состояние галки по id пользователя: ключ — user.id, ответ для одного пользователя не попадает
+  // в чужое состояние (тот же приём, что прежде).
+  const [childStates, setChildStates] = useState<Record<string, ChildRowState>>({});
+  // Ребёнок, чьё окно настроек открыто (Ф2f): окно — отдельный диалог поверх «Пользователей»,
+  // в строку списка оно не встраивается (макет kids-settings-window: окно MODAL_W.wide).
+  const [settingsUser, setSettingsUser] = useState<UserProfile | null>(null);
+  // Список маршрутов для пикера раздела «Безопасность»: грузится, когда окно открыто, и отменяется
+  // при его закрытии (тот же приём, что у старого редактора). null — ещё не загружен (пикер
+  // не говорит «нет записей», пока список в пути); пустой — действительно нет.
+  const [childRoutes, setChildRoutes] = useState<ChildRoute[] | null>(null);
 
-  // Загрузка живого профиля одного пользователя (UsersController.GetChildProfile). Пока снимок
-  // не пришёл — редактора нет: его пустой черновик затёр бы живой профиль при сохранении
-  // (дефект 06201244). Ответ и отказ пишутся только состоянию «жду» того же id: ответ для
-  // другого пользователя в чужое состояние не попадает (тот же приём, что сверка user.id в save).
-  const loadProfile = (userId: string) => {
-    setProfileStates(prev => (prev[userId]?.status === 'loading' ? prev : { ...prev, [userId]: { status: 'loading' } }));
-    childApi.getProfile(userId)
-      .then((res) => setProfileStates(prev => (
-        prev[userId]?.status === 'loading'
-          ? { ...prev, [userId]: { status: 'loaded', profile: res.profile ?? null, tutorPersonaId: res.tutorPersonaId ?? '' } }
-          : prev
-      )))
-      // Текст отказа — серверный (body.message, тот же путь, что у loadErrorText в
-      // ChildProfileEditor.tsx:139): Notice уже говорит «Профиль ребёнка не загрузился»,
-      // выдуманное тело эту строку дублировала бы (хвост 69c3ee96). Серверного текста нет — пустое.
-      .catch((e) => setProfileStates(prev => (
-        prev[userId]?.status === 'loading'
-          ? { ...prev, [userId]: { status: 'error', text: (e as { body?: { message?: string } } | null)?.body?.message ?? '' } }
-          : prev
-      )));
+  // Снимок состояния при открытии модалки: список пользователей режима не несёт, а галка без
+  // снимка его угадывала бы. Отказ одного пользователя не глушит других: их строки остаются при
+  // своих запросах (ключ — id).
+  const loadChildStates = (list: UserProfile[]) => {
+    const ids = list.filter((u) => u.executionEnvironment === 'container').map((u) => u.id);
+    setChildStates(Object.fromEntries(ids.map((id) => [id, { loaded: false, enabled: false, busy: false, error: '' } as ChildRowState])));
+    for (const id of ids) {
+      childApi.getChildProfile(id)
+        .then((r) => setChildStates((prev) => ({ ...prev, [id]: { ...prev[id], loaded: true, enabled: r.profile?.enabled === true, error: '' } })))
+        .catch((e) => setChildStates((prev) => ({ ...prev, [id]: { ...prev[id], error: rejectText(e) } })));
+    }
   };
 
-  // Раздел «Детский режим» — только пользователям песочницы: ограничения ребёнка работают
-  // только в container, `local`-пользователям сервер отказывает not_container (REJECT_TEXT
-  // в ChildProfileEditor). Свёрнут в строку статуса; редактор — только в раскрытом виде
-  // и только по загруженному профилю.
-  const childSection = (user: UserProfile) => {
+  // Галка — узкая ручка PUT child-mode (ADR-041 ред. 4 решение 30): тела профиля нет; включение
+  // заводит профиль «не настроен», выключение сохраняет настройки. Ответ — сохранённый профиль
+  // сервера, им и обновляем галку. Отказ (not_container — среда сменилась с момента чтения
+  // списка) — текст под галкой; галка остаётся при своём подтверждённом состоянии.
+  const toggleMode = (userId: string, enabled: boolean) => {
+    setChildStates((prev) => ({ ...prev, [userId]: { ...prev[userId], busy: true, error: '' } }));
+    childApi.setChildMode(userId, enabled)
+      .then((res) => setChildStates((prev) => ({ ...prev, [userId]: { loaded: true, enabled: res.profile?.enabled === true, busy: false, error: '' } })))
+      .catch((e) => setChildStates((prev) => ({ ...prev, [userId]: { ...prev[userId], busy: false, error: rejectText(e) } })));
+  };
+
+  // Галка и кнопка — только пользователям песочницы: ограничения ребёнка работают только в
+  // container, `local`-пользователю сервер отказывает not_container (та же граница, что KM-F12).
+  // Галка гасится до снимка: состояния ещё нет, и клик послал бы неверное значение. Кнопка —
+  // только при включённом режиме: окно правит настройки, выключенному режиму править нечего.
+  const childRow = (user: UserProfile) => {
     if (user.executionEnvironment !== 'container') return null;
-    const open = childOpen[user.id] === true;
-    const st = profileStates[user.id];
-    // Строка статуса — три состояния (решение Софьи, хвост 69c3ee96): «включён»/«выключен»
-    // утверждает только снимок; без снимка (ещё не запрашивался или в пути) — нейтральное
-    // «…»: для реального ребёнка «выключен» до ответа GET было бы ложью; при отказе —
-    // «не загрузилось» (причина и «Повторить» — в Notice после раскрытия).
-    const enabled = st?.status === 'loaded' && st.profile?.enabled === true;
-    const statusLine = st?.status === 'loaded' ? `Детский режим: ${enabled ? 'включён' : 'выключен'}`
-      : st?.status === 'error' ? 'Детский режим: не загрузилось'
-      : 'Детский режим…';
+    const st = childStates[user.id];
+    const known = st?.loaded === true;
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, ...(isMobile ? {} : { padding: '0 16px 12px' }) }}>
-        <Button
-          variant="ghost" size="md" fullWidth
-          dataTestId="child-section-toggle"
-          ariaExpanded={open}
-          leftIcon={open
-            ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-          onClick={() => {
-            const willOpen = !(childOpen[user.id] === true);
-            setChildOpen(prev => ({ ...prev, [user.id]: willOpen }));
-            // Раскрытие — запрос живого профиля (Д1): редактор без снимка не открывается.
-            // Пока запрос в пути — второго нет; «error» при раскрытии не молчит — тоже попытка.
-            if (willOpen && st?.status !== 'loading') loadProfile(user.id);
-          }}
-        >
-          {statusLine}
-        </Button>
-        {open && st?.status === 'loading' && (
-          <div data-testid="child-profile-loading" style={{ padding: SP.md, color: C.textMuted, fontSize: FS.sm }}>
-            Загрузка…
-          </div>
-        )}
-        {open && st?.status === 'error' && st && (
-          <Notice
-            tone="danger" icon={AlertTriangle} title="Профиль ребёнка не загрузился" data-testid="child-profile-error"
-            action={<Button variant="secondary" size="md" dataTestId="child-profile-retry" onClick={() => loadProfile(user.id)}>Повторить</Button>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', ...(isMobile ? {} : { padding: '0 16px 12px' }) }}>
+        <Checkbox
+          checked={known && st?.enabled === true}
+          disabled={!known || st?.busy === true}
+          ariaLabel="Детский режим"
+          onChange={(v) => toggleMode(user.id, v)}
+        />
+        <span style={{ fontSize: FS.sm, color: C.textSecondary }}>Детский режим</span>
+        {known && st?.enabled === true && (
+          <Button
+            variant="ghostAccent" size="sm" dataTestId="child-settings-open"
+            leftIcon={<Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            onClick={() => setSettingsUser(user)}
           >
-            {/* тело — только серверный текст (после catch выше он server message или пусто):
-                заголовок Notice уже называет причину, повторять её нечем */}
-            {st.text || null}
-          </Notice>
+            Настроить занятия
+          </Button>
         )}
-        {open && st?.status === 'loaded' && st && (
-          <ChildProfileEditor
-            user={{ id: user.id, username: user.username, childProfile: st.profile, tutorPersonaId: st.tutorPersonaId }}
-            // Ответ сохранения — живой профиль сервера: им и обновляем состояние (строка статуса
-            // после сохранения обязана показать то, что сохранилось). Тьютора берём из второго
-            // аргумента onSaved — он из ответа PUT: провиж создаёт новый id, своя копия его
-            // не содержит (хвост 69c3ee96).
-            onSaved={(p, tutorPersonaId) => setProfileStates(prev => {
-              const cur = prev[user.id];
-              return cur?.status === 'loaded'
-                ? { ...prev, [user.id]: { status: 'loaded', profile: p, tutorPersonaId } }
-                : prev;
-            })}
-          />
+        {st?.error && (
+          <span data-testid="child-mode-error" style={{ fontSize: FS.sm, color: C.danger }}>
+            {st.error}
+          </span>
         )}
       </div>
     );
   };
 
+  // ── Слоты окна (Ф2f, по контракту Ф2b: функция живого черновика) ──────────────────
+  // Черновик окна — профиль контракта (ChildSettingsProfile); разделы просят свою форму
+  // (ChildSettingsSubject[], ChildTimeValues, опекуны/согласие/маршрут). Маппинг — здесь:
+  // это знание вызывающего, каркас о нём не догадывается.
+
+  // Время профиля живёт в space «lessons» — единственном пространстве режима (тот же читатель,
+  // что у Обзора: ChildSettingsOverview.tsx:90). Бюджеты и порог — поля профиля, не space.
+  const timeValues = (p: ChildSettingsProfile) => {
+    const sp = p.spaces?.lessons;
+    return {
+      windows: sp?.windows ?? [],
+      dailyMinutes: sp?.dailyMinutes ?? null,
+      warnMinutes: p.warnMinutes ?? 5,
+      dailyBudgetUsd: p.dailyBudgetUsd ?? null,
+      monthlyBudgetUsd: p.monthlyBudgetUsd ?? null,
+    };
+  };
+  const patchTime = (p: ChildSettingsProfile, v: ChildTimeValues) => ({
+    // Прочие space профиля (если появятся) остаются как есть: меняется только lessons.
+    spaces: { ...p.spaces, lessons: { windows: v.windows, dailyMinutes: v.dailyMinutes } },
+    warnMinutes: v.warnMinutes,
+    dailyBudgetUsd: v.dailyBudgetUsd,
+    monthlyBudgetUsd: v.monthlyBudgetUsd,
+  });
+
+  const userNames = Object.fromEntries(users.map((u) => [u.id, u.displayName || u.username]));
+
   useEffect(() => {
     api.users.list()
-      .then(list => { setUsers(list); setLoading(false); })
+      .then(list => {
+        setUsers(list);
+        setLoading(false);
+        // Снимок детского режима — вместе со списком: галка часть строки, её состояние должно
+        // приходить вместе со строкой. Без флага интерфейс не рисуется — запросов тоже нет.
+        if (childModeUi) loadChildStates(list);
+      })
       .catch(e => { setLoadError(e.message ?? 'Ошибка загрузки'); setLoading(false); });
-  }, []);
+  }, [childModeUi]);
+
+  // Список маршрутов для пикера окна: один запрос на открытое окно, отмена при его закрытии
+  // (тот же приём, что у старого редактора). Отказ — пустой список: пикер сам говорит, что
+  // выбирать не из чего, правка предметов и времени при этом не блокируется.
+  useEffect(() => {
+    if (!settingsUser) return;
+    setChildRoutes(null);
+    const ac = new AbortController();
+    childApi.getRoutes({ signal: ac.signal })
+      .then((list) => setChildRoutes(list))
+      .catch(() => setChildRoutes([]));
+    return () => ac.abort();
+  }, [settingsUser]);
 
   const removeUser = (id: string) => setUsers(prev => prev.filter(u => u.id !== id));
-  const upsertUser = (u: UserProfile) => setUsers(prev =>
-    prev.some(x => x.id === u.id) ? prev.map(x => x.id === u.id ? u : x) : [...prev, u]
-  );
+  const upsertUser = (u: UserProfile) => {
+    setUsers(prev =>
+      prev.some(x => x.id === u.id) ? prev.map(x => x.id === u.id ? u : x) : [...prev, u]
+    );
+    // Ф2f, доработка по ревью 37e1a4f4: у пользователя, созданного в этой модалке, детского
+    // профиля быть не может — POST создания не принимает тела профиля и при заведении его не
+    // заводит (UsersController.Create → users.Add). Значит его состояние подтверждено без GET:
+    // выключен. Без этой строки состояние заводит только loadChildStates (эффект открытия) —
+    // галка новой строки мёртва до повторного открытия модалки. Инвариант «галка показывает
+    // только подтверждённое состояние» сохраняется: loaded=true здесь — знание о факте создания,
+    // не догадка. Уже прочитанное состояние не перезаписывается: upsert не теряет снимок;
+    // граница по флагу — та же, что у loadChildStates: нет интерфейса — нет состояния.
+    if (childModeUi && u.executionEnvironment === 'container') {
+      setChildStates(prev => prev[u.id] ? prev : { ...prev, [u.id]: { loaded: true, enabled: false, busy: false, error: '' } });
+    }
+  };
 
   // Заголовок: на мобиле — column, кнопка под названием; на десктопе — row
   const titleNode = isMobile ? (
@@ -338,7 +387,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                     )}
 
                     {/* Раздел профиля ребёнка — после основных полей, под флагом (ADR-041) */}
-                    {childModeUi && childSection(user)}
+                    {childModeUi && childRow(user)}
                   </div>
                 );
               }
@@ -393,7 +442,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                       </button>
                     </div>
                   </div>
-                  {childModeUi && childSection(user)}
+                  {childModeUi && childRow(user)}
                 </div>
               );
             })}
@@ -405,6 +454,47 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
           </div>
         )}
       </Modal>
+
+      {/* Ф2f: окно настроек ребёнка — три раздела в слотах каркаса (контракт Ф2b: слот — функция
+          живого черновика). Маппинг полей профиля в форму разделов — здесь, у вызывающего. */}
+      {settingsUser && (
+        <ChildSettingsWindow
+          userId={settingsUser.id}
+          userLabel={settingsUser.displayName || settingsUser.username}
+          userNames={userNames}
+          onClose={() => setSettingsUser(null)}
+          subjectsSection={(d) => (
+            <ChildSubjectsSection
+              value={d.profile.subjects ?? []}
+              onChange={(next) => d.patch({ subjects: next })}
+              disabled={d.saving}
+              errorId={d.saveError?.subjectId ?? null}
+            />
+          )}
+          timeSection={(d) => (
+            <ChildTimeSection
+              enabled={d.profile.enabled}
+              values={timeValues(d.profile)}
+              onChange={(v) => d.patch(patchTime(d.profile, v))}
+            />
+          )}
+          safetySection={(d) => (
+            <ChildSafetySection
+              guardians={d.profile.guardians ?? []}
+              sharedProjectsInstanceEnabled={d.profile.sharedProjectsInstanceEnabled}
+              userNames={userNames}
+              acknowledge={d.profile.acknowledgeRouteRisk ?? null}
+              acknowledgedAt={d.profile.routeRiskAcknowledgedAt}
+              acknowledgedBy={d.profile.routeRiskAcknowledgedBy}
+              onAcknowledgeChange={(v) => d.patch({ acknowledgeRouteRisk: v })}
+              routes={childRoutes}
+              route={{ providerKey: d.profile.providerKey, model: d.profile.model }}
+              onRouteChange={(r) => d.patch({ providerKey: r.providerKey, model: r.model })}
+              disabled={d.saving}
+            />
+          )}
+        />
+      )}
 
       {dialog?.kind === 'add' && (
         <AddUserDialog

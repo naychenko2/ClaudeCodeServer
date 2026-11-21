@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Reflection;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
@@ -1063,5 +1066,104 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         JsonDocument.Parse(File.ReadAllText(StorePath)).RootElement.EnumerateArray()
             .Count(e => e.GetProperty("Id").GetString() == personaId)
             .Should().Be(1, "personas.json после двух одновременных сохранений: запись одна, файл не оборван");
+    }
+
+    // ── Б16b (ADR-041 ред. 7, разрез §13 «Две находки», находка 1): право на персону — ──────
+    // ConfigurePersonas, не Configure.
+    //
+    // Все двери персон ([ProjectScope(From = Persona)] в PersonasController и SkillsController) и их
+    // инлайновые резолвы требуют ProjectRight.ConfigurePersonas: в обычном общем проекте новое право
+    // равно Configure (матрицы выше не меняются — редактору и читателю по-прежнему 403), в
+    // проекте-предмете ребёнка оно есть куратору-редактору: он правит персону-репетитора, не проект
+    // (ProjectAccess.RoleHasRight — единственный случай исключения). Мутация сторожа: в одной строке
+    // атрибута PersonasController вернуть Right = ProjectRight.Configure — красный.
+
+    [Fact]
+    public void Сторож_ДвериПерсон_НиОднаНеТребуетConfigure()
+    {
+        var doors = new List<string>();
+        foreach (var controller in new[] { typeof(PersonasController), typeof(SkillsController) })
+            foreach (var m in controller.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            {
+                var scope = ProjectScopeAttribute.For(m);
+                if (scope is null || scope.From != ScopeSource.Persona) continue;
+                doors.Add($"{controller.Name}.{m.Name}");
+                scope.Right.Should().NotBe(ProjectRight.Configure,
+                    $"дверь персон {controller.Name}.{m.Name} обязана требовать ConfigurePersonas "
+                    + "(Б16b, ADR-041 ред. 7)");
+            }
+
+        doors.Should().HaveCountGreaterThanOrEqualTo(31,
+            "сверка не вакуумная: [ProjectScope(From = Persona)] в двух контроллерах — 31 места");
+
+        // Инлайновые резолвы (ProjectWriteArea в PersonasController, Suggest в SkillsController) —
+        // тот же перевод: в исходнике этих двух файлов права Configure не остаётся ни в одной строке.
+        var root = RepoRoot();
+        foreach (var name in new[] { "PersonasController.cs", "SkillsController.cs" })
+        {
+            var source = File.ReadAllText(Path.Combine(root, "backend", "ClaudeHomeServer", "Controllers", name));
+            Regex.Matches(source, @"ProjectRight\.Configure\b").Count.Should().Be(0,
+                $"{name}: двери персон переведены на ConfigurePersonas (Б16b)");
+        }
+    }
+
+    /// <summary>Проект-предмет ребёнка (маркер ChildSubjectId — та же точка, что у
+    /// ChildSubjectProjectProvisioner) с редактором-куратором и проектной персоной в нём.
+    /// Куратор — прямой записью членства (тот же состав строки, что пишет SyncChildCuratorsAsync):
+    /// ручное приглашение проекту-предмету Б14b отвечает 409 managed_by_child_profile — его ACL
+    /// правит только синхронизация кураторов (решение 62), а здесь ребёнка нет вовсе: его профиль
+    /// и его опекунский список были бы лишней фикстурой внутри проверки права на персону.</summary>
+    private async Task<(string ProjectId, string PersonaId)> ArrangeSubjectAsync()
+    {
+        var owner = OwnerClient();
+        await SetFlagAsync(owner);
+        await SetFlagAsync(SecondClient());
+
+        var dir = Directory.CreateDirectory(Path.Combine(_factory.TempDir, "subj_" + Guid.NewGuid().ToString("N")[..8])).FullName;
+        var project = Projects.Create("Предмет" + Guid.NewGuid().ToString("N")[..6], dir, TenantId,
+            TestWebApplicationFactory.TestUsername, createDirectory: true, childSubjectId: "math");
+        ProjectCapabilities.IsChildSubject(project).Should().BeTrue("фитчюра — проект-предмет по маркеру");
+
+        Projects.SetMembers(project.Id,
+            [new ProjectMember { UserId = MemberId, Role = ProjectRole.Editor, AddedBy = TenantId }]);
+        Projects.GetById(project.Id)!.Members.Should()
+            .Contain(m => m.UserId == MemberId && m.Role == ProjectRole.Editor, "фитчюра — куратор в проекте");
+
+        var persona = await owner.PostAsJsonAsync("/api/personas",
+            new { name = "Репетитор" + Guid.NewGuid().ToString("N")[..6], scope = "project", projectId = project.Id });
+        persona.EnsureSuccessStatusCode();
+        return (project.Id, IdOf(await persona.Content.ReadAsStringAsync()));
+    }
+
+    [Fact]
+    public async Task КураторПроектаПредмета_ПравитХарактерРепетитора_ВОбщемПроектеТотЖеЗапрос403()
+    {
+        var runId = RunId();
+
+        var (_, tutorId) = await ArrangeSubjectAsync();
+        var (status, _) = await SendAsync(SecondClient(), HttpMethod.Put, $"/api/personas/{tutorId}",
+            new { contract = new { tone = "Тон куратора " + runId } });
+        (status >= 200 && status < 300).Should().BeTrue($"куратор проекта-предмета правит характер репетитора → {status}");
+        Personas.Get(tutorId, TenantId)!.Contract?.Tone.Should().Be("Тон куратора " + runId,
+            "запись — под ключом арендатора (владельца проекта), не куратора");
+
+        // Та же правка в обычном общем проекте — как раньше: редактор права на карточку не имеет
+        var (_, ordinaryId) = await ArrangeAsync(Editor);
+        var (ordinaryStatus, ordinaryCode) = await SendAsync(SecondClient(), HttpMethod.Put,
+            $"/api/personas/{ordinaryId}", new { contract = new { tone = "Тон редактора " + runId } });
+        ordinaryStatus.Should().Be(403, "Editor обычного общего проекта: ConfigurePersonas равен Configure");
+        ordinaryCode.Should().Be(NoRight);
+        Personas.Get(ordinaryId, TenantId)!.Contract?.Tone.Should().NotBe("Тон редактора " + runId,
+            "отказанная правка не оставила следа в сторе владельца");
+    }
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null
+               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
+               && !File.Exists(Path.Combine(dir.FullName, ".git")))
+            dir = dir.Parent;
+        return dir?.FullName ?? throw new InvalidOperationException("Корень репозитория не найден");
     }
 }

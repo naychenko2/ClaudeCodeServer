@@ -57,6 +57,36 @@
 # (прямой вызов в контроллере, снимок 0) и ProjectActionCallerKeyGuardTests (UserId аргументом
 # вызова, 108 против 107) — то есть требует подъёма ещё двух чужих снимков. Перейдёт на
 # IProjectAccess вместе с переводом вертикали персон на ключ арендатора (S4).
+# Дельта Б8e (ADR-041, детская ветка): +5 совпадений — по одному в четырёх новых файлах
+# и +1 в TasksController (7→8). Все пять — один класс: предикат «проект-предмет ЭТОГО
+# ребёнка» = маркер предмета (ProjectCapabilities.IsChildSubject) + владение самим
+# ребёнком. Это сужающая проверка владения своим предметом (роль Owner), fail-closed:
+# чужой, не-предметный и несуществующий неотличимы (403/404 до любой работы).
+# Почему не перевод на TenantOwnerId — по местам, не одним словом:
+#   • там, где [ProjectScope] уже стоит (KnowledgeController:19, TasksController:67 и :104),
+#     он отказал чужой проект по праву раньше тела ручки — сверять ещё и арендатора было бы
+#     тавтологией на уже отработавшем гейте;
+#   • там, где его нет (NotesController и ChildAttachmentsController их не имеют вовсе),
+#     просить RequestScope не у чего: источник задан телом запроса (sourceKey) или выведен
+#     из СВОЕГО ChildSpace-чата вызывающего (ChildAttachmentsController:65), а список проектов
+#     ребёнка берётся GetByOwner(childId) (ProjectsController:173);
+#   • ребёнок и есть владелец своего предмета (ChildSubjectProjectProvisioner), и его данные
+#     ключуются им самим (И1-бис) — подставляемый арендатор здесь не меняет ни одного ключа.
+# Места:
+#   • NotesController|1 — :163 ChildGate: заметки ребёнка только в папке своего предмета;
+#   • ChildAttachmentsController|1 — :75 загрузка вложения только в чат урока своего предмета;
+#   • KnowledgeController|1 — :64 IsOwnSubjectProject: «Знания» открыты только своему предмету;
+#   • ProjectsController|1 — :162 IsOwnEnabledSubjectProject: список проектов ребёнка —
+#     только его предметы, включённые в профиле;
+#   • TasksController|8 (+1) — :2298 ChildTaskScope.IsOwnSubjectProject: тот же предикат
+#     для детских ручек задач.
+# Дельта Х-W4-47 (хвост ревью e748c039): предикат «проект-предмет этого ребёнка» вынесен в общую
+# точку ChildSubjectAccess — копии убраны из Sessions/Preview/Knowledge/Chats/ChatContext/Tasks
+# (у Sessions/Preview сравнения добавил e7021183e и не внёс в снимок — сторож на ветке краснел
+# с него; здесь разница закрыта переносом). Вердикт тот же, что у Б8e: сужающая проверка владения
+# своим предметом, fail-closed; на TenantOwnerId не переводим по тем же причинам.
+#   • ChildSubjectAccess|1 — IsOwnSubjectProject: единственное оставшееся сравнение предиката;
+#   • KnowledgeController −1 и TasksController 8→7 — сравнения ушли из контроллеров в общую точку.
 
 backend/ClaudeHomeServer.Architecture/Services/Architecture/ArchitectureToolset.cs|1
 backend/ClaudeHomeServer.AudioEditor/Mcp/AudioEditorToolset.cs|1
@@ -97,3 +127,10 @@ backend/ClaudeHomeServer.Notes/Controllers/WikiPackagesController.cs|2
 backend/ClaudeHomeServer.Notes/Controllers/WikiPagesController.cs|2
 backend/ClaudeHomeServer.Notes/Controllers/WikiSettingsController.cs|1
 backend/ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs|1
+# Б8e (ADR-041, детская ветка «свой проект-предмета») — вердикт по каждой строке в дельте выше:
+# сужающая проверка владения своим предметом (роль Owner), fail-closed; на TenantOwnerId не
+# переводим по причинам из той же дельты.
+backend/ClaudeHomeServer.Notes/Controllers/NotesController.cs|1
+backend/ClaudeHomeServer/Controllers/ChildAttachmentsController.cs|1
+backend/ClaudeHomeServer/Controllers/ChildSubjectAccess.cs|1
+backend/ClaudeHomeServer/Controllers/ProjectsController.cs|1

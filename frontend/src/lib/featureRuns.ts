@@ -34,6 +34,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
+import { getMeSnapshot } from './defaultPersona';
 import { onMessage } from './signalr';
 import { getTaskById } from './tasks';
 import type { FeatureRun } from '../types/featureRun';
@@ -332,6 +333,12 @@ const _inflight = new Map<string, Promise<FeatureRun[]>>();
 const _lastFetchAt = new Map<string, number>();
 
 function fetchRuns(sessionId: string): Promise<FeatureRun[]> {
+  // К9b (дефект cc43582b): ребёнок не опрашивает фичи чата — GET /api/tasks/features
+  // взрослая ручка без [ChildAllowed] (на ленте урока ребёнку был 403). Гейт в единственной
+  // точке запроса: к fetchRuns ведут useFeatureRuns, refetchFeatureRuns и scheduleRefetch —
+  // дальше них ни один путь не спросит. Стор остаётся пустым (как «фич у чата нет»):
+  // разрешённый EMPTY, без исключения и без записи в _inflight.
+  if (getMeSnapshot().isChild) return Promise.resolve(EMPTY);
   const running = _inflight.get(sessionId);
   if (running) return running;
   _lastFetchAt.set(sessionId, Date.now());
@@ -452,6 +459,8 @@ export const __test = {
   affectedSessionId,
   setActive: (s: string) => _active.add(s),
   active: () => new Set(_active),
+  // К9b: прямой доступ к дедуп-реестру in-flight (тест проверяет «нет записи» напрямую).
+  inflight: () => new Set(_inflight.keys()),
   pending: () => new Set(_pending.keys()),
   // F1: прямой доступ к срезам режима/выбора/фокуса для тестов.
   modeFor,

@@ -32,6 +32,7 @@ import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/d
 import { OfflineError, type EtagRef } from '../lib/offline';
 import { agentStreamUrl, useProjectRoutes } from '../lib/deviceAgent';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
+import { useMe } from '../lib/defaultPersona';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
 import { relTime } from '../lib/gitFormat';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
@@ -616,9 +617,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     if (!target) return undefined;
     return viaAgent ? resolveAgentImage(target) : api.files.fileUrl(project.id, target, sessionId, taskId);
   };
-  // Git: репо-статус (гейт вкладки «Авторы»), blame-кэш и busy зернистого stage
+  // Git: репо-статус (гейт вкладки «Авторы»), blame-кэш и busy зернистого stage.
+  // Ребёнок git не опрашивает: GitController без [ChildAllowed] (решение 77); панель —
+  // второй вызывающий, тот же гейт по Me.isChild, что у FileExplorer/useGitChip (X-W4-60).
   const gitSt = useGitState(project.id);
-  useEffect(() => { ensureGit(project.id); }, [project.id]);
+  const me = useMe();
+  useEffect(() => { if (me.isChild) return; ensureGit(project.id); }, [project.id, me.isChild]);
   const inRepo = gitSt.status?.isRepo ?? false;
   const [blame, setBlame] = useState<GitBlameLine[] | null>(null);
   const [blameLoading, setBlameLoading] = useState(false);

@@ -637,22 +637,17 @@ public class UserStore : IForgejoAccountStore, IUserStore
     /// провижн тьютора не удался, вызывающий откатывает прежний). Возвращает false, если
     /// пользователь не найден.
     /// Предметы (Т2a, разрез §2): список тела авторитетен (админ правит его, порядок
-    /// сохраняется), но TutorPersonaId каждого предмета берётся из ЖИВОГО профиля по Id,
-    /// как тьютор профиля: админ не может подменить персону через DTO, её пишет только
-    /// SetChildSubjectTutor. Новый Id — пустой (провижн Т2b); без живого профиля новые все
-    /// Id — тьюторы тела обнуляются так же. Привязка базы знаний предмета (К1b) — тот же
-    /// приём: из тела берётся только кандидат (id датасета + автор и момент вызывающего),
-    /// живая пара сохраняется, когда id не изменился. profile.Subjects=null —
-    /// сигнал вызывающего «предметов в теле нет»: живой список сохраняется как есть
-    /// (PUT вкладки «Режим и время» не стирает предметы); без живого профиля — [].
-    /// В сохранённом профиле Subjects никогда не null (тот же сигнал нормализуется здесь).
-    /// revokeAcknowledgedSubjectIds (Х1): id предметов, чьё согласие на не-Anthropic маршрут админ
-    /// ОТОЗВАЛ (acknowledgeRouteRisk=false в теле): под этим же локом пара обнуляется даже при
-    /// том же providerKey — решение по живому предмету, а не по снимку: одновременные PUT с true и
-    /// false дают одно из двух состояний целиком.
+    /// сохраняется); маркеры предмета Migrated и KnowledgeMoved берутся из ЖИВОГО профиля по Id
+    /// (из тела не читаются). Репетитора, модели и знаний у предмета больше нет (Б17c).
+    /// profile.Subjects=null — сигнал вызывающего «предметов в теле нет»: живой список
+    /// сохраняется как есть (PUT вкладки «Режим и время» не стирает предметы); без живого
+    /// профиля — []. В сохранённом профиле Subjects никогда не null.
+    /// revokeRouteRisk (решение 26): админ ОТОЗВАЛ согласие на риск маршрутов (acknowledgeRouteRisk
+    /// =false в теле профиля) — под этим же локом пара профиля снимается безусловно. Живая пара
+    /// иначе остаётся как есть: смена модели или поставщика её не касается, повторный PUT с тем же
+    /// флагом её не переставляет.
     /// </summary>
-    public bool SetChildProfile(string id, ChildProfile? profile, bool resetRules,
-        IReadOnlySet<string>? revokeAcknowledgedSubjectIds = null)
+    public bool SetChildProfile(string id, ChildProfile? profile, bool resetRules, bool revokeRouteRisk = false)
     {
         lock (_lock)
         {
@@ -677,60 +672,16 @@ public class UserStore : IForgejoAccountStore, IUserStore
                     }
                     else
                     {
-                        var tutors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                        // Привязка базы знаний (К1b, разрез §1/§3): в теле — только кандидат
-                        // (id датасета, автор и момент вызывающего); решение — здесь, по ЖИВОМУ
-                        // значению под этим же локом: тот же datasetId → прежняя пара (автор и
-                        // момент не меняются, повторный PUT другого админа их не переставляет),
-                        // другой id или нового датасета в живом нет → кандидат вызывающего,
-                        // null в теле → привязка снята. Слияние вне этого замка (по снимку
-                        // профиля до записи) вернуло бы пару, какой она была на первом чтении
-                        // запроса, — параллельная привязка затёрлась бы.
-                        var knowledge = new Dictionary<string, ChildSubjectKnowledge?>(StringComparer.OrdinalIgnoreCase);
+                        // Маркеры предмета, которых нет в теле (Б17c): перенос в проект-предмет и пометка
+                        // «знания перенесите» — решение под замком по ЖИВОМУ предмету, из тела не читаются.
                         var liveSubjects = new Dictionary<string, ChildSubject>(StringComparer.OrdinalIgnoreCase);
                         foreach (var subject in live.Subjects)
-                        {
-                            if (subject is null) continue;
-                            tutors[subject.Id] = subject.TutorPersonaId;
-                            knowledge[subject.Id] = subject.Knowledge;
-                            liveSubjects[subject.Id] = subject;
-                        }
+                            if (subject is not null) liveSubjects[subject.Id] = subject;
                         foreach (var subject in profile.Subjects)
                         {
-                            if (subject is null) continue;
-                            // Тьютор предмета никогда не берётся из тела: живой по Id
-                            // (админ список правит, персону не подменяет), новый Id — пусто.
-                            subject.TutorPersonaId =
-                                tutors.TryGetValue(subject.Id, out var tutor) ? tutor : "";
-                            // Согласие админа на не-Anthropic маршрут (Т5a, И2′) — решение ЗДЕСЬ, под замком,
-                            // по ЖИВОМУ предмету (вне замка слияние по снимку вернуло бы согласие от старого
-                            // providerKey параллельному PUT со сменой). В теле — кандидат (момент и админ запроса)
-                            // либо пусто. Тот же providerKey и живое согласие — прежняя пара остаётся; тело просит
-                            // согласие — берётся кандидат; иначе (смена providerKey без согласия, предмет новый,
-                            // согласия не было) — сброс. Согласие от старого providerKey не переживает смену.
-                            var hasLiveSubject = liveSubjects.TryGetValue(subject.Id, out var liveSubject);
-                            // Отзыв согласия (Х1, ревью Т5a): id в наборе отзыва — пара обнуляется даже при
-                            // том же providerKey: предмет сохраняется «не согласованным», 400 даст запуск
-                            // хода. Под тем же замком и по тому же живому разбору, что и сохранение: два
-                            // одновременных PUT (true и false) дают одно из двух состояний целиком, не смесь пар.
-                            if (revokeAcknowledgedSubjectIds is not null
-                                && revokeAcknowledgedSubjectIds.Contains(subject.Id))
-                            {
-                                subject.RouteAcknowledgedAt = null;
-                                subject.RouteAcknowledgedBy = null;
-                            }
-                            else if (hasLiveSubject && liveSubject!.RouteAcknowledgedAt is not null
-                                && liveSubject.ProviderKey == subject.ProviderKey)
-                            {
-                                subject.RouteAcknowledgedAt = liveSubject.RouteAcknowledgedAt;
-                                subject.RouteAcknowledgedBy = liveSubject.RouteAcknowledgedBy;
-                            }
-                            else if (subject.RouteAcknowledgedAt is null)
-                                subject.RouteAcknowledgedBy = null;
-                            if (subject.Knowledge is { } requested
-                                && knowledge.TryGetValue(subject.Id, out var stored)
-                                && stored?.DatasetId == requested.DatasetId)
-                                subject.Knowledge = stored;
+                            if (subject is null || !liveSubjects.TryGetValue(subject.Id, out var liveSubject)) continue;
+                            subject.Migrated = liveSubject.Migrated;
+                            subject.KnowledgeMoved = liveSubject.KnowledgeMoved;
                         }
                     }
                 }
@@ -740,15 +691,25 @@ public class UserStore : IForgejoAccountStore, IUserStore
                     {
                         profile.Subjects = [];
                     }
-                    else
-                    {
-                        // Нет живого профиля — новые все Id: тьюторы тела обнуляются
-                        // (тот же контракт, что в живой ветке: персону пишет только
-                        // SetChildSubjectTutor, Т2b).
-                        foreach (var subject in profile.Subjects)
-                            if (subject is not null)
-                                subject.TutorPersonaId = "";
-                    }
+                }
+                // Согласие админа на риск маршрутов (ADR-041 ред. 4, решение 26) — ОДНО на профиль
+                // ребёнка, и решение о нём здесь же, под этим же локом, по ЖИВОМУ профилю:
+                // «отзывать» — снимает пару безусловно; живая пара остаётся как есть — смена модели
+                // или поставщика её не касается (в отличие от согласия предмета) и повторный PUT с
+                // тем же флагом её не переставляет; кандидата тела нет и живого нет — согласия нет.
+                // Слияние вне этого замка (по снимку профиля до записи) потерял бы параллельный
+                // отзыв либо вернул бы уже снятое согласие: два одновременных PUT — один с
+                // «поставить», другой с «не трогать» и другими полями — дали бы смесь пары вместо
+                // одного её исхода. Поля пишутся только вместе: половины согласия не бывает.
+                if (revokeRouteRisk)
+                {
+                    profile.RouteRiskAcknowledgedAt = null;
+                    profile.RouteRiskAcknowledgedBy = null;
+                }
+                else if (user.ChildMode is { RouteRiskAcknowledgedAt: { } liveAt })
+                {
+                    profile.RouteRiskAcknowledgedAt = liveAt;
+                    profile.RouteRiskAcknowledgedBy = user.ChildMode.RouteRiskAcknowledgedBy;
                 }
                 user.ChildMode = profile;
             }
@@ -762,12 +723,12 @@ public class UserStore : IForgejoAccountStore, IUserStore
     }
 
     /// <summary>
-    /// Id персоны-репетитора предмета (ChildSubject.TutorPersonaId, Т2a; провижн Т2b
-    /// закрепляет персону только этим методом — через DTO профиля её подменить нельзя).
-    /// Пишет только в существующий предмет существующего профиля ребёнка, по образцу
-    /// SetChildTutorPersona: возвращает false, если пользователя, профиля или предмета нет.
+    /// Маркер переноса предмета (Б17b, ADR-041 ред. 7, решение 75): пишет ТОЛЬКО true в
+    /// существующий предмет существующего профиля ребёнка, по образцу SetChildSubjectTutor:
+    /// возвращает false, если пользователя, профиля или предмета нет. Сами поля предмета не
+    /// трогает (их снятие — Б17c); false — не сброс: повторный перенос маркер не снимает.
     /// </summary>
-    public bool SetChildSubjectTutor(string userId, string subjectId, string personaId)
+    public bool MarkChildSubjectMigrated(string userId, string subjectId)
     {
         lock (_lock)
         {
@@ -775,7 +736,7 @@ public class UserStore : IForgejoAccountStore, IUserStore
             if (user?.ChildMode is null) return false;
             var subject = user.ChildMode.Subjects.FirstOrDefault(s => s.Id == subjectId);
             if (subject is null) return false;
-            subject.TutorPersonaId = personaId;
+            subject.Migrated = true;
             Save();
             return true;
         }
@@ -837,6 +798,71 @@ public class UserStore : IForgejoAccountStore, IUserStore
             return true;
         }
     }
+
+    /// <summary>
+    /// Включение галки (Б4a, ADR-041 ред. 4 решение 30): решение «включить/оставить» и запись —
+    /// под этим одним локом, по ЖИВОМУ профилю. Галка вне этого замка читала бы снимок профиля
+    /// ДО записи: параллельный PUT child-profile с телом (model/provider/предметы) успел бы
+    /// между чтением и записью, и галка затёрла бы его пустым профилем. Здесь порядок запросов
+    /// значения не имеет: живой профиль уже включён — идемпотентный возврат БЕЗ записи (галка
+    /// не смеет тронуть выставленный профиль); выключенный — копия его настроек с Enabled=true
+    /// (предметы/тьютор/правила/согласие — живые, их галка не пересоздаёт и не стирает); профиля
+    /// нет — «не настроен» (Subjects=[]: без предметов, маршрутов и тьютора — дальше решает
+    /// только политика fail-closed). Возвращает итоговый профиль; null — пользователя нет на
+    /// момент записи (параллельное удаление): профиля пополам не бывает.
+    /// virtual — шов подмены в тестах (тот же приём, что у virtual-точек ChatHistoryService):
+    /// ветка 500 контроллера проверяется подменой «сохранение отказало», а не гонкой — окно
+    /// «чтение контроллера ‖ эта запись» микросекундное, гонка его не ловит.
+    /// </summary>
+    public virtual ChildProfile? EnableChildModeIfAbsentOrDisabled(string id)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return null;
+            if (user.ChildMode is { Enabled: true } enabledLive)
+                return enabledLive;
+            var body = user.ChildMode is { } disabled
+                ? ReenableBodyOf(disabled)
+                : new ChildProfile { Enabled = true };
+            user.ChildMode = body;
+            Save();
+            return body;
+        }
+    }
+
+    // Тело повторного включения выключенного режима (Б4a): копия ЖИВОГО профиля под замком —
+    // только те настройки, которых галка не пересоздаёт: предметы, тьютор, правила и согласие
+    // берутся из живого как есть (сигнала «не трогать» здесь нет: слияние — этот же метод).
+    // Копия — новыми записями, чтобы сохранённый профиль не делил списки с прежним снимком.
+    private static ChildProfile ReenableBodyOf(ChildProfile live) => new()
+    {
+        Enabled = true,
+        Subjects = [.. live.Subjects],
+        GuardianUserIds = [.. live.GuardianUserIds],
+        ProviderKey = live.ProviderKey,
+        Model = live.Model,
+        Spaces = live.Spaces.ToDictionary(
+            kv => kv.Key,
+            kv => new SpaceLimits
+            {
+                Windows = [.. kv.Value.Windows.Select(w => new TimeWindow
+                {
+                    From = w.From,
+                    To = w.To,
+                    Weekdays = w.Weekdays is { } days ? [.. days] : null,
+                })],
+                DailyMinutes = kv.Value.DailyMinutes,
+            }),
+        DailyBudgetUsd = live.DailyBudgetUsd,
+        MonthlyBudgetUsd = live.MonthlyBudgetUsd,
+        WarnMinutes = live.WarnMinutes,
+        TutorPersonaId = live.TutorPersonaId,
+        RulesAgreedAt = live.RulesAgreedAt,
+        RulesSummary = live.RulesSummary,
+        RouteRiskAcknowledgedAt = live.RouteRiskAcknowledgedAt,
+        RouteRiskAcknowledgedBy = live.RouteRiskAcknowledgedBy,
+    };
 
     /// <summary>
     /// Выключение детского режима (KM-B1e): Enabled=false на существующем профиле, настройки

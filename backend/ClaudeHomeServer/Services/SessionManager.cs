@@ -732,9 +732,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     public string? SaveChatAttachment(string sessionId, string callerId, string? fileName, Action<string> write) =>
         _visibility.SaveChatAttachment(sessionId, callerId, fileName, write);
 
-    public string? SaveDerivedChatAttachment(string sessionId, string originalRel, string derivedExtension, Action<string> write) =>
-        _visibility.SaveDerivedChatAttachment(sessionId, originalRel, derivedExtension, write);
-
     public bool IsRecordedAttachment(string sessionId, string rel) =>
         _visibility.IsRecordedAttachment(sessionId, rel);
 
@@ -796,8 +793,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // этого предмета этого ребёнка приводятся к ЖИВОМУ маршруту; при смене поставщика транскрипт
     // переезжает в профиль нового (ProviderMigration.RepinChildSubjectAsync). Чаты другого предмета
     // и другого ребёнка не трогает. Возвращает число перезакреплённых чатов.
-    public Task<int> RepinChildSubjectAsync(string ownerId, string subjectId, Func<ChildRepinTarget?> liveTarget) =>
-        _providerMigration.RepinChildSubjectAsync(ownerId, subjectId, liveTarget);
+    public Task<int> RepinChildSubjectAsync(string ownerId, string subjectId) =>
+        _providerMigration.RepinChildSubjectAsync(ownerId, subjectId);
 
     // Рабочая папка чата, принадлежащего пользователю (для загрузки вложений): у чата вне
     // проекта — {дом}/Chats, у проектного — рабочая папка сессии (worktree, иначе корень
@@ -933,9 +930,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null, string? createdByUserId = null, string? privateToUserId = null)
+        string? onboardingKind = null, string? createdByUserId = null, string? privateToUserId = null,
+        string? childSpace = null, string? childSubject = null, string? providerKey = null)
         => await _creation.CreateAsync(projectId, mode, resumeSessionId, name, model, agentName, effort,
-            personaId, taskExecution, taskId, onboardingKind, createdByUserId, privateToUserId);
+            personaId, taskExecution, taskId, onboardingKind, createdByUserId, privateToUserId,
+            childSpace, childSubject, providerKey);
 
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,

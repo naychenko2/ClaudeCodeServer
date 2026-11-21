@@ -82,9 +82,11 @@ public class UpstreamSelector(
     {
         var decision = SelectRoute(model);
         // И2: ребёнок (и неопознанный владелец — fail-closed) не получает маршрут по подписке никогда — шлюз единственный выдаёт такие маршруты.
+        // Текст без обещания (доработка ревью Б4b, п.3): этот отказ события child/route-refusal
+        // не публикует — рассылки кураторам не было бы никогда.
         if (decision.Route is { Kind: GatewayUpstreamKind.Subscription }
             && (string.IsNullOrWhiteSpace(ownerId) || childPolicy?.For(ownerId) is not null))
-            return new(null, ChildRoute.RefusedText);
+            return new(null, ChildRoute.RefusedTextNoGuardians);
         return decision.Route is null
             ? new(null, decision.FailureText)
             : new(tokens.Issue(ownerId, sessionId, deviceId, decision.Route, lifetime), null);

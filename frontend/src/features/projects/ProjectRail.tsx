@@ -1,10 +1,10 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { AlarmClock, ArrowDownToLine, Pin, Search } from 'lucide-react';
-import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
+import { C, R, SP, FS, FONT, Z, SHADOW } from '../../lib/design';
 import { useWatchdogPresence } from '../../lib/watchdogPresence';
 import type { Project } from '../../types';
-import { RailCapsule, RailHat, RailIconButton, RailSep, RAIL_HAT_H } from '../../components/ui';
+import { Button, RailCapsule, RAIL_W, RailHat, RailIconButton, RailSep, RAIL_HAT_H } from '../../components/ui';
 import { PanelDropLine } from '../../components/ui/PanelDropGuide';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { ProjectIcon } from './ProjectIcon';
@@ -13,6 +13,9 @@ import { useAllProjects, openProjectViaEvent } from './useAllProjects';
 import { usePinnedIds, useSwitcherOrder, recordSwitcherProject, isPinned, togglePin, unpinProject, pinInsertAt, switcherInsertBefore, removeFromDock } from '../../lib/pinnedProjects';
 import { useProjectActivity, STATUS_COLOR, STATUS_PULSE, type ProjectActivity } from '../../lib/projectActivity';
 import { TOUCH_CALLOUT_GUARD } from '../../lib/pointer';
+import { showToast } from '../../lib/toast';
+import { subjectColors } from '../childMode/subjectPalette';
+import { childApi, type ChildSubjectWithViewers } from '../childMode/api';
 
 // Вертикальный док проектов — ВТОРАЯ левая рельса, под рельсой панелей. Раньше те же
 // иконки лежали горизонтальной строкой внутри панели «Проекты»: ряд в колонке шириной
@@ -29,6 +32,10 @@ import { TOUCH_CALLOUT_GUARD } from '../../lib/pointer';
 // закреплённых нет вовсе, зона пинов — «выше первой иконки», и линия несёт булавку:
 // отдельная мишень-квадрат раньше вставала В ПОТОК и сдвигала весь док вниз.
 // Что не влезло по высоте — «+N» на лупе, оттуда палитра со всеми проектами.
+//
+// Детский вариант этого же дока — в конце файла (Ф1e, ADR-041 ред. 8 решение 84):
+// предметы-предметы ребёнка вместо проектов, значок — глиф и цвет предмета. Он выбран
+// здесь, а не отдельной детской рельсой: ребёнок видит штатный док, а не его копию.
 
 const ICON_BOX = 32;          // бокс кнопки проекта — как у кнопок рельсы (IconButton md)
 const CAP_GAP = 6;            // зазор между элементами капсулы (как в PanelRail)
@@ -170,7 +177,7 @@ function ProjectDockIcon({ p, activity, watchdog, active, muted, dragging, dragA
   );
 }
 
-export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
+interface Props {
   // Активный проект (свежая версия из WorkspacePage). undefined — активного нет:
   // так док выглядит на пустой «Стене», где фокусной колонки ещё не существует.
   // Ряд проектов при этом полноценный, просто ни одна иконка не подсвечена.
@@ -178,7 +185,11 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
   onOpenSettings: () => void;   // настройки текущего проекта — из его контекст-меню
   // Сторона окна: в какую сторону раскрываются подписи кнопок
   side?: 'left' | 'right';
-}) {
+  // Детский вариант: данные дока предметов-предметов. Нет — взрослый док, как был.
+  child?: ChildSubjectsDock;
+}
+
+function ProjectsRail({ project, onOpenSettings, side = 'left' }: Props) {
   const projects = useAllProjects();
   const pinnedIds = usePinnedIds();
   const switcherOrder = useSwitcherOrder();
@@ -572,6 +583,190 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
         </div>,
         document.body,
       )}
+    </div>
+  );
+}
+
+/* ================= Детский вариант дока (Ф1e, ADR-041 ред. 8 решение 84) =================
+
+// Ребёнок вместо «Уроков» и рельсы предметов видит этот же док — но предметов-предметов:
+// значок = глиф и цвет предмета (subjectPalette — та же палитра, что у плиток главной),
+// порядок = порядок предметов профиля (И5, не переставляем), выключенный предмет не
+// показывается.
+//
+// Чего здесь нет и почему: пины, перетаскивание, палитра и «+N» — порядок предметов
+// задаёт взрослый в настройках, своих проектов у ребёнка нет, и ряда длиной в несколько
+// значков, который надо было бы резать по высоте, тоже нет.
+//
+// Источник списка — GET /api/child/subjects: единственная детская ручка, которая называет
+// предметы ребёнка (GET /api/projects ребёнку 403 — ChildModeGateMiddleware). Поэтому и
+// «открыть предмет», и «открыть созданный урок» решает вызывающий: у дока есть ключ
+// предмета и id нового чата, но не проект. */
+
+export interface ChildSubjectsDock {
+  // Предметы ребёнка в порядке профиля; enabled:false док скрывает (решение 84)
+  subjects: readonly ChildSubjectWithViewers[];
+  // Предмет открытого проекта-предмета; null — открыт не предмет (главная)
+  activeSubjectId: string | null;
+  // Открыть предмет — его проект. Решает вызывающий: у ребёнка нет списка проектов
+  onOpenSubject: (subject: ChildSubjectWithViewers) => void;
+  // Урок создан: id нового чата — дальше ведёт вызывающий (открыть его в проекте предмета)
+  onLessonCreated?: (sessionId: string) => void;
+}
+
+export function ProjectRail(props: Props) {
+  // Диспетчер без хуков: смена режима не должна ломать порядок их вызова в одном
+  // компоненте. Хуки взрослого дока (список проектов, активность чатов, сторожа) при
+  // детском ряде не звут вовсе — ребёнку они не чем не служат, а /api/projects ему 403.
+  if (props.child) return <ChildSubjectsRail child={props.child} side={props.side ?? 'left'} />;
+  return <ProjectsRail {...props} />;
+}
+
+// Значок предмета в доке — та же кнопка рельсы, что у проекта (RailIconButton, media):
+// бокс, скругление, подсветка активного и focus-ring общие, внутри вместо картинки
+// проекта — квадрат глифа (тот же приём и тот же фолбэк пустого глифа «?», что у плиток
+// главной). Приглушения цвета нет: для ребёнка цвет глифа и есть то, по чему он узнаёт
+// предмет, — «спящая рельса» обесцвечивает то, что различают формой.
+function SubjectDockIcon({ s, active, side, anchorRef, onOpen }: {
+  s: ChildSubjectWithViewers;
+  active: boolean;
+  side: 'left' | 'right';
+  // Корень замера плашки — только у активного значка (см. ChildSubjectsRail)
+  anchorRef?: React.Ref<HTMLSpanElement>;
+  onOpen: (s: ChildSubjectWithViewers) => void;
+}) {
+  const { bg, fg } = subjectColors(s.color);
+  return (
+    <span data-child-subject={s.id} ref={anchorRef} style={{ display: 'flex', flexShrink: 0, ...TOUCH_CALLOUT_GUARD }}>
+      <RailIconButton side={side} label={s.label} variant="media" active={active} onClick={() => onOpen(s)}>
+        <span style={{
+          width: ICON_BOX, height: ICON_BOX, flexShrink: 0, borderRadius: R.md,
+          background: bg, color: fg, display: 'grid', placeItems: 'center',
+          // serif и тот же вес, что у глифа плитки: знак предмета в доке и на главной —
+          // один и тот же знак
+          fontFamily: FONT.serif, fontSize: FS.md, fontWeight: 700,
+        }}>
+          {s.glyph || '?'}
+        </span>
+      </RailIconButton>
+    </span>
+  );
+}
+
+// Постоянная плашка активного предмета (макет kids-project-screen, .flyout): предмет и его
+// репетитор — то, что ребёнок видит о уроке всегда, а не по наведению. Второй строкой —
+// «Эту папку видят: …» (решение 64): кому доступна его папка. В стоящей плашке ей место
+// именно здесь: на таче наведения нет, а это строка про приватность (записка Майи к
+// макету). Пустых зрителей не показываем вовсе; длинный список — одна строка с обрезкой,
+// полный текст в title. Вывеска — порталом в body: капсула режет содержимое по своим
+// скруглениям (тот же повод, что у подсказки RailFlyout).
+function SubjectPlate({ s, top, creating, onNewLesson }: {
+  s: ChildSubjectWithViewers;
+  top: number;
+  creating: boolean;
+  onNewLesson: () => void;
+}) {
+  const seen = (s.viewers ?? []).length > 0 ? `Эту папку видят: ${(s.viewers ?? []).join(', ')}` : null;
+  return createPortal(
+    <div style={{
+      position: 'fixed', top, transform: 'translateY(-50%)', left: RAIL_W + SP.sm, zIndex: Z.dropdown,
+      display: 'flex', flexDirection: 'column', gap: SP.xs, padding: `6px ${SP.sm}px`,
+      maxWidth: 280, boxSizing: 'border-box', minWidth: 0,
+      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md,
+      boxShadow: SHADOW.dropdown, fontFamily: FONT.sans,
+    }}>
+      <span style={{
+        fontSize: FS.base, fontWeight: 600, color: C.textPrimary, minWidth: 0,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>
+        {s.label}{s.tutor ? ` · ${s.tutor.name}` : ''}
+      </span>
+      {seen && (
+        <span title={seen} style={{
+          fontSize: FS.xs, color: C.textMuted, minWidth: 0,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
+          {seen}
+        </span>
+      )}
+      {/* «Новый урок» — единственная точка создания детского чата (решение 84): ряд
+          вызывает её, а не каждая панель. Пока POST в полёте, кнопка закрыта: второй
+          тап не должен создать второй урок. size=md и minWidth 40 (Х-W4-25): xs даёт
+          высоту 24 — ниже минимума гайда «тач-цель не меньше 40px»
+          (docs/design/guidelines.md); md — минимальный размер кита с minHeight 40
+          (Button.tsx:13), а ширина заявлена явно: ни вызывающий, ни тест не должны
+          полагаться на неё сами по себе. */}
+      <Button size="md" style={{ minWidth: 40 }} dataTestId="child-new-lesson" disabled={creating} onClick={onNewLesson}>
+        Новый урок
+      </Button>
+    </div>,
+    document.body,
+  );
+}
+
+function ChildSubjectsRail({ child, side }: { child: ChildSubjectsDock; side: 'left' | 'right' }) {
+  const [creating, setCreating] = useState(false);
+  // Выключенный предмет скрыт (решение 84). Порядок — порядок списка: он порядок профиля (И5).
+  const shown = useMemo(() => child.subjects.filter(s => s.enabled !== false), [child.subjects]);
+  const active = useMemo(() => shown.find(s => s.id === child.activeSubjectId) ?? null, [shown, child.activeSubjectId]);
+  const activeId = active ? active.id : null;
+
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const [plateTop, setPlateTop] = useState(0);
+  // Отпечаток порядка ряда: строка id через разделитель. Нужен именно порядок, а не
+  // длина: перестановка предметов при той же длине переставляет и значок активного —
+  // по [shown.length] эффект бы не перёсбегал, и плашка осталась бы на месте прежнего
+  // предмета. Считается только при смене shown, а не на каждый рендер.
+  const orderKey = useMemo(() => shown.map(s => s.id).join(','), [shown]);
+  // Плашка стоит напротив своего значка — меряем сам значок (он единственный знает, где
+  // встал). В среде без раскладки getBoundingClientRect нет — плашка остаётся при своей
+  // высоте: содержимое от этого не меняется.
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = anchorRef.current;
+      if (!el || typeof el.getBoundingClientRect !== 'function') return;
+      const r = el.getBoundingClientRect();
+      setPlateTop(r.top + r.height / 2);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [activeId, orderKey]);
+
+  async function newLesson() {
+    if (!active || creating) return;   // двойной тап: второй игнорируется, пока первый в полёте
+    setCreating(true);
+    try {
+      const r = await childApi.createLesson(active.id);
+      child.onLessonCreated?.(r.sessionId);
+    } catch (e) {
+      // Отказ по предмету или по состоянию (unknown_subject / subject_disabled / time_up…) —
+      // спокойный серверный текст как есть (ADR-041, «Общие правила»); урок не «создан
+      // пополам»: кнопка возвращается активной, действия за ней нет
+      const msg = (e as { body?: { message?: string } }).body?.message ?? 'Сейчас урок не получится начать. Попробуй чуть позже.';
+      showToast('Новый урок', msg);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <div style={{ flexShrink: 0, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', pointerEvents: 'auto' }}>
+      <RailCapsule side={side} aria-label="Уроки">
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: CAP_GAP, flexShrink: 0 }}>
+          {shown.map(s => (
+            <SubjectDockIcon
+              key={s.id}
+              s={s}
+              side={side}
+              active={s.id === activeId}
+              anchorRef={s.id === activeId ? anchorRef : undefined}
+              onOpen={child.onOpenSubject}
+            />
+          ))}
+        </div>
+      </RailCapsule>
+      {active && <SubjectPlate s={active} top={plateTop} creating={creating} onNewLesson={() => void newLesson()} />}
     </div>
   );
 }

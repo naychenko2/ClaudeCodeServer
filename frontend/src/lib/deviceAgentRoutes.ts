@@ -61,6 +61,7 @@ export const DEVICE_AGENT_UNSUPPORTED = [
   'POST files/save-from-url',
   'POST files/changed-by',
   'POST files/locate',
+  'POST files/restore',
   'GET files/zip',
   'GET files/office-download',
   'GET files/office-config',

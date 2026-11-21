@@ -40,6 +40,15 @@ public class ChildProfile
     // null — правила не согласованы, «Уроки» открывают только онбординг.
     public DateTime? RulesAgreedAt { get; set; }
     public string? RulesSummary { get; set; }
+    // Согласие админа на риск маршрутов (ADR-041 ред. 4, решение 26): ОДНО на профиль ребёнка,
+    // покрывает все предметы и чат правил; сменой модели или поставщика не сбрасывается.
+    // Ставит его только PUT child-profile с acknowledgeRouteRisk=true — стор, под своим замком
+    // (UserStore.SetChildProfile); прежнее согласие предмета (поле снято Б17c)
+    // в него не переводится: те поля остаются историей. null — согласия нет, уроки и чат
+    // правил не стартуют. Поле добавочное: старые записи users.json читаются с null,
+    // BackupSchema.Version не двигается.
+    public DateTimeOffset? RouteRiskAcknowledgedAt { get; set; }
+    public string? RouteRiskAcknowledgedBy { get; set; }
 }
 
 /// <summary>
@@ -69,11 +78,9 @@ public class TimeWindow
 }
 
 /// <summary>
-/// Предмет ребёнка в профиле (срез §1): в записи лежат маршрут модели и ссылка на
-/// персону-репетитора. Характер репетитора (имя, аватар, голос, промпт) живёт в обычной
-/// персоне ребёнка, здесь — только ссылка и маршрут. Класс без логики: уникальность Id,
-/// ключи Color и непустые поля проверяют валидатор (Т2a) и политика; конкретность Model
-/// проверяет ChildRoute.IsConcreteModel (Т5a), валидатор — через ChildRoute.Evaluate.
+/// Предмет ребёнка в профиле (срез §1): плитка главной (id, название, глиф, цвет, включён).
+/// Репетитор и модель живут в проекте-предмете (руководитель проекта, ADR-041 ред. 7).
+/// Класс без логики: уникальность Id и ключи Color проверяют валидатор и политика.
 /// </summary>
 public class ChildSubject
 {
@@ -89,32 +96,29 @@ public class ChildSubject
     public string Glyph { get; set; } = "";
     // Ключ цвета из ColorKeys.
     public string Color { get; set; } = "";
-    // Персона-репетитор ребёнка (владелец — сам ребёнок); провижнер создаёт её при добавлении
-    // предмета (Т2). У разных предметов может быть одна и та же персона.
-    public string TutorPersonaId { get; set; } = "";
-    // Маршрут: запись ClaudeSubscriptionPool с ApiKey или ключ LlmProviders (срез §3).
-    public string ProviderKey { get; set; } = "";
-    // Конкретный id модели; маркеры tier:*/preset:* отказывает валидатор (Т5).
-    public string Model { get; set; } = "";
-    // Согласие админа на не-Anthropic маршрут (срез §3): момент (UTC) и автор.
-    // Пишет его сохранение предмета с acknowledgeRouteRisk; согласие сбрасывается при смене ProviderKey.
-    public DateTime? RouteAcknowledgedAt { get; set; }
-    public string? RouteAcknowledgedBy { get; set; }
     // Выключенный предмет скрыт с главной, его чаты не стартуют.
     public bool Enabled { get; set; } = true;
-    // Привязанная база знаний (срез §3 «Какие датасеты можно привязать»): один датасет Dify
-    // или null — не привязана. Запись — через PUT child-profile (К1b), допустимость проверяется
-    // на каждом вызове (К3); здесь только запись. Поле добавочное: старые записи читаются
-    // с null, BackupSchema.Version не двигается.
-    public ChildSubjectKnowledge? Knowledge { get; set; }
-}
+    // Маркер переноса предмета в проект-предмет (Б17b, ADR-041 ред. 7, решение 75): пишет его
+    // только миграция, последним шагом переноса — по нему повторный старт пропускает предмет.
+    // Репетитор — руководитель проекта-предмета (Project.DefaultPersonaId), модель — модель
+    // персоны; старые поля предмета (репетитор, поставщик, модель, согласие маршрута,
+    // Knowledge) сняты Б17c: старые записи users.json с ними читаются, лишние поля игнорируются.
+    // Поле добавочное: старые записи читаются с false, BackupSchema.Version не двигается.
+    public bool Migrated { get; set; }
+    // Пометка «у предмета была привязана база знаний — перенесите материалы в папку проекта»
+    // (Б17c): ставится при чтении старого users.json с полем knowledge и живёт до ручной правки.
+    // Само поле knowledge снято, его содержимое не хранится — только факт.
+    public bool KnowledgeMoved { get; set; }
 
-/// <summary>
-/// Привязка базы знаний к предмету ребёнка (срез §1): id датасета Dify, автор и момент привязки.
-/// Запись без логики: допустимость датасета — чистая функция KnowledgeAccess.IsTutorAttachable (К1a),
-/// проверка на входе — валидатор записи (К1b).
-/// </summary>
-public record ChildSubjectKnowledge(string DatasetId, string AttachedByUserId, DateTime AttachedAt);
+    // Приёмник устаревшего поля knowledge старых записей (users.json — PascalCase): только ставит пометку. Записи у свойства
+    // нет (нет getter) — System.Text.Json его не пишет, остальные снятые поля (tutorPersonaId,
+    // providerKey, model, routeAcknowledged*) игнорируются как неизвестные.
+    [System.Text.Json.Serialization.JsonPropertyName("Knowledge")]
+    public System.Text.Json.JsonElement LegacyKnowledge
+    {
+        set { if (value.ValueKind == System.Text.Json.JsonValueKind.Object) KnowledgeMoved = true; }
+    }
+}
 
 // Значения ключей ChildProfile.Spaces и Session.ChildSpace (ADR-041): строки, не enum —
 // Студия волны 2 добавляется записью в профиль без миграции формата сторов.

@@ -177,7 +177,11 @@ public class ProjectManager : IProjectManager
         return project;
     }
 
-    public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false, string? groupId = null, string? color = null)
+    // childSubjectId (Б8b, ADR-041 ред. 5): маркер «это проект-предмет ребёнка» пишется вместе
+    // с записью — полупроекта без маркера не бывает: после рестарта идемпотентность провижна
+    // держится на нём, а не на памяти процесса. Вызывает его только провижнер предмета (Б8b).
+    public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false, string? groupId = null, string? color = null,
+        string? childSubjectId = null)
     {
         // Путь не задан — «Новый проект»: папку под него придумываем сами.
         // Проверка стоит прямо в if (а не через заранее вычисленный флаг): так компилятор
@@ -227,6 +231,7 @@ public class ProjectManager : IProjectManager
             // Новый проект — кандидат на предложение каркаса (знакомство v2); созданные
             // до фичи проекты остаются с null и предложение не получают никогда
             PresetKey = ProjectPreset.Pending,
+            ChildSubjectId = string.IsNullOrWhiteSpace(childSubjectId) ? null : childSubjectId,
         };
         _projects[project.Id] = project;
         Save();

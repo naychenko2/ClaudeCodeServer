@@ -40,6 +40,9 @@ import { getTaskById } from '../../lib/tasks';
 import { canSplitCenter, CHAT_SPLIT_MIN_PX, SPLIT_SIDE_MIN_PX } from './splitLayout';
 import { FeatureCenter } from '../../components/feature/FeatureCenter';
 import { centerOccupiedByOther, type CenterOccupancy } from '../../lib/centerOccupancy';
+import type { ChildWorkspaceProps } from '../../features/childMode/types';
+import { ChildCenterEmpty } from '../../features/childMode/ChildCenterEmpty';
+import { ChildLessonsPanel } from '../../features/childMode/ChildLessonsPanel';
 
 // Минимумы колонок разделённого центра — в splitLayout.ts; на узком центре соседка (минимум 200) всё равно
 // остаётся, поэтому минимум ленты — это то, что остаётся от неё
@@ -172,6 +175,12 @@ interface Props {
   fileOpenedAt: number;
   // Итерация 2: мета панелей плагинов (заголовок + иконка) — пропсом в PanelZone.
   pluginPanelMeta?: Record<import('./panelCatalog').PluginPanelKey, { title: string; Icon: import('lucide-react').LucideIcon }>;
+  // Детская проводка (Ф1j, ADR-041 ред. 8, решения 76–84): один проп-объект вместо
+  // четырёх разрозненных. Экран — только проводник: он ничего не решает по нему и
+  // отдаёт части своим компонентам — features/feedKinds/header в ChatPanel (тот —
+  // Composer'у), dock в ProjectRail. Источник — useChildSurface владельца (WorkspacePage, Ф1f).
+  // Без child — взрослый экран без изменений: ни один детский проп не передаётся.
+  child?: ChildWorkspaceProps;
 }
 
 // Кто выигрывает центр: страница фичи или файл — тот, чьё событие «открыли»
@@ -312,8 +321,13 @@ export function DesktopWorkspace(p: Props) {
     && !p.openFile && !p.readerState.open && !p.openCommitSha;
 
   // «Стена»: док и пункт меню карточек чата. Планшету она доступна (колонок туда
-  // влезает одна-две), отсекается только телефон — но мобильной ветки тут и нет
-  const wallOn = !!p.onOpenWall;
+  // влезает одна-две), отсекается только телефон — но мобильной ветки тут и нет.
+  // Ребёнку стены нет вовсе: она — взрослый хаб (у детского экрана хаб-разделов нет),
+  // а сам док при маунте поднимает взрослые опросы: снимок сторожей GET /api/watchdogs
+  // и состав стены GET /api/me/wall (обе без [ChildAllowed] → ребёнку 403, Х-W4-34).
+  // Признак — тот же p.child, что гасит док проектов ниже и берёт детские панели:
+  // ни хук, ни стор его не выдумывают, его знает вызывающий.
+  const wallOn = !!p.onOpenWall && !p.child;
   const handleAddToWall = (s: Session) => {
     void addChatSafe(s).then(() => showToast('Стена', `«${s.name?.trim() || 'Чат'}» на стене`));
   };
@@ -325,7 +339,20 @@ export function DesktopWorkspace(p: Props) {
   // Панель есть ВСЕГДА, даже когда чатов ноль: иначе её кнопка пропадала из рельсы
   // (нет контента → keyAvailable=false), край рельсы дёргался и вход в чаты терялся.
   // Пустой список сам показывает empty-state с кнопкой «Новый чат» (см. SessionList).
-  const chatsPanel = (
+  // Ребёнку вместо штатного списка — детская панель уроков (Х-W4-78, дефект fab7e418):
+  // тулбар и действия карточек штатного списка ребёнку закрыты И11 (I1 п.1), в панели
+  // только «открыть урок» и «Новый урок» — та же точка создания урока, что в доке.
+  const chatsPanel = p.child ? (
+    <ChildLessonsPanel
+      projectId={p.project.id}
+      subjectId={p.child.dock?.activeSubjectId ?? null}
+      viewers={p.child.header?.viewers}
+      activeSession={p.activeSession}
+      onSelectSession={handleSelectSession}
+      onLessonCreated={(id) => p.child?.dock?.onLessonCreated?.(id)}
+      isMobile={false}
+    />
+  ) : (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
       <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onSessionsListChanged={p.onSessionsListChanged} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
     </div>
@@ -411,7 +438,16 @@ export function DesktopWorkspace(p: Props) {
       onAddToWall={wallOn ? () => handleAddToWall(p.activeSession!) : undefined}
       onChatDeleted={p.onClearSession}
       availableChatIds={p.availableChatIds}
+      // Детская проводка (Ф1j): части одного объекта — по своим местам; без child
+      // все три undefined, т.е. взрослый чат как раньше
+      childFeatures={p.child?.features}
+      childFeedKinds={p.child?.feedKinds}
+      childHeader={p.child?.header}
     />
+  ) : p.child ? (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <ChildCenterEmpty dock={p.child.dock} />
+    </div>
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
@@ -533,7 +569,8 @@ export function DesktopWorkspace(p: Props) {
           // flex: 1 — по высоте этой обёртки док проектов считает число видимых
           // иконок; без неё они все уезжали бы под лупу «ещё N»
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
+            {/* Детский ряд предметов вместо дока проектов (Ф1e/Ф1j): без child — взрослый док */}
+            <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} child={p.child?.dock} />
             {wallOn && <WallDock onOpenWall={p.onOpenWall!} />}
           </div>
         }

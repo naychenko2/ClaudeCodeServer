@@ -1,4 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace ClaudeHomeServer.Services.Llm;
@@ -156,9 +159,17 @@ public static class TranscriptMigrator
     //
     // waitIfBusy=false — для горячего пути старта хода: занятый файл не ждём бэкофом до 8 с, а
     // сразу отдаём false с причиной (ход полагается на --resume и не простаивает).
+    // normalizeMcpBlocks — инцидент 21.11 (GLM → Kimi): история, отвеченная GLM, содержит
+    // провайдеро-специфичные блоки MCP (mcp_tool_use/mcp_tool_result от webReader), которые
+    // Anthropic-совместимый приёмник другого провайдера отвергает 400 Invalid request на КАЖДОМ
+    // --resume. При true целевая копия переписывается: type → tool_use/tool_result, служебное
+    // server_name удаляется, id/name/input и content сохраняются. Решает вызывающий: тот же
+    // тип поставщика (ротация подписок одного пула, копии внутри одного провайдера) — false,
+    // перенос между РАЗНЫМИ типами (GLM ↔ Kimi, сторонний ↔ подписка Claude) — true.
+    // Исходник не трогается никогда — нормализуется только целевая копия.
     public static bool TryMigrate(string srcRoot, string dstRoot, string cwd,
         string claudeSessionId, out string? error, bool preserveLongerDestination = false,
-        bool waitIfBusy = true)
+        bool waitIfBusy = true, bool normalizeMcpBlocks = false)
     {
         error = null;
         try
@@ -192,6 +203,13 @@ public static class TranscriptMigrator
             }
             CopyFileShared(src, dstFile, waitIfBusy);
 
+            // Нормализация идёт ПОСЛЕ побайтовой копии и только над целевым файлом: он в
+            // нашем распоряжении (профиль приёмника ещё не занят CLI этого хода), поэтому
+            // rewrite безопасен; сбой нормализации выводит error наверх — TryMigrate
+            // возвращает false, и ход на повреждённой/ненормализованной копии не стартует
+            if (normalizeMcpBlocks)
+                NormalizeMcpBlocksInPlace(dstFile);
+
             var srcSessionDir = Path.Combine(Path.GetDirectoryName(src)!, claudeSessionId);
             if (Directory.Exists(srcSessionDir))
                 CopyDirectory(srcSessionDir, Path.Combine(dstDir, claudeSessionId), waitIfBusy);
@@ -202,6 +220,84 @@ public static class TranscriptMigrator
             error = ex.Message;
             return false;
         }
+    }
+
+    // Нормализация провайдеро-специфичных блоков MCP в целевой копии транскрипта.
+    // Разрез строго по постановке: трогаются ТОЛЬКО блоки content-массивов сообщений
+    // (root.message.content[]) с type mcp_tool_use/mcp_tool_result — type переименовывается
+    // в tool_use/tool_result, служебное server_name удаляется, id/name/input и прочие поля
+    // блока (tool_use_id, content, is_error…) сохраняются. Thinking, тексты и любые другие
+    // блоки не трогаются; строки без подстроки остаются исходными байтами (файл перезаписывается
+    // только если что-то реально изменилось). Строка, которую не удалось разобрать как JSON-объект
+    // с message.content-массивом, остаётся как есть — нормализация не имеет права ломать resume.
+    private static void NormalizeMcpBlocksInPlace(string file)
+    {
+        string[] lines;
+        try { lines = File.ReadAllLines(file); }
+        catch (IOException ex)
+        {
+            Console.Error.WriteLine($"[TranscriptMigrator] Нормализация не прочитала {file}: {ex.Message}");
+            throw;
+        }
+
+        var changed = false;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            // Быстрый фильтр по подстроке: почти все строки транскрипта пропускаются без JSON-парса
+            if (!lines[i].Contains("mcp_tool_use", StringComparison.Ordinal)
+                && !lines[i].Contains("mcp_tool_result", StringComparison.Ordinal))
+                continue;
+            var replaced = TryNormalizeLine(lines[i]);
+            if (replaced is null) continue;
+            lines[i] = replaced;
+            changed = true;
+        }
+
+        // Нечего менять — файл уже побайтовая копия CopyFileShared, не переписываем
+        // (иначе пересериализация всей истории перемотала бы байты всей истории зря)
+        if (!changed) return;
+
+        // Явный '\n' вместо File.WriteAllLines: тот добавляет Environment.NewLine ('\r\n' на
+        // Windows-проде), а CLI-транскрипты пишутся с '\n'. Как у TranscriptBrancher.WritePrefix.
+        var sb = new StringBuilder();
+        foreach (var line in lines)
+            sb.Append(line).Append('\n');
+        File.WriteAllText(file, sb.ToString(), new UTF8Encoding(false));
+    }
+
+    // Одна строка JSONL: переименование type + удаление server_name в блоках message.content[].
+    // null — строка не JSON-объект с message.content-массивом (битая/мусорная или блоков там нет).
+    private static string? TryNormalizeLine(string line)
+    {
+        try
+        {
+            if (JsonNode.Parse(line) is not JsonObject root) return null;
+            if (root["message"] is not JsonObject msg) return null;
+            if (msg["content"] is not JsonArray content) return null;
+
+            var changed = false;
+            foreach (var block in content)
+            {
+                if (block is not JsonObject obj) continue;
+                if (obj["type"] is not JsonValue typeValue) continue;
+                if (typeValue.TryGetValue<string>(out var type) is false) continue;
+
+                if (type == "mcp_tool_use")
+                {
+                    obj["type"] = JsonValue.Create("tool_use");
+                    obj.Remove("server_name");
+                    changed = true;
+                }
+                else if (type == "mcp_tool_result")
+                {
+                    obj["type"] = JsonValue.Create("tool_result");
+                    obj.Remove("server_name");
+                    changed = true;
+                }
+            }
+            return changed ? root.ToJsonString() : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     // Переезд транскрипта между РАБОЧИМИ ПАПКАМИ в рамках одного профиля (worktree чата):

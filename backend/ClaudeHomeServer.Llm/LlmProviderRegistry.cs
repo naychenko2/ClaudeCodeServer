@@ -221,6 +221,17 @@ public class LlmProviderRegistry
     public LlmProviderConfig? GetByKey(string? key) =>
         key is not null && _providers.TryGetValue(key, out var p) ? p : null;
 
+    // Один и тот же «тип поставщика» для решения о нормализации транскрипта при переносе
+    // (инцидент 21.11, GLM → Kimi): обе стороны — подписки одного пула Claude (реестр
+    // сторонних их не знает, GetByKey null с обеих сторон) или один и тот же реестровый
+    // сторонний ключ — история одного формата, копия остаётся побайтовой. Разные типы
+    // (GLM ↔ Kimi, сторонний ↔ подписка) — история другого формата, нормализация нужна.
+    public bool SameProviderKind(string? a, string? b)
+    {
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+        return GetByKey(a) is null && GetByKey(b) is null;
+    }
+
     // Статистическая дорожка ходов провайдера (фича «Локальные модели: Qwen 27B на Video, vLLM», B1; ключи
     // дорожки — контракт с B5/B7): явный StatsEngine провайдера; иначе MainTrackName
     // («main»), если провайдер — основной локальный (тот же выбор, что MainLocalProvider

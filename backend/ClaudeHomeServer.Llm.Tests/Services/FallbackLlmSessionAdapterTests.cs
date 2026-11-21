@@ -3069,6 +3069,91 @@ public class FallbackLlmSessionAdapterTests
         finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
     }
 
+    // Инцидент 21.11 (GLM → Kimi, 400 Invalid request на каждом --resume): история,
+    // отвеченная GLM, содержит провайдеро-специфичную пару mcp_tool_use/mcp_tool_result
+    // (webReader). Стартовая подмена p-glm (кулдаун) → шаг цепочки p-kimi переносит
+    // транскрипт с нормализацией — разные типы поставщика. В целевой копии блоки
+    // tool_use/tool_result без server_name; соседние thinking/text и исходник не тронуты.
+    [Fact]
+    public async Task СтартоваяПодмена_McpИсторияGLM_НормализуетсяВПрофилеШага()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_norm_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var dict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+                ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+                ["LlmProviders:p-glm:ApiKey"] = "sk-g",
+                ["LlmProviders:p-glm:AnthropicBaseUrl"] = "https://glm.example.com",
+                ["LlmProviders:p-glm:Models:0:Id"] = "m-glm",
+                ["LlmProviders:p-kimi:ApiKey"] = "sk-k",
+                ["LlmProviders:p-kimi:AnthropicBaseUrl"] = "https://kimi.example.com",
+                ["LlmProviders:p-kimi:Models:0:Id"] = "m-kimi",
+            };
+            var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+            var pool = BuildPool("acc-a");
+            var health = new ProviderHealthRegistry();
+            health.MarkUnavailable("p-glm");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-norm";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var glmDir = Path.Combine(baseDir, "claude-profiles", "p-glm", "projects", flat);
+            var kimiDir = Path.Combine(baseDir, "claude-profiles", "p-kimi", "projects", flat);
+            Directory.CreateDirectory(glmDir);
+            // Фикстура webReader GLM: пара mcp_tool_use/mcp_tool_result + соседние блоки
+            var body =
+                "{\"parentUuid\":\"u1\",\"type\":\"assistant\",\"message\":{\"id\":\"msg-glm\",\"role\":\"assistant\"," +
+                "\"model\":\"m-glm\",\"content\":[" +
+                "{\"type\":\"thinking\",\"thinking\":\"смотрю\",\"signature\":null}," +
+                "{\"type\":\"mcp_tool_use\",\"id\":\"call_abc\",\"name\":\"webReader\",\"server_name\":\"web_reader\"," +
+                "\"input\":{\"url\":\"https://example.com\"}}," +
+                "{\"type\":\"text\",\"text\":\"Открываю\"}]}," +
+                "\"timestamp\":\"2026-11-21T18:00:00.000Z\"}\n" +
+                "{\"parentUuid\":\"u2\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[" +
+                "{\"type\":\"mcp_tool_result\",\"tool_use_id\":\"call_abc\",\"content\":[{\"type\":\"text\",\"text\":\"страница\"}]}" +
+                "]},\"timestamp\":\"2026-11-21T18:01:00.000Z\"}\n";
+            File.WriteAllText(Path.Combine(glmDir, csid + ".jsonl"), body);
+
+            var session = new Session { Model = "m-glm", Provider = "p-glm", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                isChildTurn: () => false,
+                effectiveChain: () => new[] { "m-glm", "m-kimi" }, health: health);
+            inner.Sink = sut.HandleMessageAsync;
+            // Ответ дописывается в kimi-профиль (туда идёт ход под подменой)
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(Path.Combine(kimiDir, csid + ".jsonl"), "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Стартовая подмена сработала: одна попытка — на p-kimi × m-kimi
+            inner.Attempts.Should().ContainSingle();
+            inner.Attempts[0].Should().Be(("p-kimi", "m-kimi"), "старт с живого шага цепочки");
+            // Целевая копия (kimi-профиль) нормализована: tool_use/tool_result без server_name
+            var kimiLines = File.ReadAllText(Path.Combine(kimiDir, csid + ".jsonl"));
+            kimiLines.Should().NotContain("mcp_tool_use").And.NotContain("mcp_tool_result").And.NotContain("server_name");
+            kimiLines.Should().Contain("\"type\":\"tool_use\"").And.Contain("\"type\":\"tool_result\"");
+            // Соседние блоки пережили нормализацию
+            kimiLines.Should().Contain("\"type\":\"thinking\"").And.Contain("\"type\":\"text\"");
+            // Restore (обратный перенос p-kimi → p-glm) тоже нормализует — обе копии в форме,
+            // которую принимает любой приёмник
+            var glmLines = File.ReadAllText(Path.Combine(glmDir, csid + ".jsonl"));
+            glmLines.Should().NotContain("mcp_tool_use").And.NotContain("server_name");
+            glmLines.Should().Contain("\"type\":\"tool_use\"").And.Contain("ANSWER");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
     // Несколько подмен подряд (шаг → шаг → шаг): обратный перенос в finally идёт из ПОСЛЕДНЕГО
     // профиля цепочки (где прошёл ход и записан свежий ответ), а не из первого/промежуточного.
     // Цепочка m1(p1) → m2(p2) → m3(p3); ответ CLI пишется только в профиль p3; после хода он

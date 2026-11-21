@@ -347,4 +347,119 @@ public class TranscriptMigratorTests : IDisposable
 
         File.Exists(victim).Should().BeTrue();
     }
+
+    // --- Нормализация провайдеро-специфичных блоков MCP (инцидент 21.11: GLM → Kimi) ---
+    // Фикстура GLM webReader: assistant-строка с mcp_tool_use (+ thinking и text рядом —
+    // они обязаны пережить нормализацию) и user-строка с mcp_tool_result.
+
+    private const string McpUseLine =
+        "{\"parentUuid\":\"u1\",\"type\":\"assistant\",\"message\":{\"id\":\"msg-glm\",\"role\":\"assistant\"," +
+        "\"model\":\"glm-5.3-flash\",\"content\":[" +
+        "{\"type\":\"thinking\",\"thinking\":\"смотрю страницу\",\"signature\":null}," +
+        "{\"type\":\"mcp_tool_use\",\"id\":\"call_abc\",\"name\":\"webReader\",\"server_name\":\"web_reader\"," +
+        "\"input\":{\"url\":\"https://example.com\"}}," +
+        "{\"type\":\"text\",\"text\":\"Открываю страницу\"}]},\"timestamp\":\"2026-11-21T18:00:00.000Z\"}";
+
+    private const string McpResultLine =
+        "{\"parentUuid\":\"u2\",\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[" +
+        "{\"type\":\"mcp_tool_result\",\"tool_use_id\":\"call_abc\",\"content\":[{\"type\":\"text\",\"text\":\"страница\"}]}" +
+        "]},\"timestamp\":\"2026-11-21T18:01:00.000Z\"}";
+
+    private const string PlainCyrillicLine = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Продолжай\"}}";
+
+    private static string JoinLines(params string[] lines) => string.Join("\n", lines) + "\n";
+
+    private static System.Text.Json.Nodes.JsonArray? ContentOf(string line) =>
+        System.Text.Json.Nodes.JsonNode.Parse(line)?["message"]?["content"] as System.Text.Json.Nodes.JsonArray;
+
+    [Fact]
+    public void TryMigrate_НормализуетMcpПаруВЦелевойКопии()
+    {
+        SeedTranscript(_src, content: JoinLines(McpUseLine, McpResultLine, PlainCyrillicLine));
+
+        var ok = TranscriptMigrator.TryMigrate(_src, _dst, Cwd, SessionId, out var error,
+            normalizeMcpBlocks: true);
+
+        ok.Should().BeTrue(error);
+        var dstFile = Path.Combine(_dst, "projects", TranscriptMigrator.FlattenCwd(Cwd), SessionId + ".jsonl");
+        // Исходник не тронут — нормализуется только целевая копия
+        File.ReadAllText(Path.Combine(_src, "projects", TranscriptMigrator.FlattenCwd(Cwd), SessionId + ".jsonl"))
+            .Should().Contain("mcp_tool_use").And.Contain("server_name");
+        // use-блок: type → tool_use, server_name удалён, id/name/input сохранены,
+        // соседние thinking/text не тронуты (в фикстуре tool_use — второй блок, после thinking)
+        var use = ContentOf(File.ReadLines(dstFile).First());
+        use.Should().NotBeNull();
+        use![0]!["type"]!.GetValue<string>().Should().Be("thinking");
+        use![1]!["type"]!.GetValue<string>().Should().Be("tool_use");
+        use[1]!["id"]!.GetValue<string>().Should().Be("call_abc");
+        use[1]!["name"]!.GetValue<string>().Should().Be("webReader");
+        use[1]!["input"]!["url"]!.GetValue<string>().Should().Be("https://example.com");
+        (use[1] as System.Text.Json.Nodes.JsonObject)!.Should().NotContainKey("server_name");
+        use[2]!["type"]!.GetValue<string>().Should().Be("text");
+    }
+
+    [Fact]
+    public void TryMigrate_БезНормализации_КопияПобайтовая()
+    {
+        var body = JoinLines(McpUseLine, McpResultLine);
+        SeedTranscript(_src, content: body);
+
+        // normalizeMcpBlocks не передаётся (default false) — ротация подписок пула и
+        // копии внутри одного провайдера обязаны остаться побайтовыми (критерий c1)
+        var ok = TranscriptMigrator.TryMigrate(_src, _dst, Cwd, SessionId, out var error);
+
+        ok.Should().BeTrue(error);
+        File.ReadAllText(Path.Combine(_dst, "projects", TranscriptMigrator.FlattenCwd(Cwd), SessionId + ".jsonl"))
+            .Should().Be(body, "без нормализации копия побайтовая — mcp-блоки не тронуты");
+    }
+
+    [Fact]
+    public void TryMigrate_Нормализация_СтрокиБезMcpОстаютсяИсходными()
+    {
+        // С normalize=true файл перезаписывается только если нашлись блоки; строки без
+        // подстроки сохраняются байт-в-байт
+        var body = JoinLines(PlainCyrillicLine, "{\"type\":\"summary\",\"summary\":\"итог\"}");
+        SeedTranscript(_src, content: body);
+
+        TranscriptMigrator.TryMigrate(_src, _dst, Cwd, SessionId, out _, normalizeMcpBlocks: true)
+            .Should().BeTrue();
+
+        File.ReadAllText(Path.Combine(_dst, "projects", TranscriptMigrator.FlattenCwd(Cwd), SessionId + ".jsonl"))
+            .Should().Be(body);
+    }
+
+    [Fact]
+    public void TryMigrate_Нормализация_БитаяJsonСтрокаНеВалитФайл()
+    {
+        // Строка с подстрокой, но не JSON-объект с message.content — остаётся как есть,
+        // нормализация не имеет права ломать resume
+        var body = JoinLines("not json {\"mcp_tool_use\"", McpUseLine);
+        SeedTranscript(_src, content: body);
+
+        TranscriptMigrator.TryMigrate(_src, _dst, Cwd, SessionId, out var error, normalizeMcpBlocks: true)
+            .Should().BeTrue(error);
+
+        var dstLines = File.ReadAllLines(Path.Combine(_dst, "projects", TranscriptMigrator.FlattenCwd(Cwd), SessionId + ".jsonl"));
+        dstLines[0].Should().Be("not json {\"mcp_tool_use\"");
+        ContentOf(dstLines[1])![1]!["type"]!.GetValue<string>().Should().Be("tool_use");
+    }
+
+    [Fact]
+    public void TryMigrate_Нормализация_ResultСServerName_ИмяСрезается()
+    {
+        var resultWithServer = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[" +
+            "{\"type\":\"mcp_tool_result\",\"tool_use_id\":\"call_x\",\"server_name\":\"web_reader\"," +
+            "\"content\":\"ок\"}]}}";
+        SeedTranscript(_src, content: JoinLines(resultWithServer));
+
+        TranscriptMigrator.TryMigrate(_src, _dst, Cwd, SessionId, out var error, normalizeMcpBlocks: true)
+            .Should().BeTrue(error);
+
+        var dstFile = Path.Combine(_dst, "projects", TranscriptMigrator.FlattenCwd(Cwd), SessionId + ".jsonl");
+        var block = ContentOf(File.ReadLines(dstFile).First())![0];
+        block!["type"]!.GetValue<string>().Should().Be("tool_result");
+        (block as System.Text.Json.Nodes.JsonObject)!.Should().NotContainKey("server_name");
+        block["tool_use_id"]!.GetValue<string>().Should().Be("call_x");
+        block["content"]!.GetValue<string>().Should().Be("ок");
+    }
 }

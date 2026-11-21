@@ -3,12 +3,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Гибридная прочитанность (chatReadState.ts): формула max(локальная, серверная,
 // baseline) и фоновый синк отметки на бэк (leading + trailing троттл, гард офлайна).
 
-const { markReadMock, offlineState } = vi.hoisted(() => ({
+const { markReadMock, offlineState, meState } = vi.hoisted(() => ({
   markReadMock: vi.fn(() => Promise.resolve()),
   offlineState: { online: true },
+  meState: { isChild: false },
 }));
 vi.mock('../api', () => ({ api: { chats: { markRead: markReadMock } } }));
 vi.mock('../offline', () => ({ isOnline: () => offlineState.online }));
+// Минимальный мок Me: chatReadState читает из него только isChild
+vi.mock('../defaultPersona', () => ({ getMeSnapshot: () => ({ isChild: meState.isChild }) }));
 
 // Стаб localStorage для node-окружения vitest (jsdom в проекте не подключён)
 function fakeStorage(): Storage {
@@ -41,6 +44,7 @@ beforeEach(async () => {
   // сдвигающие время до первого обращения, иначе получили бы «уехавший» baseline
   localStorage.setItem('cc_chats_read_since', String(T0));
   offlineState.online = true;
+  meState.isChild = false;
   markReadMock.mockClear();
   mod = await import('../chatReadState');
 });
@@ -132,5 +136,25 @@ describe('markChatRead: фоновый синк на бэк', () => {
   it('ошибка запроса глотается молча', () => {
     markReadMock.mockReturnValueOnce(Promise.reject(new Error('сеть упала')));
     expect(() => mod.markChatRead('a')).not.toThrow();
+  });
+});
+
+describe('ребёнок: серверный синк не шлётся (K9d)', () => {
+  it('два markChatRead в окне + дослов таймера: 0 PUT, локальная отметка стоит', () => {
+    meState.isChild = true;
+    vi.setSystemTime(T0 + 30_000);
+    mod.markChatRead('a');
+    mod.markChatRead('a');
+    vi.advanceTimersByTime(10_000); // за пределами окна — trailing тоже погашен
+    expect(markReadMock).not.toHaveBeenCalled();
+    expect(mod.getChatReadTime('a')).toBeGreaterThan(0);
+    // локальная прочитанность работает как раньше
+    expect(mod.hasUnread(iso(25_000), 'a')).toBe(false);
+  });
+
+  it('офлайн-гард и прочие взрослые тесты не меняются: взрослый шлёт как раньше', () => {
+    // меState.isChild по умолчанию false — поведение leading/trailing не тронуто
+    mod.markChatRead('a');
+    expect(markReadMock).toHaveBeenCalledTimes(1);
   });
 });

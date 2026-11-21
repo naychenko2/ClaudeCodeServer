@@ -30,7 +30,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import type { ChildRoute } from './types';
 
-// Значение пикера — та же тройка, что поля предмета (ChildSubjectAdmin.providerKey/model/
+// Значение пикера — та же тройка, что поля профиля (ChildSettingsProfile.providerKey/model/
 // acknowledgeRouteRisk). Последнее — состояние галки: true — согласие стоит (живое от сервера
 // или только что поставленное админом); отсутствие или false — согласия нет. Едет ли оно в тело
 // — решает родитель (Т6): только действие этой сессии, не прочитанное из ответа.

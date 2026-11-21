@@ -163,7 +163,10 @@ describe('проводка гейта «Голоса» (QA-P1F, остаток M
   });
   it('кнопка режима разговора в композере неактивна участнику с причиной', () => {
     expect(composer).toContain('const voiceDeniedReason = ownerSettingsDeniedReason(project);');
-    const btn = composer.slice(composer.indexOf('const voiceButton = onToggleVoiceMode'), composer.indexOf('const talkStopButton'));
+    // Якорь — без хвоста условия: он уже менялся («!childSet && onToggleVoiceMode») и обнулял срез
+    const start = composer.indexOf('const voiceButton = ');
+    expect(start, 'якорь voiceButton не найден').toBeGreaterThan(-1);
+    const btn = composer.slice(start, composer.indexOf('const talkStopButton'));
     expect(btn).toContain('disabled={!!voiceDeniedReason}');
     expect(btn).toContain('`Режим разговора: ${voiceDeniedReason}`');
   });

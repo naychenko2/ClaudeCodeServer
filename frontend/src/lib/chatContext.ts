@@ -10,6 +10,9 @@
 import { useSyncExternalStore } from 'react';
 import type { ServerMessage, SessionContextEntry } from '../types';
 import { api } from './api';
+import { getMeSnapshot } from './defaultPersona';
+import { chatContextApi } from './chatContext/api';
+import type { ChatContextDto } from './chatContext/types';
 
 // Составы по sessionId. Внутри — только ссылки из GET/события: кладём всегда новый
 // массив, useSyncExternalStore различает обновления по ссылке
@@ -25,12 +28,38 @@ function subscribe(l: () => void): () => void {
   return () => { listeners.delete(l); };
 }
 
-// Первичная загрузка состава (GET с live: true внутри api). Идемпотентна по «кеша нет»:
+// Ручка чтения состава выбирается по существующему признаку детства (Me.isChild из стора
+// me — тот же, по которому App ведёт детский маршрут), нового признака не заводим:
+// проектная ручка GET {projectId}/sessions/{sessionId}/context ребёнку закрыта гейтом И1
+// (метки [ChildAllowed] нет → 403); для него открыта GET /api/chats/{id}/context
+// ([ChildAllowed], B20c: только контекст своего детского чата). Открытая ручка отвечает
+// DTO ADR-023 (основной объект + референсы), а не прежним списком: в прежнюю модель
+// выводимы только файлы проекта — полоса открывает их тем же путём, по адресу от корня.
+// Прочие виды (картинки, звук, заметки) в прежний список не кладутся: детская панель
+// «Контекст» — новая система (ContextPanelHost), она читает DTO сама, полосе они не нужны
+const PROJECT_FILE_KIND = 'project-file'; // зеркало бэкенд-константы ProjectFileContextKind
+
+function childEntriesOf(dto: ChatContextDto): SessionContextEntry[] {
+  return [dto.primary, ...dto.refs].flatMap(i =>
+    i && i.kind === PROJECT_FILE_KIND && typeof i.ref.path === 'string' && i.ref.path
+      ? [{ type: 'file' as const, id: i.ref.path, title: i.label, missing: i.missing }]
+      : [],
+  );
+}
+
+// Единая точка чтения состава для обоих путей: взрослый — прежняя проектная ручка
+// (live: true внутри api), детский — разрешённая (live: true внутри chatContextApi)
+async function fetchContextEntries(projectId: string, sessionId: string): Promise<SessionContextEntry[]> {
+  if (getMeSnapshot().isChild) return childEntriesOf(await chatContextApi.get(sessionId));
+  return api.sessions.getContext(projectId, sessionId);
+}
+
+// Первичная загрузка состава (GET с live: true внутри транспорта). Идемпотентна по «кеша нет»:
 // актуальность после загрузки держат событие context_updated и saveChatContext
 export async function loadChatContext(projectId: string, sessionId: string): Promise<void> {
   if (entries.has(sessionId)) return;
   try {
-    entries.set(sessionId, await api.sessions.getContext(projectId, sessionId));
+    entries.set(sessionId, await fetchContextEntries(projectId, sessionId));
     emit();
   } catch {
     // офлайн/ошибка — кеша нет, полоса решает, что показывать; повторная попытка —
@@ -60,7 +89,7 @@ export function applyContextUpdated(msg: ServerMessage): void {
   // переключения чата. Догоняем их отдельным GET (проект знаем из открытого чата)
   if (activeChat?.sessionId !== msg.sessionId) return;
   const { projectId, sessionId } = activeChat;
-  void api.sessions.getContext(projectId, sessionId)
+  void fetchContextEntries(projectId, sessionId)
     .then(fresh => { entries.set(sessionId, fresh); emit(); })
     .catch(() => { /* офлайн — состав из события остаётся, признаки догонит следующий GET */ });
 }
@@ -140,7 +169,7 @@ export async function addToChatContext(projectId: string, sessionId: string,
 // Убрать материал из контекста
 export async function removeFromChatContext(projectId: string, sessionId: string,
   type: SessionContextEntry['type'], id: string): Promise<void> {
-  const list = entries.get(sessionId) ?? await api.sessions.getContext(projectId, sessionId);
+  const list = entries.get(sessionId) ?? await fetchContextEntries(projectId, sessionId);
   const key = contextKey(type, id);
   await saveChatContext(projectId, sessionId, toPayload(list).filter(e => contextKey(e.type, e.id) !== key));
 }
@@ -150,7 +179,7 @@ export async function removeFromChatContext(projectId: string, sessionId: string
 export async function replaceChatContextEntry(projectId: string, sessionId: string,
   type: SessionContextEntry['type'], id: string,
   next: Pick<SessionContextEntry, 'type' | 'id' | 'title'>): Promise<void> {
-  const list = entries.get(sessionId) ?? await api.sessions.getContext(projectId, sessionId);
+  const list = entries.get(sessionId) ?? await fetchContextEntries(projectId, sessionId);
   const key = contextKey(type, id);
   await saveChatContext(projectId, sessionId, toPayload(list).map(e => contextKey(e.type, e.id) === key ? next : e));
 }

@@ -123,11 +123,18 @@ if (typeof window !== 'undefined') {
 // --- Отправка на сервер (телефон/планшет: консоль недоступна) ---
 
 import { request } from './offline';
+import { getMeSnapshot } from './defaultPersona';
 
 // POST /api/tts/diag: дамп пишется в серверный лог с тегом [talk-diag]. Запрос
 // идёт через общий request (авторизация, офлайн-гейт, таймаут); длина ограничена
 // сервером (64k), фронтовый буфер меньше
 export async function talkDiagUpload(): Promise<boolean> {
+  // Ребёнок не шлёт диагностику: /api/tts/diag — взрослая отладочная ручка без
+  // [ChildAllowed] (дефект cc43582b: ребёнку на ленте урока был 403). Гейт в единственной
+  // точке запроса: к talkDiagUpload ведёт и talkDiagSave, и прямой вызов из консоли —
+  // дальше них ни один путь не спросит. Дамп в localStorage (talkDiagSave) пишется
+  // как прежде: он локальный и 403 не даёт.
+  if (getMeSnapshot().isChild) return false;
   try {
     await request('/tts/diag', {
       method: 'POST',

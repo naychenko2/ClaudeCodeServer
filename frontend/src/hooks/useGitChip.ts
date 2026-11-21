@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import type { Project, Session } from '../types';
 import { basename } from '../lib/paths';
 import { ensureGit, gitStripStatus, loadUnpushedLog, useGitState, workingDiffStat } from '../lib/git';
+import { useMe } from '../lib/defaultPersona';
 import type { TurnTree } from '../lib/turnWorktree';
 
 export function useGitChip(project: Project, session?: Session, turnTree: TurnTree | null = null) {
@@ -13,11 +14,16 @@ export function useGitChip(project: Project, session?: Session, turnTree: TurnTr
   // перечитываем статус при переключении дерева у активной сессии
   const worktreeBranch = session?.worktreeBranch ?? null;
 
-  // Статус + стек незапушенных (для «Опубликовать»); realtime держит их свежими
+  // Статус + стек незапушенных (для «Опубликовать»); realtime держит их свежими.
+  // Ребёнок git не опрашивает: GitController без [ChildAllowed] (решение 77), а строка
+  // контекста чата — обход, оставшийся после гашения панелей (доработка X-W4-37).
+  // Взрослый путь не тронут; без статуса чип и так скрыт (isRepo=false), вид не меняется.
+  const me = useMe();
   useEffect(() => {
+    if (me.isChild) return;
     ensureGit(project.id, true);
     void loadUnpushedLog(project.id);
-  }, [project.id, worktreeBranch]);
+  }, [project.id, worktreeBranch, me.isChild]);
 
   const diff = workingDiffStat(status);
   const ahead = status?.ahead ?? 0;

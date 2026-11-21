@@ -1,7 +1,12 @@
-// Т4d «Предметов и репетиторов» (макет Д1, секция «Предметы на главной»): контролируемый список
-// предметов. Состояния и запросов своих нет: черновик держит родитель (Т4f), каждое действие
-// строит НОВЫЙ массив и отдаёт его целиком onChange(next); порядок массива = порядок плиток у
-// ребёнка (И5). Пустой список — empty-state с подсказкой (макет «Предметов нет»).
+// Ф2c «Предметы» окна настроек ребёнка (ADR-041 ред. 7 §13, решение 74; макет Майи, раздел subjects).
+// Управляемый список: value — черновик предметов из родителя окна (Ф2f), каждое действие строит НОВЫЙ
+// массив и отдаёт его целиком onChange(next); порядок массива = порядок плиток у ребёнка (И5).
+// Своего состояния и своих запросов нет — к каркасу окна (Ф2b) не привязан, его встроит Ф2f в слот subjectsSection.
+//
+// Чем этот раздел отличается от прежнего ChildSubjectsEditor (его удалит Ф1g): у предмета нет маршрута,
+// репетитора, знаний и файлов — всё это несёт проект-предмета (решения 69–71), репетитора куратор
+// настраивает штатной карточкой персоны в самом проекте. Сервер заведёт проект и персону при сохранении
+// предмета (решение 70) — здесь об этом только подсказка после добавления.
 //
 // id рождается из slug названия (тот же разбор, что lib/slug — зеркало бэкового Slugify) в момент,
 // когда название впервые становится непустым; с этого момента id от названия не зависит —
@@ -9,35 +14,17 @@
 // потолка ^[a-z0-9-]{1,32}$ (ChildProfileValidator.cs:201). Новая строка до названия id не имеет:
 // в тело она не уйдёт (название обязано, subject_label_invalid), а до появления id строка
 // ключуется draft-ключом — состояния по строкам у компонента нет, контролы управляемые,
-// поэтому индексный ключ здесь не смешивает данные.
+// поэтому индексный ключ здесь не смешивает данных.
 //
-// Подсказки у полей — правила валидатора Т2a (название 1..40, глиф 1..3), до отправки;
+// Подсказки у полей — правила валидатора (название 1..40, глиф 1..3), до отправки;
 // ввод обрезается по этим же длинам (TextField maxLength не пропускает — срез в onChange).
 // Ошибка поля — когда значение точно не пройдёт сервер: у предмета с id (он уже назван)
 // название или глиф очищены. Новая строка с пустым названием — не ошибка: человек её заполняет.
-// Серверный 400 показывает родитель (Т4f), здесь своего «Сохранить» нет.
+// Серверный 400 показывает родитель; errorId — предмет, по которому он отказал (рамка C.danger).
 //
-// Маршрут нового предмета — «маршрут Помощника (правила)»: его знает только родитель, поэтому
-// проп defaultRoute (значение из его черновика); без него — первая пара из routes (тот же
-// порядок, что отдаёт GET /api/admin/child-routes). Пустые routes — пустая пара: пикер сам
-// скажет «Нет записей пула с API-ключом» (Т4c), список предметов при этом работает.
-//
-// Отказ загрузки списка (routesError, Т4f): пикеры строк заглушаются так же, как пикер
-// помощника, — пустой список сказал бы «Нет записей пула с API-ключом», чего мы не знаем:
-// поставщики могут быть, мы их просто не получили (ревью Т4f). Предметы при этом правятся
-// и сохраняются как есть — их данные не потерялись.
-//
-// Согласие на не-Anthropic маршрут (Т6, И2′): флаг живёт в черновике предмета и проходит в
-// onChange целиком — решает его родитель. Галка показывает: действие этой сессии
-// (acknowledgeRouteRisk в черновике) или живое согласие (routeAcknowledgedAt — поле ответа,
-// оно держится, пока поставщик не менялся). Смена поставщика снимает и то и другое: ни флага,
-// ни даты не остаётся (бэк живое согласие при другом providerKey не считает, UserStore).
-// Смена модели согласия не касается. Живой флаг из ответа в черновике не появляется — его
-// убирает родитель (draftOf): иначе нетронутый профиль молча согласовал бы свой маршрут
-// заново (ревью Т4a).
-//
-// Клик по строке (её текст) — onSelect(id): карточку репетитора открывает родитель (Т4f);
-// selectedId — отмеченная строка. Строка без id не выбирается: открывать нечего.
+// knowledgeMoved — маркер только из ответа (тип Ф2a): к предмету была привязана база знаний,
+// материалы надо перенести в папку проекта-предмета. Из тела не читается никогда и здесь не
+// правится: маркер показывает перенос, папку правит взрослый интерфейс проекта.
 
 import type { CSSProperties } from 'react';
 import { BookOpen, ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react';
@@ -51,11 +38,10 @@ import { Toggle } from '../../components/ui/Toggle';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { slugify } from '../../lib/slug';
-import { ChildRoutePicker, type ChildRouteValue } from './ChildRoutePicker';
 import { subjectColors } from './subjectPalette';
-import type { ChildRoute, ChildSubjectAdmin, ChildSubjectColor } from './types';
+import type { ChildSettingsSubject, ChildSubjectColor } from './types';
 
-// Правила Т2a (ChildProfileValidator.cs:110-113) и потолок id (тот же файл, строка 201).
+// Правила валидатора (ChildProfileValidator.cs:110-113) и потолок id (тот же файл, строка 201).
 const LABEL_MAX = 40;
 const GLYPH_MAX = 3;
 const ID_MAX = 32;
@@ -82,50 +68,29 @@ function uniqueId(label: string, taken: Set<string>): string {
 }
 
 interface Props {
-  // Черновик предмета из профиля (тот же элемент, что тело subjects): компонент его не держит.
-  subjects: ChildSubjectAdmin[];
-  // Элементы GET /api/admin/child-routes как есть (Т4c): пикеру и маршруту по умолчанию.
-  routes: ChildRoute[];
-  onChange: (next: ChildSubjectAdmin[]) => void;
-  // Открытая сейчас карточка репетитора (Т4f): строка отмечена, клик по другой строке зовёт onSelect.
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  // Маршрут «Помощника (правила)» из черновика родителя — им и начинается новый предмет.
-  defaultRoute?: ChildRouteValue;
-  // Гасит контролы на время сохранения (макет Д1 «Сохранение») — состояние родителя.
+  // Черновик предметов из окна (тот же элемент, что поле subjects тела): компонент его не держит.
+  value: ChildSettingsSubject[];
+  onChange: (next: ChildSettingsSubject[]) => void;
+  // Гасит контролы на время сохранения — состояние родителя.
   disabled?: boolean;
-  // Предмет, по которому сервер отказал (Т4f): строка с этим id — рамка C.danger (макет
-  // «Ошибка сохранения по этому предмету: рамка C.danger»). Имя берёт родитель: здесь нет
-  // ни текста отказа, ни его кода.
+  // Предмет, по которому сервер отказал: строка с этим id — рамка C.danger. Имя и текст отказа
+  // несёт родитель: здесь их нет.
   errorId?: string | null;
-  // Список маршрутов не загрузился (Т4f): пикеры строк заглушены (см. шапку файла) —
-  // пустые routes при этом не показывают ложного «пула нет».
-  routesError?: boolean;
 }
 
-// Дата согласия — только человек и дата, без времени: админу важно «когда это разрешили»,
-// не минута (поле ответа routeAcknowledgedAt).
-const fmtDate = (iso: string): string =>
-  new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-
-export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, onSelect, defaultRoute, disabled, errorId, routesError }: Props) {
+export function ChildSubjectsSection({ value, onChange, disabled, errorId }: Props) {
   const isMobile = useIsMobile();
 
+  const subjects = value;
   const takenIds = new Set(subjects.map((s) => s.id).filter(Boolean));
-  const defaultRouteValue = (): ChildRouteValue =>
-    defaultRoute ?? (routes.length > 0
-      ? { providerKey: routes[0].providerKey, model: routes[0].models[0]?.id ?? '' }
-      : { providerKey: '', model: '' });
 
-  const patch = (i: number, fn: (s: ChildSubjectAdmin) => ChildSubjectAdmin) =>
+  const patch = (i: number, fn: (s: ChildSettingsSubject) => ChildSettingsSubject) =>
     onChange(subjects.map((s, j) => (j === i ? fn(s) : s)));
 
+  // Новая строка — пустой предмет: id родится из первого непустого названия (uniqueId в onChange
+  // поля), полей маршрута/репетитора у предмета окна нет в типе (ChildSettingsSubject, Ф2a).
   const addSubject = () => {
-    const route = defaultRouteValue();
-    onChange([
-      ...subjects,
-      { id: '', label: '', glyph: '', color: 'info', providerKey: route.providerKey, model: route.model, enabled: true },
-    ]);
+    onChange([...subjects, { id: '', label: '', glyph: '', color: 'info', enabled: true }]);
   };
 
   const move = (i: number, dir: -1 | 1) => {
@@ -140,9 +105,8 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
 
   const rowGap = isMobile ? SP.sm : SP.md;
   const rootStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: rowGap };
-  const rowStyle = (selected: boolean, failed: boolean): CSSProperties => ({
-    // Рамка отказа сильнее рамки выбора: красная строка важнее отмеченной.
-    border: `1px solid ${failed ? C.danger : selected ? C.accent : C.borderLight}`,
+  const rowStyle = (failed: boolean): CSSProperties => ({
+    border: `1px solid ${failed ? C.danger : C.borderLight}`,
     borderRadius: R.xl, background: C.bgWhite, overflow: 'hidden',
   });
   const headStyle: CSSProperties = {
@@ -170,9 +134,9 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
     };
   };
 
-  const subjectName = (s: ChildSubjectAdmin): string => s.label.trim() || 'без названия';
+  const subjectName = (s: ChildSettingsSubject): string => s.label.trim() || 'без названия';
 
-  const upButton = (s: ChildSubjectAdmin, i: number, mobile: boolean) => (
+  const upButton = (s: ChildSettingsSubject, i: number, mobile: boolean) => (
     <Button
       variant="ghost"
       // md — touch-размер ≥40 (спека мобиле); на десктопе тот же control остаётся читаемым
@@ -186,7 +150,7 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
       {mobile ? 'Выше' : <ChevronUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
     </Button>
   );
-  const downButton = (s: ChildSubjectAdmin, i: number, mobile: boolean) => (
+  const downButton = (s: ChildSettingsSubject, i: number, mobile: boolean) => (
     <Button
       variant="ghost"
       size={mobile ? 'md' : 'sm'}
@@ -213,26 +177,20 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
     </Button>
   );
 
-  const subjectRow = (s: ChildSubjectAdmin, i: number) => {
-    const selected = !!s.id && s.id === selectedId;
+  const subjectRow = (s: ChildSettingsSubject, i: number) => {
     const failed = !!s.id && s.id === errorId;
     // Пустое название у новой строки — не ошибка (её заполняют); у строки с id — очищено, сервер
     // такой не примет (subject_label_invalid).
     const badLabel = !!s.id && !s.label.trim();
     const badGlyph = !!s.id && !s.glyph.trim();
     return (
-      <div key={s.id || `draft-${i}`} data-testid="subject-row" data-error={failed ? 'true' : undefined} style={rowStyle(selected, failed)}>
+      <div key={s.id || `draft-${i}`} data-testid="subject-row" data-error={failed ? 'true' : undefined} style={rowStyle(failed)}>
         <div style={headStyle}>
           <span style={glyphTile(s.color, !s.enabled)} aria-hidden="true">{s.glyph || '?'}</span>
-          <button
-            data-testid="subject-open"
-            aria-label={`Открыть: ${subjectName(s)}`}
-            disabled={!s.id || disabled}
-            onClick={() => s.id && onSelect(s.id)}
+          <span
             style={{
               flex: 1, minWidth: 0, minHeight: 40, display: 'flex', flexDirection: 'column', gap: SP.xxs,
-              background: 'none', border: 'none', padding: 0, textAlign: 'left', color: 'inherit',
-              cursor: s.id ? 'pointer' : 'default',
+              textAlign: 'left',
             }}
           >
             <span style={{
@@ -244,10 +202,10 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
               {!s.id && <Badge tone="plan" size="xs">новый</Badge>}
               {!s.enabled && <Badge tone="neutral" size="xs">выключен</Badge>}
             </span>
-          </button>
+          </span>
           <span style={{ minWidth: 44, minHeight: 40, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
             <Toggle
-              checked={s.enabled}
+              checked={!!s.enabled}
               ariaLabel={`Предмет «${subjectName(s)}» включён`}
               disabled={disabled}
               onChange={(v) => patch(i, (prev) => ({ ...prev, enabled: v }))}
@@ -314,46 +272,12 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
             </div>
           </div>
 
-          {routesError ? (
-            <span data-testid="subject-route-off" style={{ fontSize: FS.sm, color: C.textMuted }}>
-              Список моделей не загрузился — выбрать маршрут сейчас нечем.
+          {/* Перенос материалов (маркер только из ответа, Ф2a): привязанная к предмету база ушла,
+              файлы — в папку проекта-предмета, её правит взрослый интерфейс проекта. */}
+          {s.knowledgeMoved && (
+            <span data-testid="subject-materials-move" style={{ fontSize: FS.sm, color: C.warningText }}>
+              Перенесите материалы в папку предмета.
             </span>
-          ) : (
-            <>
-              <ChildRoutePicker
-                routes={routes}
-                value={{
-                  providerKey: s.providerKey,
-                  model: s.model,
-                  // Галка: действие этой сессии, иначе живое согласие (дата ответа). Пустой
-                  // черновый флаг — не «false по умолчанию»: живое согласие видно, пока его
-                  // не тронули.
-                  acknowledgeRouteRisk: s.acknowledgeRouteRisk ?? (s.routeAcknowledgedAt != null),
-                }}
-                onChange={(v) => patch(i, (prev) => {
-                  if (v.providerKey !== prev.providerKey) {
-                    // Смена поставщика снимает согласие целиком: ни флага, ни живой даты —
-                    // при другом providerKey бэк живое согласие не считает, и тело без флага
-                    // даст на сохранении route_risk_unacknowledged (так и задумано).
-                    return { ...prev, providerKey: v.providerKey, model: v.model, acknowledgeRouteRisk: undefined, routeAcknowledgedAt: null };
-                  }
-                  if (v.model !== prev.model) {
-                    // Смена модели согласия не касается: флаг из неё в черновик не пишется —
-                    // иначе живое согласие уехало бы в тело как новое действие (ревью Т4a).
-                    return { ...prev, model: v.model };
-                  }
-                  // Та же пара — это галка согласия. Снятие галки гасит и строку «Разрешено …»:
-                  // она про живое согласие, а его админ только что отозвал.
-                  return { ...prev, acknowledgeRouteRisk: v.acknowledgeRouteRisk, ...(v.acknowledgeRouteRisk ? {} : { routeAcknowledgedAt: null }) };
-                })}
-                disabled={disabled}
-              />
-              {s.routeAcknowledgedAt != null && (
-                <span data-testid="subject-ack-at" style={{ fontSize: FS.sm, color: C.textMuted }}>
-                  Разрешено {fmtDate(s.routeAcknowledgedAt)}. Сменишь поставщика — согласие сбросится.
-                </span>
-              )}
-            </>
           )}
 
           <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -379,14 +303,24 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
     );
   };
 
+  // Подсказка после создания: предмет окна — это будущий проект-предмет (решение 70), его проект,
+  // файлы и репетитор — не здесь. Пока в списке есть несохранённая строка (без id) — подсказка видна.
+  const hasDraft = subjects.some((s) => !s.id);
+  const newHint = hasDraft && (
+    <span data-testid="subject-new-hint" style={{ fontSize: FS.sm, color: C.textMuted }}>
+      Предмет появится у ребёнка как проект; файлы и репетитор — в самом проекте.
+    </span>
+  );
+
   return (
-    <div data-testid="child-subjects-editor" style={rootStyle}>
-      <span style={{ fontSize: FS.xs, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        Предметы на главной
-      </span>
-      <span style={{ fontSize: FS.sm, color: C.textMuted, marginTop: -SP.sm }}>
-        Порядок списка — порядок плиток у ребёнка. Выключенный предмет скрыт с главной, его чаты только для чтения.
-      </span>
+    <div data-testid="child-subjects-section" style={rootStyle}>
+      <div>
+        <div style={{ fontFamily: FONT.serif, fontSize: FS.xl, color: C.textHeading, lineHeight: 1.2 }}>Предметы</div>
+        <p style={{ fontSize: FS.base, color: C.textMuted, lineHeight: 1.45, margin: `${SP.xs}px 0 0` }}>
+          Порядок списка — порядок плиток у ребёнка. Выключенный предмет скрыт с главной, его чаты только для чтения.
+          Репетитор, модель, файлы и знания — в самом проекте предмета.
+        </p>
+      </div>
       {subjects.length === 0 ? (
         <EmptyState
           inline
@@ -399,6 +333,7 @@ export function ChildSubjectsEditor({ subjects, routes, onChange, selectedId, on
         <>
           {subjects.map(subjectRow)}
           {addBtn(false)}
+          {newHint}
         </>
       )}
     </div>

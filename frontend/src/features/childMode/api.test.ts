@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { childApi, ChildAttachmentRejectedError, tutorAvatarUrl } from './api';
-import type { ChildProfile, ChildSubjectView, ChildTutorPatch } from './types';
+import type { ChildSettingsProfile, ChildSettingsResponse, ChildSubjectView, ChildTutorPatch } from './types';
 
 // Клиент проверяем по его запросам: моким request (lib/offline) утверждаем URL, метод
 // и тело по таблице «Ручки» ADR-041 («Контракт /api/child/*»). Путь request() строит
@@ -245,61 +245,171 @@ describe('POST /api/child/stop-signal', () => {
   });
 });
 
-describe('GET /api/users/{id}/child-profile', () => {
-  it('id экранирован, GET, live (редактор чернит текущий профиль, не копию кэша)', async () => {
-    await childApi.getProfile('u 1');
+// ── Окно настроек ребёнка (Ф2a) ────────────────────────────────────────────────
+// Форма ручек после Б4a (docs/architecture/api.md, «Детский режим: окно настроек ребёнка»;
+// бэк — ChildProfileDto/ChildSubjectDto/ChildGuardianDto, маппинг — ToChildProfileDto).
+// Клиент проверяем по запросам: что уходит в тело и что проходит из ответа как есть.
+
+// Профиль «не настроен» (маршрута профиля нет — пустые строки, законно по валидатору) с
+// предметом-плиткой: так окно чернит профиль сразу после галки.
+const windowProfile = (): ChildSettingsProfile => ({
+  enabled: true,
+  guardianUserIds: ['u2', 'u3'],
+  providerKey: '',
+  model: '',
+  spaces: { lessons: { windows: [{ from: '16:00', to: '19:00', weekdays: [1, 2, 3] }], dailyMinutes: 30 } },
+  subjects: [{ id: 'math', label: 'Математика', glyph: '×÷', color: 'accent', enabled: true }],
+  dailyBudgetUsd: 2,
+  monthlyBudgetUsd: 40,
+  warnMinutes: 5,
+});
+
+describe('окно: PUT /api/users/{id}/child-mode — узкая ручка галки', () => {
+  it('тело — только { enabled: true }, id экранирован; ответ проходит как пришёл', async () => {
+    const r = await req();
+    const res: ChildSettingsResponse = { profile: windowProfile(), tutorPersonaId: '' };
+    r.mockResolvedValueOnce(res);
+    const got = await childApi.setChildMode('u 1', true);
+    const { url, opts } = await lastCall();
+    expect(url).toBe('/users/u%201/child-mode');
+    expect(opts.method).toBe('PUT');
+    expect(JSON.parse(opts.body as string)).toEqual({ enabled: true });
+    expect(got).toEqual(res);
+  });
+
+  it('enabled: false — то же тело с false (выключение с сохранением настроек)', async () => {
+    await childApi.setChildMode('u1', false);
+    const { url, opts } = await lastCall();
+    expect(url).toBe('/users/u1/child-mode');
+    expect(JSON.parse(opts.body as string)).toEqual({ enabled: false });
+  });
+
+  it('400 not_container и 404 user_not_found — status + body.code (текст — с сервера)', async () => {
+    const r = await req();
+    r.mockRejectedValueOnce(httpErr(400, 'not_container', 'Детский режим включается только пользователям со средой исполнения container.'));
+    const e400 = (await rejection(childApi.setChildMode('u1', true))) as { status?: number; body?: { code?: string } };
+    expect(e400.status).toBe(400);
+    expect(e400.body?.code).toBe('not_container');
+
+    r.mockRejectedValueOnce(httpErr(404, 'user_not_found', 'Пользователь не найден.'));
+    const e404 = (await rejection(childApi.setChildMode('u1', true))) as { status?: number; body?: { code?: string } };
+    expect(e404.status).toBe(404);
+    expect(e404.body?.code).toBe('user_not_found');
+  });
+});
+
+// Одна ручка пути: чтение и запись профиля окна в одном описании.
+describe('окно: GET/PUT /api/users/{id}/child-profile', () => {
+  it('GET, live (окно чернит текущий профиль сервера), id экранирован', async () => {
+    await childApi.getChildProfile('u 1');
     const { url, opts } = await lastCall();
     expect(url).toBe('/users/u%201/child-profile');
     expect((opts.method ?? 'GET').toUpperCase()).toBe('GET');
     expect(opts.live).toBe(true);
   });
 
-  it('ответ — та же форма, что у PUT: { profile, tutorPersonaId }; профиля нет — profile: null проходит как есть', async () => {
+  it('ответ окна проходит как есть: согласие с автором, guardians по опекуну, рубильник инстанса, knowledgeMoved', async () => {
     const r = await req();
-    const profile: ChildProfile = {
-      enabled: true, guardianUserIds: [], providerKey: 'pk', model: 'm',
-      spaces: { lessons: { windows: [], dailyMinutes: null } },
+    const res: ChildSettingsResponse = {
+      profile: {
+        ...windowProfile(),
+        acknowledgeRouteRisk: true,
+        routeRiskAcknowledgedAt: '2026-11-20T10:00:00Z',
+        routeRiskAcknowledgedBy: 'admin',
+        guardians: [{ userId: 'u2', sharedProjectsFlag: true }, { userId: 'u3', sharedProjectsFlag: false }],
+        sharedProjectsInstanceEnabled: true,
+        subjects: [{ id: 'math', label: 'Математика', glyph: '×÷', color: 'accent', enabled: true, knowledgeMoved: true }],
+      },
+      tutorPersonaId: 'p-1',
     };
-    r.mockResolvedValueOnce({ profile, tutorPersonaId: 'p-1' });
-    expect(await childApi.getProfile('u1')).toEqual({ profile, tutorPersonaId: 'p-1' });
-
-    r.mockResolvedValueOnce({ profile: null, tutorPersonaId: '' });
-    expect(await childApi.getProfile('u2')).toEqual({ profile: null, tutorPersonaId: '' });
+    r.mockResolvedValueOnce(res);
+    const got = await childApi.getChildProfile('u1');
+    expect(got).toEqual(res);
+    // Порядок guardians — как guardianUserIds; флаг опекуна и рубильник — разные вещи окна.
+    expect(got.profile?.guardians).toEqual([{ userId: 'u2', sharedProjectsFlag: true }, { userId: 'u3', sharedProjectsFlag: false }]);
+    expect(got.profile?.sharedProjectsInstanceEnabled).toBe(true);
+    expect(got.profile?.routeRiskAcknowledgedBy).toBe('admin');
+    expect(got.profile?.subjects?.[0].knowledgeMoved).toBe(true);
   });
 
-  it('404 user_not_found — как прочие отказы: status + body.code', async () => {
+  it('профиля нет — profile: null проходит как есть (выключение пользователя, который им и не был)', async () => {
+    const r = await req();
+    r.mockResolvedValueOnce({ profile: null, tutorPersonaId: '' });
+    expect(await childApi.getChildProfile('u2')).toEqual({ profile: null, tutorPersonaId: '' });
+  });
+
+  it('404 user_not_found — status + body.code', async () => {
     const r = await req();
     r.mockRejectedValueOnce(httpErr(404, 'user_not_found', 'Пользователь не найден.'));
-    const e = (await rejection(childApi.getProfile('u1'))) as { status?: number; body?: { code?: string } };
+    const e = (await rejection(childApi.getChildProfile('u1'))) as { status?: number; body?: { code?: string } };
     expect(e.status).toBe(404);
     expect(e.body?.code).toBe('user_not_found');
   });
-});
 
-describe('PUT /api/users/{id}/child-profile', () => {
-  const profile: ChildProfile = {
-    enabled: true,
-    guardianUserIds: ['u2', 'u3'],
-    providerKey: 'pk-org',
-    model: 'claude-sonnet-4-5',
-    spaces: { lessons: { windows: [{ from: '16:00', to: '19:00', weekdays: [1, 2, 3] }], dailyMinutes: 30 } },
-    dailyBudgetUsd: 2,
-    monthlyBudgetUsd: 40,
-    warnMinutes: 5,
-  };
-
-  it('тело — ChildProfile целиком', async () => {
-    await childApi.putProfile('u1', profile);
+  it('тело — профиль окна целиком, id экранирован', async () => {
+    const profile = windowProfile();
+    await childApi.putChildProfile('u 1', profile);
     const { url, opts } = await lastCall();
-    expect(url).toBe('/users/u1/child-profile');
+    expect(url).toBe('/users/u%201/child-profile');
     expect(opts.method).toBe('PUT');
     expect(JSON.parse(opts.body as string)).toEqual(profile);
   });
 
-  it('выключение — { enabled: false }', async () => {
-    await childApi.putProfile('u1', { enabled: false });
+  it('тело предмета — только плитка: ни providerKey, ни model, ни tutorPersonaId (маршрут и репетитор — у проекта-предмета)', async () => {
+    await childApi.putChildProfile('u1', windowProfile());
+    const { opts } = await lastCall();
+    const body = JSON.parse(opts.body as string) as { subjects: Record<string, unknown>[] };
+    const subject = body.subjects[0];
+    expect(Object.keys(subject).sort()).toEqual(['color', 'enabled', 'glyph', 'id', 'label']);
+    for (const removed of ['providerKey', 'model', 'tutorPersonaId']) {
+      expect(subject).not.toHaveProperty(removed);
+    }
+  });
+
+  it('отсутствие enabled в предмете — поля в теле нет (сервер берёт «включён»), клиент не подставляет', async () => {
+    const profile: ChildSettingsProfile = {
+      ...windowProfile(),
+      subjects: [{ id: 'lit', label: 'Литература', glyph: 'Л', color: 'rose' }],
+    };
+    await childApi.putChildProfile('u1', profile);
+    const { opts } = await lastCall();
+    const body = JSON.parse(opts.body as string) as { subjects: Record<string, unknown>[] };
+    expect(body.subjects[0]).not.toHaveProperty('enabled');
+  });
+
+  // Согласие профиля в теле трёхзначно: «не трогать» не должно превращаться в «отозвать» —
+  // false вместо отсутствующего поля снял бы живое согласие (решение 26).
+  it('acknowledgeRouteRisk: null или отсутствие поля — в теле не false; false и true проходят как даны', async () => {
+    const withNull: ChildSettingsProfile = { ...windowProfile(), acknowledgeRouteRisk: null };
+    await childApi.putChildProfile('u1', withNull);
+    let body = JSON.parse((await lastCall()).opts.body as string) as Record<string, unknown>;
+    expect(body.acknowledgeRouteRisk ?? null).toBeNull();
+
+    await childApi.putChildProfile('u1', windowProfile());
+    body = JSON.parse((await lastCall()).opts.body as string) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('acknowledgeRouteRisk');
+
+    await childApi.putChildProfile('u1', { ...windowProfile(), acknowledgeRouteRisk: false });
+    body = JSON.parse((await lastCall()).opts.body as string) as Record<string, unknown>;
+    expect(body.acknowledgeRouteRisk).toBe(false);
+
+    await childApi.putChildProfile('u1', { ...windowProfile(), acknowledgeRouteRisk: true });
+    body = JSON.parse((await lastCall()).opts.body as string) as Record<string, unknown>;
+    expect(body.acknowledgeRouteRisk).toBe(true);
+  });
+
+  it('выключение — { enabled: false } без тела профиля', async () => {
+    await childApi.putChildProfile('u1', { enabled: false });
     const { opts } = await lastCall();
     expect(JSON.parse(opts.body as string)).toEqual({ enabled: false });
+  });
+
+  it('400 route_risk_unacknowledged — status + body.code (текст отказа показывает окно как есть)', async () => {
+    const r = await req();
+    r.mockRejectedValueOnce(httpErr(400, 'route_risk_unacknowledged', 'Маршрут профиля не Anthropic: нужно согласие на профиле ребёнка (acknowledgeRouteRisk).'));
+    const e = (await rejection(childApi.putChildProfile('u1', windowProfile()))) as { status?: number; body?: { code?: string } };
+    expect(e.status).toBe(400);
+    expect(e.body?.code).toBe('route_risk_unacknowledged');
   });
 });
 
@@ -371,128 +481,5 @@ describe('PUT /api/users/{id}/child-tutors/{personaId}', () => {
     const e = (await rejection(childApi.putTutor('u1', 'p1', { mustDo: ['x'] }))) as { status?: number; body?: { code?: string } };
     expect(e.status).toBe(400);
     expect(e.body?.code).toBe('rules_too_long');
-  });
-});
-
-describe('childApi.tutorAvatar.* — /api/users/{id}/child-tutors/{personaId}/avatar/*', () => {
-  const avatarBase = '/users/u1/child-tutors/p%201/avatar';
-
-  it('generate: POST { } без опций, prompt trim-ится, count по заданному; таймаут — под бюджет генерации', async () => {
-    const r = await req();
-    r.mockResolvedValueOnce({ candidates: ['cand-1.png'] });
-    const got = await childApi.tutorAvatar.generate('u1', 'p 1');
-    const first = await lastCall();
-    expect(first.url).toBe(`${avatarBase}/generate`);
-    expect(first.opts.method).toBe('POST');
-    expect(JSON.parse(first.opts.body as string)).toEqual({});
-    expect(first.opts.timeoutMs).toBe(400_000);
-    expect(got.candidates).toEqual(['cand-1.png']);
-
-    await childApi.tutorAvatar.generate('u1', 'p 1', { prompt: '  портрет учительницы ', count: 2 });
-    const second = await lastCall();
-    expect(JSON.parse(second.opts.body as string)).toEqual({ prompt: 'портрет учительницы', count: 2 });
-  });
-
-  it('upload: multipart original+cropped+crop, таймаут как у загрузки аватара персоны', async () => {
-    const original = new File(['\x89PNG-данные'], 'photo.png', { type: 'image/png' });
-    const cropped = new Blob(['\x89PNG-crop'], { type: 'image/png' });
-    await childApi.tutorAvatar.upload('u1', 'p 1', original, cropped, { scale: 1, offsetX: 0, offsetY: 0 });
-    const { url, opts } = await lastCall();
-    expect(url).toBe(`${avatarBase}/upload`);
-    expect(opts.method).toBe('POST');
-    expect(opts.timeoutMs).toBe(60_000);
-    const form = opts.body as FormData;
-    expect(form).toBeInstanceOf(FormData);
-    expect((form.get('original') as Blob).size).toBe(original.size);
-    expect((form.get('cropped') as Blob).size).toBe(cropped.size);
-    expect(JSON.parse(form.get('crop') as string)).toEqual({ scale: 1, offsetX: 0, offsetY: 0 });
-  });
-
-  it('select: POST { file }; 503 image_generation_off — на error.body.code', async () => {
-    await childApi.tutorAvatar.select('u1', 'p 1', 'cand-1.png');
-    const { url, opts } = await lastCall();
-    expect(url).toBe(`${avatarBase}/select`);
-    expect(opts.method).toBe('POST');
-    expect(JSON.parse(opts.body as string)).toEqual({ file: 'cand-1.png' });
-
-    const r = await req();
-    r.mockRejectedValueOnce(httpErr(503, 'image_generation_off', 'Генерация изображений не настроена.'));
-    const e = (await rejection(childApi.tutorAvatar.generate('u1', 'p 1'))) as { status?: number; body?: { code?: string } };
-    expect(e.status).toBe(503);
-    expect(e.body?.code).toBe('image_generation_off');
-  });
-});
-
-describe('childApi.materials — /api/users/{id}/child-subjects/{subjectId}/materials (К5a)', () => {
-  const base = '/users/u%201/child-subjects/l%20it/materials';
-  const file = () => new File(['данные файла'], 'уравнения.pdf', { type: 'application/pdf' });
-
-  // Таблица ручек (разрез §2): метод и URL каждого вызова, id экранированы.
-  const table = [
-    { name: 'list', method: 'GET', url: base, call: () => childApi.materials.list('u 1', 'l it') },
-    { name: 'upload', method: 'POST', url: base, call: () => childApi.materials.upload('u 1', 'l it', file()) },
-    { name: 'remove', method: 'DELETE', url: `${base}/m_1`, call: () => childApi.materials.remove('u 1', 'l it', 'm_1') },
-  ];
-  it.each(table)('$name: $method в свой URL', async (t) => {
-    await t.call();
-    const { url, opts } = await lastCall();
-    expect(url).toBe(t.url);
-    expect((opts.method ?? 'GET').toUpperCase()).toBe(t.method);
-  });
-
-  it('list: массив строк проходит как пришёл (обёртки нет и маппинга нет)', async () => {
-    const rows = [
-      { id: 'm_1', name: 'уравнения.pdf', kind: 'pdf', bytes: 20480, uploadedAt: '2026-11-18T10:00:00Z' },
-      { id: 'm_2', name: 'страница.png', kind: 'image', bytes: 1024, uploadedAt: '2026-11-18T10:05:00Z' },
-    ];
-    const r = await req();
-    r.mockResolvedValueOnce(rows);
-    const got = await childApi.materials.list('u1', 'lit');
-    expect(got).toEqual(rows);
-  });
-
-  it('upload: multipart поле file (имя файла сохраняется), ответ — строка + preview', async () => {
-    const uploaded = {
-      id: 'm_1', name: 'уравнения.pdf', kind: 'pdf', bytes: 1024, uploadedAt: '2026-11-18T10:00:00Z',
-      preview: 'Распознанный текст первых 600 символов…',
-    };
-    const r = await req();
-    r.mockResolvedValueOnce(uploaded);
-    const got = await childApi.materials.upload('u1', 'lit', file());
-    const { opts } = await lastCall();
-    const form = opts.body as FormData;
-    expect(form).toBeInstanceOf(FormData);
-    expect((form.get('file') as File).name).toBe('уравнения.pdf');
-    expect(got).toEqual(uploaded);
-    expect(got.preview).toBe('Распознанный текст первых 600 символов…');
-  });
-
-  it('upload не резается таймаутом короче серверного распознавания (до 3 мин)', async () => {
-    await childApi.materials.upload('u1', 'lit', file());
-    const { opts } = await lastCall();
-    // Дефолт request — 30 с (offline.ts:396): без явного перекрытия загрузка падала бы на середине.
-    expect((opts.timeoutMs as number | undefined) ?? 30_000).toBeGreaterThanOrEqual(180_000);
-  });
-
-  it('415 unsupported_type и 503 ocr_unavailable — как у putProfile: status + body.code, без обёртки', async () => {
-    const r = await req();
-    r.mockRejectedValueOnce(httpErr(415, 'unsupported_type', 'Такой файл нельзя добавить: подходит текстовый PDF, DOCX или TXT.'));
-    const e415 = await rejection(childApi.materials.upload('u1', 'lit', file()));
-    expect(e415).not.toBeInstanceOf(ChildAttachmentRejectedError);
-    expect((e415 as { status?: number }).status).toBe(415);
-    expect((e415 as { body?: { code?: string } }).body?.code).toBe('unsupported_type');
-
-    r.mockRejectedValueOnce(httpErr(503, 'ocr_unavailable', 'Страницу не удалось распознать.'));
-    const e503 = await rejection(childApi.materials.upload('u1', 'lit', file()));
-    expect((e503 as { status?: number }).status).toBe(503);
-    expect((e503 as { body?: { code?: string } }).body?.code).toBe('ocr_unavailable');
-  });
-
-  it('remove: 404 material_not_found — status + body.code (204 — обычный успех без тела)', async () => {
-    const r = await req();
-    r.mockRejectedValueOnce(httpErr(404, 'material_not_found', 'Материал не найден.'));
-    const e = (await rejection(childApi.materials.remove('u1', 'lit', 'm_x'))) as { status?: number; body?: { code?: string } };
-    expect(e.status).toBe(404);
-    expect(e.body?.code).toBe('material_not_found');
   });
 });

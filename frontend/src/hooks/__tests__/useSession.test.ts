@@ -2,7 +2,7 @@
    Хук здесь гоняется вне React: модуль react замокан мини-раннером ниже, порядок
    вызова хуков и жизненный цикл эффектов держит openChat. */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { ChatItem } from '../../types';
+import type { ChatItem, Me } from '../../types';
 
 // Тесты гонки «снапшот истории → вход в SignalR-группу» и залипания isWaiting
 // при переключении между чатами. Гоняется НАСТОЯЩИЙ useSession: react, lib/api и
@@ -49,6 +49,13 @@ const m = vi.hoisted(() => ({
   // getHistory — прежние тесты идут как раньше; тесты курсора переопределяют ответ конвертом.
   // onBytes — колбэк веса ответа (как в настоящей api): тест, проверяющий вес, сам его зовёт
   getHistoryTail: vi.fn<(sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => Promise<unknown>>(async () => []),
+  // Разнесение ручек хвоста (К9a, дефект 30a7ded3): ребёнок с проектным чатом обязан
+  // идти в разрешённую /chats, взрослый — в проектную. Оба делегата зовут getHistoryTail —
+  // ответы и счётчики существующих тестов не меняются; новые тесты считают сами ручки.
+  chatsTail: vi.fn<(sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => Promise<unknown>>(
+    (sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => m.getHistoryTail(sid, q, onBytes)),
+  sessionsTail: vi.fn<(projectId: string, sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => Promise<unknown>>(
+    (_projectId: string, sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => m.getHistoryTail(sid, q, onBytes)),
   joinSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   leaveSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   sendMessage: vi.fn<() => Promise<'started' | 'queued' | 'queued-preempted'>>(async () => 'started'),
@@ -73,11 +80,11 @@ vi.mock('../../lib/api', () => ({
   api: {
     chats: {
       getHistory: (sid: string) => m.getHistory(sid),
-      getHistoryTail: (sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => m.getHistoryTail(sid, q, onBytes),
+      getHistoryTail: m.chatsTail,
     },
     sessions: {
       getHistory: (_projectId: string, sid: string) => m.getHistory(sid),
-      getHistoryTail: (_projectId: string, sid: string, q: { after: number; fp?: string }, onBytes?: (n: number) => void) => m.getHistoryTail(sid, q, onBytes),
+      getHistoryTail: m.sessionsTail,
       cancelPending: vi.fn(async () => { }),
       preemptForPending: (sid: string) => m.preemptForPending(sid),
     },
@@ -104,6 +111,8 @@ vi.mock('../../lib/signalr', () => ({
 const { useSession, waitDiag, warmSession, __test } = await import('../useSession');
 const { toolLiveness } = await import('../../lib/toolTiming');
 const { normalizeHistory, initialChatState } = await import('../../lib/chatReducer');
+// Стор «я» (lib/defaultPersona) — настоящий: выбор ручки истории (К9a) читает getMeSnapshot
+const { clearMe, setMeFromServer } = await import('../../lib/defaultPersona');
 
 // Сервер шлёт статус в сессию (в т.ч. replay в ответ на JoinSession)
 const emitStatus = (sid: string, status: string) =>
@@ -137,8 +146,9 @@ const waitPastJoinWindow = async () => { await new Promise(r => setTimeout(r, 50
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
-  const promise = new Promise<T>(r => { resolve = r; });
-  return { promise, resolve };
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((r, j) => { resolve = r; reject = j; });
+  return { promise, resolve, reject };
 }
 
 // Сырые записи истории (как отдаёт сервер) — normalizeHistory приводит их к ChatItem
@@ -164,6 +174,10 @@ async function leaveMidTurn(sid: string) {
 }
 
 beforeEach(() => {
+  // Снимок «я» — модульный стор: без сброса детство протекло бы в следующий кейс
+  clearMe(); // взрослый по умолчанию: прежние тесты идут взрослым путём
+  m.chatsTail.mockClear();
+  m.sessionsTail.mockClear();
   m.getHistory.mockReset();
   m.getHistory.mockResolvedValue([]);
   m.getHistoryTail.mockReset();
@@ -1763,5 +1777,107 @@ describe('useSession: потолок памяти (OOM fix)', () => {
     expect(tape[tape.length - 1]?.kind).toBe('interrupted');
 
     back.unmount();
+  });
+});
+
+describe('useSession: ручка истории ребёнка (дефект 30a7ded3, К9a)', () => {
+  // Снимок «я» (lib/defaultPersona) — модульный стор: каждый кейс ставит свой,
+  // глобальный beforeEach сбрасывает во взрослого (детство не течёт в следующий тест)
+  const me = (isChild: boolean): Me => ({ userId: 'u1', username: 'test', role: 'user', isChild });
+  const callsChats = (sid: string) => m.chatsTail.mock.calls.filter(c => c[0] === sid).length;
+  // У проектной ручки первый аргумент — projectId, sid второй
+  const callsSessions = (sid: string) => m.sessionsTail.mock.calls.filter(c => c[1] === sid).length;
+  const queriesChats = (sid: string) => m.chatsTail.mock.calls.filter(c => c[0] === sid).map(c => c[1]);
+
+  it('ребёнок с проектным чатом: лента из разрешённой /chats-ручки, проектную не зовёт', async () => {
+    setMeFromServer(me(true));
+    const sid = nextSid();
+    m.getHistoryTail.mockResolvedValue([...DONE_TURN]);
+    const chat = openChat(sid, 'proj-1');
+    await flush();
+    // Суть дефекта: лента урока после F5 на месте, а не пустая
+    expect(chat.render().items).toHaveLength(3);
+    expect(callsChats(sid)).toBe(1);
+    expect(callsSessions(sid)).toBe(0);
+    chat.unmount();
+  });
+
+  it('взрослый с проектным чатом: проектная ручка, разрешённая не зовётся', async () => {
+    setMeFromServer(me(false));
+    const sid = nextSid();
+    m.getHistoryTail.mockResolvedValue([...DONE_TURN]);
+    const chat = openChat(sid, 'proj-1');
+    await flush();
+    expect(callsSessions(sid)).toBe(1);
+    expect(callsChats(sid)).toBe(0);
+    chat.unmount();
+  });
+
+  it('ребёнок: две загрузки подряд (вторая стартовала до ответа первой) — обе через /chats, вторая хвостом', async () => {
+    setMeFromServer(me(true));
+    const sid = nextSid();
+    // Полный снимок открытия «в полёте»: ответ отдаёт тест — вторая загрузка обязана
+    // стартовать до него (fresh-цепочка) и взять курсор из ответа первой
+    const gate = deferred<{ reset: boolean; messages: unknown[]; anchorIndex: number; anchorFp: string | null }>();
+    m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }) =>
+      q.after < 0 ? gate.promise : { reset: false, messages: [], anchorIndex: 2, anchorFp: 'fp2' });
+
+    const chat = openChat(sid, 'proj-1');
+    await flush();
+    expect(callsChats(sid)).toBe(1);
+    expect(queriesChats(sid).at(-1)).toMatchObject({ after: -1 }); // первая — полная
+
+    await chat.first.send('иди'); // ход идёт: isWaiting=true
+    emitStatus(sid, 'active');   // конец хода при летящем снимке → fresh-цепочка (useSession.ts:534)
+    await flush();
+    expect(callsChats(sid)).toBe(1); // вторая ещё не стреляла — ждёт первый полёт
+
+    gate.resolve({ reset: true, messages: [...DONE_TURN], anchorIndex: 2, anchorFp: 'fp2' });
+    await flush();
+    expect(callsChats(sid)).toBe(2); // оба запроса — через разрешённую ручку
+    expect(callsSessions(sid)).toBe(0);
+    expect(queriesChats(sid).at(1)!.after).toBeGreaterThanOrEqual(0); // вторая — хвост по курсору первой
+    expect(chat.render().items).toHaveLength(3); // и гонка, и склейка не сломаны
+
+    chat.unmount();
+  });
+
+  it('ребёнок: отказ запроса не даёт нового необработанного исключения; цепочка продолжит с новой ручки', async () => {
+    setMeFromServer(me(true));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => { unhandled.push(e); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const sid = nextSid();
+      const gate = deferred<unknown[]>();
+      // Первый полный запрос «в полёте» и отклоняется тестом; второй (после отказа курсора
+      // нет — снова полный) получает ответ: как настоящий сервер, с персистнутой
+      // пользовательской «иди» (иначе serverHistoryNewer верно сочлёт сервер отстающим)
+      let firstFull = true;
+      m.getHistoryTail.mockImplementation(async (_s: string, q: { after: number; fp?: string }) => {
+        if (q.after < 0 && firstFull) { firstFull = false; return gate.promise; }
+        return { reset: true, messages: [...DONE_TURN, user('иди')], anchorIndex: 2, anchorFp: 'fp2' };
+      });
+
+      const chat = openChat(sid, 'proj-1');
+      await flush();
+      await chat.first.send('иди');
+      emitStatus(sid, 'active'); // вторая загрузка поставлена, пока первая в полёте
+      await flush();
+
+      // Та же судьба, что у взрослого: промис loadHistory отклонён, вызывающий его глотает
+      gate.reject(new Error('403'));
+      await flush();
+      expect(unhandled).toHaveLength(0);
+      // Курсора после отказа нет → продолжение идёт полным запросом той же разрешённой ручки
+      expect(callsChats(sid)).toBe(2);
+      expect(callsSessions(sid)).toBe(0);
+      expect(queriesChats(sid).at(1)).toMatchObject({ after: -1 });
+      expect(chat.render().items).toHaveLength(4); // DONE_TURN + «иди» — отказ первой не оставил ленту пустой
+
+      chat.unmount();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });

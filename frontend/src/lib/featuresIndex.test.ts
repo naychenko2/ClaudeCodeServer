@@ -17,7 +17,10 @@
 //   6 — FI-3: граница владельца — кэш и срезы не переживают сброс владельца;
 //        поздний ответ прежнего владельца отбивается по поколению; порядок
 //        плашек featureOf не зависит от повторного входа (ключ не удаляется);
-//        wiring: App.tsx зовёт сброс на logout и cc-unauthorized.
+//        wiring: App.tsx зовёт сброс на logout и cc-unauthorized;
+//   7 — К9c: ребёнок не зовёт api.tasks.featuresIndex ни одним из трёх путей
+//        стора (live-перезапрос, 0→1 с кэшем, 0→1 без кэша) — 0 вызовов,
+//        индекс пустой, индикатор не взводится; после ребёнка взрослый спрашивает.
 //
 // Тесты независимы от пояса: время — только fake timers и ISO-строки фикстуры.
 
@@ -29,9 +32,10 @@ import { __test, featureOf, resetFeaturesIndexOwner, useFeaturesIndex } from './
 import { api } from './api';
 import { upsertTaskLocal } from './tasks';
 import { setAllFlags } from './featureFlags';
+import { clearMe, getMeSnapshot, setMeFromServer } from './defaultPersona';
 import { installFakeDom, mount, uninstallFakeDom } from '../components/chat/__tests__/fakeDom';
 import type { FeaturesIndex, FeatureIndexFeature } from '../types/featureIndex';
-import type { Task } from '../types';
+import type { Me, Task } from './types';
 import fixture from './__fixtures__/featuresIndex.json';
 
 // signalr: onMessage — no-op (иначе getConnection() строит реальное соединение
@@ -666,5 +670,119 @@ describe('FI-3: порядок плашек не зависит от повто�
     const src = readFileSync(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8');
     const calls = src.match(/resetFeaturesIndexOwner\(\)/g);
     expect(calls?.length, 'вызовы сброса в App.tsx: cc-unauthorized и logout').toBe(2);
+  });
+});
+
+// ── 7: К9c — ребёнок не зовёт индекс фич ни одним путём стора ─────────────────────
+
+// Дефект cc43582b: на ленте урока ребёнок опрашивал GET /api/tasks/features/index
+// (взрослая ручка без [ChildAllowed]) → 403. Гейт — в трёх точках запроса стора;
+// здесь каждый путь проверяется отдельно, плюс конкурентность (подписка +
+// live-перезапрос подряд). Мок снимка «я» — setMeFromServer, паттерн
+// projectActivity.test.ts (X-W4-37).
+
+describe('К9c: ребёнок не зовёт api.tasks.featuresIndex', () => {
+  let featuresIndexSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __test.reset();
+    featuresIndexSpy = vi.spyOn(api.tasks, 'featuresIndex').mockResolvedValue(FIXTURE);
+    setMeFromServer({ userId: 'u-child', isChild: true } as Me);
+  });
+  afterEach(() => {
+    clearMe();
+    featuresIndexSpy.mockRestore();
+    __test.reset();
+    vi.useRealTimers();
+  });
+
+  it('путь 1 (scheduleRefetch): task_changed + окно дебаунса — нет запроса', () => {
+    upsertTaskLocal(task({ id: 'epic-k9c', role: 'feature', projectId: 'p1' }));
+    __test.setActive('p1');
+    __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'epic-k9c', role: 'feature', projectId: 'p1' }) });
+    vi.advanceTimersByTime(1500);
+    expect(featuresIndexSpy).not.toHaveBeenCalled();
+  });
+
+  it('путь 3 (0→1 без кэша): подписка — нет запроса, индикатор не взведён, индекс пуст', async () => {
+    installFakeDom();
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await act(async () => { await Promise.resolve(); });
+      expect(featuresIndexSpy).not.toHaveBeenCalled();
+      expect(__test.isIndexLoading('p1')).toBe(false);
+      expect(__test.snapshotFor('p1').features).toHaveLength(0);
+      a.root.unmount();
+      await act(async () => { await Promise.resolve(); });
+    } finally {
+      uninstallFakeDom();
+    }
+  });
+
+  it('путь 2 (0→1 с кэшем): возврат в проект — нет фонового запроса, срез цел', async () => {
+    installFakeDom();
+    try {
+      // Срез прошнего визита в кэше (как после onUnmount у взрослого):
+      // возврат рисует его — но без фонового перезапроса у ребёнка.
+      __test.setIndex('p1', FIXTURE);
+      const b = mount(createElement(Consumer, { projectId: 'p1' }));
+      await act(async () => { await Promise.resolve(); });
+      expect(featuresIndexSpy).not.toHaveBeenCalled();
+      expect(__test.isIndexLoading('p1')).toBe(false);
+      expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+      b.root.unmount();
+      await act(async () => { await Promise.resolve(); });
+    } finally {
+      uninstallFakeDom();
+    }
+  });
+
+  it('конкурентность: подписка + live-перезапрос подряд — 0 вызовов, индикатора нет', async () => {
+    installFakeDom();
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await act(async () => { await Promise.resolve(); });
+      upsertTaskLocal(task({ id: 'epic-k9c2', role: 'feature', projectId: 'p1' }));
+      __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'epic-k9c2', role: 'feature', projectId: 'p1' }) });
+      vi.advanceTimersByTime(1500);
+      expect(featuresIndexSpy).not.toHaveBeenCalled();
+      expect(__test.isIndexLoading('p1')).toBe(false);
+      a.root.unmount();
+      await act(async () => { await Promise.resolve(); });
+    } finally {
+      uninstallFakeDom();
+    }
+  });
+
+  it('взрослый после ребёнка: спрашивает как прежде (гейт не липкий)', async () => {
+    installFakeDom();
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await act(async () => { await Promise.resolve(); });
+      expect(featuresIndexSpy).not.toHaveBeenCalled();
+      a.root.unmount();
+      await act(async () => { await Promise.resolve(); });
+      // Смена «я» на взрослого (сброс владельца при этом делает App.tsx): запрос обычный.
+      setMeFromServer({ userId: 'u-adult', isChild: false } as Me);
+      const b = mount(createElement(Consumer, { projectId: 'p1' }));
+      await act(async () => { await Promise.resolve(); });
+      expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
+      expect(featuresIndexSpy).toHaveBeenCalledWith('p1');
+      expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+      b.root.unmount();
+      await act(async () => { await Promise.resolve(); });
+    } finally {
+      uninstallFakeDom();
+    }
+  });
+});
+
+// Снимок «я» по умолчанию — взрослый: на нём держатся блоки 1–6 (и их запросы).
+// Тесты 7-го блока обязаны снимать ребёнка после себя — иначе эти блоки уйдут
+// в закрытый ребёнком мир и покраснеют (страховка от протечки состояния).
+describe('К9c: снимок «я» по умолчанию — взрослый', () => {
+  it('после тестов ребёнка getMeSnapshot().isChild — false (снимок снят)', () => {
+    expect(getMeSnapshot().isChild).toBe(false);
   });
 });

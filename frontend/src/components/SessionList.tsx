@@ -29,7 +29,7 @@ import {
   startSubjectRun, takeFreshPoll, useSubjectRun, type PendingSubjectMove,
 } from '../lib/chatSubjects';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
-import { createChatWithContextPersona } from '../lib/defaultPersona';
+import { createChatWithContextPersona, useMe } from '../lib/defaultPersona';
 import { showToast } from '../lib/toast';
 import { useSubsystem } from '../lib/subsystems';
 import { ChatFilterResetActions } from './FilterBar';
@@ -191,8 +191,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
   // Значок «правки чата не зафиксированы в git». Стор подключаем сами: список живёт не
   // только в мастерской (WorkspacePage уже зовёт ensureGit), но и на Стене, где git
-  // мог не понадобиться никому. Вызов идемпотентен — повторный ничего не грузит
-  useEffect(() => { ensureGit(project.id); }, [project.id]);
+  // мог не понадобиться никому. Вызов идемпотентен — повторный ничего не грузит.
+  // Ребёнок git не опрашивает: GitController без [ChildAllowed] (решение 77), а на
+  // телефоне боковая панель с вкладкой «Чаты» в DOM и у ребёнка (X-W4-57) — без гейта
+  // список звал /git/status при каждом открытии и получал 403. Тот же гейт и тот же
+  // источник признака (Me.isChild из defaultPersona), что в useGitChip/FileExplorer (X-W4-37).
+  const me = useMe();
+  useEffect(() => { if (me.isChild) return; ensureGit(project.id); }, [project.id, me.isChild]);
   const { dirtySessionIds } = useGitState(project.id);
   // Признак наследуется вверх по ветке: родитель отвечает за работу потомков, иначе
   // свёрнутая (или просто длинная) ветка прятала бы незафиксированные правки. Считаем

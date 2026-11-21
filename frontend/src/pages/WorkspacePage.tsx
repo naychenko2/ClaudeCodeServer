@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
 import { anchorFor, nextFileTaskAnchor, type FileTaskAnchor } from '../lib/featureOpenFile';
-import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug, Users, Settings, type LucideIcon } from 'lucide-react';
-import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, ListChecks, Plug, Users, Settings, Lightbulb, WifiOff, type LucideIcon } from 'lucide-react';
+import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry, ChildSurface } from '../types';
+import { displayNameOf } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
 import { ProjectFeature } from '../types';
-import { useProjectFeature } from '../lib/projectCapabilities';
+import { useProjectFeature, projectPanelKeysAllowed } from '../lib/projectCapabilities';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
@@ -13,14 +14,14 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { useVideoPlaying, useVideoCenter } from '../lib/videoStage';
-import { keyAllowed, pluginPanelKey, workspaceKeysFor, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
+import { keyAllowed, pluginPanelKey, workspaceKeysFor, childWorkspaceKeys, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
 import { hasPendingOpen, subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { readStoredUserId } from '../lib/offline';
-import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
+import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, LEFT_TABS, type LeftTab } from '../lib/workspaceState';
 import { api, type PluginInfo, type PluginPanelView } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { SUBSYSTEMS, useActiveSubsystemKeys, useSubsystem } from '../lib/subsystems';
@@ -33,7 +34,7 @@ import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
 import { useWatchdogPresence } from '../lib/watchdogPresence';
 import { acceptDraftReplyInWorkspace } from '../lib/draftReply';
-import { C, FONT } from '../lib/design';
+import { C, FONT, SHADOW, SP } from '../lib/design';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
@@ -43,6 +44,8 @@ import { getLocalModelEngineStats, useLocalModelWatcher } from '../features/loca
 import { menuStatus, triggerDot, triggerTitleFor } from '../features/localModel/format';
 import { PluginFrame, PluginPanelsSwitcher, useHasInstalledPlugins, useInstalledPlugins, panelDisplayName, pluginIconFor } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
+import { Menu, MenuItem } from '../components/ui/Menu';
+import { LogOut, User } from 'lucide-react';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
@@ -70,7 +73,7 @@ import { useGitState, ensureGit, loadUnpushedLog, setActiveSessionForChangedBy }
 import { useExternalPreviewLinksState, ensureExternalPreviewLinks } from '../hooks/useExternalPreviewLinks';
 import { plural } from '../lib/plural';
 import { applyContextUpdated, loadChatContext, setActiveChatForContext } from '../lib/chatContext';
-import { ensurePersonasLoaded } from '../lib/personas';
+import { ensurePersonasLoaded, setPersonasChildMode } from '../lib/personas';
 import { createChatWithContextPersona, type ProjectChatContext } from '../lib/defaultPersona';
 import { chatToRestore, createLatestGuard, encodePendingChat, parsePendingChat } from '../lib/pendingProjectChat';
 import { afterChatSwitcherClosed } from '../features/home/chatSwitcherHistory';
@@ -98,6 +101,22 @@ import { ReaderBody } from './workspace/reader/ReaderBody';
 import { ChatContextBar } from '../features/chatContext/ChatContextBar';
 import { useHasChatContext } from '../lib/chatContext';
 import { listProjectSessions } from '../lib/sessionsList';
+// Детская поверхность (Ф1f, ADR-041 ред. 8): слоты ребёнка живут в этом экране —
+// разбор снимка, опрос времени, предметы, плашка, заставка, стоп-сигнал, ворота правил.
+import { useChildSurface } from '../features/childMode/useChildSurface';
+import { useChildStatus } from '../features/childMode/useChildStatus';
+import { childApi, type ChildSubjectWithViewers } from '../features/childMode/api';
+import { ChildTimeBadge } from '../features/childMode/ChildTimeBadge';
+import { ChildTimeUpScreen } from '../features/childMode/ChildTimeUpScreen';
+import { ChildHintsPanel } from '../features/childMode/ChildHintsPanel';
+import { ChildRulesOnboarding, type ChildRulesBrief } from '../features/childMode/ChildRulesOnboarding';
+import type { ChildWorkspaceProps } from '../features/childMode/types';
+import { ChildCenterEmpty } from '../features/childMode/ChildCenterEmpty';
+import { ChildLessonsPanel } from '../features/childMode/ChildLessonsPanel';
+import type { ChildStatus } from '../features/childMode/types';
+import type { ChildLessonHeaderData } from '../features/childMode/ChildLessonHeader';
+import { Island, IslandHeader } from '../components/ui/Island';
+import { EmptyState } from '../components/ui/EmptyState';
 
 // Читателям списка чатов, которым не нужна секундная свежесть (сторожа, проверка восстановленного
 // чата, переход из карточки задачи), хватает результата не старше этого: опрос SessionList держит
@@ -114,6 +133,13 @@ interface Props {
   onSwitchHub: (t: HubTabValue) => void;
   auth: AuthState;
   onLogout: () => void;
+  // Детская поверхность (Ф1f, ADR-041 ред. 8, решение 76): детский маршрут App передаёт
+  // поле childSurface из me-ответа как есть, включая null (поля нет → «нет связи»).
+  // undefined = не детский маршрут: экран взрослый, как раньше.
+  childSurface?: ChildSurface | null;
+  // Детский док (решение 84): открыть предмет = открыть его проект-предмета.
+  // Переключением проекта владеет App — здесь только передача.
+  onOpenSubjectProject?: (subject: ChildSubjectWithViewers) => void;
 }
 
 // LeftTab живёт в lib/workspaceState — там же, где список для восстановления из
@@ -341,7 +367,164 @@ export function projectChatContextFor(
   };
 }
 
-export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
+// Единственное пространство детского режима (ADR-041): опрос времени и heartbeat — под ним.
+const CHILD_SPACE = 'lessons';
+// Ширина панели «Как мы учимся» — та же спека, что у прежней оболочки (PANEL_W макета): 300
+const HINTS_PANEL_W = 300;
+
+// Детский опрос времени (Ф1f): useChildStatus монтируется только ребёнку — взрослому этот
+// опрос был бы пустым 403-запросом. Мостик не рисует ничего: он поднимает снимок владельца
+// экрана, а экран сам решает по нему — плашка, заставка «время вышло», ворота правил.
+function ChildStatusBridge({ onSnapshot }: { onSnapshot: (snap: { status: ChildStatus | null }) => void }) {
+  const { status } = useChildStatus(CHILD_SPACE);
+  useEffect(() => { onSnapshot({ status }); }, [status, onSnapshot]);
+  return null;
+}
+
+// Отказ ворота правил (доработка ревью 1f80483c): спокойный экран вместо работы с уроком —
+// тот же слот, что у «время вышло»: под закрытыми воротами работать нельзя, а молчать —
+// значит молчать на отказ. Тон прежней оболочки (ChildWorkspace.startRules): без слова
+// «ошибка», единственное действие — «Попробовать ещё раз».
+function ChildRulesError({ busy, onRetry }: { busy: boolean; onRetry: () => void }) {
+  return (
+    <EmptyState
+      icon={<ListChecks size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+      title="Правила пока не открываются"
+      subtitle="Попроси взрослого помочь."
+      // disabled на время полёта: второй клик не шлёт второй запрос (тот же гейт, что starting у startLesson)
+      action={<Button variant="secondary" size="md" disabled={busy} onClick={onRetry}>Попробовать ещё раз</Button>}
+    />
+  );
+}
+
+export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwitchHub, auth, onLogout, childSurface: childSurfaceProp, onOpenSubjectProject }: Props) {
+  // ── Детская поверхность (Ф1f, ADR-041 ред. 8, решения 76–84) ──────────────────
+  // Ребёнок работает в этом же экране проекта-предмета. Разбор снимка — здесь,
+  // default-deny: поле передано, но снимка нет → экран «нет связи» вместо взрослого
+  // набора; снимок есть → этот же экран, но с детским набором панелей и детскими
+  // слотами. Источник — me-ответ, который прикладывает детский маршрут App.
+  const childState = useChildSurface(childSurfaceProp === undefined ? undefined : { isChild: true, childSurface: childSurfaceProp });
+  const childSurface = childState.kind === 'child' ? childState.surface : null;
+  const isChildScreen = childState.kind !== 'adult';
+  // Флаг детского режима для общих сторов (KM-F10): ставится синхронно, до эффектов
+  // детских чат-компонентов — они зовут ensurePersonasLoaded (взрослая ручка → 403).
+  // После выхода ребёнка взрослый грузит персоны как обычно.
+  if (isChildScreen) setPersonasChildMode(true);
+  useEffect(() => {
+    if (!isChildScreen) return;
+    setPersonasChildMode(true); // true повторно — для StrictMode
+    return () => setPersonasChildMode(false);
+  }, [isChildScreen]);
+  // Состояние времени ребёнка: useChildStatus монтируется только ребёнку — взрослому
+  // этот опрос был бы пустым 403-запросом. Мостик поднимает снимок вверх; экран сам
+  // решает по нему: заставка «время вышло», плашка, ворота правил.
+  const [childSnap, setChildSnap] = useState<{ status: ChildStatus | null } | null>(null);
+  // Предметы для дока и шапки урока — GET /api/child/subjects: единственная детская
+  // ручка, которая называет предметы ребёнка (список проектов их не описывает).
+  const [childSubjects, setChildSubjects] = useState<ChildSubjectWithViewers[] | null>(null);
+  // Согласие снимает rules_pending сразу, не дожидаясь следующего опроса статуса (как в прежней оболочке)
+  const [agreedLocal, setAgreedLocal] = useState(false);
+  const [rulesBrief, setRulesBrief] = useState<ChildRulesBrief | null>(null);
+  // Доработка ревью 1f80483c: rulesStarting — флаг «запрос в полёте», эффект его читает,
+  // но на него не подписан (ни в deps). Раньше флаг стоял в зависимостях и снимался в
+  // .finally(): отказ → флаг снят → эффект прогнан заново → новый POST, по кругу (офлайн —
+  // плотный цикл). Теперь после отказа эффект сам не перезапускается: следующая попытка —
+  // со следующим тиком статуса (прежний смысл ворота) или немедленно по кнопке.
+  // rulesStartFailed — спокойный текст ребёнку (child-rules-error), пока согласия нет.
+  const [rulesStarting, setRulesStarting] = useState(false);
+  const [rulesStartFailed, setRulesStartFailed] = useState(false);
+  // Панель «Как мы учимся» (лесенка подсказок и «Мне неприятно»): открыта ли.
+  // Шаг лесенки в новой ленте не считает никто (его мерил удаляемый ChildLessonChat) —
+  // панель стоит на 0, сигнал работает: это предмет следующих шагов, здесь честно 0.
+  const [childPanelOpen, setChildPanelOpen] = useState(false);
+  // Меню аватара ребёнка: единственный выход из детского экрана (в прежней оболочке его
+  // держал ChildHeader; хаб-шапки ребёнку не показываем — хаб-разделов для него нет)
+  const [childMenuOpen, setChildMenuOpen] = useState(false);
+
+  const childEff: ChildStatus | null = useMemo(() => {
+    const s = childSnap?.status;
+    if (!s) return null;
+    return agreedLocal && s.state === 'rules_pending'
+      ? { ...s, state: 'ok', rulesAgreedAt: new Date().toISOString() }
+      : s;
+  }, [childSnap?.status, agreedLocal]);
+  const childTimeUp = !!childEff && (childEff.state === 'time_up' || childEff.state === 'out_of_window' || childEff.state === 'budget_exhausted');
+  const childRulesGate = !!childSurface && childEff?.state === 'rules_pending' && !agreedLocal;
+
+  useEffect(() => {
+    if (!childSurface) return;
+    const ac = new AbortController();
+    childApi.getSubjects({ signal: ac.signal })
+      .then(setChildSubjects)
+      .catch(() => { /* офлайн: док и шапка соберутся, когда список придёт */ });
+    return () => ac.abort();
+  }, [childSurface]);
+
+  // Запрос ворота — одна функция на эффект и на кнопку «Попробовать ещё раз» (доработка
+  // ревью 1f80483c: прежде у отказа не было лица, и тот же путь порождал кольцо запросов).
+  const requestRulesStart = useCallback(() => {
+    const st = childSnap?.status;
+    if (!st) return;
+    setRulesStarting(true);
+    childApi.rulesStart()
+      .then(r => {
+        setRulesBrief({
+          childName: displayNameOf(auth),
+          dailyMinutes: st.dailyMinutes,
+          windows: st.windows,
+          warnMinutes: st.warnMinutes,
+          sessionId: r.sessionId,
+          agreedAt: st.rulesAgreedAt,
+        });
+        setRulesStartFailed(false);
+      })
+      .catch(() => setRulesStartFailed(true))
+      .finally(() => setRulesStarting(false));
+  }, [childSnap?.status, auth]);
+
+  // Ворота правил до первого входа (решение 84): rules_pending — открыть чат правил
+  // (POST rules/start, идемпотентный) и показать ChildRulesOnboarding вместо работы
+  // с уроком. Закрытые без согласия ворота открываются снова со следующим тиком статуса.
+  // Доработка ревью 1f80483c: rulesStarting убрана из зависимостей — она флаг, а не сигнал:
+  // снятый в .finally() отказ перечуровивал эффект и шлёл новый POST без конца. После отказа
+  // эффект не перезапускается сам: следующая попытка — со следующим тиком статуса или
+  // немедленно по кнопке спокойного текста child-rules-error.
+  useEffect(() => {
+    if (!childRulesGate || rulesBrief || rulesStarting) return;
+    if (!childSnap?.status) return;
+    requestRulesStart();
+  }, [childRulesGate, rulesBrief, requestRulesStart]);
+
+  // Живой предмет открытого проекта-предмета: ключ — маркер проекта, список — живая
+  // проекция профиля. До ответа списка — null: шапка и плашка предмета живут без него
+  // (тот же разбор, что activeSubject в прежней оболочке).
+  const activeSubject = childSurface && project.childSubjectId
+    ? childSubjects?.find(s => s.id === project.childSubjectId) ?? null
+    : null;
+  // Имена кураторов — из subject.viewers (подзадача ревью Ф1h): их несёт та же запись
+  // предмета, что и док; отдельного поля нет — иначе строка «Уроки видит…» молча исчезнет.
+  // Урок создан (кнопка «Новый урок» дока или детской панели уже позвала свою ручку):
+  // открыть его в этом проекте штатным pending-каналом (тот же, что у диплинков;
+  // единственный потребитель — эффект канала ниже, он работает и ребёнку).
+  const openCreatedLesson = (sessionId: string) => {
+    sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, sessionId));
+    window.dispatchEvent(new Event('cc-pending-project-chat'));
+  };
+  const childHeaderData: ChildLessonHeaderData = { subject: activeSubject, viewers: activeSubject?.viewers };
+  const childProps: ChildWorkspaceProps | undefined = childSurface ? {
+    features: childSurface.composerFeatures,
+    feedKinds: childSurface.feedKinds,
+    header: childHeaderData,
+    dock: {
+      subjects: childSubjects ?? [],
+      activeSubjectId: project.childSubjectId ?? null,
+      onOpenSubject: (s) => onOpenSubjectProject?.(s),
+      // Урок создан (доковая кнопка «Новый урок» уже позвала свою ручку): тот же
+      // openCreatedLesson, что у детской панели уроков
+      onLessonCreated: openCreatedLesson,
+    },
+  } : undefined;
+
   // Сторож configured локальной модели (опрос + подписка страницы), см. хук
   useLocalModelWatcher(auth.role === 'admin');
   // Гейт подсистемы «Заметки»: при выключенной notes панель «notes» (notes/ репы)
@@ -353,6 +536,14 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const notesEnabled = useSubsystem(SUBSYSTEMS.notes)
   const activeSubs = useActiveSubsystemKeys()
   const wsAllowedKeys = useMemo(() => workspaceKeysFor(k => activeSubs.includes(k)), [activeSubs])
+  // Детская рельса (решение 76, разрез §14): набор экрана ∩ матрица проекта ∩ снимок
+  // поверхности. Порядок — входящих ключей (порядок рельсы), а не снимка: снимок —
+  // множество разрешённого, а не раскладка. Взрослый экран — без изменения: тот же
+  // wsAllowedKeys.
+  const allowedKeys = useMemo(
+    () => (childSurface ? childWorkspaceKeys(projectPanelKeysAllowed(project, wsAllowedKeys), childSurface) : wsAllowedKeys),
+    [childSurface, project, wsAllowedKeys],
+  )
   // Панели плагинов (ADR-031, гейт V5): слот появляется, только когда у проекта есть
   // хотя бы один установленный плагин. M4: список грузим здесь (а не только в секции
   // настроек) — иначе стор пуст до первого открытия настроек, и слот «не виден сразу».
@@ -470,6 +661,12 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
       }
     } catch { /* битый json — игнорируем */ }
     const saved = loadWorkspaceState(project.id)?.activeSession ?? null;
+    // Х-W4-80 (факт 3(б)): начальный читатель канала — у ребёнка тот же, что у взрослого.
+    // Адрес, называющий ДРУГОЙ чат, гасит сохранённый до разрешения: набранное сообщение
+    // не должно уйти в сохранённый (тот же риск QA-D2, что у взрослого). Детский урок
+    // восстанавливается сохранённым состоянием только когда адрес его не называет; а
+    // созданный «Новым уроком» открывает слушатель эффекта ниже — он пишет канал уже
+    // после монтирования.
     const rawPending = sessionStorage.getItem('cc_pending_project_chat');
     if (rawPending) {
       const { pid, chatId, keepFeature } = parsePendingChat(rawPending, project.id);
@@ -610,15 +807,17 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
       const key = d?.key as PanelKey | undefined;
-      // Набор один — тот же мемоизированный, что у рельсы (wsAllowedKeys, выше):
+      // Набор один — тот же мемоизированный, что у рельсы (allowedKeys, выше):
       // обработчик не строит своих копий набора на каждый событие и не может
       // разойтись с тем, что рельса показывает в этот же момент (R-S2b-2c, п. 3).
-      if (!key || !keyAllowed(key, wsAllowedKeys)) return;
+      // Для ребёнка это же пересечение с детской поверхностью: подсистема не может
+      // открыть панель, которой ребёнку нет (И11).
+      if (!key || !keyAllowed(key, allowedKeys)) return;
       revealPanelKey(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
-  }, [revealPanelKey, wsAllowedKeys]);
+  }, [revealPanelKey, allowedKeys]);
   // Режим просмотра файла — из ГЛОБАЛЬНОГО предпочтения (одно на все проекты), а не
   // из per-project стора: тумблер в шапке файла пишет предпочтение, точки открытия
   // его читают. См. loadFileFullscreenPref в lib/workspaceState.
@@ -674,10 +873,12 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
 
   // Терминалы и сервисы — общие хуки (их же зовёт «Стена»); воркспейсная навигация
   // осталась здесь: старт сервиса переключает вкладку инструментов (onStarted)
+  // Ребёнку терминалы выключены: панели «Терминал» нет в снимке, а хаб /hubs/terminal
+  // без [ChildAllowed] → 403 (Х-W4-34); признак — тот же isChildScreen, что у эффектов страницы.
   const {
     terminals, activeTerminalId, setActiveTerminalId,
     create: handleCreateTerminal, stop: handleStopTerminal, rename: handleRenameTerminal,
-  } = useProjectTerminals(project.id);
+  } = useProjectTerminals(project.id, { disabled: isChildScreen });
   const activeTerminalName = terminals.find(t => t.id === activeTerminalId)?.name;
 
   const onServiceStarted = useCallback(() => setToolsTab('preview'), []);
@@ -694,8 +895,10 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // а вкладка «Команда» знала, есть ли персоны у проекта (для пустого стейта)
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   // Нужно для резолва контекста «в рамках какой задачи» в ArtifactsPanel/бэйджах чата
-  // (плашка в ChatOriginBadge полагается на getTaskById из уже загруженного стора)
-  useEffect(() => { void ensureTasksLoaded(); }, []);
+  // (плашка в ChatOriginBadge полагается на getTaskById из уже загруженного стора).
+  // Ребёнку запрос не уходит: page-level GET /api/tasks — взрослая ручка ([ChildAllowed] нет,
+  // гейт И1 → 403). Детскую доску наполняет панель «Задачи» сама (Б20d), а не этот вызов.
+  useEffect(() => { if (isChildScreen) return; void ensureTasksLoaded(); }, [isChildScreen]);
 
   // Вкладка «Команда»: список персон — в сайдбаре, форма — в центральной зоне.
   // Состояние выбора поднято сюда, чтобы синхронизировать список ↔ форму.
@@ -781,8 +984,10 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   }), [loadKnowledgeStatus]);
 
   useEffect(() => {
+    // Навыки закрыты ребёнку (решение 77: «/» и навыки вне детского хода) — запроса нет
+    if (isChildScreen) return;
     api.skills.list(project.id).then(setSkillsData).catch(() => {});
-  }, [project.id]);
+  }, [project.id, isChildScreen]);
   // Скиллы для «/» композера: глобальные + workflow-скрипты + плагины (вызываются той же командой /имя)
   const composerSkills = useMemo(
     () => [...(skillsData?.skills ?? []), ...(skillsData?.workflows ?? []), ...(skillsData?.plugins ?? [])],
@@ -853,22 +1058,30 @@ const windowWidth = useWindowWidth();
   const extLinks = useExternalPreviewLinksState();
   useEffect(() => {
     // Кружок обязан гореть ДО первого открытия панели — иначе о забытом доступе
-    // узнаёшь, только заглянув туда, куда без повода не заглядывают
+    // узнаёшь, только заглянув туда, куда без повода не заглядывают.
+    // Ребёнку запросов нет: «Открыто наружу» и «Изменения» вне детской поверхности
+    // (решение 77: git у проекта-предмета выключен, GitController без [ChildAllowed]),
+    // сами ручки взрослые → 403.
+    if (isChildScreen) return;
     ensureExternalPreviewLinks();
     ensureGit(project.id);
     // Стек незапушенных коммитов нужен второму (серому) кружку «Изменений» ДО открытия
     // панели: ensureGit грузит только статус. Realtime и focus-обработчик стора
     // держат стек свежим дальше — здесь лишь первая подтяжка
     void loadUnpushedLog(project.id);
-  }, [project.id]);
+  }, [project.id, isChildScreen]);
   // Идёт ли эфир: по нему рельса ставит точку на кнопке «Видео»
   const videoPlaying = useVideoPlaying();
   // Сторожа чатов: пока у чата проекта на сервере жив сторож, сам чат спит (ход
   // давно завершён) — без метки ожидание было бы невидимым до открытия списка.
-  // Точка без числа: «сколько ждут» расшифровывает hint
-  const watchdogs = useWatchdogPresence();
+  // Точка без числа: «сколько ждут» расшифровывает hint.
+  // Ребёнку стор отключён: бейджа «Чаты» в детском наборе нет, а первичный снимок
+  // GET /api/watchdogs — взрослая ручка без [ChildAllowed] → 403 (Х-W4-34).
+  const watchdogs = useWatchdogPresence({ disabled: isChildScreen });
   const [watchdogChats, setWatchdogChats] = useState<string[]>([]);
   useEffect(() => {
+    // Ребёнку бейдж «Чаты» не показан (панель вне снимка): потребителя у пересечения нет.
+    if (isChildScreen) return;
     if (!watchdogs.projects.has(project.id)) { setWatchdogChats([]); return; }
     let cancelled = false;
     // Своего списка чатов у воркспейса нет (его держит SessionList), а стор знает
@@ -877,7 +1090,7 @@ const windowWidth = useWindowWidth();
       if (!cancelled) setWatchdogChats(list.map(s => s.id).filter(id => watchdogs.sessions.has(id)));
     }).catch(() => { /* офлайн — рельса живёт на событиях watchdogs_changed */ });
     return () => { cancelled = true; };
-  }, [watchdogs, project.id]);
+  }, [watchdogs, project.id, isChildScreen]);
   const watchdogCount = watchdogChats.length;
   const railBadges = useMemo<Partial<Record<PanelKey, RailBadgeInfo>>>(() => {
     // «Изменения»: основной кружок — незафиксированные файлы (дедуп по пути), второй
@@ -1236,7 +1449,26 @@ const windowWidth = useWindowWidth();
   const knowledgeAvail = useProjectFeature(project, ProjectFeature.Knowledge);
   const personasAvail = useProjectFeature(project, ProjectFeature.Personas);
 
-  const leftTabOptions: { value: LeftTab; label: string; icon?: ReactNode }[] = [
+  // Мобильный словарь: каждая вкладка таббара и каждый пункт «⋯» — та же панель
+  // реестра, открытая на весь экран вместо карточки в рельсе (на мобиле рельсы
+  // панелей нет, и без этого перевода она была бы недоступна вовсе). Это перевод
+  // между словарями, а не разрешение: что из переведённого открыто ребёнку, решает
+  // ровно тот же childWorkspaceKeys, что и десктопная allowedKeys выше — второй
+  // копии детской поверхности здесь нет.
+  const TAB_PANEL_KEY: Record<LeftTab, PanelKey> = {
+    sessions: 'chats', files: 'files', changes: 'changes', tasks: 'tasks',
+    knowledge: 'knowledge', personas: 'team', skills: 'skills',
+    // «Инструменты» — объединяющая вкладка Терминала и Сервисов (на десктопе это
+    // две панели): пересечение по первому ключу группы, в детском снимке нет ни одного
+    tools: 'terminal', plugins: 'pluginPanels',
+  };
+  // Тот же источник признака, что у allowedKeys: пересечение порядка вкладок с
+  // детским снимком. Взрослый экран — без изменения: childSurface у него null.
+  const childTabKeys = childSurface
+    ? new Set(childWorkspaceKeys(LEFT_TABS.map(t => TAB_PANEL_KEY[t]), childSurface))
+    : null;
+
+  const allTabOptions: { value: LeftTab; label: string; icon?: ReactNode }[] = [
     { value: 'sessions', label: 'Чаты', icon: LEFT_TAB_ICONS.sessions },
     { value: 'files', label: 'Файлы', icon: LEFT_TAB_ICONS.files },
     { value: 'changes', label: 'Изменения', icon: LEFT_TAB_ICONS.changes },
@@ -1252,6 +1484,13 @@ const windowWidth = useWindowWidth();
     // Панели плагинов: на мобиле рельсы нет, вкладка — единственный путь (как skills/tools)
     ...(hasPlugins ? [{ value: 'plugins' as const, label: 'Плагины', icon: LEFT_TAB_ICONS.plugins }] : []),
   ];
+  // Ребёнку остаётся только то, что проходит тот же childWorkspaceKeys, что и
+  // десктопная рельса: взрослая вкладка не монтируется вовсе, а не плашкой
+  // «недоступно» по клику. Отфильтрованный список — и источник отката ниже
+  // (restore leftTab из ws:<id> может быть взрослым — он уйдёт на «Чаты»).
+  const leftTabOptions = childTabKeys
+    ? allTabOptions.filter(o => childTabKeys.has(TAB_PANEL_KEY[o.value]))
+    : allTabOptions;
 
   // Если текущий таб внезапно пропал (capabilities обновились) — откатываемся на «Чаты»,
   // чтобы не застрять в пустой вкладке
@@ -1312,14 +1551,22 @@ const windowWidth = useWindowWidth();
   // перед «Инструментами», а архитектура — первой в их группе, не в хвост списка
   const toolsIdx = overflowTabItems.findIndex(i => i.key === 'tools');
   const splitAt = toolsIdx === -1 ? overflowTabItems.length : toolsIdx;
+  // Пункты без своей панели в реестре («Участники», «Настройки проекта», «Модели и
+  // расход») и панели вне снимка («Граф», «Архитектура») — взрослый уход: ребёнку ни
+  // того, ни другого (время и выход — его «Меню»), и ни 403 на экране, ни падения
+  // ErrorBoundary. localModel остаётся своим гейтом (admin + configured).
   const projectOverflowItems: OverflowItem[] = [
     ...overflowTabItems.slice(0, splitAt),
-    {
+    ...(!childTabKeys ? [{
       key: 'graph', label: 'Граф',
       icon: <Network size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
       onClick: () => ensureGraphOpen(),
-    },
-    ...(archEnabled ? [{
+    }] : []),
+    // «Архитектура» — взрослый уход, как «Граф»: у ребёнка её нет ни в рельсе, ни в
+    // шторке. Без гейта ребёнок на 360 открывал документ и получал 403 child_mode
+    // (в вертикали Architecture нет [ChildAllowed]) — разрыв с десктопом, где
+    // ребёнку «Архитектуру» не дают.
+    ...(!childTabKeys && archEnabled ? [{
       key: 'arch', label: 'Архитектура',
       icon: <DraftingCompass size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
       onClick: () => ensureArchOpen(),
@@ -1344,24 +1591,26 @@ const windowWidth = useWindowWidth();
       onClick: () => setLocalModelOpen(true),
     }] : []),
     ...overflowTabItems.slice(splitAt),
-    // Общий проект: на телефоне стопки аватаров нет (карта v2 п.10) — вход в «Участники» здесь
-    ...((projectForEdit.members?.count ?? 0) > 0 || isParticipant(projectForEdit) ? [{
-      key: 'members', label: 'Участники',
-      icon: <Users size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
-      onClick: openMembersSettings,
-    }] : []),
-    // Шестерёнка из крошки HubHeader на телефоне не рисуется (шапки там нет) — вход в
-    // настройки проекта живёт здесь, тем же колбэком, что и на десктопе
-    {
-      key: 'project-settings', label: 'Настройки проекта',
-      icon: <Settings size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
-      onClick: openProjectSettings,
-    },
-    {
-      key: 'models-spend', label: 'Модели и расход',
-      icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
-      onClick: () => setShowModelsSpend(true),
-    },
+    ...(!childTabKeys ? [
+      // Общий проект: на телефоне стопки аватаров нет (карта v2 п.10) — вход в «Участники» здесь
+      ...((projectForEdit.members?.count ?? 0) > 0 || isParticipant(projectForEdit) ? [{
+        key: 'members', label: 'Участники',
+        icon: <Users size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
+        onClick: openMembersSettings,
+      }] : []),
+      // Шестерёнка из крошки HubHeader на телефоне не рисуется (шапки там нет) — вход в
+      // настройки проекта живёт здесь, тем же колбэком, что и на десктопе
+      {
+        key: 'project-settings', label: 'Настройки проекта',
+        icon: <Settings size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
+        onClick: openProjectSettings,
+      },
+      {
+        key: 'models-spend', label: 'Модели и расход',
+        icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
+        onClick: () => setShowModelsSpend(true),
+      },
+    ] : []),
   ];
 
   // «Поговорить» из проектной вкладки «Команда»: сессия персоны создаётся в этом
@@ -1620,6 +1869,12 @@ const windowWidth = useWindowWidth();
   const handleSessionUpdated = (updated: Session) => {
     setActiveSession(prev => (prev?.id === updated.id ? updated : prev));
     if (updated.id !== activeSession?.id) return;
+    // Ребёнку реакция та же, что взрослому (X-W4-30, п.3): сосед ищется списком чатов,
+    // а GET sessions своего предмета — [ChildAllowed] (e7021183e). Местной архивации у
+    // ребёнка нет (шапка — ChildLessonHeader вместо ChatHeaderBar, ChatPanel.tsx:2754-2760),
+    // и слушателя chat_archived на детском экране тоже нет (SessionList вне детского
+    // набора панелей) — сюда архив приводит onSessionUpdated ChatPanel'а, если ответ
+    // сервера принёс уже архивированный чат. Сам апдейт активной сессии — выше.
     if (!isArchivedChat(updated)) return;
     const prev = activeSession;
     if (prev && !isArchivedChat(prev)) {
@@ -1652,6 +1907,10 @@ const windowWidth = useWindowWidth();
     if (project.defaultPersonaId !== undefined) setProjectDefaultId(project.defaultPersonaId);
   }, [project.defaultPersonaId]);
   useEffect(() => {
+    // Ребёнку опрос не нужен: он существует только для взрослого онбординга —
+    // дефолт-персона (ProjectIntroCard, создание чата) и плашка «доступ отозван»;
+    // ни того, ни другого ребёнку не показывают.
+    if (isChildScreen) return;
     let cancelled = false;
     api.projects.list()
       .then(list => {
@@ -1662,9 +1921,18 @@ const windowWidth = useWindowWidth();
       })
       .catch(() => { /* офлайн — работаем с тем, что знаем */ });
     return () => { cancelled = true; };
-  }, [project.id]);
+  }, [project.id, isChildScreen]);
 
   // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
+  // Этот эффект — ЕДИНСТВЕННЫЙ потребитель канала cc-pending-project-chat, а его
+  // производитель — и детский тоже: док «Новый урок» (onLessonCreated выше) пишет канал
+  // штатным образом. Ребёнку эффект не закрыт: разрешение канала стоит на
+  // GET /api/projects/{id}/sessions, а он помечен [ChildAllowed] для своего
+  // проекта-предмета (SessionsController.cs, CurrentOwnerIsChild/IsOwnSubjectProject, e7021183e)
+  // — и детский WorkspacePage всегда свой предмет (X-W4-30, п.1 вердикта ревью).
+  // Х-W4-80 (факт 3(б)): здесь же разрешается и детский холодный диплинк из адреса:
+  // начальный читатель канала общий с взрослым (инициализатор выше), проверка «чат есть
+  // в списке» — по ответу своего предмета, отказ — детским текстом ниже.
   useEffect(() => {
     // Список чатов грузится асинхронно: ответ на устаревшее событие или пришедший после
     // размонтирования (переход в другой проект) не должен ни открывать чат, ни писать историю
@@ -1693,7 +1961,10 @@ const windowWidth = useWindowWidth();
           // не должен висеть в центре рядом с отказом. Другой открытый чат не трогаем:
           // отказ про названный чат, а не про него.
           setActiveSession(cur => (cur && cur.id === chatId ? null : cur));
-          showToast('Чат недоступен', 'Чат из ссылки не найден — возможно, он удалён или доступ к нему отозван');
+          // Х-W4-80: ребёнку — детский текст отказа (тон ADR-041: без слова «ошибка», с тем
+          // действием, что есть на экране); взрослый отказ — без изменений.
+          if (isChildScreen) showToast('Урок недоступен', 'Этого урока не нашлось. Выбери другой из списка или начни новый.');
+          else showToast('Чат недоступен', 'Чат из ссылки не найден — возможно, он удалён или доступ к нему отозван');
           setMobileView('sidebar');
           navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
         } else {
@@ -1752,6 +2023,10 @@ const windowWidth = useWindowWidth();
 
   // Переход из карточки задачи в связанный диалог
   const handleOpenTaskSession = async (sessionId: string) => {
+    // Ребёнку чат задачи не открываем: этот путь не входил в вердикт X-W4-30 (п.3 назвал
+    // три), и прежний повод «403» больше не держится — список разрешён своему предмету
+    // (e7021183e). Открыть ли его ребёнку — отдельное решение, не здесь.
+    if (isChildScreen) return;
     try {
       const sessions = await listProjectSessions(project.id, { maxAgeMs: FRESH_LIST_MS, mustContain: sessionId });
       const s = sessions.find(x => x.id === sessionId);
@@ -1884,6 +2159,9 @@ const windowWidth = useWindowWidth();
   // начнут молча терять открытый чат — это хуже исходного бага. Поэтому catch здесь
   // молчит, а reset идёт только в .then по факту «id нет в ответе».
   useEffect(() => {
+    // Ребёнку валидация есть: список чатов своего предмета — [ChildAllowed] (e7021183e),
+    // а «призрак» возможен и у детского чата — его может удалить или архивировать куратор
+    // с другого устройства (X-W4-30, п.3 вердикта ревью).
     const stored = loadWorkspaceState(project.id);
     const restored = stored?.activeSession;
     if (!restored || restored.id !== activeSession?.id) return;
@@ -1917,6 +2195,9 @@ const windowWidth = useWindowWidth();
       // Сервер не шлёт status_changed при рестарте — рефетчим статус активной сессии
       // чтобы session.status в ChatPanel не застрял в 'working' после убийства процесса
       const sess = activeSessionRef.current;
+      // Тот же путь разрешён и ребёнку: список чатов своего предмета — [ChildAllowed]
+      // (e7021183e); без перечита status в детской ленте застрянет 'working' после
+      // убийства процесса (X-W4-30, п.3 вердикта ревью).
       if (!sess) return;
       try {
         const sessions = await listProjectSessions(project.id);
@@ -2410,7 +2691,7 @@ const windowWidth = useWindowWidth();
 
   // Пустое состояние центра (нет активного чата) — единый вид для мобилки и десктопа.
   // Создание чата только по клику: авто-создание при заходе убрано.
-  const NoSession = (
+  const NoSession = isChildScreen ? <ChildCenterEmpty dock={childProps?.dock} /> : (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
         <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
@@ -2459,6 +2740,19 @@ const windowWidth = useWindowWidth();
   // Переключатель режима не нужен: разворачивать некуда — он и у планшета скрыт.
   const readerOpenMobile = !openFile && !openCommitSha && reader.state.open;
 
+  // Ребёнок без снимка поверхности (default-deny, решение 76): вместо взрослого набора —
+  // спокойный «нет связи». Ребёнку не на чем угадывать состав: показывать нечего,
+  // просить не о чем (детские ручки не зовутся — мостика статуса здесь нет).
+  if (childState.kind === 'child-no-surface') {
+    return (
+      <PageCanvas project={project}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: SP.xl }}>
+          <EmptyState icon={<WifiOff size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />} title="Нет связи с сервером" subtitle="Попробуй позже." />
+        </div>
+      </PageCanvas>
+    );
+  }
+
   if (isMobile) {
     return (
       // Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях.
@@ -2490,19 +2784,42 @@ const windowWidth = useWindowWidth();
                 Точка состояния на самой кнопке (Ф9, макет renderPhone): свой ReactNode через
                 indicator — тон по состоянию дежурства (muted/warning), не accent у dotBadge;
                 обводка — фон шапки, чтобы точка читалась на ней, как на рельсе */}
-            <div ref={projectTabsMoreRef} style={{ flexShrink: 0, display: 'inline-flex' }}>
-              <ToolbarOverflowMenu
-                isMobile title="Ещё" items={projectOverflowItems}
-                triggerTitle={localModelTriggerTitle}
-                indicator={localModelTriggerDot ? (
-                  <span style={{
-                    position: 'absolute', top: 0, right: 0, width: 8, height: 8, borderRadius: '50%',
-                    background: localModelTriggerDot === 'warning' ? C.warning : C.textMuted,
-                    border: `2px solid ${C.bgPanel}`, pointerEvents: 'none',
-                  }} />
-                ) : undefined}
-              />
-            </div>
+            {/* Ребёнку в шапке — время (компактная плашка, как в прежней оболочке на телефоне)
+                и выход. При «время вышло» и воротах правил плашки нет: эти состояния
+                говорят свои экраны (ChildTimeBadge сам молчит вне ok/warn). */}
+            {isChildScreen && childEff && !childTimeUp && !childRulesGate && (
+              <ChildTimeBadge status={childEff} totalMinutes={childEff.dailyMinutes} compact />
+            )}
+            {/* Шторка живёт только когда есть что показать: у ребёнка в неё могут
+                попасть его собственные вкладки, не влезшие в ряд (панели вне его
+                снимка отфильтрованы выше) — пустого «Ещё» ни у кого нет */}
+            {projectOverflowItems.length > 0 && (
+              <div ref={projectTabsMoreRef} style={{ flexShrink: 0, display: 'inline-flex' }}>
+                <ToolbarOverflowMenu
+                  isMobile title="Ещё" items={projectOverflowItems}
+                  triggerTitle={localModelTriggerTitle}
+                  indicator={localModelTriggerDot ? (
+                    <span style={{
+                      position: 'absolute', top: 0, right: 0, width: 8, height: 8, borderRadius: '50%',
+                      background: localModelTriggerDot === 'warning' ? C.warning : C.textMuted,
+                      border: `2px solid ${C.bgPanel}`, pointerEvents: 'none',
+                    }} />
+                  ) : undefined}
+                />
+              </div>
+            )}
+            {isChildScreen && (
+              <div style={{ position: 'relative', flexShrink: 0 }}>
+                <IconButton ariaLabel="Меню" onClick={() => setChildMenuOpen(v => !v)}>
+                  <User size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+                </IconButton>
+                {childMenuOpen && (
+                  <Menu onClose={() => setChildMenuOpen(false)} minWidth={160}>
+                    <MenuItem icon={<LogOut size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} label="Выйти" onClick={() => { setChildMenuOpen(false); onLogout(); }} isMobile />
+                  </Menu>
+                )}
+              </div>
+            )}
           </div>
         )}
         {/* Sidebar — ВСЕГДА в DOM: FileExplorer не теряет текущий путь при смене вида.
@@ -2510,7 +2827,12 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsListChanged={handleSessionsListChanged} onCleared={handleClearSession} onActiveDeleted={leaveActiveChat} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+              // Ребёнку — детская панель уроков (Х-W4-78, дефект fab7e418): в штатном
+              // SessionList ребёнку нечем действовать (тулбар фильтров и действия карточек
+              // закрыты И11), а «Новый урок» — та же детская точка создания, что в доке
+              ? isChildScreen
+              ? <ChildLessonsPanel projectId={project.id} subjectId={project.childSubjectId ?? null} viewers={activeSubject?.viewers} activeSession={activeSession} onSelectSession={handleSelectSession} onLessonCreated={openCreatedLesson} isMobile />
+              : <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsListChanged={handleSessionsListChanged} onCleared={handleClearSession} onActiveDeleted={leaveActiveChat} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
               : leftTab === 'changes'
               // onScopeChange не передаём: в одноколоночной раскладке он уводил бы
               // экран в чат на каждую смену скоупа
@@ -2550,11 +2872,13 @@ const windowWidth = useWindowWidth();
         </div>
         {/* Мягкое приглашение к знакомству с проектом (фича default-personas-onboarding).
             На мобиле появляется только в режиме sidebar (как headerBar выше); не гейт —
-            workspace остаётся полностью доступным. */}
-        {!openFile && mobileView === 'sidebar' && (
+            workspace остаётся полностью доступным. Ребёнку — никогда (доработка ревью
+            1f80483c): «Разложить проект по полочкам?» и плашка участника — взрослый
+            флоу, у экрана-предмета ему не место (тот же гейт, что в десктопной ветке). */}
+        {!isChildScreen && !openFile && mobileView === 'sidebar' && (
           <OwnerSettingsNotice project={projectForEdit} revoked={accessRevoked} onGoHome={() => onSwitchHub('home')} />
         )}
-        {!openFile && mobileView === 'sidebar' && (
+        {!isChildScreen && !openFile && mobileView === 'sidebar' && (
           <ProjectIntroCard
             projectId={project.id}
             projectOwnerId={project.ownerId}
@@ -2569,7 +2893,17 @@ const windowWidth = useWindowWidth();
             виден (FeatureCenter внутри прячет сам центр display:none и рисует страницу); при
             openFile/readerOpenMobile/mobileView='sidebar' контейнер был display:none → страница
             в DOM, но невидима (проба 360px: страница над файлом). Без страницы — прежние правила. */}
-        <div data-testid="workspace-center-container" style={{ flex: 1, display: pageOnTop || (!openFile && !readerOpenMobile && mobileView !== 'sidebar') ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        <div data-testid="workspace-center-container" style={{ flex: 1, display: pageOnTop || (!openFile && !readerOpenMobile && mobileView !== 'sidebar') ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+          {/* Ребёнку над чатом — «Как мы учимся» (тот же вход, что в прежней оболочке на
+              узком экране): панель «Как мы учимся» с лесенкой и «Мне неприятно» открывается
+              шторкой. На десктопе она та же панель оверлеем справа. */}
+          {isChildScreen && activeSession && !childTimeUp && !featurePageOpen && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: `${SP.xs}px ${SP.lg}px 0`, flexShrink: 0 }}>
+              <Button size="xs" variant="ghost" leftIcon={<Lightbulb size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={() => setChildPanelOpen(true)}>
+                Как мы учимся
+              </Button>
+            </div>
+          )}
           {/* Центр (чат/задача/…) — СОСЕД страницы фичи, а не новая ветка тернарника:
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
               и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн
@@ -2589,11 +2923,27 @@ const windowWidth = useWindowWidth();
                   : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
               : activeSession
               ? (
-                <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} availableChatIds={availableSessionIds} />
+                // Детская проводка (Ф1f): те же пропы, что десктопу через DesktopWorkspace, —
+                // мобильная ветка рисует ChatPanel сама (точка названа в отчёте Ф1j)
+                <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} availableChatIds={availableSessionIds} childFeatures={childProps?.features} childFeedKinds={childProps?.feedKinds} childHeader={childProps?.header} />
               )
               : NoSession
             }
           </FeatureCenter>
+          {/* Ребёнку «время вышло» (слот центра прежней оболочки): заставка на всю контентную
+              зону — ни чата, ни поля ввода под ней быть не должно */}
+          {isChildScreen && childTimeUp && childEff && (
+            <div data-testid="child-timeup-overlay" style={{ position: 'absolute', inset: 0, zIndex: 800, display: 'flex', overflowY: 'auto', background: C.bgMain }}>
+              <ChildTimeUpScreen status={childEff} minutesToday={childEff.minutesToday} />
+            </div>
+          )}
+          {/* Отказ ворота правил (доработка ревью 1f80483c): тот же слот — под закрытыми
+              воротами работы с уроком нет, и отказ не должен быть тишиной */}
+          {isChildScreen && childRulesGate && rulesStartFailed && (
+            <div data-testid="child-rules-error" style={{ position: 'absolute', inset: 0, zIndex: 800, display: 'flex', overflowY: 'auto', background: C.bgMain }}>
+              <ChildRulesError busy={rulesStarting} onRetry={requestRulesStart} />
+            </div>
+          )}
         </div>
         {/* Просмотр файла — FileViewer имеет свою шапку. Файл/ридер — СОСЕДЫ контейнера
             центра (не его дети): при открытой странице прячутся display:none (без
@@ -2649,26 +2999,75 @@ const windowWidth = useWindowWidth();
             onClose={closeProjectSettings}
           />
         )}
+        {/* Детские слоты мобильной ветки: опрос времени (мостик без графики), панель
+            «Как мы учимся» шторкой, ворота правил до первого входа */}
+        {isChildScreen && <ChildStatusBridge onSnapshot={setChildSnap} />}
+        {isChildScreen && childPanelOpen && activeSession && (
+          <Modal title="Как мы учимся" onClose={() => setChildPanelOpen(false)}>
+            <ChildHintsPanel step={0} sessionId={activeSession.id} />
+          </Modal>
+        )}
+        {rulesBrief && (
+          <ChildRulesOnboarding
+            open
+            mode="agree"
+            rules={rulesBrief}
+            onAgreed={() => { setAgreedLocal(true); setRulesBrief(null); }}
+            onClose={() => setRulesBrief(null)}
+          />
+        )}
       </PageCanvas>
     );
   }
 
   return (
     <PageCanvas project={project}>
-      {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
-      <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} project={projectForEdit} onOpenProjectSettings={openProjectSettings} onOpenMembers={openMembersSettings} />
+      {isChildScreen ? (
+        /* Ребёнку хаб-хедер не показываем: хаб-разделов у него нет (все — 403), а его
+           слоты — время и выход — держит эта полоса (как ChildHeader прежней оболочки).
+           При «время вышло» и воротах правил плашки нет: состояния говорят свои экраны. */
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: SP.sm, padding: `${SP.sm}px ${SP.xl}px`, flexShrink: 0 }}>
+          {childEff && !childTimeUp && !childRulesGate && (
+            <ChildTimeBadge status={childEff} totalMinutes={childEff.dailyMinutes} />
+          )}
+          {activeSession && !childTimeUp && !childRulesGate && (
+            <Button size="xs" variant="ghost" leftIcon={<Lightbulb size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={() => setChildPanelOpen(v => !v)}>
+              Как мы учимся
+            </Button>
+          )}
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <IconButton ariaLabel="Меню" onClick={() => setChildMenuOpen(v => !v)}>
+              <User size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+            </IconButton>
+            {childMenuOpen && (
+              <Menu onClose={() => setChildMenuOpen(false)} minWidth={160}>
+                <MenuItem icon={<LogOut size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} label="Выйти" onClick={() => { setChildMenuOpen(false); onLogout(); }} />
+              </Menu>
+            )}
+          </div>
+        </div>
+      ) : (
+        /* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */
+        <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} project={projectForEdit} onOpenProjectSettings={openProjectSettings} onOpenMembers={openMembersSettings} />
+      )}
 
       {/* Мягкое приглашение к знакомству с проектом (фича default-personas-onboarding).
           Появляется между HubHeader и DesktopWorkspace как горизонтальная полоска,
-          DesktopWorkspace под ней получает оставшуюся высоту через flex:1. */}
-      <OwnerSettingsNotice project={projectForEdit} revoked={accessRevoked} onGoHome={() => onSwitchHub('home')} />
-      <ProjectIntroCard
-        projectId={project.id}
-        projectOwnerId={project.ownerId}
-        defaultPersonaId={projectDefaultId}
-        presetKey={project.presetKey}
-        isMobile={isMobile}
-      />
+          DesktopWorkspace под ней получает оставшуюся высоту через flex:1.
+          Ребёнку — никогда (доработка ревью 1f80483c): «Разложить проект по полочкам?»
+          и плашка участника — взрослый флоу, у экрана-предмета ему не место. */}
+      {!isChildScreen && (
+        <>
+          <OwnerSettingsNotice project={projectForEdit} revoked={accessRevoked} onGoHome={() => onSwitchHub('home')} />
+          <ProjectIntroCard
+            projectId={project.id}
+            projectOwnerId={project.ownerId}
+            defaultPersonaId={projectDefaultId}
+            presetKey={project.presetKey}
+            isMobile={isMobile}
+          />
+        </>
+      )}
 
       {/* Тело: сайдбар + контент. position:relative — чтобы drawer/overlay легли под хедер.
           overflow — clip с запасом, а не hidden: тени островов и попапа-превью панели
@@ -2692,7 +3091,10 @@ const windowWidth = useWindowWidth();
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}
           railBadges={localModelBadge ? { ...railBadges, localModel: localModelBadge } : railBadges}
-          allowedKeys={wsAllowedKeys}
+          allowedKeys={allowedKeys}
+          // Детская проводка (Ф1j): один проп-объект — его части доходят до композера,
+          // ленты, шапки и дока. Без него (взрослый экран) — undefined, поведение как раньше.
+          child={childProps}
           onOpenProjectSettings={openProjectSettings}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
@@ -2806,12 +3208,43 @@ const windowWidth = useWindowWidth();
                 onClose={() => { markGenPanelDismissed(activeSessionId, 'chatContext'); closePanelKey('chatContext'); }} />,
             } : {}),
             ...Object.fromEntries(panelDefs.flatMap(d => (
-              d.name && keyAllowed(d.name as PanelKey, wsAllowedKeys) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
+              d.name && keyAllowed(d.name as PanelKey, allowedKeys) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
                 ? [[d.name, d.render({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: false, onClose: () => { markGenPanelDismissed(activeSessionId, d.name!); closePanelKey(d.name as PanelKey); } })]]
                 : []
             ))),
           }}
         />
+
+        {/* Ребёнку «время вышло» (слот центра прежней оболочки): заставка на всё тело экрана —
+            ни чата, ни панелей под ней быть не должно; рельсы остаются в DOM под заставкой */}
+        {isChildScreen && childTimeUp && childEff && (
+          <div data-testid="child-timeup-overlay" style={{ position: 'absolute', inset: 0, zIndex: 800, display: 'flex', overflowY: 'auto', background: C.bgMain }}>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+              <ChildTimeUpScreen status={childEff} minutesToday={childEff.minutesToday} />
+            </div>
+          </div>
+        )}
+        {/* Отказ ворота правил (доработка ревью 1f80483c): тот же слот, что у «время вышло» —
+            под закрытыми воротами работы с уроком нет, и отказ не должен быть тишиной */}
+        {isChildScreen && childRulesGate && rulesStartFailed && (
+          <div data-testid="child-rules-error" style={{ position: 'absolute', inset: 0, zIndex: 800, display: 'flex', overflowY: 'auto', background: C.bgMain }}>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+              <ChildRulesError busy={rulesStarting} onRetry={requestRulesStart} />
+            </div>
+          </div>
+        )}
+        {/* «Как мы учимся» (прежний оверейл-панель оболочки, та же ширина 300): лесенка
+            подсказок и «Мне неприятно». На планшете и телефоне — та же панель шторкой Modal */}
+        {isChildScreen && childPanelOpen && activeSession && !isTablet && !childTimeUp && (
+          <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: HINTS_PANEL_W, zIndex: 801 }}>
+            <Island style={{ height: '100%', boxShadow: SHADOW.peek }}>
+              <IslandHeader title="Как мы учимся" icon={<Lightbulb size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} />
+              <div style={{ overflowY: 'auto' }}>
+                <ChildHintsPanel step={0} sessionId={activeSession.id} />
+              </div>
+            </Island>
+          </div>
+        )}
       </div>
 
       {columnsDialogEl}
@@ -2824,6 +3257,23 @@ const windowWidth = useWindowWidth();
           onProjectUpdated={handleProjectUpdated}
           openMembers={editMembersOpen}
           onClose={closeProjectSettings}
+        />
+      )}
+      {/* Детские слоты десктопной ветки: опрос времени (мостик без графики), панель
+          «Как мы учимся» на планшете — шторкой, ворота правил до первого входа */}
+      {isChildScreen && <ChildStatusBridge onSnapshot={setChildSnap} />}
+      {isChildScreen && childPanelOpen && activeSession && isTablet && !childTimeUp && (
+        <Modal title="Как мы учимся" onClose={() => setChildPanelOpen(false)}>
+          <ChildHintsPanel step={0} sessionId={activeSession.id} />
+        </Modal>
+      )}
+      {rulesBrief && (
+        <ChildRulesOnboarding
+          open
+          mode="agree"
+          rules={rulesBrief}
+          onAgreed={() => { setAgreedLocal(true); setRulesBrief(null); }}
+          onClose={() => setRulesBrief(null)}
         />
       )}
     </PageCanvas>

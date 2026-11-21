@@ -9,6 +9,7 @@ import { readStoredUserId } from './offline';
 import { plural } from './plural';
 import { isPersonalFilesId } from '../features/files/personalFiles';
 import { joinUser, onFilesChanged, onGitStatusChanged, onReconnected } from './signalr';
+import { onLogoutReset } from './logoutReset';
 
 export interface GitProjectState {
   status: GitStatus | null;
@@ -68,6 +69,18 @@ const EMPTY: GitProjectState = {
 const _state = new Map<string, GitProjectState>();
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
+
+// Поколение снимка стора (ревью Х-W4-69): ответ запроса, начатого до сброса, не пишется
+// в чужой снимок. Асинхронный писатель снимает gen до первого await и не пишет, если к
+// моменту ответа поколение поднялось (сброс при выходе). Без стража полёт запроса
+// возвращает кеш: принудительный выход (offline.ts dispatchEvent('cc-unauthorized') ДО
+// throw) поднимает поколение раньше catch того же запроса, и patch() создал бы запись
+// заново — фантомную (statusLoaded:true при status=null) или со статусом прежнего
+// владельца. Инвариант «последний запрос побеждает» — тот же, что у wiki.ts (_treeGen,
+// owner-capture) и featureFlags.ts createFlagsRefresher (mine === generation).
+// Отличается от «if (!_state.has(id)) return» внутри patch: тот ломает changedBy-тесты,
+// где loadGitStatus без ensureGit опирается на то, что patch создаёт запись.
+let _gen = 0;
 
 function emit() { _listeners.forEach(fn => fn()); }
 
@@ -155,12 +168,37 @@ export function ensureGit(projectId: string, refresh = false): void {
   }
 }
 
+// Сброс всего git-стора при смене пользователя (дефект bfaa0df1): _state — module-level
+// и переживает выход из аккаунта (logout в App.tsx идёт без location.reload). Без сброса
+// ребёнок после логина в том же проекте видит кеш взрослого: status, ветки, стэши,
+// незапушенные коммиты — а canPublish панели «Изменения» (GitChangesRail: ahead || unpushed)
+// становится истинным → активная кнопка публикации → 403 (тот же класс, что Х-W4-60/64).
+// Гасятся и пер-проектные карты, и отложенные дебаунсы: иначе висевший timer после
+// выхода дёрнул бы loadGitStatus и вернул в стор запись прежнего проекта.
+// Точка — реестр onLogoutReset, а не тело logout: App зовёт runLogoutResets на ОБОИХ
+// путях выхода (явный logout и принудительный по cc-unauthorized), вызов внутри logout
+// покрыл бы только один. Тот же паттерн, что у useCharacters.
+export function resetGitState(): void {
+  _gen++; // ответы всех запросов, ещё летящих, — прежнего владельца (cancel в createFlagsRefresher)
+  for (const t of _fileDebounce.values()) clearTimeout(t);
+  _fileDebounce.clear();
+  _activeSessionForChangedBy.clear();
+  _rawChangedBy.clear();
+  _lastFocusRefresh = 0;
+  _state.clear();
+  emit();
+}
+onLogoutReset(resetGitState);
+
 export async function loadGitStatus(projectId: string): Promise<void> {
+  const gen = _gen;
   try {
     const status = await api.git.status(projectId);
+    if (gen !== _gen) return; // стор сброшен, пока запрос был в полёте — ответ чужой
     patch(projectId, { status, statusLoaded: true });
     void loadChangedBy(projectId, status);
   } catch {
+    if (gen !== _gen) return; // та же гонка на ветке ошибки: фантомную statusLoaded не пишем
     // офлайн/ошибка — считаем «не репо», сегменты git скрыты.
     // changedBy/myChangedPaths/dirtySessionIds намеренно НЕ сбрасываем: упавший статус
     // ничего не сообщает о фиксации правок, а гашение значков в списке чатов при каждом
@@ -226,6 +264,7 @@ function applyChangedByFilter(projectId: string): void {
 // status — достоверное «ни у кого нет незакоммиченного» (пустой Set), а недоступность
 // данных (worktree-контекст, ошибка) — undefined, и значки в списке просто не рисуются.
 async function loadChangedBy(projectId: string, status: GitStatus): Promise<void> {
+  const gen = _gen; // снимается до первого await; applyChangedByFilter ниже — писатель этого ответа
   const ctx = getGitSessionContext();
   if (ctx?.projectId === projectId) {
     _rawChangedBy.delete(projectId);
@@ -245,50 +284,64 @@ async function loadChangedBy(projectId: string, status: GitStatus): Promise<void
   }
   try {
     const { files } = await api.files.changedBy(projectId, paths);
+    if (gen !== _gen) return; // и сырой ответ чужого владельца не держим: по нему перефильтрует следующий вызов
     _rawChangedBy.set(projectId, files);
     applyChangedByFilter(projectId);
   } catch {
+    if (gen !== _gen) return;
     _rawChangedBy.delete(projectId);
     patch(projectId, { changedBy: new Map(), myChangedPaths: undefined, dirtySessionIds: undefined });
   }
 }
 
 export async function loadGitLog(projectId: string, limit = 100): Promise<void> {
+  const gen = _gen;
   try {
     const log = await api.git.log(projectId, limit);
+    if (gen !== _gen) return;
     patch(projectId, { log, logLoaded: true });
   } catch (e) {
+    if (gen !== _gen) return;
     patch(projectId, { logLoaded: true, error: e instanceof Error ? e.message : 'Не удалось загрузить историю' });
   }
 }
 
 export async function loadUnpushedLog(projectId: string, limit = 100): Promise<void> {
+  const gen = _gen;
   try {
     const unpushed = await api.git.unpushed(projectId, limit);
+    if (gen !== _gen) return;
     patch(projectId, { unpushed, unpushedLoaded: true });
   } catch {
+    if (gen !== _gen) return;
     // без upstream/ошибка — стек пуст (панель покажет только «Не зафиксировано»)
     patch(projectId, { unpushed: [], unpushedLoaded: true });
   }
 }
 
 export async function loadGitBranches(projectId: string): Promise<void> {
+  const gen = _gen;
   try {
     const branches = await api.git.branches(projectId);
+    if (gen !== _gen) return;
     patch(projectId, { branches });
   } catch { /* меню веток просто останется пустым */ }
 }
 
 export async function loadGitStash(projectId: string): Promise<void> {
+  const gen = _gen;
   try {
     const stashes = await api.git.stashList(projectId);
+    if (gen !== _gen) return;
     patch(projectId, { stashes });
   } catch { /* секция стэшей просто останется пустой */ }
 }
 
 export async function loadGitRemote(projectId: string): Promise<void> {
+  const gen = _gen;
   try {
     const remote = await api.git.remote(projectId);
+    if (gen !== _gen) return;
     patch(projectId, { remote });
   } catch { /* без remote-инфо скрываем кнопку Forgejo и настройки авто-коммита */ }
 }
@@ -302,12 +355,15 @@ function errorBody(e: unknown): { diverged?: boolean; conflictFiles?: string[] }
 
 // Общая обёртка мутации: busy + сброс ошибки → операция → свежий статус либо ошибка в стор
 async function mutate(projectId: string, op: () => Promise<GitStatus>): Promise<boolean> {
+  const gen = _gen;
   patch(projectId, { busy: true, error: null, diverged: false, conflictFiles: [] });
   try {
     const status = await op();
+    if (gen !== _gen) return false; // статус прежнего владельца в чужой снимок не пишем
     patch(projectId, { status, statusLoaded: true, busy: false });
     return true;
   } catch (e) {
+    if (gen !== _gen) return false;
     const body = errorBody(e);
     patch(projectId, {
       busy: false,
@@ -375,14 +431,17 @@ export const gitRestoreFile = (projectId: string, sha: string, path: string) =>
 
 // Документный режим: «Сохранить сейчас» — commit всего с ✨-сообщением (+push при авто-пуше)
 export async function gitSaveNow(projectId: string): Promise<boolean> {
+  const gen = _gen;
   patch(projectId, { busy: true, error: null });
   try {
     await api.git.saveNow(projectId);
+    if (gen !== _gen) return false;
     patch(projectId, { busy: false });
     await loadGitStatus(projectId);
-    if (get(projectId).logLoaded) void loadGitLog(projectId);
+    if (gen === _gen && get(projectId).logLoaded) void loadGitLog(projectId);
     return true;
   } catch (e) {
+    if (gen !== _gen) return false;
     patch(projectId, { busy: false, error: e instanceof Error ? e.message : 'Не удалось сохранить' });
     return false;
   }
@@ -390,14 +449,17 @@ export async function gitSaveNow(projectId: string): Promise<boolean> {
 
 // Коммит: message = summary + описание; после успеха обновляем статус и историю
 export async function gitCommit(projectId: string, message: string, amend = false): Promise<boolean> {
+  const gen = _gen;
   patch(projectId, { busy: true, error: null });
   try {
     await api.git.commit(projectId, message, amend);
+    if (gen !== _gen) return false;
     patch(projectId, { busy: false });
     await loadGitStatus(projectId);
-    if (get(projectId).logLoaded) void loadGitLog(projectId);
+    if (gen === _gen && get(projectId).logLoaded) void loadGitLog(projectId);
     return true;
   } catch (e) {
+    if (gen !== _gen) return false;
     patch(projectId, { busy: false, error: e instanceof Error ? e.message : 'Не удалось создать коммит' });
     return false;
   }
@@ -405,13 +467,16 @@ export async function gitCommit(projectId: string, message: string, amend = fals
 
 // Откат коммита (revert): null — успех, строка — текст ошибки (409 при конфликте)
 export async function gitRevertCommit(projectId: string, sha: string): Promise<string | null> {
+  const gen = _gen;
   patch(projectId, { busy: true, error: null });
   try {
     const status = await api.git.revertCommit(projectId, sha);
+    if (gen !== _gen) return null; // чужой статус не пишем; откат на сервере уже случился
     patch(projectId, { status, statusLoaded: true, busy: false });
     if (get(projectId).logLoaded) void loadGitLog(projectId);
     return null;
   } catch (e) {
+    if (gen !== _gen) return null;
     const msg = e instanceof Error ? e.message : 'Не удалось откатить коммит';
     patch(projectId, { busy: false, error: msg });
     return msg;
@@ -420,13 +485,16 @@ export async function gitRevertCommit(projectId: string, sha: string): Promise<s
 
 // git init (+ remote на Forgejo, если настроен): после успеха статус и remote в сторе свежие
 export async function gitInit(projectId: string): Promise<{ ok: boolean; htmlUrl: string | null; error?: string }> {
+  const gen = _gen;
   patch(projectId, { busy: true, error: null });
   try {
     const r = await api.git.init(projectId);
+    if (gen !== _gen) return { ok: false, htmlUrl: null }; // репозиторий создан, но снимок — чужой: перечитается заново
     patch(projectId, { status: r.status, statusLoaded: true, busy: false });
     void loadGitRemote(projectId);
     return { ok: true, htmlUrl: r.htmlUrl };
   } catch (e) {
+    if (gen !== _gen) return { ok: false, htmlUrl: null };
     const msg = e instanceof Error ? e.message : 'Не удалось создать git-репозиторий';
     patch(projectId, { busy: false, error: msg });
     return { ok: false, htmlUrl: null, error: msg };
@@ -437,14 +505,17 @@ export async function gitInit(projectId: string): Promise<{ ok: boolean; htmlUrl
 // После успеха перечитываем статус и стек неопубликованных — у ветки появился upstream,
 // и «неопубликовано» считается уже по нему, а не по всей истории.
 async function connectRemote(projectId: string, op: () => Promise<GitRemoteInfo>): Promise<boolean> {
+  const gen = _gen;
   patch(projectId, { busy: true, error: null });
   try {
     const remote = await op();
+    if (gen !== _gen) return false;
     patch(projectId, { remote, busy: false });
     await loadGitStatus(projectId);
     await loadUnpushedLog(projectId);
     return true;
   } catch (e) {
+    if (gen !== _gen) return false;
     patch(projectId, { busy: false, error: e instanceof Error ? e.message : 'Не удалось подключить репозиторий' });
     return false;
   }
@@ -457,13 +528,16 @@ export const gitCreateServerRepo = (projectId: string) =>
 
 // Настройки авто-коммита после хода ИИ (enabled) и авто-пуша (push)
 export async function gitSetAutoCommit(projectId: string, enabled: boolean, push: boolean): Promise<boolean> {
+  const gen = _gen;
   try {
     const r = await api.git.setAutoCommit(projectId, enabled, push);
+    if (gen !== _gen) return false;
     const remote = get(projectId).remote;
     if (remote) patch(projectId, { remote: { ...remote, autoCommit: r.autoCommit, autoPush: r.autoPush } });
     else void loadGitRemote(projectId);
     return true;
   } catch (e) {
+    if (gen !== _gen) return false;
     patch(projectId, { error: e instanceof Error ? e.message : 'Не удалось сохранить настройку' });
     return false;
   }

@@ -44,7 +44,7 @@ export const PHOTO_NOTE = 'Фото помощник рассматривает 
 export interface ChildRulesBrief {
   /** Имя ребёнка: подписи согласия («Я, Лиза, согласна») и строка согласия в summary */
   childName: string;
-  /** Дневной лимит пространства в минутах (ChildProfile.spaces[space].dailyMinutes); null — лимита нет */
+  /** Дневной лимит пространства в минутах (ChildStatus.dailyMinutes); null — лимита нет */
   dailyMinutes: number | null;
   /** Окна времени пространства из профиля: from/to «HH:mm», to < from — окно через полночь */
   windows: TimeWindow[];
@@ -348,8 +348,14 @@ function RulesFlow({ mode, rules, onAgreed, onClose }: Omit<Props, 'open'>) {
     if (step === 3) {
       return (
         <div style={{ display: 'flex', gap: SP.md, flexDirection: isMobile ? 'column' : 'row' }}>
-          <CardList icon={Eye} title="Папа видит" items={['Сколько времени ты занималась', 'Предметы и темы', 'Где было трудно']} />
-          <CardList icon={EyeOff} title="Папа не видит" items={['Ваши сообщения', 'Ошибки по одной', 'Черновики']} muted />
+          {/* Куратор видит все уроки ребёнка дословно (решение Андрея 19.11) — карточка
+              называет то, что правда на самом деле. Формулировки — по карточке Ф1i. */}
+          <CardList icon={Eye} title="Папа видит" items={[
+            'Твои уроки целиком — что ты пишешь и что отвечает помощник',
+            'Сколько времени ты занималась',
+            'Какие предметы и темы ты проходила',
+          ]} />
+          <CardList icon={EyeOff} title="Папа не видит" items={['Черновики, которые ты не отправила']} muted />
         </div>
       );
     }
@@ -371,7 +377,9 @@ function RulesFlow({ mode, rules, onAgreed, onClose }: Omit<Props, 'open'>) {
               </Fragment>
             ))}
           </div>
-          <Row icon={EyeOff}>Папа узнаёт, что нужна помощь, но не читает ваш разговор.</Row>
+          {/* Прежняя строка обещала, что папа не видит разговор, — с решения 19.11 это неправда:
+              куратор видит уроки дословно. Строка говорит только то, что делает сам сигнал. */}
+          <Row icon={Bell}>Папа узнаёт, что тебе нужна помощь.</Row>
           <Row icon={Hand}>Ты ни в чём не виновата. Можно подойти к папе и самой.</Row>
         </>
       );

@@ -66,6 +66,22 @@ export interface Me {
   executionEnvironment?: 'local' | 'container';
   // Детский режим: пользователь — ребёнок, приложение рисует только детскую оболочку
   isChild?: boolean;
+  // Снимок детской поверхности (ADR-041 ред. 8, решение 76, И11): отдаётся только ребёнку,
+  // взрослому сервер присылает null (AuthControllerTests.Me_Adult_ReturnsNullChildSurface).
+  // Default-deny: фронт показывает только перечисленные ключи; отсутствие поля у детского
+  // профиля — экран «нет связи», а не взрослый набор (читает useChildSurface).
+  childSurface?: ChildSurface | null;
+}
+
+// Снимок детской поверхности: поле childSurface ответа GET /api/auth/me (только у ребёнка).
+// Заморожен на бэке (ChildModeAllowList.Surface), состав проверяется тестом-снимком
+// (AuthControllerTests). Ключи — идентификаторы фронта: panels — ключи реестра панелей
+// panelCatalog.ts (WORKSPACE_KEYS); composerFeatures и feedKinds — согласованные с фронтом
+// строки (возможности штатного Composer и виды ленты). Имена полей — camelCase JSON.
+export interface ChildSurface {
+  panels: string[];
+  composerFeatures: string[];
+  feedKinds: string[];
 }
 
 export interface AuthState {

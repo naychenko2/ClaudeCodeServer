@@ -1,7 +1,12 @@
-// KM-F10 (доработка): гейт детского режима в App стоит ДО побочных эффектов. Перехватываем всё,
-// что App шлёт наружу — api, request, fetch, signalr, загрузчики (модели, модули, подписка на
-// уведомления, MF-remote). Для ребёнка наружу уходит только allow-list ADR-041, даже если в
-// localStorage лежит OPEN_PROJECT_KEY и адрес — диплинк на проект; взрослый каркас — как раньше.
+// KM-F10 + Ф1f (ADR-041 ред. 8): гейт детского режима в App стоит ДО побочных эффектов,
+// а сам ребёнок идёт в ШТАТНЫЙ маршрут WorkspacePage проекта-предмета — отдельной детской
+// оболочки больше нет. Перехватываем всё, что App шлёт наружу — api, request, fetch, signalr,
+// загрузчики (модели, модули, подписка на уведомления, MF-remote). Для ребёнка наружу уходит
+// только allow-list ADR-041: /me и штатный список проектов (Б21: там только его проекты-
+// предметы; по умолчанию — первый предмет). Даже если в localStorage лежит OPEN_PROJECT_KEY
+// и адрес — диплинк на проект; взрослый каркас — как раньше.
+// Снимок поверхности (childSurface из me-ответа) доходит до WorkspacePage как есть, включая
+// null: default-deny проверяется на границе App → экран.
 // Окружение — то же, что у App.accessRevoked.test.ts.
 
 import { act } from 'react';
@@ -228,11 +233,16 @@ const { makeStub, makeSpy } = vi.hoisted(() => {
   });
   return { makeStub, makeSpy };
 });
-const { plpPropsReg } = vi.hoisted(() => ({ plpPropsReg: [] as Array<Record<string, unknown>> }));
+// WorkspacePage — шпион: детский маршрут обязан передать экрану и проект, и снимок
+// поверхности как есть (включая null) — это граница App → экран, её видит этот тест
+const { plpPropsReg, wpPropsReg } = vi.hoisted(() => ({
+  plpPropsReg: [] as Array<Record<string, unknown>>,
+  wpPropsReg: [] as Array<Record<string, unknown>>,
+}));
 vi.mock('./pages/ProjectListPage', () => makeSpy('ProjectListPage', plpPropsReg));
 vi.mock('./pages/LoginPage', () => makeStub('LoginPage'));
 vi.mock('./pages/ChatsPage', () => makeStub('ChatsPage'));
-vi.mock('./pages/WorkspacePage', () => makeStub('WorkspacePage'));
+vi.mock('./pages/WorkspacePage', () => makeSpy('WorkspacePage', wpPropsReg));
 vi.mock('./pages/HomePage', () => makeStub('HomePage'));
 vi.mock('./pages/WallPage', () => makeStub('WallPage'));
 vi.mock('./features/tasks/CalendarPage', () => makeStub('CalendarPage'));
@@ -251,7 +261,6 @@ vi.mock('./components/ProductHistory', () => makeStub('ProductHistory'));
 vi.mock('./components/GlobalSearch', () => makeStub('GlobalSearch'));
 vi.mock('./components/ai/AiLauncher', () => makeStub('AiLauncher'));
 vi.mock('./features/inspector/UiInspectorOverlay', () => makeStub('UiInspectorOverlay'));
-vi.mock('./features/childMode/ChildWorkspace', () => makeStub('ChildWorkspace'));
 
 import App from './App';
 
@@ -289,6 +298,7 @@ function arrange(me: { isChild: boolean } | 'hold') {
   net.hold = me === 'hold'; net.release = null;
   net.meResult = me === 'hold' ? null : { ...me, subsystems: {}, featureFlags: {} };
   plpPropsReg.length = 0;
+  wpPropsReg.length = 0;
   store.set('cc_token', 't');
   store.set('cc_server_url', 'http://x');
   store.set('cc_username', 'kid');
@@ -299,29 +309,35 @@ function arrange(me: { isChild: boolean } | 'hold') {
 // allow-list ADR-041: логин, /me, TTS, /child/*, GET chats/{id} и его /history
 const ALLOWED_URL = /^\/(auth\/login|auth\/me|tts|child\/.*|chats\/[^/]+(\/history)?)(\?.*)?$/;
 
-describe('App: гейт isChild до побочных эффектов (KM-F10)', () => {
+describe('App: ребёнок в штатном маршруте WorkspacePage, гейт isChild до побочных эффектов (KM-F10 + Ф1f)', () => {
   afterEach(() => { vi.useRealTimers(); uninstallFakeDom(); vi.restoreAllMocks(); });
 
-  it('isChild=true: наружу только /me, остальное из allow-list; взрослого каркаса нет, хотя в storage лежит OPEN_PROJECT_KEY', async () => {
+  it('isChild=true: открыт штатный WorkspacePage проекта-предмета; наружу /me и штатный список проектов, остальное из allow-list; взрослого каркаса нет', async () => {
     arrange({ isChild: true });
     const { container } = mount(createElement(App));
     await act(async () => { vi.advanceTimersByTime(5_000); });
 
-    expect(findNodeByAttr(container, 'data-stub', 'ChildWorkspace'), 'детская оболочка не открылась').not.toBeNull();
-    expect(findNodeByAttr(container, 'data-stub', 'WorkspacePage'), 'взрослый воркспейс смонтирован').toBeNull();
-    expect(net.api, 'вызовы api, кроме /me').toEqual(['auth.me']);
+    // Ф1f: вместо ChildWorkspace — штатный экран. Открытый проект из storage сохранён
+    // (p1 в списке) — экран поднят на нём; список — штатный (Б21: там только его предметы)
+    expect(findNodeByAttr(container, 'data-stub', 'WorkspacePage'), 'детский маршрут не открыл штатный воркспейс').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-stub', 'HomePage'), 'взрослый дашборд смонтирован ребёнку').toBeNull();
+    expect(findNodeByAttr(container, 'data-stub', 'ProjectListPage'), 'взрослый список проектов смонтирован ребёнку').toBeNull();
+    // Снимок доходит до экрана как есть: в me-ответе поля нет → null (default-deny решает экран)
+    expect(wpPropsReg.length, 'WorkspacePage не получил props').toBeGreaterThan(0);
+    expect(wpPropsReg[0].childSurface, 'снимок поверхности не донесён как есть (ожидался null)').toBe(null);
+    expect(net.api, 'вызовы api: /me и штатный список проектов').toEqual(['auth.me', 'projects.list']);
     expect(net.urls.filter(u => !ALLOWED_URL.test(u)), 'URL вне allow-list').toEqual([]);
     expect(net.fetches.filter(u => !ALLOWED_URL.test(u.replace(/^https?:\/\/[^/]+/, '').replace(/^\/api/, ''))), 'fetch вне allow-list').toEqual([]);
     expect(net.signalr, 'signalr-действия у ребёнка').toEqual([]);
     expect(net.loaders, 'взрослые загрузчики (модели, модули, уведомления, remote)').toEqual([]);
   });
 
-  it('пока /me не получен: ни взрослого экрана, ни взрослых запросов — даже через 3 с', async () => {
+  it('пока /me не получен: ни взрослого экрана, ни детской поверхности, ни взрослых запросов — даже через 3 с', async () => {
     arrange('hold');
     const { container } = mount(createElement(App));
     await act(async () => { vi.advanceTimersByTime(5_000); });
 
-    for (const stub of ['HomePage', 'WorkspacePage', 'ChatsPage', 'ChildWorkspace', 'LoginPage']) {
+    for (const stub of ['HomePage', 'WorkspacePage', 'ChatsPage', 'LoginPage']) {
       expect(findNodeByAttr(container, 'data-stub', stub), `до /me показан ${stub}`).toBeNull();
     }
     expect(net.api, 'до /me уходит только сам /me').toEqual(['auth.me']);
@@ -329,8 +345,10 @@ describe('App: гейт isChild до побочных эффектов (KM-F10)'
 
     await act(async () => { net.release?.({ isChild: true, subsystems: {}, featureFlags: {} }); });
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(findNodeByAttr(container, 'data-stub', 'ChildWorkspace'), 'после /me нет детской оболочки').not.toBeNull();
-    expect(net.api).toEqual(['auth.me']);
+    // После /me — тот же штатный путь: проект из storage + штатный список, снимок — как есть (null)
+    expect(findNodeByAttr(container, 'data-stub', 'WorkspacePage'), 'после /me нет штатного воркспейса').not.toBeNull();
+    expect(wpPropsReg[0]?.childSurface, 'снимок поверхности не донесён как есть (ожидался null)').toBe(null);
+    expect(net.api).toEqual(['auth.me', 'projects.list']);
   });
 
   it('isChild=false: взрослый каркас как раньше — воркспейс, список проектов, модели и подписка на уведомления', async () => {
@@ -339,7 +357,8 @@ describe('App: гейт isChild до побочных эффектов (KM-F10)'
     await act(async () => { vi.advanceTimersByTime(5_000); });
 
     expect(findNodeByAttr(container, 'data-stub', 'WorkspacePage'), 'взрослый воркспейс не открылся').not.toBeNull();
-    expect(findNodeByAttr(container, 'data-stub', 'ChildWorkspace')).toBeNull();
+    // Взрослому childSurface не передаётся вовсе: экран без детского props (undefined, не null)
+    expect(wpPropsReg[0]?.childSurface, 'взроскому прилетел детский снимок').toBe(undefined);
     expect(net.api).toContain('projects.list');
     expect(net.loaders).toEqual(expect.arrayContaining(['models', 'modules', 'notifications', 'remotes']));
   });

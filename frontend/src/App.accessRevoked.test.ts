@@ -240,7 +240,6 @@ vi.mock('./components/ProductHistory', () => makeStub('ProductHistory'));
 vi.mock('./components/GlobalSearch', () => makeStub('GlobalSearch'));
 vi.mock('./components/ai/AiLauncher', () => makeStub('AiLauncher'));
 vi.mock('./features/inspector/UiInspectorOverlay', () => makeStub('UiInspectorOverlay'));
-vi.mock('./features/childMode/ChildWorkspace', () => makeStub('ChildWorkspace'));
 
 import App from './App';
 

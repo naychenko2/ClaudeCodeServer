@@ -872,8 +872,8 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
   engines?: LocalModelEngine[];
   engine?: LocalModelEngineName;
   onEngineChange?: (e: LocalModelEngineName) => void;
-  // «Облачные модели: скорость ответа» — снимок из своего опроса (раз в минуту);
-  // без него карточки нет (не-админу карточка и не положена).
+  // «Сравнить с облаком» — снимок своего опроса «Облачные модели: скорость ответа»
+  // (раз в минуту): без него секции нет (не-админу она и не положена).
   cloudSpeed?: CloudAnswerSpeedState;
 }) {
   // «Точные метрики локальной модели» — закрыты по умолчанию: первый экран отвечает

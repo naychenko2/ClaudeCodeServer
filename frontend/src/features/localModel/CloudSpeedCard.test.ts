@@ -109,6 +109,15 @@ describe('закрытая строка «Сравнить с облаком» (
     return cloudHtml(renderTab(props));
   }
 
+  // Позиция якоря с проверяющим броском (R-Ф-4): сырой indexOf при исчезновении якоря
+  // даёт −1, и сравнение −1 < x проходит молча — проверка порядка становится
+  // пустой. Тот же образец, что head() в TextTab.test.ts:818. Якорь — с тегом.
+  function headAt(html: string, anchor: string): number {
+    const i = html.indexOf(anchor);
+    if (i < 0) throw new Error(`нет якоря «${anchor}» в разметке`);
+    return i;
+  }
+
   it('по умолчанию закрыто: aria-expanded=false, прежнего заголовка карточки нет', () => {
     const { host, root } = mountTab({ data, cloudSpeed: cloudState() });
     expect(cloudHead(host).getAttribute('aria-expanded')).toBe('false');
@@ -225,8 +234,11 @@ describe('закрытая строка «Сравнить с облаком» (
   // после закрытого раскрытия локальных метрик. Мутация «поднять облако над метриками» краснит.
   it('секция — последней строкой: после локальных метрик под их закрытием', () => {
     const html = renderTab({ data, cloudSpeed: cloudState() });
-    expect(html.indexOf('Точные метрики локальной модели')).toBeLessThan(html.indexOf('Сравнить с облаком'));
-    expect(html.indexOf('>Скорость ответа</h3>')).toBeLessThan(html.indexOf('Сравнить с облаком'));
+    const metrics = headAt(html, '>Точные метрики локальной модели</span>');
+    const speedAnswer = headAt(html, '>Скорость ответа</h3>');
+    const cloud = headAt(html, '>Сравнить с облаком</span>');
+    expect(metrics).toBeLessThan(cloud);
+    expect(speedAnswer).toBeLessThan(cloud);
   });
 
   it('подсказки тела: определение, Artificial Analysis, не сравнимо с локальной, TTFT', () => {

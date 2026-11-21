@@ -82,10 +82,14 @@ function clickSegment(host: ReturnType<typeof mountTab>['host'], label: string):
 }
 
 // Разметка одной карточки: от её заголовка до первого закрывающего </section>.
-// Поиск по тексту заголовка, без «</h3>»: правая подпись карточки (например
-// «локально» в «Сейчас на ферме») меняет только хвост h3 и не должна ломать проверку.
-function sectionHtml(html: string, title: string): string | null {
-  const from = html.indexOf(title);
+// Якорь берётся с тегом: «>Нагрузка и кэш</h3>», «>Видеокарты</span>» — голый текст
+// заголовка находит не тот блок: та же подстрока живёт в чужих строках (aria-label
+// строки «Видеокарты» несёт её целиком), а соседний заголовок может быть её началом
+// («Нагрузка» — начало «Нагрузка и кэш»). У заголовка с правым span («Сейчас на
+// ферме» + «локально») хвост меняется по ширине, поэтому там якорь только
+// открывающий — «>Сейчас на ферме» (R-Ф-3).
+function sectionHtml(html: string, anchor: string): string | null {
+  const from = html.indexOf(anchor);
   if (from < 0) return null;
   const to = html.indexOf('</section>', from);
   return html.slice(from, to < 0 ? html.length : to);
@@ -291,11 +295,22 @@ describe('состояние «уступила карту» (макет §4)', 
     // KPI выгруженной модели: все четыре ячейки «нет данных» — ни нулей её снимка
     // (running/waiting = 0), ни живых скоростей фикстуры (genPerStream = 21).
     // Спека «Состояния всех вариантов», Yielded: «KPI … пишут отсутствие данных, а не нули».
-    const kpi = sectionHtml(html, 'Сейчас на ферме') ?? '';
+    const kpi = sectionHtml(html, '>Сейчас на ферме') ?? '';
     expect(kpi).not.toBe('');
     expect(kpi.split('нет данных').length - 1).toBe(4);
-    expect(kpi).not.toContain('>0<');
-    expect(kpi).not.toContain('21 ток/с');
+    // «ни нулей, ни живых скоростей» — по тексту самих значений. По сырой innerHTML
+    // такие проверки пусты: единицы скорости — отдельный span (FarmKpiCard.tsx:61),
+    // и «21 ток/с» в разметке нет даже при живом числе (тот же вывод, что R-Ф-2 п.3).
+    // Клетки — прямые дети грида, значение — первый его ребёнок (как cells() в
+    // FarmKpiCard.test.ts:47): «нет данных» в каждой, ни нуля, ни живой скорости.
+    const { document: d } = parseHTML(`<!doctype html><body>${html}</body>`);
+    const h3 = Array.from(d.querySelectorAll('h3')).find(h => (h.textContent ?? '').includes('Сейчас на ферме'));
+    expect(h3).toBeTruthy();
+    const cells = Array.from(h3!.parentElement?.querySelectorAll('div[style*="grid-template-columns"] > div') ?? []);
+    expect(cells.length).toBe(4);
+    for (const c of cells) {
+      expect(c.firstElementChild?.textContent ?? '').toContain('нет данных');
+    }
     // «Скорость» и «Скорость ответа» — под закрытием: тело смонтировано и в закрытом
     // состоянии (display:none), поэтому их спокойная строка по-прежнему в разметке
     expect(html).toContain('Нет данных, пока модель выгружена.');
@@ -776,25 +791,29 @@ describe('порядок вкладки v1 и закрытые точные ме
   const data = () => ({ ...mockLocalModelStats('busy'), history: historyWithKv(), answerSpeed: ANSWER, hardware: HW });
   const cloud = { data: CLOUD, loading: false, forbidden: false };
 
-  function head(html: string, title: string): number {
-    const i = html.indexOf(title);
-    if (i < 0) throw new Error(`нет заголовка «${title}» в разметке`);
+  // Якорь с тегом (R-Ф-3): «>Видеокарты</span>», а не «Видеокарты» — голый текст
+  // нашёл бы aria-label той же строки; «>Нагрузка и кэш</h3>», а не «Нагрузка» —
+  // соседний заголовок может быть её началом. Бросок по отсутствующему якорю
+  // обязателен: без него отсутствие даёт −1 и сравнение −1 < x проходит молча.
+  function head(html: string, anchor: string): number {
+    const i = html.indexOf(anchor);
+    if (i < 0) throw new Error(`нет якоря «${anchor}» в разметке`);
     return i;
   }
-  function card(html: string, title: string): string {
-    const s = sectionHtml(html, title);
-    if (s == null) throw new Error(`нет карточки «${title}» в разметке`);
+  function card(html: string, anchor: string): string {
+    const s = sectionHtml(html, anchor);
+    if (s == null) throw new Error(`нет карточки «${anchor}» в разметке`);
     return s;
   }
 
   it('main: KPI → график → чаты → видеокарты → метрики → облако, без «Дежурства»', () => {
     const html = renderTab({ data: data(), cloudSpeed: cloud });
-    const kpi = head(html, 'Сейчас на ферме');
+    const kpi = head(html, '>Сейчас на ферме');
     const chart = head(html, '>Нагрузка и кэш</h3>');
     const who = head(html, '>Кто сейчас на модели</h3>');
-    const gpus = head(html, 'Видеокарты');
-    const metrics = head(html, 'Точные метрики локальной модели');
-    const cloudCard = head(html, 'Сравнить с облаком');
+    const gpus = head(html, '>Видеокарты</span>');
+    const metrics = head(html, '>Точные метрики локальной модели</span>');
+    const cloudCard = head(html, '>Сравнить с облаком</span>');
     expect(kpi).toBeLessThan(chart);
     expect(chart).toBeLessThan(who);
     expect(who).toBeLessThan(gpus);
@@ -807,10 +826,10 @@ describe('порядок вкладки v1 и закрытые точные ме
   it('named: VideoCard и «Дежурство» — последние локальные блоки перед метриками и облаком', () => {
     const html = renderTab({ data: mockEngineStats('yielded'), engine: 'gemma', cloudSpeed: cloud });
     const who = head(html, '>Кто сейчас на модели</h3>');
-    const video = head(html, 'Видеокарта · Video');
+    const video = head(html, '>Видеокарта · Video</h3>');
     const duty = head(html, '>Дежурство</h3>');
-    const metrics = head(html, 'Точные метрики локальной модели');
-    const cloudCard = head(html, 'Сравнить с облаком');
+    const metrics = head(html, '>Точные метрики локальной модели</span>');
+    const cloudCard = head(html, '>Сравнить с облаком</span>');
     expect(who).toBeLessThan(video);
     expect(video).toBeLessThan(duty);
     expect(duty).toBeLessThan(metrics);
@@ -829,7 +848,7 @@ describe('порядок вкладки v1 и закрытые точные ме
     expect(body).toBeTruthy();
     expect(body!.getAttribute('style') ?? '').toContain('display:none');
     // закрытая карточка KPI не дублирует то, что под закрытием: медианы и TTFT — только внутри
-    expect(sectionHtml(html, 'Сейчас на ферме') ?? '').not.toContain('медиана по запросам');
+    expect(sectionHtml(html, '>Сейчас на ферме') ?? '').not.toContain('медиана по запросам');
   });
 
   it('клик открывает метрики полными: промпт, обе скорости, запросы, медианы и TTFT', () => {
@@ -866,15 +885,26 @@ describe('порядок вкладки v1 и закрытые точные ме
     host.remove();
   });
 
+  // Заголовок KPI-карточки — по его тексту, а не по тексту всей секции (R-Ф-3р):
+  // «локальн…» входит в легитимные строки вкладки («Точные метрики локальной
+  // модели», «локальной модели» в подсказках) и красил бы тест при целом
+  // исправном инварианте.
+  function kpiHead(html: string): Element {
+    const { document: d } = parseHTML(`<!doctype html><body>${html}</body>`);
+    const h = Array.from(d.querySelectorAll('h3')).find(x => (x.textContent ?? '').includes('Сейчас на ферме'));
+    if (!h) throw new Error('заголовок «Сейчас на ферме» не найден в разметке');
+    return h;
+  }
+
   it('подпись «локально» — только на десктопе: через TextTab с isMobile=true её нет (Ф-3р)', () => {
     // Обвязка (вердикт R-Ф-3): сам FarmKpiCard прячет правую подпись по своему prop'у
-    // (FarmKpiCard.tsx:83), но вкладка обязана передать isMobile — иначе десктопная
+    // (FarmKpiCard.tsx:97), но вкладка обязана передать isMobile — иначе десктопная
     // подпись рендерится и на мобиле. Инвариант проверяется рендером через TextTab,
     // а не напрямую через компонент: защищена обвязка, а не только компонент.
-    const mobile = sectionHtml(renderTab({ data: data(), isMobile: true }), 'Сейчас на ферме') ?? '';
-    expect(mobile).not.toBe('');
-    expect(mobile).not.toContain('локально');
-    const desktop = sectionHtml(renderTab({ data: data(), isMobile: false }), 'Сейчас на ферме') ?? '';
-    expect(desktop).toContain('локально');
+    const mobile = kpiHead(renderTab({ data: data(), isMobile: true }));
+    expect(mobile.textContent ?? '').not.toContain('локальн');
+    // десктоп: правый span — последний ребёнок заголовка (образец FarmKpiCard.test.ts:161)
+    const desktop = kpiHead(renderTab({ data: data(), isMobile: false }));
+    expect(desktop.lastElementChild?.textContent ?? '').toBe('локально');
   });
 });

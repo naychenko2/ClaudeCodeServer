@@ -136,6 +136,12 @@ public class UpstreamSelector(
         route.Kind == GatewayUpstreamKind.Provider
         && providers.GetByKey(route.ProviderKey) is { NormalizeToolInputArrays: true };
 
+    // Тело запроса нужно чистить от блоков фичи CLI «late tool additions» (флаг провайдера
+    // ScrubLateToolBlocks). Подписки Claude — никогда: родной API block-тип принимает.
+    public bool ScrubsLateToolBlocks(GatewayRoute route) =>
+        route.Kind == GatewayUpstreamKind.Provider
+        && providers.GetByKey(route.ProviderKey) is { ScrubLateToolBlocks: true };
+
     // Модель, с которой запрос уйдёт upstream.
     public string RewriteModel(GatewayRoute route, string? requested)
     {

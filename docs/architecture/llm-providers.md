@@ -248,6 +248,20 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 запроса, ответ на который пришлось чинить (в теле весь разговор — вне `data/`, только на
 время разбора). One-shot вызовы (`OneShotClaudeRunner`) через шлюз не ходят.
 
+**Дефект late tool additions у провайдера (`ScrubLateToolBlocks`).** CLI ≥2.1.325 при
+resume-сессии, чей toolset отстал от текущего (после выкатки новых MCP-инструментов),
+инжектит в `messages` role:system-сообщение с блоками `tool_addition`/`tool_removal` (beta
+`mid-conversation-tool-changes`). Сторонний API без поддержки этих block-типов (Kimi K3.1,
+дефект d22fc75c, 21.11.2026) отвечает generic 400 «Invalid request Error» без маркеров
+(`header_rejected`, «cannot yet be defined in a message»), по которым встроенный фолбэк CLI
+(объявление новых инструментов через ToolSearch или inline tools) смог бы откатиться. У
+провайдера с флагом серверный ход идёт через шлюз LLM (тем же условием, что и
+`NormalizeToolInputArrays`), `LateToolBlockFilter` вычищает эти два block-типа из `messages`
+(пустое role:system-сообщение удаляется целиком, не-system получает text-заглушку). Каждое
+срабатывание — `LogWarning` категории `ClaudeHomeServer.LlmGateway` и дамп в
+`LlmGateway:DumpNormalizedRequestsDir`. Требует `LlmGateway:Enabled=true`, иначе ход идёт
+напрямую с предупреждением. One-shot вызовы через шлюз не ходят.
+
 ## BareMode: короткая карта вместо полной CLAUDE.md
 
 > **На локальной модели облегчённый контекст включается ВСЕГДА** (решение 19.11.2026,

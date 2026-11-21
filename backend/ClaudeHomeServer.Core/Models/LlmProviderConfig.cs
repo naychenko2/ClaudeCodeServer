@@ -227,6 +227,17 @@ public class LlmProviderConfig
     // ход напрямую на AnthropicBaseUrl, как раньше.
     public bool NormalizeToolInputArrays { get; set; }
 
+    // Upstream не понимает block-типы фичи CLI «late tool additions» (beta
+    // mid-conversation-tool-changes): CLI при resume-сессии, чей toolset отстал от текущего
+    // (после выкатки новых MCP-инструментов), инжектит в messages role:system-сообщение с
+    // блоками tool_addition/tool_removal, и провайдер отвечает generic 400 «Invalid request»
+    // без маркеров, по которым встроенный фолбэк CLI (объявление через ToolSearch или inline
+    // tools) смог бы откатиться (дефект Kimi K3.1, 21.11.2026). Шлюз LLM вычищает такие блоки
+    // из тела запроса. Ответ CCS видит только на пути через шлюз, поэтому серверные ходы
+    // такого провайдера идут через него же, как и NormalizeToolInputArrays. false — байты
+    // тела как есть.
+    public bool ScrubLateToolBlocks { get; set; }
+
     public string EffectiveModelPrefix => string.IsNullOrWhiteSpace(ModelPrefix) ? Key : ModelPrefix;
 
     // Все префиксы для резолва по id модели (см. ModelPrefixes). Пустые строки

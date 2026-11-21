@@ -53,15 +53,19 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer/Controllers/ModelsController.cs"] = (3, "LLM-провайдер"),
         // Адаптер шва IModelResolver и one-shot-раннер: IsLocal — признак локального
         // LLM-провайдера для классификации расхода (Spend), не локальность проекта.
+        // В раннере пять: три по гейту локальных моделей и метке LocalModel плюс комментарий
+        // и переменная isLocal классификации бесплатного one-shot (1444df06e).
         ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (3, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (5, "LLM-провайдер"),
         // UseServerGateway спрашивает provider.IsLocal (локальный LLM-провайдер), не локальность
         // проекта; гейт допуска ходов к локали (B1b) переехал в FallbackLlmSessionAdapter, из
-        // ClaudeSession ушли два прежних вхождения — осталось 3.
-        ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (3, "LLM-провайдер"),
+        // ClaudeSession ушли два прежних вхождения. 4a3cc061a добавил два новых: метка локального
+        // прогона IsLocalModelRun (комментарий и код) — стало 5.
+        ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (5, "LLM-провайдер"),
         // Классификация расхода one-shot: IsLocal источника — локальный LLM-провайдер, не проект.
         ["backend/ClaudeHomeServer.Llm/CloudCheapClient.cs"] = (1, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (3, "LLM-провайдер"),
+        // 4a3cc061a добавил четвёртое: пауза локальных моделей в гейте допуска хода.
+        ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (4, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Gateway/UpstreamSelector.cs"] = (1, "LLM-провайдер"),
         // Маршрут хода ребёнка (Т5b): provider.IsLocal — локальность LLM-поставщика (своей модели
         // цена не нужна), не локальность проекта.
@@ -90,14 +94,6 @@ public class ProjectCapabilitiesGuardTests
         // задачи (LocalTurnOf, 07.11) плюс упоминание в комментарии — все про провайдера,
         // не про локальный проект. Приватный метод переименован в IsLocalPersona (не вхождение).
         ["backend/ClaudeHomeServer/Services/LocalExecutorRoster.cs"] = (3, "чужой смысл: локальный провайдер модели"),
-        // Расход: локальные LLM-провайдеры считаются бесплатными (1444df06e) — IsLocal везде про провайдера, не проект.
-        ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (3, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Core/Services/Llm/IModelResolver.cs"] = (3, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Core/Models/SpendRecord.cs"] = (2, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer/Services/SpendMapping.cs"] = (2, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Spend/SpendStore.cs"] = (1, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Spend/SpendMaintenanceService.cs"] = (4, "LLM-провайдер"),
         // Тестовый хелпер шлюза: IsLocal — признак локального LLM-провайдера (vLLM), не проекта.
         // Жил в ClaudeHomeServer.Tests (сторож его пропускал как .Tests); переехал в TestKit.Host (шаг 3.3).
         ["backend/ClaudeHomeServer.TestKit.Host/GatewayTestKit.cs"] = (2, "LLM-провайдер"),
@@ -108,6 +104,13 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Spend/SpendStore.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Spend/SpendMaintenanceService.cs"] = (4, "LLM-провайдер"),
         ["backend/ClaudeHomeServer/Services/SpendMapping.cs"] = (2, "LLM-провайдер"),
+        // Сборщик скорости ответа отсекает локальные провайдеры (свой движок) из облачной
+        // выборки — IsLocal провайдера, не локальность проекта.
+        ["backend/ClaudeHomeServer.Spend/SpendAnswerSpeedService.cs"] = (1, "LLM-провайдер"),
+        // Слой Execution (4a3cc061a): метка LocalModel в ProcessSpec и slice ходов локального
+        // провайдера в IsolationOptions — оба комментария о провайдере LLM, не о проекте.
+        ["backend/ClaudeHomeServer.Core/Services/Execution/ProcessSpec.cs"] = (1, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Core/Services/Execution/IsolationOptions.cs"] = (1, "LLM-провайдер"),
         // Ценовой класс провайдера (/api/models): локальный LLM-провайдер → бесплатно.
         ["backend/ClaudeHomeServer/Services/ModelCatalogService.cs"] = (1, "LLM-провайдер"),
         // Фронт: признак локальности LLM-провайдера (isLocal в capabilities провайдера)

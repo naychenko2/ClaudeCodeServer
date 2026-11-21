@@ -56,13 +56,19 @@ public static class ScopeOrphanSweeper
 
     /// <summary>
     /// Найти и погасить сирот. Fail-open: любой сбой — предупреждение в лог, не исключение.
-    /// Зовётся при старте бэкенда, до первых запусков агентов.
+    /// Зовётся при старте бэкенда, до первых запусков агентов, и заводит тот же
+    /// периодический механизм, что держит отложенные гашения: с тех пор сироты видны не
+    /// только на следующем старте — тик зовёт этот же SelectOrphans/Sweep (≈5 мин).
+    /// Три замка отличения своего от чужого при периодическом обходе не меняются.
     /// </summary>
     public static void Sweep(IsolationOptions options)
     {
         if (!options.Enabled || OperatingSystem.IsWindows()) return;
         var systemdRun = LocalProcessRunner.ResolveSystemdRunPath(options);
         if (string.IsNullOrEmpty(systemdRun)) return;
+        // Есть чем заниматься — заводим периодический механизм (без этого точка была бы
+        // бессмысленным таймером, который ничего не может сделать)
+        LocalProcessRunner.ArmPeriodicMaintenance();
         var systemctl = LocalProcessRunner.ResolveSystemctlPath(systemdRun);
         try
         {
@@ -70,12 +76,30 @@ public static class ScopeOrphanSweeper
             foreach (var unit in orphans)
             {
                 Console.WriteLine($"[exec] гашу scope-сироту {unit}: бэкенд-владелец не запущен");
-                LocalProcessRunner.StopScope(systemctl, unit);
+                // Тот же путь, что у гашения по выходу процесса: сбой остановки сироты
+                // кладётся в отложенные гашения и повторяется тиком; успех — снимает.
+                LocalProcessRunner.RunDeferredStop(LocalProcessRunner.StopScope, systemctl, unit);
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[exec] уборка scope-сирот не удалась: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Тик периодического механизма (зовёт LocalProcessRunner): та же уборка сирот, что при
+    /// старте, теми же тремя замками. Fail-open, как Sweep: сбой — warning, наружу ничего.
+    /// </summary>
+    internal static void OnPeriodicTick()
+    {
+        try
+        {
+            Sweep(IsolationOptions.Instance);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[exec] периодическая уборка scope-сирот не удалась: {ex.GetType().Name}: {ex.Message}");
         }
     }
 

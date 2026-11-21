@@ -174,7 +174,10 @@ public sealed partial class WikiNightlyService : BackgroundService
     /// замер на том же снимке; у старого итога все пять null — «не измерено», а не «0 %». MergeProposed (C6) — число пакетов
     /// merge, созданных этой ночью; 0 — тумблер Wiki:MergeProposals выключен или предлагать нечего; null — подбор упал (и старый итог). В файле итога поля аддитивны: старый итог (без поля)
     /// читается нулями, старый Manual — false, Executors — null: «не измерено», а не «ни одного
-    /// исполнителя не было» (читать его пустым нельзя — это разные вещи).</summary>
+    /// исполнителя не было» (читать его пустым нельзя — это разные вещи). JudgeDeferredCause (S4) —
+    /// строковая категория причины JudgeDeferred ("execution_frozen" — среда исполнения была
+    /// заморожена); null/отсутствие поля — обычный отказ, старый итог читается как прежде.
+    /// Число остаётся в JudgeDeferred, отдельного счётчика нет.</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
         int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0,
@@ -186,7 +189,7 @@ public sealed partial class WikiNightlyService : BackgroundService
         IReadOnlyList<NightExecutorStat>? Executors = null,
         int? StrippedLinks = null, ConnectivityStat? NewConnectivity = null,
         ConnectivityStat? SectionConnectivity = null, bool? ConnectivityOk = null, int? MergeProposed = null,
-        ConnectivityStat? CorpusConnectivity = null);
+        ConnectivityStat? CorpusConnectivity = null, string? JudgeDeferredCause = null);
 
     /// <summary>Связность среза страниц знаний (A6, ADR-039 р.13): Pages — сколько страниц измерено,
     /// K0 — прежняя средняя степень (mentions + mentionedHere + backlinks), K1 — доля со связью
@@ -780,11 +783,13 @@ public sealed partial class WikiNightlyService : BackgroundService
     /// <summary>Текст тела утреннего уведомления — ЕДИНСТВЕННАЯ точка сборки (ADR-038, предохранитель 6):
     /// причина необычного исхода, затем по одной сводной строке за ночь («ИИ заменил N ваших
     /// формулировок», «ИИ отметил противоречие на N страницах», «Во «Входящих» N пакетов…»,
-    /// «судья недоступен — ждут решения: N», «отклонено кодом: N»; нулевая строка не пишется,
+    /// «судья недоступен — ждут решения: N» (при категории execution_frozen — «среда исполнения
+    /// была заморожена — ждут решения: N», S4: причина отложенных названа, число то же),
+    /// «отклонено кодом: N»; нулевая строка не пишется,
     /// строки на каждую замену нет), по одному предложению о каждом выбывшем исполнителе (W6a)
     /// и путь к «Журналу». Второго уведомления нет.</summary>
     internal static string NotificationBody(string? reason, int overrodeHuman, int disputedPages,
-        int toInbox, int judgeDeferred, int codeRejected,
+        int toInbox, int judgeDeferred, int codeRejected, string? judgeDeferredCause = null,
         IReadOnlyList<NightExecutorStat>? executors = null, Func<string, string>? engineTitle = null)
     {
         var parts = new List<string>();
@@ -799,8 +804,12 @@ public sealed partial class WikiNightlyService : BackgroundService
             parts.Add($"Во «Входящих» {toInbox} {Plural(toInbox, "пакет ждёт решения", "пакета ждут решения", "пакетов ждут решения")}.");
         // J-J4 (хвост 2, решение Софьи): форма без согласования с числом — «судья недоступен —
         // ждут решения: N»: «3 операций ждут» читается как обрывок фразы; склонять тут нечего.
+        // S4: категория execution_frozen называет настоящую причину отложенных — замороженную
+        // среду исполнения (инцидент tb21); число то же (judgeDeferred), форма без склонений.
         if (judgeDeferred > 0)
-            parts.Add($"судья недоступен — ждут решения: {judgeDeferred}.");
+            parts.Add(judgeDeferredCause == WikiJudgeSweep.DeferredCauseExecutionFrozen
+                ? $"среда исполнения была заморожена — ждут решения: {judgeDeferred}."
+                : $"судья недоступен — ждут решения: {judgeDeferred}.");
         // J-J4 (хвост 3): отказы, вынесенные кодом без вызова модели, — только здесь: форма
         // заголовка задана c2 и их не несёт, без этой строки владелец не видит, что часть пакета
         // закрыта не судьёй.
@@ -883,7 +892,8 @@ public sealed partial class WikiNightlyService : BackgroundService
                 Title = $"Ночной разбор: применено {result.Applied}; судья принял {result.JudgeApplied}, "
                     + $"отклонил {result.JudgeRejected}; ждут {result.JudgeDeferred}; {NoticeCostText(result.JudgeCostUsd)}",
                 Body = NotificationBody(reason, result.OverrodeHuman, result.DisputedPages,
-                    result.ToInbox, result.JudgeDeferred, result.CodeRejected, result.Executors, EngineTitle),
+                    result.ToInbox, result.JudgeDeferred, result.CodeRejected, result.JudgeDeferredCause,
+                    result.Executors, EngineTitle),
                 // Url открывает вкладку «Вики» на её подкладке по умолчанию («Страницы»): deep-link на
                 // подвкладку «Журнал» во фронте не предусмотрен (WikiTab держит подвкладку локально),
                 // поэтому текст называет путь, а не обещает переход.

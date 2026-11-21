@@ -1100,6 +1100,11 @@ export interface WikiLastNight {
   judgeApplied: number;
   judgeRejected: number;
   judgeDeferred: number;
+  // Причина отложенных решений (S4): строковая категория — «execution_frozen» (среда
+  // исполнения была заморожена; WikiNightlyService.cs:177-192, WikiJudgeSweep.DeferredCauseExecutionFrozen).
+  // Старый файл итога без поля и любая другая категория — обычный отказ судья: карточка
+  // печатает прежнюю строку (тот же приём, что rejected/manual выше).
+  judgeDeferredCause?: string;
   codeRejected: number;
   // Разбивка итога по названным исполнителям (W6a→W6b): счётчики по движкам в порядке
   // списка стора, не сортировать (WikiSettingsController.cs:358-370). null — «не измерено»

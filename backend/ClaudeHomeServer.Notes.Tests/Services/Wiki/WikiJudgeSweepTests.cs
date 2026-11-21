@@ -2,6 +2,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
@@ -299,6 +300,67 @@ public class WikiJudgeSweepTests : IDisposable
             && o.JudgeModel == WikiPackage.JudgeModelCode, "отказ вынесён кодом — метка вердикта «code», не «unknown»");
         pkg.Status.Should().Be(WikiPackage.StatusRejected, "все спорные отклонены — статус ведёт вердикт");
         llm.Calls.Should().HaveCount(3, "каждый проход звал модель заново: потолка вызовов за ночь нет");
+    }
+
+    // ─── S4: заморозка среды исполнения — типизированная категория причины Deferred ─────
+    //
+    // Инцидент tb21 (ночь 20→21): заморозка ccs-agents.slice бенчем откладывала все решения
+    // судьи, а итог ночи называл их «судья недоступен». Категорию выставляет тип исключения
+    // Core (IsolationUnavailableException с Reason=SliceFrozen), а не разбор текста.
+    // Тексты ниже нарочно расходятся с типом в обе стороны: SliceFrozen с сообщением без
+    // слова «заморожен» — всё равно ExecutionFrozen; обычный отказ, чьё сообщение это слово
+    // содержит, — всё равно None. Поэтому мутация «опознавать по подстроке сообщения»
+    // проваливает тест: формулировка не контракт.
+    [Fact]
+    public async Task ЗаморозкаСреды_СудьяВозвращаетКатегориюПричины()
+    {
+        var id = NewPackage([
+            Supersede(0, "Первый план: перенести сборку на Linux"),
+            Supersede(1, "Второй план: собрать на второй машине"),
+        ]);
+        // Тот же отказ, что бросает CheapTextRunner при замороженном срезе (S1/S2):
+        // запуск ЛЮБОГО CLI-процесса невозможен — категорию даёт Reason.
+        var frozen = new FakeJudge(null)
+        {
+            Throw = new IsolationUnavailableException(IsolationUnavailableException.SliceFrozen,
+                "Не могу запустить изолированный процесс: slice 'ccs-agents.slice' заморожен",
+                "ccs-agents.slice"),
+        };
+
+        var res = await Sut(frozen).RunAsync(User, Root());
+
+        // SliceFrozen не выходит исключением наружу: проход судьи исключений не бросает.
+        res.Calls.Should().Be(1);
+        res.Deferred.Should().Be(2, "заморозка — отказ вызова: попытка +1 всем допущенным группы");
+        res.DeferredCause.Should().Be(WikiJudgeSweep.DeferredCause.ExecutionFrozen,
+            "категорию выставляет тип исключения Core, а не текст сообщения");
+        res.FirstFailure.Should().NotBeNull();
+        Read(id).Operations.Should().OnlyContain(o => o.JudgeAttempts == 1 && o.JudgeDecision == null);
+
+        // Тот же тип и Reason, но в сообщении слова «заморожен» нет: категорию даёт пара
+        // тип+Reason, а не подстрока — на разборе текста этот случай краснеет.
+        var silent = await Sut(new FakeJudge(null)
+            {
+                Throw = new IsolationUnavailableException(IsolationUnavailableException.SliceFrozen,
+                    "нет доступа к systemd-run", "ccs-agents.slice"),
+            })
+            .RunAsync(User, Root());
+        silent.Calls.Should().Be(1);
+        silent.DeferredCause.Should().Be(WikiJudgeSweep.DeferredCause.ExecutionFrozen,
+            "без слова «заморожен» в сообщении причина всё та же — её даёт тип и Reason");
+
+        // Обратная сторона: обычный отказ, чьё сообщение это слово содержит, заморозкой
+        // среды не считается — слово в тексте ничего не решает.
+        var worded = await Sut(new FakeJudge(null)
+            {
+                Throw = new InvalidOperationException(
+                    "вызов не удался: slice 'ccs-agents.slice' заморожен"),
+            })
+            .RunAsync(User, Root());
+        worded.Calls.Should().Be(1);
+        worded.CodeRejected.Should().Be(2, "третья неудача подряд — отказ вынесен кодом, а не тишиной");
+        worded.DeferredCause.Should().Be(WikiJudgeSweep.DeferredCause.None,
+            "обычный отказ вызова — не заморозка среды, даже когда в тексте есть «заморожен»");
     }
 
     // Ответ модели есть, вердикта по операции нет — попытка +1, пакет ждёт.

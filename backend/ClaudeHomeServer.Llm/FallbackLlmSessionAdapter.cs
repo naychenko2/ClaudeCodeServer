@@ -508,6 +508,15 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             ? text[TurnErrorClassifier.LocalFileMissingMarker.Length..].TrimStart()
             : text;
 
+    // Снимает маркер «среда исполнения заморожена» из видимых «Подробностей» (классификатор
+    // уже отработал и выдал SliceFrozen). Без снятия человек читал бы «[Isolation:slice-frozen]
+    // Не могу запустить изолированный процесс…» — маркер технический, а причина после него
+    // человеку видна и без него.
+    private static string? StripSliceFrozenMarker(string? text) =>
+        text is not null && text.StartsWith(TurnErrorClassifier.SliceFrozenMarker, StringComparison.Ordinal)
+            ? text[TurnErrorClassifier.SliceFrozenMarker.Length..].TrimStart()
+            : text;
+
     // Снимает маркер «остановлен сервером» из видимых «Подробностей» (классификатор уже отработал
     // и выдал None → FailClosedAsync). Без снятия человек читал бы «[Process:stopped-by-server]
     // процесс агента остановлен сервером…» в «Подробностях» — технический шум.
@@ -999,6 +1008,20 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     LogWarn($"Процесс CLI убит сигналом ОС ({Info.Id}, «{currentModel}» × «{currentKey}»): фолбэк не запускаем, пара не меняется");
                     turnOutcome = "failed";
                     await FailLocalCauseAsync(turn, end, TurnFailureText.ProcessKilled);
+                    return;
+                }
+
+                // Среда исполнения заморожена: slice изоляции агентов держит окно бенча/замера
+                // (инцидент 21.11), и запуск изолированного процесса невозможен до оттаивания.
+                // Это не отказ провайдера и не сеть — соседняя пара пойдёт тем же systemd-срезом
+                // и упрётся в тот же отказ, поэтому фолбэк только жёг бы цепочку живых подписок.
+                // Без подмены, без кулдауна (ProviderHealthRegistry не трогаем — стоит ДО его
+                // блока), честная ошибка хода; Warning без стектрейса — причина названа и разобрана.
+                if (cls == FallbackErrorClass.SliceFrozen)
+                {
+                    LogWarn($"Среда исполнения заморожена ({Info.Id}, «{currentModel}» × «{currentKey}»): фолбэк не запускаем, пара не меняется, кулдаун не ставим");
+                    turnOutcome = "slice_frozen";
+                    await FailLocalCauseAsync(turn, end, TurnFailureText.SliceFrozen);
                     return;
                 }
 
@@ -2070,13 +2093,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         }
 
         // Сырой текст ошибки — в Details, но без технических маркеров "[Win32:NNN]" /
-        // "[Process:killed]" / "[Local:file-missing]": человек видит их в «Подробности» маркера
-        // ошибки, и маркеры ему незачем (они нужны только классификатору). Сам маркер НЕ
-        // теряем — классификатор уже отработал; здесь просто снимаем префикс из видимого текста.
-        // Осмысленная формулировка — humanText в Text (PromptOverflow / ProcessKilled /
-        // LocalFileMissing).
-        var raw = StripLocalFileMissingMarker(
-            StripProcessKilledMarker(StripWin32Marker(end.ErrorText ?? HeldErrorDetails(held))));
+        // "[Process:killed]" / "[Local:file-missing]" / "[Isolation:slice-frozen]": человек
+        // видит их в «Подробности» маркера ошибки, и маркеры ему незачем (они нужны только
+        // классификатору). Сам маркер НЕ теряем — классификатор уже отработал; здесь просто
+        // снимаем префикс из видимого текста. Осмысленная формулировка — humanText в Text
+        // (PromptOverflow / ProcessKilled / LocalFileMissing / SliceFrozen).
+        var raw = StripSliceFrozenMarker(StripLocalFileMissingMarker(
+            StripProcessKilledMarker(StripWin32Marker(end.ErrorText ?? HeldErrorDetails(held)))));
         await _downstream(new ErrorMessage(humanText,
             ExpectResultFollows: true, Details: raw));
 

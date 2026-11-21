@@ -125,6 +125,9 @@ public sealed partial class WikiNightlyService
         // Судья (J-J4): нули до её прохода — и для ранних выходов, где прохода судья не было.
         int judgeCalls = 0, judgeApplied = 0, judgeRejected = 0, judgeDeferred = 0, codeRejected = 0;
         decimal judgeCost = 0m;
+        // Категория причины отложенных (S4): переносится из прохода судьи одним полем;
+        // отдельного счётчика нет — число уже есть (judgeDeferred).
+        string? judgeDeferredCause = null;
         var disputedPages = new HashSet<string>(StringComparer.Ordinal);
         long est = 0, inputTokens = 0;
         var outcome = OutcomeCompleted;
@@ -463,6 +466,9 @@ public sealed partial class WikiNightlyService
             judgeRejected += sweep.Rejected;
             judgeDeferred += sweep.Deferred;
             codeRejected += sweep.CodeRejected;
+            // Категория причины отложенных (S4): первый проход, назвавший причину, и держит её
+            // (??=) — добор merge без заморозки причину не стирает.
+            judgeDeferredCause ??= WikiJudgeSweep.DeferredCauseText(sweep.DeferredCause);
             if (sweep.FirstFailure is not null)
                 LogWarnSafe("Ночной разбор {Owner}: проход судьи не доведён: {Reason}", ownerId, sweep.FirstFailure);
         }
@@ -472,7 +478,7 @@ public sealed partial class WikiNightlyService
             judgeCalls, judgeCost, judgeApplied, judgeRejected, judgeDeferred, codeRejected,
             stage2Refused, firstStage2Refusal, ExecutorStats(),
             StrippedLinks: strippedLinks, NewConnectivity: newConn, SectionConnectivity: sectionConn, ConnectivityOk: connOk,
-            MergeProposed: mergeProposed, CorpusConnectivity: corpusConn);
+            MergeProposed: mergeProposed, CorpusConnectivity: corpusConn, JudgeDeferredCause: judgeDeferredCause);
 
         // Счётчики итога по исполнителям (W6a): порядок — как список стора. Движок, которому ни
         // одного чата не досталось (не был готов, был занят), в списке есть с нулями: владельцу

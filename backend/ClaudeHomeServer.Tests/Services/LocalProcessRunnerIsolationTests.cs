@@ -1050,4 +1050,359 @@ public class LocalProcessRunnerIsolationTests
             return text.Replace('\n', ' ').Trim();
         }
     }
+
+    // --- Fail-closed по замороженному slice (окна бенча tb21, инцидент 21.11) ---
+    // Пока срез заморожен, systemd не создаёт в нём scope («Cannot start frozen unit»,
+    // -EDEADLK). Раннер отказывает изолированный запуск до process.Start() с названным
+    // Reason — и не кэширует отказ как приговор обёртке: после оттаивания запуск
+    // проходит снова (StartВоВремяЗаморозки_ПробаНеКэшируется).
+
+    private static IDisposable SliceFrozenSeam(Func<string, bool> check)
+    {
+        var prev = LocalProcessRunner.SliceIsFrozen;
+        LocalProcessRunner.SliceIsFrozen = check;
+        return new Restore(() => LocalProcessRunner.SliceIsFrozen = prev);
+    }
+
+    // Стаб пробы + сброс кэша на входе и выходе: тест не оставляет чужому прогону
+    // ни стаба, ни результата.
+    private static IDisposable ProbeSeam(SystemdRunProbe probe)
+    {
+        var prev = LocalProcessRunner.Probe;
+        LocalProcessRunner.Probe = probe;
+        LocalProcessRunner.ResetProbeForTests();
+        return new Restore(() =>
+        {
+            LocalProcessRunner.Probe = prev;
+            LocalProcessRunner.ResetProbeForTests();
+        });
+    }
+
+    private static ProcessSpec Sh(string command) => new()
+    {
+        FileName = "sh",
+        Args = ["-c", command],
+        RedirectStdin = false,
+        Track = false,
+    };
+
+    // Гонка: прямая проверка не увидела заморозку, а проба в неё попала. Frozen-отказ
+    // пробы — не приговор обёртке: первый запуск отказан (не fail-open), второй пробует
+    // заново и проходит; успешная проба кэшируется — третьего обращения к шву нет.
+    //
+    // Живые Start — через StartPinned, не через подмену на весь тест (дефект 45966667):
+    // в полном прогоне тест краснел с «No exception was thrown» — чужой WebApplicationFactory
+    // (хост-классы параллельны этой коллекции, см. TestCollectionDefinitions) писал
+    // IsolationOptions.Instance = Enabled=false между публикацией наших опций и Start,
+    // и первый запуск файл-оупенил без обёртки (тот же доказанный случай —
+    // VideoAssembleIsolationTests.cs:198-204). Окно ProbeSeam остаётся: при чужих
+    // Enabled=false ProbeOnce не доходит до шва (LocalProcessRunner.cs:637), поэтому
+    // наш стаб в окне не зовёт никто, а кэш после сброса пуст до первого Start.
+    [Fact]
+    public void StartВоВремяЗаморозки_ПробаНеКэшируется()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var (dir, fake) = FakeSystemdRun();
+        var calls = 0;
+        var prevStop = LocalProcessRunner.StopScope;
+        LocalProcessRunner.StopScope = (_, _) => { };
+        try
+        {
+            var options = new IsolationOptions { Enabled = true, SystemdRunPath = fake };
+            using var frozen = SliceFrozenSeam(_ => false);
+            using var probe = ProbeSeam((path, args, cmd, ms) =>
+            {
+                calls++;
+                // Реальный stderr frozen-системд (проверено на хосте, systemd 259.9):
+                // «Cannot perform operation on frozen unit …»
+                return calls == 1
+                    ? new SystemdRunProbeResult(false,
+                        "проба systemd-run завершилась с кодом 1: Cannot perform operation on frozen unit ccs-run-x.scope.")
+                    : new SystemdRunProbeResult(true);
+            });
+
+            var ex = Assert.Throws<IsolationUnavailableException>(
+                () => StartPinned(options, Sh("echo first"), bus: true));
+            ex.Reason.Should().Be(IsolationUnavailableException.SliceFrozen,
+                "frozen-отказ пробы — отказ с названной причиной, а не fail-open без изоляции");
+
+            using var process = StartPinned(options, Sh("echo second"), bus: true);
+            calls.Should().Be(2,
+                "frozen-результат не кэширован — вторая проба реальная; успешная — кэширована, третьего вызова нет");
+        }
+        finally
+        {
+            LocalProcessRunner.StopScope = prevStop;
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    // Срез заморожен на диске (поддельный cgroupfs, раскладка прод-хоста как в
+    // CgroupSlicesTests): отказ до process.Start(), фейковый systemd-run не вызван.
+    // Локальная модель отказывается по своему slice, облачный запуск в том же окне
+    // живёт (инцидент 21.11: морозить локальные — не значит морозить все).
+    [Fact]
+    public void ЗамороженныйSlice_ОтказДоProcessStart()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var root = Path.Combine(Path.GetTempPath(), "lpr_frozen_" + Guid.NewGuid().ToString("N")[..8]);
+        const string user = "user.slice/user-1000.slice/user@1000.service";
+        Directory.CreateDirectory(Path.Combine(root, user, "app.slice", "ccs.service"));
+        var cgroupFile = Path.Combine(root, "self.cgroup");
+        File.WriteAllText(cgroupFile, $"0::/{user}/app.slice/ccs.service\n");
+        var agents = Path.Combine(root, user, "ccs.slice", "ccs-agents.slice");
+        var local = Path.Combine(agents, "ccs-agents-local.slice");
+        Directory.CreateDirectory(local);
+        File.WriteAllText(Path.Combine(agents, "cgroup.freeze"), "0\n");
+        File.WriteAllText(Path.Combine(local, "cgroup.freeze"), "1\n");
+
+        var (dir, fake) = FakeSystemdRun();
+        var prevStop = LocalProcessRunner.StopScope;
+        LocalProcessRunner.StopScope = (_, _) => { };
+        try
+        {
+            // StartPinned, а не подмена на весь тест: чужой хост в параллельной коллекции
+            // подменил бы Instance на Enabled=false, и отказ по замороженному slice просто
+            // не случился бы (дефект 45966667, см. комментарий к StartВоВремяЗаморозки).
+            var options = new IsolationOptions { Enabled = true, SystemdRunPath = fake };
+            using var probe = ProbeSeam((_, _, _, _) => new SystemdRunProbeResult(true));
+            using var frozen = SliceFrozenSeam(s => CgroupSlices.IsFrozen(s, cgroupFile, root));
+
+            var ex = Assert.Throws<IsolationUnavailableException>(
+                () => StartPinned(options, Sh("echo x") with { LocalModel = true }, bus: true));
+            ex.Reason.Should().Be(IsolationUnavailableException.SliceFrozen);
+            ex.Slice.Should().Be("ccs-agents-local.slice", "отказ по фактически выбранному slice");
+            // Не «папка пуста», а «нет вызова с нашей командой»: чужой Start, попавший в
+            // микроокно нашей публикации, оставил бы здесь свой файл со своим юнитом —
+            // пустота папки снова зависела бы от удачи.
+            Directory.GetFiles(dir, "args-*.txt")
+                .SelectMany(File.ReadAllLines)
+                .Should().NotContain(a => a.Contains("echo x"),
+                    "отказ до process.Start(): фейковый systemd-run под наши аргументы не вызван ни разу");
+
+            // Облачный запуск в том же окне не затронут: его slice не заморожен.
+            using var cloud = StartPinned(options, Sh("echo cloud"), bus: true);
+
+            // Нет cgroup-файла — IsFrozen отвечает false (прежнее fail-open поведение):
+            // исключения нет, запуск идёт как раньше.
+            LocalProcessRunner.SliceIsFrozen = s => CgroupSlices.IsFrozen(s, Path.Combine(root, "нет.cgroup"), root);
+            using var plain = StartPinned(options, Sh("echo plain") with { LocalModel = true }, bus: true);
+        }
+        finally
+        {
+            LocalProcessRunner.StopScope = prevStop;
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    // --- Отложенные гашения (S3) ---
+    // Сбой гашения (таймаут/исключение/ненулевой код кроме 0 и 5) не исчезает с warning'ом:
+    // имя кладётся in-memory списком по имени unit и повторяется — после следующего успешного
+    // запуска, общим таймером и ручным тиком; успех снимает запись. Состояние процесс-глобальное
+    // (лок по имени, не по экземпляру): тест начинается и заканчивается ResetDeferredForTests,
+    // как тесты пробы начинают и заканчиваются сбросом её кэша.
+
+    // Отказ кладёт unit ровно один раз; следующий успешный запуск и ручной тик повторяют
+    // гашение; успех удаляет запись — дальше stop не вызывается. Обёртка должна применяться
+    // в оба запуска, поэтому проба и замороженность изолированы (ProbeSeam/SliceFrozenSeam):
+    // чужие прогоны чистят общий кэш пробы, а боевой срез хоста бывает заморожен окном
+    // бенча. Живые Start — через StartPinned: подмена опций и шины на весь тест давала тот
+    // же флак, что у StartВоВремяЗаморозки (дефект 45966667): без обёртки гашения нет вовсе.
+    // «Ровно один раз» проверяется счётчиком повтора на один запуск: две записи одного
+    // имени дали бы два повтора.
+    [Fact]
+    public async Task НеудачноеГашение_ПовторяетсяПослеЗапускаИТаймера()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var (dir, fake) = FakeSystemdRun();
+        var prevStop = LocalProcessRunner.StopScope;
+        string? ourUnit = null;
+        var ours = 0;
+        var firstFailed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retried = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        LocalProcessRunner.StopScope = (_, unit) =>
+        {
+            // Чужой процесс в окне (параллельные тесты других коллекций): не ругаем его —
+            // чужой отказ не должен заводить запись в общий список ради нашего теста.
+            if (unit != ourUnit) return;
+            if (Interlocked.Increment(ref ours) == 1)
+            {
+                firstFailed.TrySetResult();
+                throw new LocalProcessRunner.ScopeStopFailedException("code-1", "шина отказала");
+            }
+            retried.TrySetResult();
+        };
+        try
+        {
+            LocalProcessRunner.ResetDeferredForTests();
+            var options = new IsolationOptions { Enabled = true, SystemdRunPath = fake };
+            using var probe = ProbeSeam((_, _, _, _) => new SystemdRunProbeResult(true));
+            using var frozen = SliceFrozenSeam(_ => false);
+
+            // Оболочка ждёт stdin: выход — только когда имя уже известно шву (как в тесте
+            // про шов момента запуска), иначе первый отказ про нас мог бы уйти не в тот счёт.
+            using var p1 = StartPinned(options, new ProcessSpec
+            {
+                FileName = "sh",
+                Args = ["-c", "echo готово; read _"],
+                Track = false,
+            }, bus: true);
+            (await p1.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))
+                .Should().Be("готово");
+            ourUnit = UnitOf(dir, p1.Id);
+            p1.StandardInput.Close();
+            await p1.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+            // Гашение по выходу приходит с задержкой (Exited + Task.Run — то, из-за чего
+            // шов фиксируется на запуске): ждём первый отказ ЯВНО, иначе запись могла бы
+            // не существовать к моменту следующего запуска и повтор не обязан случиться.
+            (await Task.WhenAny(firstFailed.Task, Task.Delay(TimeSpan.FromSeconds(10))))
+                .Should().Be(firstFailed.Task, "гашение по выходу дошло до шва");
+
+            // Следующий успешный запуск — момент повтора (шина жива, обёртка работала)
+            using var p2 = StartPinned(options, Sh("echo следующий"), bus: true);
+            (await Task.WhenAny(retried.Task, Task.Delay(TimeSpan.FromSeconds(10))))
+                .Should().Be(retried.Task, "следующий успешный запуск повторяет отложенное гашение");
+            Volatile.Read(ref ours).Should().Be(2,
+                "отказ кладёт unit один раз: повтор ровно один на запуск");
+
+            // Успех снял запись: ручной тик больше не зовёт stop. Свой же unit p2 — тоже
+            // снят его штатным гашением по выходу.
+            LocalProcessRunner.RunDeferredTickNow();
+            await Task.Delay(300);
+            Volatile.Read(ref ours).Should().Be(2, "успех удаляет запись: тик после него не гасит");
+        }
+        finally
+        {
+            LocalProcessRunner.StopScope = prevStop;
+            LocalProcessRunner.ResetDeferredForTests();
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    // Гонка двух повторов одного scope: активен один (лок по имени), а поздний отказ старой
+    // попытки после успеха новой не возвращает запись — тик после гонки не гасит вовсе.
+    // Синхронизация — по факту завершения второй попытки, а не по удаче (находка ревью R-S3):
+    // пока первая держится в шву, вторая может завершиться, только если TryBeginRetry ей
+    // отказал; поэтому главный поток снимает запись уже после того, как вторая попытка
+    // взяла лок. Снятие guard'а «один активный повтор» в TryBeginRetry (проба 1) краснит
+    // ожидание «вторая попытка пыталась взять повтор»: без guard'а она входит в шов и не
+    // завершается, пока её не отпустит oldSide. (Проба 2 — снятие записи в EndRetry по
+    // отказу — здесь no-op: запись уже снята CompleteDeferred; её проверяет соседний тест
+    // «ОтказПовтора_ОставляетЗапись».)
+    [Fact]
+    public async Task ДваПовтораОдногоScope_УстаревшийОтказНеВозвращаетЗаписьПослеУспеха()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var prevStop = LocalProcessRunner.StopScope;
+        var unit = LocalProcessRunner.NewScopeUnitName();
+        var oldSide = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        LocalProcessRunner.StopScope = (_, u) =>
+        {
+            if (u != unit) return;
+            // Первая попытка — «старая»: держится до успеха новой, её отказ придёт ПОСЛЕ него.
+            // Блокировка здесь — сам механизм гонки: она держится на рабочем потоке повтора.
+            Interlocked.Increment(ref calls);
+            entered.TrySetResult();
+            oldSide.Task.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue();
+            throw new LocalProcessRunner.ScopeStopFailedException("code-1", "старая попытка отказала");
+        };
+        try
+        {
+            LocalProcessRunner.ResetDeferredForTests();
+            // Запись — как после отказа реального гашения: тот же путь, что у Exited-обработчика
+            LocalProcessRunner.RunDeferredStop(
+                (_, u) => { if (u == unit) throw new LocalProcessRunner.ScopeStopFailedException("code-1", "отказ"); },
+                "systemctl", unit);
+
+            var a = Task.Run(LocalProcessRunner.RetryDeferredStops); // старая попытка
+            (await Task.WhenAny(entered.Task, Task.Delay(5000)))
+                .Should().Be(entered.Task, "первый повтор вошёл в шов");
+            var b = Task.Run(LocalProcessRunner.RetryDeferredStops); // вторая — не должна войти, пока a активен
+
+            // Пока первая держится в шву, вторая может завершиться, только если TryBeginRetry
+            // ей отказал (путь «false → конец» — единственный незаблокированный). Значит,
+            // снимая запись после этого ожидания, мы снимаем её уже после того, как вторая
+            // попытка взяла лок: её исход определяет guard, а не то, кто раньше успел.
+            // Без guard'а вторая входит в шов и не завершается до отпуска oldSide → краснеет здесь.
+            (await Task.WhenAny(b, Task.Delay(3000)))
+                .Should().Be(b, "вторая попытка пыталась взять повтор при живой записи");
+            // Успех новой попытки — чужим путём (тот же учёт, что у гашения по выходу):
+            // снимает запись, пока старая попытка всё ещё держится в своём вызове
+            LocalProcessRunner.CompleteDeferred(unit);
+            oldSide.TrySetResult();
+
+            await Task.WhenAny(Task.WhenAll(a, b), Task.Delay(10000));
+            a.IsCompleted.Should().BeTrue();
+            b.IsCompleted.Should().BeTrue();
+
+            Volatile.Read(ref calls).Should().Be(1,
+                "одновременные тики одного unit: активен один, второй не вошёл в шов");
+            Thread.Sleep(300); // фону (отказу старой попытки) дан шанс ошибиться
+            LocalProcessRunner.RunDeferredTickNow();
+            Thread.Sleep(300);
+            Volatile.Read(ref calls).Should().Be(1,
+                "записи нет: поздний отказ старой попытки не вернул её, тик после гонки не гасит");
+        }
+        finally
+        {
+            LocalProcessRunner.StopScope = prevStop;
+            LocalProcessRunner.ResetDeferredForTests();
+        }
+    }
+
+    // Отказ повтора оставляет запись в очереди (находка ревью R-S3, Major 2): первая попытка
+    // падает — юнит остаётся в списке, и следующий ручной тик зовёт stop снова. Снятие записи
+    // в EndRetry при ok:false (проба 2: else → _deferredStops.Remove(unit)) поэтому краснит
+    // ожидание второго входа: после отказа записи нет, и второй тик в шов не входит.
+    // Второй тик идёт после полного завершения первой попытки (await a): запись больше не
+    // занята активным повтором, и второй вход блокируется только отсутствием записи.
+    [Fact]
+    public async Task ОтказПовтора_ОставляетЗапись_СледующийТикЗовётСтопСнова()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var prevStop = LocalProcessRunner.StopScope;
+        var unit = LocalProcessRunner.NewScopeUnitName();
+        var calls = 0;
+        var entered2 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        LocalProcessRunner.StopScope = (_, u) =>
+        {
+            if (u != unit) return;
+            // Первая попытка падает (обычный путь EndRetry(ok:false)), вторая входит и
+            // возвращает успех: сам вход второго тика — доказательство, что запись осталась.
+            if (Interlocked.Increment(ref calls) == 1)
+                throw new LocalProcessRunner.ScopeStopFailedException("code-1", "первая попытка отказала");
+            entered2.TrySetResult();
+        };
+        try
+        {
+            LocalProcessRunner.ResetDeferredForTests();
+            LocalProcessRunner.RunDeferredStop(
+                (_, u) => { if (u == unit) throw new LocalProcessRunner.ScopeStopFailedException("code-1", "отказ"); },
+                "systemctl", unit);
+
+            var a = Task.Run(LocalProcessRunner.RetryDeferredStops); // первый тик: попытка падает
+            (await Task.WhenAny(a, Task.Delay(5000)))
+                .Should().Be(a, "первый тик зовёт stop по отложенной записи");
+            Volatile.Read(ref calls).Should().Be(1, "первый тик зовёт stop ровно один раз");
+
+            LocalProcessRunner.RunDeferredTickNow(); // второй тик: обязан позвать stop снова
+            (await Task.WhenAny(entered2.Task, Task.Delay(5000)))
+                .Should().Be(entered2.Task, "отказ повтора оставляет запись: следующий тик зовёт stop снова");
+            Volatile.Read(ref calls).Should().Be(2, "два тика — ровно два вызова: отказ не дублирует запись");
+        }
+        finally
+        {
+            LocalProcessRunner.StopScope = prevStop;
+            LocalProcessRunner.ResetDeferredForTests();
+        }
+    }
 }

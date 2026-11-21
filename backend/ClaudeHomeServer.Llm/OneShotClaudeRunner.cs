@@ -69,6 +69,12 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             || detail.Contains("unexpected", StringComparison.OrdinalIgnoreCase)
             || detail.Contains("не поддерж", StringComparison.OrdinalIgnoreCase));
 
+    // Исключение по frozen-stderr умершего systemd-run (гонка заморозки, см. вызов в RunCliAsync).
+    // internal — покрыто тестом: живой отказ systemd-run в замороженном срезе руками не воспроизвести.
+    internal static IsolationUnavailableException FrozenUnitRefusal(string detail) =>
+        new(IsolationUnavailableException.SliceFrozen,
+            $"Не могу запустить изолированный процесс: slice заморожен ({detail})");
+
     // Модель ненастроенного провайдера тихо заменяется дефолтом claude —
     // генерация не должна падать из-за отсутствующего ключа
     public string? NormalizeModel(string? model) =>
@@ -252,6 +258,14 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
                     localSlot?.Dispose();
                     return await RunCliAsync(prompt, model, timeout, ct, ownerId, effort, label, images);
                 }
+                // Гонка заморозки: slice изоляции замёрз между проверками раннера и фактическим
+                // созданием scope — systemd-run умирает не-нулёвым кодом со stderr «Cannot
+                // (start | perform operation on) frozen unit». Это отказ среды, а не CLI и не
+                // провайдер: преобразуем в то же типизированное исключение, что бросает и
+                // LocalProcessRunner.Start (S1), — вызывающие (CheapTextRunner, S2) отличают его
+                // от ошибок провайдера и не перебирают CLI-шаги.
+                if (IsolationUnavailableException.IsFrozenUnitRefusal(detail))
+                    throw FrozenUnitRefusal(detail);
                 if (detail.Length > 500) detail = detail[..500] + "…";
                 throw new InvalidOperationException(
                     $"claude завершился с кодом {process.ExitCode}: {detail}");

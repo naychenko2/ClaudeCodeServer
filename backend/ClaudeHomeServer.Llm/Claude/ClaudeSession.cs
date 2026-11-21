@@ -2963,6 +2963,17 @@ public class ClaudeSession : ILlmSessionAdapter
                         if (refused.Reason == Execution.DeviceExecRefusal.HandsBusy)
                             await _onMessage(new HandsStatusMessage(HandsChatStates.Unavailable, Reason: HandsEndReason.Busy));
                     }
+                    else if (ex is Execution.IsolationUnavailableException isolation
+                             && isolation.Reason == Execution.IsolationUnavailableException.SliceFrozen)
+                    {
+                        // Slice изоляции агентов заморожен (окно бенча, инцидент 21.11): запуск
+                        // процесса невозможен до оттаивания — отказ среды, не провайдера. Маркер —
+                        // первым токеном Details, как ProcessKilledMarker: классификатор фолбэка
+                        // по нему даёт FallbackErrorClass.SliceFrozen (без подмены и кулдауна),
+                        // текст — фиксированная формулировка S2.
+                        details = TurnErrorClassifier.SliceFrozenMarker + ex.Message;
+                        text = TurnFailureText.SliceFrozen;
+                    }
                     else if (ex is System.ComponentModel.Win32Exception w32)
                     {
                         details = $"[Win32:{w32.NativeErrorCode}]{ex.Message}";

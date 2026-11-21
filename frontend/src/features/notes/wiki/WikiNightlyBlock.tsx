@@ -176,7 +176,13 @@ const codeRejectedLine = (c: number): string => `Отклонено кодом: 
 // «Судья недоступен — ждут решения: M» — форма Софьи 12.11, как в бэковом уведомлении
 // (NotificationBody, WikiNightlyService.cs:959): «M операций ждут» читается обрывком
 // фразы; здесь — та же строка с заглавной, как отдельная строка карточки.
-const judgeDeferredLine = (m: number): string => `Судья недоступен — ждут решения: ${m}`;
+// S4: при категории причины «execution_frozen» бэк называет настоящую причину отложенных
+// («среда исполнения была заморожена — ждут решения: N», WikiNightlyService.cs:807-811) —
+// здесь та же мысль той же формой строки карточки; без категории — прежняя строка.
+const judgeDeferredLine = (m: number, cause?: string): string =>
+  cause === 'execution_frozen'
+    ? `Среда исполнения была заморожена — ждут решения: ${m}`
+    : `Судья недоступен — ждут решения: ${m}`;
 
 // «00:41» из DateTimeOffset-строки бэка (ISO со смещением): локальное время машины, ЧЧ:ММ.
 // Пустая или нечитаемая строка — суффикса нет (тот же приём, что у nightRangeText: нечем)
@@ -284,7 +290,7 @@ function LastNightBlock({ last, snapshot, narrow, onOpenInbox, onOpenJournal }: 
             судья не сделал; цвет — warning-токен дизайн-системы */}
         {last.judgeDeferred > 0 && (
           <div data-testid="wiki-nightly-judge-deferred" style={{ fontSize: FS.sm, color: C.warningText, marginTop: SP.md }}>
-            {judgeDeferredLine(last.judgeDeferred)}
+            {judgeDeferredLine(last.judgeDeferred, last.judgeDeferredCause)}
           </div>
         )}
         {/* J-F3 (доработка по приёмке Веры): сводка судья и кодовые отказы — две независимые

@@ -84,6 +84,12 @@
 // проверяются без DOM (решение «узко» — у теста useWikiNarrow, M0).
 // (20) lastNightCols всегда возвращает широкую ветку → «сетка итога» краснеет
 //     (проверено мутацией, вывод — в отчёте задачи).
+//
+// S5 (фича «замороженный срез», после бэка S4): при judgeDeferredCause='execution_frozen'
+// строка об отложенных называет настоящую причину: «Среда исполнения была заморожена —
+// ждут решения: M» (та же мысль, что в бэковом уведомлении); без поля и при другой
+// категории — прежняя «Судья недоступен…».
+// (21) всегда прежняя строка в judgeDeferredLine → тест «execution_frozen…» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -749,6 +755,32 @@ describe('итог судья и цена ночи (J-F3)', () => {
     const cN = render();
     await settle();
     expect(has(cN, 'Судья недоступен')).toBe(false);
+  });
+
+  it('judgeDeferredCause=execution_frozen: «Среда исполнения была заморожена…»; без категории — прежняя строка (S5)', async () => {
+    // S4 называет настоящую причину отложенных (бэк: «среда исполнения была заморожена —
+    // ждут решения: N», WikiNightlyService.cs:807-811); карточка — той же мысли своей формой
+    server = settings({ lastNight: LAST({ judgeDeferred: 3, judgeDeferredCause: 'execution_frozen' }) });
+    const c = render();
+    await settle();
+    // мутация (21): всегда прежняя строка в judgeDeferredLine → эта проверка краснеет
+    expect(has(c, 'Среда исполнения была заморожена — ждут решения: 3')).toBe(true);
+    expect(has(c, 'Судья недоступен')).toBe(false);
+
+    // неизвестная категория — будущее значение контракта: прежняя строка (тот же приём,
+    // что у WikiChatAnalyzeOutcome)
+    server = settings({ lastNight: LAST({ judgeDeferred: 2, judgeDeferredCause: 'other' }) });
+    const cOther = render();
+    await settle();
+    expect(has(cOther, 'Судья недоступен — ждут решения: 2')).toBe(true);
+    expect(has(cOther, 'была заморожена')).toBe(false);
+
+    // старый keeper/nightly-last.json без поля (аддитивность): прежняя строка
+    server = settings({ lastNight: LAST({ judgeDeferred: 4 }) });
+    const cOld = render();
+    await settle();
+    expect(has(cOld, 'Судья недоступен — ждут решения: 4')).toBe(true);
+    expect(has(cOld, 'была заморожена')).toBe(false);
   });
 });
 

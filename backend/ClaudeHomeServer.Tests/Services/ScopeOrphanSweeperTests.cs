@@ -73,6 +73,9 @@ public class ScopeOrphanSweeperTests
         }
         finally
         {
+            // Sweep теперь заводит периодический механизм — его состояние (и таймер)
+            // тест за собой убирает, иначе чужой прогон ловит фантомный тик
+            LocalProcessRunner.ResetDeferredForTests();
             LocalProcessRunner.StopScope = prevStop;
             ScopeOrphanSweeper.IsProcessAlive = prevAlive;
             ScopeOrphanSweeper.ListScopes = prevList;
@@ -123,7 +126,61 @@ public class ScopeOrphanSweeperTests
         }
         finally
         {
+            LocalProcessRunner.ResetDeferredForTests();
             LocalProcessRunner.StopScope = prevStop;
+            ScopeOrphanSweeper.ListScopes = prevList;
+        }
+    }
+
+    // Периодический тик (S3): Sweep при старте заводит общий механизм LocalProcessRunner,
+    // тик зовёт ту же уборку SelectOrphans/Sweep — с теми же тремя замками отличения своего
+    // от чужого: чужое имя формата и живой владелец не остановлены, мёртвый — остановлен.
+    // Сбой уборки наружу не бросается.
+    [Fact]
+    public void ПериодическийТик_ГаситТолькоСиротПоТрёмЗамкам()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var prevList = ScopeOrphanSweeper.ListScopes;
+        var prevAlive = ScopeOrphanSweeper.IsProcessAlive;
+        var prevStop = LocalProcessRunner.StopScope;
+        var stopped = new List<string>();
+        var options = new IsolationOptions { Enabled = true, SystemdRunPath = "/usr/bin/systemd-run" };
+        // Три замка на живой выборке: чужой формат — мимо; живой владелец — мимо (в том числе
+        // мы сами); мёртвый — гасим. Тик ведёт ту же SelectOrphans, что и старт.
+        string[] units =
+        [
+            "run-p12345-i12345.scope",
+            Alive,
+            LocalProcessRunner.NewScopeUnitName(),
+            Dead,
+        ];
+        ScopeOrphanSweeper.ListScopes = _ => units;
+        ScopeOrphanSweeper.IsProcessAlive = pid => pid != 42;
+        LocalProcessRunner.StopScope = (_, unit) => { lock (stopped) stopped.Add(unit); };
+        try
+        {
+            LocalProcessRunner.ResetDeferredForTests();
+            // Старт заводит механизм: та же уборка, что была до S3…
+            ScopeOrphanSweeper.Sweep(options);
+            lock (stopped) stopped.Should().Equal(Dead);
+            stopped.Clear();
+
+            // …и тот же тик periodic-механизма: живой сосед и чужое имя снова нетронуты,
+            // мёртвый снова гасится; исключения наружу нет. Тик берёт опции из Instance —
+            // на время тика публикуем их (IsolationOptionsScope возвращает сравнением).
+            using (new IsolationOptionsScope(options))
+            {
+                var act = () => LocalProcessRunner.RunDeferredTickNow();
+                act.Should().NotThrow("сбой периодической уборки наружу не бросается");
+            }
+            lock (stopped) stopped.Should().Equal(Dead);
+        }
+        finally
+        {
+            LocalProcessRunner.ResetDeferredForTests();
+            LocalProcessRunner.StopScope = prevStop;
+            ScopeOrphanSweeper.IsProcessAlive = prevAlive;
             ScopeOrphanSweeper.ListScopes = prevList;
         }
     }

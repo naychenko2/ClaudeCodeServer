@@ -122,6 +122,21 @@ public sealed class WikiJudgeSweep
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
 
+    /// <summary>Категория причины отложенных операций (S4): обычный отказ вызова — None;
+    /// ExecutionFrozen — среда исполнения заморожена (IsolationUnavailableException(SliceFrozen)).
+    /// Категорию выставляет сам отказ по типу исключения Core, а не разбор текста сообщения:
+    /// формулировка — не контракт (инцидент tb21: 22 отложенных решения выглядели «судьёй
+    /// недоступен», а причина была в замороженном срезе изоляции).</summary>
+    public enum DeferredCause { None = 0, ExecutionFrozen = 1 }
+
+    /// <summary>Строковое значение категории execution_frozen в файле итога ночи (S4):
+    /// аддитивное поле judgeDeferredCause; старый итог без поля — обычный отказ.</summary>
+    public const string DeferredCauseExecutionFrozen = "execution_frozen";
+
+    /// <summary>Перенос категории в строковое поле итога ночи: null — обычный отказ.</summary>
+    internal static string? DeferredCauseText(DeferredCause cause) =>
+        cause == DeferredCause.ExecutionFrozen ? DeferredCauseExecutionFrozen : null;
+
     /// <summary>Итог прохода. Calls — сколько вызовов модели состоялось; CostUsd — сумма
     /// их стоимости (то, что взял облако; по операциям делится поровну — это в полях
     /// JudgeCostUsd, здесь — факт вызовов). Applied / Rejected — операции, чей вердикт
@@ -129,13 +144,15 @@ public sealed class WikiJudgeSweep
     /// отказы, вынесенные кодом: по коду причины без вызова модели (И4′) и «судья не вынес
     /// решения за N попытки» — ни одна модель такого отказа не выносила; отдельный счёт,
     /// в Rejected не входят. Deferred — операции, которым засчитана попытка без вердикта (отказ
-    /// вызова или ответ без вердикта по этой операции). FirstFailure — первая причина
+    /// вызова или ответ без вердикта по этой операции); DeferredCause — типизированная
+    /// категория этой причины (S4), число отложенных — сам Deferred, отдельного счётчика нет.
+    /// FirstFailure — первая причина
     /// любого сбоя прохода (отказ вызова, отказ стора, чужой корень); null — сбоя не было.
     /// Пропущенное молча (человек решил во время вызова, пакет ушёл в stale) в счётчики
     /// не идёт: проход считает только своё запись.</summary>
     public readonly record struct JudgeSweepResult(
         int Calls, decimal CostUsd, int Applied, int Rejected, int Deferred, int CodeRejected,
-        string? FirstFailure);
+        string? FirstFailure, DeferredCause DeferredCause = DeferredCause.None);
 
     /// <summary>Пройти вики владельца: вердикты по всем допущенным спорным операциям
     /// открытых ИИ-пакетов. ownerId — владелец; root — корень, который называет
@@ -327,6 +344,9 @@ public sealed class WikiJudgeSweep
                 // Отказ вызова (таймаут, 429, занятый слот, прочее) — попытка +1 всем
                 // допущенным группы; пакет остаётся proposed. Первая причина — в итог.
                 counters.FirstFailure ??= $"судья: вызов модели не удался: {e.Message}";
+                // Заморозка среды исполнения (S4) — отдельная типизированная категория
+                // причины Deferred: итог ночи назовёт её владельцу, число — сам Deferred.
+                if (IsSliceFrozen(e)) counters.DeferredCause = DeferredCause.ExecutionFrozen;
                 current = WriteOutcomes(root, current,
                     members.Select(t => FailOutcome(t.op, t.i)).ToList(), counters) ?? current;
                 continue;
@@ -436,6 +456,13 @@ public sealed class WikiJudgeSweep
     private static bool IsUndecidedContested(WikiPackage.Operation op) =>
         op.Decision == WikiPackage.DecisionInbox && op.HumanDecision is null && op.JudgeDecision is null;
 
+    /// <summary>Отказ среды по замороженному срезу изоляции (Reason=SliceFrozen): тот же
+    /// признак, что у CheapTextRunner.IsSliceFrozen — запуск ЛЮБОГО CLI-процесса сейчас
+    /// невозможен; это не «модель недоступна» и не ошибка провайдера (S1/S2).</summary>
+    private static bool IsSliceFrozen(Exception ex) =>
+        ex is Execution.IsolationUnavailableException isolation
+            && isolation.Reason == Execution.IsolationUnavailableException.SliceFrozen;
+
     /// internal static: форма входа группы тестируется напрямую (тот же приём, что у
     /// WikiApplyPolicy.Auto) — склейка страниц merge в неё своя, и тесту нужен результат
     /// метода, а не проход с фейком модели.
@@ -535,6 +562,7 @@ public sealed class WikiJudgeSweep
         public int Deferred;
         public int CodeRejected;
         public string? FirstFailure;
+        public DeferredCause DeferredCause;
 
         private readonly HashSet<string> _written = new(StringComparer.Ordinal);
 
@@ -542,6 +570,6 @@ public sealed class WikiJudgeSweep
         public bool WroteVerdictFor(string packageId) => _written.Contains(packageId);
 
         public JudgeSweepResult ToResult() =>
-            new(Calls, CostUsd, Applied, Rejected, Deferred, CodeRejected, FirstFailure);
+            new(Calls, CostUsd, Applied, Rejected, Deferred, CodeRejected, FirstFailure, DeferredCause);
     }
 }

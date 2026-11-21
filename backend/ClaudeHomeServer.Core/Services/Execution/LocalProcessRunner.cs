@@ -34,6 +34,27 @@ public sealed class LocalProcessRunner : IProcessLauncher
         var (psi, reason) = BuildStartInfo(
             spec, options, TargetIsWindows, systemdRun, ProbeOnce(options, systemdRun), unit);
         var wrapped = reason is null;
+        // Fail-closed по замороженному slice: systemd 259 не запускает юнит в замороженном
+        // срезе (-EDEADLK, «Cannot start frozen unit»), а fail-open положил бы процесс в
+        // cgroup прода — ровно тот OOM-инцидент, ради которого scope и существует (окна
+        // бенча, инцидент 21.11). Две дороги к одному отказу:
+        //  • срез заморожен на диске, проба прошла или её не было — проверка SliceIsFrozen;
+        //  • срез замёрз между проверкой и пробой — проба упала frozen-отказом, и она не
+        //    кэшируется и не становится fail-open (см. ProbeOnce).
+        // Отказ — до process.Start(): вызывающий (S2) видит названный Reason и проходит после
+        // оттаивания. Обе проверки — только там, где процесс реально шёл бы в scope
+        // (обёртка применима или единственной причиной сняла её заморозка): процессу, который
+        // и так живёт вне scope (нет user-шины, RawArguments, выключенная изоляция),
+        // заморозка не помеха — не отказывать зря.
+        var slice = EffectiveSlice(options, spec.LocalModel);
+        if ((wrapped && SliceIsFrozen(slice)) || IsFrozenProbeReason(reason))
+        {
+            WarnIsolationOnce($"выбранный slice заморожен, изолированный процесс не запущен: {slice}");
+            throw new IsolationUnavailableException(
+                IsolationUnavailableException.SliceFrozen,
+                $"Не могу запустить изолированный процесс: slice '{slice}' заморожен",
+                slice);
+        }
         var process = new Process { StartInfo = psi, EnableRaisingEvents = spec.EnableRaisingEvents || wrapped };
         // Процесс вышел — гасим его scope: оставшиеся в нём узлы MSBuild и VBCSCompiler
         // (реюз внутри хода) и прочие отпочковавшиеся потомки иначе живут в ccs-agents.slice
@@ -50,6 +71,9 @@ public sealed class LocalProcessRunner : IProcessLauncher
         if (!process.Start())
             throw new InvalidOperationException($"Не удалось запустить {spec.FileName}");
         if (spec.Track) ProcessRegistry.Register(process);
+        // Следующий успешный запуск — подходящий момент повторить отложенные гашения: шина
+        // жива и обёртка только что работала. Фоном: горячий путь хода не ждёт systemctl.
+        if (wrapped) _ = Task.Run(RetryDeferredStops);
         return process;
     }
 
@@ -335,19 +359,41 @@ public sealed class LocalProcessRunner : IProcessLauncher
     internal static Action<string, string> StopScope { get; set; } = StopScopeViaSystemctl;
 
     // Остановка scope уходит с потока события Exited: systemctl — процесс, а обработчик
-    // Exited не должен ждать чужой ввод-вывод. Fail-open: сбой — warning, не исключение.
+    // Exited не должен ждать чужой ввод-вывод. Fail-open: сбой — warning, не исключение;
+    // сбой ещё и кладётся имя в список отложенных гашений (RunDeferredStop), успех — снимает.
     private static void StopScopeInBackground(Action<string, string> stop, string systemctl, string unit) =>
-        _ = Task.Run(() =>
+        _ = Task.Run(() => RunDeferredStop(stop, systemctl, unit));
+
+    // Единственный путь гашения с учётом отложенных: успех снимает запись (если она была),
+    // любой сбой шва (исключение/таймаут/ненулевой код — шов сигналит ScopeStopFailedException)
+    // добавляет её с дедупликацией. Наружу не бросает ничего: сбой гашения — warning, не исключение.
+    internal static void RunDeferredStop(Action<string, string> stop, string systemctl, string unit)
+    {
+        try
         {
-            try { stop(systemctl, unit); }
-            catch (Exception ex) { WarnScopeStopOnce(ex.GetType().Name, $"{ex.GetType().Name}: {ex.Message}"); }
-        });
+            stop(systemctl, unit);
+            CompleteDeferred(unit);
+        }
+        catch (ScopeStopFailedException ex)
+        {
+            WarnScopeStopOnce(ex.Kind, ex.Details);
+            DeferStop(systemctl, unit);
+        }
+        catch (Exception ex)
+        {
+            WarnScopeStopOnce(ex.GetType().Name, $"{ex.GetType().Name}: {ex.Message}");
+            DeferStop(systemctl, unit);
+        }
+    }
 
     // KillMode у scope по умолчанию control-group: stop шлёт SIGTERM всем процессам cgroup
     // (узлы MSBuild и VBCSCompiler на него выходят сразу), через TimeoutStopSec — SIGKILL.
     // --no-block: ждать гибели хвоста незачем. Гонки с --collect нет: если scope опустел
     // вместе с процессом, systemd уже собрал его, и stop отвечает «not loaded» (код 5) —
     // гасить нечего, это штатный исход, а не сбой.
+    // Сбой (таймаут, ненулевой код кроме 0 и 5) — ScopeStopFailedException: вызывающий путь
+    // (RunDeferredStop) по ней кладёт имя в отложенные гашения; warning печатает он же,
+    // текстом из Kind/Details — прежним.
     private static void StopScopeViaSystemctl(string systemctl, string unit)
     {
         var psi = new ProcessStartInfo(systemctl)
@@ -365,12 +411,20 @@ public sealed class LocalProcessRunner : IProcessLauncher
         if (!p.WaitForExit(10_000))
         {
             try { p.Kill(); } catch { /* уже вышел */ }
-            WarnScopeStopOnce("timeout", "systemctl --user stop не ответил за 10 с");
-            return;
+            throw new ScopeStopFailedException("timeout", "systemctl --user stop не ответил за 10 с");
         }
         if (p.ExitCode is 0 or 5) return;
-        WarnScopeStopOnce($"code-{p.ExitCode}",
+        throw new ScopeStopFailedException($"code-{p.ExitCode}",
             $"systemctl --user stop вернул код {p.ExitCode}: {stderr.GetAwaiter().GetResult().Trim()}");
+    }
+
+    // Сбой systemctl-остановки scope: названный класс и текст — для warning вызывающего и для
+    // того, чтобы от него не отличали «не сбой» (InvalidOperationException «systemctl не
+    // запустился» остаётся общим исключением: это не отказ остановки, а отсутствие процесса).
+    internal sealed class ScopeStopFailedException(string kind, string details) : Exception(details)
+    {
+        public string Kind { get; } = kind;
+        public string Details { get; } = details;
     }
 
     // Сбой остановки scope: один раз на класс сбоя (в тексте имя юнита — по нему не дедупить)
@@ -382,6 +436,174 @@ public sealed class LocalProcessRunner : IProcessLauncher
             if (!_scopeStopWarnings.Add(kind)) return;
         }
         Console.WriteLine($"[exec] не удалось погасить scope процесса, хвост мог остаться в slice: {details}");
+    }
+
+    // ---- Отложенные гашения scope (S3) ----
+    // Сбой гашения (таймаут/исключение/ненулевой код кроме штатных 0 и 5) не исчезает с
+    // warning'ом: имя юнита кладётся in-memory списком и повторяется — после следующего
+    // успешного запуска scope, общим таймером (≈5 мин, пока есть чем заниматься) и ручным
+    // тиком. Успех снимает запись. Лок и версия — по ИМЕНИ unit, не по экземпляру: два
+    // одновременных гашения/тика одного unit — одна запись и один активный повтор; поздний
+    // отказ старой попытки после успеха новой не возвращает запись (версия попытки уже не
+    // актуальна). Список — состояние процесса: после рестарта бэкенда за оставшееся отвечает
+    // ScopeOrphanSweeper, не он. Сбой уборки наружу не бросается нигде.
+    internal const int DeferredStopIntervalMs = 5 * 60_000;
+    private static readonly Dictionary<string, DeferredStop> _deferredStops = new();
+    private static readonly object _deferredLock = new();
+    private static Timer? _deferredTimer;
+    private static bool _periodicArmed;
+    // Версия попытки — глобальная последовательная: между записями одного имени не повторяется,
+    // по ней поздний отказ старой попытки опознаётся как старый.
+    private static uint _deferredSeq;
+
+    private sealed class DeferredStop(string systemctl)
+    {
+        public string Systemctl { get; } = systemctl;
+        public uint Version { get; set; }  // 0 — повтор ещё не начинался
+        public bool Retrying { get; set; }
+    }
+
+    // Добавление с дедупликацией: имя уже в списке — не трогается ничего, включая версию
+    // (идущий повтор остаётся своим).
+    private static void DeferStop(string systemctl, string unit)
+    {
+        lock (_deferredLock)
+        {
+            if (!_deferredStops.ContainsKey(unit))
+                _deferredStops[unit] = new DeferredStop(systemctl);
+            EnsureDeferredTimer();
+        }
+    }
+
+    // Успех гашения: запись имени снимается всегда — даже когда её вернул поздний отказ
+    // (чужой успех уже был). internal — точка учёта и для теста гонки (успех «чужим путём»).
+    internal static void CompleteDeferred(string unit)
+    {
+        lock (_deferredLock)
+        {
+            _deferredStops.Remove(unit);
+            MaybeDisposeTimer();
+        }
+    }
+
+    // Взять повтор по имени: false — имени нет в списке (уже успешно) или его уже повторяет
+    // другой («один активный повтор»). Версия попытки выдаётся здесь.
+    private static bool TryBeginRetry(string unit, out uint version)
+    {
+        lock (_deferredLock)
+        {
+            version = 0;
+            if (!_deferredStops.TryGetValue(unit, out var rec) || rec.Retrying) return false;
+            version = ++_deferredSeq;
+            rec.Version = version;
+            rec.Retrying = true;
+            return true;
+        }
+    }
+
+    // Итог попытки. Отказ возвращает запись к ожиданию только если она ещё моя: чужой успех
+    // или чужой отказ уже снял/поднял её — мой результат старый и запись не возвращает.
+    private static void EndRetry(string unit, uint version, bool ok)
+    {
+        lock (_deferredLock)
+        {
+            if (ok) _deferredStops.Remove(unit);
+            else if (_deferredStops.TryGetValue(unit, out var rec) && rec.Version == version)
+                rec.Retrying = false;
+            MaybeDisposeTimer();
+        }
+    }
+
+    // Повтор всех отложенных: после успешного запуска scope и боевым тиком. Каждая запись
+    // повторяется ровно один раз на тик (TryBeginRetry), а снятое другим успехом имя из
+    // snapshot'а просто не берётся повтором. Сбой наружу не бросается: EndRetry остаётся на
+    // своей записи, warning — один на класс (WarnScopeStopOnce).
+    internal static void RetryDeferredStops()
+    {
+        List<(string Unit, string Systemctl)> snapshot;
+        lock (_deferredLock)
+        {
+            if (_deferredStops.Count == 0) return;
+            snapshot = [.. _deferredStops.Select(kv => (kv.Key, kv.Value.Systemctl))];
+        }
+        foreach (var (unit, systemctl) in snapshot)
+        {
+            if (!TryBeginRetry(unit, out var version)) continue;
+            try
+            {
+                StopScope(systemctl, unit);
+                EndRetry(unit, version, ok: true);
+            }
+            catch (ScopeStopFailedException ex)
+            {
+                WarnScopeStopOnce(ex.Kind, ex.Details);
+                EndRetry(unit, version, ok: false);
+            }
+            catch (Exception ex)
+            {
+                WarnScopeStopOnce(ex.GetType().Name, $"{ex.GetType().Name}: {ex.Message}");
+                EndRetry(unit, version, ok: false);
+            }
+        }
+    }
+
+    // Ручной тик — точка входа для тестов и будущего ручного вызова: тот же повтор, что
+    // боевой тик, плюс обход сирот (по тому же правилу трёх замков, что при старте).
+    internal static void RunDeferredTickNow()
+    {
+        RetryDeferredStops();
+        ScopeOrphanSweeper.OnPeriodicTick();
+    }
+
+    // Боевой тик: общий таймер ≈5 мин, пока механизму есть чем заниматься (список не пуст
+    // или периодический обход заведён — ArmPeriodicMaintenance). Таймер один на процесс.
+    private static void EnsureDeferredTimer()
+    {
+        if (_deferredTimer is not null) return;
+        if (!_periodicArmed && _deferredStops.Count == 0) return;
+        _deferredTimer = new Timer(_ =>
+        {
+            try
+            {
+                RetryDeferredStops();
+                ScopeOrphanSweeper.OnPeriodicTick();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[exec] периодический обход не удался: {ex.GetType().Name}: {ex.Message}");
+            }
+        }, null, DeferredStopIntervalMs, DeferredStopIntervalMs);
+    }
+
+    private static void MaybeDisposeTimer()
+    {
+        if (_periodicArmed || _deferredStops.Count > 0) return;
+        _deferredTimer?.Dispose();
+        _deferredTimer = null;
+    }
+
+    // Завести периодический механизм: зовёт ScopeOrphanSweeper.Sweep при старте бэкенда —
+    // сироты с тех пор видны не только на следующем старте.
+    internal static void ArmPeriodicMaintenance()
+    {
+        lock (_deferredLock)
+        {
+            _periodicArmed = true;
+            EnsureDeferredTimer();
+        }
+    }
+
+    // Сброс состояния отложенных: только для тестов (как ResetProbeForTests — прогон не
+    // должен нести чужой список, чужой таймер или заведённый обход дальше своего теста).
+    internal static void ResetDeferredForTests()
+    {
+        lock (_deferredLock)
+        {
+            _deferredStops.Clear();
+            _periodicArmed = false;
+            _deferredTimer?.Dispose();
+            _deferredTimer = null;
+        }
     }
 
     // ---- Проба systemd-run: обёртка есть в PATH, но работает ли она в рантайме? ----
@@ -399,7 +621,8 @@ public sealed class LocalProcessRunner : IProcessLauncher
     private static SystemdRunProbeResult? _probeResult;
     private static readonly object _probeLock = new();
 
-    // Выполняет пробу один раз за процесс и возвращает кэш; null — проба не нужна:
+    // Выполняет пробу один раз за процесс и возвращает кэш; frozen-отказ возвращает без
+    // кэша (ниже); null — проба не нужна:
     // изоляция выключена (или Windows) или systemd-run не найден — в этих случаях обёртки
     // не будет и без пробы (BuildStartInfo сам fail-open'ит). Для spec с RawArguments Start
     // тоже вызывает пробу: сам этот запуск решит fail-open на RawArguments, но следующий
@@ -416,10 +639,37 @@ public sealed class LocalProcessRunner : IProcessLauncher
         {
             if (_probeResult is not null) return _probeResult;
             var result = Probe(systemdRunPath, WrapperArgs(options, NewScopeUnitName()), "true", ProbeTimeoutMs);
+            // Frozen-отказ — не приговор обёртке, а состояние среза на окно (бенч): его не
+            // кэшируем, иначе вся оставшаяся жизнь процесса после одной заморозки жила бы
+            // fail-open без изоляции. И не пропускаем его в fail-open: Start по такому
+            // результату отказывает запуск (IsolationUnavailableException), а не ведёт
+            // процесс в cgroup прода. Обычная проба возможности (битая шина, нет прав на
+            // slice) кэшируется, как раньше.
+            if (result is { Ok: false } && IsolationUnavailableException.IsFrozenUnitRefusal(result.FailReason))
+                return result;
             _probeResult = result;
             return result;
         }
     }
+
+    // Случайная причина fail-open — frozen-отказ пробы (гонка: срез замёрз после прямой
+    // проверки SliceIsFrozen). Только проба даёт такую причину — другие fail-open причины
+    // (RawArguments, user-шина, отсутствие systemd-run) заморозку не упоминают.
+    private static bool IsFrozenProbeReason(string? reason) =>
+        reason is not null && reason.StartsWith("проба systemd-run")
+        && IsolationUnavailableException.IsFrozenUnitRefusal(reason);
+
+    // Фактически выбранный slice запуска — то же правило, что у WrapperArgs: локальный ход
+    // в LocalModelSlice (если задан), остальные в общий Slice.
+    internal static string EffectiveSlice(IsolationOptions options, bool localModel) =>
+        localModel && !string.IsNullOrWhiteSpace(options.LocalModelSlice)
+            ? options.LocalModelSlice
+            : options.Slice;
+
+    // Шов проверки заморозки: реальная — CgroupSlices.IsFrozen (отсутствие файла/сбой
+    // чтения — false, прежнее fail-open поведение: ход пойдёт как раньше). Тесты подменяют
+    // стабом, чтобы не зависеть от настоящего cgroupfs машины прогона.
+    internal static Func<string, bool> SliceIsFrozen { get; set; } = slice => CgroupSlices.IsFrozen(slice);
 
     // Сброс кэша пробы: только для тестов (статическое состояние процесса — коллекция
     // ProcessGlobalState сериализует тесты, а тест сам сохраняет/восстанавливает шов Probe).
@@ -444,7 +694,11 @@ public sealed class LocalProcessRunner : IProcessLauncher
             RedirectStandardError = true,
             CreateNoWindow = true,
         };
-        foreach (var a in wrapperArgs) psi.ArgumentList.Add(a);
+        foreach (var a in wrapperArgs)
+            // --quiet глушит stderr systemd-run, а цели пробы — именно прочитать причину
+            // отказа (замороженный slice, битая шина): с --quiet stderr пуст и различить их
+            // нельзя. Флаг меняет только многословие вывода, не поведение обёртки.
+            if (a != "--quiet") psi.ArgumentList.Add(a);
         psi.ArgumentList.Add(command);
 
         var process = new Process { StartInfo = psi };
@@ -452,12 +706,21 @@ public sealed class LocalProcessRunner : IProcessLauncher
         {
             if (!process.Start())
                 return new SystemdRunProbeResult(false, $"не удалось запустить {systemdRunPath}");
-            // stdout/stderr не читаем: `true` молчит, а неречиваемые байты в 64К буфере
-            // не затасят 5-секундную команду; таймаут страхует зависшую шину.
             if (process.WaitForExit(timeoutMs))
-                return process.ExitCode == 0
-                    ? new SystemdRunProbeResult(true)
-                    : new SystemdRunProbeResult(false, $"проба systemd-run завершилась с кодом {process.ExitCode}");
+            {
+                if (process.ExitCode == 0) return new SystemdRunProbeResult(true);
+                // Причина отказа — в stderr: по одному «код 1» не отличить битую шину от
+                // замороженного slice (первое кэшируется как fail-open, второе — нет,
+                // см. ProbeOnce). stdout не читаем: `true` молчит. Чтение — с тем же
+                // таймаутом: процесс уже вышел и обычно не держит трубу.
+                var stderrTask = process.StandardError.ReadToEndAsync();
+                var stderr = Task.WhenAny(stderrTask, Task.Delay(timeoutMs)).Result == stderrTask
+                    ? stderrTask.Result.Trim()
+                    : "";
+                return new SystemdRunProbeResult(false, stderr.Length > 0
+                    ? $"проба systemd-run завершилась с кодом {process.ExitCode}: {stderr}"
+                    : $"проба systemd-run завершилась с кодом {process.ExitCode}");
+            }
             process.Kill(entireProcessTree: true);
             return new SystemdRunProbeResult(false, $"проба systemd-run не завершилась за {timeoutMs / 1000} с");
         }

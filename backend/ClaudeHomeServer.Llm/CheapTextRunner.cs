@@ -219,6 +219,12 @@ public sealed class CheapTextRunner(
         if (RefuseChildOwner(actionKey, ownerId)) return (null, null);
         var route = ResolveRoute(actionKey);
 
+        // Заморозка среды (slice изоляции, окно бенча — S2): первый же CLI-шаг упал отказом
+        // среды. Остальные CLI-шаги не перебираем (тот же systemd-срез откажет так же), но
+        // цепочка до её HTTP-шага идёт: ILocalLlmClient локальных процессов не порождает и
+        // ответить может. Отвечет — работаем; нет/не выбран — исходное исключение наружу.
+        Execution.IsolationUnavailableException? sliceFrozen = null;
+
         // Шаг 1 — выбранная админом модель. Два транспорта: префикс "direct:" → прямой
         // HTTP-адаптер (быстро, для бесплатных моделей агрегатора), иначе → провайдер через
         // claude CLI. Оба при неудаче отдают null и уходят дальше по цепочке.
@@ -233,9 +239,21 @@ public sealed class CheapTextRunner(
             }
             else
             {
-                var picked = await TryDetailedModelAsync(actionKey, route.Model!, prompt, ownerId,
-                    CloudTimeoutFor(actionKey), ct);
-                if (picked is not null) return (picked.Text, picked.Usage);
+                try
+                {
+                    var picked = await TryDetailedModelAsync(actionKey, route.Model!, prompt, ownerId,
+                        CloudTimeoutFor(actionKey), ct);
+                    if (picked is not null) return (picked.Text, picked.Usage);
+                }
+                catch (Exception ex) when (IsSliceFrozen(ex))
+                {
+                    // Warning без стектрейса: отказ среды ожидаем и уже назван, стектрейс
+                    // в логах фоновых задач — шум.
+                    sliceFrozen = (Execution.IsolationUnavailableException)ex;
+                    log.LogWarning(
+                        "cheap-runner: действие {Action} — среда исполнения заморожена ({Reason}); CLI-шаги не перебираю, жду ответа HTTP-движка",
+                        actionKey, ex.Message);
+                }
             }
         }
 
@@ -295,6 +313,9 @@ public sealed class CheapTextRunner(
             // маршрут места локальный — сбой/пусто локали не уводит данные в облако молча.
             // Пустой ответ финального шага — тоже «без ответа» (корзина missed).
             if (!allowCloudFallback && route.Kind == RouteKind.Local) return (null, null);
+            // Заморозка среды и HTTP не ответил: финальный CLI-шаг не выполняется — он упал бы
+            // тем же отказом среды (S2: без перебора CLI). Наружу — исходное исключение.
+            if (sliceFrozen is not null) throw sliceFrozen;
             // Звено Claude — только у цепочек, которые реально дошли до облачного шага:
             // в режиме «без облака» цепочка с движком закончится без ответа, и «кто сейчас
             // на модели» не должна показывать Claude у места, которое в облако не уходит
@@ -381,6 +402,14 @@ public sealed class CheapTextRunner(
     internal static bool LocalStepApplies(string actionKey, RouteKind kind) =>
         kind == RouteKind.Local
         || (kind == RouteKind.Model && LocalActionCatalog.Find(actionKey)?.DefaultLocal == true);
+
+    // Отказ среды исполнения по замороженному slice изоляции (Reason=SliceFrozen, S1): запуск
+    // ЛЮБОГО CLI-процесса сейчас невозможен — это не ошибка провайдера и не «модель недоступна».
+    // Перебор других CLI-шагов цепочки бессмыслен (тот же systemd-срез откажет так же), но
+    // HTTP-движки ILocalLlmClient локальных процессов не порождают и отвечать могут (S2).
+    private static bool IsSliceFrozen(Exception ex) =>
+        ex is Execution.IsolationUnavailableException isolation
+            && isolation.Reason == Execution.IsolationUnavailableException.SliceFrozen;
 
     // Одно место, где названо исключение ночи (WN-4): цепочка БЕЗ облачной страховки на
     // локальном маршруте (allowCloudFallback=false и Kind=Local, RunLocalOrChosen*) не имеет
@@ -505,6 +534,9 @@ public sealed class CheapTextRunner(
                 $"Действие «{actionKey}» работает с картинками и не выполняется текстовым раннером");
         if (RefuseChildOwner(actionKey, ownerId)) return new OneShotResult(string.Empty, null, 0);
         var route = ResolveRoute(actionKey);
+        // Заморозка среды (slice изоляции, окно бенча — S2): как в RunChainCoreAsync —
+        // CLI-шаги не перебираем, HTTP-движку ответить разрешено, иначе исключение наружу.
+        Execution.IsolationUnavailableException? sliceFrozen = null;
         // Таймаут по маршруту: явный override потребителя (changelog), иначе ОБЛАЧНЫЙ
         // потолок профиля — вызов заканчивается на claude даже у действий на локали.
         var effTimeout = timeout ?? CloudTimeoutFor(actionKey);
@@ -533,8 +565,18 @@ public sealed class CheapTextRunner(
             }
             else
             {
-                var picked = await TryDetailedModelAsync(actionKey, route.Model!, prompt, ownerId, effTimeout, ct);
-                if (picked is not null) return picked;
+                try
+                {
+                    var picked = await TryDetailedModelAsync(actionKey, route.Model!, prompt, ownerId, effTimeout, ct);
+                    if (picked is not null) return picked;
+                }
+                catch (Exception ex) when (IsSliceFrozen(ex))
+                {
+                    sliceFrozen = (Execution.IsolationUnavailableException)ex;
+                    log.LogWarning(
+                        "cheap-runner (detailed): действие {Action} — среда исполнения заморожена ({Reason}); CLI-шаги не перебираю",
+                        actionKey, ex.Message);
+                }
             }
         }
 
@@ -582,6 +624,9 @@ public sealed class CheapTextRunner(
 
             // Шаг 3 — claude: маршрут-слот берёт модель слота, иначе модель действия из его конфига.
             // Один повтор при таймауте — как в RunAsync (см. там). Пустой Text — «без ответа».
+            // Заморозка среды и HTTP не ответил: финальный CLI-шаг не выполняется — он упал бы
+            // тем же отказом среды (S2: без перебора CLI). Наружу — исходное исключение.
+            if (sliceFrozen is not null) throw sliceFrozen;
             var effFallback = EffectiveFallback(route, fallbackModel, ownerId);
             var claudeModel = claude.NormalizeModel(effFallback);
             try
@@ -623,11 +668,14 @@ public sealed class CheapTextRunner(
             if (!string.IsNullOrWhiteSpace(run.Text)) return run;
             log.LogDebug("cheap-runner: действие {Action} — модель {Model} вернула пустой ответ", actionKey, model);
         }
-        catch (Exception ex) when (!ct.IsCancellationRequested)
+        catch (Exception ex) when (!ct.IsCancellationRequested && !IsSliceFrozen(ex))
         {
             log.LogWarning(ex, "cheap-runner: действие {Action} — модель {Model} недоступна, иду дальше по цепочке",
                 actionKey, model);
         }
+        // Отказ среды (заморозка slice) уходит наружу без лога здесь: его встречает и
+        // разбирает вызывающая цепочка (RunChainCoreAsync/RunDetailedAsync) — Warning без
+        // стектрейса и отказ от перебора CLI-шагов.
         return null;
     }
 

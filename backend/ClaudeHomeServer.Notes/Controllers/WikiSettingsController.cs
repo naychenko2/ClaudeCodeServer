@@ -355,6 +355,8 @@ public class WikiSettingsController : ControllerBase
                 JudgeRejected = lastNight.JudgeRejected,
                 JudgeDeferred = lastNight.JudgeDeferred,
                 CodeRejected = lastNight.CodeRejected,
+                // S4: причина отложенных — из того же файла итога, карточке нужны слова, а не только число.
+                JudgeDeferredCause = lastNight.JudgeDeferredCause,
                 // Разбивка итога по названным исполнителям (W6a → W6b): те же счётчики, что в
                 // файле, плюс подпись движка из текущего списка (тот же приём, что EngineTitle
                 // в журнале службы). null — «не измерено» (старый файл без поля), пустой
@@ -431,6 +433,10 @@ public sealed class WikiLastNightDto
     public int JudgeRejected { get; set; }
     public int JudgeDeferred { get; set; }
     public int CodeRejected { get; set; }
+    // S4: строковая категория причины JudgeDeferred ("execution_frozen" — среда исполнения
+    // была заморожена); карточка по ней называет заморозку вместо «Судья недоступен». null —
+    // обычный отказ без категории (старый файл без поля читается null, та же аддитивность).
+    public string? JudgeDeferredCause { get; set; }
     // W6b: разбивка прохода по названным исполнителям — те же счётчики, что в файле итога
     // (NightExecutorStat), плюс подпись движка из текущего списка. Старый файл без поля
     // читается null («не измерено»), а не пустым списком (W6a: разные состояния).

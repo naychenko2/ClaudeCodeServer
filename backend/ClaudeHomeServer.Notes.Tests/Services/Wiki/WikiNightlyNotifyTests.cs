@@ -125,10 +125,12 @@ public class WikiNightlyNotifyTests : IDisposable
             notifier, _keeper, judge);
 
     // Фейк прохода судьи (J-J4): сводка в уведомлении проверяется без облачной модели.
+    // deferredCause (S4) — категория причины отложенных: по умолчанию обычный отказ.
     private static Func<string, string, IReadOnlySet<string>?, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> Judge(
-        int applied = 0, int rejected = 0, int deferred = 0, int codeRejected = 0, int calls = 0, decimal cost = 0m) =>
+        int applied = 0, int rejected = 0, int deferred = 0, int codeRejected = 0, int calls = 0, decimal cost = 0m,
+        WikiJudgeSweep.DeferredCause deferredCause = WikiJudgeSweep.DeferredCause.None) =>
         (owner, root, _, ct) => Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(
-            calls, cost, applied, rejected, deferred, codeRejected, null));
+            calls, cost, applied, rejected, deferred, codeRejected, null, deferredCause));
 
     private static Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done() =>
         (owner, chat, _, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
@@ -273,6 +275,35 @@ public class WikiNightlyNotifyTests : IDisposable
         n.Title.Should().Contain("ждут 3");
         n.Body.Should().Contain("судья недоступен — ждут решения: 3");
         n.Body.Should().NotContain("операций ждут", "старой формы с согласованием числа в тексте нет");
+    }
+
+    // ─── S4: заморозка среды — итог ночи называет причину и число отложенных ────────────
+
+    [Fact]
+    public async Task ЗаморозкаСреды_ИтогНочиНазываетПричинуИЧислоОтложенных()
+    {
+        // Инцидент tb21: ночь с замороженным срезом изоляции откладывала решения судьи, а
+        // владелец читал «судья недоступен» — прямую неправду. Категория доехала из прохода
+        // судьи в итог: тело называет причину («среда исполнения была заморожена») и
+        // существующее число JudgeDeferred; прежней строки «судья недоступен» в этом случае
+        // нет. Мутация «NotificationBody игнорирует execution_frozen» (всегда прежняя
+        // строка) краснит оба assert о теле.
+        Configure();
+        AddChat("c1", humans: 2);
+        var notifier = new Notifier();
+
+        await Tick(Sut(null, notifier, new RecordingLog(),
+            judge: Judge(deferred: 5, calls: 2, deferredCause: WikiJudgeSweep.DeferredCause.ExecutionFrozen)));
+
+        var last = Last();
+        last.Analyzed.Should().Be(0);
+        last.JudgeDeferred.Should().Be(5);
+        last.JudgeDeferredCause.Should().Be(WikiJudgeSweep.DeferredCauseExecutionFrozen,
+            "категория записана в файл итога ночи");
+        notifier.Sent.Should().HaveCount(1, "отложенные операции — не молчание");
+        var body = notifier.Sent[0].Body;
+        body.Should().Contain("среда исполнения была заморожена — ждут решения: 5");
+        body.Should().NotContain("судья недоступен", "причина названа точно: это не молчаливая недоступность судьи");
     }
 
     [Fact]
@@ -704,6 +735,7 @@ public class WikiNightlyNotifyTests : IDisposable
         last.Analyzed.Should().Be(2);
         last.Rejected.Should().Be(1);
         last.Executors.Should().BeNull("старого поля в файле нет: «не измерено», а не «пустой список»");
+        last.JudgeDeferredCause.Should().BeNull("старого поля в файле нет: обычный отказ без категории (S4)");
     }
 
     // ─── подменные швы (те же, что у WikiNightlyServiceTests) ────────────────

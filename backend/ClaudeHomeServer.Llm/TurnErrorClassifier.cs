@@ -69,6 +69,14 @@ public enum FallbackErrorClass
     // 2026-10-16: Opus → MiniMax-M3 без спроса, журнал ccs.service 06:37:51–53). Маркер ставит
     // ClaudeSession в Details ErrorMessage (LocalFileMissingMarker) — как ProcessKilledMarker.
     LocalFileMissing,
+    // Среда исполнения заморожена: slice изоляции агентов (ccs-agents.slice) заморожен на время
+    // бенча/замера — systemd не создаёт в нём scope, запуск процесса CLI невозможен до оттаивания
+    // (инцидент 21.11, окна tb21). Отказ СРЕДЫ на нашей стороне, а не провайдера и не сети:
+    // соседняя пара «модель × подписка» пойдёт тем же systemd-срезом и упрётся в тот же отказ.
+    // Фолбэк не запускается, провайдер не кулдаунится (ProviderHealthRegistry не трогаем), ход
+    // завершается честной ошибкой с текстом TurnFailureText.SliceFrozen. Маркер ставит
+    // ClaudeSession первым токеном Details (SliceFrozenMarker) — как ProcessKilledMarker.
+    SliceFrozen,
     // CLI не нашёл разговор для --resume («No conversation found with session ID», exit=1 до
     // первого события, маркер в stderr). Транскрипт убран плановой уборкой CLI или лежит в
     // другом профиле/на другой машине. Смена пары «модель × подписка» не лечит: resume идёт
@@ -159,6 +167,12 @@ public static class TurnErrorClassifier
     // после маркера в Details, человек видит его в «Подробностях».
     public const string LocalFileMissingMarker = "[Local:file-missing]";
 
+    // Маркер «среда исполнения заморожена»: ClaudeSession ставит его первым токеном Details,
+    // когда запуск процесса CLI упал IsolationUnavailableException(Reason=SliceFrozen) —
+    // заморожен slice изоляции (окно бенча). Классификатор работает с СЫРЫМ текстом, поэтому
+    // опознать отказ среды по русской формулировке в Text он не может — только по маркеру.
+    public const string SliceFrozenMarker = "[Isolation:slice-frozen]";
+
     public static FallbackErrorClass Classify(TurnAttemptOutcome outcome)
     {
         // Остановка пользователем — не ошибка доставки
@@ -228,6 +242,13 @@ public static class TurnErrorClassifier
             || (!outcome.HasResult && LooksLocalFileMissing(outcome.ErrorText)))
             return FallbackErrorClass.LocalFileMissing;
 
+        // Среда исполнения заморожена (slice изоляции, окно бенча) — тоже ДО ветки "без
+        // result → Unreachable": это не мёртвый эндпоинт и не сбой провайдера, а отказ нашей
+        // среды запустить процесс. Смена пары не лечит (тот же systemd-срез откажет соседней
+        // паре так же), кулдаун провайдеру не ставится — ход завершается честной ошибкой
+        // (инцидент 21.11: окна бенча роняли ходы, а фолбэк жёг цепочку живых подписок).
+        if (outcome.ErrorText?.StartsWith(SliceFrozenMarker, StringComparison.Ordinal) == true)
+            return FallbackErrorClass.SliceFrozen;
         // Транскрипт resume не найден (exit=1 до первого события, маркер CLI в stderr) — тоже
         // ДО ветки "без result → Unreachable": смена пары «модель × подписка» resume не лечит
         // (ход идёт тем же отсутствующим файлом), цепочка гонялась бы впустую (инцидент 21.11:
@@ -335,6 +356,9 @@ public static class TurnErrorClassifier
         // Файл аргумента не найден: не идёт в ProviderSwitchedMessage (фолбэк не запускается),
         // но имя полезно для лога/паспорта хода и для будущих подсказок.
         FallbackErrorClass.LocalFileMissing => "local_file_missing",
+        // Заморозка среды исполнения: не идёт в ProviderSwitchedMessage (фолбэк не запускается),
+        // имя — для лога/паспорта хода.
+        FallbackErrorClass.SliceFrozen => "slice_frozen",
         // Транскрипт resume не найден: фолбэк не запускается, имя — для лога/паспорта хода.
         FallbackErrorClass.ResumeTranscriptMissing => "resume_transcript_missing",
         _ => null,

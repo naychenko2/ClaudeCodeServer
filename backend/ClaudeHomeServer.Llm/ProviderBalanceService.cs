@@ -387,6 +387,9 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
     // GET {BalanceUrl} → { data: { limits: [ {type:"TOKENS_LIMIT", unit, number, percentage,
     // nextResetTime}, {type:"TIME_LIMIT", unit, number, currentValue, usage, nextResetTime, ...} ] } }.
     // TOKENS_LIMIT (unit=3 — часы, unit=6 — недели) → окна остатка токенов в процентах;
+    // с 2026-11 новые тарифы (V3 coding plans) отдают те же окна с type=CREDIT_LIMIT — разбираем
+    // обе ветки одинаково (percentage — израсходовано, nextResetTime — epoch ms; кредитные
+    // usage/currentValue/remaining percent-окнам не нужны);
     // TIME_LIMIT (unit=5 — месячный лимит вызовов веб-инструментов подписки search-prime/
     // web-reader/zread) → окно count "currentValue/usage". Общей безоконной квоты токенов нет.
     // Хедер Authorization БЕЗ префикса "Bearer". Разбор — ParseGlmQuota (фиксируется тестами).
@@ -418,7 +421,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
     }
 
     // Разбор ответа квоты GLM (internal — под тестами). null — массива limits нет либо ни одного
-    // percent-окна (TOKENS_LIMIT) не разобрали: основного баланса в процентах без него нет.
+    // percent-окна (TOKENS_LIMIT/CREDIT_LIMIT) не разобрали: основного баланса без него нет.
     // TOKENS_LIMIT-окна идут списком, отсортированными по длительности (короткое первым, с
     // неизвестной длительностью — в конец); TIME_LIMIT достраивается последним как count-окно.
     internal static ProviderBalance? ParseGlmQuota(JsonElement root)
@@ -436,7 +439,9 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             if (!item.TryGetProperty("type", out var t) || t.ValueKind != JsonValueKind.String) continue;
             var type = t.GetString();
 
-            if (string.Equals(type, "TOKENS_LIMIT", StringComparison.OrdinalIgnoreCase))
+            // Старые тарифы шлют TOKENS_LIMIT, новые (кредитные) — CREDIT_LIMIT; тело окна то же
+            if (string.Equals(type, "TOKENS_LIMIT", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(type, "CREDIT_LIMIT", StringComparison.OrdinalIgnoreCase))
             {
                 // percentage — израсходовано; показываем остаток (100 − percentage)
                 var pct = ReadNumber(item, "percentage");

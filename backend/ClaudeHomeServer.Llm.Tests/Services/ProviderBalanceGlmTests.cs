@@ -22,6 +22,17 @@ public class ProviderBalanceGlmTests
         {"modelCode":"web-reader","usage":8},{"modelCode":"zread","usage":0}]}]}}
         """;
 
+    // Живой payload кредитных тарифов (снимок 21.11.2026): z.ai перевёл Coding Plan на кредиты,
+    // percent-окна едут с type=CREDIT_LIMIT, семантика прежняя (percentage — израсходовано,
+    // nextResetTime — epoch ms). Поля usage/currentValue/remaining (кредиты: лимит/израсходовано/
+    // остаток) percent-окнам не нужны и игнорируются. level:"max" — метаданные плана, вне разбора.
+    private const string CreditPayload = """
+        {"code":200,"msg":"Operation successful","data":{"limits":[
+         {"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":28000,"currentValue":5485,"remaining":22514,"percentage":19,"nextResetTime":1795282871842},
+         {"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":140000,"currentValue":5485,"remaining":134514,"percentage":3,"nextResetTime":1795869274983}
+        ],"level":"max"},"success":true}
+        """;
+
     private static ProviderBalance? Parse(string json) =>
         ProviderBalanceService.ParseGlmQuota(JsonDocument.Parse(json).RootElement);
 
@@ -66,6 +77,67 @@ public class ProviderBalanceGlmTests
         tools.Value.Should().Be("101/4000");
         tools.Unit.Should().Be("consumed"); // накопительный расход со сбросом, не моментальная занятость
         tools.ResetsAt.Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(1786567342991).UtcDateTime);
+    }
+
+    [Fact]
+    public void КредитныйОтвет_ДваПроцентныхОкнаОстатком()
+    {
+        var b = Parse(CreditPayload);
+
+        b.Should().NotBeNull();
+        b!.Available.Should().BeTrue();
+        b.Currency.Should().Be("%");
+        b.TotalBalance.Should().Be("81"); // 100 − 19, основное окно — 5 часов
+        b.ResetsAt.Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(1795282871842).UtcDateTime);
+        b.TrackHistory.Should().BeTrue(); // основное окно часовое (unit=3) — историю ведём
+        b.Windows.Should().HaveCount(2);
+        // Короткое (5 часов) первым, недельное вторым — сортировка по длительности
+        b.Windows![0].Label.Should().Be("5 часов");
+        b.Windows[0].Value.Should().Be("81"); // 100 − 19
+        b.Windows[0].Unit.Should().Be("percent");
+        b.Windows[0].ResetsAt.Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(1795282871842).UtcDateTime);
+
+        b.Windows[1].Label.Should().Be("Неделя");
+        b.Windows[1].Value.Should().Be("97"); // 100 − 3
+        b.Windows[1].Unit.Should().Be("percent");
+        b.Windows[1].ResetsAt.Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(1795869274983).UtcDateTime);
+    }
+
+    [Fact]
+    public void КредитноеОкноСМусорнымПроцентом_ПропущеноБезПотериОстальных()
+    {
+        // Битое кредитное окно не должно ронять валидное соседнее — как у TOKENS_LIMIT
+        const string json = """
+            {"data":{"limits":[
+            {"type":"CREDIT_LIMIT","unit":3,"number":5,"percentage":true},
+            {"type":"CREDIT_LIMIT","unit":6,"number":1,"percentage":3,"nextResetTime":1795869274983}]}}
+            """;
+        var b = Parse(json);
+
+        b!.Windows.Should().HaveCount(1);
+        b.Windows![0].Label.Should().Be("Неделя");
+        b.Windows[0].Value.Should().Be("97");
+        b.TotalBalance.Should().Be("97");
+    }
+
+    [Fact]
+    public void СмешанныйОтвет_КредитноеИТокенсноеОкнаВместе()
+    {
+        // Переходный период: старое и новое окно в одном ответе — оба разбираются,
+        // сортировка по длительности, а не по типу
+        const string json = """
+            {"data":{"limits":[
+            {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":60,"nextResetTime":1786101061032},
+            {"type":"CREDIT_LIMIT","unit":6,"number":1,"percentage":3,"nextResetTime":1795869274983}]}}
+            """;
+        var b = Parse(json);
+
+        b!.Windows.Should().HaveCount(2);
+        b.Windows![0].Label.Should().Be("5 часов");
+        b.Windows[0].Value.Should().Be("40");
+        b.Windows[1].Label.Should().Be("Неделя");
+        b.Windows[1].Value.Should().Be("97");
+        b.TrackHistory.Should().BeTrue(); // основное окно — часовое TOKENS_LIMIT
     }
 
     [Fact]

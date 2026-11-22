@@ -7,9 +7,9 @@
 // Г13 — удалённый опекун: REST-цепочка (назначить → удалить → записать → граница
 //       guardian_not_found) плюс UI-редактор опекунов в разделе «Безопасность».
 
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import {
-  BASE, call, tokenOf, loginViaUi, openUserManagement, openChildSettings, type Page,
+  BASE, call, tokenOf, loginViaUi, openUserManagement, openChildSettings,
 } from './kids-w5-helpers';
 
 test.describe.configure({ mode: 'serial' });
@@ -22,7 +22,7 @@ const GUARD2 = `qa10h${STAMP}`;
 const GUARD3 = `qa10i${STAMP}`;
 const SUBJECT = 'qa10-subj';
 const ADMIN_PW = process.env.E2E_PASS || '12345';
-const SHOTS = '/home/an/Sources/ClaudeCodeServer-kids-w5-fix/.cc-attachments/qa10-shots';
+const SHOTS = '/home/an/Sources/ClaudeCodeServer-kids-qa-ts/.cc-attachments/qa10-shots';
 
 let request: APIRequestContext;
 let tok: string;
@@ -33,6 +33,16 @@ let guard3Id = '';
 let adminProjectId = '';
 
 interface Rect { x: number; y: number; w: number; h: number }
+interface SubjectIcon { id: string | null; w: number; h: number }
+/** Результат замера на экране: типизирован, чтобы tsc не терял проверки. */
+interface Measure {
+  viewport: number;
+  buttons: Record<string, Rect | null>;
+  subjectIcons: SubjectIcon[];
+  railCapsule: Rect | null;
+  railCapsuleChats: Rect | null;
+  newLesson: Rect | null;
+}
 
 /** Включить/выключить профиль ребёнка: enabled=true, предметы приходят из живого профиля (subjects:null). */
 async function putChildProfile(body: Record<string, unknown>): Promise<{ status: number; body: any }> {
@@ -44,20 +54,27 @@ async function putChildProfile(body: Record<string, unknown>): Promise<{ status:
   });
 }
 
-async function shot(page: import('@playwright/test').Page, name: string) {
+async function shot(page: Page, name: string) {
   await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: false });
 }
 
 /** Замер детских кнопок рельсы/шапки: aria-label → прямоугольник, потолок. */
-const MEASURE = () => {
+const MEASURE = (): Measure => {
   const grab = (sel: string): Rect | null => {
     const el = document.querySelector(sel) as HTMLElement | null;
     if (!el) return null;
     const r = el.getBoundingClientRect();
     return r.width || r.height ? { x: r.x, y: r.y, w: r.width, h: r.height } : null;
   };
-  const round = (r: Rect | null) => (r ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) } : null);
-  const out: Record<string, unknown> = { viewport: window.innerWidth, buttons: {} as Record<string, Rect | null> };
+  const round = (r: Rect | null): Rect | null => (r ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) } : null);
+  const out: Measure = {
+    viewport: window.innerWidth,
+    buttons: {},
+    subjectIcons: [],
+    railCapsule: null,
+    railCapsuleChats: null,
+    newLesson: null,
+  };
   const btns: Record<string, Rect | null> = {};
   for (const n of ['Меню', 'Чаты', 'Файлы', 'Задачи', 'Ещё']) btns[n] = round(grab(`[aria-label="${n}"]`));
   // Активная панель «Чаты» переименовывает кнопку в «Скрыть „Чаты“» — меряем её как «Чаты»
@@ -85,7 +102,7 @@ const MEASURE = () => {
     }
     return c;
   };
-  const capsOfRect = (btn: HTMLElement | null) => {
+  const capsOfRect = (btn: HTMLElement | null): Rect | null => {
     const c = capsOf(btn);
     if (!c) return null;
     const r = c.getBoundingClientRect();
@@ -100,12 +117,13 @@ const MEASURE = () => {
   return out;
 };
 
-const expect40 = (m: any, labels: string[]) => {
+/** Тач-цель ≥40×40 у каждой перечисленной кнопки рельсы. */
+const expect40 = (m: Measure, labels: string[]) => {
   for (const n of labels) {
     const b = m.buttons[n];
     expect(b, `кнопка «${n}» на экране`).not.toBeNull();
-    expect(b.w, `«${n}» ширина ≥40 (факт ${b.w})`).toBeGreaterThanOrEqual(40);
-    expect(b.h, `«${n}» высота ≥40 (факт ${b.h})`).toBeGreaterThanOrEqual(40);
+    expect(b!.w, `«${n}» ширина ≥40 (факт ${b!.w})`).toBeGreaterThanOrEqual(40);
+    expect(b!.h, `«${n}» высота ≥40 (факт ${b!.h})`).toBeGreaterThanOrEqual(40);
   }
 };
 
@@ -175,10 +193,8 @@ test('Г11: тач-цели детской рельсы ≥40 на 768/1280, н�
     } else {
       expect(found.length, 'на 360 найдена хотя бы одна детская кнопка').toBeGreaterThan(0);
     }
-    for (const n of found) {
-      expect(m.buttons[n].w, `«${n}» ширина ≥40 (факт ${m.buttons[n].w})`).toBeGreaterThanOrEqual(40);
-      expect(m.buttons[n].h, `«${n}» высота ≥40 (факт ${m.buttons[n].h})`).toBeGreaterThanOrEqual(40);
-    }
+    // Тач-цели ≥40×40 у всех найденных детских кнопок
+    expect40(m, found);
     if (strict) {
       expect(m.subjectIcons.length, 'значок предмета в доке рельсы на экране').toBeGreaterThan(0);
       for (const ic of m.subjectIcons) {
@@ -186,13 +202,14 @@ test('Г11: тач-цели детской рельсы ≥40 на 768/1280, н�
         expect(ic.h, `значок «${ic.id}» высота ≥40 (факт ${ic.h})`).toBeGreaterThanOrEqual(40);
       }
       expect(m.railCapsule, 'капсула детской рельсы найдена').not.toBeNull();
-      expect(m.railCapsule.w, `капсула рельсы ≥44 (факт ${m.railCapsule.w})`).toBeGreaterThanOrEqual(44);
+      const capsule = m.railCapsule!;
+      expect(capsule.w, `капсула рельсы ≥44 (факт ${capsule.w})`).toBeGreaterThanOrEqual(44);
       // Плашка предмета при закрытых панелях: НЕ пересекает капсулу рельсы (рельса бывает
       // и правой на 768 — критерий пересечения, не знака зазора)
       if (m.newLesson) {
-        const capRight = m.railCapsule.x + m.railCapsule.w;
+        const capRight = capsule.x + capsule.w;
         const plateRight = m.newLesson.x + m.newLesson.w;
-        const sep = Math.max(m.railCapsule.x - plateRight, m.newLesson.x - capRight);
+        const sep = Math.max(capsule.x - plateRight, m.newLesson.x - capRight);
         expect(Math.round(sep), `плашка предмета не пересекает капсулу рельсы (разнос ${sep}px)`).toBeGreaterThanOrEqual(-2);
       }
     } else {
@@ -207,7 +224,6 @@ test('Г11: тач-цели детской рельсы ≥40 на 768/1280, н�
 
   // Панель «Чаты» открыта по умолчанию; её кнопка называется «Скрыть „Чаты“».
   // Рельса бывает и правой (768) — меряем разнос по X между панелью и капсулой.
-  const cap0 = await page.evaluate(MEASURE);
   const panel = await page.evaluate(() => {
     const cands = Array.from(document.querySelectorAll('div,span,h1,h2,h3'))
       .filter(el => (el.textContent ?? '').trim() === 'Чаты' && el.getBoundingClientRect().width > 120) as HTMLElement[];
@@ -219,11 +235,13 @@ test('Г11: тач-цели детской рельсы ≥40 на 768/1280, н�
   });
   console.log('QA10-PANEL chats', JSON.stringify(panel));
   expect(panel, 'панель «Чаты» открылась').not.toBeNull();
+  if (!panel) throw new Error('панель «Чаты» не найдена — замер разноса невозможен');
   await shot(page, 'child-1280-panel');
   const cap = await page.evaluate(MEASURE);
   // Панель прилегает к СВОЕЙ капсуле (у «Чаты» — левая, панельная рельса «Файлы…» может быть правой)
   const capChats = cap.railCapsuleChats;
   expect(capChats, 'капсула кнопки «Чаты» найдена').not.toBeNull();
+  if (!capChats) throw new Error('капсула кнопки «Чаты» не найдена — замер разноса невозможен');
   const capRightCh = capChats.x + capChats.w;
   const panelRight = panel.x + panel.w;
   // Панель и капсула «Чаты»: без пересечения и без дыры — расстояние между интервалами по X
@@ -252,10 +270,11 @@ test('Г11: тач-цели детской рельсы ≥40 на 768/1280, н�
     const adult = ['Файлы', 'Задачи', 'Ещё'].filter(n => m.buttons[n]);
     expect(adult.length, `у взрослого найдены кнопки рельсы на ${w}`).toBeGreaterThan(1);
     for (const n of adult) {
-      expect(m.buttons[n].w, `взрослая «${n}» ширина 32±2 (факт ${m.buttons[n].w})`).toBeGreaterThanOrEqual(30);
-      expect(m.buttons[n].w, `взрослая «${n}» ширина 32±2 (факт ${m.buttons[n].w})`).toBeLessThanOrEqual(34);
-      expect(m.buttons[n].h, `взрослая «${n}» высота 32±2 (факт ${m.buttons[n].h})`).toBeGreaterThanOrEqual(30);
-      expect(m.buttons[n].h, `взрослая «${n}» высота 32±2 (факт ${m.buttons[n].h})`).toBeLessThanOrEqual(34);
+      const b = m.buttons[n]!;
+      expect(b.w, `взрослая «${n}» ширина 32±2 (факт ${b.w})`).toBeGreaterThanOrEqual(30);
+      expect(b.w, `взрослая «${n}» ширина 32±2 (факт ${b.w})`).toBeLessThanOrEqual(34);
+      expect(b.h, `взрослая «${n}» высота 32±2 (факт ${b.h})`).toBeGreaterThanOrEqual(30);
+      expect(b.h, `взрослая «${n}» высота 32±2 (факт ${b.h})`).toBeLessThanOrEqual(34);
     }
     await shot(page, `adult-${w}`);
   }

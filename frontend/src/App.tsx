@@ -188,6 +188,11 @@ export default function App() {
   // Живёт только в детском маршруте: undefined = не ребёнок (взрослый экран как раньше);
   // null = детский профиль без снимка — WorkspacePage рисует «нет связи», а не взрослый набор.
   const [childSurface, setChildSurface] = useState<ChildSurface | null | undefined>(undefined)
+  // Г20: тап по плитке пикера, у которой нет проекта-предмета (его удалили из воркспейса),
+  // раньше молчал — ребёнок жмёт и ничего не происходит. Снимок id предмета, который не
+  // открылся: его рисует пикер спокойной плашкой («попроси взрослого»). Гасится самим
+  // следующим тапом — новый тап обязан дать свой исход, а не чужой прошлый.
+  const [subjectMiss, setSubjectMiss] = useState<string | null>(null)
 
   // Активная вкладка хаба — вне открытого проекта. Стартовый экран — дашборд «Домой»:
   // hash-диплинк приоритетнее, а без hash всегда открывается 'home'. Ключ HUB_TAB_KEY
@@ -1010,10 +1015,16 @@ export default function App() {
   // детский (Б21: только свои включённые предметы), поиск по ключу предмета; проекта в списке
   // нет (предмет выключили или удалили из профиля) — док никуда не ведёт.
   const openSubjectProject = (subject: ChildSubjectWithViewers) => {
+    // Г20: прошлый промах снимается до запроса — тап не должен оставлять на экране чужую
+    // прошлую плашку, пока идёт новый поиск
+    setSubjectMiss(null)
     api.projects.list()
       .then(list => {
         const p = list.find(x => x.childSubjectId === subject.id)
-        if (p) openProject(p)
+        if (p) { openProject(p); return }
+        // Проекта нет (предмет выключили или удалили из профиля) — док не ведёт никуда,
+        // но промах назван: пикер по этому снимку объясняет его ребёнку (Г20)
+        setSubjectMiss(subject.id)
       })
       .catch(() => { /* офлайн — док никуда не ведёт */ })
   }
@@ -1529,7 +1540,7 @@ export default function App() {
         {project ? (
           <WorkspacePage key={project.id} project={project} onProjectUpdated={handleOpenProjectUpdated} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} childSurface={childSurface} onOpenSubjectProject={openSubjectProject} />
         ) : (
-          <ChildSubjectPicker onPick={openSubjectProject} />
+          <ChildSubjectPicker onPick={openSubjectProject} missSubjectId={subjectMiss} />
         )}
       </>
     )

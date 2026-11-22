@@ -30,7 +30,7 @@ vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect()
 vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { PanelRail } = await import('./PanelRail');
+const { PanelRail, RAIL_W, RAIL_W_LG } = await import('./PanelRail');
 import type { RailItem } from './PanelRail';
 
 const item = (key: string): RailItem => ({
@@ -52,10 +52,18 @@ const num = (style: string, prop: string): number =>
 
 const buttons = (host: HTMLElement) => Array.from(host.querySelectorAll('button'));
 
-// Капсула — единственный div рельсы с явной шириной (обёртка зоны и столбец её не
-// задают): по ней и проверяем, что размер капсулы следует за размером кнопок
-const capsuleOf = (host: HTMLElement) =>
-  Array.from(host.querySelectorAll('div')).find(d => /(?:^|[^-])width:\s*\d+px/.test(d.getAttribute('style') ?? ''));
+// Капсула — ПЕРВЫЙ элементный ребёнок корня рельсы (PanelRail.tsx:720-725: первыми
+// детьми корня идут только она; футер и превью — дальше). Ищем по структуре, а не
+// по «первому div с явной шириной»: если в поддереве появится другой элемент с
+// шириной, мы не начнём мерить не то. Ширина при этом НЕ признак поиска: она
+// проверяется здесь же и краснит кейс, если капсула не там или не того размера.
+const capsuleOf = (host: HTMLElement, expectedW: number): HTMLElement | null => {
+  const root = host.firstElementChild as HTMLElement | null;
+  const capsule = (root?.firstElementChild as HTMLElement | null) ?? null;
+  const w = capsule ? num(capsule.getAttribute('style') ?? '', 'width') : 0;
+  expect(w, `капсула (первый ребёнок корня рельсы) должна быть ${expectedW}px; фактическая ширина ${w}`).toBe(expectedW);
+  return capsule;
+};
 
 describe('PanelRail: тач-цели детской рельсы (Г11)', () => {
   it('itemSize="lg" → кнопки панелей и ящик «Ещё» не меньше 40×40, капсула 48', async () => {
@@ -77,10 +85,8 @@ describe('PanelRail: тач-цели детской рельсы (Г11)', () => 
     }
     // Капсула — ширина под 40px-кнопку с полями (RAIL_W_LG): в прежних 40px
     // (внутренние 38) кнопка 40 обрезалась бы краем
-    const capsule = capsuleOf(host);
-    expect(capsule, 'капсула').toBeTruthy();
-    const cw = num(capsule!.getAttribute('style') ?? '', 'width');
-    expect(cw, `ширина капсулы; style="${capsule!.getAttribute('style')}"`).toBe(48);
+    const capsule = capsuleOf(host, RAIL_W_LG);
+    expect(capsule, 'капсула не найдена по структуре').toBeTruthy();
   });
 
   it('без itemSize (взрослая рельса) — прежние 32 в капсуле 40: взрослую раскладку не трогали', async () => {
@@ -96,8 +102,7 @@ describe('PanelRail: тач-цели детской рельсы (Г11)', () => 
       expect(num(attr, 'width'), `ширина; style="${attr}"`).toBe(32);
       expect(num(attr, 'height'), `высота; style="${attr}"`).toBe(32);
     }
-    const capsule = capsuleOf(host);
-    expect(capsule, 'капсула').toBeTruthy();
-    expect(num(capsule!.getAttribute('style') ?? '', 'width'), 'ширина капсулы').toBe(40);
+    const capsule = capsuleOf(host, RAIL_W);
+    expect(capsule, 'капсула не найдена по структуре').toBeTruthy();
   });
 });

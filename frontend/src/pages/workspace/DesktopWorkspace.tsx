@@ -237,7 +237,7 @@ export function DesktopWorkspace(p: Props) {
   // его поднимают проектный воркспейс (этот файл) и раздел «Чаты» (ChatsPage) —
   // у обоих есть PanelZone с compact={isTablet}. WallPage и остальные разделы
   // хаба compact не передают, и эксклюзив у них не действует.
-  const { setExclusive, markActive, closeCompactStack, reveal, zones } = wsPanels.use();
+  const { setExclusive, markActive, closeCompactStack, carryTabletLayout, reveal, zones } = wsPanels.use();
   // Плашка предмета (SubjectPlate) по макету kids-project-screen (.fly) стоит только
   // при закрытых панелях и не на планшете: при открытой панели «Чаты» (у ребёнка она
   // открыта по умолчанию) fixed-плашка с left=RAIL_W закрывала её заголовок и «Новый
@@ -272,13 +272,30 @@ export function DesktopWorkspace(p: Props) {
   // closeCompactStack уже на первом кадре и стирал дефолтную панель дровера
   // (defaultCompactPanel='chats' у ребёнка) раньше, чем она добиралась до экрана.
   // Сравнение по ref: сигнал уходит только при реальной смене id.
+  // Г15 (дельта Р-Г5-д1, minor): смена isTablet — тоже сигнал, но не маунт.
+  // Взрослый с открытой раскладкой, сузившийся до планшета (1280→768), раньше
+  // терял её на первом же кадре; теперь тот же стоп-сигнал, и PanelZone по
+  // нему переносит взрослую раскладку в дровер (её открытость живёт в сторе,
+  // а дровер читает локальный стек — без переноса панель просто исчезала бы
+  // на узком плече и возвращалась открытой после обратного расширения).
+  // Маунт (ref при маунте = текущее) — не смена: дефолт ребёнка не стёрся бы.
   const seenSessionRef = useRef(p.activeSession?.id);
+  const seenTabletRef = useRef(!!p.isTablet);
   useEffect(() => {
+    // ref обновляем и вне планшета: иначе выход из планшета (768→1280) его не
+    // снимет, и повторный вход (1280→768) не сошёлся бы с переходом
+    const tabletChanged = seenTabletRef.current !== !!p.isTablet;
+    seenTabletRef.current = !!p.isTablet;
     if (!p.isTablet) return;
-    if (seenSessionRef.current === p.activeSession?.id) return;
+    const sessionChanged = seenSessionRef.current !== p.activeSession?.id;
     seenSessionRef.current = p.activeSession?.id;
+    if (!tabletChanged && !sessionChanged) return;
     closeCompactStack();
-    // closeCompactStack стабилен (useCallback в сторе) — в deps не нужен
+    // Взрослый вход в планшет без смены чата: раскладка дроверу дороже пустоты
+    // (см. Г15 выше). Ребёнку — никогда: его дефолт — список уроков, и чужой
+    // перенос его бы закрыл.
+    if (tabletChanged && !sessionChanged && !p.child) carryTabletLayout();
+    // closeCompactStack/carryTabletLayout стабильны (useCallback в сторе) — в deps не нужны
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.isTablet, p.activeSession?.id]);
 

@@ -24,6 +24,7 @@ import type { ChildWorkspaceProps } from '../../../features/childMode/types';
 import type { ChildSubjectWithViewers } from '../../../features/childMode/api';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes } from '../../../components/chat/__tests__/fakeDom';
 import { __test as sessionsListTest } from '../../../lib/sessionsList';
+import { openKeysOf, wsPanels } from '../panelStackState';
 
 // ── localStorage / sessionStorage vi.hoisted: panelStackState и useActionVisibility
 //     читают их при импорте модулей, до module-level кода теста ──
@@ -87,7 +88,10 @@ vi.mock('../../../lib/api', () => {
       if (prop === 'chats') return ns({ get: () => Promise.resolve(null) });
       // list отдаёт уроки предмета: список панели на 768 — сам предмет теста
       if (prop === 'sessions') return ns({ list: () => Promise.resolve(mockChats) });
-      if (prop === 'projects') return ns({ list: () => Promise.resolve([]) });
+      // subjects.list — явный мок: SessionList (reloadSubjects) зовёт его при
+      // маунте; ns-Proxy отдаёт по одной функции на уровень, а .list поверх
+      // функции — уже undefined («not a function» в теле компонента)
+      if (prop === 'projects') return ns({ list: () => Promise.resolve([]), subjects: ns({ list: () => Promise.resolve([]) }) });
       // personas.list → []: иначе проп personas Composer'а null → «not iterable» при полном рендере
       if (prop === 'personas') return ns({ list: () => Promise.resolve([]) });
       return deep(null);
@@ -211,6 +215,21 @@ async function mountWorkspace(props: DWProps) {
   return { root, container: container as unknown as NodeLike };
 }
 
+// Г15: эмуляция ресайза/поворота — смена ширины окна + событие 'resize',
+// которое читает useWindowWidth (PanelZone), и новый кадр с тем же деревом
+// (PanelZone не перемонтируется: её состояние — эфемерный стек — живёт между
+// ориентациями). isTablet меняет вызывающий (в приложении — WorkspacePage
+// по ширине), здесь он часть того же act-кадра.
+async function resizeTo(root: ReturnType<typeof mount>['root'], w: number, over: Partial<DWProps> = {}) {
+  await act(async () => {
+    (globalThis as any).window.innerWidth = w;
+    window.dispatchEvent({ type: 'resize' });
+    // isTablet — как его выводит WorkspacePage: по порогу TABLET_MAX (1199)
+    root.render(createElement(DesktopWorkspace, baseProps({ isTablet: w <= 1199, ...over })));
+  });
+  await act(async () => { vi.advanceTimersByTime(300); });
+}
+
 describe('DesktopWorkspace: список уроков ребёнка на планшете (Г5-д1, 68812ebd)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -270,9 +289,59 @@ describe('DesktopWorkspace: список уроков ребёнка на пла
   });
 
   it('взрослый на 768: детской панели нет — раскладка не меняется', async () => {
-    const { root, container } = await mountWorkspace(baseProps());
+    const { root, container } = await mountWorkspace(baseProps({
+      panels: { chats: createElement('div', { 'data-testid': 'g15-chats-panel' }) },
+    }));
     try {
       expect(findNodeByAttr(container as any, 'data-testid', 'child-lessons-panel'), 'детской панели у взрослого быть не должно').toBeNull();
+      // Г15: и своей панели тоже — маунт планшета не «смена isTablet», дровер при
+      // маунте пуст (перенос раскладки в дровер бывает только по сигналу)
+      expect(findNodeByAttr(container as any, 'data-testid', 'g15-chats-panel'), 'у взрослого на 768 открылась своя панель чатов (маунт планшета не переход: дровер пуст)').toBeNull();
+    } finally { root.unmount(); }
+  });
+
+  // Г15 (дельта Р-Г5-д1, minor 6): поворот планшета 768→1024→768. Эффект-чистка
+  // PanelZone бил подписан на смену compactOverlay: при возврате в узкий дровер
+  // он стирал эфемерный стек, а ref-защита дефолта не давала применить его снова
+  // → список уроков исчезал после каждого поворота. Теперь чистка — только по
+  // сигналу смены чата: набор переживает ориентацию (на 1024 он не рисуется —
+  // открытость широкого плеча живёт в раскладке стора — а на 768 возвращается).
+  it('ребёнок на 768: список уроков переживает поворот планшета (768→1024→768)', async () => {
+    const { root, container } = await mountWorkspace(baseProps({ child: childSurface }));
+    try {
+      expect(findNodeByAttr(container as any, 'data-testid', 'child-lessons-panel'), 'панели уроков на 768 нет').not.toBeNull();
+      // поворот в 1024: эфемерный стек не рисуется (открытость широкого плеча —
+      // в раскладке стора), сам набор не трогается; возврат в 768 — он на месте
+      await resizeTo(root, 1024, { child: childSurface });
+      await resizeTo(root, 768, { child: childSurface });
+      expect(findNodeByAttr(container as any, 'data-testid', 'child-lessons-panel'), 'после поворота список уроков на 768 не вернулся').not.toBeNull();
+      expect(rowNames(container), 'после поворота строк уроков в панели нет').toEqual(['Дроби']);
+    } finally { root.unmount(); }
+  });
+
+  // Г15 (дельта Р-Г5-д1, minor 7): взрослый сузился 1280→768. Раньше (до Г5-д1)
+  // маунт планшета бил closeCompactStack безусловно — открытая панель терялась
+  // на первом же кадре. Г5-д1 снял безусловность и задел взрослого: сигнал не
+  // шёл вовсе. Теперь: смена isTablet — сигнал (не маунт), и по нему зона
+  // переносит открытую раскладку в дровер — панель остаётся на экране, а не
+  // «воскресает» при обратном расширении. Ребёнку сигнал не звётся: его дефолт.
+  it('взрослый: открытая панель не исчезает при сужении 1280→768 и не «воскресает»', async () => {
+    const filesPanel = () => ({ panels: { files: createElement('div', { 'data-testid': 'g15-files-panel' }) } });
+    // раскладка чистая: открытость 'files' — результат теста (пользователь открыл),
+    // не дефолт стора и не предыдущего кейса (стор — module-level singleton)
+    for (const k of openKeysOf(wsPanels.getZones())) wsPanels.ops.close(k);
+    // 1280 — десктоп (за порогом TABLET_MAX): взрослая раскладка в колонках стора
+    (globalThis as any).window.innerWidth = 1280;
+    (globalThis as any).window.innerHeight = 720;
+    const { root, container } = await mountWorkspace(baseProps({ isTablet: false, ...filesPanel() }));
+    try {
+      await act(async () => { wsPanels.ops.openIn('left', 'files'); });
+      await act(async () => { vi.advanceTimersByTime(300); });
+      expect(findNodeByAttr(container as any, 'data-testid', 'g15-files-panel'), 'панель «Файлы» не открылась на 1280').not.toBeNull();
+      await resizeTo(root, 768, filesPanel());
+      expect(findNodeByAttr(container as any, 'data-testid', 'g15-files-panel'), 'после сужения панель пропала из экрана (исчезла и «воскресала» при обратном расширении)').not.toBeNull();
+      // раскладка не потеряна: открытость по-прежнему в сторе, дровер — её копия
+      expect(openKeysOf(wsPanels.getZones()), 'сигнал смены isTablet очистил раскладку стора').toContain('files');
     } finally { root.unmount(); }
   });
 });

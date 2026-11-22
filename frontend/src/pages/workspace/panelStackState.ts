@@ -358,6 +358,13 @@ export interface PanelZones {
   // отличие от inline-раскладки, где то же делает чистая restoreOppositeIfEmpty.
   // runtime, не персистится (см. persist).
   restoreCompactSignal: number;
+  // Г15 (дельта Р-Г5-д1): счётчик сигнала «взрослый вошёл в планшет: открой
+  // открытую раскладку в дровер». Бросает экран на переходе isTablet false→true
+  // без смены чата (DesktopWorkspace): открытость раскладки живёт в сторе, а
+  // узкий дровер читает локальный стек зоны — по сигналу зона сама переносит
+  // своё открытое в стек (PanelZone). Маунт — не сигнал: дефолт ребёнка.
+  // runtime, не персистится (см. persist).
+  carryCompactSignal: number;
 }
 
 export function emptyZone(): ZoneState {
@@ -365,7 +372,7 @@ export function emptyZone(): ZoneState {
 }
 
 export function emptyZones(): PanelZones {
-  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [], railOrder: [], exclusive: false, activeSide: null, closeCompactSignal: 0, restoreCompactSignal: 0 };
+  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [], railOrder: [], exclusive: false, activeSide: null, closeCompactSignal: 0, restoreCompactSignal: 0, carryCompactSignal: 0 };
 }
 
 // Зона, в которой панель показывает свою иконку, когда закрыта. Для ключей
@@ -463,6 +470,7 @@ export function sanitizeZones(raw: unknown): PanelZones {
     activeSide: null,
     closeCompactSignal: 0,
     restoreCompactSignal: 0,
+    carryCompactSignal: 0,
   });
 }
 
@@ -919,6 +927,7 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
     activeSide: null,
     closeCompactSignal: 0,
     restoreCompactSignal: 0,
+    carryCompactSignal: 0,
   });
 }
 
@@ -1009,6 +1018,12 @@ export interface PanelZonesApi {
   // эффектом на счётчик и чистит свой локальный tabletPanels. runtime, мимо persist
   // — в localStorage не пишем.
   closeCompactStack: () => void;
+  // Г15 (дельта Р-Г5-д1): бросить сигнал «открой открытую раскладку в compact-
+  // дровер» — экран зовёт его, когда взрослый переходит на планшет (isTablet
+  // false→true) без смены чата. Счётчик, как closeCompactStack: каждая
+  // смонтированная PanelZone по нему переносит своё открытое layout в локальный
+  // стек. runtime, мимо persist — в localStorage не пишем.
+  carryTabletLayout: () => void;
   // Compact-зона (узкий планшет) сообщает: у неё закрылась ПОСЛЕДНЯЯ панель, сторона
   // свободна. Стор передаёт активность соседке и бросает restoreCompactSignal —
   // та возвращает свой выбитый стек. Для inline-раскладки этого не нужно: там
@@ -1152,7 +1167,7 @@ function createPanelZones(ns: string, opts?: {
     // exclusive/activeSide/сигналы — runtime: в localStorage не пишем,
     // иначе флаг поднимался бы на WallPage и при откате кода. sanitizeZones
     // обнулит их и при чтении — двойная защита.
-    const { exclusive: _exclusive, activeSide: _activeSide, closeCompactSignal: _closeCompactSignal, restoreCompactSignal: _restoreCompactSignal, ...rest } = _zones;
+    const { exclusive: _exclusive, activeSide: _activeSide, closeCompactSignal: _closeCompactSignal, restoreCompactSignal: _restoreCompactSignal, carryCompactSignal: _carryCompactSignal, ...rest } = _zones;
     lsSet(KEY, JSON.stringify(rest));
   }
 
@@ -1346,6 +1361,15 @@ function createPanelZones(ns: string, opts?: {
     // commit: ничего в раскладке не меняется, persist не нужен (см. persist()).
     closeCompactStack: () => {
       _zones = { ..._zones, closeCompactSignal: _zones.closeCompactSignal + 1 };
+      emit();
+    },
+
+    // Г15: сигнал «открой открытую раскладку в compact-дровер» — счётчик версий,
+    // каждая PanelZone подписана эффектом и по нему переносит своё открытое
+    // layout в локальный стек. Мимо commit: раскладка не меняется, персистить
+    // нечего (см. closeCompactStack).
+    carryTabletLayout: () => {
+      _zones = { ..._zones, carryCompactSignal: _zones.carryCompactSignal + 1 };
       emit();
     },
 

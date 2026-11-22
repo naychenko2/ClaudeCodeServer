@@ -1,16 +1,20 @@
-// Тесты вкладки «Стенды» (Ф3): выбор узла по умолчанию (худший уровень, при равенстве —
+// Тесты вкладки «Стенды»: выбор узла по умолчанию (худший уровень, при равенстве —
 // первый), счётчик «N показателей без данных», плитка «Плата» (датчика нет / нет данных /
-// периферия), причина падения скорости, сборка вкладки: карточка «Узлы» сверху, движки узла, баннер
-// молчащего узла, пустое состояние «Нет связи с узлом», отсутствие строк «Железо» /
-// прежнего баннера и инвариант «ветвление по kind, а не по ключу плитки».
+// периферия), причина падения скорости, сборка вкладки: порядок блоков v4 (Узлы → ИБП →
+// Динамика за 15 мин → баннер → Стенд → Другие датчики → Температуры → Видеокарты →
+// Движок), один TempChart, секции закрыты при первом открытии, тела смонтированы,
+// двойной клик по свёртке возвращает false (функциональный setState), баннер молчащего
+// узла, пустое состояние «Нет связи с узлом», инвариант «ветвление по kind».
 //
-// Окружение node (без jsdom): renderToStaticMarkup + чтение исходников для сторожей.
+// Окружение node: SSR — renderToStaticMarkup; интерактив — linkedom + createRoot (§8).
 
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import type { HardwareFarm, HardwareFarmNode, HardwareNode, HardwareReport } from './hardwareTypes';
+import { createRoot } from 'react-dom/client';
+import { parseHTML } from 'linkedom';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
+import type { HardwareFarm, HardwareFarmNode, HardwareGpu, HardwareNode, HardwareReport, HardwareUps } from './hardwareTypes';
 import {
   farmPickNode, hwIcon, hwNoDataCount, hwNoDataCountLabel, hwThrottled, hwTileView,
 } from './hardwareFormat';
@@ -197,13 +201,14 @@ describe('HardwareTab', () => {
     expect(html).not.toContain('Узел ai не отвечает');
     expect(html).not.toContain('Температуры');
   });
-  it('счётчик «без данных» под плитками: две nodata и одна none → «2 показателя»', () => {
+  it('счётчик «без данных» — в секции «Другие датчики»: 2 nodata-датчика + аптайм без значения → «3 показателя»', () => {
     const html = render({ report: report([
       tile({ key: 'a', tempC: null, sensor: 'nodata', level: 'none' }),
       tile({ key: 'b', tempC: null, sensor: 'none', level: 'none' }),
       tile({ key: 'c', tempC: null, sensor: 'nodata', level: 'none' }),
     ]) });
-    expect(html).toContain('2 показателя без данных');
+    // 2 nodata-датчика + аптайм (uptimeS не задан — nodata-строка секции); none не считается.
+    expect(html).toContain('3 показателя без данных');
   });
   it('два сокета: «Процессор 1» ok и «Процессор 2» danger — красной бывает только вторая', () => {
     const html = render({ selected: 'worker', stats: null, report: report([
@@ -213,12 +218,14 @@ describe('HardwareTab', () => {
     expect(html).toContain('Процессор 1');
     expect(html).toContain('Процессор 2');
     // Плитка danger — C.dangerBg/C.dangerBorder; у ok-плитки таких цветов нет.
-    const tiles = html.split('<div title=').slice(1);
-    expect(tiles).toHaveLength(2);
-    const ok = tiles.find(t => t.includes('Процессор 1'))!;
-    const bad = tiles.find(t => t.includes('Процессор 2'))!;
-    expect(bad).toContain('--c-danger-border');
-    expect(ok).not.toContain('--c-danger-border');
+    // Рамка danger-плитки — в её открытии (до имени): до имени «Процессор 2» опасная
+    // рамка есть, до имени «Процессор 1» — нет.
+    const p1 = html.indexOf('Процессор 1');
+    const p2 = html.indexOf('Процессор 2');
+    expect(p1).toBeGreaterThan(-1);
+    expect(p2).toBeGreaterThan(-1);
+    expect(html.slice(0, p2)).toContain('--c-danger-border');
+    expect(html.slice(0, p1)).not.toContain('--c-danger-border');
   });
   it('ферма не ответила — вкладка не падает, карточки «Узлы» нет, детали узла показаны', () => {
     const html = render({ farm: null, selected: null });
@@ -244,4 +251,150 @@ describe('инвариант: ни одного ветвления по ключ
       expect(src).not.toMatch(/['"](cpu|vrm|board)['"]\s*===?\s*\w*\.?key/);
     });
   }
+});
+
+// === 7. Сборка v4: точный порядок блоков, один TempChart, обе секции закрыты при первом открытии.
+// Порядок (спека v4): Узлы → ИБП → Динамика за 15 мин → баннер → Стенд → Другие датчики
+// → Температуры (TempChart, единственный график истории) → Видеокарты → Движок.
+// Секции — sibling-острова с штатным DisclosureSection: закрыты по умолчанию, тела смонтированы.
+const UPS: HardwareUps = {
+  title: 'ИБП фермы', status: 'ok', since: null, level: 'ok', power: 'line',
+  powerLevel: 'ok', loadLevel: 'ok',
+  loadPerc: 22, loadW: 528, chargePerc: 100, batteryV: 54.1, batteryNominalV: 48,
+  inputV: 222, inputHz: 49.9, outputV: 222, tempC: 28,
+  loadSpark15m: [20, 22, null, 22], chargeSpark15m: [100, 100], inputVSpark15m: [221, 222], batteryDeciVSpark15m: [541, 540],
+};
+
+const gpu = (i: number, uuid: string): HardwareGpu => ({
+  index: i, uuid, name: 'RTX 3090', roles: [], utilPerc: 90, memUsedMb: 20000, memTotalMb: 24576,
+  memBusPerc: 81, coreTempC: 61, memTempC: 68, hotspotTempC: 75, fanPerc: 50,
+  clockMhz: 1590, clockMaxMhz: 2100, memClockMhz: 9501, powerW: 218, powerLimitW: 220,
+  throttle: { powerCap: false, thermal: false }, pstate: 'P2', pcie: { gen: 4, width: 8 },
+  busId: `0000:0${i}:00.0`, level: 'ok', levels: { mem: 'ok', core: 'ok', hotspot: 'ok' },
+});
+
+// Сценарий v4: молчащий узел ai с отчётом (баннер), ИБП настроен, 2 GPU, движок vLLM.
+const V4_FARM: HardwareFarm = {
+  at: 0, level: 'ok',
+  farmNodes: [fnode({ key: 'ai', engines: ['main'], status: 'down', since: SINCE, level: 'ok' })],
+  ups: UPS,
+};
+const V4_REPORT = report(
+  [tile({ key: 'cpu', kind: 'cpu', name: 'Процессор', tempC: 70, detail: { ccdC: [66, 68] } })],
+  { gpus: [gpu(0, 'gpu-a'), gpu(1, 'gpu-b')], status: 'stale', staleSince: SINCE },
+);
+
+function renderV4(): string {
+  return render({ farm: V4_FARM, selected: 'ai', report: V4_REPORT });
+}
+
+describe('сборка v4: порядок и состояния', () => {
+  it('точный порядок: Узлы → ИБП → Динамика за 15 мин → баннер → Стенд → Другие датчики → Температуры → Видеокарты → Движок', () => {
+    const html = renderV4();
+    const anchors = [
+      'Узлы</h3>', 'ИБП ·', 'Динамика за 15 мин', 'Узел ai не отвечает с', 'Стенд</h3>',
+      'Другие датчики', 'Температуры</h3>', 'Видеокарты</h3>', 'Движок',
+    ];
+    let prev = -1;
+    for (const a of anchors) {
+      const i = html.indexOf(a);
+      expect(i, `«${a}» не найден`).toBeGreaterThan(-1);
+      expect(i, `«${a}» раньше предыдущего блока`).toBeGreaterThan(prev);
+      prev = i;
+    }
+  });
+  it('TempChart ровно один: «Температуры</h3>» встречается один раз', () => {
+    expect((renderV4().match(/Температуры<\/h3>/g) ?? []).length).toBe(1);
+  });
+  it('обе секции закрыты при первом открытии: aria-expanded=false ровно 2', () => {
+    const html = renderV4();
+    // FarmSummaryCard: кнопка выбранного узла — true (не секция); обе свёртки — false.
+    expect((html.match(/aria-expanded="false"/g) ?? []).length).toBe(2);
+    expect((html.match(/aria-expanded="true"/g) ?? []).length).toBe(1);
+  });
+});
+
+// === 8. Секции v4: тела смонтированы, двойной клик по каждой свёртке возвращает false.
+// Окружение linkedom: createRoot + act, клики — win.Event('click', { bubbles: true })
+// (паттерн calendarSharedChip.test.ts / tasksPanelChild.test.ts). Два клика в ОДНОМ act:
+// ре-рендер между ними не flush'ится, оба обработчика видят одно замыкание open —
+// функциональный setState возвращает false, захват старого open оставляет true.
+const { window: win, document: doc } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
+Object.assign(win, {
+  matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+});
+vi.stubGlobal('window', win);
+vi.stubGlobal('document', doc);
+vi.stubGlobal('navigator', { language: 'ru-RU', onLine: true, userAgent: 'node' });
+vi.stubGlobal('HTMLElement', win.HTMLElement);
+vi.stubGlobal('Node', win.Node);
+vi.stubGlobal('Event', win.Event);
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// Монтирование v4 на linkedom (возвращает host и перечитанные кнопки секций).
+async function mountV4(): Promise<{ host: HTMLElement }> {
+  const host = doc.createElement('div');
+  doc.getElementById('root')!.appendChild(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  const props: Parameters<typeof HardwareTab>[0] = {
+    farm: V4_FARM, farmLoading: false, selected: 'ai', onSelect: () => {},
+    report: V4_REPORT, loading: false, stats, media: null, isMobile: true,
+    window: '15m', onWindowChange: () => {},
+  };
+  await act(async () => { root.render(createElement(HardwareTab, props)); });
+  return { host: host as unknown as HTMLElement };
+}
+
+// Кнопка-заголовок секции по тексту заголовка.
+function sectionButton(host: HTMLElement, title: string): HTMLElement {
+  const b = [...host.querySelectorAll('button')].find(x => (x.textContent ?? '').includes(title));
+  if (!b) throw new Error(`кнопка «${title}» не найдена`);
+  return b as unknown as HTMLElement;
+}
+
+describe('секции v4 (linkedom): тела смонтированы, быстрые клики', () => {
+  it('обе секции закрыты, тела смонтированы (display:none, строки в DOM)', async () => {
+    const { host } = await mountV4();
+    const b1 = sectionButton(host, 'Другие датчики');
+    const b2 = sectionButton(host, 'Динамика за 15 мин');
+    expect(b1.getAttribute('aria-expanded')).toBe('false');
+    expect(b2.getAttribute('aria-expanded')).toBe('false');
+    // Тела смонтированы: строка «Аптайм» (other-sensors) и ряд «Заряд, 15 минут» (ups-dynamics) в DOM.
+    expect(host.innerHTML).toContain('Аптайм');
+    expect(host.innerHTML).toContain('Заряд, 15 минут');
+    // Тела скрыты display:none.
+    const bodies = [...host.querySelectorAll('[role="region"]')];
+    expect(bodies).toHaveLength(2);
+    for (const b of bodies) expect((b.getAttribute('style') ?? '').includes('display:none')).toBe(true);
+  });
+  it('один клик раскрывает секцию: aria-expanded=true, тело display:block', async () => {
+    const { host } = await mountV4();
+    const btn = sectionButton(host, 'Другие датчики');
+    await act(async () => { btn.dispatchEvent(new win.Event('click', { bubbles: true })); });
+    expect(btn.getAttribute('aria-expanded')).toBe('true');
+    const body = [...host.querySelectorAll('[role="region"]')].filter(r => (r.getAttribute('style') ?? '').includes('display:block'));
+    expect(body).toHaveLength(1);
+  });
+  it('два быстрых клика по каждой свёртке возвращают false (функциональный setState)', async () => {
+    for (const title of ['Другие датчики', 'Динамика за 15 мин']) {
+      const { host } = await mountV4();
+      const btn = sectionButton(host, title);
+      // Оба клика в ОДНОМ act: ре-рендер между ними не flush'ится — оба обработчика
+      // видят одно замыкание open. setOpen(v => !v) вернёт false, setOpen(!open) — true.
+      await act(async () => {
+        btn.dispatchEvent(new win.Event('click', { bubbles: true }));
+        btn.dispatchEvent(new win.Event('click', { bubbles: true }));
+      });
+      expect(btn.getAttribute('aria-expanded'), title).toBe('false');
+    }
+  });
+  it('опросы при раскрытии не перезапускаются: тело не перемонтируется после кликов', async () => {
+    const { host } = await mountV4();
+    const btn = sectionButton(host, 'Динамика за 15 мин');
+    const dyn = doc.getElementById('ups-dynamics');
+    await act(async () => {
+      btn.dispatchEvent(new win.Event('click', { bubbles: true }));
+    });
+    expect(dyn === doc.getElementById('ups-dynamics')).toBe(true);
+  });
 });

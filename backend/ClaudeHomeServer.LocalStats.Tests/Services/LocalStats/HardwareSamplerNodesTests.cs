@@ -276,12 +276,12 @@ public class HardwareSamplerNodesTests
         Path.Combine(Path.GetDirectoryName(self)!, "Fixtures", "hardware-report-worker-master.json");
 
     // Из ответа убирается ровно то, что добавилось к эталону Ш2c: три поля узла (node, uptimeS,
-    // cpuLoadPerc) и плитка+ряд платы. Остальное сравнивается строка в строку — порядок ключей и
-    // экранирование при этом не меняются (JsonNode хранит то, что было в тексте).
+    // cpuLoadPerc), история загрузки CPU и плитка+ряд платы. Остальное сравнивается строка в
+    // строку — порядок ключей и экранирование при этом не меняются (JsonNode хранит то, что было).
     private static string StripNewFields(string json)
     {
         var root = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
-        foreach (var key in new[] { "node", "uptimeS", "cpuLoadPerc" }) root.Remove(key);
+        foreach (var key in new[] { "node", "uptimeS", "cpuLoadPerc", "cpuLoadSpark15m" }) root.Remove(key);
         foreach (var arr in new[] { root["nodes"]!.AsArray(), root["series"]!.AsArray() })
             for (var i = arr.Count - 1; i >= 0; i--)
                 if (arr[i]!["key"]!.GetValue<string>() == "board") arr.RemoveAt(i);

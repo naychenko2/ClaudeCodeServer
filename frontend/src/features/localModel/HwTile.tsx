@@ -25,12 +25,14 @@ const ICONS: Record<string, ComponentType<{ size?: number; strokeWidth?: number;
 };
 
 // Тон плитки по level: фон/рамка/точка/цвет значения. stale — данные устарели:
-// без окраски (C.textMuted), точка C.track, график обрывается.
+// без окраски (C.textMuted), точка C.track, график обрывается. level null — окраска
+// не применяется: нейтральный тон без зелёной точки (точка C.track).
 function tone(level: HwTileView['level'], noData: boolean, stale: boolean): {
   bg: string; border: string; dot: string; value: string;
 } {
   if (stale) return { bg: C.bgWhite, border: C.borderLight, dot: C.track, value: C.textMuted };
   if (noData) return { bg: C.bgWhite, border: C.borderLight, dot: C.track, value: C.textMuted };
+  if (level == null) return { bg: C.bgWhite, border: C.borderLight, dot: C.track, value: C.textHeading };
   switch (level) {
     case 'danger': return { bg: C.dangerBg, border: C.dangerBorder, dot: C.danger, value: C.dangerText };
     case 'warn': return { bg: C.warningBg, border: C.warning, dot: C.warning, value: C.warningText };

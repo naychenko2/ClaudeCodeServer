@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>«Стенды» · три уровня показателей и компактный ИБП · макет v4</title>
+<!--
+  МАКЕТ, не код продукта. Реализация: docs/mockups/, синтетические данные.
+  Привязка: featureId=95767ea1-dcfd-406a-abdb-caf3e34417a0; задача Д1=924d75bb-89ff-4cee-a014-c4c7fcfe5c42;
+  архитектурный разрез А1=a1a32403-6ad9-4279-b6a9-74e2e2201442; stepRef не задан (роль задачи — design).
+  Основание: HardwareTab.tsx, UpsCard.tsx, FarmSummaryCard.tsx, HwTile.tsx, hardwareFormat.ts,
+  hardwareTypes.ts, TempChart.tsx, DisclosureSection.tsx. v3 не заменяется.
+  Цвета ниже — значения C.* из theme.css, в разметке используются только var(--c-*).
+  Размеры соответствуют FS/SP/R/SHADOW; контролы обозначают InlineSegmented, PressableArea,
+  DisclosureSection, Dot, Badge, Notice. Обе DisclosureSection закрыты при первом открытии.
+-->
+<style>
+[data-theme="light"] {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5; --c-rose:#B0527C;
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-press:inset 0 1px 3px rgba(60,50,35,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-track:#453F37;
+  --c-success:#7CB86A; --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33; --c-rose:#C76B96;
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.22);
+  --shadow-press:inset 0 1px 3px rgba(0,0,0,.35);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; min-width:0; }
+body { font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+button:active { box-shadow:var(--shadow-press); }
+
+/* Обвязка макета, не продукт. */
+.bar { position:sticky; top:0; z-index:50; display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px;
+  padding:10px 20px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); color:var(--c-text-heading); }
+.bar h1 { margin:0; font-size:15px; font-weight:600; flex:1 1 300px; }
+.control { display:flex; align-items:center; gap:6px; min-width:0; }
+.control > label { font-size:11px; color:var(--c-text-secondary); }
+.tog { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-inset); border-radius:10px; }
+.tog button { min-height:28px; padding:3px 9px; border:0; border-radius:8px; background:transparent; color:var(--c-text-secondary); cursor:pointer; font-size:12px; }
+.tog button.on { background:var(--c-bg-card); color:var(--c-text-heading); font-weight:600; }
+.cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr)); align-items:start; }
+.col { min-width:0; padding:24px; background:var(--c-bg-main); color:var(--c-text-primary); }
+.col h2 { margin:0 0 4px; font-family:"PT Serif",Georgia,serif; font-size:20px; color:var(--c-text-heading); }
+.note,.pcap { color:var(--c-text-secondary); font-size:12px; }
+.note { margin:0 0 16px; max-width:76ch; }
+.pcap { margin:8px 2px 0; max-width:440px; }
+.mock { display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:0; }
+
+/* Панель и существующие Card/Island. */
+.isl { width:100%; min-width:0; overflow:hidden; background:var(--c-bg-panel); border:1px solid var(--c-border-light);
+  border-radius:14px; box-shadow:var(--shadow-island); color:var(--c-text-primary); }
+.isl.sheet { border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); }
+.hd { min-height:40px; display:flex; align-items:center; gap:8px; padding:6px 12px; background:var(--c-bg-inset); }
+.isl.sheet .hd { background:transparent; }
+.hd .x { margin-left:auto; color:var(--c-text-muted); }
+.grab { width:36px; height:4px; margin:8px auto 0; border-radius:999px; background:var(--c-track); }
+.body { min-width:0; padding:12px; display:flex; flex-direction:column; gap:12px; }
+.seg { display:inline-flex; flex-wrap:wrap; max-width:100%; gap:2px; padding:2px; background:var(--c-bg-inset); border-radius:10px; }
+.seg button { min-height:26px; padding:2px 8px; border:0; border-radius:8px; background:transparent; color:var(--c-text-secondary); cursor:pointer; font-size:12px; white-space:nowrap; }
+.seg button.on { background:var(--c-accent-light); color:var(--c-accent); font-weight:600; }
+.seg.windows button.on { background:var(--c-bg-card); color:var(--c-text-heading); }
+.card { min-width:0; padding:12px; background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:12px; }
+.ch { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; min-width:0; margin-bottom:8px; }
+.ch h3 { flex:1 1 auto; min-width:0; margin:0; color:var(--c-text-secondary); font-size:11px; font-weight:700;
+  letter-spacing:.06em; text-transform:uppercase; }
+.summary { margin:-2px 0 8px; color:var(--c-text-secondary); font-size:12px; overflow-wrap:anywhere; }
+.summary b { color:var(--c-text-heading); font-family:"JetBrains Mono",monospace; }
+.pill { display:inline-flex; align-items:center; max-width:100%; padding:1px 8px; border-radius:999px; font-size:11px; font-weight:600; line-height:1.5; }
+.p-ok,.p-none { background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.p-warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.p-danger { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.dot { width:8px; height:8px; flex:none; display:inline-block; border-radius:50%; background:var(--c-track); }
+.d-ok { background:var(--c-success); } .d-warn { background:var(--c-warning); } .d-danger { background:var(--c-danger); }
+.d-down { background:var(--c-track); box-shadow:inset 0 0 0 2px var(--c-text-muted); }
+.na { color:var(--c-text-muted)!important; font-family:"Hanken Grotesk",sans-serif!important; font-size:12px!important; font-style:italic; font-weight:400!important; }
+.mono { font-family:"JetBrains Mono",monospace; }
+
+/* Карточка «Узлы»: поведение FarmSummaryCard сохранено. */
+.farm { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.farm.list { grid-template-columns:1fr; gap:4px; }
+.nc { min-width:0; min-height:44px; padding:8px; text-align:left; color:inherit; background:var(--c-bg-white);
+  border:1px solid var(--c-border-light); border-radius:10px; cursor:pointer; }
+.nc:hover { background:var(--c-bg-selected); }
+.nc.sel { background:var(--c-accent-light); border-color:var(--c-accent-muted); }
+.nc.warn { border-color:var(--c-warning); } .nc.danger { border-color:var(--c-danger-border); }
+.nh { display:flex; align-items:center; gap:6px; min-width:0; color:var(--c-text-heading); font:700 12px "JetBrains Mono",monospace; }
+.role,.what { overflow:hidden; color:var(--c-text-muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.what { color:var(--c-text-secondary); }
+.big { margin-top:4px; overflow:hidden; color:var(--c-text-heading); font:600 18px/1.25 "JetBrains Mono",monospace; text-overflow:ellipsis; white-space:nowrap; }
+.big.warn { color:var(--c-warning-text); } .big.danger { color:var(--c-danger-text); }
+.eng { margin-top:4px; padding-top:4px; overflow:hidden; border-top:1px solid var(--c-border-light); color:var(--c-text-muted); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.farm.list .nc { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:0 8px; padding:4px 8px; }
+.farm.list .big { grid-column:2; grid-row:1 / span 2; margin:0; font-size:16px; text-align:right; }
+.farm.list .eng { grid-column:1 / span 2; }
+
+/* Уровень 1: крупные KPI. CPU/RAM без level — никакого зелёного светофора. */
+.kpis { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.kpi { min-width:0; padding:12px; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; }
+.kpi-label { display:flex; align-items:center; gap:6px; min-width:0; color:var(--c-text-secondary); font-size:11px; font-weight:600; }
+.kpi-label span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.kpi-value { margin-top:4px; color:var(--c-text-heading); font:600 28px/1.15 "JetBrains Mono",monospace; }
+.kpi-detail { min-width:0; margin-top:4px; color:var(--c-text-secondary); font-size:11px; overflow-wrap:anywhere; }
+.kpi-detail b { color:var(--c-text-primary); font-family:"JetBrains Mono",monospace; }
+.spark { display:block; width:100%; height:24px; margin-top:4px; overflow:visible; }
+.spark-na { height:24px; margin-top:4px; border-radius:4px; background:var(--c-bg-inset); }
+
+/* Уровень 2: текущие температуры, история только в TempChart. */
+.level-caption { display:flex; flex-wrap:wrap; gap:2px 8px; margin:12px 0 6px; color:var(--c-text-heading); font-size:11px; font-weight:600; }
+.level-caption span { color:var(--c-text-muted); font-weight:400; }
+.temps { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.temp { min-width:0; padding:8px; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; }
+.temp.warn { background:var(--c-warning-bg); border-color:var(--c-warning); }
+.temp.danger { background:var(--c-danger-bg); border-color:var(--c-danger-border); }
+.temp-name { display:flex; align-items:center; gap:6px; min-width:0; color:var(--c-text-secondary); font-size:11px; font-weight:600; }
+.temp-name span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.temp-value { margin-top:2px; color:var(--c-text-heading); font:600 20px/1.2 "JetBrains Mono",monospace; }
+.temp.warn .temp-value { color:var(--c-warning-text); } .temp.danger .temp-value { color:var(--c-danger-text); }
+.temp-detail { margin-top:2px; color:var(--c-text-secondary); font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
+.temp-detail b { color:var(--c-text-primary); font-family:"JetBrains Mono",monospace; }
+
+/* DisclosureSection: отдельный sibling, 40 px десктоп / 44 px мобильный. */
+.disclosure { min-width:0; overflow:hidden; background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:12px; }
+.disclosure-head { width:100%; min-width:0; min-height:40px; display:flex; align-items:center; gap:8px; padding:8px 12px;
+  border:0; background:transparent; color:var(--c-text-primary); text-align:left; cursor:pointer; }
+.disclosure-head:hover { background:var(--c-bg-selected); }
+.sheet .disclosure-head { min-height:44px; }
+.disclosure-title { flex:none; color:var(--c-text-heading); font-size:12px; font-weight:600; }
+.disclosure-meta { flex:1 1 auto; min-width:0; color:var(--c-text-muted); font-size:11px; white-space:normal; overflow-wrap:break-word; }
+.disclosure-meta.alarm { color:var(--c-warning-text); font-weight:600; }
+.chev { flex:none; margin-left:auto; color:var(--c-text-muted); transition:transform .15s; }
+.disclosure-head[aria-expanded="true"] .chev { transform:rotate(180deg); }
+.disclosure-body { min-width:0; padding:0 12px 12px; border-top:1px solid var(--c-border-light); }
+
+/* Уровень 3: компактные строки, не HwTile. */
+.sensor-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:1px 8px; min-width:0; padding:8px 0; border-bottom:1px solid var(--c-border-light); }
+.sensor-row:last-of-type { border-bottom:0; }
+.sensor-name { display:flex; align-items:center; gap:6px; min-width:0; color:var(--c-text-secondary); font-size:11px; }
+.sensor-name > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sensor-value { color:var(--c-text-heading); font:600 12px "JetBrains Mono",monospace; text-align:right; white-space:nowrap; }
+.sensor-value.warn { color:var(--c-warning-text); } .sensor-value.danger { color:var(--c-danger-text); }
+.sensor-detail { min-width:0; color:var(--c-text-muted); font-size:10px; overflow-wrap:anywhere; }
+.sensor-state { color:var(--c-text-muted); font-size:10px; text-align:right; }
+.sensor-state.warn { color:var(--c-warning-text); } .sensor-state.danger { color:var(--c-danger-text); }
+.nodata-count { padding-top:8px; color:var(--c-text-muted); font-size:11px; font-style:italic; }
+
+/* ИБП: одна KPI, одна сводка и одна полоса из трёх ячеек. */
+.ups-kpi { margin-bottom:8px; }
+.ups-kpi.low { background:var(--c-danger-bg); border-color:var(--c-danger-border); }
+.ups-kpi.low .kpi-value { color:var(--c-danger-text); }
+.ups-cells { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); min-width:0; overflow:hidden;
+  background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; }
+.ups-cell { min-width:0; padding:8px; border-left:1px solid var(--c-border-light); }
+.ups-cell:first-child { border-left:0; }
+.ups-cell-label { color:var(--c-text-muted); font-size:10px; }
+.ups-cell-value { margin-top:2px; color:var(--c-text-heading); font:600 16px/1.25 "JetBrains Mono",monospace; overflow-wrap:anywhere; }
+.ups-cell-value.warn { color:var(--c-warning-text); } .ups-cell-value.danger { color:var(--c-danger-text); }
+.ups-cell-detail { margin-top:2px; color:var(--c-text-secondary); font-size:10px; overflow-wrap:anywhere; }
+.dynamics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; padding-top:12px; }
+.dynamic { min-width:0; }
+.dynamic-label { color:var(--c-text-secondary); font-size:11px; }
+.dynamic .spark { height:32px; }
+
+/* Notice и самостоятельный TempChart. */
+.banner { display:flex; align-items:flex-start; gap:8px; padding:8px 12px; border-radius:10px;
+  background:var(--c-warning-bg); color:var(--c-warning-text); font-size:12px; }
+.temp-head { align-items:flex-start; }
+.chips { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
+.chip { min-height:28px; display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border:1px solid var(--c-border);
+  border-radius:999px; background:transparent; color:var(--c-text-secondary); cursor:pointer; font-size:11px; white-space:nowrap; }
+.chip.on { border-color:var(--c-accent-muted); background:var(--c-accent-light); color:var(--c-text-heading); font-weight:600; }
+.chip:disabled { cursor:not-allowed; opacity:.45; }
+.chip i { width:10px; height:3px; border-radius:2px; background:var(--chip-color); }
+.chart { display:block; width:100%; height:auto; min-width:0; }
+.chart-times { display:flex; justify-content:space-between; padding-right:24px; color:var(--c-text-muted); font:10px "JetBrains Mono",monospace; }
+.legend { display:flex; flex-wrap:wrap; gap:2px 12px; margin-top:4px; color:var(--c-text-secondary); font-size:11px; }
+.legend b { color:var(--c-text-heading); font-family:"JetBrains Mono",monospace; }
+
+/* stale: последние значения видны, но не выдают себя за живую норму/тревогу. */
+.stale .kpi-value,.stale .temp-value,.stale .sensor-value,.stale .ups-cell-value,.stale .big { color:var(--c-text-muted)!important; }
+.stale .kpi,.stale .temp,.stale .ups-kpi { background:var(--c-bg-card)!important; border-color:var(--c-border-light)!important; }
+.stale .dot { background:var(--c-track)!important; box-shadow:none; }
+.stale .sensor-state { color:var(--c-text-muted)!important; }
+
+.after { padding:10px 12px; color:var(--c-text-muted); font-size:11px; }
+@media (max-width:600px) {
+  .bar { padding:8px; gap:6px 8px; } .bar h1 { flex-basis:100%; }
+  .col { padding:16px 4px; } .control { align-items:flex-start; }
+}
+@media (prefers-reduced-motion:reduce) { .chev { transition:none; } }
+</style>
+</head>
+<body>
+<div class="bar" data-theme="light">
+  <h1>«Стенды» · три уровня показателей · макет v4</h1>
+  <span class="control"><label>Состояние</label><span class="tog" id="tState"></span></span>
+  <span class="control"><label>Тема</label><span class="tog" id="tTheme"></span></span>
+  <span class="control"><label>Ширина</label><span class="tog" id="tWidth"></span></span>
+</div>
+<div class="cols" id="root"></div>
+<script>
+// Иконки — контуры lucide; в продукте использовать lucide-react и ICON_SIZE/ICON_STROKE.
+const ICONS = {
+  Cpu:'<path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
+  Memory:'<path d="M12 12v-2"/><path d="M12 18v-2"/><path d="M16 12v-2"/><path d="M16 18v-2"/><path d="M2 11h1.5"/><path d="M20 18v-2"/><path d="M20.5 11H22"/><path d="M4 18v-2"/><path d="M8 12v-2"/><path d="M8 18v-2"/><rect x="2" y="6" width="20" height="10" rx="2"/>',
+  Battery:'<rect x="2" y="6" width="16" height="12" rx="2"/><path d="M22 13v-2"/><path d="M6 10v4"/><path d="M10 10v4"/>',
+  Chevron:'<path d="m6 9 6 6 6-6"/>', Alert:'<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  Message:'<path d="M22 17a2 2 0 0 1-2 2H6.8a2 2 0 0 0-1.4.6l-2.2 2.2A.7.7 0 0 1 2 21.3V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="M7 11h10"/><path d="M7 15h6"/><path d="M7 7h8"/>',
+  Media:'<path d="m12.3 6.5 3 4"/><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m6.2 5.3 3.1 3.9"/>'
+};
+const icon = (name,size=14,cls='') => `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+const clone = o => JSON.parse(JSON.stringify(o));
+const nd = '<span class="na">нет данных</span>';
+const noSensor = '<span class="na">датчика нет</span>';
+const val = (v,unit='',dec=false) => v == null ? nd : `${dec ? String(Math.round(v*10)/10).replace('.',',') : Math.round(v)}${unit ? ` ${unit}` : ''}`;
+const detailVal = (v,unit='°C') => v == null ? '<span class="na">нет данных</span>' : `<b>${Math.round(v)} ${unit}</b>`;
+const pill = (label,level='none',status=false) => `<span class="pill p-${level}"${status?' role="status"':''}>${label}</span>`;
+const dot = level => `<span class="dot d-${level}" aria-hidden="true"></span>`;
+
+const detailsBase = [
+  { key:'vrm',name:'VRM',value:64,unit:'°C',detail:'цепи питания на плате',level:'ok',sensor:'ok' },
+  { key:'board',name:'Плата',value:47,unit:'°C',detail:'периферия 39 °C',level:'ok',sensor:'ok' },
+  { key:'chipset',name:'Чипсет',value:58,unit:'°C',detail:'вентилятор 1 240 об/мин',level:'ok',sensor:'ok' },
+  { key:'water',name:'Вода',value:31,unit:'°C',detail:'в резервуаре',level:'ok',sensor:'ok' },
+  { key:'system',name:'Системный диск',value:44,unit:'°C',detail:'заполнен 38 %',level:'ok',sensor:'ok' },
+  { key:'cache',name:'Диск кэша',value:71,unit:'%',detail:'занято 682 из 960 ГБ',level:'ok',sensor:'ok',spark:true },
+  { key:'fans',name:'Вентиляторы корпуса',value:'820 и 760 об/мин',unit:'',detail:'передний и задний',level:'none',sensor:'ok' },
+  { key:'uptime',name:'Аптайм',value:'3 д 19 ч',unit:'',detail:'с последней перезагрузки',level:'none',sensor:'ok' }
+];
+const NODES = {
+  worker:{ key:'worker',roles:'CCS',level:'ok',status:'ok',hotName:'Плата',hot:44,cpuLoad:18,ram:{perc:33,used:21,total:64},
+    cpu:{temp:null,level:'none',sensor:'none',ccd:[]},gpus:[],eng:'ходы 3 · ждут 2',details:clone(detailsBase).filter(d=>!['water','cache'].includes(d.key)) },
+  ai:{ key:'ai',roles:'LLM',level:'ok',status:'ok',hotName:'Карта 2',hot:78,cpuLoad:9,ram:{perc:45,used:58,total:128},
+    cpu:{temp:62,level:'ok',sensor:'ok',ccd:[59,61]},gpus:[
+      {index:0,mem:68,core:61,hot:75,level:'ok',util:100,used:'23,5',total:24},
+      {index:1,mem:78,core:64,hot:76,level:'ok',util:99,used:'23,5',total:24}],eng:'96 ток/с · KV 61 %',details:clone(detailsBase) },
+  video:{ key:'video',roles:'медиа и LLM',level:'ok',status:'ok',hotName:'Карта 1',hot:72,cpuLoad:31,ram:{perc:63,used:40,total:64},
+    cpu:{temp:55,level:'ok',sensor:'ok',ccd:[54]},gpus:[{index:0,mem:72,core:66,hot:79,level:'ok',util:87,used:'19,3',total:24}],
+    eng:'очередь 2 · идёт 1',details:clone(detailsBase).map(d=>d.key==='cache'?{...d,value:74,detail:'занято 710 из 960 ГБ'}:d) }
+};
+const STATES = {
+  norm:{label:'Норма',caption:'Живые узлы, заряд 100 % и питание от сети. CPU и RAM без уровня остаются нейтральными, а не зелёными.'},
+  danger:{label:'Тревога',caption:'Красный уровень — память карты 2; жёлтые — VRM и диск кэша. Их имена и значения видны даже в закрытой свёртке.'},
+  battery:{label:'От батареи',caption:'ИБП перешёл на батарею: плашка меняется по powerLevel, главная KPI остаётся фиксированным зарядом.'},
+  overload:{label:'Перегрузка',caption:'Плашка «перегрузка» и красная нагрузка приходят из loadLevel; новых порогов на фронте нет.'},
+  stale:{label:'Молчит',caption:'Узел video и ИБП молчат: последние значения приглушены, уровни прошлого снимка не красят их в зелёный или красный.'},
+  missing:{label:'0 и нет данных',caption:'Нулевая загрузка CPU и заряд 0 % — измеренные значения. Пропуски подписаны «нет данных» и не заменяются нулём.'}
+};
+const S = { state:'danger',theme:'both',width:380,node:'ai',detailsOpen:false,upsOpen:false,window:'15m',families:['mem'] };
+
+function makeData() {
+  const nodes = clone(NODES);
+  let ups = { title:'APC Back-UPS',status:'ok',power:'line',pill:'от сети',pillLevel:'ok',charge:100,load:31,loadW:212,loadLevel:'ok',
+    input:230,inputHz:50,batteryV:27.2,batteryNominal:24,output:230,temp:28,powerLevel:'ok',summary:'внутри 28 °C' };
+  if (S.state === 'danger') {
+    const n = nodes.ai, g = n.gpus[1]; Object.assign(g,{mem:106,core:93,hot:101,level:'danger'});
+    Object.assign(n,{level:'danger',hotName:'Карта 2',hot:106,eng:'41 ток/с · KV 83 %'});
+    n.details.find(d=>d.key==='vrm').value=88; n.details.find(d=>d.key==='vrm').level='warn';
+    n.details.find(d=>d.key==='cache').value=91; n.details.find(d=>d.key==='cache').level='warn'; n.details.find(d=>d.key==='cache').detail='занято 874 из 960 ГБ';
+    nodes.video.level='warn'; nodes.video.hotName='Диск кэша'; nodes.video.hot=91;
+    nodes.video.details.find(d=>d.key==='cache').value=91; nodes.video.details.find(d=>d.key==='cache').level='warn';
+    ups = {...ups,power:'lowBattery',pill:'батарея садится',pillLevel:'danger',charge:18,load:78,loadW:538,loadLevel:'warn',input:0,batteryV:21.4,output:207,powerLevel:'danger',summary:'выход 207 В · внутри 34 °C'};
+  } else if (S.state === 'battery') {
+    ups = {...ups,power:'battery',pill:'от батареи',pillLevel:'warn',charge:64,input:0,batteryV:24.8,output:218,powerLevel:'warn',summary:'выход 218 В · внутри 30 °C'};
+  } else if (S.state === 'overload') {
+    ups = {...ups,pill:'перегрузка',pillLevel:'danger',load:112,loadW:772,loadLevel:'danger'};
+  } else if (S.state === 'stale') {
+    Object.assign(nodes.video,{status:'down',since:'14:32:10'});
+    ups = {...ups,status:'down',pill:'ИБП молчит',pillLevel:'warn',summary:'не отвечает с 14:32:10 · последние данные'};
+  } else if (S.state === 'missing') {
+    nodes.ai.cpuLoad=0; nodes.ai.cpu.temp=null; nodes.ai.cpu.level='none'; nodes.ai.cpu.sensor='nodata'; nodes.ai.cpu.ccd=[];
+    nodes.ai.gpus[0].hot=null;
+    nodes.ai.details.find(d=>d.key==='water').value=null; nodes.ai.details.find(d=>d.key==='water').sensor='nodata'; nodes.ai.details.find(d=>d.key==='water').level='none';
+    nodes.ai.details.find(d=>d.key==='system').value=null; nodes.ai.details.find(d=>d.key==='system').sensor='nodata'; nodes.ai.details.find(d=>d.key==='system').level='none';
+    ups = {...ups,power:'lowBattery',pill:'батарея садится',pillLevel:'danger',charge:0,input:null,inputHz:null,batteryV:19.8,output:198,powerLevel:'danger',summary:'выход 198 В · внутри 32 °C'};
+  }
+  return {nodes,ups};
+}
+
+function hist(cur,seed=1,stale=false,gap=false) {
+  const n=90, cut=77;
+  return Array.from({length:n},(_,i)=>{
+    if (stale && i>=cut) return null;
+    if (gap && (i===24 || i===25 || i===58)) return null;
+    const f=x=>1.6*Math.sin(x/10+seed)+.8*Math.sin(x/2.3+seed*1.7);
+    return Math.max(0,cur+f(i)-f(stale?cut-1:n-1));
+  });
+}
+function spark(values,color='var(--c-text-muted)',label='Динамика за 15 минут') {
+  const vs=values.filter(v=>v!=null); if (!vs.length) return '<div class="spark-na" aria-label="Нет данных"></div>';
+  const lo=Math.min(...vs)-1,hi=Math.max(...vs)+1,W=120,H=24,X=i=>i*W/(values.length-1),Y=v=>H-2-(v-lo)/(hi-lo||1)*(H-4);
+  const segs=[]; let cur=[];
+  values.forEach((v,i)=>{ if(v==null){if(cur.length){segs.push(cur);cur=[];}}else cur.push(`${X(i).toFixed(1)},${Y(v).toFixed(1)}`); });
+  if(cur.length)segs.push(cur);
+  let li=0; values.forEach((v,i)=>{if(v!=null)li=i;});
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${label}">
+    ${segs.map(s=>`<polyline points="${s.join(' ')}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`).join('')}
+    <circle cx="${X(li)}" cy="${Y(values[li])}" r="2.5" fill="${color}" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function farmCard(nodes,theme) {
+  const list=S.width<360, silent=Object.values(nodes).filter(n=>n.status!=='ok').length;
+  const farmLevel=nodes.ai.level==='danger'?'danger':Object.values(nodes).some(n=>n.level==='warn')?'warn':'ok';
+  const p=silent&&farmLevel!=='danger'?pill('узел молчит','warn'):pill(farmLevel==='danger'?'есть опасность':farmLevel==='warn'?'есть горячие узлы':'всё в норме',farmLevel);
+  const cards=Object.values(nodes).map(n=>{
+    const off=n.status!=='ok', selected=S.node===n.key, lv=off?'down':n.level;
+    const value=off?'<span class="na">не отвечает</span>':n.hot==null?nd:`${Math.round(n.hot)} ${n.hotName==='Диск кэша'?'%':'°C'}`;
+    return `<button type="button" class="nc ${selected?'sel':''} ${off?'':n.level} ${off?'stale':''}" data-node="${n.key}" aria-expanded="${selected}" aria-label="Узел ${n.key}: ${off?`не отвечает с ${n.since}`:n.roles}">
+      <div class="nh">${dot(lv)}<span>${n.key}</span></div><div class="role">${n.roles}</div>
+      <div class="big ${off?'':n.level}">${value}</div><div class="what">${off?`с ${n.since}`:n.hotName.toLowerCase()}</div>
+      <div class="eng">${off?'данные устарели':n.eng}</div></button>`;
+  }).join('');
+  const sum=farmLevel==='danger'?'Опасно — <b>ai</b> · карта 2: 106 °C':silent?'Живые узлы в норме · 1 узел молчит':'Ближе всех к пределу — <b>ai</b> · карта 2: 78 °C';
+  return `<section class="card" aria-labelledby="${theme}-nodes-title"><div class="ch"><h3 id="${theme}-nodes-title">Узлы</h3>${p}</div><div class="summary">${sum}</div>
+    <div class="farm ${list?'list':''}" role="group" aria-label="Узлы фермы">${cards}</div></section>`;
+}
+function upsDataCard(ups,theme) {
+  const stale=ups.status!=='ok', low=ups.power==='lowBattery'&&!stale;
+  const loadLv=stale?'none':ups.loadLevel, powerLv=stale?'none':ups.powerLevel;
+  return `<section class="card ${stale?'stale':''}" aria-labelledby="${theme}-ups-title">
+    <div class="ch"><h3 id="${theme}-ups-title">ИБП · ${ups.title}</h3>${pill(ups.pill,ups.pillLevel,true)}</div>
+    <div class="summary">${ups.summary}</div>
+    <div class="kpi ups-kpi ${low?'low':''}" data-ups-kpi="charge"><div class="kpi-label">${icon('Battery')}<span>Заряд</span></div>
+      <div class="kpi-value">${val(ups.charge,'%')}</div><div class="kpi-detail">по напряжению батареи</div></div>
+    <div class="ups-cells">
+      <div class="ups-cell"><div class="ups-cell-label">Нагрузка</div><div class="ups-cell-value ${loadLv}">${val(ups.load,'%')}</div><div class="ups-cell-detail">${ups.loadW==null?nd:`≈ ${ups.loadW} Вт`}</div></div>
+      <div class="ups-cell"><div class="ups-cell-label">Сеть</div><div class="ups-cell-value ${ups.power!=='line'?powerLv:''}">${val(ups.input,'В')}</div><div class="ups-cell-detail">${ups.inputHz==null?nd:`${ups.inputHz} Гц`}</div></div>
+      <div class="ups-cell"><div class="ups-cell-label">Батарея</div><div class="ups-cell-value">${val(ups.batteryV,'В',true)}</div><div class="ups-cell-detail">номинал ${ups.batteryNominal} В</div></div>
+    </div></section>`;
+}
+function disclosure(key,title,meta,body,theme,alarm=false) {
+  const open=key==='details'?S.detailsOpen:S.upsOpen, hid=`${theme}-${key}-head`,bid=`${theme}-${key}-body`;
+  return `<section class="disclosure"><button type="button" class="disclosure-head" id="${hid}" data-disclosure="${key}" aria-expanded="${open}" aria-controls="${bid}">
+    <span class="disclosure-title">${title}</span><span class="disclosure-meta ${alarm?'alarm':''}">${meta}</span>${icon('Chevron',14,'chev')}</button>
+    <div class="disclosure-body" id="${bid}" data-body="${key}" role="region" aria-labelledby="${hid}" style="display:${open?'block':'none'}">${body}</div></section>`;
+}
+function upsDynamics(ups,theme) {
+  const stale=ups.status!=='ok', c=stale?'var(--c-text-muted)':'var(--c-accent)';
+  const items=[
+    ['Заряд',ups.charge==null?Array(90).fill(null):hist(ups.charge,1,stale)],
+    ['Нагрузка',ups.load==null?Array(90).fill(null):hist(ups.load,2,stale)],
+    ['Вход',ups.input==null?Array(90).fill(null):hist(ups.input,3,stale)],
+    ['Батарея',ups.batteryV==null?Array(90).fill(null):hist(ups.batteryV,4,stale)]
+  ];
+  const body=`<div class="dynamics">${items.map(([label,points])=>`<div class="dynamic"><div class="dynamic-label">${label}</div>${spark(points,c,`${label}, 15 минут`)}</div>`).join('')}</div>`;
+  return disclosure('ups','Динамика за 15 мин','4 графика · 90 точек · шаг 10 с',body,theme);
+}
+function kpiCpu(n,stale) {
+  return `<div class="kpi" data-kpi="cpu"><div class="kpi-label">${icon('Cpu')}<span>Загрузка CPU</span></div>
+    <div class="kpi-value">${val(n.cpuLoad,'%')}</div><div class="kpi-detail">текущий снимок · все ядра</div></div>`;
+}
+function kpiRam(n,stale) {
+  const r=n.ram, color=stale?'var(--c-text-muted)':'var(--c-info)';
+  return `<div class="kpi" data-kpi="ram"><div class="kpi-label">${icon('Memory')}<span>Память</span></div>
+    <div class="kpi-value">${val(r.perc,'%')}</div><div class="kpi-detail"><b>${r.used} из ${r.total} ГБ</b> · занято</div>
+    ${r.perc==null?'<div class="spark-na"></div>':spark(hist(r.perc,4,stale,true),color,'Занятость памяти за 15 минут')}</div>`;
+}
+function tempTiles(n,stale) {
+  const gpu=n.gpus.map(g=>{
+    const useMem=g.mem!=null, value=useMem?g.mem:g.core, lv=stale?'none':g.level;
+    return `<div class="temp ${stale?'':g.level}" data-temp="gpu-${g.index}"><div class="temp-name">${dot(stale?'none':g.level)}<span>Карта ${g.index+1}</span></div>
+      <div class="temp-value">${val(value,'°C')}</div><div class="temp-detail">${useMem?'память':'ядро · память: нет данных'}<br>ядро ${detailVal(g.core)} · гор. точка ${detailVal(g.hot)}</div></div>`;
+  }).join('');
+  const c=n.cpu, lv=stale?'none':c.level;
+  const cpu=`<div class="temp ${stale?'':c.level}" data-temp="cpu"><div class="temp-name">${dot(lv)}<span>Процессор</span></div>
+    <div class="temp-value">${c.temp==null?(c.sensor==='none'?noSensor:nd):val(c.temp,'°C')}</div>
+    <div class="temp-detail">общая${c.ccd.length?`<br>кристаллы ${c.ccd.map(x=>`<b>${Math.round(x)} °C</b>`).join(' и ')}`:''}</div></div>`;
+  return gpu+cpu;
+}
+function sensorValue(d) {
+  if(d.value==null)return d.sensor==='none'?noSensor:nd;
+  return typeof d.value==='number'?val(d.value,d.unit):d.value;
+}
+const LEVEL_TEXT={ok:'норма',warn:'горячо',danger:'опасность',none:'—'};
+function otherDetails(n,theme,stale) {
+  const count=n.details.filter(d=>d.sensor==='nodata').length+(n.cpu.sensor==='nodata'?1:0);
+  const alarms=n.details.filter(d=>['warn','danger'].includes(d.level)).map(d=>`${d.name} ${typeof d.value==='number'?`${Math.round(d.value)} ${d.unit}`:d.value}`);
+  const meta=stale?'последние данные · уровни не окрашены':alarms.length?alarms.join(' · '):`${n.details.length} показателей${count?` · ${count} без данных`:''}`;
+  const rows=n.details.map(d=>{
+    const lv=stale?'none':d.level, state=d.value==null?(d.sensor==='none'?'датчика нет':'нет данных'):stale?'последнее значение':LEVEL_TEXT[d.level];
+    return `<div class="sensor-row" data-sensor="${d.key}"><div class="sensor-name">${d.level==='none'?'':dot(lv)}<span>${d.name}</span></div>
+      <div class="sensor-value ${lv}">${sensorValue(d)}</div><div class="sensor-detail">${d.detail}</div><div class="sensor-state ${lv}">${state}</div>
+      ${d.spark&&d.value!=null?`<div style="grid-column:1 / span 2">${spark(hist(d.value,6,stale,true),stale?'var(--c-text-muted)':d.level==='warn'?'var(--c-warning)':'var(--c-info)','Заполненность диска кэша за 15 минут')}</div>`:''}</div>`;
+  }).join('');
+  const body=`${rows}${count?`<div class="nodata-count">${count===1?'1 показатель':count<5?`${count} показателя`:`${count} показателей`} без данных</div>`:''}`;
+  return disclosure('details','Другие датчики',meta,body,theme,alarms.length>0&&!stale);
+}
+function standCard(n,theme) {
+  const stale=n.status!=='ok', p=stale?pill('узел молчит','warn'):n.level==='danger'?pill('есть опасность','danger'):n.level==='warn'?pill('есть горячие узлы','warn'):pill('всё в норме','ok');
+  const sum=stale?'нет свежих данных':n.level==='danger'?'Ближе всех к пределу — карта 2: <b>106 °C</b>, опасно с <b>105 °C</b>':'Горячее всех — карта 2: <b>78 °C</b>';
+  return `<section class="card ${stale?'stale':''}" aria-labelledby="${theme}-stand-title"><div class="ch"><h3 id="${theme}-stand-title">Стенд</h3>${p}</div>
+    <div class="summary">${sum}</div><div class="kpis">${kpiCpu(n,stale)}${kpiRam(n,stale)}</div>
+    <div class="level-caption">Температуры сейчас <span>история — в графике ниже</span></div><div class="temps">${tempTiles(n,stale)}</div></section>`;
+}
+function staleBanner(n) {
+  if(n.status==='ok')return '';
+  return `<div class="banner" role="status">${icon('Alert',14)}<div><b>Узел ${n.key} не отвечает с ${n.since}.</b> Показаны последние данные — они могут быть неверны.</div></div>`;
+}
+
+// Упрощённый, но самостоятельный TempChart: чипы семейств и окна кликабельны.
+const FAMILY={mem:{label:'Память карт',color:'var(--c-accent)'},core:{label:'Ядро карт',color:'var(--c-info)'},cpu:{label:'Процессор',color:'var(--c-success)'},board:{label:'Плата',color:'var(--c-text-muted)'},disk:{label:'Диски',color:'var(--c-warning)'}};
+function tempChart(n,theme) {
+  const stale=n.status!=='ok', selected=S.families;
+  const series=[];
+  selected.forEach(f=>{
+    if(f==='mem'||f==='core')n.gpus.forEach(g=>series.push({family:f,label:`Карта ${g.index+1}`,current:g[f],dash:g.index? '4 3':''}));
+    if(f==='cpu'&&n.cpu.temp!=null)series.push({family:f,label:'Процессор',current:n.cpu.temp,dash:''});
+    if(f==='board'){const d=n.details.find(x=>x.key==='board');if(d?.value!=null)series.push({family:f,label:'Плата',current:d.value,dash:''});}
+    if(f==='disk'){const d=n.details.find(x=>x.key==='system');if(d?.value!=null)series.push({family:f,label:'Системный диск',current:d.value,dash:''});}
+  });
+  const W=340,H=110,PR=26,pw=W-PR,N=90;
+  const currents=series.map(s=>s.current).filter(v=>v!=null); if(selected.length===1&&selected[0]==='mem')currents.push(95);
+  const lo=currents.length?Math.floor((Math.min(...currents)-5)/10)*10:30,hi=currents.length?Math.ceil((Math.max(...currents)+3)/10)*10:100;
+  const X=i=>i*pw/(N-1),Y=v=>H-(v-lo)/(hi-lo||1)*H;
+  const grid=[lo,(lo+hi)/2,hi].map((v,i)=>`<line x1="0" x2="${pw}" y1="${Y(v)}" y2="${Y(v)}" stroke="${i===0?'var(--c-border)':'var(--c-border-light)'}"/><text x="${W-2}" y="${Y(v)+3}" text-anchor="end" fill="var(--c-text-muted)" font-size="10" font-family="monospace">${Math.round(v)}</text>`).join('');
+  const lines=series.map((s,si)=>{
+    const points=hist(s.current,si+2,stale,true),segs=[];let cur=[];
+    points.forEach((v,i)=>{if(v==null){if(cur.length){segs.push(cur);cur=[];}}else cur.push(`${X(i).toFixed(1)},${Y(v).toFixed(1)}`);});if(cur.length)segs.push(cur);
+    return segs.map(seg=>`<polyline points="${seg.join(' ')}" fill="none" stroke="${FAMILY[s.family].color}" stroke-width="1.75" stroke-dasharray="${s.dash}" stroke-linejoin="round"/>`).join('');
+  }).join('');
+  const threshold=selected.length===1&&selected[0]==='mem'?`<line x1="0" x2="${pw}" y1="${Y(95)}" y2="${Y(95)}" stroke="var(--c-warning)" stroke-dasharray="3 3"/><text x="2" y="${Y(95)-3}" fill="var(--c-warning-text)" font-size="10">замедление памяти 95</text>`:'';
+  const off=stale?`<rect x="${X(77)}" y="0" width="${pw-X(77)}" height="${H}" fill="var(--c-bg-inset)" opacity=".6"/><text x="${(X(77)+pw)/2}" y="${H/2}" text-anchor="middle" fill="var(--c-text-muted)" font-size="10">нет связи</text>`:'';
+  const chips=Object.entries(FAMILY).map(([k,f])=>{const on=selected.includes(k),dis=!on&&selected.length>=3;return `<button type="button" class="chip ${on?'on':''}" data-family="${k}" aria-pressed="${on}" ${dis?'disabled':''} style="--chip-color:${f.color}"><i></i>${f.label}</button>`;}).join('');
+  const times={ '1m':['−1 мин','−30 с','сейчас'],'5m':['−5 мин','−2,5','сейчас'],'15m':['−15 мин','−10','−5','сейчас'],'1h':['−1 ч','−30','сейчас'] };
+  const windows=[['1m','1 мин'],['5m','5 мин'],['15m','15 мин'],['1h','1 ч']].map(([v,t])=>`<button type="button" data-window="${v}" class="${S.window===v?'on':''}" aria-pressed="${S.window===v}">${t}</button>`).join('');
+  return `<section class="card ${stale?'stale':''}" aria-labelledby="${theme}-temp-title"><div class="ch temp-head"><h3 id="${theme}-temp-title">Температуры</h3><span class="seg windows">${windows}</span></div>
+    <div class="chips">${chips}</div>${series.length?`<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="График температур узла ${n.key}">${grid}${off}${threshold}${lines}</svg>
+    <div class="chart-times">${times[S.window].map(t=>`<span>${t}</span>`).join('')}</div><div class="legend">${series.map(s=>`<span style="color:${FAMILY[s.family].color}">— ${s.label} <b>${s.current==null?'—':Math.round(s.current)+'°'}</b></span>`).join('')}</div>`:'<div class="summary">Выберите, что показать</div>'}</section>`;
+}
+function gpuCards(n) {
+  if(!n.gpus.length)return '';
+  const stale=n.status!=='ok';
+  return `<section class="card ${stale?'stale':''}"><div class="ch"><h3>${n.gpus.length>1?'Видеокарты':'Видеокарта'}</h3></div>
+    ${n.gpus.map(g=>`<div class="sensor-row"><div class="sensor-name">${dot(stale?'none':g.level)}<span>Карта ${g.index+1} · RTX 3090</span></div><div class="sensor-value ${stale?'':g.level}">${val(g.mem,'°C')}</div><div class="sensor-detail">загрузка ${g.util} % · видеопамять ${g.used} из ${g.total} ГБ</div><div class="sensor-state">${g.level==='danger'?'сбрасывает частоту от перегрева':'в норме'}</div></div>`).join('')}</section>`;
+}
+function island(theme,data) {
+  const n=data.nodes[S.node], stale=n.status!=='ok', mobile=S.width<380;
+  const tabs=`<span class="seg"><button type="button">${icon('Message',12)} LLM</button><button type="button">${icon('Media',12)} Медиа</button><button type="button" class="on">${icon('Cpu',12)} Стенды ${n.level==='danger'&&!stale?dot('danger'):''}</button></span>`;
+  const body=`${farmCard(data.nodes,theme)}${upsDataCard(data.ups,theme)}${upsDynamics(data.ups,theme)}${staleBanner(n)}${standCard(n,theme)}${otherDetails(n,theme,stale)}${tempChart(n,theme)}${gpuCards(n)}`;
+  return `<div class="isl ${mobile?'sheet':''}" style="max-width:${S.width}px" data-panel>${mobile?'<div class="grab"></div>':''}<div class="hd">${mobile?'Локальные модели':tabs}<span class="x">✕</span></div><div class="body">${mobile?`<div>${tabs}</div>`:''}${body}</div></div>`;
+}
+function render() {
+  const data=makeData(), themes=S.theme==='both'?['light','dark']:[S.theme];
+  document.getElementById('root').innerHTML=themes.map(theme=>`<div class="col" data-theme="${theme}"><h2>${theme==='light'?'Светлая':'Тёмная'} тема</h2>
+    <p class="note"><b>${STATES[S.state].label}.</b> ${STATES[S.state].caption}<br>${S.width} CSS px · свёртки ${S.detailsOpen||S.upsOpen?'сохраняют выбранное состояние':'закрыты по умолчанию'}.</p>
+    <div class="mock">${island(theme,data)}<p class="pcap">Два крупных KPI → средние текущие температуры → компактная свёртка. TempChart не вложен в свёртку; GpuDetailCard и EngineCard ниже — без изменений.</p></div></div>`).join('');
+  bind(); bar();
+}
+function bar() {
+  tog('tState','state',Object.entries(STATES).map(([k,v])=>[k,v.label]));
+  tog('tTheme','theme',[['light','Светлая'],['dark','Тёмная'],['both','Обе']]);
+  tog('tWidth','width',[[380,'Рельс 380'],[360,'Телефон 360'],[320,'Узкий 320']]);
+}
+function tog(id,key,opts) {
+  const el=document.getElementById(id); el.innerHTML=opts.map(([v,t])=>`<button type="button" class="${String(S[key])===String(v)?'on':''}" data-v="${v}" aria-pressed="${String(S[key])===String(v)}">${t}</button>`).join('');
+  el.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    S[key]=key==='width'?+b.dataset.v:b.dataset.v;
+    if(key==='state'){S.node=S.state==='stale'?'video':'ai';S.detailsOpen=false;S.upsOpen=false;}
+    render();
+  });
+}
+function bind() {
+  document.querySelectorAll('[data-node]').forEach(b=>b.onclick=()=>{S.node=b.dataset.node;S.detailsOpen=false;render();});
+  document.querySelectorAll('[data-disclosure]').forEach(b=>b.onclick=()=>{
+    const key=b.dataset.disclosure, open=key==='details'?!S.detailsOpen:!S.upsOpen;
+    if(key==='details')S.detailsOpen=open;else S.upsOpen=open;
+    document.querySelectorAll(`[data-disclosure="${key}"]`).forEach(x=>x.setAttribute('aria-expanded',String(open)));
+    document.querySelectorAll(`[data-body="${key}"]`).forEach(x=>x.style.display=open?'block':'none');
+  });
+  document.querySelectorAll('[data-window]').forEach(b=>b.onclick=()=>{S.window=b.dataset.window;render();});
+  document.querySelectorAll('[data-family]').forEach(b=>b.onclick=()=>{
+    const f=b.dataset.family;S.families=S.families.includes(f)?S.families.filter(x=>x!==f):S.families.length<3?[...S.families,f]:S.families;render();
+  });
+}
+render();
+</script>
+</body>
+</html>

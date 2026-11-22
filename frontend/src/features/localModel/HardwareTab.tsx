@@ -1,61 +1,40 @@
-// Вкладка «Стенды» панели «Локальные модели» (только админ), макет А. Сверху вниз:
-//   1. Карточка «Узлы» (FarmSummaryCard): все узлы, касание выбирает узел; под ней — «ИБП»
-//      (UpsCard), если ИБП настроен (farm.ups);
-//   2. Баннер «Узел <key> не отвечает с HH:MM:SS» (узел молчит, данные последние);
-//   3. Детали выбранного узла: Card «Стенд» (плитки, счётчик «N показателей без данных»,
-//      вентиляторы), «Температуры», «Видеокарты», затем «Движок» (vLLM — если у узла есть
-//      engines, ComfyUI — если media). Узел молчит и отчёта нет ни разу — «Нет связи с узлом».
+// Вкладка «Стенды» панели «Локальные модели» (только админ) по макету v4.
+// Порядок блоков — по спеке макета v4: FarmSummaryCard → UpsCard → UpsDynamicsSection
+// → StaleBanner (при молчании выбранного узла) → StandCard → OtherSensorsSection
+// → TempChart → GpusCard → EngineCard. Секции — sibling-острова, не внутри карточек.
+// Классификацию показателей делает ST1 (hwMetricGroups); ST4 только компонует.
+// LevelPill живёт в StandCard, секции используют штатный DisclosureSection.
 //
-// Макет: docs/mockups/local-model-hardware-cluster-v3.html. Окраска — по level (бэкенд);
-// stale — значения приглушены (C.textMuted), точка на вкладке гаснет. Выбранный узел и
-// опросы живут в LocalModelPanel (ему нужен ключ узла для запроса); вкладка — на пропсах.
+// Окраска — по level (бэкенд); stale — значения приглушены, тревожные заливки сняты.
+// Выбранный узел и опросы живут в LocalModelPanel; вкладка — на пропсах: своих запросов
+// и кэшей нет, report в state не копируется. Обе секции закрыты при первом открытии
+// (localStorage нет); тела смонтированы силами DisclosureSection (display:none),
+// поэтому раскрытие не перемонтирует содержимое и не перезапускает опросы.
+// Два быстрых клика по свёртке обрабатываются функциональным setState.
 
+import { useState, type ReactNode } from 'react';
 import { C, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
-import { AlertTriangle, Fan, WifiOff } from 'lucide-react';
+import { AlertTriangle, WifiOff } from 'lucide-react';
 import { EmptyState } from '../../components/ui/EmptyState';
-import type { HardwareFarm, HardwareFarmNode, HardwareReport, HwLevel } from './hardwareTypes';
-import {
-  farmNodeSilent, hwFansLine, hwLevelLabel, hwNoDataCount, hwNoDataCountLabel, hwSummary,
-  hwThrottled, hwTileView,
-} from './hardwareFormat';
-import { HwTile } from './HwTile';
+import type { HardwareFarm, HardwareFarmNode, HardwareReport } from './hardwareTypes';
+import { farmNodeSilent, hwThrottled } from './hardwareFormat';
+import { StandCard } from './StandCard';
+import { OtherSensorsSection } from './OtherSensorsSection';
+import { UpsCard, UpsDynamicsSection } from './UpsCard';
 import { TempChart } from './TempChart';
 import { GpuDetailCard } from './GpuDetailCard';
 import { FarmSummaryCard } from './FarmSummaryCard';
-import { UpsCard } from './UpsCard';
 import { EngineCard, engineLine } from './EngineCard';
 import type { LocalModelMedia, LocalModelStats } from './types';
 import type { HardwareWindow } from './useLocalModelHardware';
 
-// «HH:MM:SS» из unix-мс (баннер молчащего узла).
+// «HH:MM:SS» из unix-мс, локальное время браузера.
 function formatHms(ms?: number): string {
   if (ms == null || !Number.isFinite(ms)) return '';
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return '';
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
-
-// Плашка уровня стенда: ok → muted, warn → warning, danger → danger.
-function LevelPill({ level, silent }: { level: HwLevel; silent?: boolean }) {
-  if (level === 'none') return null;
-  // Молчащий узел без опасности — «узел молчит», как в плашке карточки «Узлы», а не «всё в норме».
-  if (silent && level !== 'danger') {
-    return (
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', background: C.warningBg, color: C.warningText,
-        borderRadius: R.max, padding: `1px ${SP.sm}px`, fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
-      }}>узел молчит</span>
-    );
-  }
-  const bg = level === 'danger' ? C.dangerBg : level === 'warn' ? C.warningBg : C.bgInset;
-  const fg = level === 'danger' ? C.dangerText : level === 'warn' ? C.warningText : C.textSecondary;
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', background: bg, color: fg,
-      borderRadius: R.max, padding: `1px ${SP.sm}px`, fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
-    }}>{hwLevelLabel(level)}</span>
-  );
 }
 
 // Баннер молчащего узла: C.warningBg/C.warningText, R.lg.
@@ -75,46 +54,6 @@ function StaleBanner({ nodeKey, since }: { nodeKey: string; since?: number | nul
         Показаны последние данные — они могут быть неверны.
       </div>
     </div>
-  );
-}
-
-// Карточка «Стенд»: плашка уровня, сводка, сетка плиток, вентиляторы.
-function StandCard({ report, isMobile }: { report: HardwareReport; isMobile: boolean }) {
-  const stale = report.status === 'stale';
-  const views = hwTileView(report);
-  const noData = hwNoDataCount(report);
-  // Мобила (320): плитки в 2 колонки; десктоп — auto-fit minmax(130px,1fr).
-  const gridCols = isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(130px, 1fr))';
-  return (
-    <section style={{ background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
-        <h3 style={{ margin: 0, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textSecondary, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          Стенд
-        </h3>
-        <LevelPill level={report.level} silent={stale} />
-      </div>
-      {/* Строка-сводка */}
-      <div style={{ fontSize: FS.sm, color: C.textSecondary, margin: `-2px 0 ${SP.sm}px` }}>
-        {hwSummary(report)}
-      </div>
-      {/* Сетка плиток */}
-      <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: SP.sm }}>
-        {views.map(v => <HwTile key={v.key} view={v} stale={stale} />)}
-      </div>
-      {/* Плитки «датчик есть, но не ответил»; «датчика нет» в счётчик не входит */}
-      {noData > 0 && (
-        <div style={{ fontSize: FS.xs, color: C.textMuted, fontStyle: 'italic', marginTop: SP.sm }}>
-          {hwNoDataCountLabel(noData)}
-        </div>
-      )}
-      {/* Вентиляторы корпуса */}
-      {report.caseFans.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FS.xs, color: C.textSecondary, marginTop: SP.sm, flexWrap: 'wrap' }}>
-          <Fan size={14} strokeWidth={ICON_STROKE} color={C.textMuted} />
-          <span>{hwFansLine(report.caseFans)}</span>
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -173,6 +112,10 @@ export function HardwareTab({
   window: HardwareWindow;
   onWindowChange: (w: HardwareWindow) => void;
 }) {
+  // Обе секции v4 закрыты при первом открытии; функциональное обновление — два быстрых
+  // клика подряд обрабатываются верно (каждый клик видит свежее значение состояния).
+  const [otherSensorsOpen, setOtherSensorsOpen] = useState(false);
+  const [upsDynamicsOpen, setUpsDynamicsOpen] = useState(false);
   const node = farm?.farmNodes.find(n => n.key === selected) ?? null;
   // Первое открытие до первого ответа — скелетоны
   if (!farm && !report) return loading || farmLoading ? <HardwareTabSkeleton /> : null;
@@ -187,7 +130,7 @@ export function HardwareTab({
   const engineLines: Record<string, string> | undefined = node && engLine ? { [node.key]: engLine } : undefined;
   const showBanner = (down || reportStale) && !(down && hasNoReport(report)) && bannerKey !== '';
 
-  let details: React.ReactNode;
+  let details: ReactNode;
   if (down && hasNoReport(report)) {
     // Узел молчит, и отчёта не было ни разу: вместо пустых плиток — причина.
     details = (
@@ -215,6 +158,7 @@ export function HardwareTab({
     details = (
       <>
         <StandCard report={report} isMobile={isMobile} />
+        <OtherSensorsSection report={report} open={otherSensorsOpen} onToggle={() => setOtherSensorsOpen(v => !v)} isMobile={isMobile} />
         <TempChart report={report} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
         <GpusCard report={report} isMobile={isMobile} />
         {engines}
@@ -226,6 +170,7 @@ export function HardwareTab({
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
       {farm && <FarmSummaryCard farm={farm} selected={selected} onSelect={onSelect} isMobile={isMobile} engineLines={engineLines} />}
       {farm?.ups && <UpsCard ups={farm.ups} isMobile={isMobile} />}
+      {farm?.ups && <UpsDynamicsSection ups={farm.ups} open={upsDynamicsOpen} onToggle={() => setUpsDynamicsOpen(v => !v)} isMobile={isMobile} />}
       {showBanner && <StaleBanner nodeKey={bannerKey} since={since} />}
       {details}
     </div>

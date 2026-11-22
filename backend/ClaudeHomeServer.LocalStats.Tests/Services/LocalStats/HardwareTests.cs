@@ -741,6 +741,78 @@ public class HardwareTests : IDisposable
         report.Nodes.Single(n => n.Kind == "gpu").Level.Should().Be("ok");
     }
 
+    // ─── История загрузки CPU крупной KPI (ST5): поле CpuLoadSpark15m отчёта узла ──────
+
+    // Опросы в t0/t0+2/t0+4, Build в t0+6: все три снимка в одном 10-секундном бакете.
+    // Первая дельта — null (нет prev jiffies), null-снимок значения в бакет не вносит.
+    [Fact]
+    public async Task Report_CpuLoadSpark15m_FirstDeltaNull_MaxInBucket_90Points()
+    {
+        var (s, time, src) = BuildSampler();
+        src.Files["/proc/stat"] = "cpu  100 0 100 800 0 0 0 0 0 0\n";    // total 1000, busy 200
+        await s.PollNodeAsync("worker");                                 // первая дельта — null
+        time.Advance(TimeSpan.FromSeconds(2));
+        src.Files["/proc/stat"] = "cpu  450 0 500 1050 0 0 0 0 0 0\n";   // Δtotal 1000, Δidle 250 → 75 %
+        await s.PollNodeAsync("worker");
+        time.Advance(TimeSpan.FromSeconds(2));
+        src.Files["/proc/stat"] = "cpu  800 0 800 1400 0 0 0 0 0 0\n";   // Δtotal 1000, Δidle 350 → 65 %
+        await s.PollNodeAsync("worker");
+        time.Advance(TimeSpan.FromSeconds(2));
+
+        var report = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(15))!;
+
+        report.CpuLoadSpark15m!.Should().HaveCount(90, "окно 15 мин / шаг 10 с");
+        var live = report.CpuLoadSpark15m!.Where(p => p is not null).ToList();
+        live.Should().ContainSingle().Which.Should().Be(75, "в бакете максимум (75, 65); null-снимок значения не вносит");
+        report.CpuLoadPerc.Should().Be(65, "текущая загрузка — из последнего снимка");
+    }
+
+    // Бакет без единого непустого значения — null (разрыв), не 0; настоящий 0% остаётся 0.
+    [Fact]
+    public async Task Report_CpuLoadSpark15m_ZeroStaysZero_AllNullIsGap()
+    {
+        var (s, time, src) = BuildSampler();
+        src.Files["/proc/stat"] = "cpu  100 0 100 800 0 0 0 0 0 0\n";    // total 1000, busy 200
+        await s.PollNodeAsync("worker");                                 // первая дельта — null
+
+        // Разрыв: в кольце только null-дельта — все 90 точек null.
+        var gap = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(15))!;
+        gap.CpuLoadSpark15m!.Should().OnlyContain(p => p == null, "нет ни одного непустого значения — разрыв, не 0");
+
+        // 0 %: busy не изменился, idle вырос (Δtotal 1000, Δidle 1000 → 0 %).
+        time.Advance(TimeSpan.FromSeconds(2));
+        src.Files["/proc/stat"] = "cpu  100 0 100 1800 0 0 0 0 0 0\n";   // total 2000, busy 200 → 0 %
+        await s.PollNodeAsync("worker");
+        time.Advance(TimeSpan.FromSeconds(2));   // Build в t0+4 — оба снимка в одном бакете
+
+        var report = new HardwareReportService(s, NoNodes()).Build(TimeSpan.FromMinutes(15))!;
+        var live = report.CpuLoadSpark15m!.Where(p => p is not null).ToList();
+        live.Should().ContainSingle().Which.Should().Be(0, "настоящий 0 % — не разрыв");
+        report.CpuLoadPerc.Should().Be(0);
+    }
+
+    // JSON-контракт: у пустого отчёта контроллера (ветка без Llm) ключа нет; при наличии поля —
+    // camelCase, массив с null-разрывами.
+    [Fact]
+    public void Report_CpuLoadSpark15m_JsonContract()
+    {
+        var at = new DateTimeOffset(2026, 10, 18, 12, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        var empty = System.Text.Json.JsonSerializer.Serialize(
+            new HardwareReport(at, "ok", null, "ok", [], [], [], [], 5000),
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        using var doc = System.Text.Json.JsonDocument.Parse(empty);
+        doc.RootElement.TryGetProperty("cpuLoadSpark15m", out _).Should().BeFalse("null не пишется в JSON");
+
+        var filled = System.Text.Json.JsonSerializer.Serialize(
+            new HardwareReport(at, "ok", null, "ok", [], [], [], [], 10_000,
+                Node: new HardwareNodeInfoDto("worker", "worker"), CpuLoadPerc: 30,
+                CpuLoadSpark15m: [null, 30]),
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        using var docFilled = System.Text.Json.JsonDocument.Parse(filled);
+        docFilled.RootElement.GetProperty("cpuLoadSpark15m").GetRawText().Should().Be("[null,30]",
+            "массив процентов с null-разрывом");
+    }
+
     private sealed class FixedSampler(HardwareSample cur) : IHardwareSampler, INodeHardwareView
     {
         public IReadOnlyList<string> NodeKeys => ["worker"];

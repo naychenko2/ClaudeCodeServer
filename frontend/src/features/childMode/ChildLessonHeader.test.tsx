@@ -373,6 +373,27 @@ describe('ChildLessonHeader: шапка урока со строкой кура�
     expect(pill?.getAttribute('aria-label')).toBe('Осталось около 35 минут');
   });
 
+  // Г5-д1 (дефект QA-8 c7082105): на 360 автоимя репетитора «Репетитор: Математика»
+  // не влезало в ряд с «назад» и стоп-сигналом и резалось многоточием («Репетитор:
+  // Математ…», clientWidth 186 при scrollWidth 200) — ребёнок не видел, к какому
+  // репетитору открыт урок. Теперь имя переносится по словам, а не обрезается.
+  // Замер clientWidth/scrollWidth в fake-DOM невозможен — доказательство стилем:
+  // у заголовка переноса нет nowrap/ellipsis (на прежнем поведении тест красный).
+  it('мобильная: длинное имя репетитора переносится, а не обрезается', async () => {
+    mobile = true; win.innerWidth = 360;
+    await renderHeader({ subject: subject({ tutor: { personaId: 'p1', name: 'Репетитор: Математика', hasAvatar: false } }), viewers: [], title: 'Дроби', isMobile: true });
+    const holder = textHolder('Репетитор: Математика');
+    expect(holder, 'имени репетитора в шапке нет').not.toBeNull();
+    const st = holder!.getAttribute('style') ?? '';
+    expect(st, 'у имени осталась обрезка nowrap — вернётся «Репетитор: Математ…»').not.toMatch(/white-space:\s*nowrap/);
+    expect(st, 'у имени остался ellipsis').not.toMatch(/text-overflow:\s*ellipsis/);
+    expect(st, 'перенос по словам не разрешён (нет white-space:normal)').toMatch(/white-space:\s*normal/);
+    // Имя урока в мете — по макету (.meta) остаётся обрезанным с полным текстом в title
+    const meta = textHolder('Дроби');
+    expectEllipsis(meta, 'имя урока в мете', true);
+    expect(titleFor(meta, 'Дроби'), 'полного имени урока нет в title').toBe(true);
+  });
+
   it('десктоп: блок имени не сжимается — flex:1 и min-width:240 как в макете (L2 аудита)', async () => {
     await renderHeader({ subject: subject(), viewers: ['Папа'], title: 'Дроби', isMobile: false });
     const h1 = doc.querySelector('h1');

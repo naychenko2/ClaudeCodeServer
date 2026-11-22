@@ -256,29 +256,36 @@ export function ChildLessonHeader({ subject, viewers, time, title, isMobile, onB
             {view && subject?.tutor && <TutorMark tutor={subject.tutor} size={28} />}
             <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+                {/* Имя репетитора — переносом, а не ellipsis (дефект QA-8 c7082105): автоимя
+                    «Репетитор: Математика» на 360 не влезало в ряд с «назад» и стоп-сигналом
+                    (scrollWidth 200 при clientWidth 186) и резалось многоточием — ребёнок не
+                    видел, к какому репетитору открыт урок. Многоточие вместо целиком читаемого
+                    имени у детской шапки недопустимо; имя урока в мете ниже остаётся обрезанным
+                    с полным текстом в title — как в макете (.meta). */}
                 <span
-                  title={subject?.tutor?.name ?? title}
                   style={{
                     fontFamily: FONT.serif, fontSize: FS.lg, fontWeight: 600,
                     color: C.textHeading, minWidth: 0,
-                    overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                    whiteSpace: 'normal', overflowWrap: 'anywhere',
                   }}
                 >
                   {subject?.tutor?.name ?? title}
                 </span>
                 <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} aria-hidden />
               </span>
-              {lessonName && (
-                <span
-                  title={title}
-                  style={{
-                    fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted, minWidth: 0,
-                    overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
-                  }}
-                >
-                  {title}
-                </span>
-              )}
+              <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+                {lessonName && (
+                  <span
+                    title={title}
+                    style={{
+                      fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted, minWidth: 0,
+                      overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {title}
+                  </span>
+                )}
+              </span>
             </span>
           </button>
           {sessionId && <StopSignalButton sessionId={sessionId} />}

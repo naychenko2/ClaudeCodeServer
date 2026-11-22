@@ -1,14 +1,20 @@
-// Карточка «ИБП» вкладки «Стенды»: под карточкой «Узлы», если ИБП настроен (farm.ups).
-// Шапка: имя ИБП и плашка питания («от сети» / «от батареи» / «батарея садится»);
-// строка-сводка; плитки HwTile: нагрузка, заряд, сеть, батарея (мини-графики — 15 мин).
-// Окраска — по уровням бэкенда (powerLevel, loadLevel); свои пороги фронт не держит.
-// ИБП молчит (status stale/down) — как молчащий узел: плашка «ИБП молчит», цифры приглушены.
+// Карточка «ИБП» вкладки «Стенды» (макет docs/mockups/local-model-hardware-cluster-v4.html,
+// §«Компактный ИБП»): шапка с плашкой питания (role=status), строка-сводка, одна крупная
+// KPI «Заряд» и одна полоса из трёх ячеек (нагрузка, сеть, батарея).
+// Рядом с карточкой — отдельная секция «Динамика за 15 мин» (UpsDynamicsSection, sibling:
+// состояние раскрытия и подключение — за HardwareTab, ST4; внутрь UpsCard не вкладывается).
+// Значения, детали и уровни даёт upsMetricGroups (hardwareFormat.ts, ST1) — своих порогов
+// и минут автономии фронт не считает. ИБП молчит (status stale/down) — как молчащий узел:
+// плашка «ИБП молчит», значения C.textMuted, тревожные заливки сняты.
 
-import { C, FS, R, SP } from 'aihome_shell/kit';
+import { BatteryMedium } from 'lucide-react';
+import { type CSSProperties } from 'react';
+import { C, FONT, FS, R, SP } from 'aihome_shell/kit';
+import { ICON_STROKE } from '../../components/ui/icons';
 import type { HardwareUps, HwLevel } from './hardwareTypes';
-import type { HwTileView } from './hardwareFormat';
-import { ruNum } from './hardwareFormat';
-import { HwTile } from './HwTile';
+import { ruNum, upsMetricGroups } from './hardwareFormat';
+import { DisclosureSection } from '../../components/ui/DisclosureSection';
+import { Sparkline, SparklinePlaceholder } from './Sparkline';
 
 // «HH:MM:SS» из unix-мс — локальное время браузера.
 function formatHms(ms: number | null): string {
@@ -35,7 +41,7 @@ export function upsPill(u: HardwareUps): { label: string; level: HwLevel } {
 }
 
 // Сводка: «внутри 28 °C», выход — только если отличается от входа больше чем на 5 В
-// (ватты — в детали плитки «Нагрузка»); молчит — «не отвечает с HH:MM:SS».
+// (ватты — в полосе); молчит — «не отвечает с HH:MM:SS».
 export function upsSummary(u: HardwareUps): string {
   if (upsSilent(u)) {
     const t = formatHms(u.since);
@@ -48,35 +54,95 @@ export function upsSummary(u: HardwareUps): string {
   return parts.join(' · ');
 }
 
-const sensor = (v: number | null): HwTileView['sensor'] => (v == null ? 'nodata' : 'ok');
+// Цвет значения по level: warn/danger окрашиваются, остальное нейтрально.
+const VALUE_COLOR: Record<HwLevel, string> = {
+  ok: C.textHeading, none: C.textHeading, warn: C.warningText, danger: C.dangerText,
+};
 
-// Окраска: «Нагрузка» — loadLevel; «Сеть» — powerLevel, когда ИБП ушёл с сети; «Заряд» — только
-// когда батарея садится (жёлтый заряд при 100 % читался бы как «плохая батарея»).
-export function upsTiles(u: HardwareUps): HwTileView[] {
-  const base = { dec: false, thresholdTitle: '', sensorLabel: '' };
-  const offLine = u.power === 'battery' || u.power === 'lowBattery';
-  return [
-    {
-      ...base, key: 'ups-load', icon: 'Gauge', name: 'Нагрузка', unit: '%',
-      value: u.loadPerc, level: u.loadLevel, sensor: sensor(u.loadPerc),
-      detail: u.loadW != null ? `≈ ${u.loadW} Вт` : '', spark: u.loadSpark15m,
-    },
-    {
-      ...base, key: 'ups-charge', icon: 'BatteryMedium', name: 'Заряд', unit: '%',
-      value: u.chargePerc, level: u.power === 'lowBattery' ? u.powerLevel : 'ok', sensor: sensor(u.chargePerc),
-      detail: 'по напряжению', spark: u.chargeSpark15m,
-    },
-    {
-      ...base, key: 'ups-input', icon: 'PlugZap', name: 'Сеть', unit: 'В',
-      value: u.inputV, level: offLine ? u.powerLevel : 'ok', sensor: sensor(u.inputV),
-      detail: u.inputHz != null ? `${ruNum(u.inputHz)} Гц` : '', spark: u.inputVSpark15m,
-    },
-    {
-      ...base, key: 'ups-battery', icon: 'Battery', name: 'Батарея', unit: 'В', dec: true,
-      value: u.batteryV, level: 'ok', sensor: sensor(u.batteryV),
-      detail: u.batteryNominalV != null ? `номинал ${ruNum(u.batteryNominalV)} В` : '', spark: u.batteryDeciVSpark15m,
-    },
-  ];
+// KPI «Заряд» (макет .kpi/.ups-kpi): bgCard, borderLight, R.xl, SP.md.
+const KPI_BOX: CSSProperties = {
+  background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md,
+};
+
+// Полоса из трёх ячеек (макет .ups-cells): repeat(3, minmax(0,1fr)), bgCard,
+// borderLight, R.lg; разделители ячеек — border-left borderLight.
+const STRIP: CSSProperties = {
+  display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', minWidth: 0, overflow: 'hidden',
+  background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
+};
+
+// Значение с единицей: null — «нет данных» (курсив, C.textMuted, FS.sm);
+// 0 — измеренное значение, выводится «0 %» (по dec — с запятой).
+function MetricValue({ v, unit, dec, color }: { v: number | null; unit: string; dec: boolean; color: string }) {
+  if (v == null) {
+    return (
+      <div style={{ fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 600, lineHeight: 1.3, marginTop: 2, color: C.textMuted, fontStyle: 'italic' }}>
+        нет данных
+      </div>
+    );
+  }
+  return (
+    <div style={{ fontFamily: FONT.mono, fontSize: FS.lg, fontWeight: 600, lineHeight: 1.25, overflowWrap: 'anywhere', color }}>
+      {`${dec ? ruNum(v) : Math.round(v)} ${unit}`}
+    </div>
+  );
+}
+
+// Ячейка полосы: подпись (FS.xxs C.textMuted), значение (mono FS.lg 600),
+// деталь (FS.xxs C.textSecondary). Разделитель — border-left на соседних ячейках.
+function UpsCell({ label, value, dec, unit, level, detail, silent }: {
+  label: string; value: number | null; dec: boolean; unit: string; level: HwLevel; detail: string; silent: boolean;
+}) {
+  return (
+    <div style={{ minWidth: 0, padding: SP.sm, borderLeft: `1px solid ${C.borderLight}` }}>
+      <div style={{ fontSize: FS.xxs, color: C.textMuted }}>{label}</div>
+      <MetricValue v={value} unit={unit} dec={dec} color={silent ? C.textMuted : VALUE_COLOR[level]} />
+      {detail && <div style={{ fontSize: FS.xxs, color: C.textSecondary, marginTop: 2 }}>{detail}</div>}
+    </div>
+  );
+}
+
+// Компактный ИБП: шапка, сводка, одна KPI «Заряд», одна полоса (нагрузка, сеть, батарея).
+// Данные — из upsMetricGroups; заливка KPI — только при lowBattery по powerLevel и
+// только когда ИБП отвечает; при молчании значения C.textMuted, заливки сняты.
+export function UpsCard(props: { ups: HardwareUps; isMobile: boolean }) {
+  const { ups } = props;
+  const silent = upsSilent(ups);
+  const g = upsMetricGroups(ups);
+  const low = ups.power === 'lowBattery' && !silent;
+  const kpiLevel: HwLevel = silent ? 'none' : (ups.power === 'lowBattery' ? ups.powerLevel : 'ok');
+  const [load, input, battery] = g.secondary;
+  const pill = upsPill(ups);
+  const summary = upsSummary(ups);
+  return (
+    <section
+      aria-labelledby="ups-card-title"
+      style={{ background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
+        <h3 id="ups-card-title" title={ups.title} style={{ margin: 0, fontSize: FS.xs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textSecondary, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {`ИБП · ${ups.title}`}
+        </h3>
+        <Pill label={pill.label} level={pill.level} />
+      </div>
+      {summary && <div style={{ fontSize: FS.sm, color: C.textSecondary, margin: `-2px 0 ${SP.sm}px` }}>{summary}</div>}
+      {/* KPI «Заряд»: заливка (danger) только при lowBattery и живом ИБП */}
+      <div style={{ ...KPI_BOX, marginBottom: SP.sm, background: low ? C.dangerBg : KPI_BOX.background, borderColor: low ? C.dangerBorder : C.borderLight }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FS.xs, fontWeight: 600, color: C.textSecondary }}>
+          <BatteryMedium size={14} strokeWidth={ICON_STROKE} aria-hidden />
+          <span>Заряд</span>
+        </div>
+        <MetricValue v={g.primary.value} unit="%" dec={false} color={silent ? C.textMuted : VALUE_COLOR[kpiLevel]} />
+        <div style={{ fontSize: FS.xs, color: C.textSecondary, marginTop: 4 }}>{g.primary.detail}</div>
+      </div>
+      {/* Полоса из трёх ячеек: нагрузка, сеть, батарея */}
+      <div style={STRIP}>
+        <UpsCell label={load.name} value={load.value} dec={false} unit={load.unit} level={silent ? 'none' : load.level} detail={load.detail} silent={silent} />
+        <UpsCell label={input.name} value={input.value} dec={false} unit={input.unit} level={silent ? 'none' : input.level} detail={input.detail} silent={silent} />
+        <UpsCell label={battery.name} value={battery.value} dec={true} unit={battery.unit} level={silent ? 'none' : battery.level} detail={battery.detail} silent={silent} />
+      </div>
+    </section>
+  );
 }
 
 // Плашка — role="status": переход «от сети» → «от батареи» озвучивается скринридером.
@@ -91,26 +157,34 @@ function Pill({ label, level }: { label: string; level: HwLevel }) {
   );
 }
 
-export function UpsCard({ ups, isMobile }: { ups: HardwareUps; isMobile: boolean }) {
+// Секция «Динамика за 15 мин»: sibling карточки (div id="ups-dynamics"), штатный
+// DisclosureSection «Динамика за 15 мин»; внутри четыре подписанных Sparkline
+// в две колонки. Состояние раскрытия — у потребителя (HardwareTab, ST4): open/onToggle,
+// своего useState нет. Ряды и деление десятых вольта — из upsMetricGroups (ST1).
+export function UpsDynamicsSection({ ups, open, onToggle, isMobile }: {
+  ups: HardwareUps; open: boolean; onToggle: () => void; isMobile: boolean;
+}) {
   const silent = upsSilent(ups);
-  const pill = upsPill(ups);
-  const summary = upsSummary(ups);
-  const gridCols = isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(130px, 1fr))';
+  const series = upsMetricGroups(ups).dynamics;
+  // Молчит — линия C.textMuted вместо accent (макет: c = stale ? muted : accent).
+  const lineColor = silent ? C.textMuted : C.accent;
   return (
-    <section
-      aria-labelledby="ups-card-title"
-      style={{ background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
-        <h3 id="ups-card-title" title={ups.title} style={{ margin: 0, fontSize: FS.xs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textSecondary, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {`ИБП · ${ups.title}`}
-        </h3>
-        <Pill label={pill.label} level={pill.level} />
-      </div>
-      {summary && <div style={{ fontSize: FS.sm, color: C.textSecondary, margin: `-2px 0 ${SP.sm}px` }}>{summary}</div>}
-      <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: SP.sm }}>
-        {upsTiles(ups).map(v => <HwTile key={v.key} view={v} stale={silent} />)}
-      </div>
-    </section>
+    <div id="ups-dynamics">
+      <DisclosureSection title="Динамика за 15 мин" meta="4 графика · 90 точек · шаг 10 с" open={open} onToggle={onToggle} isMobile={isMobile}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: SP.sm, paddingTop: SP.md }}>
+          {series.map(s => {
+            const has = s.points.some(v => v != null);
+            return (
+              <div key={s.label} style={{ minWidth: 0 }}>
+                <div style={{ fontSize: FS.xs, color: C.textSecondary }}>{s.label}</div>
+                {has
+                  ? <Sparkline points={s.points} color={lineColor} ariaLabel={`${s.label}, 15 минут`} />
+                  : <SparklinePlaceholder />}
+              </div>
+            );
+          })}
+        </div>
+      </DisclosureSection>
+    </div>
   );
 }

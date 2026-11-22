@@ -1,12 +1,13 @@
-// Тесты карточки «ИБП» вкладки «Стенды»: плашка питания по уровням бэкенда, сводка,
-// плитки (значения, единицы, окраска), молчащий ИБП и встраивание во вкладку (farm.ups).
+// Тесты карточки «ИБП» вкладки «Стенды» (макет v4, §«Компактный ИБП»): плашка питания
+// по уровням бэкенда, сводка, одна KPI «Заряд», одна полоса из трёх ячеек, молчащий ИБП,
+// отдельная секция «Динамика за 15 мин» (sibling карточки) и её ряды.
 // Окружение node: SSR — renderToStaticMarkup (паттерн FarmSummaryCard.test.ts).
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { HardwareFarm, HardwareUps } from './hardwareTypes';
-import { UpsCard, upsPill, upsSummary, upsTiles } from './UpsCard';
+import { UpsCard, UpsDynamicsSection, upsPill, upsSummary } from './UpsCard';
 import { HardwareTab } from './HardwareTab';
 
 const SINCE = 1763650000000;
@@ -59,35 +60,110 @@ describe('upsSummary', () => {
   });
 });
 
-describe('upsTiles', () => {
-  it('четыре плитки с единицами; от батареи — красится сеть, заряд — нет', () => {
-    const t = upsTiles(ups({ loadLevel: 'warn', powerLevel: 'warn', power: 'battery', inputV: 0 }));
-    expect(t.map(x => [x.name, x.unit, x.value, x.level])).toEqual([
-      ['Нагрузка', '%', 22, 'warn'],
-      ['Заряд', '%', 100, 'ok'],
-      ['Сеть', 'В', 0, 'warn'],
-      ['Батарея', 'В', 54.1, 'ok'],
-    ]);
-    expect(t[2].detail).toBe('49,9 Гц');
-    expect(t[3].detail).toBe('номинал 48 В');
+describe('UpsCard', () => {
+  const render = (u: HardwareUps) => renderToStaticMarkup(createElement(UpsCard, { ups: u, isMobile: false }));
+
+  it('шапка, плашка role=status и сводка', () => {
+    const html = render(ups());
+    expect(html).toContain('ИБП · Raskat');
+    expect(html).toContain('от сети');
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-labelledby="ups-card-title"');
+    expect(html).toContain('внутри 28 °C');
   });
-  it('батарея садится — заряд красный', () => {
-    expect(upsTiles(ups({ power: 'lowBattery', powerLevel: 'danger' }))[1].level).toBe('danger');
+
+  it('ровно одна KPI «Заряд» и одна полоса из трёх ячеек', () => {
+    const html = render(ups());
+    expect((html.match(/Заряд/g) ?? []).length).toBe(1);
+    expect((html.match(/repeat\(3, minmax\(0, 1fr\)\)/g) ?? []).length).toBe(1);
+    expect(html).toContain('Нагрузка');
+    expect(html).toContain('Сеть');
+    expect(html).toContain('Батарея');
+    expect(html).toContain('22 %');
+    expect(html).toContain('222 В');
+    expect(html).toContain('54,1 В');
+    expect(html).toContain('по напряжению');
+    expect(html).toContain('≈ 528 Вт');
+    expect(html).toContain('49,9 Гц');
+    expect(html).toContain('номинал 48 В');
   });
-  it('нет значения — «нет данных», а не 0', () => {
-    expect(upsTiles(ups({ chargePerc: null }))[1].sensor).toBe('nodata');
+
+  it('заряд 0 — «0 %», а не «нет данных»', () => {
+    const html = render(ups({ chargePerc: 0 }));
+    expect(html).toContain('0 %');
+    expect(html).not.toContain('нет данных');
+  });
+
+  it('chargePerc null — «нет данных», а не 0 (ловит замену null нулём)', () => {
+    const html = render(ups({ chargePerc: null }));
+    expect(html).toContain('нет данных');
+    expect(html).not.toContain('0 %');
+  });
+
+  it('lowBattery — заливка KPI по powerLevel; обычный заряд без заливки', () => {
+    const html = render(ups({ power: 'lowBattery', powerLevel: 'danger', chargePerc: 18 }));
+    expect(html).toContain('var(--c-danger-bg)');
+    expect(html).toContain('var(--c-danger-border)');
+    expect(html).toContain('var(--c-danger-text)');
+    expect(html).toContain('18 %');
+    // Обычный заряд при питании от сети: danger-заливки нет
+    expect(render(ups())).not.toContain('var(--c-danger-bg)');
+  });
+
+  it('lowBattery с powerLevel=warn — жёлтый текст значения KPI', () => {
+    expect(render(ups({ power: 'lowBattery', powerLevel: 'warn', chargePerc: 64 }))).toContain('var(--c-warning-text)');
+  });
+
+  it('молчащий ИБП: значения textMuted, заливки сняты, плашка молчания остаётся', () => {
+    const html = render(ups({
+      status: 'stale', since: SINCE, power: 'lowBattery', powerLevel: 'danger',
+      loadLevel: 'danger', loadPerc: 96,
+    }));
+    expect(html).toContain('ИБП молчит');
+    expect(html).toContain('role="status"');
+    // тревожные заливки KPI/полосы сняты (danger полностью; warn остаётся только на плашке молчания)
+    expect(html).not.toContain('var(--c-danger-bg)');
+    expect((html.match(/var\(--c-warning-bg\)/g) ?? []).length).toBe(1);
+    expect(html).toContain('var(--c-text-muted)');
+    // значения не выдаются за текущую тревогу: цвет значения — не dangerText
+    expect(html).not.toContain('var(--c-danger-text)');
+  });
+
+  it('секция динамики не вложена в UpsCard (ловит вложение DisclosureSection)', () => {
+    const html = render(ups());
+    expect(html).not.toContain('ups-dynamics');
+    expect(html).not.toContain('Динамика за 15 мин');
   });
 });
 
-describe('UpsCard', () => {
-  it('рендерит шапку, плашку и значения', () => {
-    const html = renderToStaticMarkup(createElement(UpsCard, { ups: ups(), isMobile: true }));
-    expect(html).toContain('ИБП · Raskat');
-    expect(html).toContain('от сети');
-    expect(html).toContain('22 %');
-    expect(html).toContain('54,1 В');
-    expect(html).toContain('aria-labelledby="ups-card-title"');
-    expect(html).toContain('role="status"');
+describe('UpsDynamicsSection', () => {
+  const render = (u: HardwareUps, open = false) => renderToStaticMarkup(createElement(UpsDynamicsSection, { ups: u, open, onToggle: () => {}, isMobile: false }));
+
+  it('open=false: aria-expanded="false", тело скрыто, четыре подписи рядов смонтированы', () => {
+    const html = render(ups());
+    expect(html).toContain('id="ups-dynamics"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('display:none');
+    expect(html).toContain('Динамика за 15 мин');
+    expect(html).toContain('Заряд');
+    expect(html).toContain('Нагрузка');
+    expect(html).toContain('Сеть');
+    expect(html).toContain('Батарея');
+  });
+
+  it('open=true: тело раскрыто', () => {
+    expect(render(ups(), true)).toContain('display:block');
+  });
+
+  it('сетки динамики — две колонки minmax(0, 1fr)', () => {
+    expect(render(ups())).toContain('repeat(2, minmax(0, 1fr))');
+  });
+
+  it('молчит — линия textMuted; пустой ряд — подложка', () => {
+    const html = render(ups({ status: 'stale', since: SINCE }));
+    expect(html).toContain('stroke="var(--c-text-muted)"');
+    const empty = render(ups({ chargeSpark15m: [null, null] }));
+    expect(empty).toContain('var(--c-bg-inset)');
   });
 });
 

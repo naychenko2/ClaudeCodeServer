@@ -424,9 +424,9 @@ export interface UpsMetricGroups {
   dynamics: HwUpsSeries[];
 }
 
-// Иерархия ИБП. Сборка плиток зеркалит тело upsTiles (UpsCard.tsx): сводить в
-// общий код нельзя — тот импортирует React (HwTile), а этот модуль обязан
-// оставаться чистым (юнит-тесты без React/DOM).
+// Иерархия ИБП — единственный источник данных и окраски карточки UpsCard.tsx
+// и секции UpsDynamicsSection: фронт своих порогов и минут автономии не держит.
+// Модуль обязан оставаться чистым (юнит-тесты без React/DOM): React сюда не импортируется.
 export function upsMetricGroups(u: HardwareUps): UpsMetricGroups {
   const base = { dec: false, thresholdTitle: '', sensorLabel: '' };
   const offLine = u.power === 'battery' || u.power === 'lowBattery';

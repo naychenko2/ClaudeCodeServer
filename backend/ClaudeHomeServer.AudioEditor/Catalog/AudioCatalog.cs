@@ -244,7 +244,7 @@ public static partial class AudioCatalog
                 [AudioOp.Song] = Bind(LocalAudioOp.MusicGenerate, ("engine", "minimax")),
             },
             ops => new AudioCaps(ops, SungRuEn, [], [AudioOutputs.Audio],
-                AudioLicenses.NotStated, AudioPriceUnits.Free, MaxTextChars: LyricsChars, MinDurationSec: SongMinSec,
+                AudioLicenses.MiniMaxMusic3, AudioPriceUnits.Free, MaxTextChars: LyricsChars, MinDurationSec: SongMinSec,
                 MaxDurationSec: SongMaxSec)),
 
         // Обработка: стемы (audio-separator, MIT)

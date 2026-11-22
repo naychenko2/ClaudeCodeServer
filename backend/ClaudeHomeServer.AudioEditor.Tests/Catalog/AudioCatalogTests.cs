@@ -33,7 +33,7 @@ public class AudioCatalogTests
     [InlineData(AudioCatalog.Yue2, AudioLicenseKind.NonCommercial, "CC BY-NC 4.0")]
     [InlineData(AudioCatalog.SeedVc, AudioLicenseKind.Copyleft, "GPL-3.0")]
     [InlineData(AudioCatalog.Matchering, AudioLicenseKind.Copyleft, "GPL-3.0")]
-    [InlineData(AudioCatalog.MiniMaxMusic, AudioLicenseKind.Unknown, "не указана")]
+    [InlineData(AudioCatalog.MiniMaxMusic, AudioLicenseKind.Unknown, "MiniMax-Music3 Community · коммерция до $20 млн, подпись «MiniMax-Music3»")]
     [InlineData(AudioCatalog.QwenTts, AudioLicenseKind.Permissive, "Apache-2.0")]
     [InlineData(AudioCatalog.AceStep, AudioLicenseKind.Permissive, "MIT")]
     public void Local_Licenses(string id, AudioLicenseKind kind, string label)

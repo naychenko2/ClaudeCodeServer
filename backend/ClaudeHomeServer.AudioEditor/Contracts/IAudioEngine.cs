@@ -123,6 +123,9 @@ public static class AudioLicenses
     public static readonly AudioLicense Commercial = new("коммерческая · условия поставщика", AudioLicenseKind.Permissive);
     public static readonly AudioLicense CommercialWatermark = new("коммерческая · водяной знак", AudioLicenseKind.Watermark);
     public static readonly AudioLicense TencentHunyuan = new("Tencent Hunyuan Community · не для ЕС, Великобритании и Кореи", AudioLicenseKind.Unknown);
+    // Условная (по образцу Tencent): коммерция до $20 млн годовой выручки, в продукте — надпись «MiniMax-Music3»,
+    // публичный выход помечается как созданный ИИ (LICENSE, Exhibit A, п. 11)
+    public static readonly AudioLicense MiniMaxMusic3 = new("MiniMax-Music3 Community · коммерция до $20 млн, подпись «MiniMax-Music3»", AudioLicenseKind.Unknown);
     public static readonly AudioLicense MitWatermark = new("MIT · водяной знак Perth", AudioLicenseKind.Watermark);
     public static readonly AudioLicense SynthId = new("коммерческая · водяной знак SynthID", AudioLicenseKind.Watermark);
 }

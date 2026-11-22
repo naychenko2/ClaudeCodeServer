@@ -6,16 +6,18 @@ import { Menu, MenuItem } from './Menu';
 import { CountBadge, type BadgeTone } from './CountBadge';
 import { Dot } from './Dot';
 import { PanelDropLine } from './PanelDropGuide';
-import { RailCapsule, RAIL_W, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
+import { RailCapsule, RAIL_W, RAIL_W_LG, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
 import { RailHat, RAIL_HAT_H } from './RailHat';
 import { RailIconButton } from './RailIconButton';
+import type { IconButtonSize } from './IconButton';
 import type { RailFlyoutAction } from './RailFlyout';
 import { RailSep } from './RailSep';
 
 // Высота капсулы с ОДНОЙ кнопкой: паддинги 4+4, бокс кнопки 32, рамка 1+1, плюс
 // шляпка. Столько места держим за схлопнутой рельсой, чтобы соседние
 // капсулы (док проектов) не подпрыгивали, когда панелей на экране не осталось.
-const RAIL_MIN_H = 42 + RAIL_HAT_H;
+// lg-кнопка (ребёнок, Г11) — тот же расчёт по своему боксу 40: 4+4+40+2 = 50.
+const railMinH = (itemSize?: IconButtonSize) => (itemSize === 'lg' ? 50 : 42) + RAIL_HAT_H;
 
 // Вертикальная рельса иконок у края окна — полукапсула-остров, из которой
 // открываются панели-карточки. Общая для ОБЕИХ зон: RightPanelStack (инструменты
@@ -27,7 +29,9 @@ const RAIL_MIN_H = 42 + RAIL_HAT_H;
 // одного молча расходилась с другим.
 
 // Геометрия капсулы (ширина, зазор до центра) живёт вместе с ней — RailCapsule.
-export { RAIL_W, RAIL_GAP };
+// RAIL_W_LG — ширина детской рельсы (40px-тач-цели, Г11): зоной панелей она
+// меряется так же, как взрослой RAIL_W (см. PanelZone.railItemSize).
+export { RAIL_W, RAIL_W_LG, RAIL_GAP };
 
 // Одна иконка рельсы. key нужен только React'у — сам ключ панели рельса не
 // трактует, всю логику (что открыто, что видно) решает вызывающий стек.
@@ -128,6 +132,12 @@ interface Props {
   // крайний разделитель колонок), но при закрытых панелях задаётся здесь —
   // иначе рельса липнет к контенту.
   gapToCenter?: number;
+  // Размер кнопок рельсы. Дефолт md (32) — взрослая. Ребёнку — 'lg' (40): тач-цель
+  // не меньше 40 (дефект 034360be, Г11). Размер здесь же выбирает ширину капсулы
+  // (RAIL_W_LG) и высоту резерва схлопнутой рельсы — всё вместе, чтобы вызывающий
+  // не разводил половину. Вызывающий, который ставит 'lg', обязан тем же размером
+  // мерить драуэры и попапы рядом (см. PanelZone.railItemSize).
+  itemSize?: IconButtonSize;
   // Кнопка «свернуть все» (ПЕРВОЙ в столбце). Не передана — не рендерится.
   collapse?: { collapsed: boolean; disabled: boolean; onToggle: () => void };
   // Попап-превью панели, которую сейчас держат под курсором в рельсе. Рисуется
@@ -180,7 +190,7 @@ interface Props {
 // Кнопка САМА принимает дроп: пока панель тащат, вокруг неё стоит пунктирная
 // мишень, под курсором — акцентная. Мишень капсулы («убрать панель с глаз») её не
 // накрывает — оверлей дропа рисуется только над столбцом иконок.
-function RailOverflow({ side, overflow, collapse }: {
+function RailOverflow({ side, overflow, collapse, itemSize }: {
   side: 'left' | 'right';
   overflow: NonNullable<Props['overflow']>;
   // Сворачивание зоны — вторым местом, рядом с режимом раскладки: обе строки об
@@ -188,6 +198,8 @@ function RailOverflow({ side, overflow, collapse }: {
   // Главный путь — клик по шляпке рельсы; эта строка называет жест словами, чтобы
   // его вообще можно было найти.
   collapse?: { collapsed: boolean; onToggle: () => void };
+  // Размер кнопки ящика — общий с рельсой (см. PanelRail.itemSize)
+  itemSize?: IconButtonSize;
 }) {
   const { items, modeToggle, badge, dragActive, drop, onRestore } = overflow;
   // Возврат — открытый глаз: пара к EyeOff плашки кнопки (убрать/вернуть = скрыть
@@ -225,6 +237,9 @@ function RailOverflow({ side, overflow, collapse }: {
       <RailIconButton
         side={side}
         label="Ещё"
+        // Ящик — кнопка той же рельсы: у детской (lg) она не может остаться 32 —
+        // тач-цель той же, что у панелей над ней (Г11)
+        size={itemSize}
         active={anchor != null}
         onClick={() => setAnchor(anchor ? null : hostRef.current?.getBoundingClientRect() ?? null)}
       >
@@ -385,7 +400,7 @@ function railActions(item: RailItem, side: 'left' | 'right'): RailFlyoutAction[]
   return acts.length > 0 ? acts : undefined;
 }
 
-function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) {
+function RailButton({ item, side, itemSize }: { item: RailItem; side: 'left' | 'right'; itemSize?: IconButtonSize }) {
   // Во время HTML5-drag браузер не шлёт mouse-события, поэтому hover, поднятый при
   // захвате иконки, залипает: после дропа панель могла стать активной, и залипший
   // hover рисовал бы на её иконке крестик закрытия. Поэтому наведение гасится в
@@ -423,6 +438,8 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
       // Подпись меняется по наведению вместе с иконкой: у открытой панели клик
       // закрывает, у закрытой с попапом — закрепляет
       label={item.active ? `Скрыть «${item.title}»` : item.title}
+      // Размер — общий для всей рельсы (см. PanelRail.itemSize)
+      size={itemSize}
       // Подзаголовок-расшифровка чисел под названием в плашке. Показываем всегда —
       // числа на иконке видны и у открытой панели, значит и расшифровка должна быть
       hint={item.hint}
@@ -487,9 +504,11 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
   );
 }
 
-export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCenter = 0, overflow, collapse, peek, drop, footer }: Props) {
+export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCenter = 0, itemSize, overflow, collapse, peek, drop, footer }: Props) {
   const isLeft = side === 'left';
   const dropping = !!drop?.active;
+  // Ширина капсулы и всего, что меряется от её кромки, — по размеру кнопок (см. itemSize)
+  const railW = itemSize === 'lg' ? RAIL_W_LG : RAIL_W;
 
 
   // Пустые группы отбрасываем ДО отрисовки сепараторов — иначе между скрытой
@@ -613,7 +632,7 @@ export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCe
     // а не разные наборы: между ними пунктир. Сплошная черта остаётся там, где
     // граница настоящая: у служебных кнопок рельсы.
     inner: gi > 0,
-    node: group.map(it => <RailButton key={it.key} item={it} side={side} />),
+    node: group.map(it => <RailButton key={it.key} item={it} side={side} itemSize={itemSize} />),
   }));
 
   const rail = (
@@ -621,13 +640,14 @@ export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCe
       side={side}
       visible={visible}
       gapToCenter={gapToCenter}
+      width={railW}
       border={railBorder}
       onMouseEnter={() => setRailHover(true)}
       onMouseLeave={() => setRailHover(false)}
     >
       {/* Шляпка — ВНЕ столбца кнопок: она не участвует ни в дропе, ни в расчёте
           места вставки (там перебираются только узлы с data-rail-item). */}
-      {hat && <RailHat side={side} label={hat} title={hatTitle} collapse={collapseToggle} railHover={railHover} />}
+      {hat && <RailHat side={side} label={hat} title={hatTitle} collapse={collapseToggle} railHover={railHover} railWidth={railW} />}
 
       {/* Столбец кнопок панелей. Отдельным блоком он стоит
           ради дропа: панель принимает ИМЕННО он (в нём есть места вставки), а кнопка
@@ -684,7 +704,7 @@ export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCe
       {showOverflow && (
         <>
           {columnSections.length > 0 && <RailSep margin="2px 0 1px" />}
-          <RailOverflow side={side} overflow={overflow} collapse={collapseToggle} />
+          <RailOverflow side={side} overflow={overflow} collapse={collapseToggle} itemSize={itemSize} />
         </>
       )}
     </RailCapsule>
@@ -717,7 +737,7 @@ export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCe
           // резервируем высотой капсулы с одной кнопкой: иначе док проектов
           // подпрыгивает к верхней кромке, стоит панелям исчезнуть, и вертикаль
           // рельс «дышит» на каждом переключении экрана.
-          marginTop: visible ? ISLAND.gap : RAIL_MIN_H + ISLAND.gap,
+          marginTop: visible ? ISLAND.gap : railMinH(itemSize) + ISLAND.gap,
           ...(isLeft ? { marginRight: gapToCenter } : { marginLeft: gapToCenter }),
         }}>
           {footer}
@@ -740,10 +760,11 @@ export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCe
             // Отсчёт от ШИРИНЫ КАПСУЛЫ, а не от её текущего положения: при закрытых
             // панелях рельса отодвинута от центра на gapToCenter, и попап, повторяя
             // этот отступ, вставал на 4px мимо места, куда панель встанет после
-            // закрепления — закрепление выглядело как рывок.
+            // закрепления — закрепление выглядело как рывок. Ширина — та же, что у
+            // капсулы выше (railW): детская рельса шире взрослой (Г11).
             ...(isLeft
-              ? { left: RAIL_W, paddingLeft: RAIL_GAP }
-              : { right: RAIL_W, paddingRight: RAIL_GAP }),
+              ? { left: railW, paddingLeft: RAIL_GAP }
+              : { right: railW, paddingRight: RAIL_GAP }),
             display: 'flex', flexDirection: 'column', pointerEvents: 'auto',
           }}
         >

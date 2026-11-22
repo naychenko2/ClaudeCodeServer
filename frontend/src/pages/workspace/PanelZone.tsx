@@ -28,8 +28,9 @@ import { Pin } from 'lucide-react';
 import { C, ISLAND, SHADOW, PANEL_ANIM, Z } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { PanelShell } from '../../components/ui/PanelShell';
-import { PanelRail, RAIL_W, RAIL_GAP, type RailItem } from '../../components/ui/PanelRail';
+import { PanelRail, RAIL_W, RAIL_W_LG, RAIL_GAP, type RailItem } from '../../components/ui/PanelRail';
 import { PanelDropGuide, PanelDropLine, SEP_HIT, sepShift } from '../../components/ui/PanelDropGuide';
+import type { IconButtonSize } from '../../components/ui/IconButton';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth, MOBILE_MAX, PANEL_INLINE_MAX_SHARE, TABLET_MAX } from '../../lib/breakpoints';
 import {
@@ -114,6 +115,11 @@ interface Props {
   // Человек закрыл панель — крестиком в шапке или повторным кликом по рельсе. Хост
   // ставит по нему признак «закрыта в этом чате» панели генерации (ADR-021 §3)
   onUserClose?: (k: PanelKey) => void;
+  // Размер кнопок рельсы. Дефолт md (32) — взрослая. Ребёнку — 'lg' (40): тач-цель
+  // не меньше 40 (дефект 034360be, Г11). Здесь же по нему меряются отсчёты драуэра
+  // и плавающих панелей от края окна — они обязаны совпасть с реальной шириной
+  // капсулы (RAIL_W_LG), которую ставит PanelRail.
+  railItemSize?: IconButtonSize;
   // Мета панелей плагинов (итерация 2): заголовок и иконка каждой панели плагина.
   // Передаётся пропсом из WorkspacePage (а не через глобальный реестр),
   // чтобы рендер был чистым. Без неё — panelMetaResolved (fallback).
@@ -124,8 +130,12 @@ export function PanelZone({
   side, panels, railBadges, hat, hatTitle, panelStack,
   allowedKeys: allowedKeysProp, hideWhenEmpty, compact, sessionPanels,
   railFooter, floating, centerFileOpen, onUserClose, pluginPanelMeta, defaultCompactPanel,
+  railItemSize,
 }: Props) {
   const allowedKeys = allowedKeysProp ?? WORKSPACE_KEYS;
+  // Ширина рельсы этого экрана — по размеру её кнопок (см. railItemSize): от неё
+  // отсчитываются драуэр и плавающие панели. PanelRail ставит капсуле ту же ширину.
+  const railW = railItemSize === 'lg' ? RAIL_W_LG : RAIL_W;
   // Итерация 2: мета плагинов — пропсом (а не глобальный реестр). Для ключей plugin:*
   // проп имеет приоритет; для статических — panelMetaResolved (как раньше).
   const resolveMeta = (k: PanelKey): { title: string; Icon: import('lucide-react').LucideIcon } => {
@@ -1129,6 +1139,8 @@ export function PanelZone({
       hat={hat ?? 'Панели'}
       hatTitle={hatTitle ?? 'Панели инструментов'}
       visible={showRail}
+      // Размер кнопок — общий для обеих зон этого экрана (см. railItemSize)
+      itemSize={railItemSize}
       peek={peekCard ? {
         node: peekCard,
         full: peekFull,
@@ -1445,7 +1457,9 @@ export function PanelZone({
           // карточка», даже когда внутри сидит короткая панель. `maxHeight`
           // держит потолок — длинный контент упрётся в него и скроллится внутри.
           position: 'absolute', top: GAP, maxHeight: `calc(100% - ${GAP * 2}px)`, zIndex: 15,
-          ...(isLeft ? { left: RAIL_W + GAP } : { right: RAIL_W + GAP }),
+          // От реальной кромки рельсы (railW): у детской (lg) она шире — драуэр
+          // обязан встать вплотную к ней, а не под неё (Г11)
+          ...(isLeft ? { left: railW + GAP } : { right: railW + GAP }),
           width: 'min(85vw, 380px)', display: 'flex', flexDirection: 'column', boxShadow: SHADOW.modal,
           // Растянутая панель (делит высоту либо просит её сама) имеет flex-basis 0: у drawer'а
           // с высотой «по контенту» она схлопывалась до PANEL_MIN_H. Нужна определённая высота.
@@ -1485,7 +1499,7 @@ export function PanelZone({
             ref={floatRef}
             style={{
               position: 'absolute', top: 0, bottom: 0, zIndex: Z.dropdown,
-              ...(isLeft ? { left: RAIL_W + RAIL_GAP } : { right: RAIL_W + RAIL_GAP }),
+              ...(isLeft ? { left: railW + RAIL_GAP } : { right: railW + RAIL_GAP }),
               display: 'flex', alignItems: 'stretch', padding: `0 ${RAIL_GAP}px`,
               boxSizing: 'border-box', pointerEvents: 'auto',
             }}

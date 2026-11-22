@@ -66,9 +66,14 @@ public static class ChildProfileValidator
 
         // Опекун — реальный пользователь: уведомление стоп-сигнала и кабинет волны 2
         // должны указывать на живую учётку, а не в пустоту.
+        // Разграничение (Г13, дефект 6efb3ce6): несуществующий id, уже лежащий в ЖИВОМ профиле, —
+        // остаток удаления до каскада UserStore.Delete: он не блокирует всю правку (стор снимет
+        // его при записи, SetChildProfile). Заведомо новый несуществующий id — опечатка админа:
+        // остаётся guardian_not_found, иначе мусор записался бы в профиль.
+        var liveGuardians = user.ChildMode?.GuardianUserIds;
         foreach (var guardianId in req.GuardianUserIds ?? [])
         {
-            if (users.GetById(guardianId) is null)
+            if (users.GetById(guardianId) is null && liveGuardians?.Contains(guardianId) != true)
                 return new("guardian_not_found", "Среди опекунов есть id несуществующего пользователя.");
         }
 

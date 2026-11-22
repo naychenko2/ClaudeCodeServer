@@ -1,9 +1,9 @@
 import { useState, type HTMLAttributes, type ReactNode } from 'react';
 import { useCanHover, TOUCH_CALLOUT_GUARD } from '../../lib/pointer';
 import { useLongPress } from '../../hooks/useLongPress';
-import { IconButton, type IconButtonVariant } from './IconButton';
+import { IconButton, type IconButtonSize, type IconButtonVariant } from './IconButton';
 import { RailFlyout, type RailFlyoutAction } from './RailFlyout';
-import { RAIL_W } from './RailCapsule';
+import { RAIL_W, RAIL_W_LG } from './RailCapsule';
 import type { BadgeTone } from './CountBadge';
 
 // Кнопка вертикальной рельсы: icon-кнопка плюс подпись сбоку по наведению. Общая
@@ -29,11 +29,16 @@ import type { BadgeTone } from './CountBadge';
 // такая подмена читалась бы как «сейчас закрою»), а наружу (onHoverChange —
 // призрак места, попап-превью) удержание не сообщается вовсе.
 export function RailIconButton({
-  side, label, hint, actions, active, disabled, variant, wrapper, hoverSuppressed, onClick, onHoverChange, children,
+  side, label, hint, actions, active, disabled, variant, size = 'md', wrapper, hoverSuppressed, onClick, onHoverChange, children,
 }: {
   side: 'left' | 'right';
   // media — внутри картинка (иконка проекта), а не штриховой глиф; см. IconButton
   variant?: IconButtonVariant;
+  // Размер кнопки. Дефолт md (32) — взрослая рельса. Ребёнку — 'lg' (40): тач-цель
+  // не меньше 40 (дефект 034360be, Г11); размер здесь же задаёт и ширину капсулы
+  // (lg → RAIL_W_LG), и место плашки относительно её внешней кромки — держим их
+  // вместе, чтобы вызывающий не разводил две половины одной рельсы.
+  size?: IconButtonSize;
   // Текст подписи. Он же имя кнопки для скринридера — нативный тултип не ставится,
   // иначе подсказка приезжала бы дважды.
   label: string;
@@ -101,10 +106,12 @@ export function RailIconButton({
         hint={hint}
         open={(hover || pressed) && !hoverSuppressed}
         actions={actions}
-        railWidth={RAIL_W}
+        // Плашка выезжает из-под капсулы — по её реальной ширине: lg-кнопка живёт
+        // только в широкой (RAIL_W_LG) рельсе, язычок обязан примыкать к её кромке
+        railWidth={size === 'lg' ? RAIL_W_LG : RAIL_W}
         onDismiss={() => setPressed(false)}
       >
-        <IconButton size="md" variant={variant} onClick={() => { setPressed(false); onClick?.(); }} active={active} disabled={disabled} ariaLabel={ariaLabel}>
+        <IconButton size={size} variant={variant} onClick={() => { setPressed(false); onClick?.(); }} active={active} disabled={disabled} ariaLabel={ariaLabel}>
           {typeof children === 'function' ? children(hover) : children}
         </IconButton>
       </RailFlyout>

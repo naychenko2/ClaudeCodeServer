@@ -237,7 +237,9 @@ describe('ProjectRail · детский док проектов-предмето
     act(() => { root.unmount(); });
   });
 
-  it('childPlateVisible=true → плашка есть, left = RAIL_W + SP.sm (48)', () => {
+  // Г11 (дефект 034360be): значок предмета стал 40px, детская капсула — 48
+  // (RAIL_W_LG); плашка обязана выезжать из-под реальной кромки, а не прежних 40px
+  it('childPlateVisible=true → плашка есть, left = RAIL_W_LG + SP.sm (56)', () => {
     const root = createRoot(doc.getElementById('root')!);
     act(() => { root.render(createElement(ProjectRail, { child: { subjects: threeSubjects(), activeSubjectId: 'mat', onOpenSubject: vi.fn() }, onOpenSettings: () => {}, childPlateVisible: true })); });
     expect(doc.body.textContent).toContain('Математика · Сова Ульяна');
@@ -245,8 +247,31 @@ describe('ProjectRail · детский док проектов-предмето
     const plate = divs.find(d => (d.textContent ?? '').includes('· Сова Ульяна'));
     expect(plate).toBeTruthy();
     const left = (plate!.getAttribute('style') ?? '').match(/left:\s*([\d.]+)px/)?.[1];
-    expect(left, `left плашки; style="${plate!.getAttribute('style')}"`).toBe('48');
+    expect(left, `left плашки; style="${plate!.getAttribute('style')}"`).toBe('56');
     unmount?.();
     act(() => { root.unmount(); });
+  });
+
+  it('значки предметов — тач-цель не меньше 40 px по обеим сторонам и капсула 48 (Г11)', () => {
+    mount({ subjects: threeSubjects(), activeSubjectId: 'mat', onOpenSubject: vi.fn() });
+    for (const wrap of icons()) {
+      const btn = wrap.querySelector('button');
+      expect(btn, `кнопка значка предмета ${wrap.getAttribute('data-child-subject')}`).toBeTruthy();
+      // Размер читается по inline-стилю кнопки (тот же приём, что «Новый урок» выше):
+      // IconButton lg задаёт width/height явно (IconButton.tsx:96) — вернуть в
+      // SubjectDockIcon size="md" значит краснить этот тест на 32.
+      const attr = btn!.getAttribute('style') ?? '';
+      const w = Number(attr.match(/(^|[^-])width:\s*([\d.]+)px/)?.[2] ?? 0);
+      const h = Number(attr.match(/(^|[^-])height:\s*([\d.]+)px/)?.[2] ?? 0);
+      expect(w, `ширина значка; style="${attr}"`).toBeGreaterThanOrEqual(40);
+      expect(h, `высота значка; style="${attr}"`).toBeGreaterThanOrEqual(40);
+    }
+    // Капсула дока — та же ширина, что у значков плюс поля: 40px-значок в 40px-полосе
+    // обрезался бы краем (внутренняя ширина 38). Рельса панелей над этим доком держит
+    // ту же RAIL_W_LG (PanelRail.itemSize='lg') — капсулы обязаны стоять ровно.
+    const capsule = doc.querySelector('[aria-label="Уроки"]');
+    expect(capsule).toBeTruthy();
+    const cw = Number((capsule!.getAttribute('style') ?? '').match(/(^|[^-])width:\s*([\d.]+)px/)?.[2] ?? 0);
+    expect(cw, `ширина капсулы дока; style="${capsule!.getAttribute('style')}"`).toBe(48);
   });
 });

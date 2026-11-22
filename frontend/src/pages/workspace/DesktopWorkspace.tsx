@@ -272,11 +272,24 @@ export function DesktopWorkspace(p: Props) {
   // closeCompactStack уже на первом кадре и стирал дефолтную панель дровера
   // (defaultCompactPanel='chats' у ребёнка) раньше, чем она добиралась до экрана.
   // Сравнение по ref: сигнал уходит только при реальной смене id.
+  // Г15 (дельта Р-Г5-д1, minor): смена isTablet — тоже сигнал, но не маунт:
+  // при сужении 1280→768 открытые дроверы закрываются (тот же стоп-сигнал,
+  // что и смена чата). Маунт (ref при маунте = текущее) — не смена: дефолт
+  // ребёнка не стёрся бы. Перенос взрослой раскладки в дровер снят (Г15-д1,
+  // продуктовое решение): на узком экране панель закрыта, её открытость
+  // живёт в раскладке стора и вернётся при расширении — оверлей сам собой,
+  // без клика, никто не просил.
   const seenSessionRef = useRef(p.activeSession?.id);
+  const seenTabletRef = useRef(!!p.isTablet);
   useEffect(() => {
+    // ref обновляем и вне планшета: иначе выход из планшета (768→1280) его не
+    // снимет, и повторный вход (1280→768) не сошёлся бы с переходом
+    const tabletChanged = seenTabletRef.current !== !!p.isTablet;
+    seenTabletRef.current = !!p.isTablet;
     if (!p.isTablet) return;
-    if (seenSessionRef.current === p.activeSession?.id) return;
+    const sessionChanged = seenSessionRef.current !== p.activeSession?.id;
     seenSessionRef.current = p.activeSession?.id;
+    if (!tabletChanged && !sessionChanged) return;
     closeCompactStack();
     // closeCompactStack стабилен (useCallback в сторе) — в deps не нужен
     // eslint-disable-next-line react-hooks/exhaustive-deps

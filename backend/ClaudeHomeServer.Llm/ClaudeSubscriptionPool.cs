@@ -409,7 +409,7 @@ public class ClaudeSubscriptionPool
     public double WeeklyUtilization(string key) => UtilizationOf(key, WeeklyLimitType);
 
     // Общая часть чтения снимка по конкретному окну: последний снимок, истёкший ResetsAt → 0,
-    // отсутствие данных/утилизации → 0.
+    // снимок без числа → последнее известное число того же окна, данных нет вовсе → 0.
     private double UtilizationOf(string key, string limitType)
     {
         if (_usage is null) return 0;
@@ -423,10 +423,25 @@ public class ClaudeSubscriptionPool
             && resetsAt <= DateTime.UtcNow)
             return 0;
 
-        return last.Utilization ?? 0;
+        if (last.Utilization is { } u) return u;
+
+        // Снимки ходов и проб часто приходят без числа (CLI шлёт только статус). Такой снимок
+        // не должен затирать известную утилизацию того же окна (тот же ResetsAt) от опроса
+        // usage — иначе аккаунт между опросами выглядит пустым и выигрывает LeastLoaded.
+        return snapshots.LastOrDefault(s => s.LimitType == limitType
+                                            && s.ResetsAt == last.ResetsAt
+                                            && s.Utilization is not null)?.Utilization ?? 0;
     }
 
-    // Ключ с минимальной утилизацией; при равенстве — случайный среди минимальных
+    // Нагрузка для сравнения аккаунтов: доля израсходованного запаса по самому узкому окну —
+    // max(5ч / SoftThreshold, неделя / WeeklyThreshold). Только по 5ч нельзя: аккаунт, у которого
+    // CLI шлёт лишь недельное окно (90%), без 5ч-снимка выглядел бы пустым и забирал новые
+    // чаты у почти свободного соседа (прод 22.11: Claude 1 против Claude 2).
+    private double RoutingLoad(string key)
+        => Math.Max(EffectiveUtilization(key) / Math.Max(_softThreshold, 1e-9),
+                    WeeklyUtilization(key) / Math.Max(_weeklyThreshold, 1e-9));
+
+    // Ключ с минимальной нагрузкой (RoutingLoad); при равенстве — случайный среди минимальных
     // (deterministic=true — первый по порядку, для стабильного отображения).
     private string LeastLoaded(IReadOnlyList<string> keys, bool deterministic = false)
     {
@@ -434,7 +449,7 @@ public class ClaudeSubscriptionPool
         var winners = new List<string>();
         foreach (var k in keys)
         {
-            var u = EffectiveUtilization(k);
+            var u = RoutingLoad(k);
             if (u < best - 1e-9)
             {
                 best = u;

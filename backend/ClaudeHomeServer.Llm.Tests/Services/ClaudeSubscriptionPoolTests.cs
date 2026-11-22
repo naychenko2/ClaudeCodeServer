@@ -943,6 +943,57 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     }
 
     [Fact]
+    public void LeastLoaded_УчитываетНедельное_БезПятичасовогоСнимка()
+    {
+        // Прод 22.11: у claude CLI шлёт только seven_day 90% (5ч-снимка нет вовсе), у claude-2
+        // 5ч 20% и неделя 2%. Оба в ротации, тариф равный — чат обязан идти на claude-2,
+        // а не на «пустой с виду» claude.
+        var config = ConfigWithTiers("max20", ("claude-2", "max20"));
+        var usage = new UsageService(config);
+        RecordWeekly(usage, ClaudeSubscriptionPool.PrimaryKey, 0.9);
+        RecordUtil(usage, "claude-2", 0.2);
+        RecordWeekly(usage, "claude-2", 0.02);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.IsInRotation(ClaudeSubscriptionPool.PrimaryKey).Should().BeTrue();
+        pool.IsInRotation("claude-2").Should().BeTrue();
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("claude-2");
+        pool.PickForDisplay().Should().Be("claude-2");
+    }
+
+    [Fact]
+    public void СнимокБезЧисла_НеЗатираетИзвестнуюУтилизациюОкна()
+    {
+        var config = Config("second");
+        var usage = new UsageService(config);
+        var resetsAt = DateTime.UtcNow.AddHours(2).ToString("o");
+        RecordUtil(usage, "second", 0.2, resetsAt);
+        usage.Record("five_hour", null, "allowed", isUsingOverage: false,
+            resetsAt: resetsAt, subscriptionKey: "second");
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.EffectiveUtilization("second").Should().Be(0.2);
+    }
+
+    [Fact]
+    public void СнимокБезЧисла_НовогоОкна_СчитаетсяЗаНоль()
+    {
+        // Окно сменилось (другой ResetsAt) — число прошлого окна к новому не относится.
+        var config = Config("second");
+        var usage = new UsageService(config);
+        RecordUtil(usage, "second", 0.7, DateTime.UtcNow.AddMinutes(30).ToString("o"));
+        usage.Record("five_hour", null, "allowed", isUsingOverage: false,
+            resetsAt: DateTime.UtcNow.AddHours(5).ToString("o"), subscriptionKey: "second");
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.EffectiveUtilization("second").Should().Be(0);
+    }
+
+    [Fact]
     public void НедельноеОкно_ИстёкшийResetsAt_СчитаетсяЗаНоль()
     {
         var config = Config("second");

@@ -604,6 +604,10 @@ describe('панель: мусор и отказ localStorage дают дефо�
     expect(windowPressed(m.host, '5 мин')).toBe(true);
     await openTab(m.host, 'Стенды');
     expect(windowPressed(m.host, '15 мин')).toBe(true);
+    // Выбор окна переживает отказ хранилища: saveWindow глотает исключение,
+    // выбор остаётся в памяти компонента (try/catch в windowStorage.ts:30).
+    await clickWindow(m.host, '1 ч');
+    expect(windowPressed(m.host, '1 ч')).toBe(true);
     // Отказ хранилища проглочен тихо: ни одной записи в console.error.
     expect(errSpy).not.toHaveBeenCalled();
   });

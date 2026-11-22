@@ -4,7 +4,7 @@ import { AlarmClock, ArrowDownToLine, Pin, Search } from 'lucide-react';
 import { C, R, SP, FS, FONT, Z, SHADOW } from '../../lib/design';
 import { useWatchdogPresence } from '../../lib/watchdogPresence';
 import type { Project } from '../../types';
-import { Button, RailCapsule, RAIL_W, RailHat, RailIconButton, RailSep, RAIL_HAT_H } from '../../components/ui';
+import { Button, RailCapsule, RAIL_W_LG, RailHat, RailIconButton, RailSep, RAIL_HAT_H } from '../../components/ui';
 import { PanelDropLine } from '../../components/ui/PanelDropGuide';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { ProjectIcon } from './ProjectIcon';
@@ -643,7 +643,9 @@ function SubjectDockIcon({ s, active, side, anchorRef, onOpen }: {
   const { bg, fg } = subjectColors(s.color);
   return (
     <span data-child-subject={s.id} ref={anchorRef} style={{ display: 'flex', flexShrink: 0, ...TOUCH_CALLOUT_GUARD }}>
-      <RailIconButton side={side} label={s.label} variant="media" active={active} onClick={() => onOpen(s)}>
+      {/* size lg (Г11, дефект 034360be): значок предмета — тач-цель ≥40px, как кнопки
+          панелей над ним; глиф внутри остаётся своего размера (ICON_BOX) */}
+      <RailIconButton side={side} label={s.label} variant="media" size="lg" active={active} onClick={() => onOpen(s)}>
         <span style={{
           width: ICON_BOX, height: ICON_BOX, flexShrink: 0, borderRadius: R.md,
           background: bg, color: fg, display: 'grid', placeItems: 'center',
@@ -681,7 +683,9 @@ function SubjectPlate({ s, top, creating, onNewLesson, visible }: {
   if (!visible) return null;
   return createPortal(
     <div style={{
-      position: 'fixed', top, transform: 'translateY(-50%)', left: RAIL_W + SP.sm, zIndex: Z.dropdown,
+      // От реальной кромки детской капсулы (RAIL_W_LG): значок стал 40, капсула — 48
+      // (Г11); плашка обязана выезжать из-под неё, а не из-под прежних 40px
+      position: 'fixed', top, transform: 'translateY(-50%)', left: RAIL_W_LG + SP.sm, zIndex: Z.dropdown,
       display: 'flex', flexDirection: 'column', gap: SP.xs, padding: `6px ${SP.sm}px`,
       maxWidth: 280, boxSizing: 'border-box', minWidth: 0,
       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md,
@@ -764,7 +768,9 @@ function ChildSubjectsRail({ child, side, plateVisible }: { child: ChildSubjects
 
   return (
     <div style={{ flexShrink: 0, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', pointerEvents: 'auto' }}>
-      <RailCapsule side={side} aria-label="Уроки">
+      {/* Ширина детской капсулы (Г11): 40px-значок в 40px-полосе обрезался бы
+          краем; тот же размер, что у панельной рельсы над этим доком */}
+      <RailCapsule side={side} aria-label="Уроки" width={RAIL_W_LG}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: CAP_GAP, flexShrink: 0 }}>
           {shown.map(s => (
             <SubjectDockIcon

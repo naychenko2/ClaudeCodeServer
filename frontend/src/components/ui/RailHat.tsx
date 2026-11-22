@@ -33,7 +33,7 @@ import { RAIL_W } from './RailCapsule';
 // схлопнутую капсулу).
 export const RAIL_HAT_H = 13;
 
-export function RailHat({ side, label, labelSize = 7, title, collapse, railHover }: {
+export function RailHat({ side, label, labelSize = 7, title, collapse, railHover, railWidth = RAIL_W }: {
   // Сторона окна: в неё же выезжает плашка с полным названием
   side: 'left' | 'right';
   // Подпись в самой шляпке — капс до семи символов (см. замер выше)
@@ -58,6 +58,9 @@ export function RailHat({ side, label, labelSize = 7, title, collapse, railHover
   // касается — она по-прежнему открывается лишь наведением на саму шляпку, иначе
   // висела бы над каждой кнопкой рельсы.
   railHover?: boolean;
+  // Ширина капсулы, к кромке которой примыкает плашка полного названия. Дефолт
+  // взрослый RAIL_W; детская рельса (lg-кнопки) шире — см. RAIL_W_LG и RailIconButton.
+  railWidth?: number;
 }) {
   const [hover, setHover] = useState(false);
   // Плашка по долгому нажатию — как у кнопок рельсы (RailIconButton): пальцем
@@ -154,7 +157,7 @@ export function RailHat({ side, label, labelSize = 7, title, collapse, railHover
         : undefined}
       open={hover || pressed}
       onDismiss={() => setPressed(false)}
-      railWidth={RAIL_W}
+      railWidth={railWidth}
       hostStyle={{ alignSelf: 'stretch' }}
       // Таблетка со скруглениями с обеих сторон: подпись рельсы — не язычок кнопки
       standalone

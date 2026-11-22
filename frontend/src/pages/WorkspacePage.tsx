@@ -3053,7 +3053,10 @@ const windowWidth = useWindowWidth();
             </Button>
           )}
           <div style={{ position: 'relative', flexShrink: 0 }}>
-            <IconButton ariaLabel="Меню" onClick={() => setChildMenuOpen(v => !v)}>
+            {/* Тач-цель 40px и здесь (L5 аудита 21.11 → Г11, дефект 034360be): раньше
+                size='lg' был только в мобильной «Меню» (выше), на 768/1280 кнопка
+                оставалась md=32 — та же ошибка в десктопной/планшетной ветке */}
+            <IconButton size="lg" ariaLabel="Меню" onClick={() => setChildMenuOpen(v => !v)}>
               <User size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
             </IconButton>
             {childMenuOpen && (

@@ -13,7 +13,7 @@ export { PanelHeaderSlot } from './PanelHeaderSlot';
 export { useHasPanelHeader, usePanelHeaderHold, usePanelElement } from './panelHeaderSlotContext';
 export { RailFlyout } from './RailFlyout';
 export type { RailFlyoutAction } from './RailFlyout';
-export { RailCapsule, RAIL_W, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
+export { RailCapsule, RAIL_W, RAIL_W_LG, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
 export { RailIconButton } from './RailIconButton';
 export { RailSep } from './RailSep';
 export { RailHat, RAIL_HAT_H } from './RailHat';

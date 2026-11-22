@@ -577,6 +577,9 @@ export function DesktopWorkspace(p: Props) {
         // открыть существующий урок вовсе. Дефолтная панель дровера только ему;
         // взрослому undefined — раскладка как раньше.
         defaultCompactPanel={p.child ? 'chats' : undefined}
+        // Г11 (дефект 034360be): ребёнку кнопки рельсы — 40px (тач-цель), взрослому
+        // как было. Тот же p.child, что берёт детские панели и док предметов.
+        railItemSize={p.child ? 'lg' : undefined}
         panels={zonePanels}
         allowedKeys={p.allowedKeys}
         railBadges={p.railBadges}
@@ -767,6 +770,8 @@ export function DesktopWorkspace(p: Props) {
       <PanelZone
         side="right"
         compact={p.isTablet}
+        // Г11: та же детская тач-цель, что левой зоне (см. левый PanelZone)
+        railItemSize={p.child ? 'lg' : undefined}
         panels={zonePanels}
         allowedKeys={p.allowedKeys}
         railBadges={p.railBadges}

@@ -12,7 +12,15 @@ import { C, ISLAND } from '../../lib/design';
 
 // Ширина рельсы и зазор между рельсой и зоной панелей. Значения общие: рельсы
 // обязаны быть зеркальны, иначе одна зона визуально «толще» другой.
+// RAIL_W — взрослая: кнопка 32 (IconButton md) плюс по 3px поля с каждой стороны
+// (внутренняя ширина 40−2 рамки = 38).
 export const RAIL_W = 40;
+// RAIL_W_LG — детская (дефект 034360be, Г11): тач-цель ребёнка ≥40px (docs/design/
+// guidelines.md), кнопка 40 (IconButton lg) плюс те же 3px поля — enough для
+// акцентного кольца активной media-кнопки (3px, IconButton.tsx:84) и по той же
+// формуле, что взрослая: 40 + 3×2 + рамка 2. Рельсы ребёнка держат этот размер
+// обе: и панельная, и док предметов под ней — иначе капсулы разъехались бы.
+export const RAIL_W_LG = 48;
 // Зазор 8, а не 4: в него встаёт крайняя направляющая места вставки (толщина 2 плюс
 // отступ от кромки панели). При 4 она прижималась к рельсе вплотную и читалась как
 // её граница, а не как «сюда встанет колонка».
@@ -35,12 +43,17 @@ interface Props extends HTMLAttributes<HTMLDivElement> {
   // Отсюда же и приём вызывающего: пунктирная мишень дропа задаётся ЦЕЛОЙ строкой.
   border?: string;
   background?: string;
+  // Ширина капсулы. По умолчанию взрослая RAIL_W; ребёнку — RAIL_W_LG: 40px-кнопка
+  // в 40px-полосе обрезалась бы краем (внутренняя ширина 38 < 40). Вызывающий,
+  // который ставит не-deфолт, обязан тем же размером мерить всё вокруг капсулы
+  // (плашки, драуэры, попапы) — см. RAIL_W_LG.
+  width?: number;
   style?: CSSProperties;
   children: ReactNode;
 }
 
 export function RailCapsule({
-  side, visible = true, gapToCenter = 0, border, background, style, children, ...rest
+  side, visible = true, gapToCenter = 0, border, background, width = RAIL_W, style, children, ...rest
 }: Props) {
   const isLeft = side === 'left';
   // Схлопнутая капсула не должна оставлять после себя ни линии, ни полоски padding
@@ -49,7 +62,7 @@ export function RailCapsule({
     <div
       {...rest}
       style={{
-        width: visible ? RAIL_W : 0,
+        width: visible ? width : 0,
         opacity: visible ? 1 : 0,
         pointerEvents: visible ? 'auto' : 'none',
         maxHeight: visible ? undefined : 0,

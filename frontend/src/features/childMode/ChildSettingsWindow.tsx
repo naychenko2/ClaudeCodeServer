@@ -231,7 +231,11 @@ export function ChildSettingsWindow({
     </p>
   );
 
-  const body = loadFailed ? (
+  // Отказ чтения — один Notice на все экраны (дефект b8a6b293 / Г12): на десктопе и на
+  // мобильном экране раздела он идёт в тело окна, на мобильном экране СПИСКА разделов —
+  // над списком: родитель должен понимать, что настройки не загрузились, а не думать, что
+  // всё в порядке. Текст и «Повторить» — те же, второй формулировки не заводим.
+  const loadReject = (
     <Notice
       data-testid="child-settings-load-error"
       tone="danger"
@@ -245,7 +249,9 @@ export function ChildSettingsWindow({
     >
       {loadFailed} Ничего не потеряно — попробуй ещё раз.
     </Notice>
-  ) : !loaded ? (
+  );
+
+  const body = loadFailed ? loadReject : !loaded ? (
     <p data-testid="child-settings-loading" style={{ fontSize: FS.sm, color: C.textMuted, margin: 0 }}>
       Загружаю настройки…
     </p>
@@ -336,7 +342,7 @@ export function ChildSettingsWindow({
       header={isMobile ? (mobileSection === null ? null : backBar) : tabs}
       footer={footer}
     >
-      {isMobile && mobileSection === null ? navList : body}
+      {isMobile && mobileSection === null ? (loadFailed ? (<>{loadReject}{navList}</>) : navList) : body}
     </Modal>
   );
 }

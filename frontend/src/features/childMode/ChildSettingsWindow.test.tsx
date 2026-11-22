@@ -374,6 +374,25 @@ describe('Мобильная навигация (L4 аудита)', () => {
     await unmount();
   });
 
+  // Дефект b8a6b293 (находка приёмки QA-8): на экране СПИСКА разделов отказ чтения профиля
+  // не был виден — родитель думал, что всё в порядке, пока не тапнет в раздел. Тот же
+  // Notice, что в теле раздела, теперь и над списком; список и переход в раздел остаются.
+  it('отказ чтения виден на экране списка разделов; тот же — в разделе и после «←»', async () => {
+    getAnswers[0] = httpErr(500, 'server_error', 'стенд: профиль недоступен');
+    const { host, unmount } = await mount();
+    const notice = byTestId(host, 'child-settings-load-error');
+    expect(notice, 'признака отказа на экране списка нет').not.toBeNull();
+    expect(notice!.textContent).toContain('стенд: профиль недоступен');
+    expect(byTestId(host, 'child-settings-nav-list'), 'список разделов пропал').not.toBeNull();
+    // переход в раздел — отказ виден и там (как было), «←» возвращает к списку с ним же
+    await click(byTestId(host, 'child-settings-nav-time')!);
+    expect(byTestId(host, 'child-settings-load-error')?.textContent).toContain('стенд: профиль недоступен');
+    await click(byTestId(host, 'child-settings-back-bar')!.querySelector('[aria-label="К разделам"]') as HTMLElement);
+    expect(byTestId(host, 'child-settings-load-error')?.textContent).toContain('стенд: профиль недоступен');
+    expect(byTestId(host, 'child-settings-nav-list'), 'список не вернулся').not.toBeNull();
+    await unmount();
+  });
+
   it('тап по разделу — экран раздела с «←»; «←» — список; слот раздела живёт', async () => {
     const { host, unmount } = await mount();
     await click(byTestId(host, 'child-settings-nav-time')!);

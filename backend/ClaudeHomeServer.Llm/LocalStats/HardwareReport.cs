@@ -57,11 +57,14 @@ public static class HardwareThresholds
 
 // Node/UptimeS/CpuLoadPerc — узел, к которому относится отчёт (Ш3a). Значения по умолчанию держат
 // пустой отчёт контроллера (ветка без Llm), где узла нет вовсе.
+// CpuLoadSpark15m — история загрузки CPU крупной KPI узла: та же агрегация, что spark15m плиток
+// (окно 15 мин, 90 бакетов по 10 с, максимум в бакете, null — разрыв); null — поле не пишется в JSON.
 public sealed record HardwareReport(
     long At, string Status, long? StaleSince, string Level,
     HardwareGpuDto[] Gpus, HardwareNodeDto[] Nodes, HardwareFanDto[] CaseFans,
     HardwareSeriesDto[] Series, long StepMs,
-    HardwareNodeInfoDto? Node = null, long? UptimeS = null, int? CpuLoadPerc = null);
+    HardwareNodeInfoDto? Node = null, long? UptimeS = null, int? CpuLoadPerc = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int?[]? CpuLoadSpark15m = null);
 
 public sealed record HardwareNodeInfoDto(string Key, string Title);
 
@@ -220,7 +223,9 @@ public sealed class HardwareReportService(IHardwareSampler sampler, IConfigurati
         return new HardwareReport(
             (d.Cur?.At ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds(), status, status == "stale" ? d.View!.Since : null, d.Level,
             d.Gpus.Select(x => x.Dto).ToArray(), tiles, fans, series, (long)step.TotalMilliseconds,
-            new HardwareNodeInfoDto(d.Def.Key, TitleOf(d.Def)), d.Cur?.UptimeS, d.Cur?.CpuLoadPerc);
+            new HardwareNodeInfoDto(d.Def.Key, TitleOf(d.Def)), d.Cur?.UptimeS, d.Cur?.CpuLoadPerc,
+            // История загрузки CPU — та же агрегация кольца, что spark15m плиток (макс в бакете, null — разрыв).
+            d.View?.Aggregate(s => s.CpuLoadPerc, SparkWindow, SparkStep).Select(p => p.value).ToArray() ?? []);
     }
 
     public HardwareReport? Build(TimeSpan window) => Build("worker", window);

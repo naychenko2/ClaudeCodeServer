@@ -16,6 +16,10 @@ namespace ClaudeHomeServer.Tests.Guards;
 /// Сторож гейта И1 детского режима (KM-B2, ADR-041): ребёнок может только то, что помечено
 /// [ChildAllowed]. Перебирает ВСЕ эндпоинты EndpointDataSource хоста: детский токен на любом
 /// эндпоинте без метки → 403 child_mode; список размеченных заморожен здесь.
+/// Сторож поверхности DenyAll (Г14-д1, ADR-041 ред. 9): второй замороженный подсписок —
+/// [ChildRequiresProfile] (закрытые нечитаемому профилю платные операции и запись) и открытая
+/// ему часть поверхности (FrozenDenyAllOpen = Allowed \ RequiresProfile). Новая метка без
+/// правки этих списков краснит тест: класс эндпоинта при DenyAll — осознанное решение.
 /// Слепая зона та же, что у AnonymousEndpointsGuardTests: ветки конвейера без эндпоинта
 /// (WebDAV, /preview) и YARP-модули — для них отдельные тесты ниже и проверка в самих ветках.
 /// </summary>
@@ -128,6 +132,77 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         "GET,HEAD {*path:nonfile}",
     ];
 
+    // Заморожено (Г14-д1, ADR-041 ред. 9): [ChildRequiresProfile] — эндпоинты, закрытые ребёнку с
+    // нечитаемым профилем (DenyAll) до тела: платные операции и запись вне «своего экрана».
+    // Любая из них — [ChildAllowed]: ребёнок до них доходит, но не платит и не пишет.
+    private static readonly string[] FrozenRequiresProfile =
+    [
+        "POST api/tts",
+        // Голос чата и согласие правил — запись в чат/профиль (Г14-д1, Major 2)
+        "PUT api/child/chats/{id}/voice",
+        "POST api/child/rules/agree",
+        // Запись заметок (чтение двух GET остаётся открытым)
+        "POST api/notes",
+        "PUT api/notes/{id}",
+        "DELETE api/notes/{id}",
+        // Запись рельсы «Файлы» (шесть читающих GET и stream/zip остаются открытыми)
+        "PUT api/projects/{projectId}/files/content",
+        "POST api/projects/{projectId}/files/create",
+        "POST api/projects/{projectId}/files/mkdir",
+        "POST api/projects/{projectId}/files/rename",
+        "POST api/projects/{projectId}/files/upload",
+        "DELETE api/projects/{projectId}/files",
+        "POST api/projects/{projectId}/files/restore",
+        // Задача: создание/правка/удаление (список GET остаётся открытым)
+        "POST api/projects/{projectId}/tasks",
+        "PUT api/tasks/{taskId}",
+        "DELETE api/tasks/{taskId}",
+    ];
+
+    // Заморожено: то, что открыто DenyAll — оставшаяся часть [ChildAllowed]-поверхности:
+    // bootstrap (вход, личность и снимок поверхности, health, SPA-корень, хаб), статус/присутствие,
+    // предметы и аватары репетиторов, стоп-сигнал (явное исключение безопасности), чтение своих
+    // предметов-предметов и чтение своих уроков. Контроллеры этих ручек отвечают DenyAll по-детски
+    // сами (503 policy_unavailable / 403 not_child_subject / 404) — поведение не меняется.
+    private static readonly string[] FrozenDenyAllOpen =
+    [
+        "GET api/auth/me",
+        "POST api/auth/login",
+        "POST api/child/heartbeat",
+        "GET api/child/status",
+        "POST api/child/spaces/{space}/chat",
+        "GET api/child/spaces/{space}/chats",
+        "POST api/child/chats/{id}/attachments",
+        "POST api/child/rules/start",
+        "POST api/child/stop-signal",
+        "GET api/chats/{id}",
+        "GET api/chats/{id}/history",
+        "GET api/chats/{id}/attachments/raw",
+        "GET api/chats/{sessionId}/context",
+        "GET api/chats/{sessionId}/context/saved-files",
+        "GET api/child/subjects",
+        "GET api/personas/{id}/avatar",
+        "GET api/notes",
+        "GET api/notes/{id}",
+        "GET api/projects/{projectId}/knowledge",
+        "GET api/projects/{projectId}/knowledge/search",
+        "GET api/projects/{projectId}/tasks",
+        "GET api/projects",
+        "GET api/projects/{id}",
+        "GET api/projects/{projectId}/sessions",
+        "GET api/projects/{projectId}/services",
+        "GET api/projects/{projectId}/files",
+        "GET api/projects/{projectId}/files/tree",
+        "GET api/projects/{projectId}/files/search",
+        "GET api/projects/{projectId}/files/content",
+        "GET api/projects/{projectId}/files/stream",
+        "GET api/projects/{projectId}/files/zip",
+        "GET,HEAD api/health",
+        "ANY /hubs/session",
+        "ANY /hubs/session/negotiate",
+        "GET,HEAD {*path:nonfile}",
+    ];
+
     private void SetChild(bool enabled = true, bool valid = true)
     {
         var user = factory.Services.GetRequiredService<UserStore>()
@@ -166,6 +241,77 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
             .Where(e => e.Metadata.GetMetadata<ChildAllowedAttribute>() is not null)
             .Select(Describe).Distinct().Order(StringComparer.Ordinal).ToArray();
         actual.Should().Equal(FrozenAllowed.Order(StringComparer.Ordinal));
+    }
+
+    // Поверхность DenyAll заморожена двумя списками (Г14-д1): закрытое профилем и открытое.
+    // Их объединение — ровно [ChildAllowed]-поверхность, пересечения нет: класс каждого
+    // размеченного эндпоинта при DenyAll решён явно. Новый [ChildAllowed] без решения о нём
+    // краснит и этот тест, и ChildAllowedList_IsFrozen.
+    [Fact]
+    public void DenyAllSurface_IsFrozen()
+    {
+        FrozenDenyAllOpen.Intersect(FrozenRequiresProfile).Should().BeEmpty();
+        FrozenDenyAllOpen.Concat(FrozenRequiresProfile).Order(StringComparer.Ordinal)
+            .Should().Equal(FrozenAllowed.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void ChildRequiresProfileList_IsFrozen()
+    {
+        var actual = Endpoints()
+            .Where(e => e.Metadata.GetMetadata<ChildRequiresProfileAttribute>() is not null)
+            .Select(Describe).Distinct().Order(StringComparer.Ordinal).ToArray();
+        actual.Should().Equal(FrozenRequiresProfile.Order(StringComparer.Ordinal));
+    }
+
+    // Default-deny для DenyAll (ADR-041 ред. 9): каждая помеченная [ChildRequiresProfile] ручка
+    // получает детский отказ 503 policy_unavailable — того же контракта И3, что контроллерные
+    // отказы DenyAll — до тела контроллера: ни записи, ни расхода. Мутация «снять метку с любой»
+    // краснит этот тест: запрос доходит до тела и отвечает не-детским телом (not_configured,
+    // 404, запись).
+    [Fact]
+    public async Task DenyAllToken_OnRequiredProfileEndpoint_Gets503PolicyUnavailable()
+    {
+        SetChild(valid: false); // профиль есть, но нечитаем → DenyAll
+        using var client = ChildClient();
+        var marked = Endpoints()
+            .Where(e => e.Metadata.GetMetadata<ChildRequiresProfileAttribute>() is not null)
+            .ToList();
+        marked.Should().NotBeEmpty();
+
+        foreach (var e in marked)
+        {
+            var method = e.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods.FirstOrDefault() ?? "GET";
+            var path = System.Text.RegularExpressions.Regex.Replace(e.RoutePattern.RawText ?? "/", @"\{[^}]*\}", "x");
+            using var req = new HttpRequestMessage(new HttpMethod(method), path);
+            // Тело по типу ручки: POST/PUT — пустой JSON (проходит [FromBody]-валидации как
+            // «поля пусты», а DenyAll-отказ всё равно до тела); files/upload — multipart: у неё
+            // контент-констрейнт (IFormFile), и запрос с другим телом матчит не её, а
+            // /api-фолбэк — проверено диагностикой: multipart матчит upload, JSON/пустое — нет.
+            if (method is "POST" or "PUT")
+                req.Content = (e.RoutePattern.RawText ?? "").EndsWith("files/upload")
+                    ? new MultipartFormDataContent { { new StringContent("a"), "file" } }
+                    : (HttpContent)new StringContent("{}", Encoding.UTF8, "application/json");
+            var resp = await client.SendAsync(req);
+            var body = await resp.Content.ReadAsStringAsync();
+            resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable,
+                $"{Describe(e)} закрыта DenyAll до тела: платная операция и запись вне своего экрана; тело: {body}");
+            body.Should().Contain("policy_unavailable");
+        }
+    }
+
+    // Стоп-сигнал — явное исключение безопасности (Г14-д1): остаётся доступен DenyAll-ребёнку.
+    // Мутация «поставить [ChildRequiresProfile] на ChildStopSignalController.Raise» краснит тест.
+    [Fact]
+    public async Task DenyAllToken_OnStopSignal_StillAccepted()
+    {
+        SetChild(valid: false);
+        using var client = ChildClient();
+        var resp = await client.PostAsync("/api/child/stop-signal",
+            new StringContent("{}", Encoding.UTF8, "application/json"));
+        ((int)resp.StatusCode).Should().BeLessThan(400);
+        var body = await resp.Content.ReadAsStringAsync();
+        body.Should().NotContain("policy_unavailable").And.NotContain("child_mode");
     }
 
     // Ревью К4a (К3): WorkflowController.GetTimeline отдаёт ToolResult из транскрипта workflow-агента, а защита

@@ -662,8 +662,10 @@ public class NotesController : ControllerBase
     public ActionResult<IReadOnlyList<NoteBacklinkDto>> Backlinks(string id) =>
         Ok(_notes.GetBacklinks(UserId, id));
 
+    // Запись заметки: DenyAll-ребёнку закрыта гейтом до тела ([ChildRequiresProfile], ADR-041 ред. 9).
     [HttpPost]
     [ChildAllowed]
+    [ChildRequiresProfile]
     public async Task<ActionResult<NoteDetail>> Create([FromBody] CreateNoteRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Title))
@@ -696,6 +698,7 @@ public class NotesController : ControllerBase
     // Без If-Match — как раньше.
     [HttpPut("{id}")]
     [ChildAllowed]
+    [ChildRequiresProfile] // запись: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     public async Task<ActionResult<NoteDetail>> Update(string id, [FromBody] UpdateNoteRequest req)
     {
         var ifMatch = Request.Headers.IfMatch.ToString();
@@ -748,6 +751,7 @@ public class NotesController : ControllerBase
 
     [HttpDelete("{id}")]
     [ChildAllowed]
+    [ChildRequiresProfile] // удаление записи: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     public async Task<IActionResult> Delete(string id)
     {
         var (sourceKey, relPath) = IdParts(id);

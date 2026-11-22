@@ -116,7 +116,10 @@ public class ChildRulesController(
         return Ok(new { sessionId = chat!.Id });
     }
 
+    // Запись согласия в профиль (RulesAgreedAt/RulesSummary): DenyAll-ребёнку закрыта гейтом до тела
+    // ([ChildRequiresProfile], ADR-041 ред. 9) — при нечитаемом профиле согласие не ставится.
     [ChildAllowed]
+    [ChildRequiresProfile]
     [HttpPost("rules/agree")]
     public IActionResult Agree([FromBody] ChildRulesAgreeRequest req)
     {

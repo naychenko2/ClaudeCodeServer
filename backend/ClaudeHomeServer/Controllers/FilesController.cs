@@ -632,6 +632,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     [HttpPut("content")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     [ChildAllowed]
+    [ChildRequiresProfile] // запись файла: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     public async Task<IActionResult> SaveContent(string projectId, [FromQuery] string path, [FromBody] SaveContentRequest req, [FromQuery] string? taskId = null)
     {
         try
@@ -1033,6 +1034,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     [HttpPost("create")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     [ChildAllowed]
+    [ChildRequiresProfile] // запись файла: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     public IActionResult CreateFile(string projectId, [FromBody] CreateFileRequest req)
     {
         try
@@ -1057,6 +1059,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     [HttpPost("mkdir")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     [ChildAllowed]
+    [ChildRequiresProfile] // запись файла: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     public IActionResult CreateDir(string projectId, [FromBody] PathRequest req)
     {
         // S2d-6b-5: каталог под чужим автором — 404 до CreateDirectory. Сам контейнер
@@ -1086,6 +1089,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     [HttpPost("rename")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     [ChildAllowed]
+    [ChildRequiresProfile] // запись файла: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     public async Task<IActionResult> Rename(string projectId, [FromBody] RenameRequest req)
     {
         try
@@ -1176,6 +1180,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     [HttpDelete]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     [ChildAllowed]
+    [ChildRequiresProfile] // запись файла: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     // Секция destructive: на делегированном ходу агент не удаляет данные (раньше — срезанием
     // секции из состава инструментов wsp, что перезапускало процесс CLI со всеми MCP)
     [DenyOnDelegatedTurn("Удаление файлов")]
@@ -1263,6 +1268,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     [HttpPost("restore")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     [ChildAllowed]
+    [ChildRequiresProfile] // запись файла: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     public IActionResult RestoreFromTrash(string projectId, [FromBody] RestoreFromTrashRequest req)
     {
         try
@@ -1287,6 +1293,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     [HttpPost("upload")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     [ChildAllowed]
+    [ChildRequiresProfile] // запись файла: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
     public async Task<IActionResult> Upload(string projectId, [FromQuery] string path = "", IFormFile? file = null,
         CancellationToken ct = default)

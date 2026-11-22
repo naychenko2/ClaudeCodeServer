@@ -19,12 +19,16 @@ namespace ClaudeHomeServer.Services.ChildMode;
 /// считается: вход (login) закрывает свой [AllowAnonymous].
 /// </para>
 /// <para>
-/// Гейт НЕ решает, что можно ребёнку с неполным профилем (<c>DenyAll</c>): такой ребёнок остаётся
-/// ребёнком и доходит до размеченных <see cref="ChildAllowedAttribute"/> ручек, а каждая из них отвечает
-/// ему по-детски — <c>503 policy_unavailable</c> с текстом «попросите взрослого» (ChildStatusController,
-/// ChildSubjectsController, ChildChatsController) или 403 not_child_subject / 404. Так неполный профиль не
-/// уводит ребёнка во взрослую поверхность: он видит свой экран с empty-state (Г14, дефект 65aa2189).
-/// Раньше blanket-отказ гейта по <c>DenyAll</c> глушил именно эту детскую обработку контроллеров.
+/// Гейт решает детскую поверхность и при неполном профиле (<c>DenyAll</c>), и делает это одной точкой
+/// (ADR-041 ред. 9): такой ребёнок остаётся ребёнком и доходит до <see cref="ChildAllowedAttribute"/>
+/// ручек своей оболочки — личности, статуса, предметов-предметов, чтения, стоп-сигнала; но ручки,
+/// помеченные <see cref="ChildRequiresProfileAttribute"/> (платные операции и запись вне «своего
+/// экрана»), гейт закрывает сам: <c>503 policy_unavailable</c> с текстом «попросите взрослого»
+/// до тела эндпоинта — ни записи, ни расхода. Остальные дошедшие ручки отвечают по-детски сами
+/// (<c>503 policy_unavailable</c> ChildStatusController/ChildSubjectsController/ChildChatsController,
+/// 403 not_child_subject / 404). Так неполный профиль не уводит ребёнка ни во взрослую поверхность,
+/// ни в платную операцию: он видит свой экран с empty-state (Г14, дефект 65aa2189; Г14-д1).
+/// Раньше blanket-отказ гейта по <c>DenyAll</c> глушил саму детскую обработку контроллеров.
 /// </para>
 /// <para>
 /// Операционный <c>DenyAll</c> (запуск хода ребёнка, MCP-тулзы) остаётся fail-closed в <see cref="ChildModeGate"/>:
@@ -46,8 +50,9 @@ public sealed class ChildModeGateMiddleware(RequestDelegate next)
                 // Хабы кроме /hubs/session (terminal, devices) ребёнку закрыты целиком:
                 // у них нет [ChildAllowed], поэтому negotiate получает 403 здесь.
                 // Allow-list эндпоинтов: ребёнку открыто только помеченное [ChildAllowed]. Неполный
-                // профиль (DenyAll) здесь НЕ отсекается — до контроллера доходит он, и тот отвечает по-детски
-                // (503 policy_unavailable / 403 not_child_subject / 404), а не уводит во взрослую поверхность (Г14).
+                // профиль (DenyAll) здесь НЕ отсекается целиком — до контроллера доходит он, и тот отвечает
+                // по-детски (503 policy_unavailable / 403 not_child_subject / 404), а не уводит во взрослую
+                // поверхность (Г14).
                 var meta = ctx.GetEndpoint()?.Metadata;
                 var allowed = !unknownOwner
                     && meta?.GetMetadata<ChildAllowedAttribute>() is not null
@@ -56,6 +61,20 @@ public sealed class ChildModeGateMiddleware(RequestDelegate next)
                 {
                     ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
                     await ctx.Response.WriteAsJsonAsync(new { error = "child_mode" });
+                    return;
+                }
+                // Default-deny для DenyAll (ADR-041 ред. 9): из открытой детской поверхности этому
+                // ребёнку закрыто помеченное [ChildRequiresProfile] — платные операции и запись.
+                // Тело — тот же детский контракт, что у контроллерных отказов DenyAll (И3): один
+                // код на одно состояние, фронт показывает message как есть.
+                if (snapshot!.DenyAll && meta!.GetMetadata<ChildRequiresProfileAttribute>() is not null)
+                {
+                    ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                    await ctx.Response.WriteAsJsonAsync(new
+                    {
+                        code = "policy_unavailable",
+                        message = "Администратор ещё не настроил твои занятия — попроси взрослого.",
+                    });
                     return;
                 }
             }

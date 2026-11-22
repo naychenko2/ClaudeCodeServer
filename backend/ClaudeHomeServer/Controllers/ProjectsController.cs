@@ -145,13 +145,25 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
     // Ребёнок ли текущий владелец и что разрешает его профиль — та же точка правды, что у гейта И1:
     // IChildModePolicy по стору, а не по claim (образец ChatsController.CurrentOwnerIsChild,
-    // хвост ревью R-KM-B6f). DenyAll/нечитаемый профиль — не ребёнок здесь: такого ребёнка сам гейт
-    // не пускает к телу эндпоинта (403 child_mode, ChildModeGateMiddleware.cs:37). Без DI-скопа
+    // хвост ревью R-KM-B6f). DenyAll/нечитаемый профиль — тоже ребёнок: он доходит до тела этой
+    // ручки (Г14) и видит свои предметы-предметы по их существованию — список предметов нечитаемого
+    // профиля не читается, но проект-предмета и его данные ребёнку остаются видны (тот же смысл,
+    // что у «предмет, удалённый из профиля, не помеха» в ChildSubjectAccess). Во взрослую ветку
+    // (GetAccessible: собственные + доступные общие) DenyAll не уходит ни в какой форме —
+    // ADR-041 ред. 9, Г14-д1 (Major 1 вердикта: раньше null-снимок давал именно её). Без DI-скопа
     // (бесхостовые тесты этого контроллера) — не ребёнок: детские запросы к не-размеченным
     // ручкам сюда всё равно не доходят — их отсекает тот же гейт.
-    private (string ChildId, ChildProfile Profile)? ChildScope() =>
-        HttpContext.RequestServices?.GetService<IChildModePolicy>()?.For(UserId)
-            is { DenyAll: false, Profile: { } profile } snapshot ? (snapshot.OwnerId, profile) : null;
+    private (string ChildId, ChildProfile? Profile)? ChildScope()
+    {
+        var snapshot = HttpContext.RequestServices?.GetService<IChildModePolicy>()?.For(UserId);
+        return snapshot switch
+        {
+            { DenyAll: false, Profile: { } profile } readable => (readable.OwnerId, profile),
+            // DenyAll: профиль есть, но не читается — док судится существованием предмета, не профилем.
+            { DenyAll: true } denied => (denied.OwnerId, null),
+            _ => null,
+        };
+    }
 
     // «Свой проект-предмета включённого предмета» (решение 84): маркер из единой точки его чтения
     // (ProjectCapabilities.IsChildSubject) + владение самим ребёнком + предмет есть в профиле и
@@ -170,10 +182,13 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     public IActionResult GetAll()
     {
         // Ребёнку — только его проекты-предметы включённых предметов; «владение» — на GetByOwner,
-        // как во всех местах владения. Взрослый путь — без изменений.
+        // как во всех местах владения. DenyAll (нечитаемый профиль) — та же детская ветка, но без
+        // фильтра по списку профиля: свои предметы-предметы по их существованию (ADR-041 ред. 9);
+        // взрослый GetAccessible ему закрыт. Взрослый путь — без изменений.
         if (ChildScope() is (string childId, var profile))
             return Ok(projects.GetByOwner(childId)
-                .Where(p => IsOwnEnabledSubjectProject(p, childId, profile))
+                .Where(p => profile is null ? ChildSubjectAccess.IsOwnSubjectProject(p, childId)
+                    : IsOwnEnabledSubjectProject(p, childId, profile))
                 .Select(WithCount));
         return Ok(projects.GetAccessible(UserId).Select(WithCount));
     }
@@ -188,8 +203,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // Чужой или обычный проект ребёнку — тот же 404, что «не найдено»: проекты ребёнка —
         // только его проекты-предметы, существование остального ему не раскрываем. Видимость
         // чужого (участник + SharedProjects) здесь не помогает: ProjectScope её пропускает,
-        // отказывает эта проверка.
-        if (ChildScope() is (string childId, var profile) && !IsOwnEnabledSubjectProject(p, childId, profile))
+        // отказывает эта проверка. DenyAll — своя форма той же границы: свой предмет-предмета
+        // по владению и маркеру (профиль не читается), всё остальное — тот же 404 (ADR-041 ред. 9).
+        if (ChildScope() is (string childId, var profile) &&
+            !(profile is null ? ChildSubjectAccess.IsOwnSubjectProject(p, childId)
+                : IsOwnEnabledSubjectProject(p, childId, profile)))
             return NotFound();
         return Ok(WithCount(p));
     }

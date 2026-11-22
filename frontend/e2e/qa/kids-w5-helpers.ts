@@ -49,14 +49,16 @@ export interface EnterOpts {
 }
 
 export async function enter(page: Page, token: string, opts: EnterOpts = {}) {
-  await page.addInitScript((t: string, o: EnterOpts) => {
+  // addInitScript принимает ОДИН аргумент-подстановку, поэтому роли/токен
+  // уезжают одним объектом (раньше было три аргумента — tsc ругался TS2554).
+  await page.addInitScript(({ t, o }: { t: string; o: EnterOpts }) => {
     localStorage.setItem('cc_token', t);
     localStorage.setItem('__probe', 'yes');
     if (o.role) localStorage.setItem('cc_role', o.role);
     if (o.userId) localStorage.setItem('cc_user_id', o.userId);
     if (o.username) localStorage.setItem('cc_username', o.username);
     if (o.clean) localStorage.removeItem('cc_open_project');
-  }, token, opts);
+  }, { t: token, o: opts });
 }
 
 /** Настоящий вход через форму: init-скрипт на этом стенде не выживает (токен сносит инициализация). */
@@ -141,10 +143,15 @@ export async function openUserManagement(page: Page) {
       els => els.map(e => (e.getAttribute('aria-label') ?? e.textContent ?? '').slice(0, 40)).slice(0, 20))));
     throw new Error('триггер меню пользователя не найден');
   }
-  await avatar.click({ force: true });
+  // Клик по САМОМУ элементу, а не по координатам: поверх шапки висит тост, и
+  // force-клик по точке уходил в тост — меню не открывалось (пункт «Пользователи»
+  // так и не появлялся, тест висел до потолка).
+  await avatar.evaluate((el: HTMLElement) => el.click());
   await page.waitForTimeout(1000);
   console.log('QA-DEBUG-MENU', (await page.locator('body').innerText()).slice(0, 500));
-  await page.getByRole('button', { name: 'Пользователи', exact: true }).first().click({ force: true });
+  const usersItem = page.getByRole('button', { name: 'Пользователи', exact: true }).first();
+  await expect(usersItem, 'в меню аватара есть пункт «Пользователи»').toBeVisible({ timeout: 15000 });
+  await usersItem.evaluate((el: HTMLElement) => el.click());
   await expect(page.locator('text=Пользователи').first()).toBeVisible({ timeout: 15000 });
   await page.waitForTimeout(1500);
 }
@@ -154,13 +161,16 @@ export async function openChildSettings(page: Page, login: string) {
   const buttons = page.locator('[data-testid="child-settings-open"]');
   const n = await buttons.count();
   expect(n, 'в списке пользователей есть кнопки «Настроить занятия»').toBeGreaterThan(0);
+  // Логин — ТОЧНОЕ слово: 'qa_w5_child' входит в 'qa_w5_child2', и по includes
+  // открывалось окно другого ребёнка (правка уходила в чужой профиль).
+  const loginRe = new RegExp(`(^|\\s)${login.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|\\s)`);
   for (let i = 0; i < n; i++) {
     await buttons.nth(i).click({ force: true });
     await page.waitForTimeout(1500);
     // окно настроек — верхняя модалка (последняя в DOM)
     const dialog = page.locator('.cc-modal-card, .cc-sheet-card').last();
     const text = await dialog.innerText().catch(() => '');
-    if (text.includes('Настройки детского режима') && text.includes(login)) {
+    if (text.includes('Настройки детского режима') && loginRe.test(text)) {
       return true;
     }
     // окно не того ребёнка — закрываем

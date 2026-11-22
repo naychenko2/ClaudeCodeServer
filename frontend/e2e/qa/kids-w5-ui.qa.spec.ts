@@ -150,7 +150,9 @@ async function layoutOf(page: Page) {
 }
 
 /** Плашка предмета (портал в body, fixed) — ищется по кнопке «Новый урок» внутри fixed-контейнера. */
-async function subjectPlate(page: Page) {
+async function subjectPlate(page: Page): Promise<
+  { found: true; left: number; right: number; top: number; text: string } | { found: false }
+> {
   return page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('[data-testid="child-new-lesson"]')) as HTMLElement[];
     for (const b of btns) {
@@ -163,12 +165,14 @@ async function subjectPlate(page: Page) {
         n = n.parentElement;
       }
     }
-    return { found: false };
+    return { found: false as const };
   });
 }
 
 /** Панель «Чаты» (десктоп) — прямоугольник её карточки, если она открыта. */
-async function chatsPanel(page: Page) {
+async function chatsPanel(page: Page): Promise<
+  { found: true; left: number; right: number; top: number; bottom: number } | { found: false }
+> {
   return page.evaluate(() => {
     const heads = Array.from(document.querySelectorAll('*')).filter(e => {
       const t = (e.textContent || '').trim();
@@ -184,7 +188,7 @@ async function chatsPanel(page: Page) {
         n = n.parentElement;
       }
     }
-    return { found: false };
+    return { found: false as const };
   });
 }
 
@@ -261,7 +265,6 @@ test('Г6: «назад» из проекта возвращает к списк
   const ids = await page.locator('[data-testid^="child-subject-tile-"]').evaluateAll(
     els => els.map(e => e.getAttribute('data-testid') ?? ''));
   const second = ids[1];
-  const subjectId = second.replace('child-subject-tile-', '');
   await page.locator(`[data-testid="${second}"]`).click({ force: true });
   await page.waitForTimeout(3000);
   const openedUrl = page.url();
@@ -393,7 +396,7 @@ test('Г3б: шапка не сжимает имя репетитора', async 
 
   // Имя репетитора — из снимка поверхности ребёнка.
   const childToken = await tokenOf(req, CHILD_U, CHILD_PW);
-  const subjects = (await call(req, 'get', '/api/child/subjects', childToken)).body as any[];
+  const subjects = (await call(req, 'get', '/api/child/subjects', childToken)).body as { subjects?: any[] } | null;
   const tutorName: string = subjects?.subjects?.find((s: any) => s.id === 'math')?.tutor?.name ?? '';
   console.log('QA-TUTOR-NAME', JSON.stringify(tutorName));
 
@@ -471,7 +474,6 @@ test('уточнение: на 768 список уроков и имя репе�
   const before = await layoutOf(page);
   console.log('QA-768-BEFORE-RAIL', JSON.stringify(before.testids));
 
-  const railGlyph = page.locator('button:has-text("∑"), [data-testid*="rail"] , button:has(svg)').filter({ hasText: '∑' }).first();
   const railCount = await page.locator('text=∑').count();
   console.log('QA-768-GLYPH-COUNT', railCount);
   if (railCount > 0) {
@@ -495,7 +497,7 @@ test('уточнение: на 768 список уроков и имя репе�
   await row.click({ force: true });
   await page.waitForTimeout(3000);
   const childToken = await tokenOf(req, CHILD_U, CHILD_PW);
-  const subjects = (await call(req, 'get', '/api/child/subjects', childToken)).body as any[];
+  const subjects = (await call(req, 'get', '/api/child/subjects', childToken)).body as { subjects?: any[] } | null;
   const tutorName: string = subjects?.subjects?.find((s: any) => s.id === 'math')?.tutor?.name ?? '';
   const header = await tutorBox(page, tutorName);
   console.log('QA-360-HEADER-TUTOR', JSON.stringify({ tutorName, header }));

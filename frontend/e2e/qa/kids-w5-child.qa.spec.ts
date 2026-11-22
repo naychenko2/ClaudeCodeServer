@@ -15,7 +15,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   ADMIN_U, ADMIN_PW, CHILD_U, CHILD_PW, CHILD3_U, CHILD3_PW, BASE,
-  call, tokenOf, enter, loginViaUi, uiProbe, badResponses,
+  call, tokenOf, enter, uiProbe, badResponses,
 } from './kids-w5-helpers';
 
 const SHOTS = resolve(process.cwd(), '.cc-attachments/qa/kids-w5-qa8/shots');
@@ -26,7 +26,6 @@ let adminToken = '';
 let childId = '';
 let mathProjectId = '';
 let literProjectId = '';
-let mathProjectName = '';
 let literProjectName = '';
 let adultProjectId = '';
 
@@ -57,7 +56,7 @@ test.beforeAll(async ({ playwright }) => {
   const liter = projects.find(p => p.childSubjectId === 'liter');
   expect(math, 'проект-предмет «Математика» есть').toBeTruthy();
   expect(liter, 'проект-предмет «Литература…» есть').toBeTruthy();
-  mathProjectId = math.id; mathProjectName = math.name;
+  mathProjectId = math.id;
   literProjectId = liter.id; literProjectName = liter.name;
   console.log('QA-CHILD-PROJECTS', JSON.stringify(projects.map(p => ({ id: p.id, name: p.name, subject: p.childSubjectId }))));
 });

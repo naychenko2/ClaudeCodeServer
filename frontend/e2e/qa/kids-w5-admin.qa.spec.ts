@@ -15,11 +15,10 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   ADMIN_U, ADMIN_PW, CHILD_U, GUARD_U, GUARD_PW, CHILD2_U, CHILD2_PW, CHILD3_U, CHILD3_PW,
-  BASE, call, tokenOf, enter, loginViaUi, openUserManagement, openChildSettings, uiProbe,
+  BASE, call, tokenOf, loginViaUi, openUserManagement, openChildSettings,
 } from './kids-w5-helpers';
 
 const SHOTS = resolve(process.cwd(), '.cc-attachments/qa/kids-w5-qa8/shots');
-const ACK_LABEL = 'Я понимаю риски и беру их на себя';
 
 let req: APIRequestContext;
 let adminToken = '';
@@ -27,7 +26,6 @@ let guardId = '';
 let child2Id = '';
 let child3Id = '';
 let mashaId = '';
-let adminId = '';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -38,7 +36,6 @@ test.beforeAll(async ({ playwright }) => {
 
   const allUsers = (await call(req, 'get', '/api/users', adminToken)).body as any[];
   mashaId = allUsers.find(u => u.username === CHILD_U)?.id ?? '';
-  adminId = allUsers.find(u => u.username === ADMIN_U)?.id ?? '';
   // Чистим профили от опекунов-пользователей, которых уже нет (следы прошлых прогонов):
   // такой id в списке блокирует любую правку профиля (guardian_not_found).
   const liveIds = new Set(allUsers.map(u => u.id));
@@ -234,8 +231,14 @@ test('Г2-д1б: правка опекунов не создаёт соглас�
     await page.waitForTimeout(600);
     await page.getByText(GUARD_U, { exact: false }).first().click({ force: true });
   }
-  await page.locator('[data-testid="guardian-add-btn"]').click({ force: true });
+  // Кнопка «Добавить» disabled, пока опекун не выбран: ждём её доступности,
+  // иначе клик (с force) уходит в никуда и опекун не добавляется.
+  const addBtn = page.locator('[data-testid="guardian-add-btn"]');
+  await expect(addBtn, 'кнопка «Добавить» стала активной после выбора опекуна').toBeEnabled({ timeout: 10000 });
+  await addBtn.click({ force: true });
   await page.waitForTimeout(600);
+  expect(await page.locator(`[data-testid="guardian-${guardId}"]`).count(),
+    'строка опекуна появилась в черновике').toBeGreaterThan(0);
   await page.locator('[data-testid="child-settings-save"]').click({ force: true });
   await page.waitForTimeout(2500);
 

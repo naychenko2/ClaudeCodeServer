@@ -2798,7 +2798,15 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // от владельца экрана (он грузит предметы и их viewers, Ф1e); без них шапка —
   // имя чата без метки предмета (тот же случай, что закрытый/до-предметный чат).
   const headerBar = childFeedKinds ? (
-    <ChildLessonHeader subject={childHeader?.subject ?? null} viewers={childHeader?.viewers} title={session.name || 'Новый урок'} isMobile={!!isMobile} />
+    <ChildLessonHeader
+      subject={childHeader?.subject ?? null}
+      viewers={childHeader?.viewers}
+      time={childHeader?.time}
+      title={session.name || 'Новый урок'}
+      isMobile={!!isMobile}
+      onBack={onBack}
+      sessionId={session.id}
+    />
   ) : (
     <FeatureChatCard
       sessionId={session.id}

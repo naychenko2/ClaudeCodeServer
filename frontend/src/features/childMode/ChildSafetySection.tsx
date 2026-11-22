@@ -27,20 +27,49 @@
 // назвала его (тот же вывод, что у текстов ChildSettingsOverview). Имена опекунов и автора
 // согласия приходят извне (userNames от вызывающего): в ответе профиля только id, без имени
 // строка показывает id (тот же порядок, что nameOf в ChildSettingsOverview.tsx:40).
+//
+// Г2: опекунов можно править из окна, без API. Раздел остаётся onChange-компонентом:
+// выбор и кнопки меняют только черновик вызывающего (onGuardiansChange — целый новый список
+// id; порядок — текущий плюс новый в конец). Записывает черновик каркас (PUT child-profile):
+// запрос идёт из живого профиля, поэтому лимиты, окна и предметы не затираются; согласие каркас
+// не трогает — это отдельная галка (onAcknowledgeChange): правка списка опекунов явный отзыв
+// не стирает, живую пару согласия слияние стора не двигает (UserStore.SetChildProfile:
+// «повторный PUT с тем же флагом его не переставляет»). Без onGuardiansChange
+// раздел остаётся read-only (прежний контракт).
+// Флаг shared-projects строки — только известный из ответа: у добавленного до сохранения
+// опекуна его нет (UserDto флага не несёт, api.md:369-374 — флаг включает человек, не окно);
+// строка без флага честнее выдуманного.
 
-import { Hand, Users } from 'lucide-react';
+import { useState } from 'react';
+import { Hand, Plus, Trash2, Users } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Badge } from '../../components/ui/Badge';
+import { Button } from '../../components/ui/Button';
 import { Checkbox } from '../../components/ui/Checkbox';
+import { Field } from '../../components/ui/Field';
 import { Notice } from '../../components/ui/Notice';
+import { Select } from '../../components/ui/Select';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ChildRoutePicker, type ChildRouteValue } from './ChildRoutePicker';
-import type { ChildRoute, ChildSettingsGuardian } from './types';
+import type { ChildRoute } from './types';
+
+// Строка опекуна в рендере: id — из списка черновика (порядок guardianUserIds), флаг — известный
+// из ответа (ChildSettingsGuardian). Отсутствие флага — «ещё не сохранён», не «выключен».
+export interface ChildSettingsGuardianRow {
+  userId: string;
+  sharedProjectsFlag?: boolean;
+}
 
 interface Props {
-  // Опекунa профиля из ответа (ChildSettingsGuardian, порядок guardianUserIds) и рубильник
-  // инстанса SharedProjects:Enabled (решение 60): без него флаги опекунов ничего не открывают.
-  guardians: ChildSettingsGuardian[];
+  // Опекунa профиля: порядок — черновика (guardianUserIds), флаг — известного из ответа;
+  // рубильник инстанса SharedProjects:Enabled (решение 60): без него флаги опекунов ничего
+  // не открывают.
+  guardians: ChildSettingsGuardianRow[];
+  // Кандидаты пикера: id пользователей без детского режима (фильтр вызывающего: ребёнок
+  // не бывает опекуном). Имена — из userNames, как у списка. Без пропа правки нет.
+  guardianCandidates?: string[];
+  // Целый новый список опекунов: вызывающий патчит черновик (guardianUserIds + согласие).
+  onGuardiansChange?: (ids: string[]) => void;
   sharedProjectsInstanceEnabled?: boolean;
   // Имена по id — список вызывающего. Без имени строка показывает id.
   userNames?: Record<string, string>;
@@ -102,13 +131,28 @@ const panelStyle = {
 const rowStyle = { display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' as const };
 
 export function ChildSafetySection({
-  guardians, sharedProjectsInstanceEnabled, userNames,
+  guardians, guardianCandidates, onGuardiansChange,
+  sharedProjectsInstanceEnabled, userNames,
   acknowledge, acknowledgedAt, acknowledgedBy, onAcknowledgeChange,
   routes, route, onRouteChange, disabled,
 }: Props) {
   // Живое согласие сервера — его дата (пара момента и автора пишется вместе);
   // действие сессии перекрывает его.
   const consentOn = acknowledge ?? acknowledgedAt != null;
+
+  // Выбор пикера — UI-состояние раздела (не данные: в черновик оно не едет, действие —
+  // сама кнопка «Добавить»). Кандидаты — переданные минус уже в списке: тот же id не бывает
+  // опекуном дважды (защита и на случай невнимательного вызывающего).
+  const [selected, setSelected] = useState('');
+  const candidateIds = (guardianCandidates ?? []).filter((id) => !guardians.some((g) => g.userId === id));
+  const addGuardian = () => {
+    if (!selected || !onGuardiansChange) return;
+    // Порядок: текущий список как есть, новый — в конец (порядок guardianUserIds — порядок
+    // строк ответа, его не переставляем). Выбор после действия снимается: добавленный больше
+    // не кандидат.
+    onGuardiansChange([...guardians.map((g) => g.userId), selected]);
+    setSelected('');
+  };
 
   // Строка «Дано {дата} · {кто}» — только когда согласие стоит и есть что ставить:
   // только что поставленное (действия ещё нет в ответе) подтверждает сама отмеченная галка,
@@ -204,28 +248,75 @@ export function ChildSafetySection({
         </p>
       ) : (
         <div data-testid="guardians-list" style={{ border: `1px solid ${C.borderLight}`, borderRadius: R.xxl, background: C.bgWhite, overflow: 'hidden' }}>
-          {guardians.map((g, i) => (
-            <div
-              key={g.userId}
-              data-testid={`guardian-${g.userId}`}
-              style={{ display: 'flex', alignItems: 'center', gap: SP.md, padding: `${SP.md}px ${SP.lg}px`, minHeight: 48, borderTop: i ? `1px solid ${C.borderLight}` : 'none', flexWrap: 'wrap' }}
-            >
-              <span style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
-                {nameOf(g.userId, userNames)}
-              </span>
-              <Badge tone={g.sharedProjectsFlag ? 'success' : 'warning'} size="xs">
-                {g.sharedProjectsFlag ? 'shared-projects включён' : 'нужен флаг shared-projects'}
-              </Badge>
-              {!g.sharedProjectsFlag && (
-                <span style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.5, flexBasis: '100%' }}>
-                  Включите shared-projects у {nameOf(g.userId, userNames)} — без этого флага опекун
-                  не станет куратором проекта-предмета и не сможет работать с его файлами и знаниями.
+          {guardians.map((g, i) => {
+            const name = nameOf(g.userId, userNames);
+            return (
+              <div
+                key={g.userId}
+                data-testid={`guardian-${g.userId}`}
+                style={{ display: 'flex', alignItems: 'center', gap: SP.md, padding: `${SP.md}px ${SP.lg}px`, minHeight: 48, borderTop: i ? `1px solid ${C.borderLight}` : 'none', flexWrap: 'wrap' }}
+              >
+                <span style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
+                  {name}
                 </span>
-              )}
-            </div>
-          ))}
+                {g.sharedProjectsFlag === true && (
+                  <Badge tone="success" size="xs">shared-projects включён</Badge>
+                )}
+                {g.sharedProjectsFlag === false && (
+                  <>
+                    <Badge tone="warning" size="xs">нужен флаг shared-projects</Badge>
+                    <span style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.5, flexBasis: '100%' }}>
+                      Включите shared-projects у {name} — без этого флага опекун
+                      не станет куратором проекта-предмета и не сможет работать с его файлами и знаниями.
+                    </span>
+                  </>
+                )}
+                {g.sharedProjectsFlag === undefined && (
+                  <span data-testid={`guardian-flag-unknown-${g.userId}`} style={{ fontSize: FS.sm, color: C.textMuted }}>
+                    Флаг shared-projects будет виден после сохранения.
+                  </span>
+                )}
+                {onGuardiansChange && (
+                  <Button
+                    variant="danger" size="sm" dataTestId={`guardian-remove-${g.userId}`}
+                    ariaLabel={`Убрать опекуна «${name}»`} disabled={disabled}
+                    onClick={() => onGuardiansChange(guardians.filter((x) => x.userId !== g.userId).map((x) => x.userId))}
+                  >
+                    <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                    Убрать
+                  </Button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
+      {onGuardiansChange && (candidateIds.length === 0 ? (
+        <p data-testid="guardian-add-empty" style={{ fontSize: FS.sm, color: C.textMuted, margin: 0 }}>
+          Добавить некого: остальные пользователи уже опекуны или в детском режиме.
+        </p>
+      ) : (
+        <div data-testid="guardian-add" style={{ display: 'flex', gap: SP.md, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <Field label="Добавить опекуна">
+              <Select
+                value={selected}
+                onChange={(v) => setSelected(v)}
+                options={candidateIds.map((id) => ({ value: id, label: nameOf(id, userNames) }))}
+                placeholder="Выбери пользователя"
+                disabled={disabled}
+              />
+            </Field>
+          </div>
+          <Button
+            variant="secondary" size="md" dataTestId="guardian-add-btn"
+            leftIcon={<Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            disabled={disabled || !selected} onClick={addGuardian}
+          >
+            Добавить
+          </Button>
+        </div>
+      ))}
       <p style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.5, margin: 0 }}>
         Опекун получает уведомления и открывает проекты предметов (файлы, знания, репетиторов),
         но не видит уроков ребёнка.

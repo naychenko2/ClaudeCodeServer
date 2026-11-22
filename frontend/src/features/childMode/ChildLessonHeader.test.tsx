@@ -19,8 +19,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { parseHTML } from 'linkedom';
+import { showToast } from '../../lib/toast';
 import { CHAT_MAX_W } from '../../lib/design';
-import type { ChildSubjectView } from './types';
+import type { ChildStatus, ChildSubjectView } from './types';
 
 const { window: win, document: doc } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
 // useIsMobile/useIsTouch читают matchMedia при mount; useWindowWidth — innerWidth.
@@ -146,6 +147,28 @@ vi.mock('../../components/chat/ChatHeaderBar', async () => {
   return { ChatHeaderBar: () => React.createElement('div', { 'data-testid': 'chat-header-bar-stub' }) };
 });
 
+// childApi — под контролем теста (шаблон ChildHintsPanel.test): вызовы и ответы по
+// индексу; нет записи — promise держится in-flight (на этом проверяются гонки).
+let stopCalls: (string | undefined)[] = [];
+let stopAnswers: (Error | object)[] = [];
+let stopPending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+let stopIdx = 0;
+vi.mock('./api', () => ({
+  tutorAvatarUrl: (id: string, t?: string) => `/api/personas/${id}/avatar${t ? `?t=${t}` : ''}`,
+  childApi: {
+    stopSignal: (sessionId?: string) => {
+      const i = stopIdx++;
+      stopCalls.push(sessionId);
+      const a = stopAnswers[i];
+      if (a instanceof Error) return Promise.reject(a);
+      if (a) return Promise.resolve(a);
+      return new Promise((res, rej) => { stopPending.set(i, { resolve: res, reject: rej }); });
+    },
+  },
+}));
+// Тосты — под контролем теста: отказ стоп-сигнала в шапке говорит тостом
+vi.mock('../../lib/toast', () => ({ showToast: vi.fn() }));
+
 // Импорт после глобалов: модульный код графа (в т.ч. ChatPanel) не должен читать
 // DOM/сторы до их подстановки (тот же приём, что в ChildWorkspace.test)
 const { ChildLessonHeader, curatorsLine } = await import('./ChildLessonHeader');
@@ -156,7 +179,18 @@ const subject = (over: Partial<ChildSubjectView> = {}): ChildSubjectView => ({
   tutor: { personaId: 'p1', name: 'Сова Ульяна', hasAvatar: false }, ...over,
 });
 
-async function renderHeader(props: { subject: ChildSubjectView | null; viewers?: string[]; title: string; isMobile: boolean }) {
+// Снимок времени ребёнка для плашки (ChildTimeBadge): ok с остатком минут —
+// минимальный контракт, который читает компактная плашка.
+const childStatus = (): ChildStatus => ({
+  state: 'ok', space: 'lessons', minutesLeft: 35, windowEndsAt: null, nextWindowAt: null,
+  warnMinutes: 5, maxAttachmentBytes: 10 * 1024 * 1024, attachmentTypes: ['image/png'],
+  rulesAgreedAt: null, dailyMinutes: 45, windows: [], minutesToday: null,
+});
+
+async function renderHeader(props: {
+  subject: ChildSubjectView | null; viewers?: string[]; time?: ChildStatus | null;
+  title: string; isMobile: boolean; onBack?: () => void; sessionId?: string;
+}) {
   const root = createRoot(doc.getElementById('root')!);
   await act(async () => { root.render(createElement(ChildLessonHeader, props)); });
   await act(async () => {});
@@ -164,6 +198,24 @@ async function renderHeader(props: { subject: ChildSubjectView | null; viewers?:
 }
 const lineNode = () => doc.querySelector('[data-testid="child-curators-line"]');
 const lineText = () => (lineNode()?.textContent ?? '').trim();
+const headerNode = () => doc.querySelector('[data-testid="child-lesson-header"]');
+const backBtn = () => doc.querySelector('button[aria-label="К списку уроков"]') as HTMLButtonElement | null;
+const switcherBtn = () => doc.querySelector('[data-testid="child-lesson-switcher"]') as HTMLButtonElement | null;
+const stopBtn = () => doc.querySelector('button[aria-label="Мне неприятно — позвать взрослого"]') as HTMLButtonElement | null;
+const sentBtn = () => doc.querySelector('button[aria-label="Сигнал отправлен"]') as HTMLButtonElement | null;
+async function click(el: HTMLElement) {
+  await act(async () => { el.click(); });
+}
+// Ответ + выгнать цепочку then/catch обработчика (depth hops микротасков с запасом)
+async function settle(fn: () => void) {
+  await act(async () => {
+    fn();
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+  });
+}
+// Отказ с формой, как его выносит request() из lib/offline
+const httpErr = (status: number, code?: string) =>
+  Object.assign(new Error('отказ'), { status, body: code ? { code } : {} });
 
 // Глубочайший элемент, в тексте которого есть данный текст: querySelectorAll обходит
 // дерево в документном порядке (родитель раньше потомков) — последний совпавший и есть
@@ -275,29 +327,80 @@ describe('ChildLessonHeader: шапка урока со строкой кура�
     expect(lineText()).toBe('Уроки видит Папа');
   });
 
-  it('мобильная ширина: строка кураторов в DOM и видима, остальная шапка свёрнута', async () => {
+  it('мобильная ширина: рабочая шапка — назад, аватар, имя, урок в мете, стоп-сигнал; строка кураторов видима', async () => {
     mobile = true; win.innerWidth = 360;
-    await renderHeader({ subject: subject(), viewers: ['Папа'], title: 'Дроби', isMobile: true });
-    const line = lineNode();
-    expect(line, 'на мобиле строки кураторов нет').not.toBeNull();
+    let backs = 0;
+    await renderHeader({ subject: subject(), viewers: ['Папа'], title: 'Дроби', isMobile: true, onBack: () => { backs++; }, sessionId: 's1' });
+    expect(headerNode(), 'мобильной шапки нет').not.toBeNull();
+    expect(lineNode(), 'на мобиле строки кураторов нет').not.toBeNull();
     expect(lineText()).toBe('Уроки видит Папа');
-    // «видима» = не скрыта стилем и не вне шапки: display:none/hidden у неё или родителя нет
-    const hiddenStyle = (n: Element | null): boolean => {
-      for (let el = n as Element | null; el; el = el.parentElement) {
-        const st = (el as { getAttribute?: (a: string) => string | null }).getAttribute?.('style') ?? '';
-        if (/display:\s*none/.test(st) || el.hasAttribute('hidden')) return true;
-      }
-      return false;
-    };
-    expect(hiddenStyle(line), 'строка скрыта стилем').toBe(false);
-    expect(doc.querySelector('h1'), 'на мобиле остальная шапка должна быть свёрнута').toBeNull();
-    expect(doc.querySelector('[data-testid="tutor-mark"]'), 'на мобиле аватара быть не должно').toBeNull();
+    // Ряд 1 по макету (.mtool): назад, знак репетитора, имя, стоп-сигнал
+    expect(backBtn(), 'кнопки «назад» нет').not.toBeNull();
+    expect(doc.querySelector('[data-testid="tutor-mark"]'), 'знака репетитора нет').not.toBeNull();
+    expect((switcherBtn()?.textContent ?? '').includes('Сова Ульяна'), 'имени репетитора в шапке нет').toBe(true);
+    expect((switcherBtn()?.textContent ?? '').includes('Дроби'), 'имени урока в шапке нет').toBe(true);
+    expect(stopBtn(), 'стоп-сигнала нет').not.toBeNull();
+    // «Назад» и переключатель ведут к списку уроков
+    await click(backBtn()!);
+    expect(backs).toBe(1);
+    await click(switcherBtn()!);
+    expect(backs).toBe(2);
   });
 
-  it('мобильная ширина без кураторов: показывать нечего — шапки нет', async () => {
+  it('мобильная ширина без кураторов: шапка на месте, «назад» доступен (P1: раньше шапка исчезала целиком)', async () => {
+    mobile = true; win.innerWidth = 360;
+    let backs = 0;
+    await renderHeader({ subject: subject(), viewers: [], title: 'Дроби', isMobile: true, onBack: () => { backs++; } });
+    expect(headerNode(), 'без кураторов шапки нет — возврата к списку уроков нет').not.toBeNull();
+    expect(backBtn(), 'без кураторов «назад» недоступен').not.toBeNull();
+    await click(backBtn()!);
+    expect(backs).toBe(1);
+  });
+
+  it('мобильная: без кураторов и без времени второго ряда нет — но шапка (ряд 1) есть', async () => {
     mobile = true; win.innerWidth = 360;
     await renderHeader({ subject: subject(), viewers: [], title: 'Дроби', isMobile: true });
-    expect(doc.querySelector('[data-testid="child-lesson-header"]')).toBeNull();
+    expect(lineNode(), 'строки кураторов быть не должно').toBeNull();
+    expect(headerNode(), 'шапки урока нет').not.toBeNull();
+    expect(doc.querySelector('[role="status"]'), 'плашки времени быть не должно').toBeNull();
+  });
+
+  it('мобильная: плашка времени во втором ряду, когда статус передан', async () => {
+    mobile = true; win.innerWidth = 360;
+    await renderHeader({ subject: subject(), viewers: ['Папа'], time: childStatus(), title: 'Дроби', isMobile: true });
+    const pill = doc.querySelector('[role="status"]');
+    expect(pill, 'плашки времени нет').not.toBeNull();
+    expect(pill?.getAttribute('aria-label')).toBe('Осталось около 35 минут');
+  });
+
+  // Г5-д1 (дефект QA-8 c7082105): на 360 автоимя репетитора «Репетитор: Математика»
+  // не влезало в ряд с «назад» и стоп-сигналом и резалось многоточием («Репетитор:
+  // Математ…», clientWidth 186 при scrollWidth 200) — ребёнок не видел, к какому
+  // репетитору открыт урок. Теперь имя переносится по словам, а не обрезается.
+  // Замер clientWidth/scrollWidth в fake-DOM невозможен — доказательство стилем:
+  // у заголовка переноса нет nowrap/ellipsis (на прежнем поведении тест красный).
+  it('мобильная: длинное имя репетитора переносится, а не обрезается', async () => {
+    mobile = true; win.innerWidth = 360;
+    await renderHeader({ subject: subject({ tutor: { personaId: 'p1', name: 'Репетитор: Математика', hasAvatar: false } }), viewers: [], title: 'Дроби', isMobile: true });
+    const holder = textHolder('Репетитор: Математика');
+    expect(holder, 'имени репетитора в шапке нет').not.toBeNull();
+    const st = holder!.getAttribute('style') ?? '';
+    expect(st, 'у имени осталась обрезка nowrap — вернётся «Репетитор: Математ…»').not.toMatch(/white-space:\s*nowrap/);
+    expect(st, 'у имени остался ellipsis').not.toMatch(/text-overflow:\s*ellipsis/);
+    expect(st, 'перенос по словам не разрешён (нет white-space:normal)').toMatch(/white-space:\s*normal/);
+    // Имя урока в мете — по макету (.meta) остаётся обрезанным с полным текстом в title
+    const meta = textHolder('Дроби');
+    expectEllipsis(meta, 'имя урока в мете', true);
+    expect(titleFor(meta, 'Дроби'), 'полного имени урока нет в title').toBe(true);
+  });
+
+  it('десктоп: блок имени не сжимается — flex:1 и min-width:240 как в макете (L2 аудита)', async () => {
+    await renderHeader({ subject: subject(), viewers: ['Папа'], title: 'Дроби', isMobile: false });
+    const h1 = doc.querySelector('h1');
+    expect(h1, 'заголовка нет').not.toBeNull();
+    const style = h1!.parentElement?.getAttribute('style') ?? '';
+    expect(style, 'у блока имени нет flex:1').toMatch(/flex:\s*1/);
+    expect(style, 'у блока имени нет min-width:240').toMatch(/min-width:\s*240/);
   });
 
   // Хвост ревью d52edd91: длинный текст шапки резался без «…» (textOverflow на
@@ -332,6 +435,60 @@ describe('ChildLessonHeader: шапка урока со строкой кура�
   });
 });
 
+// ── стоп-сигнал шапки (Г5): тот же контракт, что у панели «Как мы учимся» (KM-F7) ──
+describe('StopSignalButton: стоп-сигнал в шапке урока', () => {
+  beforeEach(() => {
+    doc.getElementById('root')!.innerHTML = '';
+    mobile = false; win.innerWidth = 1280;
+    stopCalls = []; stopAnswers = []; stopPending = new Map(); stopIdx = 0;
+  });
+
+  it('клик шлёт POST с sessionId; после ответа — «Сигнал отправлен» и кнопка не активна', async () => {
+    await renderHeader({ subject: subject(), viewers: [], title: 'Дроби', isMobile: true, sessionId: 's1' });
+    const btn = stopBtn()!;
+    expect(btn, 'стоп-сигнала нет').not.toBeNull();
+    await click(btn);
+    expect(stopCalls, 'sessionId не ушёл в ручку').toEqual(['s1']);
+    await settle(() => stopPending.get(0)!.resolve({ accepted: true }));
+    const sent = sentBtn();
+    expect(sent, 'после сигнала нет состояния «отправлен»').not.toBeNull();
+    expect(sent!.disabled).toBe(true);
+    expect(stopBtn(), 'старой кнопки быть не должно').toBeNull();
+  });
+
+  it('429 too_frequent — то же состояние «отправлен», что при 202 (сервер схлопнул повтор)', async () => {
+    await renderHeader({ subject: subject(), viewers: [], title: 'Дроби', isMobile: true, sessionId: 's1' });
+    await click(stopBtn()!);
+    await settle(() => stopPending.get(0)!.reject(httpErr(429, 'too_frequent')));
+    expect(sentBtn(), '429 должен быть «отправлено»').not.toBeNull();
+  });
+
+  it('другой отказ — тост, кнопка снова доступна, повторный клик шлёт второй сигнал', async () => {
+    await renderHeader({ subject: subject(), viewers: [], title: 'Дроби', isMobile: true, sessionId: 's1' });
+    await click(stopBtn()!);
+    await settle(() => stopPending.get(0)!.reject(httpErr(500)));
+    expect(vi.mocked(showToast)).toHaveBeenCalledTimes(1);
+    const btn = stopBtn()!;
+    expect(btn.disabled).toBe(false);
+    await click(btn);
+    expect(stopCalls.length).toBe(2);
+  });
+
+  it('сигнал отправлен — по sessionId: у другого чата своей кнопки лишать нельзя', async () => {
+    // sentFor в шапке привязан к sessionId: для другого чата колокольчик не показан
+    // (sentFor !== sessionId → вместо него обычная кнопка стоп-сигнала)
+    await renderHeader({ subject: subject(), viewers: [], title: 'Дроби', isMobile: true, sessionId: 's1' });
+    await click(stopBtn()!);
+    await settle(() => stopPending.get(0)!.resolve({ accepted: true }));
+    expect(sentBtn()).not.toBeNull();
+    // Перемонтируем с другим sessionId — состояние не наследуется (новый root)
+    doc.getElementById('root')!.innerHTML = '';
+    await renderHeader({ subject: subject(), viewers: [], title: 'Дроби', isMobile: true, sessionId: 's2' });
+    expect(stopBtn(), 'у другого урока должен быть свой стоп-сигнал').not.toBeNull();
+    expect(sentBtn()).toBeNull();
+  });
+});
+
 // ── случай ChatPanel: при childFeedKinds шапка целиком детская, взрослая не монтируется ──
 // mode обязателен: ChatPanel инициализирует им состояние режима (ChatPanel.tsx:850),
 // без него композер падает на MODE_META[undefined]
@@ -355,6 +512,7 @@ describe('ChatPanel: детская шапка вместо взрослой (Ф
   beforeEach(() => {
     doc.getElementById('root')!.innerHTML = '';
     mobile = false; win.innerWidth = 1280;
+    stopCalls = []; stopAnswers = []; stopPending = new Map(); stopIdx = 0;
   });
 
   it('childFeedKinds + childHeader: ChildLessonHeader с строкой кураторов, ChatHeaderBar не монтирован', async () => {
@@ -373,5 +531,38 @@ describe('ChatPanel: детская шапка вместо взрослой (Ф
     await renderChatPanel({});
     expect(doc.querySelector('[data-testid="chat-header-bar-stub"]'), 'взрослой шапки нет').not.toBeNull();
     expect(doc.querySelector('[data-testid="child-lesson-header"]'), 'детской шапки быть не должно').toBeNull();
+  });
+
+  it('мобильный ChatPanel: «назад» в шапке урока зовёт onBack владельца (Г5: onBack дошёл до шапки)', async () => {
+    mobile = true; win.innerWidth = 360;
+    let backs = 0;
+    await renderChatPanel({
+      isMobile: true,
+      childFeedKinds: ['assistant', 'user'],
+      // Кураторов нет — именно на этом шапка раньше исчезала целиком (P1)
+      childHeader: { subject: subject(), viewers: [] },
+      onBack: () => { backs++; },
+    });
+    expect(headerNode(), 'мобильной шапки урока нет').not.toBeNull();
+    expect(doc.querySelector('[data-testid="chat-header-bar-stub"]'), 'взрослая шапка ребёнку не должна монтироваться').toBeNull();
+    await click(backBtn()!);
+    expect(backs, 'onBack от WorkspacePage не дошёл до кнопки «назад» шапки').toBe(1);
+    await click(switcherBtn()!);
+    expect(backs).toBe(2);
+  });
+
+  it('мобильный ChatPanel: стоп-сигнал в шапке зовёт childApi.stopSignal с id открытого чата', async () => {
+    mobile = true; win.innerWidth = 360;
+    await renderChatPanel({
+      isMobile: true,
+      childFeedKinds: ['assistant', 'user'],
+      childHeader: { subject: subject(), viewers: [] },
+      onBack: () => {},
+    });
+    expect(stopBtn(), 'стоп-сигнала в мобильной шапке нет').not.toBeNull();
+    await click(stopBtn()!);
+    expect(stopCalls, 'стоп-сигнал пошёл не с id открытого чата').toEqual(['s1']);
+    await settle(() => stopPending.get(0)!.resolve({ accepted: true }));
+    expect(sentBtn(), 'нет состояния «отправлен» после сигнала').not.toBeNull();
   });
 });

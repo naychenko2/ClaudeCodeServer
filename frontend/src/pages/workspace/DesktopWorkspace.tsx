@@ -237,7 +237,14 @@ export function DesktopWorkspace(p: Props) {
   // его поднимают проектный воркспейс (этот файл) и раздел «Чаты» (ChatsPage) —
   // у обоих есть PanelZone с compact={isTablet}. WallPage и остальные разделы
   // хаба compact не передают, и эксклюзив у них не действует.
-  const { setExclusive, markActive, closeCompactStack, reveal } = wsPanels.use();
+  const { setExclusive, markActive, closeCompactStack, reveal, zones } = wsPanels.use();
+  // Плашка предмета (SubjectPlate) по макету kids-project-screen (.fly) стоит только
+  // при закрытых панелях и не на планшете: при открытой панели «Чаты» (у ребёнка она
+  // открыта по умолчанию) fixed-плашка с left=RAIL_W закрывала её заголовок и «Новый
+  // урок» (L1 аудита 21.11, дефект 36e0160d). Решает владелец поверхности: знание о
+  // панелях — в сторе, который читает этот экран.
+  const childPlateVisible = !p.isTablet
+    && zones.left.layout.length === 0 && zones.right.layout.length === 0;
   // Канал выбрали в КАТАЛОГЕ — эфир идёт в боковой панели, а та могла быть закрыта
   // или лежать в ящике рельсы. Раскладка — епархия страницы, поэтому являет панель
   // она, а стор только просит об этом событием.
@@ -261,8 +268,15 @@ export function DesktopWorkspace(p: Props) {
   // навигация ВНУТРИ контентных панелей («открыть файл») дровер не закрывает,
   // а вот смена активного чата — закрывает. closeCompactStack в сторе — счётчик,
   // обе PanelZone слушают его и чистят свой локальный tabletPanels.
+  // Г5-д1 (дефект 68812ebd): маунт — не «смена сессии». Раньше эффект бил
+  // closeCompactStack уже на первом кадре и стирал дефолтную панель дровера
+  // (defaultCompactPanel='chats' у ребёнка) раньше, чем она добиралась до экрана.
+  // Сравнение по ref: сигнал уходит только при реальной смене id.
+  const seenSessionRef = useRef(p.activeSession?.id);
   useEffect(() => {
     if (!p.isTablet) return;
+    if (seenSessionRef.current === p.activeSession?.id) return;
+    seenSessionRef.current = p.activeSession?.id;
     closeCompactStack();
     // closeCompactStack стабилен (useCallback в сторе) — в deps не нужен
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -557,6 +571,12 @@ export function DesktopWorkspace(p: Props) {
         // windowWidth × PANEL_INLINE_MAX_SHARE (см. PanelZone), на широком планшете
         // (≥1000px) стек встаёт inline, как у правой зоны (строка 459).
         compact={p.isTablet}
+        // Г5-д1 (дефект 68812ebd): у ребёнка список уроков — «всегда виден» экраном
+        // (360 — постоянный сайдбар мобильной раскладки, 1280 — постоянная колонка
+        // рельсы), а на 768 дровер компактной зоны стартовал пустым и ребёнок не мог
+        // открыть существующий урок вовсе. Дефолтная панель дровера только ему;
+        // взрослому undefined — раскладка как раньше.
+        defaultCompactPanel={p.child ? 'chats' : undefined}
         panels={zonePanels}
         allowedKeys={p.allowedKeys}
         railBadges={p.railBadges}
@@ -569,8 +589,10 @@ export function DesktopWorkspace(p: Props) {
           // flex: 1 — по высоте этой обёртки док проектов считает число видимых
           // иконок; без неё они все уезжали бы под лупу «ещё N»
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            {/* Детский ряд предметов вместо дока проектов (Ф1e/Ф1j): без child — взрослый док */}
-            <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} child={p.child?.dock} />
+            {/* Детский ряд предметов вместо дока проектов (Ф1e/Ф1j): без child — взрослый док.
+                childPlateVisible — плашка предмета только при закрытых панелях (L1, дефект
+                36e0160d): при открытой панели «Чаты» fixed-плашка закрывала её заголовок */}
+            <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} child={p.child?.dock} childPlateVisible={childPlateVisible} />
             {wallOn && <WallDock onOpenWall={p.onOpenWall!} />}
           </div>
         }

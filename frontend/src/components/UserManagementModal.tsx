@@ -219,6 +219,14 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
 
   const userNames = Object.fromEntries(users.map((u) => [u.id, u.displayName || u.username]));
 
+  // Г2: кандидаты в опекуны для окна — пользователи без детского режима: ребёнок не бывает
+  // опекуном (его лимиты и стоп-сигналы — его собственные), и его профиль правится в его окне.
+  // Исключается подтверждённый снимком включённый (тот же признак, что у галки: состояние без
+  // снимка — не знание); local-пользователь — кандидат: опекуном он быть может, child-mode
+  // ему просто не включается. Сам ребёнок (id окна) в список не входит.
+  const guardianCandidates = (childId: string) =>
+    users.filter((u) => u.id !== childId && childStates[u.id]?.enabled !== true).map((u) => u.id);
+
   useEffect(() => {
     api.users.list()
       .then(list => {
@@ -478,9 +486,18 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
               onChange={(v) => d.patch(patchTime(d.profile, v))}
             />
           )}
+          // Г2: строки — по списку черновика (порядок guardianUserIds), флаг — известный из
+          // ответа; у добавленного до сохранения опекуна флага нет — его сообщит ответ.
           safetySection={(d) => (
             <ChildSafetySection
-              guardians={d.profile.guardians ?? []}
+              guardians={(d.profile.guardianUserIds ?? []).map(
+                (id) => (d.profile.guardians ?? []).find((g) => g.userId === id) ?? { userId: id })}
+              guardianCandidates={guardianCandidates(settingsUser.id)}
+              // Г2-д1б: правка опекунов патчит только список. Согласие — не её часть: это
+              // осознанный акт админа отдельной галкой (onAcknowledgeChange), явный отзыв
+              // не должен стираться правкой списка; живую пару согласия слияние стора и так
+              // не двигает (UserStore.cs:704-711).
+              onGuardiansChange={(ids) => d.patch({ guardianUserIds: ids })}
               sharedProjectsInstanceEnabled={d.profile.sharedProjectsInstanceEnabled}
               userNames={userNames}
               acknowledge={d.profile.acknowledgeRouteRisk ?? null}

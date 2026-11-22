@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense, createElement } from 'react'
-import { BookOpen } from 'lucide-react'
 import type { Project, AuthState, ChildSurface } from './types'
 import { C } from './lib/design'
-import { ICON_SIZE, ICON_STROKE } from './components/ui/icons'
+import { ChildSubjectPicker } from './features/childMode/ChildSubjectPicker'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
@@ -29,7 +28,6 @@ import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHe
 import { initConnectivity, invalidateTokenCache, readStoredToken, readStoredUserId } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
 import { LoadingScreen } from './components/ui/LoadingScreen'
-import { EmptyState } from './components/ui/EmptyState'
 import { SubsystemDisabledState } from './components/SubsystemDisabledState'
 import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
@@ -190,9 +188,6 @@ export default function App() {
   // Живёт только в детском маршруте: undefined = не ребёнок (взрослый экран как раньше);
   // null = детский профиль без снимка — WorkspacePage рисует «нет связи», а не взрослый набор.
   const [childSurface, setChildSurface] = useState<ChildSurface | null | undefined>(undefined)
-  // Предметов у ребёнка нет (профиль не настроен админом): это редкий, но названный случай —
-  // ребёнку нужен спокойный текст, а не вечно идущая загрузка
-  const [childNoSubjects, setChildNoSubjects] = useState(false)
 
   // Активная вкладка хаба — вне открытого проекта. Стартовый экран — дашборд «Домой»:
   // hash-диплинк приоритетнее, а без hash всегда открывается 'home'. Ключ HUB_TAB_KEY
@@ -604,7 +599,6 @@ export default function App() {
       resetWallOwner()
       setPersonasChildMode(false) // детская оболочка могла не успеть размонтироваться
       setChildSurface(undefined) // снимок поверхности прежнего ребёнка не должен течь следующему входу
-      setChildNoSubjects(false)
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
       runLogoutResets() // сторы модулей (персонажи «Картинок» и др.) прежнего пользователя
       resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки (Х-6)
@@ -845,27 +839,27 @@ export default function App() {
   }, [auth, online, project?.id, adultBlocked])
 
   // Детские проекты (Ф1f, решение 84): ребёнок идёт в штатный маршрут проекта-предмета.
-  // Штатный список возвращает только его проекты-предметы (Б21: [ChildAllowed] + детская
-  // проверка), по умолчанию — первый предмет: проект ребёнок не выбирает. Восстановленный
-  // OPEN_PROJECT_KEY держится, только если он в списке (та же сверка, что у взрослого выше),
-  // иначе — первый. Пустой список — профиль ребёнка не настроен: это названный текст, а не
-  // вечно идущая загрузка.
+  // Предмет выбирает САМ ребёнок: без открытого проекта — экран ChildSubjectPicker (Г6,
+  // находка P2 аудита 21.11: на телефоне не было выбора произвольного предмета, а «назад»
+  // из проекта тут же возвращало первый — авто-выбор list[0] убран). Эффект только сверяет
+  // ОТКРЫТЫЙ проект со списком (та же модель, что у взрослой сверки выше): в списке —
+  // освежить данные сервера (boardColumns и пр.); предмет выключили или проект удалили —
+  // снять проект, ребёнок возвращается к выбору предмета.
   useEffect(() => {
     if (!auth || authChecking || !me.isChild || !online) return
+    if (!project) return // выбор предмета — за ребёнком: пикер живёт при project == null
     let cancelled = false
     api.projects.list()
       .then(list => {
         if (cancelled) return
-        const fresh = project ? list.find(p => p.id === project.id) : undefined
-        const target = fresh ?? list[0] ?? null
-        if (target) {
-          localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(target))
-          setProject(target)
-          setChildNoSubjects(false)
+        const fresh = list.find(p => p.id === project.id)
+        if (fresh) {
+          localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))
+          setProject(fresh)
         } else {
+          // Предмет выключен или проект удалён: назад к выбору, первый проект НЕ открываем
           localStorage.removeItem(OPEN_PROJECT_KEY)
           setProject(null)
-          setChildNoSubjects(true)
         }
       })
       .catch(() => { /* сервер недоступен — остаёмся на том, что есть в хранилище */ })
@@ -1475,7 +1469,6 @@ export default function App() {
     resetWallOwner()
     setPersonasChildMode(false)
     setChildSurface(undefined) // см. cc-unauthorized выше: снимок прежнего ребёнка не течёт следующему входу
-    setChildNoSubjects(false)
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
     runLogoutResets() // сторы модулей (персонажи «Картинок» и др.) прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки
@@ -1526,18 +1519,17 @@ export default function App() {
   // Детский режим (Ф1f, ADR-041 ред. 8): ребёнок идёт в штатный маршрут WorkspacePage
   // проекта-предмета — отдельной детской оболочки больше нет. Взрослые экраны, уведомления,
   // поиск и плавающие слои не монтируются вовсе (KM-F10, гейт isChild до эффектов App).
-  // Предмет ещё не разрешён — нейтральная загрузка; предметов нет (профиль не настроен) —
-  // спокойный текст ребёнку, а не вечно идущая загрузка.
+  // Без открытого проекта — выбор предмета за ребёнком: экран ChildSubjectPicker (Г6) —
+  // на телефоне док предметов не живёт, и раньше ребёнок не мог выбрать второй предмет
+  // (находка P2 аудита 21.11).
   if (auth && !authChecking && me.isChild) {
     return (
       <>
         <UpdatePrompt />
         {project ? (
           <WorkspacePage key={project.id} project={project} onProjectUpdated={handleOpenProjectUpdated} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} childSurface={childSurface} onOpenSubjectProject={openSubjectProject} />
-        ) : childNoSubjects ? (
-          <EmptyState icon={<BookOpen size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />} title="Предметов пока нет" subtitle="Попроси маму или папу настроить твои предметы." />
         ) : (
-          <LoadingScreen hint="Открываю предметы" />
+          <ChildSubjectPicker onPick={openSubjectProject} />
         )}
       </>
     )

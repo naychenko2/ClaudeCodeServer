@@ -183,6 +183,26 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
         _tokens.Validate(turnId, token).Should().BeNull("финализация прогона отзывает токен процесса");
     }
 
+    // Провайдер со ScrubLateToolBlocks идёт через шлюз тем же условием, что и
+    // NormalizeToolInputArrays: ход должен смотреть env'ом на шлюз (без него фильтр
+    // не применяется вовсе — ход уходит напрямую, дефект не компенсируется).
+    [Fact]
+    public async Task ПровайдерСScrubLateToolBlocks_EnvНаШлюз_КлючаВEnvНет()
+    {
+        var turn = await RunTurnAsync("scrub-m1");
+        var env = turn.Env!;
+
+        var (turnId, token) = GatewayOf(env);
+        var grant = _tokens.Validate(turnId, token);
+        grant.Should().NotBeNull("токен выдан и жив, пока жив процесс");
+        grant!.Route!.ProviderKey.Should().Be("scrub");
+        env.Values.Should().NotContain(v => v.Contains("scrub-key"), "ключ провайдера подставляет шлюз");
+        env["NO_PROXY"].Split(',').Should().Contain("ccs-gw-host", "завернуть ход к шлюзу");
+        turn.Session.LastLaunchSignature.Should().NotContain(token, "сигнатура считается по заглушкам");
+
+        await KillAndWaitAsync(turn);
+    }
+
     [Fact]
     public async Task ДваХода_СигнатураСтабильна_ТокеныРазные()
     {

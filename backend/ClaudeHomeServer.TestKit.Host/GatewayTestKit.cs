@@ -63,6 +63,12 @@ public sealed class GatewayTestKit : IDisposable
             ["LlmProviders:mmx:ApiKey"] = "mmx-key",
             ["LlmProviders:mmx:NormalizeToolInputArrays"] = "true",
             ["LlmProviders:mmx:Models:0:Id"] = "mmx-m3",
+            // Провайдер с дефектом late tool blocks (как Kimi): тело запроса чинит шлюз
+            ["LlmProviders:scrub:DisplayName"] = "Scrub",
+            ["LlmProviders:scrub:AnthropicBaseUrl"] = "https://scrub.test/anthropic",
+            ["LlmProviders:scrub:ApiKey"] = "scrub-key",
+            ["LlmProviders:scrub:ScrubLateToolBlocks"] = "true",
+            ["LlmProviders:scrub:Models:0:Id"] = "scrub-m1",
             // Локальный провайдер (vLLM): IsLocal=true, без API-ключа. Тесты наблюдателя
             // метрик (LlmGatewayObserverTests) проверяют, что шлюз создаёт наблюдателя
             // только на локальном маршруте. Модели не пересекаются с deepseek/mmx/подписками.

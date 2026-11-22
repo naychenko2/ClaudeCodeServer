@@ -101,8 +101,17 @@ public static class LlmGatewayEndpoints
             tokens.Reroute(grant.TurnId, upstream.Route);
 
         var normalize = selector.NormalizesToolInput(upstream.Route);
-        var (request, requestBody) = await BuildRequestAsync(ctx, path, upstream, selector, normalize);
+        var scrub = selector.ScrubsLateToolBlocks(upstream.Route);
+        var (request, requestBody, scrubStats) = await BuildRequestAsync(ctx, path, upstream, selector, normalize, scrub);
         using var _ = request;
+        if (scrubStats.RemovedBlocks > 0)
+        {
+            var scrubLog = loggers.CreateLogger(LogCategory);
+            scrubLog.LogWarning(
+                "Шлюз LLM вычистил блоки late tool additions из тела запроса: провайдер {Provider}, блоков {Blocks}, сообщений {Messages}, ход {TurnId}",
+                upstream.Route.ProviderKey, scrubStats.RemovedBlocks, scrubStats.RemovedMessages, grant.TurnId);
+            DumpRequest(options.CurrentValue, requestBody, grant.TurnId, scrubLog);
+        }
 
         // Опциональные швы метрик локальной модели — через GetService (единый стиль: биндинг
         // endpoint'а не тянет их как обязательные параметры HandleAsync, а тесты без них — null).
@@ -403,13 +412,14 @@ public static class LlmGatewayEndpoints
         }
     }
 
-    private static async Task<(HttpRequestMessage Request, byte[]? Body)> BuildRequestAsync(HttpContext ctx, string path,
-        GatewayUpstream upstream, UpstreamSelector selector, bool normalize)
+    private static async Task<(HttpRequestMessage Request, byte[]? Body, LateToolScrubStats ScrubStats)> BuildRequestAsync(HttpContext ctx, string path,
+        GatewayUpstream upstream, UpstreamSelector selector, bool normalize, bool scrub)
     {
         var target = upstream.BaseUrl.TrimEnd('/') + "/" + path + ctx.Request.QueryString.Value;
         var request = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), target);
 
         byte[]? bytes = null;
+        var scrubStats = default(LateToolScrubStats);
         if (ctx.Request.ContentLength > 0 || ctx.Request.Headers.TransferEncoding.Count > 0)
         {
             using var ms = new MemoryStream();
@@ -417,6 +427,8 @@ public static class LlmGatewayEndpoints
             bytes = ms.ToArray();
             if (ctx.Request.ContentType?.Contains("json", StringComparison.OrdinalIgnoreCase) == true)
                 bytes = RewriteModel(bytes, upstream.Route, selector);
+            if (scrub)
+                bytes = LateToolBlockFilter.Scrub(bytes, out scrubStats);
             request.Content = new ByteArrayContent(bytes);
         }
 
@@ -457,7 +469,7 @@ public static class LlmGatewayEndpoints
         }
         if (betas.Count > 0)
             request.Headers.TryAddWithoutValidation("anthropic-beta", string.Join(",", betas));
-        return (request, bytes);
+        return (request, bytes, scrubStats);
     }
 
     // Поле model тела запроса переписывается по маршруту хода; не JSON или без model — как есть.

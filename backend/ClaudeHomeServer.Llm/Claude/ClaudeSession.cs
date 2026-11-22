@@ -1246,8 +1246,9 @@ public class ClaudeSession : ILlmSessionAdapter
         var provider = _providers?.ResolveByModel(EffectiveModel);
         if (provider is null) return false;
         var needsNormalization = provider.NormalizeToolInputArrays;
+        var needsScrub = provider.ScrubLateToolBlocks;
         var viaLocalStats = provider.IsLocal && _localModelStats?.CurrentValue.Enabled == true;
-        if (!needsNormalization && !viaLocalStats) return false;
+        if (!needsNormalization && !needsScrub && !viaLocalStats) return false;
         // Ключ — владелец хода (_turnOwnerId), а не Info.OwnerId: у проектной сессии OwnerId пуст
         // по контракту (Models/Session.cs:382), и такой чат на шлюз не уходил (дефект 29.09):
         // ни нормализатора tool_use.input, ни статистики локальных моделей за ход.
@@ -1258,8 +1259,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // вызовы (каждый новый процесс CLI) не пишут в лог.
         if (Interlocked.CompareExchange(ref _gatewayDisabledWarned, 1, 0) == 0)
             (_sessionLog ?? (ILogger?)_log)?.LogWarning(
-                needsNormalization
-                    ? "Провайдер {Provider} требует нормализатора tool_use.input, но шлюз LLM выключен (LlmGateway:Enabled) — ход идёт напрямую, дефект провайдера не компенсируется"
+                needsNormalization || needsScrub
+                    ? "Провайдер {Provider} требует нормализатора tool_use.input или чистки late tool blocks, но шлюз LLM выключен (LlmGateway:Enabled) — ход идёт напрямую, дефект провайдера не компенсируется"
                     : "Локальная модель {Provider} со включённой статистикой (LocalModelStats:Enabled=true), но шлюз LLM выключен (LlmGateway:Enabled) — ход идёт напрямую, LocalModelStats:Enabled=true не сработает без LlmGateway",
                 provider.Key);
         return false;

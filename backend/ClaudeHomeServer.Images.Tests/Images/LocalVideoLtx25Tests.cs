@@ -18,7 +18,7 @@ public class LocalVideoLtx25Tests
     [Fact]
     public void Граф_по_тексту_два_прохода_без_кадра()
     {
-        var wf = ComfyWorkflows.Ltx25Video("кот на подоконнике", null, 5, portrait: false, 11, "ccs/x");
+        var wf = ComfyWorkflows.Ltx25Video("кот на подоконнике", null, null, 5, portrait: false, 11, "ccs/x");
 
         Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be(ComfyWorkflows.Ltx25UnetName);
         Inputs(wf, "clip")["type"]!.GetValue<string>().Should().Be("ltxv");
@@ -43,7 +43,7 @@ public class LocalVideoLtx25Tests
     [Fact]
     public void Граф_по_кадру_вписывает_картинку_в_оба_прохода_портрет_меняет_стороны()
     {
-        var wf = ComfyWorkflows.Ltx25Video("оживи маяк", "lv_in1.png", 3, portrait: true, 5, "ccs/x");
+        var wf = ComfyWorkflows.Ltx25Video("оживи маяк", "lv_in1.png", null, 3, portrait: true, 5, "ccs/x");
 
         Inputs(wf, "img")["image"]!.GetValue<string>().Should().Be("lv_in1.png");
         Inputs(wf, "rsz")["resize_type.longer_size"]!.GetValue<int>().Should().Be(1536);
@@ -61,7 +61,7 @@ public class LocalVideoLtx25Tests
     public void Граф_тяжёлый_для_арбитра_по_маркеру_video()
     {
         string[] markers = ["h3", "minimax", "video", "fasth3", "whisper"];
-        var text = ComfyWorkflows.Ltx25Video("x", null, 5, false, 1, "ccs/x").ToJsonString().ToLowerInvariant();
+        var text = ComfyWorkflows.Ltx25Video("x", null, null, 5, false, 1, "ccs/x").ToJsonString().ToLowerInvariant();
         markers.Should().Contain(m => text.Contains(m));
     }
 
@@ -120,7 +120,6 @@ public class LocalVideoLtx25Tests
     [Theory]
     [InlineData(10, false, "от 3 до 5 секунд")]
     [InlineData(2, false, "от 3 до 5 секунд")]
-    [InlineData(5, true, "последний кадр")]
     public async Task Адаптер_отказывает_в_том_чего_модель_не_умеет(int seconds, bool withLast, string part)
     {
         var comfy = new FakeComfy();
@@ -131,6 +130,26 @@ public class LocalVideoLtx25Tests
         submitted.Ticket.Should().BeNull();
         submitted.Error.Should().Contain(part);
         comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Граф_по_двум_кадрам_FLF2V_ставит_гайды_на_оба_прохода()
+    {
+        var wf = ComfyWorkflows.Ltx25Video("маяк и шторм", "lv_in1.png", "lv_in2.png", 5, portrait: false, 3, "ccs/x");
+
+        wf.Should().ContainKey("g1c").And.ContainKey("g2c");
+        Inputs(wf, "g1c")["frame_idx"]!.GetValue<int>().Should().Be(-1);
+        Inputs(wf, "g1c")["image"]!.ToJsonString().Should().Be("[\"preb\",0]");
+        Link(wf, "g1c", "latent").Should().Be("[\"i2v1\",0]");
+        Link(wf, "g1", "positive").Should().Be("[\"g1c\",0]");
+        Link(wf, "g1", "negative").Should().Be("[\"g1c\",1]");
+        Link(wf, "g2c", "latent").Should().Be("[\"i2v2\",0]");
+        Link(wf, "g2", "positive").Should().Be("[\"g2c\",0]");
+        Link(wf, "g2", "negative").Should().Be("[\"g2c\",1]");
+        // Латент конкатенации остаётся от i2v-узлов, гайд только в гайдере
+        Link(wf, "av1", "video_latent").Should().Be("[\"i2v1\",0]");
+        Link(wf, "av2", "video_latent").Should().Be("[\"i2v2\",0]");
+        Inputs(wf, "imgb")["image"]!.GetValue<string>().Should().Be("lv_in2.png");
     }
 
     [Fact]

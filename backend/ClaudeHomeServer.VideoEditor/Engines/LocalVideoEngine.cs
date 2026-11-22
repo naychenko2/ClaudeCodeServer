@@ -84,9 +84,10 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
                 Format: VideoFormatCatalog.LocalKandinsky6(["16:9"]), FirstFrameOptional: true),
             ManualOnly: true, Hint: Kandinsky6Hint),
         // Третья локальная (решение Андрея 15.11): с кадром «Авто» по-прежнему берёт H3, без кадра — LTX-2.5
-        // (раньше такие сцены уходили в облако)
+        // (раньше такие сцены уходили в облако). Кадр B поддержан с ночи A/B 22.11 (FLF2V, 3/3, ×3,2 к H3);
+        // «Авто» с кадром B всё ещё берёт H3 — флип роутинга после слепого теста Андрея
         new(Ltx25, "LTX-2.5",
-            new VideoCaps(Ltx25Durations, ["16:9", "9:16"], Sound: true, LastFrame: false,
+            new VideoCaps(Ltx25Durations, ["16:9", "9:16"], Sound: true, LastFrame: true,
                 new VideoLicense("LTX: бесплатно до $10 млн выручки", VideoLicenseKind.Permissive), VideoPriceUnits.Free,
                 FirstFrame: true, MaxFrameBytes: MaxFrameBytes,
                 Format: VideoFormatCatalog.LocalLtx25(["16:9", "9:16"]), FirstFrameOptional: true),
@@ -439,15 +440,15 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
         return (WithOrigin(run, req), null);
     }
 
-    // LTX-2.5: текст, кадр A необязателен; кадра B и частных параметров нет, длина 3–5 с, пропорция — из формата
+    // LTX-2.5: текст, кадр A необязателен, кадр B поддержан с ночи A/B 22.11 (FLF2V); частных параметров нет,
+    // длина 3–5 с, пропорция — из формата
     private static (LocalVideoRequest? Run, string? Error) ComposeLtx(VideoRequest req)
     {
-        if (req.FrameB is not null) return (null, "LTX-2.5 не берёт кадр B: только текст или кадр A");
         if (!Ltx25Durations.Contains(req.DurationSec))
             return (null, $"LTX-2.5 снимает ролик от {Ltx25Durations[0]} до {Ltx25Durations[^1]} секунд");
         if (req.Params is { } p && p.FirstOrDefault() is { Key: { } unknown })
             return (null, $"Неизвестный параметр {unknown}");
-        var run = new LocalVideoRequest(req.Text, req.FrameA?.Bytes ?? [], null, req.DurationSec, LtxSize(req), null, req.Seed,
+        var run = new LocalVideoRequest(req.Text, req.FrameA?.Bytes ?? [], req.FrameB?.Bytes, req.DurationSec, LtxSize(req), null, req.Seed,
             Model: Ltx25);
         return (WithOrigin(run, req), null);
     }

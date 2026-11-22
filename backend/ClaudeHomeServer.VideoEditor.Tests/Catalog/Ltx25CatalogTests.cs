@@ -31,12 +31,12 @@ public class Ltx25CatalogTests
     }
 
     [Fact]
-    public void Ручной_выбор_по_тексту_и_по_кадру_но_не_кадр_B_и_не_длиннее_5_с()
+    public void Ручной_выбор_по_тексту_по_кадру_и_по_двум_кадрам_не_длиннее_5_с()
     {
         var e = Engine();
         VideoCatalog.Pick(e, "ltx-2.5", new VideoCatalog.Need(false, false, 3)).Should().NotBeNull();
         VideoCatalog.Pick(e, "ltx-2.5", new VideoCatalog.Need(true, false, 5)).Should().NotBeNull();
-        VideoCatalog.Pick(e, "ltx-2.5", new VideoCatalog.Need(true, true, 5)).Should().BeNull();
+        VideoCatalog.Pick(e, "ltx-2.5", new VideoCatalog.Need(true, true, 5)).Should().NotBeNull();
         VideoCatalog.Pick(e, "ltx-2.5", new VideoCatalog.Need(false, false, 8)).Should().BeNull();
     }
 
@@ -47,7 +47,7 @@ public class Ltx25CatalogTests
 
         dto.Experimental.Should().NotBe(true);
         dto.FirstFrameOptional.Should().BeTrue();
-        dto.LastFrame.Should().BeFalse();
+        dto.LastFrame.Should().BeTrue();
         dto.Sound.Should().BeTrue();
         dto.Durations.Should().Equal(3, 4, 5);
         dto.Aspects.Should().Equal("16:9", "9:16");
@@ -78,10 +78,10 @@ public class Ltx25CatalogTests
     }
 
     [Fact]
-    public void Compose_отказывает_по_кадру_B_длительности_и_параметрам()
+    public void Compose_принимает_оба_кадра_отказывает_по_длительности_и_параметрам()
     {
         var frame = new VideoFrameBytes([1], "image/png");
-        LocalVideoEngine.Compose(Req(frame, frame)).Error.Should().Contain("кадр B");
+        LocalVideoEngine.Compose(Req(frame, frame)).Run.Should().NotBeNull();
         LocalVideoEngine.Compose(Req(frame, null, 10)).Error.Should().Contain("от 3 до 5");
         LocalVideoEngine.Compose(Req(frame, null, p: new() { ["fast"] = true })).Error.Should().Contain("fast");
     }

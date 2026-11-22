@@ -7,6 +7,8 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 // distilled int8, два прохода — половинное разрешение (8 сигм), латентный апскейл ×2 и доводка (3 сигмы).
 // Улучшатель промпта шаблона (Gemma 4 E2B) выключен: текст сцены идёт в кодировщик как есть.
 // Проверено 1280×704 / 5 с: пик VRAM 23,9 ГБ на 24 ГБ, поэтому длиннее 5 с и крупнее 720p модель не даёт.
+// Кадр B (первый+последний, FLF2V): граф ночного A/B 22.11.2026 (~/ltx-music3-ab-2026-11-21), LTXVAddGuide(frame_idx=-1)
+// на обоих проходах — 3/3 сцены, среднее 145 с на 5,17 с против 456 с у прода-H3 FL2V-124.
 public static partial class ComfyWorkflows
 {
     public const string Ltx25UnetName = "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors";
@@ -35,8 +37,10 @@ public static partial class ComfyWorkflows
 
     public static (int Width, int Height) Ltx25Size(bool portrait) => portrait ? Ltx25Portrait : Ltx25Landscape;
 
-    // firstFrame — имя картинки в input ComfyUI; null — съёмка по тексту. Звук есть всегда
-    public static JsonObject Ltx25Video(string prompt, string? firstFrame, int seconds, bool portrait, long seed, string filenamePrefix)
+    // firstFrame/lastFrame — имена картинок в input ComfyUI; null — съёмка по тексту. Звук есть всегда.
+    // lastFrame требует firstFrame (каталог сцены отсекает кадр B без кадра A)
+    public static JsonObject Ltx25Video(string prompt, string? firstFrame, string? lastFrame, int seconds, bool portrait,
+        long seed, string filenamePrefix)
     {
         var (width, height) = Ltx25Size(portrait);
         var frames = Ltx25Frames(seconds);
@@ -79,6 +83,20 @@ public static partial class ComfyWorkflows
             ["n2"] = Node("RandomNoise", new JsonObject { ["noise_seed"] = Ltx25RefineSeed }),
         };
 
+        // Кадр B: загрузка и предобработка как у кадра A
+        if (lastFrame is not null)
+        {
+            wf["imgb"] = Node("LoadImage", new JsonObject { ["image"] = lastFrame });
+            wf["rszb"] = Node("ResizeImageMaskNode", new JsonObject
+            {
+                ["input"] = Link("imgb"),
+                ["resize_type"] = "scale longer dimension",
+                ["resize_type.longer_size"] = 1536,
+                ["scale_method"] = "lanczos",
+            });
+            wf["preb"] = Node("LTXVPreprocess", new JsonObject { ["image"] = Link("rszb"), ["img_compression"] = 18 });
+        }
+
         // Первый проход: латент видео (по кадру — с вписанной картинкой, сила 0,7) плюс пустой латент звука
         var video1 = "vlat";
         if (firstFrame is not null)
@@ -101,6 +119,22 @@ public static partial class ComfyWorkflows
                 ["bypass"] = false,
             });
             video1 = "i2v1";
+        }
+        // Кадр B: гайд на первом проходе — гуider смотрит на гайд, латент конкатенации остаётся i2v1
+        if (lastFrame is not null)
+        {
+            wf["g1c"] = Node("LTXVAddGuide", new JsonObject
+            {
+                ["positive"] = Link("cond"),
+                ["negative"] = Link("cond", 1),
+                ["vae"] = Link("vae"),
+                ["latent"] = Link(video1),
+                ["image"] = Link("preb"),
+                ["frame_idx"] = -1,
+                ["strength"] = 1.0,
+            });
+            wf["g1"]!["inputs"]!["positive"] = Link("g1c");
+            wf["g1"]!["inputs"]!["negative"] = Link("g1c", 1);
         }
         wf["av1"] = Node("LTXVConcatAVLatent", new JsonObject { ["video_latent"] = Link(video1), ["audio_latent"] = Link("alat") });
         wf["run1"] = Node("SamplerCustomAdvanced", new JsonObject
@@ -132,6 +166,22 @@ public static partial class ComfyWorkflows
                 ["bypass"] = false,
             });
             video2 = "i2v2";
+        }
+        // Кадр B: гайд на втором проходе — латент конкатенации остаётся i2v2, звук идёт с первого прохода
+        if (lastFrame is not null)
+        {
+            wf["g2c"] = Node("LTXVAddGuide", new JsonObject
+            {
+                ["positive"] = Link("cond"),
+                ["negative"] = Link("cond", 1),
+                ["vae"] = Link("vae"),
+                ["latent"] = Link(video2),
+                ["image"] = Link("preb"),
+                ["frame_idx"] = -1,
+                ["strength"] = 1.0,
+            });
+            wf["g2"]!["inputs"]!["positive"] = Link("g2c");
+            wf["g2"]!["inputs"]!["negative"] = Link("g2c", 1);
         }
         wf["av2"] = Node("LTXVConcatAVLatent", new JsonObject { ["video_latent"] = Link(video2), ["audio_latent"] = Link("sep1", 1) });
         wf["run2"] = Node("SamplerCustomAdvanced", new JsonObject

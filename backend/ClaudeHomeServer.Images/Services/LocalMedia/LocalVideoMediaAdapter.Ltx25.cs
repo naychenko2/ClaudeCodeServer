@@ -24,8 +24,6 @@ public sealed partial class LocalVideoMediaAdapter
         if (request.Seconds is < ComfyWorkflows.Ltx25MinSeconds or > ComfyWorkflows.Ltx25MaxSeconds)
             return LocalVideoSubmitted.Fail(
                 $"LTX-2.5 снимает ролик от {ComfyWorkflows.Ltx25MinSeconds} до {ComfyWorkflows.Ltx25MaxSeconds} секунд.");
-        if (request.LastFrame is { Length: > 0 })
-            return LocalVideoSubmitted.Fail("LTX-2.5 не берёт последний кадр — только текст или первый кадр.");
         var portrait = string.Equals(request.Size, "portrait", StringComparison.OrdinalIgnoreCase);
 
         LocalMediaService.InputFile? first = null;
@@ -34,6 +32,19 @@ public sealed partial class LocalVideoMediaAdapter
             try
             {
                 first = LocalMediaService.CheckInput(request.FirstFrame, FirstSlot, FirstSlot, LocalMediaService.MediaKind.Image);
+            }
+            catch (LocalMediaInputException ex)
+            {
+                return LocalVideoSubmitted.Fail(ex.Message);
+            }
+        }
+
+        LocalMediaService.InputFile? last = null;
+        if (request.LastFrame is { Length: > 0 })
+        {
+            try
+            {
+                last = LocalMediaService.CheckInput(request.LastFrame, FirstSlot, FirstSlot, LocalMediaService.MediaKind.Image);
             }
             catch (LocalMediaInputException ex)
             {
@@ -54,7 +65,8 @@ public sealed partial class LocalVideoMediaAdapter
         try
         {
             var firstName = first is null ? null : await comfy.UploadImageAsync(first.Bytes, $"{id}-in1{first.Extension}", ct);
-            var graph = ComfyWorkflows.Ltx25Video(prompt, firstName, request.Seconds, portrait, seed, $"{ComfyWorkflows.OutputFolder}/{id}");
+            var lastName = last is null ? null : await comfy.UploadImageAsync(last.Bytes, $"{id}-in2{last.Extension}", ct);
+            var graph = ComfyWorkflows.Ltx25Video(prompt, firstName, lastName, request.Seconds, portrait, seed, $"{ComfyWorkflows.OutputFolder}/{id}");
             var queued = await comfy.QueuePromptAsync(graph, ct);
             var size = ComfyWorkflows.Ltx25Size(portrait);
             var details = new LocalRunDetails(LocalVideoModels.Ltx25, prompt, new LocalRunParams(
@@ -62,7 +74,7 @@ public sealed partial class LocalVideoMediaAdapter
                 Frames: ComfyWorkflows.Ltx25Frames(request.Seconds), Steps: 11, Seed: seed));
             ledger?.Register(queued.PromptId, request.Origin, eta, details);
             Sweep();
-            _shots[queued.PromptId] = new Shot(id, prompt, firstName ?? "", null, size, request.Seconds, seed, Now, request.Origin);
+            _shots[queued.PromptId] = new Shot(id, prompt, firstName ?? "", lastName, size, request.Seconds, seed, Now, request.Origin);
             return new LocalVideoSubmitted(queued.PromptId, queue, eta, null);
         }
         catch (ComfyException ex)

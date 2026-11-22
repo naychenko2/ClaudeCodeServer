@@ -12,9 +12,11 @@
 // «нет связи» с «Попробовать ещё раз»; предметов нет → «Предметов пока нет» (текст и
 // пустое состояние переехали сюда из App без изменения). Плитка — только включённые
 // предметы: фильтр enabled !== false, тот же, что у дока (правило решения 84).
+// Тап без исхода (Г20): missSubjectId от вызывающего — предмет без проекта-предмета;
+// над списком — плашка «…пока не открывается / попроси взрослого», пикер остаётся.
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { BookOpen, WifiOff } from 'lucide-react';
+import { BookOpen, Info, WifiOff } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 // Button/LoadingScreen — прямыми файл-импортами, не ui/index: тот тянет PanelShell →
@@ -23,6 +25,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button } from '../../components/ui/Button';
 import { LoadingScreen } from '../../components/ui/LoadingScreen';
 import { EmptyState } from '../../components/ui/EmptyState';
+import { Notice } from '../../components/ui/Notice';
 import { useIsMobile } from '../../lib/breakpoints';
 import { childApi, type ChildSubjectWithViewers } from './api';
 import { subjectColors } from './subjectPalette';
@@ -56,7 +59,7 @@ function TutorLine({ tutor }: { tutor: ChildSubjectTutor | null }) {
   );
 }
 
-export function ChildSubjectPicker({ onPick }: { onPick: (s: ChildSubjectWithViewers) => void }) {
+export function ChildSubjectPicker({ onPick, missSubjectId }: { onPick: (s: ChildSubjectWithViewers) => void; missSubjectId?: string | null }) {
   const isMobile = useIsMobile();
   const [subjects, setSubjects] = useState<ChildSubjectWithViewers[] | null>(null);
   const [error, setError] = useState(false);
@@ -118,6 +121,20 @@ export function ChildSubjectPicker({ onPick }: { onPick: (s: ChildSubjectWithVie
       {/* minmax(0,1fr), а не 1fr: минимум колонки — ноль, а не min-content (глиф 40 + gap +
           nowrap-строка репетитора), иначе на 360 колонка вылезает за правый край
           (тот же дефект c28b42bf, что у плиток главной) */}
+      {/* Г20: тап по плитке, у которой нет проекта-предмета (его удалили из воркспейса),
+          не должен молчать. Плитку заранее не блокируем: наличие проекта известно только
+          из поиска при тапе (его делает вызывающий), поэтому промах — плашка после тапа.
+          Тон — существующий детский: «…пока не открывается» + «Попроси взрослого помочь.»
+          (тот же, что у «Правила пока не открываются» в воркспейсе предмета). Пикер
+          остаётся на экране: ребёнок может выбрать другой предмет. */}
+      {missSubjectId && (() => {
+        const missed = subjects.find(s => s.id === missSubjectId);
+        return missed ? (
+          <Notice tone="info" icon={Info} data-testid="child-subject-miss" title={`«${missed.label}» пока не открывается`}>
+            Попроси взрослого помочь.
+          </Notice>
+        ) : null;
+      })()}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))', gap: SP.md }}>
         {subjects.map(s => {
           const { bg, fg } = subjectColors(s.color);

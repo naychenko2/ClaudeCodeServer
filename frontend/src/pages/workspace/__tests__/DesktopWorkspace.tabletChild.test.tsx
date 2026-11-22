@@ -291,15 +291,29 @@ describe('DesktopWorkspace: список уроков ребёнка на пла
     } finally { root.unmount(); }
   });
 
-  it('взрослый на 768: детской панели нет — раскладка не меняется', async () => {
-    const { root, container } = await mountWorkspace(baseProps({
-      panels: { chats: createElement('div', { 'data-testid': 'g15-chats-panel' }) },
-    }));
+  // Инвариант, а не «нет детского элемента»: раньше кейс проверял отсутствие
+  // child-lessons-panel, которого у взрослого и так не бывает (рисуется SessionList) —
+  // утечка defaultCompactPanel взрослому его бы не покрасила. Теперь: при маунте
+  // планшета НИ ОДНА панель не открывается сама (дровер пуст), по маркерам обеих
+  // панелей из panels. Дефолт 'chats' — только ребёнку (DesktopWorkspace.tsx:592):
+  // мутация «defaultCompactPanel без p.child» краснит этот кейс.
+  it('взрослый на 768: ни одна панель не открывается сама — дровер пуст', async () => {
+    const panels = {
+      chats: createElement('div', { 'data-testid': 'g15-chats-panel' }),
+      files: createElement('div', { 'data-testid': 'g15-files-panel' }),
+    };
+    const { root, container } = await mountWorkspace(baseProps({ panels }));
     try {
+      for (const name of ['g15-chats-panel', 'g15-files-panel']) {
+        expect(findNodeByAttr(container as any, 'data-testid', name), `у взрослого на 768 открылась своя панель (${name}): дровер при маунте должен быть пуст`).toBeNull();
+      }
       expect(findNodeByAttr(container as any, 'data-testid', 'child-lessons-panel'), 'детской панели у взрослого быть не должно').toBeNull();
-      // Г15: и своей панели тоже — маунт планшета не «смена isTablet», дровер при
-      // маунте пуст (перенос раскладки в дровер бывает только по сигналу)
-      expect(findNodeByAttr(container as any, 'data-testid', 'g15-chats-panel'), 'у взрослого на 768 открылась своя панель чатов (маунт планшета не переход: дровер пуст)').toBeNull();
+      // Позитивный контроль той же панелью в том же дровере: открытая действием
+      // (reveal — тот же путь, что клик по кнопке рельсы) она рисуется — значит
+      // отсутствие выше про пустой дровер при маунте, а не про сломанный контент panels
+      await act(async () => { wsPanels.ops.reveal('chats'); });
+      await act(async () => { vi.advanceTimersByTime(300); });
+      expect(findNodeByAttr(container as any, 'data-testid', 'g15-chats-panel'), 'панель «Чаты» не открылась даже действием — отсутствие выше ничего не доказывает').not.toBeNull();
     } finally { root.unmount(); }
   });
 

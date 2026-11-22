@@ -181,14 +181,19 @@ public class ChildHubFilterTests(TestWebApplicationFactory factory) : IClassFixt
         await act.Should().ThrowAsync<Exception>();
     }
 
+    // Г14: DenyAll-ребёнок доходит до подключения к session-хабу — HTTP-гейт отвечает только за
+    // allow-list, а /hubs/session помечен [ChildAllowed]. Сам метод-вызов остаётся закрытым:
+    // фильтр хаба отказывает его по DenyAll (ChildHubFilter.cs:39). Подключиться может — сделать
+    // в хабе ничего нельзя. (Раньше коннект глушил blanket-отказ HTTP-гейта, не сам фильтр.)
     [Fact]
-    public async Task DenyAllChild_CannotConnect_ToSessionHub()
+    public async Task DenyAllChild_CanConnect_ButEveryMethodIsChildMode()
     {
         SetChild(valid: false);
         ShouldBeChild();
         var c = Build("hubs/session", TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        var act = () => c.StartAsync();
-        await act.Should().ThrowAsync<Exception>();
+        await c.StartAsync(); // дошёл до подключения
+        var act = () => c.InvokeAsync("JoinSession", "no-such");
+        (await act.Should().ThrowAsync<HubException>()).Which.Message.Should().Contain("child_mode");
     }
 
     [Fact]

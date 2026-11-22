@@ -150,8 +150,9 @@ public class NotesController : ControllerBase
     // Контекст ребёнка в ручке заметок: Scope — источник разрешён; Deny — отказ; ни того, ни
     // другого — вызывающий не ребёнок, обычная рельса (как до шага). Ребёнок опознаётся по
     // стору через единую точку политики (тот же приём, что у ChildChatsController): выключенный
-    // профиль = обычный пользователь. DenyAll до этой ручки не доходит — сам гейт отказывает
-    // его 403 на любом эндпоинте (ChildModeEndpointGuardTests.DenyAllProfile_Gets403).
+    // профиль = обычный пользователь. DenyAll-ребёнок доходит до этой ручки (Г14: гейт отвечает
+    // только за allow-list): без своих предметов-предметов он получает отказ здесь же —
+    // not_child_subject, а не 403 child_mode от гейта.
     private (ChildNotesScope? Scope, ObjectResult? Deny) ChildGate(string? sourceKey)
     {
         if (_childPolicy?.For(UserId) is null) return (null, null);
@@ -661,8 +662,10 @@ public class NotesController : ControllerBase
     public ActionResult<IReadOnlyList<NoteBacklinkDto>> Backlinks(string id) =>
         Ok(_notes.GetBacklinks(UserId, id));
 
+    // Запись заметки: DenyAll-ребёнку закрыта гейтом до тела ([ChildRequiresProfile], ADR-041 ред. 9).
     [HttpPost]
     [ChildAllowed]
+    [ChildRequiresProfile]
     public async Task<ActionResult<NoteDetail>> Create([FromBody] CreateNoteRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Title))
@@ -695,6 +698,7 @@ public class NotesController : ControllerBase
     // Без If-Match — как раньше.
     [HttpPut("{id}")]
     [ChildAllowed]
+    [ChildRequiresProfile] // запись: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     public async Task<ActionResult<NoteDetail>> Update(string id, [FromBody] UpdateNoteRequest req)
     {
         var ifMatch = Request.Headers.IfMatch.ToString();
@@ -747,6 +751,7 @@ public class NotesController : ControllerBase
 
     [HttpDelete("{id}")]
     [ChildAllowed]
+    [ChildRequiresProfile] // удаление записи: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     public async Task<IActionResult> Delete(string id)
     {
         var (sourceKey, relPath) = IdParts(id);

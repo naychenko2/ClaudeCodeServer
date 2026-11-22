@@ -100,7 +100,9 @@ public class ProjectTasksController(
     // Право Write участнику остаётся закрытым (замок ProjectAccessService не открыт).
     // Б20d (разрез §14.4): ребёнок создаёт задачи только себе и только в своём проекте-предмете;
     // запрещённые поля (персона/исполнитель/фича/план/дерево) — 400 до любой записи.
+    // Запись задачи: DenyAll-ребёнку закрыта гейтом до тела ([ChildRequiresProfile], ADR-041 ред. 9).
     [ChildAllowed]
+    [ChildRequiresProfile]
     [HttpPost]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateTaskRequest req)
@@ -648,6 +650,7 @@ public class TasksController(
     // записи; уже удалённая — 404 прежним NotFound (тот же порядок, что у TaskDeleteDenied:
     // отсутствие раньше авторства).
     [ChildAllowed]
+    [ChildRequiresProfile] // правка задачи: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     [HttpPut("{taskId}")]
     public async Task<IActionResult> Update(string taskId, [FromBody] UpdateTaskRequest req)
     {
@@ -2144,6 +2147,7 @@ public class TasksController(
     // Б20d (разрез §14.4): ребёнку — только его задачи (созданные им); чужая — 403. Порядок тот же,
     // что у TaskDeleteDenied: отсутствие — 404 раньше авторства.
     [ChildAllowed]
+    [ChildRequiresProfile] // удаление задачи: DenyAll-ребёнку закрыта гейтом до тела (ADR-041 ред. 9)
     [HttpDelete("{taskId}")]
     public async Task<IActionResult> Delete(string taskId)
     {

@@ -85,7 +85,10 @@ public class TtsController(
                 v.Model, TtsVoiceCatalog.SupportsSpeed(v.Voice))).ToList()));
     }
 
+    // Платная операция (SpeechKit тарифицирует каждый запрос): DenyAll-ребёнку закрыта до тела —
+    // [ChildRequiresProfile] (ADR-041 ред. 9): текст не уходит во внешний синтез, расход не появляется.
     [ChildAllowed]
+    [ChildRequiresProfile]
     [HttpPost]
     public async Task<IActionResult> Synthesize([FromBody] TtsRequest req, CancellationToken ct)
     {

@@ -50,11 +50,12 @@ public class ChildRulesControllerTests : IClassFixture<ChildRulesControllerTests
     private const string VanishUsername = "kid-rules-profile-vanish";
 
     /// <summary>
-    /// Обёртка боевой политики, воспроизводящая гонку гейта и контроллера — единственная
-    /// HTTP-дорога к ветке DenyAll в контроллере: middleware не пускает DenyAll-ребёнка
-    /// ни на какой эндпоинт (ChildModeGateMiddleware.cs:37). Первое успешное чтение профиля
-    /// RaceUsername отдаётся как есть (гейт проходит) и сразу роняет профиль в сторе —
-    /// правка «взрослого» посреди запроса; следующее чтение (контроллера) — настоящий DenyAll.
+    /// Обёртка боевой политики, воспроизводящая гонку гейта и контроллера — одну из дорог к
+    /// ветке DenyAll в контроллере. С Г14 статичный DenyAll-ребёнок доходит до неё и напрямую
+    /// (middleware отвечает только за allow-list и его не отсекает), но гонка остаётся отдельной
+    /// проверкой той же ветки. Первое успешное чтение профиля RaceUsername отдаётся как есть
+    /// (гейт проходит) и сразу роняет профиль в сторе — правка «взрослого» посреди запроса;
+    /// следующее чтение (контроллера) — настоящий DenyAll.
     /// </summary>
     private sealed class RacePolicy(IUserStore users) : IChildModePolicy
     {

@@ -10,13 +10,29 @@ namespace ClaudeHomeServer.Services.ChildMode;
 /// по стору через <see cref="IChildModePolicy"/>, а не из claim: выключение профиля действует
 /// со следующего запроса.
 /// <para>
-/// Отказ по умолчанию: ребёнок получает 403 на любом запросе без метки <see cref="ChildAllowedAttribute"/>.
-/// SPA-фолбэк совпадает с любым путём без своего эндпоинта, поэтому открыт ему лишь на GET/HEAD к корню
-/// <c>/</c> (<see cref="ChildSpaFallbackAttribute"/>), всё прочее на нём — 403: иначе ребёнок прошёл бы
-/// в ветки <c>app.Use</c> после гейта (/telemetry-proxy, OnlyOffice, статика модулей). У веток свои проверки профиля на входе
-/// для случаев, когда токен приходит не в <c>ctx.User</c>. Профиль с <c>DenyAll</c> не пускает
-/// никуда, даже на размеченные эндпоинты: «выход» — клиентский, серверного logout у JWT нет.
-/// Аутентифицированный запрос без владельца (нет sub) отказывается так же. Анонимный запрос ребёнком не считается: вход (login) закрывает свой [AllowAnonymous].
+/// Гейт делает только allow-list эндпоинтов: ребёнок получает 403 на любом запросе без метки
+/// <see cref="ChildAllowedAttribute"/>. SPA-фолбэк совпадает с любым путём без своего эндпоинта, поэтому
+/// открыт ему лишь на GET/HEAD к корню <c>/</c> (<see cref="ChildSpaFallbackAttribute"/>), всё прочее на нём —
+/// 403: иначе ребёнок прошёл бы в ветки <c>app.Use</c> после гейта (/telemetry-proxy, OnlyOffice, статика
+/// модулей). У веток свои проверки профиля на входе для случаев, когда токен приходит не в <c>ctx.User</c>.
+/// Аутентифицированный запрос без владельца (нет sub) отказывается так же. Анонимный запрос ребёнком не
+/// считается: вход (login) закрывает свой [AllowAnonymous].
+/// </para>
+/// <para>
+/// Гейт решает детскую поверхность и при неполном профиле (<c>DenyAll</c>), и делает это одной точкой
+/// (ADR-041 ред. 9): такой ребёнок остаётся ребёнком и доходит до <see cref="ChildAllowedAttribute"/>
+/// ручек своей оболочки — личности, статуса, предметов-предметов, чтения, стоп-сигнала; но ручки,
+/// помеченные <see cref="ChildRequiresProfileAttribute"/> (платные операции и запись вне «своего
+/// экрана»), гейт закрывает сам: <c>503 policy_unavailable</c> с текстом «попросите взрослого»
+/// до тела эндпоинта — ни записи, ни расхода. Остальные дошедшие ручки отвечают по-детски сами
+/// (<c>503 policy_unavailable</c> ChildStatusController/ChildSubjectsController/ChildChatsController,
+/// 403 not_child_subject / 404). Так неполный профиль не уводит ребёнка ни во взрослую поверхность,
+/// ни в платную операцию: он видит свой экран с empty-state (Г14, дефект 65aa2189; Г14-д1).
+/// Раньше blanket-отказ гейта по <c>DenyAll</c> глушил саму детскую обработку контроллеров.
+/// </para>
+/// <para>
+/// Операционный <c>DenyAll</c> (запуск хода ребёнка, MCP-тулзы) остаётся fail-closed в <see cref="ChildModeGate"/>:
+/// дойти до своего экрана — не то же, что вести урок по нечитаемому маршруту.
 /// </para>
 /// </summary>
 public sealed class ChildModeGateMiddleware(RequestDelegate next)
@@ -33,14 +49,32 @@ public sealed class ChildModeGateMiddleware(RequestDelegate next)
             {
                 // Хабы кроме /hubs/session (terminal, devices) ребёнку закрыты целиком:
                 // у них нет [ChildAllowed], поэтому negotiate получает 403 здесь.
+                // Allow-list эндпоинтов: ребёнку открыто только помеченное [ChildAllowed]. Неполный
+                // профиль (DenyAll) здесь НЕ отсекается целиком — до контроллера доходит он, и тот отвечает
+                // по-детски (503 policy_unavailable / 403 not_child_subject / 404), а не уводит во взрослую
+                // поверхность (Г14).
                 var meta = ctx.GetEndpoint()?.Metadata;
-                var allowed = !unknownOwner && !snapshot!.DenyAll
+                var allowed = !unknownOwner
                     && meta?.GetMetadata<ChildAllowedAttribute>() is not null
                     && (meta.GetMetadata<ChildSpaFallbackAttribute>() is null || IsSpaRootRead(ctx.Request));
                 if (!allowed)
                 {
                     ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
                     await ctx.Response.WriteAsJsonAsync(new { error = "child_mode" });
+                    return;
+                }
+                // Default-deny для DenyAll (ADR-041 ред. 9): из открытой детской поверхности этому
+                // ребёнку закрыто помеченное [ChildRequiresProfile] — платные операции и запись.
+                // Тело — тот же детский контракт, что у контроллерных отказов DenyAll (И3): один
+                // код на одно состояние, фронт показывает message как есть.
+                if (snapshot!.DenyAll && meta!.GetMetadata<ChildRequiresProfileAttribute>() is not null)
+                {
+                    ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                    await ctx.Response.WriteAsJsonAsync(new
+                    {
+                        code = "policy_unavailable",
+                        message = "Администратор ещё не настроил твои занятия — попроси взрослого.",
+                    });
                     return;
                 }
             }

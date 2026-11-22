@@ -17,8 +17,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// <summary>
 /// Б4a: узкая ручка галки PUT /api/users/{id}/child-mode (ADR-041 ред. 4, решение 30) и
 /// расширение GET child-profile (автор согласия, готовность опекунов к общим проектам).
-/// Включение заводит профиль «не настроен» — без предметов, маршрутов и тьютора: серверная
-/// сторона «ребёнку не открывается ничего» — DenyAll политики и 403 на детском запросе.
+/// Включение заводит профиль «не настроен» — без предметов, маршрутов и тьютора: политика
+/// ставит DenyAll (операционные детские ходы/тулзы закрыты). Но до своего экрана ребёнок доходит:
+/// HTTP-гейт отвечает только за allow-list, /me отдаёт isChild=true и снимок поверхности, а не 403
+/// во взрослую поверхность (Г14).
 /// Запись — через стор под его замком: гонка двух одновременных записей (галка ‖ запись
 /// профиля с телом), 20 раундов; ветка 500 — подменой стора (ответ Софьи по c3).
 /// Хост поднимает рубильник SharedProjects:Enabled=true и запись пула с ApiKey: полное тело
@@ -152,7 +154,7 @@ public class UsersChildModeToggleTests :
     // --- c1: включение/отказы ручки ---
 
     [Fact]
-    public async Task Enable_ContainerUser_CreatesNotConfiguredProfile_FailClosedForChild()
+    public async Task Enable_ContainerUser_CreatesNotConfiguredProfile_DenyAllButReachesOwnScreen()
     {
         var id = await NewUser("cm-notconfigured");
         var (status, body) = await ChildModeAsync(id, true);
@@ -166,13 +168,20 @@ public class UsersChildModeToggleTests :
         // полной записью окна.
         body.GetProperty("tutorPersonaId").GetString().Should().BeEmpty();
 
-        // Политика fail-closed: нечитаемый профиль есть DenyAll — ребёнку закрыто всё, включая
-        // помеченные [ChildAllowed] ручки (то же поведение, что у DenyAllProfile в guard'е).
+        // Политика по-прежнему fail-closed: нечитаемый профиль есть DenyAll — операционные детские
+        // ходы и тулзы закрыты (ChildModeGate). Но HTTP-гейт отвечает только за allow-list: ребёнок
+        // доходит до своего /me и получает свой детский экран (isChild=true + снимок поверхности),
+        // а не 403 во взрослую поверхность (Г14, дефект 65aa2189).
         var snapshot = _policy.For(id);
         snapshot.Should().NotBeNull();
         snapshot!.DenyAll.Should().BeTrue();
         using var child = _factory.CreateAuthenticatedClient("cm-notconfigured", UserPassword);
-        (await child.GetAsync("/api/auth/me")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        var me = await child.GetAsync("/api/auth/me");
+        me.StatusCode.Should().Be(HttpStatusCode.OK);
+        var meBody = JsonSerializer.Deserialize<JsonElement>(await me.Content.ReadAsStringAsync());
+        meBody.GetProperty("isChild").GetBoolean().Should().BeTrue();
+        meBody.GetProperty("childSurface").ValueKind.Should().NotBe(JsonValueKind.Null,
+            "неполный профиль не лишает ребёнка его поверхности");
     }
 
     [Fact]

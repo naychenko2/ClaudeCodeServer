@@ -26,13 +26,18 @@ public static class ChildSubjectAccess
     // ветка (в проде политику регистрирует AddSessionCore, молчаливый фолбэк на взрослом прятал
     // бы обрыв связи). Без DI-скопа (ручные сборки без RequestServices) — не ребёнок: детские
     // запросы к не-размеченным ручкам сюда всё равно не доходят — их отсекает сам гейт И1.
+    // DenyAll здесь — ребёнок (снимок не null): граница «своего проекта-предмета» от читаемости
+    // профиля не зависит, и это ровно то, что нужно (ADR-041 ред. 9): чтение предметов-предметов
+    // DenyAll открыто, а его запись закрыта раньше — маркером [ChildRequiresProfile] в гейте,
+    // до всякого вызова этой точки.
     public static bool IsChild(HttpContext http, string userId) =>
         http.RequestServices?.GetRequiredService<IChildModePolicy>()?.For(userId) is not null;
 
     // «Проект-предмет этого ребёнка» (решение 81): маркер из единой точки его чтения
     // (ProjectCapabilities.IsChildSubject) + владение: проект-предмета принадлежит самому
     // ребёнку (ChildSubjectProjectProvisioner). Предмет, удалённый из профиля, не помеха:
-    // по ADR-041 проект живёт, и его данные ребёнку остаются видны.
+    // по ADR-041 проект живёт, и его данные ребёнку остаются видны. Та же точка — у дока
+    // проектов DenyAll (ProjectsController, ред. 9): док судится существованием, не профилем.
     public static bool IsOwnSubjectProject(Project? p, string childId) =>
         ProjectCapabilities.IsChildSubject(p) && p!.OwnerId == childId;
 

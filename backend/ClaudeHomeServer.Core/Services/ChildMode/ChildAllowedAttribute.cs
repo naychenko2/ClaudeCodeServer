@@ -17,3 +17,16 @@ public sealed class ChildAllowedAttribute : Attribute;
 /// </summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, Inherited = true, AllowMultiple = false)]
 public sealed class ChildSpaFallbackAttribute : Attribute;
+
+/// <summary>
+/// Метка эндпоинта «нужен читаемый детский профиль» (ADR-041 ред. 9, Г14-д1): ребёнок с нечитаемым
+/// профилем (<c>DenyAll</c>) получает от <c>ChildModeGateMiddleware</c> детский отказ
+/// 503 <c>policy_unavailable</c> ДО тела ручки — платная операция не оплачена, запись не написана.
+/// Маркер стоит на платных операциях и записи вне «своего экрана»: синтез речи, голос чата,
+/// согласие правил, запись заметок/файлов/задач. Читающие ручки, bootstrap и стоп-сигнал не
+/// помечены намеренно: ребёнок без настроенных занятий читает свои предметы-предметы и может
+/// позвать взрослого. Пара «список [ChildAllowed] + список [ChildRequiresProfile]» заморожена
+/// в стороже <c>ChildModeEndpointGuardTests</c>: новая метка без правки сторожа краснит тест.
+/// </summary>
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, Inherited = true, AllowMultiple = false)]
+public sealed class ChildRequiresProfileAttribute : Attribute;

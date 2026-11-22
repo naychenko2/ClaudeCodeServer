@@ -11,7 +11,8 @@ namespace ClaudeHomeServer.Hubs;
 /// Ребёнку (по <see cref="IChildModePolicy"/>, а не по claim) разрешены только SendMessage, ответ на
 /// карточку вопроса (AnswerQuestion) и подписка/присоединение к своему чату. Хабы terminal и devices
 /// закрыты на negotiate гейтом REST-слоя: у них нет [ChildAllowed], поэтому ребёнок не доходит до
-/// подключения. Профиль с DenyAll не пускает никуда.
+/// подключения. Профиль с DenyAll доходит до подключения к session-хабу (Г14: HTTP-гейт отвечает
+/// только за allow-list), но каждый метод-вызов этого фильтра — child_mode.
 /// У SendMessage ребёнка <c>mode</c> и <c>auto</c> игнорируются: режим подставляется из профиля (KM-B3a);
 /// <c>attachedPaths</c> — пути папки предмета этого чата (И8, решение 57): их судит
 /// <see cref="ChildPathPolicy"/> (одна точка правды), Deny/Hidden — путь отбрасывается, вызов не падает.

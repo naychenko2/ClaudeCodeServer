@@ -197,7 +197,10 @@ public class ChildChatsController(
         }
     }
 
+    // Запись настройки чата: DenyAll-ребёнку закрыта гейтом до тела ([ChildRequiresProfile],
+    // ADR-041 ред. 9) — VoiceMode/VoiceStyle не меняются при нечитаемом профиле.
     [ChildAllowed]
+    [ChildRequiresProfile]
     [HttpPut("chats/{id}/voice")]
     public IActionResult Voice(string id, [FromBody] ChildVoiceRequest req)
     {

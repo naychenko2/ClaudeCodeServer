@@ -268,8 +268,15 @@ export function DesktopWorkspace(p: Props) {
   // навигация ВНУТРИ контентных панелей («открыть файл») дровер не закрывает,
   // а вот смена активного чата — закрывает. closeCompactStack в сторе — счётчик,
   // обе PanelZone слушают его и чистят свой локальный tabletPanels.
+  // Г5-д1 (дефект 68812ebd): маунт — не «смена сессии». Раньше эффект бил
+  // closeCompactStack уже на первом кадре и стирал дефолтную панель дровера
+  // (defaultCompactPanel='chats' у ребёнка) раньше, чем она добиралась до экрана.
+  // Сравнение по ref: сигнал уходит только при реальной смене id.
+  const seenSessionRef = useRef(p.activeSession?.id);
   useEffect(() => {
     if (!p.isTablet) return;
+    if (seenSessionRef.current === p.activeSession?.id) return;
+    seenSessionRef.current = p.activeSession?.id;
     closeCompactStack();
     // closeCompactStack стабилен (useCallback в сторе) — в deps не нужен
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -564,6 +571,12 @@ export function DesktopWorkspace(p: Props) {
         // windowWidth × PANEL_INLINE_MAX_SHARE (см. PanelZone), на широком планшете
         // (≥1000px) стек встаёт inline, как у правой зоны (строка 459).
         compact={p.isTablet}
+        // Г5-д1 (дефект 68812ebd): у ребёнка список уроков — «всегда виден» экраном
+        // (360 — постоянный сайдбар мобильной раскладки, 1280 — постоянная колонка
+        // рельсы), а на 768 дровер компактной зоны стартовал пустым и ребёнок не мог
+        // открыть существующий урок вовсе. Дефолтная панель дровера только ему;
+        // взрослому undefined — раскладка как раньше.
+        defaultCompactPanel={p.child ? 'chats' : undefined}
         panels={zonePanels}
         allowedKeys={p.allowedKeys}
         railBadges={p.railBadges}

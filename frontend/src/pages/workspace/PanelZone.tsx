@@ -91,6 +91,13 @@ interface Props {
   hideWhenEmpty?: boolean;
   // Планшет/телефон: одна-две панели, drawer поверх на узком экране, без DnD и колонок
   compact?: boolean;
+  // Г5-д1 (дефект 68812ebd): панель, которую компактная зона (drawer поверх контента)
+  // открывает при маунте, пока человек ничего не выбрал. У ребёнка это «Чаты» — список
+  // уроков: на 360 он в постоянном сайдбаре мобильной раскладки, на 1280 — постоянная
+  // колонка рельсы, а на 768 дровер стартовал пустым и ребёнок не мог открыть
+  // существующий урок вовсе. Зовётся один раз за жизнь зоны; после закрытия человеком
+  // и после сигнала смены чата (closeCompactSignal) дефолт не возвращается.
+  defaultCompactPanel?: PanelKey;
   // Панели текущей сессии (План/Агенты/Персона) — контент, видимость, бейджи
   sessionPanels?: SessionPanels;
   // Второй остров ПОД рельсой зоны — сейчас это док проектов воркспейса. К раскладке
@@ -116,7 +123,7 @@ interface Props {
 export function PanelZone({
   side, panels, railBadges, hat, hatTitle, panelStack,
   allowedKeys: allowedKeysProp, hideWhenEmpty, compact, sessionPanels,
-  railFooter, floating, centerFileOpen, onUserClose, pluginPanelMeta,
+  railFooter, floating, centerFileOpen, onUserClose, pluginPanelMeta, defaultCompactPanel,
 }: Props) {
   const allowedKeys = allowedKeysProp ?? WORKSPACE_KEYS;
   // Итерация 2: мета плагинов — пропсом (а не глобальный реестр). Для ключей plugin:*
@@ -591,6 +598,23 @@ export function PanelZone({
     // нового чата незачем — это ровно то, от чего сигнал и защищает.
     setTabletStash([]);
   }, [compactOverlay, zones.closeCompactSignal]);
+
+  // Г5-д1 (дефект 68812ebd): дефолтная панель компактного дровера. Ставится
+  // ОДИН раз за жизнь зоны, после чистки closeCompactSignal-эффектом: тот при
+  // маунте тоже пробегает (и не вредит — стек ещё пуст), а этот эффект идёт
+  // следом по порядку объявления. Дальше дефолт не возвращается: человек закрыл
+  // крестиком или смена чата почистила стек — панель сама не воскресает.
+  // keyAvailable в deps не включён — его читаем в момент эффекта (замыкание
+  // свежего рендера), состав панелей экрана статичен за жизнь зоны.
+  const defaultCompactAppliedRef = useRef(false);
+  useEffect(() => {
+    if (defaultCompactAppliedRef.current) return;
+    if (!compactOverlay || !defaultCompactPanel) return;
+    if (!keyAvailable(defaultCompactPanel)) return;
+    defaultCompactAppliedRef.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- дефолтная открытость дровера, однократно при маунте зоны
+    setTabletPanels([defaultCompactPanel]);
+  }, [compactOverlay, defaultCompactPanel]);
 
   // Плавающие панели закрываются кликом мимо: слой висит поверх контента, и
   // «убрать его с глаз» должно быть так же дёшево, как открыть. Клик по самой

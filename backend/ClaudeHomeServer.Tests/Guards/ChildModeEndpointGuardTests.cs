@@ -20,6 +20,9 @@ namespace ClaudeHomeServer.Tests.Guards;
 /// [ChildRequiresProfile] (закрытые нечитаемому профилю платные операции и запись) и открытая
 /// ему часть поверхности (FrozenDenyAllOpen = Allowed \ RequiresProfile). Новая метка без
 /// правки этих списков краснит тест: класс эндпоинта при DenyAll — осознанное решение.
+/// Правило пишущих методов (Г16, A-Г14-д1): из открытой DenyAll части каждый не-GET/HEAD метод
+/// обязан нести [ChildRequiresProfile] или быть в FrozenDenyAllWriteExceptions с обоснованием —
+/// семантику записи в FrozenDenyAllOpen сторож сам не выводит.
 /// Слепая зона та же, что у AnonymousEndpointsGuardTests: ветки конвейера без эндпоинта
 /// (WebDAV, /preview) и YARP-модули — для них отдельные тесты ниже и проверка в самих ветках.
 /// </summary>
@@ -203,6 +206,37 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         "GET,HEAD {*path:nonfile}",
     ];
 
+    // Заморожено (Г16, ADR-041 ред. 9): пишущие ручки открытой DenyAll части без [ChildRequiresProfile].
+    // Сторож DenyAllOpen_WritingEndpoints_HaveMarkOrAreNamedExceptions требует: всё открытое DenyAll —
+    // чтение (GET/HEAD), либо [ChildRequiresProfile], либо эта запись с обоснованием. Пустой
+    // IHttpMethodMetadata (хабы) — не «чтение»: транспорт не ограничен GET/HEAD, поэтому хаб —
+    // тоже запись здесь. Новый пишущий [ChildAllowed] без метки и без записи краснит сторож —
+    // семантику записи в FrozenDenyAllOpen он сам не выводит (ограничение из A-Г14-д1).
+    private static readonly string[] FrozenDenyAllWriteExceptions =
+    [
+        // Bootstrap-вход: без него ребёнок не доходит до своего экрана (Г14, дефект 65aa2189).
+        // [AllowAnonymous], пишет только собственный auth-токен — не детская операция.
+        "POST api/auth/login",
+        // Явное исключение безопасности (Г14-д1, ручка №9): «Мне неприятно» доступен и DenyAll —
+        // сигнал не требует читаемого профиля; поведение держит DenyAllToken_OnStopSignal_StillAccepted.
+        "POST api/child/stop-signal",
+        // Остальные честно отказывают 503 policy_unavailable ДО побочного эффекта (проверено
+        // DenyAllToken_OnOpenWritingEndpoints_Gets503PolicyUnavailable и порядком в контроллерах:
+        // ChildStatusController.cs:69 до RecordMinute :78; ChildChatsController.cs:242 до провижна
+        // и создания; ChildAttachmentsController.cs:60 до поиска чата и записи; ChildRulesController.cs:62
+        // до лока и создания chats-чата) — ни записи, ни расхода.
+        "POST api/child/heartbeat",
+        "POST api/child/spaces/{space}/chat",
+        "POST api/child/chats/{id}/attachments",
+        "POST api/child/rules/start",
+        // Транспорт своего экрана (Г14): DenyAll-ребёнок доходит до подключения к session-хабу,
+        // но каждый метод-вызов отказывает ChildHubFilter (ChildHubFilter.cs:40-42) до тела метода —
+        // «подключиться может, сделать в хабе ничего нельзя»
+        // (ChildHubFilterTests.DenyAllChild_CanConnect_ButEveryMethodIsChildMode).
+        "ANY /hubs/session",
+        "ANY /hubs/session/negotiate",
+    ];
+
     private void SetChild(bool enabled = true, bool valid = true)
     {
         var user = factory.Services.GetRequiredService<UserStore>()
@@ -230,6 +264,12 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
             ? string.Join(",", m.Order(StringComparer.Ordinal)) : "ANY";
         return $"{methods} {e.RoutePattern.RawText}";
     }
+
+    // «Только чтение» для правила Г16: у эндпоинта есть HTTP-методы и все они GET/HEAD.
+    // Пустой IHttpMethodMetadata (хабы) — не чтение: транспорт не ограничен GET/HEAD.
+    private static bool IsReadingOnly(RouteEndpoint e) =>
+        e.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods is { Count: > 0 } m
+        && m.All(x => x is "GET" or "HEAD");
 
     private IEnumerable<RouteEndpoint> Endpoints() =>
         factory.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>();
@@ -312,6 +352,67 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         ((int)resp.StatusCode).Should().BeLessThan(400);
         var body = await resp.Content.ReadAsStringAsync();
         body.Should().NotContain("policy_unavailable").And.NotContain("child_mode");
+    }
+
+    // Г16 (ограничение сторожа из A-Г14-д1): для DenyAll открытая часть поверхности — только
+    // чтение (GET/HEAD), либо [ChildRequiresProfile], либо именованное исключение с обоснованием
+    // (FrozenDenyAllWriteExceptions). Семантику записи в FrozenDenyAllOpen сторож сам не выводит —
+    // поэтому пишущая ручка без метки обязана назвать себя здесь. Мутация: пометь [ChildAllowed]
+    // пишущую взрослую ручку (например PUT api/chats/{id}/visibility) и внеси её в FrozenAllowed
+    // и FrozenDenyAllOpen, не поставив [ChildRequiresProfile], — этот тест краснеет.
+    [Fact]
+    public void DenyAllOpen_WritingEndpoints_HaveMarkOrAreNamedExceptions()
+    {
+        var open = Endpoints()
+            .Where(e => e.Metadata.GetMetadata<ChildAllowedAttribute>() is not null
+                && e.Metadata.GetMetadata<ChildRequiresProfileAttribute>() is null)
+            .ToList();
+        open.Should().NotBeEmpty();
+
+        foreach (var e in open)
+            (IsReadingOnly(e) || FrozenDenyAllWriteExceptions.Contains(Describe(e), StringComparer.Ordinal))
+                .Should().BeTrue(
+                    $"{Describe(e)} открыт DenyAll: это чтение (GET/HEAD), [ChildRequiresProfile] или именованное исключение");
+
+        // Список исключений минимален и живой: ровно те пишущие ручки открытой части, что есть сейчас.
+        var actualWrites = open.Where(e => !IsReadingOnly(e)).Select(Describe).Distinct()
+            .Order(StringComparer.Ordinal).ToArray();
+        actualWrites.Should().Equal(FrozenDenyAllWriteExceptions.Order(StringComparer.Ordinal));
+    }
+
+    // Г16: обоснование «отказывает до побочного эффекта» — не комментарий, а контракт. DenyAll-
+    // ребёнок на каждой такой ручке получает 503 policy_unavailable и не доходит до тела: ни записи,
+    // ни расхода. Мутация: перенеси проверку DenyAll в любом из этих контроллеров за побочный
+    // эффект — этот тест краснеет (ответ станет 404/400/409 или запись случится до отказа).
+    [Theory]
+    [InlineData("POST", "/api/child/heartbeat")]
+    [InlineData("POST", "/api/child/spaces/lessons/chat")]
+    [InlineData("POST", "/api/child/rules/start")]
+    public async Task DenyAllToken_OnOpenWritingEndpoints_Gets503PolicyUnavailable(string method, string path)
+    {
+        SetChild(valid: false);
+        using var client = ChildClient();
+        using var req = new HttpRequestMessage(new HttpMethod(method), path)
+        { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
+        var resp = await client.SendAsync(req);
+        var body = await resp.Content.ReadAsStringAsync();
+        resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable,
+            $"{method} {path}: открыто DenyAll только потому, что отказывает до побочного эффекта; тело: {body}");
+        body.Should().Contain("policy_unavailable");
+    }
+
+    // Та же граница на загрузке вложения: DenyAll-отказ — до поиска чата и любой записи в папку
+    // предмета (ChildAttachmentsController.cs:60), поэтому «no-such» здесь законен: до 404 не доходит.
+    [Fact]
+    public async Task DenyAllToken_OnAttachmentUpload_Gets503PolicyUnavailable()
+    {
+        SetChild(valid: false);
+        using var client = ChildClient();
+        using var form = new MultipartFormDataContent { { new StringContent("a"), "file" } };
+        var resp = await client.PostAsync("/api/child/chats/no-such/attachments", form);
+        var body = await resp.Content.ReadAsStringAsync();
+        resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable, $"тело: {body}");
+        body.Should().Contain("policy_unavailable");
     }
 
     // Ревью К4a (К3): WorkflowController.GetTimeline отдаёт ToolResult из транскрипта workflow-агента, а защита

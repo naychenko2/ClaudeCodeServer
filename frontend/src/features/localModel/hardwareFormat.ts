@@ -4,7 +4,7 @@
 // Уровень (level) и пороги считает БЕКЕНД (HardwareReport.cs); фронт только
 // красит по level и не дублирует пороги. Здесь — только текст и выбор.
 
-import type { HardwareBrief, HardwareFarm, HardwareFarmNode, HardwareGpu, HardwareNode, HardwareReport, HwLevel } from './hardwareTypes';
+import type { HardwareBrief, HardwareFarm, HardwareFarmNode, HardwareGpu, HardwareNode, HardwareReport, HardwareUps, HwLevel } from './hardwareTypes';
 
 // === Числа ===
 
@@ -344,4 +344,123 @@ export function hwThrottled(report: Pick<HardwareReport, 'gpus'>): 'thermal' | '
   if (report.gpus.some(g => g.throttle.thermal)) return 'thermal';
   if (report.gpus.some(g => g.throttle.powerCap)) return 'powerCap';
   return null;
+}
+
+// === Иерархия показателей вкладки «Стенды» (макет v4): три уровня ===
+// KPI-уровень (primary), температуры сейчас (secondary) и строки «Другие датчики»
+// (details). Элементы групп — те же HwTileView, что у плиток: ветвление по kind с
+// подписями и деталями делает hwTileView, группировка поверх него — только
+// распределение по уровням. Спарк остаётся там, где историю больше нигде не видно:
+// у RAM (KPI) и диска кэша (details); у secondary историю даёт TempChart, а у
+// «Загрузки CPU» истории нет вовсе — плейсхолдер вместо неё не подставляется.
+// UI пока не подключён — рендер групп это ST2; свёртки и порядок вкладки — ST4.
+
+// Иерархия показателей узла.
+export interface HwMetricGroups {
+  // KPI-уровень: «Загрузка CPU» (report.cpuLoadPerc) и память (RAM-узлы).
+  primary: HwTileView[];
+  // Температуры сейчас: карты и процессоры.
+  secondary: HwTileView[];
+  // «Другие датчики»: VRM, плата, чипсет, вода и оба вида дисков.
+  details: HwTileView[];
+  // Показателей «нет данных» (датчик nodata); «датчика нет» (none) не считается —
+  // та же семантика, что у hwNoDataCount. KPI «Загрузка CPU» без узла при
+  // cpuLoadPerc=null в счётчик не входит: его «нет данных» видно на самой KPI.
+  nodataCount: number;
+}
+
+// Иерархия узлов снимка. Ветвление — только по node.kind и node.detail.role;
+// порядок внутри групп — порядок report.nodes. RAM с sensor='none' — валидный KPI:
+// её датчик температуры отсутствует, а занятость (usedPerc) валидна — значение
+// остаётся значением, null остаётся null, 0 остаётся числом.
+export function hwMetricGroups(report: HardwareReport): HwMetricGroups {
+  const views = hwTileView(report);
+  const groups: HwMetricGroups = { primary: [], secondary: [], details: [], nodataCount: hwNoDataCount(report) };
+  const load = report.cpuLoadPerc ?? null;
+  groups.primary.push({
+    key: 'cpu-load',
+    icon: hwIcon('cpu'),
+    name: 'Загрузка CPU',
+    value: load,
+    unit: '%',
+    dec: false,
+    level: 'none',
+    sensor: load == null ? 'nodata' : 'ok',
+    sensorLabel: '',
+    detail: '',
+    spark: [],
+    thresholdTitle: '',
+  });
+  report.nodes.forEach((node, i) => {
+    const v = views[i];
+    if (node.kind === 'ram') {
+      groups.primary.push(v);
+    } else if (node.kind === 'gpu' || node.kind === 'cpu') {
+      groups.secondary.push({ ...v, spark: [] });
+    } else if (node.kind === 'disk' && node.detail.role === 'kv') {
+      groups.details.push(v);
+    } else {
+      groups.details.push({ ...v, spark: [] });
+    }
+  });
+  return groups;
+}
+
+// Подписанный ряд динамики ИБП (секция «Динамика за 15 мин»).
+export interface HwUpsSeries {
+  label: string;
+  unit: '%' | 'В';
+  dec: boolean;
+  points: (number | null)[];
+}
+
+// Иерархия показателей ИБП.
+export interface UpsMetricGroups {
+  // KPI-уровень: заряд.
+  primary: HwTileView;
+  // Нагрузка, сеть, батарея — детали и уровни как у плиток upsTiles (UpsCard.tsx).
+  secondary: HwTileView[];
+  // Четыре подписанных ряда 15 мин: заряд, нагрузка, сеть, батарея.
+  dynamics: HwUpsSeries[];
+}
+
+// Иерархия ИБП. Сборка плиток зеркалит тело upsTiles (UpsCard.tsx): сводить в
+// общий код нельзя — тот импортирует React (HwTile), а этот модуль обязан
+// оставаться чистым (юнит-тесты без React/DOM).
+export function upsMetricGroups(u: HardwareUps): UpsMetricGroups {
+  const base = { dec: false, thresholdTitle: '', sensorLabel: '' };
+  const offLine = u.power === 'battery' || u.power === 'lowBattery';
+  return {
+    primary: {
+      ...base, key: 'ups-charge', icon: 'BatteryMedium', name: 'Заряд', unit: '%',
+      value: u.chargePerc, level: u.power === 'lowBattery' ? u.powerLevel : 'ok',
+      sensor: u.chargePerc == null ? 'nodata' : 'ok',
+      detail: 'по напряжению', spark: [],
+    },
+    secondary: [
+      {
+        ...base, key: 'ups-load', icon: 'Gauge', name: 'Нагрузка', unit: '%',
+        value: u.loadPerc, level: u.loadLevel, sensor: u.loadPerc == null ? 'nodata' : 'ok',
+        detail: u.loadW != null ? `≈ ${u.loadW} Вт` : '', spark: [],
+      },
+      {
+        ...base, key: 'ups-input', icon: 'PlugZap', name: 'Сеть', unit: 'В',
+        value: u.inputV, level: offLine ? u.powerLevel : 'ok', sensor: u.inputV == null ? 'nodata' : 'ok',
+        detail: u.inputHz != null ? `${ruNum(u.inputHz)} Гц` : '', spark: [],
+      },
+      {
+        ...base, key: 'ups-battery', icon: 'Battery', name: 'Батарея', unit: 'В', dec: true,
+        value: u.batteryV, level: 'ok', sensor: u.batteryV == null ? 'nodata' : 'ok',
+        detail: u.batteryNominalV != null ? `номинал ${ruNum(u.batteryNominalV)} В` : '', spark: [],
+      },
+    ],
+    dynamics: [
+      { label: 'Заряд', unit: '%', dec: false, points: u.chargeSpark15m },
+      { label: 'Нагрузка', unit: '%', dec: false, points: u.loadSpark15m },
+      { label: 'Сеть', unit: 'В', dec: false, points: u.inputVSpark15m },
+      // Батарея приходит в десятых вольта: каждое non-null значение делим на 10,
+      // null остаётся разрывом линии.
+      { label: 'Батарея', unit: 'В', dec: true, points: u.batteryDeciVSpark15m.map(v => (v == null ? null : v / 10)) },
+    ],
+  };
 }

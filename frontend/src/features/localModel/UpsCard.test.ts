@@ -63,6 +63,13 @@ describe('upsSummary', () => {
 describe('UpsCard', () => {
   const render = (u: HardwareUps) => renderToStaticMarkup(createElement(UpsCard, { ups: u, isMobile: false }));
 
+  // style-атрибут первого элемента, чей style содержит marker:
+  // font-size:28px в карточке только у значения KPI «Заряд» — им и привязаны проверки окраски.
+  function styleOf(html: string, marker: string): string | null {
+    const m = html.match(new RegExp(`style="([^"]*${marker}[^"]*)"`, 'i'));
+    return m ? m[1] : null;
+  }
+
   it('шапка, плашка role=status и сводка', () => {
     const html = render(ups());
     expect(html).toContain('ИБП · Raskat');
@@ -100,18 +107,42 @@ describe('UpsCard', () => {
     expect(html).not.toContain('0 %');
   });
 
+  it('KPI крупная: значение 28px/1.15, ячейки полосы 16px/1.25 (макет v4)', () => {
+    const html = render(ups());
+    // Значение KPI: единственный элемент с font-size:28px, высота строки 1.15
+    const kpi = styleOf(html, 'font-size:28px');
+    expect(kpi).not.toBeNull();
+    expect(kpi).toContain('line-height:1.15');
+    // Три ячейки полосы: font-size:16px с line-height:1.25
+    const cells = html.match(/style="[^"]*font-size:16px[^"]*line-height:1\.25[^"]*"/g) ?? [];
+    expect(cells).toHaveLength(3);
+  });
+
   it('lowBattery — заливка KPI по powerLevel; обычный заряд без заливки', () => {
     const html = render(ups({ power: 'lowBattery', powerLevel: 'danger', chargePerc: 18 }));
     expect(html).toContain('var(--c-danger-bg)');
     expect(html).toContain('var(--c-danger-border)');
-    expect(html).toContain('var(--c-danger-text)');
     expect(html).toContain('18 %');
     // Обычный заряд при питании от сети: danger-заливки нет
     expect(render(ups())).not.toContain('var(--c-danger-bg)');
   });
 
+  it('lowBattery danger — значение KPI (28px) окрашено dangerText, не плашкой', () => {
+    const kpi = styleOf(render(ups({ power: 'lowBattery', powerLevel: 'danger', chargePerc: 18 })), 'font-size:28px');
+    expect(kpi).not.toBeNull();
+    expect(kpi).toContain('color:var(--c-danger-text)');
+  });
+
   it('lowBattery с powerLevel=warn — жёлтый текст значения KPI', () => {
-    expect(render(ups({ power: 'lowBattery', powerLevel: 'warn', chargePerc: 64 }))).toContain('var(--c-warning-text)');
+    const kpi = styleOf(render(ups({ power: 'lowBattery', powerLevel: 'warn', chargePerc: 64 })), 'font-size:28px');
+    expect(kpi).not.toBeNull();
+    expect(kpi).toContain('color:var(--c-warning-text)');
+  });
+
+  it('от сети с powerLevel=danger — значение KPI НЕ dangerText (окраска только при lowBattery)', () => {
+    const kpi = styleOf(render(ups({ power: 'line', powerLevel: 'danger', chargePerc: 100 })), 'font-size:28px');
+    expect(kpi).not.toBeNull();
+    expect(kpi).not.toContain('color:var(--c-danger-text)');
   });
 
   it('молчащий ИБП: значения textMuted, заливки сняты, плашка молчания остаётся', () => {

@@ -73,7 +73,9 @@ const STRIP: CSSProperties = {
 
 // Значение с единицей: null — «нет данных» (курсив, C.textMuted, FS.sm);
 // 0 — измеренное значение, выводится «0 %» (по dec — с запятой).
-function MetricValue({ v, unit, dec, color }: { v: number | null; unit: string; dec: boolean; color: string }) {
+// large — крупная KPI (макет .kpi-value 600 28px/1.15); иначе ячейка полосы
+// (макет .ups-cell-value 600 16px/1.25). Размер KPI обязан быть крупнее ячейки.
+function MetricValue({ v, unit, dec, color, large = false }: { v: number | null; unit: string; dec: boolean; color: string; large?: boolean }) {
   if (v == null) {
     return (
       <div style={{ fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 600, lineHeight: 1.3, marginTop: 2, color: C.textMuted, fontStyle: 'italic' }}>
@@ -81,8 +83,10 @@ function MetricValue({ v, unit, dec, color }: { v: number | null; unit: string; 
       </div>
     );
   }
+  const fontSize = large ? FS.h1 : FS.lg;
+  const lineHeight = large ? 1.15 : 1.25;
   return (
-    <div style={{ fontFamily: FONT.mono, fontSize: FS.lg, fontWeight: 600, lineHeight: 1.25, overflowWrap: 'anywhere', color }}>
+    <div style={{ fontFamily: FONT.mono, fontSize, fontWeight: 600, lineHeight, overflowWrap: 'anywhere', color }}>
       {`${dec ? ruNum(v) : Math.round(v)} ${unit}`}
     </div>
   );
@@ -132,7 +136,7 @@ export function UpsCard(props: { ups: HardwareUps; isMobile: boolean }) {
           <BatteryMedium size={14} strokeWidth={ICON_STROKE} aria-hidden />
           <span>Заряд</span>
         </div>
-        <MetricValue v={g.primary.value} unit="%" dec={false} color={silent ? C.textMuted : VALUE_COLOR[kpiLevel]} />
+        <MetricValue v={g.primary.value} unit="%" dec={false} color={silent ? C.textMuted : VALUE_COLOR[kpiLevel]} large />
         <div style={{ fontSize: FS.xs, color: C.textSecondary, marginTop: 4 }}>{g.primary.detail}</div>
       </div>
       {/* Полоса из трёх ячеек: нагрузка, сеть, батарея */}

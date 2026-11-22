@@ -77,7 +77,18 @@ export async function loginViaUi(page: Page, username: string, password: string,
   for (let attempt = 1; attempt <= 4; attempt++) {
     await userInput.fill(username);
     await page.locator('input[placeholder="Пароль"]').first().fill(password);
-    await page.getByRole('button', { name: /Войти/ }).first().click({ force: true });
+    // При isError (429 rate-limit) кнопка НЕ рендерится — клик ловит таймаут,
+    // перезагружаем страницу и пробуем заново
+    const clicked = await page.getByRole('button', { name: /Войти|Вхожу/ }).first()
+      .click({ force: true, timeout: 8000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!clicked) {
+      console.log('QA-DEBUG-LOGIN', attempt, 'кнопка скрыта (isError) — перезагрузка и повтор');
+      await page.reload();
+      await page.waitForTimeout(2500);
+      continue;
+    }
     await page.waitForTimeout(6000);
     const stillForm = await page.locator('input[placeholder="Имя пользователя"]').count();
     console.log('QA-DEBUG-LOGIN', attempt, stillForm > 0 ? 'форма ещё на экране' : 'вошли');
@@ -159,8 +170,10 @@ export async function openUserManagement(page: Page) {
 /** Открыть окно настроек детского режима конкретного ребёнка (по логину в подписи окна). */
 export async function openChildSettings(page: Page, login: string) {
   const buttons = page.locator('[data-testid="child-settings-open"]');
+  // Статус детского режима строки грузится асинхронно — кнопка появляется после него
+  await expect(buttons.first(), 'в списке пользователей есть кнопка «Настроить занятия»')
+    .toBeVisible({ timeout: 20_000 });
   const n = await buttons.count();
-  expect(n, 'в списке пользователей есть кнопки «Настроить занятия»').toBeGreaterThan(0);
   // Логин — ТОЧНОЕ слово: 'qa_w5_child' входит в 'qa_w5_child2', и по includes
   // открывалось окно другого ребёнка (правка уходила в чужой профиль).
   const loginRe = new RegExp(`(^|\\s)${login.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|\\s)`);

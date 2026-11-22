@@ -237,7 +237,14 @@ export function DesktopWorkspace(p: Props) {
   // его поднимают проектный воркспейс (этот файл) и раздел «Чаты» (ChatsPage) —
   // у обоих есть PanelZone с compact={isTablet}. WallPage и остальные разделы
   // хаба compact не передают, и эксклюзив у них не действует.
-  const { setExclusive, markActive, closeCompactStack, reveal } = wsPanels.use();
+  const { setExclusive, markActive, closeCompactStack, reveal, zones } = wsPanels.use();
+  // Плашка предмета (SubjectPlate) по макету kids-project-screen (.fly) стоит только
+  // при закрытых панелях и не на планшете: при открытой панели «Чаты» (у ребёнка она
+  // открыта по умолчанию) fixed-плашка с left=RAIL_W закрывала её заголовок и «Новый
+  // урок» (L1 аудита 21.11, дефект 36e0160d). Решает владелец поверхности: знание о
+  // панелях — в сторе, который читает этот экран.
+  const childPlateVisible = !p.isTablet
+    && zones.left.layout.length === 0 && zones.right.layout.length === 0;
   // Канал выбрали в КАТАЛОГЕ — эфир идёт в боковой панели, а та могла быть закрыта
   // или лежать в ящике рельсы. Раскладка — епархия страницы, поэтому являет панель
   // она, а стор только просит об этом событием.
@@ -569,8 +576,10 @@ export function DesktopWorkspace(p: Props) {
           // flex: 1 — по высоте этой обёртки док проектов считает число видимых
           // иконок; без неё они все уезжали бы под лупу «ещё N»
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            {/* Детский ряд предметов вместо дока проектов (Ф1e/Ф1j): без child — взрослый док */}
-            <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} child={p.child?.dock} />
+            {/* Детский ряд предметов вместо дока проектов (Ф1e/Ф1j): без child — взрослый док.
+                childPlateVisible — плашка предмета только при закрытых панелях (L1, дефект
+                36e0160d): при открытой панели «Чаты» fixed-плашка закрывала её заголовок */}
+            <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} child={p.child?.dock} childPlateVisible={childPlateVisible} />
             {wallOn && <WallDock onOpenWall={p.onOpenWall!} />}
           </div>
         }

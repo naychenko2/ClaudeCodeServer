@@ -91,6 +91,7 @@ import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
 import { DossierHistoryPanel } from './workspace/DossierHistoryPanel';
 import { wsPanels } from './workspace/panelStackState';
+import { computeTabsFit } from './workspace/mobileTabsFit';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
 import { SkillsPanel } from '../components/SkillsPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
@@ -1508,7 +1509,17 @@ const windowWidth = useWindowWidth();
   const projectTabsProbeRef = useRef<HTMLDivElement>(null);
   const projectTabsMoreRef = useRef<HTMLDivElement>(null);
   const [projectVisibleCount, setProjectVisibleCount] = useState(leftTabOptions.length);
-
+  // Детские слоты шапки: плашка времени и кнопка меню — тоже потребители бюджета
+  // пилюль (L3 аудита 21.11, дефект 36e0160d): прежний расчёт их не резервировал,
+  // PillSwitch не сжимается (flexShrink:0), и при переполнении ряда правые элементы
+  // шапки выдавливало за край. Место под них резервируем тем же способом, что и под
+  // «Ещё», — реальной шириной обёрток (mobileTabsFit.ts).
+  const projectChildBadgeRef = useRef<HTMLSpanElement>(null);
+  const projectChildMenuRef = useRef<HTMLDivElement>(null);
+  // Плашка времени живёт не всегда: появление/исчезновение меняет состав шапки при
+  // той же её ширине — ResizeObserver за шапкой этого не видит, пересчёт перезапускается
+  // признаком присутствия детских слотов.
+  const hasChildHeaderSlots = isChildScreen && !!childEff && !childTimeUp && !childRulesGate;
   useLayoutEffect(() => {
     if (!isMobile) return;
     const header = projectTabsHeaderRef.current;
@@ -1520,21 +1531,23 @@ const windowWidth = useWindowWidth();
       const cs = getComputedStyle(header);
       const avail = header.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       const moreW = projectTabsMoreRef.current?.offsetWidth ?? 40;
-      // 64 — минимум под кнопку проекта (имя с эллипсисом), 14 — зазоры back|pills|⋯
-      const budget = avail - 64 - moreW - 14;
-      let used = 6; // внутренние отступы трека PillSwitch (padding 3×2)
-      let fit = 0;
-      for (let i = 0; i < pills.length; i++) {
-        const w = pills[i].offsetWidth + (i > 0 ? 3 : 0);
-        if (used + w <= budget) { used += w; fit++; } else break;
-      }
-      setProjectVisibleCount(Math.max(1, Math.min(pills.length, fit)));
+      // Детские слоты — тоже потребители бюджета: их место резервируем реальной
+      // шириной обёрток, как у «Ещё» (L3, дефект 36e0160d)
+      const badgeW = projectChildBadgeRef.current?.offsetWidth ?? 0;
+      const menuW = projectChildMenuRef.current?.offsetWidth ?? 0;
+      // Каждый детский слот стоит после пилюль — перед ним зазор шапки (gap 10)
+      const childReserve = (badgeW ? badgeW + 10 : 0) + (menuW ? menuW + 10 : 0);
+      setProjectVisibleCount(computeTabsFit({ avail, pillWidths: pills.map(p => p.offsetWidth), moreW, childReserve }));
     };
     compute();
     const ro = new ResizeObserver(compute);
     ro.observe(header);
+    // Ширина плашки времени меняется со временем («около 35 мин» → «5 минут»),
+    // ширина шапки при этом не меняется — за шапкой такой пересчёт не придёт
+    if (projectChildBadgeRef.current) ro.observe(projectChildBadgeRef.current);
+    if (projectChildMenuRef.current) ro.observe(projectChildMenuRef.current);
     return () => ro.disconnect();
-  }, [isMobile, leftTabOptions.length, leftTab]);
+  }, [isMobile, leftTabOptions.length, leftTab, hasChildHeaderSlots]);
 
   // Видимые вкладки — первые projectVisibleCount; активную спрятанную подставляем
   // последней, чтобы подсветка была верной. Остальные + «Модели и расход» — в «⋯».
@@ -2787,8 +2800,10 @@ const windowWidth = useWindowWidth();
             {/* Ребёнку в шапке — время (компактная плашка, как в прежней оболочке на телефоне)
                 и выход. При «время вышло» и воротах правил плашки нет: эти состояния
                 говорят свои экраны (ChildTimeBadge сам молчит вне ok/warn). */}
-            {isChildScreen && childEff && !childTimeUp && !childRulesGate && (
-              <ChildTimeBadge status={childEff} totalMinutes={childEff.dailyMinutes} compact />
+            {hasChildHeaderSlots && (
+              <span ref={projectChildBadgeRef} style={{ display: 'inline-flex', flexShrink: 0 }}>
+                <ChildTimeBadge status={childEff} totalMinutes={childEff.dailyMinutes} compact />
+              </span>
             )}
             {/* Шторка живёт только когда есть что показать: у ребёнка в неё могут
                 попасть его собственные вкладки, не влезшие в ряд (панели вне его
@@ -2809,7 +2824,7 @@ const windowWidth = useWindowWidth();
               </div>
             )}
             {isChildScreen && (
-              <div style={{ position: 'relative', flexShrink: 0 }}>
+              <div ref={projectChildMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
                 <IconButton ariaLabel="Меню" onClick={() => setChildMenuOpen(v => !v)}>
                   <User size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
                 </IconButton>

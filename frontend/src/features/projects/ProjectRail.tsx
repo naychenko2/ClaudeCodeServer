@@ -187,6 +187,11 @@ interface Props {
   side?: 'left' | 'right';
   // Детский вариант: данные дока предметов-предметов. Нет — взрослый док, как был.
   child?: ChildSubjectsDock;
+  // Показывать ли плашку активного предмета (SubjectPlate). По макету
+  // kids-project-screen (.fly) она стоит только при закрытых панелях и не на
+  // планшете; решает владелец поверхности — у него знание о панелях. Не задан —
+  // как было: плашка постоянная (постоянное поведение взрослых вызовов не меняется).
+  childPlateVisible?: boolean;
 }
 
 function ProjectsRail({ project, onOpenSettings, side = 'left' }: Props) {
@@ -618,7 +623,7 @@ export function ProjectRail(props: Props) {
   // Диспетчер без хуков: смена режима не должна ломать порядок их вызова в одном
   // компоненте. Хуки взрослого дока (список проектов, активность чатов, сторожа) при
   // детском ряде не звут вовсе — ребёнку они не чем не служат, а /api/projects ему 403.
-  if (props.child) return <ChildSubjectsRail child={props.child} side={props.side ?? 'left'} />;
+  if (props.child) return <ChildSubjectsRail child={props.child} side={props.side ?? 'left'} plateVisible={props.childPlateVisible ?? true} />;
   return <ProjectsRail {...props} />;
 }
 
@@ -660,13 +665,20 @@ function SubjectDockIcon({ s, active, side, anchorRef, onOpen }: {
 // макету). Пустых зрителей не показываем вовсе; длинный список — одна строка с обрезкой,
 // полный текст в title. Вывеска — порталом в body: капсула режет содержимое по своим
 // скруглениям (тот же повод, что у подсказки RailFlyout).
-function SubjectPlate({ s, top, creating, onNewLesson }: {
+function SubjectPlate({ s, top, creating, onNewLesson, visible }: {
   s: ChildSubjectWithViewers;
   top: number;
   creating: boolean;
   onNewLesson: () => void;
+  // Плашка — только при закрытых панелях и не на планшете (макет kids-project-screen,
+  // .fly): при открытой панели «Чаты» она закрывала её заголовок и «Новый урок»
+  // (L1 аудита 21.11, дефект 36e0160d — «наезжает слева»).
+  visible: boolean;
 }) {
   const seen = (s.viewers ?? []).length > 0 ? `Эту папку видят: ${(s.viewers ?? []).join(', ')}` : null;
+  // При открытой панели плашку из DOM убираем вовсе: fixed-портал поверх панели
+  // закрывал её заголовок и «Новый урок» (L1, дефект 36e0160d)
+  if (!visible) return null;
   return createPortal(
     <div style={{
       position: 'fixed', top, transform: 'translateY(-50%)', left: RAIL_W + SP.sm, zIndex: Z.dropdown,
@@ -704,7 +716,7 @@ function SubjectPlate({ s, top, creating, onNewLesson }: {
   );
 }
 
-function ChildSubjectsRail({ child, side }: { child: ChildSubjectsDock; side: 'left' | 'right' }) {
+function ChildSubjectsRail({ child, side, plateVisible }: { child: ChildSubjectsDock; side: 'left' | 'right'; plateVisible: boolean }) {
   const [creating, setCreating] = useState(false);
   // Выключенный предмет скрыт (решение 84). Порядок — порядок списка: он порядок профиля (И5).
   const shown = useMemo(() => child.subjects.filter(s => s.enabled !== false), [child.subjects]);
@@ -766,7 +778,7 @@ function ChildSubjectsRail({ child, side }: { child: ChildSubjectsDock; side: 'l
           ))}
         </div>
       </RailCapsule>
-      {active && <SubjectPlate s={active} top={plateTop} creating={creating} onNewLesson={() => void newLesson()} />}
+      {active && <SubjectPlate s={active} top={plateTop} creating={creating} onNewLesson={() => void newLesson()} visible={plateVisible} />}
     </div>
   );
 }

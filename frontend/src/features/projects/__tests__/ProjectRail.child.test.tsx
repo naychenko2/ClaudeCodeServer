@@ -223,4 +223,30 @@ describe('ProjectRail · детский док проектов-предмето
     expect(onLessonCreated).toHaveBeenCalledTimes(1);
     expect(newLessonBtn()?.hasAttribute('disabled')).toBe(false);
   });
+
+  // L1 аудита 21.11 / дефект 36e0160d: плашка — fixed-портал с left=RAIL_W+SP.sm;
+  // при открытой панели «Чаты» (у ребёнка она открыта по умолчанию) она закрывала
+  // её заголовок и «Новый урок». По макету kids-project-screen (.fly) плашка стоит
+  // только при закрытых панелях и не на планшете; решает владелец через childPlateVisible.
+  it('childPlateVisible=false → плашки нет (панель открыта — плашка её закрывала)', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    act(() => { root.render(createElement(ProjectRail, { child: { subjects: threeSubjects(), activeSubjectId: 'mat', onOpenSubject: vi.fn() }, onOpenSettings: () => {}, childPlateVisible: false })); });
+    expect(doc.body.textContent).not.toContain('Математика · Сова Ульяна');
+    expect(newLessonBtn()).toBe(null);
+    unmount?.();
+    act(() => { root.unmount(); });
+  });
+
+  it('childPlateVisible=true → плашка есть, left = RAIL_W + SP.sm (48)', () => {
+    const root = createRoot(doc.getElementById('root')!);
+    act(() => { root.render(createElement(ProjectRail, { child: { subjects: threeSubjects(), activeSubjectId: 'mat', onOpenSubject: vi.fn() }, onOpenSettings: () => {}, childPlateVisible: true })); });
+    expect(doc.body.textContent).toContain('Математика · Сова Ульяна');
+    const divs = Array.from(doc.querySelectorAll('div'));
+    const plate = divs.find(d => (d.textContent ?? '').includes('· Сова Ульяна'));
+    expect(plate).toBeTruthy();
+    const left = (plate!.getAttribute('style') ?? '').match(/left:\s*([\d.]+)px/)?.[1];
+    expect(left, `left плашки; style="${plate!.getAttribute('style')}"`).toBe('48');
+    unmount?.();
+    act(() => { root.unmount(); });
+  });
 });

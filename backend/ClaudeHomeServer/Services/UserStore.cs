@@ -281,6 +281,16 @@ public class UserStore : IForgejoAccountStore, IUserStore
 
             _users.Remove(user);
             _ntlm?.Remove(user.Username);
+
+            // Каскад (Г13, дефект 6efb3ce6): удалённый пользователь не должен оставаться id-опекуном
+            // в профилях детей: после этого валидатор отвергает ЛЮБУЮ правку такого профиля
+            // (guardian_not_found), а мёртвый id невиден в редакторе — снять его из списка нельзя.
+            // Инвариант здесь, а не на вызывающей стороне: стор — единственное место, где все дети
+            // видны под этим же замком, и удаление с чисткой — один атомарный шаг без окна между ними.
+            foreach (var child in _users)
+                if (child.ChildMode?.GuardianUserIds.Remove(id) == true)
+                    _logger.LogInformation("Детский профиль {Child}: снят id удалённого опекуна {Guardian}", child.Id, id);
+
             Save();
             return true;
         }
@@ -711,6 +721,15 @@ public class UserStore : IForgejoAccountStore, IUserStore
                     profile.RouteRiskAcknowledgedAt = liveAt;
                     profile.RouteRiskAcknowledgedBy = user.ChildMode.RouteRiskAcknowledgedBy;
                 }
+                // Мёртвые опекуны (Г13, дефект 6efb3ce6): валидатор пропускает id, уже лежащий в живом
+                // профиле (остаток удаления до каскада Delete), но в НОВЫЙ профиль они не пишутся:
+                // проверка существования здесь атомарна с самой записью — тот же замок стора.
+                // Так старая живая запись чистится на ближайшем сохранении,
+                // а удаление опекуна, случившееся параллельно с этой записью (тело сложилось до него),
+                // не оставляет мёртвый id в профиле.
+                var deadGuardians = profile.GuardianUserIds.RemoveAll(g => !_users.Any(u => u.Id == g));
+                if (deadGuardians > 0)
+                    _logger.LogWarning("Детский профиль {Child}: при записи сняты id несуществующих опекунов ({Count})", id, deadGuardians);
                 user.ChildMode = profile;
             }
             else

@@ -420,6 +420,85 @@ public class UsersChildProfileTests : IClassFixture<UsersChildProfileTests.Hosts
         _users.GetById(id)!.ChildMode.Should().BeNull();
     }
 
+    [Fact]
+    public async Task Put_УдалённыйОпекун_КаскадСнимаетId_ПравкаПрофиляПроходит()
+    {
+        // Дефект 6efb3ce6 (находка приёмки QA-8): удалённый опекун оставлял мёртвый id в профиле
+        // ребёнка, и после этого любая правка настроек отвергалась guardian_not_found.
+        // Каскад — в UserStore.Delete: удаление пользователя и чистка его id из профилей детей
+        // — один шаг под тем же замком стора, мёртвый id не переживает учётку.
+        var child = await EnableChild("kid-guardian-deleted");
+        var guardianId = _users.Add("guardian-victim", KidsPassword, "user").Id;
+        (await PutAsync(child, ValidBody(guardianId))).Item1.Should().Be(HttpStatusCode.OK);
+
+        var del = await _admin.DeleteAsync($"/api/users/{guardianId}");
+        del.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        _users.GetById(child)!.ChildMode!.GuardianUserIds.Should().NotContain(guardianId,
+            "удалённый опекун не должен оставаться id в профиле ребёнка");
+
+        // Та самая правка, что в дефекте отвергалась: сохранение после удаления опекуна.
+        var (status, _) = await PutAsync(child, ValidBody(AdminId));
+        status.Should().Be(HttpStatusCode.OK);
+        _users.GetById(child)!.ChildMode!.GuardianUserIds.Should().Equal(AdminId);
+    }
+
+    [Fact]
+    public async Task Put_МёртвыйIdВЖивомПрофиле_ПравкаПроходит_ИСнимаетсяПриЗаписи()
+    {
+        // Страховка для уже лежащих данных (производство): мёртвый id — остаток удаления до
+        // каскада — не должен блокировать правку всего профиля. Валидатор пропускает id, уже
+        // лежащий в живом профиле; стор снимает несуществующих опекунов при записи
+        // (SetChildProfile) — старая запись чистится на ближайшем сохранении.
+        var child = await EnableChild("kid-guardian-stale");
+        var ghost = Guid.NewGuid().ToString("N"); // аккаунта с таким id в сторе нет (тот же приём, что у ghost-опекуна ChildTasksTests)
+        _users.GetById(child)!.ChildMode!.GuardianUserIds = [AdminId, ghost];
+
+        // Тело — ровно то, что отдаёт редактор: список из GET, включая мёртвый id.
+        var (status, resp) = await PutAsync(child, new
+        {
+            enabled = true,
+            acknowledgeRouteRisk = true,
+            guardianUserIds = new[] { AdminId, ghost },
+            providerKey = KidsKey,
+            model = "sonnet",
+            spaces = new Dictionary<string, object>(),
+        });
+        status.Should().Be(HttpStatusCode.OK);
+
+        _users.GetById(child)!.ChildMode!.GuardianUserIds.Should().BeEquivalentTo([AdminId],
+            "мёртвый id снят при записи, а не оставлен в профиле");
+        resp.GetProperty("profile").GetProperty("guardianUserIds").EnumerateArray()
+            .Select(v => v.GetString()).Should().BeEquivalentTo([AdminId],
+            "ответ отдаёт уже чистый список: следующий save редактора придёт без мёртвого id");
+    }
+
+    [Fact]
+    public async Task Put_МёртвыйIdВПрофиле_НовыйНесуществующийId_ВсёЕщё_400_guardian_not_found()
+    {
+        // Граница разрешения (пункт «не ослабляй валидатор молча»): толерантность — только к
+        // старым мёртвым id из живого профиля. Заведомо новый несуществующий id отвергается
+        // и при соседе-мёртвом в профиле: иначе мусор записался бы в профиль.
+        var child = await EnableChild("kid-guardian-new-bad");
+        var ghost = Guid.NewGuid().ToString("N");
+        _users.GetById(child)!.ChildMode!.GuardianUserIds = [ghost];
+
+        var (status, resp) = await PutAsync(child, new
+        {
+            enabled = true,
+            acknowledgeRouteRisk = true,
+            guardianUserIds = new[] { ghost, "no-such-new-guardian" },
+            providerKey = KidsKey,
+            model = "sonnet",
+            spaces = new Dictionary<string, object>(),
+        });
+        status.Should().Be(HttpStatusCode.BadRequest);
+        CodeOf(resp).Should().Be("guardian_not_found");
+        // Отказ — до записи: живой профиль не тронут (мёртвый id в нём остаётся до
+        // успешного сохранения, которое его снимет).
+        _users.GetById(child)!.ChildMode!.GuardianUserIds.Should().Equal(ghost);
+    }
+
     // --- валидный путь ---
 
     [Fact]

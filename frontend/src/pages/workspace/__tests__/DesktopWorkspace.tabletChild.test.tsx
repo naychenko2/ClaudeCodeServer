@@ -257,6 +257,9 @@ describe('DesktopWorkspace: список уроков ребёнка на пла
     // кэш списка чатов (sessionsList) — модульный синглтон: без сброса кейс получил бы
     // список предыдущего кейса мгновенно и «доехал» бы ответ не тем числом шагов
     sessionsListTest.reset();
+    // раскладка стора — module-level singleton: без явного сброса кейс зависел бы
+    // от чистоты предыдущего (открытая панель прошлого кейса доезжала бы до этого)
+    for (const k of openKeysOf(wsPanels.getZones())) wsPanels.ops.close(k);
     mockChats.length = 0; mockChats.push(session);
   });
   afterEach(() => {
@@ -319,17 +322,13 @@ describe('DesktopWorkspace: список уроков ребёнка на пла
     } finally { root.unmount(); }
   });
 
-  // Г15 (дельта Р-Г5-д1, minor 7): взрослый сузился 1280→768. Раньше (до Г5-д1)
-  // маунт планшета бил closeCompactStack безусловно — открытая панель терялась
-  // на первом же кадре. Г5-д1 снял безусловность и задел взрослого: сигнал не
-  // шёл вовсе. Теперь: смена isTablet — сигнал (не маунт), и по нему зона
-  // переносит открытую раскладку в дровер — панель остаётся на экране, а не
-  // «воскресает» при обратном расширении. Ребёнку сигнал не звётся: его дефолт.
-  it('взрослый: открытая панель не исчезает при сужении 1280→768 и не «воскресает»', async () => {
+  // Г15-д1 (снятие переноса, продуктовое решение): взрослый сузился 1280→768 —
+  // дровер ЗАКРЫТ, панель не появляется сама. Смена ориентации бросает тот же
+  // стоп-сигнал, что и смена чата: оверлей сам собой, без клика, никто не просил.
+  // Открытость раскладки при этом НЕ теряется — она живёт в сторе и вернётся
+  // при обратном расширении (проверяем и то, и другое).
+  it('взрослый: при сужении 1280→768 дровер закрыт, панель не появляется сама', async () => {
     const filesPanel = () => ({ panels: { files: createElement('div', { 'data-testid': 'g15-files-panel' }) } });
-    // раскладка чистая: открытость 'files' — результат теста (пользователь открыл),
-    // не дефолт стора и не предыдущего кейса (стор — module-level singleton)
-    for (const k of openKeysOf(wsPanels.getZones())) wsPanels.ops.close(k);
     // 1280 — десктоп (за порогом TABLET_MAX): взрослая раскладка в колонках стора
     (globalThis as any).window.innerWidth = 1280;
     (globalThis as any).window.innerHeight = 720;
@@ -339,9 +338,28 @@ describe('DesktopWorkspace: список уроков ребёнка на пла
       await act(async () => { vi.advanceTimersByTime(300); });
       expect(findNodeByAttr(container as any, 'data-testid', 'g15-files-panel'), 'панель «Файлы» не открылась на 1280').not.toBeNull();
       await resizeTo(root, 768, filesPanel());
-      expect(findNodeByAttr(container as any, 'data-testid', 'g15-files-panel'), 'после сужения панель пропала из экрана (исчезла и «воскресала» при обратном расширении)').not.toBeNull();
-      // раскладка не потеряна: открытость по-прежнему в сторе, дровер — её копия
-      expect(openKeysOf(wsPanels.getZones()), 'сигнал смены isTablet очистил раскладку стора').toContain('files');
+      expect(findNodeByAttr(container as any, 'data-testid', 'g15-files-panel'), 'после сужения панель появилась сама (перенос в дровер вернулся)').toBeNull();
+      // раскладка цела: закрыт дровер, не открытость — при расширении панель на своём месте
+      expect(openKeysOf(wsPanels.getZones()), 'сигнал смены isTablet стёр раскладку стора').toContain('files');
+    } finally { root.unmount(); }
+  });
+
+  // Г15 (принятая часть): смена isTablet — сигнал, и он держится. Взрослый открыл
+  // панель НА УЗКОМ экране (reveal через правило зоны — тот же путь, что клик по
+  // кнопке: локальный стек дровера), повернул на десктоп и обратно в узкий:
+  // смена ориентации закрыла дровер — панель не возвращается сама собой.
+  // Без сигнала смены isTablet (мутация «return при !sessionChanged») этот кейс
+  // краснеет: локальный стек переживал бы ориентацию и панель лезла бы оверлеем.
+  it('взрослый: после поворота 768→1280→768 дровер закрыт, открытая на узком панель не появляется', async () => {
+    const filesPanel = () => ({ panels: { files: createElement('div', { 'data-testid': 'g15-files-panel' }) } });
+    const { root, container } = await mountWorkspace(baseProps({ ...filesPanel() }));
+    try {
+      await act(async () => { wsPanels.ops.reveal('files'); });
+      await act(async () => { vi.advanceTimersByTime(300); });
+      expect(findNodeByAttr(container as any, 'data-testid', 'g15-files-panel'), 'панель не открылась в дровере на 768').not.toBeNull();
+      await resizeTo(root, 1280, filesPanel());
+      await resizeTo(root, 768, filesPanel());
+      expect(findNodeByAttr(container as any, 'data-testid', 'g15-files-panel'), 'после поворота панель открылась сама (сигнал смены isTablet потерян)').toBeNull();
     } finally { root.unmount(); }
   });
 });

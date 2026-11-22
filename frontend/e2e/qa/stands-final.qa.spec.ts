@@ -95,26 +95,6 @@ async function blockOrder(page: Page): Promise<string[]> {
   });
 }
 
-// Размеры значений в карточке «Стенд»: KPI (28 px) и плитки температур (20 px).
-async function standFontSizes(page: Page) {
-  return page.evaluate(() => {
-    const card = document.querySelector('section[aria-labelledby="stand-card-title"]');
-    if (!card) return null;
-    const tiles = Array.from(card.querySelectorAll('div')).filter(d => d.children.length === 0 || true);
-    const out: { name: string; size: number; text: string }[] = [];
-    // Значение KPI — моно-элемент с font-size FS.h1; ищем по font-family mono и размеру.
-    for (const el of Array.from(card.querySelectorAll('*'))) {
-      const e = el as HTMLElement;
-      const st = getComputedStyle(e);
-      if (!st.fontFamily.includes('mono')) continue;
-      if (!e.textContent || !e.textContent.trim()) continue;
-      if (e.children.length > 0) continue;
-      out.push({ name: e.textContent.trim(), size: parseFloat(st.fontSize), text: e.textContent.trim() });
-    }
-    return out;
-  });
-}
-
 test('1: порядок блоков, крупные KPI, свёртки «Другие датчики» и «Динамика за 15 мин», ужатый ИБП', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });

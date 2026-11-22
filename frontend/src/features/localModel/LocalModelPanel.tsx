@@ -51,6 +51,7 @@ import { MediaTab } from './MediaTab';
 import { HardwareTab } from './HardwareTab';
 import { TranscriptionTab } from './TranscriptionTab';
 import { DEFAULT_WINDOW, type Window as StatsWindow } from './ThroughputChart';
+import { HW_WINDOW_KEY, STATS_WINDOW_KEY, loadWindow, saveWindow } from './windowStorage';
 
 // Вкладка запоминается на устройство (localStorage): «LLM · Медиа · Стенды · Встречи» —
 // выбор человека, не состояние сессии.
@@ -153,13 +154,23 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
     try { localStorage.setItem(TAB_KEY, t); } catch { /* приватный режим */ }
   }, []);
 
-  // Окно графика (5m/15m/1h): держим здесь, чтобы и тяжёлый опрос (сервер отдаёт
+  // Окно графика (1m/5m/15m/1h): держим здесь, чтобы и тяжёлый опрос (сервер отдаёт
   // средние за это окно), и вкладка «LLM» видели один и тот же выбор.
-  // Дефолт 5m (DEFAULT_WINDOW): выбор не персистентен, новый пользователь видит 5m.
-  const [window, setWindow] = useState<StatsWindow>(DEFAULT_WINDOW);
+  // Выбор помнится хранилищем (windowStorage, общий ключ для проектов и личных
+  // чатов): при мусоре или отказе хранилища — дефолт 5m (DEFAULT_WINDOW).
+  const [window, setWindow] = useState<StatsWindow>(() => loadWindow(STATS_WINDOW_KEY, DEFAULT_WINDOW));
+  const changeWindow = useCallback((w: StatsWindow) => {
+    setWindow(w);
+    saveWindow(STATS_WINDOW_KEY, w);
+  }, []);
 
   // Окно графика «Температуры» вкладки «Стенды»: своё, не общее с LLM; дефолт 15m.
-  const [hwWindow, setHwWindow] = useState<HardwareWindow>(DEFAULT_HARDWARE_WINDOW);
+  // Помнится тем же хранилищем под своим ключом — значения независимы.
+  const [hwWindow, setHwWindow] = useState<HardwareWindow>(() => loadWindow(HW_WINDOW_KEY, DEFAULT_HARDWARE_WINDOW));
+  const changeHwWindow = useCallback((w: HardwareWindow) => {
+    setHwWindow(w);
+    saveWindow(HW_WINDOW_KEY, w);
+  }, []);
 
   // Движок: список с сервера и выбор человека — стор Ф1 (useLocalModelEngines,
   // localStorage). Активен, только когда видна вкладка «LLM» (переключатель и стенд
@@ -233,9 +244,9 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   const body = (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: SP.md, padding: SP.md }}>
       {tab === 'text'
-        ? <TextTab data={textData} loading={textLoading} error={textError} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} onOpenHardware={() => changeTab('hardware')} onOpenMedia={() => changeTab('media')} window={window} onWindowChange={setWindow} engines={engines} engine={engine} onEngineChange={setEngine} cloudSpeed={isAdmin ? cloudSpeed : undefined} />
+        ? <TextTab data={textData} loading={textLoading} error={textError} isMobile={ctx.isMobile} onOpenChat={onOpenChat} onRefetch={textRefetch} onOpenHardware={() => changeTab('hardware')} onOpenMedia={() => changeTab('media')} window={window} onWindowChange={changeWindow} engines={engines} engine={engine} onEngineChange={setEngine} cloudSpeed={isAdmin ? cloudSpeed : undefined} />
         : tab === 'hardware'
-          ? <HardwareTab farm={farm} farmLoading={farmLoading} selected={nodeKey} onSelect={setChosenNode} report={hwData} loading={hwLoading} stats={nodeStats} media={nodeMedia} isMobile={ctx.isMobile} window={hwWindow} onWindowChange={setHwWindow} />
+          ? <HardwareTab farm={farm} farmLoading={farmLoading} selected={nodeKey} onSelect={setChosenNode} report={hwData} loading={hwLoading} stats={nodeStats} media={nodeMedia} isMobile={ctx.isMobile} window={hwWindow} onWindowChange={changeHwWindow} />
           : tab === 'transcription'
             // Тело вкладки «Встречи»: верх (Ф3) — конвейер, «Сейчас», очередь; нижняя
             // часть (сбои, встречи, сверка, зависимости) — шаг Ф4.

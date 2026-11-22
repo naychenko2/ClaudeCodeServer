@@ -16,6 +16,11 @@
 //
 // Остальное — окружение node: чистые функции прямыми вызовами, переключатель —
 // renderToStaticMarkup (паттерн hardware.test.ts), имя панели — сторожем по исходнику.
+//
+// Шаг farm-window-memory (§7): окна «Нагрузка и кэш» и «Температуры» помнятся
+// localStorage (cc_local_model_stats_window / cc_local_model_hardware_window) —
+// восстановление после размонтирования, мусор/отказ хранилища → дефолт, последний
+// синхронный выбор побеждает.
 
 import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -23,10 +28,13 @@ import { createRoot } from 'react-dom/client';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseHTML } from 'linkedom';
+import type { LocalModelStats } from '../../lib/api';
 import type { WorkspacePanelDefCtx } from '../../lib/subsystems/registryCore';
-import type { HardwareFarm } from './hardwareTypes';
+import type { HardwareFarm, HardwareReport } from './hardwareTypes';
 import type { TranscriptionLevel, TranscriptionSnapshot } from './types';
 import { loadTab, LocalModelPanel, resolveTab, transcriptionDot, TabSwitch } from './LocalModelPanel';
+import { mockLocalModelStats } from './localModel.fixtures';
+import { HW_WINDOW_KEY, STATS_WINDOW_KEY } from './windowStorage';
 
 // === 1. Видимость вкладки: админ / не-админ / сохранённая transcription ===
 
@@ -155,6 +163,9 @@ const st = vi.hoisted(() => ({
   // То же для сводки фермы (точка на «Стендах»).
   farmLevel: null as 'ok' | 'warn' | 'danger' | null,
   farmCalls: 0,
+  // Фикстуры §7 (помнение окон): ставят их только тесты окон; в остальных — null, как раньше.
+  statsData: null as LocalModelStats | null,
+  hwReport: null as HardwareReport | null,
 }));
 
 vi.mock('./useLocalModelStats', () => ({
@@ -165,7 +176,7 @@ vi.mock('./useLocalModelStats', () => ({
   // не-админа даёт 403 → поллер возвращает error='failed' → вкладка «LLM»
   // объясняет пустоту («Не удалось получить данные»). На этом и проверяется дефект №3.
   useLocalModelStats: (active: boolean) => ({
-    data: null,
+    data: st.statsData,
     loading: false,
     error: active && !st.admin ? ('failed' as const) : null,
     refetch: () => {},
@@ -197,6 +208,9 @@ function farmSnapshot(level: 'ok' | 'warn' | 'danger'): HardwareFarm {
 
 vi.mock('../../lib/api', () => ({
   api: {
+    // Список проектов — §7: WhoCard вкладки «LLM» с фикстурой статистики читает
+    // стор проектов (useAllProjects → api.projects.list); в тесте — пустой список.
+    projects: { list: () => Promise.resolve([]) },
     localModel: {
       transcription: () => {
         st.transCalls++;
@@ -210,8 +224,9 @@ vi.mock('../../lib/api', () => ({
         st.farmCalls++;
         return Promise.resolve(st.farmLevel ? farmSnapshot(st.farmLevel) : null);
       },
-      // Отчёт узла: опрашивается только на активной вкладке «Стенды» — тесты её не открывают.
-      hardware: () => Promise.resolve(null),
+      // Отчёт узла: опрашивается только на активной вкладке «Стенды»; §7 подставляет
+      // фикстуру st.hwReport (в остальных тестах — null, как раньше).
+      hardware: () => Promise.resolve(st.hwReport),
     },
   },
 }));
@@ -234,6 +249,12 @@ vi.stubGlobal('navigator', { language: 'ru-RU', onLine: true, userAgent: 'node' 
 vi.stubGlobal('HTMLElement', win.HTMLElement);
 vi.stubGlobal('Node', win.Node);
 vi.stubGlobal('Event', win.Event);
+// ThroughputChart меряет ширину обёртки ResizeObserver'ом (ThroughputChart.tsx:1475) —
+// в node его нет; заглушка как в TextTab.test.ts (наблюдать нечего, ширина остаётся дефолтной).
+class FakeResizeObserver {
+  observe() {} unobserve() {} disconnect() {}
+}
+vi.stubGlobal('ResizeObserver', FakeResizeObserver);
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const panelCtx: WorkspacePanelDefCtx = { projectId: null, sessionId: null, isMobile: false, onClose: () => {} };
@@ -258,11 +279,11 @@ async function drainMicrotasks() {
   }
 }
 
-async function mountPanel() {
+async function mountPanel(ctx: WorkspacePanelDefCtx = panelCtx) {
   const host = doc.createElement('div');
   doc.body.appendChild(host as unknown as HTMLElement);
   const root = createRoot(host as unknown as HTMLElement);
-  await act(async () => { root.render(createElement(LocalModelPanel, { ctx: panelCtx })); });
+  await act(async () => { root.render(createElement(LocalModelPanel, { ctx })); });
   // Первый ответ поллера должен дойти до DOM — прогоняем цепочку внутри act,
   // иначе точка в DOM ещё не будет.
   await act(async () => { await drainMicrotasks(); });
@@ -455,5 +476,181 @@ describe('панель: не-админ с сохранённой «Встреч
     expect(m.host.textContent ?? '').not.toContain('Встречи');
     // И админский эндпоинт снимка он не опрашивает.
     expect(st.transCalls).toBe(0);
+  });
+});
+
+// === 7. Помнение окон (шаг farm-window-memory) ===
+// Окна «Нагрузка и кэш» и «Температуры» хранятся в localStorage под своими ключами
+// (cc_local_model_stats_window / cc_local_model_hardware_window): выбор принадлежит
+// человеку, а не чату — ключи не зависят от ctx (проект/личный чат). Монтаж настоящий:
+// TextTab/HardwareTab и переключатели окон настоящие; опросы мокнуты, как в §6 —
+// фикстура статистики через st.statsData, отчёт железа через st.hwReport.
+
+// Мутируемое хранилище: тесты кликают переключатели и читают записи напрямую.
+function makeStore(initial: Record<string, string> = {}): Map<string, string> {
+  const data = new Map(Object.entries(initial));
+  (globalThis as unknown as { localStorage: unknown }).localStorage = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => { data.set(k, v); },
+  };
+  return data;
+}
+
+// Кнопка окна: точное совпадение подписи ('5 мин' — подстрока '15 мин', поиск
+// по подстроке взял бы не ту кнопку).
+const windowBtn = (host: HTMLElement, label: string) =>
+  Array.from(host.querySelectorAll('button')).find(b => (b.textContent ?? '').trim() === label) ?? null;
+const windowPressed = (host: HTMLElement, label: string) =>
+  windowBtn(host, label)?.getAttribute('aria-pressed') === 'true';
+
+// Отчёт железа для мока: минимальный, но достаточный, чтобы карточка «Температуры»
+// отрисовалась: пустые series/nodes/gpus (график рисует пустую шкалу, GpusCard молчит).
+function hwReportFixture(): HardwareReport {
+  return {
+    at: 1_763_000_000_000, status: 'ok', level: 'ok', gpus: [], nodes: [], caseFans: [],
+    series: [], stepMs: 10_000, node: { key: 'worker', title: 'worker' },
+  };
+}
+
+async function clickWindow(host: HTMLElement, label: string) {
+  const btn = windowBtn(host, label);
+  expect(btn).not.toBeNull();
+  await act(async () => { btn!.click(); });
+}
+
+async function openTab(host: HTMLElement, label: string) {
+  const btn = buttonWithText(host, label);
+  expect(btn).not.toBeNull();
+  await act(async () => { btn!.click(); });
+  // Ответ мока (api → .then поллера → emit → ререндер) должен дойти до DOM.
+  await act(async () => { await drainMicrotasks(); });
+}
+
+describe('панель: окна помнятся между монтированиями (шаг farm-window-memory)', () => {
+  let current: { unmount: () => Promise<void> } | null = null;
+  afterEach(async () => {
+    await current?.unmount();
+    current = null;
+    st.admin = true; st.transLevel = null; st.transCalls = 0; st.farmLevel = null; st.farmCalls = 0;
+    st.statsData = null; st.hwReport = null;
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+    vi.useRealTimers();
+  });
+
+  it('окна восстанавливаются после размонтирования: stats 1h, hardware 5m — с другим ctx', async () => {
+    st.statsData = mockLocalModelStats('working');
+    st.hwReport = hwReportFixture();
+    makeStore();
+    const m1 = await mountPanel(); current = m1;
+    // До выбора — дефолт: на «LLM» активно 5m.
+    expect(windowPressed(m1.host, '5 мин')).toBe(true);
+    await clickWindow(m1.host, '1 ч');
+    expect(windowPressed(m1.host, '1 ч')).toBe(true);
+    // «Стенды»: отчёт пришёл — переключатель «Температур» в DOM, его дефолт 15m.
+    await openTab(m1.host, 'Стенды');
+    expect(windowPressed(m1.host, '15 мин')).toBe(true);
+    await clickWindow(m1.host, '5 мин');
+    expect(windowPressed(m1.host, '5 мин')).toBe(true);
+    await m1.unmount(); current = null;
+
+    // Повторный монтаж в другом контексте (чат проекта): ключи не зависят от ctx —
+    // тот же выбор, а не дефолты.
+    const m2 = await mountPanel({ projectId: 'p-window', sessionId: 's-window', isMobile: false, onClose: () => {} });
+    current = m2;
+    // Сохранённая вкладка — «Стенды» (её открывали в m1): окно там 5m, не дефолтные 15m.
+    expect(windowPressed(m2.host, '5 мин')).toBe(true);
+    expect(windowPressed(m2.host, '15 мин')).toBe(false);
+    // «LLM» — 1h, не дефолтные 5m.
+    await openTab(m2.host, 'LLM');
+    expect(windowPressed(m2.host, '1 ч')).toBe(true);
+    expect(windowPressed(m2.host, '5 мин')).toBe(false);
+  });
+});
+
+describe('панель: мусор и отказ localStorage дают дефолт (шаг farm-window-memory)', () => {
+  let current: { unmount: () => Promise<void> } | null = null;
+  afterEach(async () => {
+    await current?.unmount();
+    current = null;
+    st.admin = true; st.transLevel = null; st.transCalls = 0; st.farmLevel = null; st.farmCalls = 0;
+    st.statsData = null; st.hwReport = null;
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('значение abc — панель монтируется с дефолтами 5m/15m', async () => {
+    st.statsData = mockLocalModelStats('working');
+    st.hwReport = hwReportFixture();
+    // Сохранённая вкладка — 'text': дефолт окна 5m виден сразу.
+    makeStore({ [STATS_WINDOW_KEY]: 'abc', [HW_WINDOW_KEY]: 'abc', cc_local_model_tab: 'text' });
+    const m = await mountPanel(); current = m;
+    expect(windowPressed(m.host, '5 мин')).toBe(true);
+    await openTab(m.host, 'Стенды');
+    expect(windowPressed(m.host, '15 мин')).toBe(true);
+  });
+
+  it('бросающие getItem/setItem — панель живая, дефолты 5m/15m, console.error молчит', async () => {
+    st.statsData = mockLocalModelStats('working');
+    st.hwReport = hwReportFixture();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    (globalThis as unknown as { localStorage: unknown }).localStorage = {
+      getItem: () => { throw new Error('storage denied'); },
+      setItem: () => { throw new Error('storage denied'); },
+    };
+    const m = await mountPanel(); current = m;
+    // Панель смонтирована и работает (не заглушка): контейнер на месте.
+    expect(m.host.querySelector('[role="complementary"]')).not.toBeNull();
+    expect(windowPressed(m.host, '5 мин')).toBe(true);
+    await openTab(m.host, 'Стенды');
+    expect(windowPressed(m.host, '15 мин')).toBe(true);
+    // Выбор окна переживает отказ хранилища: saveWindow глотает исключение,
+    // выбор остаётся в памяти компонента (try/catch в windowStorage.ts:30).
+    await clickWindow(m.host, '1 ч');
+    expect(windowPressed(m.host, '1 ч')).toBe(true);
+    // Отказ хранилища проглочен тихо: ни одной записи в console.error.
+    expect(errSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('панель: последний синхронный выбор окна побеждает (шаг farm-window-memory)', () => {
+  let current: { unmount: () => Promise<void> } | null = null;
+  afterEach(async () => {
+    await current?.unmount();
+    current = null;
+    st.admin = true; st.transLevel = null; st.transCalls = 0; st.farmLevel = null; st.farmCalls = 0;
+    st.statsData = null; st.hwReport = null;
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+    vi.useRealTimers();
+  });
+
+  it('два клика подряд — в каждом ключе и в UI последнее значение', async () => {
+    st.statsData = mockLocalModelStats('working');
+    st.hwReport = hwReportFixture();
+    const store = makeStore();
+    const m = await mountPanel(); current = m;
+    // «LLM»: 15m, затем 1h — двумя синхронными кликами (без ре-рендера между ними).
+    const b15 = windowBtn(m.host, '15 мин');
+    const b1h = windowBtn(m.host, '1 ч');
+    expect(b15).not.toBeNull(); expect(b1h).not.toBeNull();
+    await act(async () => { b15!.click(); b1h!.click(); });
+    expect(store.get(STATS_WINDOW_KEY)).toBe('1h');
+    expect(windowPressed(m.host, '1 ч')).toBe(true);
+    expect(windowPressed(m.host, '15 мин')).toBe(false);
+    // Ещё один выбор — снова побеждает последний.
+    await clickWindow(m.host, '15 мин');
+    expect(store.get(STATS_WINDOW_KEY)).toBe('15m');
+    expect(windowPressed(m.host, '15 мин')).toBe(true);
+    // «Стенды»: тот же порядок для своего ключа — 1h, затем 5m.
+    await openTab(m.host, 'Стенды');
+    const h1h = windowBtn(m.host, '1 ч');
+    const h5m = windowBtn(m.host, '5 мин');
+    expect(h1h).not.toBeNull(); expect(h5m).not.toBeNull();
+    await act(async () => { h1h!.click(); h5m!.click(); });
+    expect(store.get(HW_WINDOW_KEY)).toBe('5m');
+    expect(windowPressed(m.host, '5 мин')).toBe(true);
+    expect(windowPressed(m.host, '1 ч')).toBe(false);
+    // Ключи независимы: выбор hardware не тронул stats.
+    expect(store.get(STATS_WINDOW_KEY)).toBe('15m');
   });
 });

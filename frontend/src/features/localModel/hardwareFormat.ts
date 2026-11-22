@@ -47,12 +47,17 @@ export interface HwTileView {
   // Единица значения: температура, занятость (RAM, диск кэша) или напряжение (ИБП).
   unit: '°C' | '%' | 'В';
   dec: boolean;
-  level: HwLevel;
+  // null — окраска не применяется (показатель без порогов, например загрузка CPU);
+  // 'none' остаётся только отсутствию измеренного значения.
+  level: HwLevel | null;
   sensor: 'ok' | 'none' | 'nodata';
   sensorLabel: string;
   detail: string;
   spark: (number | null)[];
   thresholdTitle: string;
+  // true — подпись плитки переносится на несколько строк вместо усечения
+  // (подпись KPI «Загрузка CPU» обязана читаться целиком на 320 px).
+  nameWrap?: boolean;
 }
 
 // Строит модели плиток из снимка: порядок узлов фиксированный (как в бэкенде),
@@ -351,9 +356,8 @@ export function hwThrottled(report: Pick<HardwareReport, 'gpus'>): 'thermal' | '
 // (details). Элементы групп — те же HwTileView, что у плиток: ветвление по kind с
 // подписями и деталями делает hwTileView, группировка поверх него — только
 // распределение по уровням. Спарк остаётся там, где историю больше нигде не видно:
-// у RAM (KPI) и диска кэша (details); у secondary историю даёт TempChart, а у
-// «Загрузки CPU» истории нет вовсе — плейсхолдер вместо неё не подставляется.
-// UI пока не подключён — рендер групп это ST2; свёртки и порядок вкладки — ST4.
+// у RAM (KPI), диска кэша (details) и «Загрузки CPU» (KPI, ряд из отчёта
+// cpuLoadSpark15m); у secondary историю даёт TempChart. UI подключён с ST4.
 
 // Иерархия показателей узла.
 export interface HwMetricGroups {
@@ -373,24 +377,45 @@ export interface HwMetricGroups {
 // порядок внутри групп — порядок report.nodes. RAM с sensor='none' — валидный KPI:
 // её датчик температуры отсутствует, а занятость (usedPerc) валидна — значение
 // остаётся значением, null остаётся null, 0 остаётся числом.
-export function hwMetricGroups(report: HardwareReport): HwMetricGroups {
-  const views = hwTileView(report);
-  const groups: HwMetricGroups = { primary: [], secondary: [], details: [], nodataCount: hwNoDataCount(report) };
+// Число температурных CPU-узлов отчёта (сокеты): «все ядра · 2 сокета» при 2+.
+function cpuSocketCount(report: Pick<HardwareReport, 'nodes'>): number {
+  return report.nodes.filter(n => n.kind === 'cpu').length;
+}
+
+// Слово «сокет/сокета/сокетов» по русской плюрализации (2–4 → «сокета», 5+ → «сокетов»).
+function socketWord(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? 'сокет' : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 'сокета' : 'сокетов';
+}
+
+// KPI «Загрузка CPU»: значение report.cpuLoadPerc, история report.cpuLoadSpark15m
+// (нет — пустой ряд, без выдуманной линии). Показатель нейтрален: level null —
+// окраска не применяется, зелёной точки нет; «none» остаётся отсутствию значения.
+// Деталь «все ядра», при двух и более температурных CPU-узлах — «все ядра · N сокета».
+function cpuLoadKpi(report: HardwareReport): HwTileView {
   const load = report.cpuLoadPerc ?? null;
-  groups.primary.push({
+  const sockets = cpuSocketCount(report);
+  return {
     key: 'cpu-load',
     icon: hwIcon('cpu'),
     name: 'Загрузка CPU',
     value: load,
     unit: '%',
     dec: false,
-    level: 'none',
+    level: null,
     sensor: load == null ? 'nodata' : 'ok',
     sensorLabel: '',
-    detail: '',
-    spark: [],
+    detail: sockets >= 2 ? `все ядра · ${sockets} ${socketWord(sockets)}` : 'все ядра',
+    nameWrap: true,
+    spark: report.cpuLoadSpark15m ?? [],
     thresholdTitle: '',
-  });
+  };
+}
+
+export function hwMetricGroups(report: HardwareReport): HwMetricGroups {
+  const views = hwTileView(report);
+  const groups: HwMetricGroups = { primary: [cpuLoadKpi(report)], secondary: [], details: [], nodataCount: hwNoDataCount(report) };
   report.nodes.forEach((node, i) => {
     const v = views[i];
     if (node.kind === 'ram') {

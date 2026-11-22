@@ -119,6 +119,9 @@ export interface HardwareReport {
   // Аптайм узла, с; загрузка CPU узла, %. null — источник не ответил.
   uptimeS?: number | null;
   cpuLoadPerc?: number | null;
+  // История загрузки CPU под KPI: 90 точек, шаг 10 с, 15 мин; null — разрыв
+  // (бакет без данных). В ответах до ST6 поля нет — optional.
+  cpuLoadSpark15m?: (number | null)[] | null;
 }
 
 // === Краткая сводка (HardwareBrief) — только у админа ===

@@ -23,7 +23,7 @@ export interface SensorRow {
   value: number | string | null;
   unit: string;
   dec: boolean;
-  level: HwLevel;
+  level: HwLevel | null;
   sensor: 'ok' | 'none' | 'nodata';
   detail: string;
   spark: (number | null)[];
@@ -109,7 +109,7 @@ const ROW_GRID: CSSProperties = {
 const ROW_NAME: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, fontSize: FS.xs, color: C.textSecondary };
 
 // Значение: моно 12 px 600; warn/danger красят значение.
-function rowValueStyle(level: HwLevel, noData: boolean, stale: boolean): CSSProperties {
+function rowValueStyle(level: HwLevel | null, noData: boolean, stale: boolean): CSSProperties {
   if (noData) return { fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 600, textAlign: 'right', whiteSpace: 'nowrap', color: C.textMuted, fontStyle: 'italic' };
   if (stale) return { fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 600, textAlign: 'right', whiteSpace: 'nowrap', color: C.textMuted };
   return {
@@ -131,8 +131,8 @@ function rowState(r: SensorRow, stale: boolean): string {
 }
 
 // Точка уровня строки: stale и нет данных — C.track; иначе по level (макет .sensor-name dot).
-function rowDot(level: HwLevel, noData: boolean, stale: boolean): string {
-  if (stale || noData) return C.track;
+function rowDot(level: HwLevel | null, noData: boolean, stale: boolean): string {
+  if (stale || noData || level == null) return C.track;
   switch (level) {
     case 'danger': return C.danger;
     case 'warn': return C.warning;
@@ -169,7 +169,7 @@ function SensorRowView({ row, stale }: { row: SensorRow; stale: boolean }) {
 }
 
 // Цвет состояния строки: stale/noData — muted; warn/danger — тревожные тексты.
-function rowLevelText(level: HwLevel, noData: boolean, stale: boolean): string {
+function rowLevelText(level: HwLevel | null, noData: boolean, stale: boolean): string {
   if (stale || noData) return C.textMuted;
   return level === 'danger' ? C.dangerText : level === 'warn' ? C.warningText : C.textMuted;
 }

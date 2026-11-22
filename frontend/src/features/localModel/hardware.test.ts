@@ -434,4 +434,21 @@ describe('TempChart — график «Температуры»', () => {
     expect(html).toContain('Память · карта 1');
     expect(html).toContain('Память · карта 2');
   });
+
+  it('мобильная ширина: заголовок «Температуры» на своей строке (flex 1 1 100%), окна переносятся', () => {
+    const html = renderToStaticMarkup(createElement(TempChart, {
+      report: makeReport(), window: '15m', onWindowChange: () => {}, isMobile: true,
+    }));
+    // контейнер переносится, заголовок занимает всю строку — усечения «ТЕМ…» нет
+    expect(html).toContain('flex-wrap:wrap');
+    expect(html).toContain('flex:1 1 100%');
+  });
+
+  it('десктоп: заголовок и окна в одной строке, как было', () => {
+    const html = renderToStaticMarkup(createElement(TempChart, {
+      report: makeReport(), window: '15m', onWindowChange: () => {}, isMobile: false,
+    }));
+    expect(html).toContain('flex-wrap:nowrap');
+    expect(html).not.toContain('flex:1 1 100%');
+  });
 });

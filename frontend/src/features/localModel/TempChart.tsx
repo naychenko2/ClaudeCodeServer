@@ -181,9 +181,10 @@ export function TempChart({ report, window, onWindowChange, isMobile }: {
 
   return (
     <section style={{ background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, padding: SP.md }}>
-      {/* Заголовок + окна */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
-        <h3 style={{ margin: 0, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textSecondary, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+      {/* Заголовок + окна: на мобиле заголовок занимает всю строку целиком —
+          переключатель окон уезжает на следующую (усечения «ТЕМ…» нет, дефект 9f94bf4c) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
+        <h3 style={{ margin: 0, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.textSecondary, flex: isMobile ? '1 1 100%' : 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           Температуры
         </h3>
         <InlineSegmented<HardwareWindow>

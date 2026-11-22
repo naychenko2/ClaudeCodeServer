@@ -1,10 +1,10 @@
 // Карточка «Стенд» вкладки «Стенды» по макету v4 (§«Уровень 1–3»): уровень 1 — две
 // нейтральные KPI («Загрузка CPU» и «Память») без точек светофора и тревожных заливок;
 // уровень 2 — текущие температуры GPU/CPU без индивидуальных спарков: историю всех
-// температур даёт TempChart. У CPU-загрузки истории нет вовсе — плейсхолдер вместо
-// неё не подставляется. Источник данных — hwMetricGroups (ST1). Тревожные цвета —
-// только по level от бэкенда; stale снимает заливки и приглушает значения (макет .stale).
-// Чистый презентационный компонент: без опросов и собственного состояния.
+// температур даёт TempChart, а у «Загрузки CPU» — свой Sparkline из отчёта
+// (cpuLoadSpark15m, «пики за 10 с»). Источник данных — hwMetricGroups (ST1). Тревожные
+// цвета — только по level от бэкенда; stale снимает заливки и приглушает значения
+// (макет .stale). Чистый презентационный компонент: без опросов и собственного состояния.
 //
 // LevelPill переехала сюда из HardwareTab: ST4 удаляет старый StandCard вместе с его
 // LevelPill, а старый и новый StandCard используют одну плашку — импорт
@@ -96,8 +96,9 @@ function kpiValueStyle(has: boolean, stale: boolean): CSSProperties {
 }
 
 // Значение плитки уровня 2 (макет .temp-value): FONT.mono 20 px 600; warn/danger
-// красят значение, stale и нет данных — приглушённые.
-function tempValueStyle(level: HwLevel, noData: boolean, stale: boolean): CSSProperties {
+// красят значение, stale и нет данных — приглушённые. level null — нейтрально:
+// окраска не применяется, значение обычного цвета.
+function tempValueStyle(level: HwLevel | null, noData: boolean, stale: boolean): CSSProperties {
   if (stale || noData) return { fontFamily: FONT.mono, fontSize: 20, fontWeight: 600, lineHeight: 1.2, marginTop: 2, color: C.textMuted };
   return {
     fontFamily: FONT.mono, fontSize: 20, fontWeight: 600, lineHeight: 1.2, marginTop: 2,
@@ -106,10 +107,11 @@ function tempValueStyle(level: HwLevel, noData: boolean, stale: boolean): CSSPro
 }
 
 // Тон плитки уровня 2 по level (макет .temp.warn/.temp.danger): ok — нейтральная
-// плитка с зелёной точкой; stale и нет данных — без окраски, точка C.track.
+// плитка с зелёной точкой; stale, нет данных и level null (окраска не применяется)
+// — без окраски и без зелёной точки, точка C.track.
 // Тревожные цвета приходят ТОЛЬКО из level — своих порогов нет.
-function tempTone(level: HwLevel, noData: boolean, stale: boolean): { bg: string; border: string; dot: string } {
-  if (stale || noData) return { bg: C.bgCard, border: C.borderLight, dot: C.track };
+function tempTone(level: HwLevel | null, noData: boolean, stale: boolean): { bg: string; border: string; dot: string } {
+  if (stale || noData || level == null) return { bg: C.bgCard, border: C.borderLight, dot: C.track };
   switch (level) {
     case 'danger': return { bg: C.dangerBg, border: C.dangerBorder, dot: C.danger };
     case 'warn': return { bg: C.warningBg, border: C.warning, dot: C.warning };
@@ -122,19 +124,24 @@ const ICONS: Record<string, ComponentType<{ size?: number; strokeWidth?: number;
   Cpu, MemoryStick,
 };
 
-// KPI-плитка уровня 1: иконка + подпись, значение, у RAM — деталь и спарк занятости.
-// Нейтральная: точек светофора и тревожных заливок нет (мутация «добавить C.success
-// в primary» обязана краснить тест). Рендер по value: sensor='none' RAM не скрывает
-// KPI. Спарк — по модели: spark непустой → Sparkline занятости (RAM), value без
-// числа → подложка; spark пустой → ничего (CPU — истории загрузки нет вовсе).
+// KPI-плитка уровня 1: иконка + подпись, значение, деталь и спарк. Нейтральная:
+// точек светофора и тревожных заливок нет (мутация «добавить C.success в primary»
+// обязана краснить тест). Рендер по value: sensor='none' RAM не скрывает KPI.
+// Спарк — по модели: spark непустой → Sparkline C.info (занятость RAM, история
+// загрузки CPU — «пики за 10 с»), value без числа → подложка; spark пустой → ничего.
 function Kpi({ view, stale }: { view: HwTileView; stale: boolean }) {
   const has = view.value != null && Number.isFinite(view.value);
+  const cpuKpi = view.key === 'cpu-load';
   const Icon = ICONS[view.icon] ?? Cpu;
   return (
     <div style={KPI_TILE}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, fontSize: FS.xs, fontWeight: 600, color: C.textSecondary }}>
         <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{view.name}</span>
+        {/* У cpu-load подпись переносится (nameWrap) вместо усечения: «Загрузка CPU»
+            обязана читаться целиком на 320 px; остальные подписи — многоточие. */}
+        <span style={view.nameWrap
+          ? { minWidth: 0, whiteSpace: 'normal' }
+          : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{view.name}</span>
       </div>
       <div style={kpiValueStyle(has, stale)}>
         {has ? <>{Math.round(view.value!)} <span style={KPI_UNIT}>{view.unit}</span></> : 'нет данных'}
@@ -143,7 +150,13 @@ function Kpi({ view, stale }: { view: HwTileView; stale: boolean }) {
         <div style={{ minWidth: 0, marginTop: 2, fontSize: FS.xs, color: C.textSecondary, overflowWrap: 'anywhere' }}>{view.detail}</div>
       )}
       {view.spark.length === 0 ? null
-        : has ? <Sparkline points={view.spark} color={stale ? C.textMuted : C.info} ariaLabel="Занятость памяти за 15 минут" />
+        : has ? (
+          cpuKpi
+            ? <div title="Пики за 10 с — максимум в бакете, не средняя загрузка">
+                <Sparkline points={view.spark} color={stale ? C.textMuted : C.info} ariaLabel="Загрузка CPU, пики за 10 с, 15 минут" />
+              </div>
+            : <Sparkline points={view.spark} color={stale ? C.textMuted : C.info} ariaLabel="Занятость памяти за 15 минут" />
+        )
           : <SparklinePlaceholder />}
     </div>
   );

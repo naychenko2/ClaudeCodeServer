@@ -166,11 +166,47 @@ describe('StandCard', () => {
     unmount();
   });
 
+  it('под KPI «Загрузка CPU» рисуется Sparkline «пики за 10 с»: C.info, null — разрыв', () => {
+    const r = makeReport({ cpuLoadSpark15m: [41, null, 43] });
+    const { host, unmount } = mount(createElement(StandCard, { report: r, isMobile: false }));
+    const cpuCell = grids(host)[0].children[0];
+    const sparks = cpuCell.querySelectorAll('svg.spark');
+    expect(sparks.length).toBe(1);
+    expect(sparks[0]?.getAttribute('aria-label')).toContain('пики за 10 с');
+    // null в середине ряда — разрыв: два polyline-сегмента вместо одного
+    expect(sparks[0]?.querySelectorAll('polyline').length).toBe(2);
+    expect((sparks[0]?.querySelectorAll('polyline')[0]?.getAttribute('stroke') ?? '')).toContain('var(--c-info)');
+    unmount();
+  });
+
+  it('загрузка 0 — «0 %» и линия (0 не теряется); null в ряду — разрыв, не ноль', () => {
+    const r = makeReport({ cpuLoadPerc: 0, cpuLoadSpark15m: [0, null, 0] });
+    const { host, unmount } = mount(createElement(StandCard, { report: r, isMobile: false }));
+    const cpuCell = grids(host)[0].children[0];
+    expect((cpuCell.children[1]?.textContent ?? '').trim()).toBe('0 %');
+    const sparks = cpuCell.querySelectorAll('svg.spark');
+    expect(sparks.length).toBe(1);
+    expect(sparks[0]?.querySelectorAll('polyline').length).toBe(2);
+    unmount();
+  });
+
   it('isMobile=true — обе сетки остаются в двух колонках', () => {
     const { host, unmount } = mount(createElement(StandCard, { report: makeReport(), isMobile: true }));
     for (const g of grids(host)) {
       expect(g.getAttribute('style') ?? '').toContain('repeat(2, minmax(0, 1fr))');
     }
+    unmount();
+  });
+
+  it('подпись «Загрузка CPU» переносится вместо усечения; у RAM усечение сохранено', () => {
+    const { host, unmount } = mount(createElement(StandCard, { report: makeReport(), isMobile: false }));
+    const cells = Array.from(grids(host)[0].children);
+    // у «Загрузка CPU» нет ellipsis-механизма — усечение невозможно в принципе
+    expect(cells[0].querySelector('span[style*="ellipsis"]')).toBeNull();
+    // у RAM усечение сохранено (допускается только у «Оперативная память»)
+    const ramLabel = cells[1].querySelector('span[style*="ellipsis"]');
+    expect(ramLabel).not.toBeNull();
+    expect(ramLabel?.textContent ?? '').toBe('Оперативная память');
     unmount();
   });
 });

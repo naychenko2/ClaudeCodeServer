@@ -80,13 +80,20 @@ describe('hwMetricGroups', () => {
     expect(g.details.map(v => v.key)).toEqual(['vrm-0', 'vrm-1', 'board', 'chipset', 'water', 'disk-0', 'disk-1']);
   });
 
-  it('KPI «Загрузка CPU»: значение из отчёта, spark пустой', () => {
+  it('KPI «Загрузка CPU»: значение из отчёта, level null, деталь по отчёту', () => {
     const g = hwMetricGroups(makeReport({ cpuLoadPerc: 41 }));
     const kpi = g.primary[0];
     expect(kpi.name).toBe('Загрузка CPU');
     expect(kpi.value).toBe(41);
     expect(kpi.unit).toBe('%');
     expect(kpi.sensor).toBe('ok');
+    // уровень null — окраска не применяется; 'none' остаётся отсутствию значения
+    expect(kpi.level).toBeNull();
+    // два температурных CPU-узла фикстуры → «все ядра · 2 сокета»
+    expect(kpi.detail).toBe('все ядра · 2 сокета');
+    // подпись переносится вместо усечения (усечение разрешено только у «Оперативная память»)
+    expect(kpi.nameWrap).toBe(true);
+    // без поля cpuLoadSpark15m (ответы до ST6) — пустой ряд, без выдуманной линии
     expect(kpi.spark).toEqual([]);
   });
 
@@ -107,6 +114,25 @@ describe('hwMetricGroups', () => {
     expect(gAbsent.primary[0].value).toBeNull();
     expect(gAbsent.primary[0].sensor).toBe('nodata');
     expect(gAbsent.nodataCount).toBe(0);
+  });
+
+  it('история загрузки идёт в cpu-load из отчёта: ряд как есть, null — разрыв', () => {
+    const g = hwMetricGroups(makeReport({ cpuLoadPerc: 41, cpuLoadSpark15m: [41, null, 43] }));
+    // ряд передаётся как есть: null остаётся разрывом линии, не превращается в ноль
+    expect(g.primary[0].spark).toEqual([41, null, 43]);
+  });
+
+  it('детали KPI по числу температурных CPU-узлов: 2 сокета / 1 сокет / без k10temp', () => {
+    const r1 = makeReport();
+    // один температурный CPU-узел → просто «все ядра»
+    r1.nodes = r1.nodes.filter(n => n.kind !== 'cpu' || n.key === 'cpu-0');
+    expect(hwMetricGroups(r1).primary[0].detail).toBe('все ядра');
+    // без k10temp (CPU-узлов нет вовсе) — KPI не скрыта, деталь «все ядра»
+    const r0 = makeReport();
+    r0.nodes = r0.nodes.filter(n => n.kind !== 'cpu');
+    const g0 = hwMetricGroups(r0);
+    expect(g0.primary[0].detail).toBe('все ядра');
+    expect(g0.primary[0].name).toBe('Загрузка CPU');
   });
 
   it('RAM с sensor=none — валидный KPI: значение 69, spark15m с KPI, в счётчик не входит', () => {

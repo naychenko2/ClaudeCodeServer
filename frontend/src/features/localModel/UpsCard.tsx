@@ -95,12 +95,13 @@ function MetricValue({ v, unit, dec, color, large = false }: { v: number | null;
 // Ячейка полосы: подпись (FS.xxs C.textMuted), значение (mono FS.lg 600),
 // деталь (FS.xxs C.textSecondary). Разделитель — border-left на соседних ячейках.
 function UpsCell({ label, value, dec, unit, level, detail, silent }: {
-  label: string; value: number | null; dec: boolean; unit: string; level: HwLevel; detail: string; silent: boolean;
+  label: string; value: number | null; dec: boolean; unit: string; level: HwLevel | null; detail: string; silent: boolean;
 }) {
   return (
     <div style={{ minWidth: 0, padding: SP.sm, borderLeft: `1px solid ${C.borderLight}` }}>
       <div style={{ fontSize: FS.xxs, color: C.textMuted }}>{label}</div>
-      <MetricValue v={value} unit={unit} dec={dec} color={silent ? C.textMuted : VALUE_COLOR[level]} />
+      {/* level null — окраска не применяется: значение нейтрального цвета */}
+      <MetricValue v={value} unit={unit} dec={dec} color={silent ? C.textMuted : level == null ? C.textHeading : VALUE_COLOR[level]} />
       {detail && <div style={{ fontSize: FS.xxs, color: C.textSecondary, marginTop: 2 }}>{detail}</div>}
     </div>
   );

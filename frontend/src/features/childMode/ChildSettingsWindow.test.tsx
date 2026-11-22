@@ -353,3 +353,40 @@ describe('Конкурентность', () => {
     expect(host.textContent).toBe('');
   });
 });
+
+// L4 аудита 21.11 (макет kids-settings-window.html:1066-1073): на телефоне разделы —
+// список рядов-карточек с переходом в раздел и «←», не горизонтальный ряд вкладок,
+// где четвёртая подпись уходит за кадр. Десктоп остаётся на вкладках (вариант A).
+describe('Мобильная навигация (L4 аудита)', () => {
+  beforeEach(() => {
+    mobile = true;
+    getAnswers = [resp(profile())];
+  });
+
+  it('разделы — список рядов-карточек, вкладок нет', async () => {
+    const { host, unmount } = await mount();
+    const navNodes = Array.from(host.querySelectorAll('[data-testid^="child-settings-nav-"]')) as unknown as HTMLElement[];
+    const items = navNodes.filter((n) => n.getAttribute('data-testid') !== 'child-settings-nav-list');
+    expect(byTestId(host, 'child-settings-nav-list'), 'списка разделов нет').not.toBeNull();
+    expect(items.length, 'рядов списка').toBe(4);
+    expect(items.map((n) => n.textContent)).toEqual(['Обзор', 'Предметы', 'Время и лимиты', 'Безопасность и согласие']);
+    expect(host.querySelectorAll('[role="tab"]').length, 'вкладки на мобиле остались').toBe(0);
+    await unmount();
+  });
+
+  it('тап по разделу — экран раздела с «←»; «←» — список; слот раздела живёт', async () => {
+    const { host, unmount } = await mount();
+    await click(byTestId(host, 'child-settings-nav-time')!);
+    expect(byTestId(host, 'child-settings-nav-list'), 'список не скрылся').toBeNull();
+    const bar = byTestId(host, 'child-settings-back-bar');
+    expect(bar, 'бара «назад» нет').not.toBeNull();
+    expect(bar?.textContent, 'имя раздела в баре').toContain('Время и лимиты');
+    expect(byTestId(host, 'child-settings-slot-time'), 'содержимого раздела нет').not.toBeNull();
+    expect(host.querySelectorAll('[role="tab"]').length).toBe(0);
+    const back = bar!.querySelector('[aria-label="К разделам"]') as HTMLElement;
+    await click(back);
+    expect(byTestId(host, 'child-settings-nav-list'), 'список не вернулся').not.toBeNull();
+    expect(byTestId(host, 'child-settings-back-bar')).toBeNull();
+    await unmount();
+  });
+});

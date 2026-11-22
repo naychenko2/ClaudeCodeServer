@@ -2825,7 +2825,9 @@ const windowWidth = useWindowWidth();
             )}
             {isChildScreen && (
               <div ref={projectChildMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
-                <IconButton ariaLabel="Меню" onClick={() => setChildMenuOpen(v => !v)}>
+                {/* Тач-цель 40px (L5 аудита 21.11, макет kids-project-screen.html:345-348):
+                    IconButton по умолчанию md=32 — ребёнку мало. */}
+                <IconButton size="lg" ariaLabel="Меню" onClick={() => setChildMenuOpen(v => !v)}>
                   <User size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
                 </IconButton>
                 {childMenuOpen && (

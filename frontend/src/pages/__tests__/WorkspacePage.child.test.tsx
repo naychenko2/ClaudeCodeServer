@@ -687,6 +687,18 @@ describe('WorkspacePage: детская поверхность (Ф1f)', () => {
     } finally { root.unmount(); }
   });
 
+  // Тач-цели детской шапки (L5 аудита 21.11, макет kids-project-screen.html:345-348):
+  // «Меню» — IconButton lg (40px), не дефолтный md (32): ребёнку нужен крупный тап.
+  it('«Меню» в детской шапке на 360 — 40×40 (L5 аудита 21.11)', async () => {
+    const { root, container } = await mountChild({ width: 360, childSurface: surface });
+    try {
+      const menu = findNodeByAttr(container as any, 'aria-label', 'Меню');
+      expect(menu, 'кнопки «Меню» нет').not.toBeNull();
+      expect(menu.style.width, 'ширина «Меню» не 40').toBe('40px');
+      expect(menu.style.height, 'высота «Меню» не 40').toBe('40px');
+    } finally { root.unmount(); }
+  });
+
   // Та же страница без детского снимка на той же ширине: взрослая мобильная поверхность
   // не изменилась (иначе правка — просто выключенный экран для всех). «Плагины» здесь
   // нет: плагинов ни у кого (hasPlugins=false) — это не предмет кейса.

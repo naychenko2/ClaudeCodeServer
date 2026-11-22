@@ -151,7 +151,9 @@ export function ChildLessonsPanel({ projectId, subjectId, viewers, activeSession
 
   const rowStyle = (active: boolean): CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: SP.sm, boxSizing: 'border-box',
-    padding: `${SP.sm}px`, borderRadius: R.md, cursor: 'pointer',
+    // Тач-цель строки (L5 аудита 21.11, макет kids-tutors.html .krow min-height:40px):
+    // без minHeight строка была 35px — под детскую поверхность это мало.
+    padding: `${SP.sm}px`, borderRadius: R.md, cursor: 'pointer', minHeight: 40,
     // Что урок выбран, видно по акцентной заливке — тот же признак, что у взрослой карточки
     background: active ? C.accentMuted : 'transparent',
   });

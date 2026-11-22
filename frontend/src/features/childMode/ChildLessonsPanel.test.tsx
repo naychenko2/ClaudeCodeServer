@@ -139,6 +139,13 @@ describe('ChildLessonsPanel: детская панель уроков (Х-W4-78)
   });
   afterEach(() => { uninstallFakeDom(); vi.restoreAllMocks(); });
 
+  it('тач-цель строки урока — не меньше 40px (L5 аудита 21.11)', async () => {
+    const { container } = await mountPanel({ projectId: 'p1', subjectId: 'math', onSelectSession: () => {}, onLessonCreated: () => {} });
+    const row = rowsWithText(container, 'child-lesson-row', 'Дроби')[0];
+    expect(row, 'строки урока нет').not.toBeNull();
+    expect(row.style.minHeight, 'строка ниже 40px — тач-цель детской поверхности').toBe('40px');
+  });
+
   it('текущие уроки — из штатной ручки; «Старые» — только subjectClosed из spaceChats', async () => {
     const { root, container } = await mountPanel({ projectId: 'p1', subjectId: 'math', onSelectSession: () => {}, onLessonCreated: () => {} });
     try {

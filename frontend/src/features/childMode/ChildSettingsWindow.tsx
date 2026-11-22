@@ -1,5 +1,6 @@
 // Ф2b: каркас окна «Настройки детского режима» (ADR-041 ред. 7 решение 74; макет
-// docs/mockups/kids-settings-window.html — вариант A «вкладки», MODAL_W.wide).
+// docs/mockups/kids-settings-window.html — вариант A «вкладки» на десктопе; на телефоне —
+// вариант B: список разделов → экран раздела с «←» (L4 аудита 21.11, макет:1066-1073).
 // Разделы: «Обзор» (./ChildSettingsOverview) и три слота-пропса — их наполняют Ф2c–Ф2e.
 // Загрузка — childApi.getChildProfile, запись — childApi.putChildProfile (единственная
 // ручка записи профиля, решение 12/30). Отказ любой из двух — текст body.message в теле
@@ -24,14 +25,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import { Modal } from '../../components/ui/Modal';
+import { IconButton } from '../../components/ui/IconButton';
 import { Tabs } from '../../components/ui/Tabs';
 import { Button } from '../../components/ui/Button';
 import { Notice } from '../../components/ui/Notice';
 import { Badge } from '../../components/ui/Badge';
 import { useIsMobileModal } from '../../components/ui/useIsMobileModal';
-import { C, FS, MODAL_W, SP } from '../../lib/design';
+import { C, FONT, FS, MODAL_W, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { childApi } from './api';
 import type { ChildSettingsProfile } from './types';
@@ -107,6 +109,19 @@ export function ChildSettingsWindow({
 }: Props) {
   const isMobile = useIsMobileModal();
   const [section, setSection] = useState<ChildSettingsSection>('overview');
+  // Мобильная навигация (L4 аудита 21.11, макет kids-settings-window.html:1066-1073): на
+  // телефоне вместо горизонтального ряда вкладок — экран списка разделов и экран раздела
+  // с «←». null — экран списка; значение — открытый экран раздела. Десктоп навигацию не видит.
+  const [mobileSection, setMobileSection] = useState<ChildSettingsSection | null>(null);
+  // Один хелпер для вкладок, списка и карточек обзора: куда ни тапни, оба навигационных
+  // состояния согласованы. Обзор зовёт openSection, не setSection: иначе на мобиле карточка
+  // из списка не откроет экран раздела.
+  const openSection = useCallback((key: ChildSettingsSection) => {
+    setSection(key);
+    setMobileSection(key);
+  }, []);
+  // «←» экрана раздела: только мобильное состояние, десктопное section не трогаем.
+  const backToList = useCallback(() => setMobileSection(null), []);
   const [profile, setProfile] = useState<ChildSettingsProfile | null>(null);
   // Ответ чтения пришёл (профиль может быть и null — «профиля нет»). Без этого «Загружаю…»
   // оставалось бы и при пустом профиле: интерфейс врал бы о состоянии, которое уже известно.
@@ -202,7 +217,7 @@ export function ChildSettingsWindow({
     <Tabs
       value={section}
       items={SECTIONS.map((s) => ({ value: s.key, label: s.label }))}
-      onChange={setSection}
+      onChange={openSection}
       ariaLabel="Разделы настроек ребёнка"
       size="md"
       isMobile={isMobile}
@@ -248,11 +263,49 @@ export function ChildSettingsWindow({
         </Notice>
       )}
       {section === 'overview' && (
-        <ChildSettingsOverview profile={profile} userNames={userNames} openSection={setSection} />
+        <ChildSettingsOverview profile={profile} userNames={userNames} openSection={openSection} />
       )}
       {section === 'subjects' && slot('subjects', 'Предметы', subjectsSection)}
       {section === 'time' && slot('time', 'Время и лимиты', timeSection)}
       {section === 'safety' && slot('safety', 'Безопасность и согласие', safetySection)}
+    </div>
+  );
+
+  // Разделы списком (мобильный экран списка, L4): ряды-карточки 60px с шевроном —
+  // по мобильному стилю макета (.m .navitem): карточка с рамкой, тач-цель крупнее 40px.
+  const navList = (
+    <div data-testid="child-settings-nav-list" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+      {SECTIONS.map((s) => (
+        <button
+          key={s.key}
+          type="button"
+          data-testid={`child-settings-nav-${s.key}`}
+          onClick={() => openSection(s.key)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: SP.md, width: '100%', minHeight: 60,
+            padding: `${SP.md}px`, boxSizing: 'border-box',
+            background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.xl,
+            cursor: 'pointer', textAlign: 'left', fontFamily: FONT.sans,
+          }}
+        >
+          <span style={{ flex: 1, minWidth: 0, fontSize: FS.md, fontWeight: 600, color: C.textHeading }}>
+            {s.label}
+          </span>
+          <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} aria-hidden />
+        </button>
+      ))}
+    </div>
+  );
+
+  // Бар «←» экрана раздела (мобильный): «←» + имя раздела, кнопка IconButton lg (40px).
+  const backBar = (
+    <div data-testid="child-settings-back-bar" style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
+      <IconButton size="lg" ariaLabel="К разделам" onClick={backToList}>
+        <ChevronLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      <span style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading }}>
+        {SECTIONS.find((s) => s.key === mobileSection)?.label}
+      </span>
     </div>
   );
 
@@ -280,10 +333,10 @@ export function ChildSettingsWindow({
       title="Настройки детского режима"
       subtitle={subtitle}
       onClose={onClose}
-      header={tabs}
+      header={isMobile ? (mobileSection === null ? null : backBar) : tabs}
       footer={footer}
     >
-      {body}
+      {isMobile && mobileSection === null ? navList : body}
     </Modal>
   );
 }

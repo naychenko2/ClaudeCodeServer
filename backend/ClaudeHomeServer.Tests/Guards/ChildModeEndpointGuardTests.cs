@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ChildMode;
@@ -290,13 +291,49 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         (await resp.Content.ReadAsStringAsync()).Should().Contain("child_mode");
     }
 
+    // Г14 (дефект 65aa2189): неполный профиль (DenyAll) — не повод уводить ребёнка во взрослую поверхность.
+    // Раньше этот тест проверял обратное: 403 на /me даже на размеченном эндпоинте. Теперь:
+    // /me — чтение личности — отвечает по-детски (isChild=true + замороженный снимок поверхности,
+    // по которому фронт рисует детский экран, а не взрослый хаб — useChildSurface). Операционная
+    // детская ручка даёт свой детский отказ контроллера (503 policy_unavailable), а не 403 child_mode.
+    // Allow-list не изменился: непомеченная взрослая поверхность остаётся закрытой (403 child_mode).
     [Fact]
-    public async Task DenyAllProfile_Gets403_EvenOnAllowedEndpoint()
+    public async Task DenyAllProfile_ReachesOwnChildSurface_NotAdult()
     {
-        SetChild(valid: false);
+        SetChild(valid: false); // профиль есть, но нечитаем (пустой TutorPersonaId) → DenyAll
+        using var client = ChildClient();
+
+        // Доходит до своего экрана: /me 200, isChild=true, снимок поверхности есть.
+        var me = await client.GetAsync("/api/auth/me");
+        me.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = JsonDocument.Parse(await me.Content.ReadAsStringAsync());
+        doc.RootElement.GetProperty("isChild").GetBoolean().Should().BeTrue();
+        doc.RootElement.GetProperty("childSurface").ValueKind.Should().NotBe(JsonValueKind.Null,
+            "неполный профиль не лишает ребёнка поверхности: снимок заморожен и не зависит от профиля");
+
+        // Операционная детская ручка — отказ контроллера по-детски (503), а не 403 child_mode: до тела доходит ребёнок.
+        var subjects = await client.GetAsync("/api/child/subjects");
+        subjects.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await subjects.Content.ReadAsStringAsync()).Should().Contain("policy_unavailable");
+
+        // Allow-list прежний: непомеченная взрослая поверхность закрыта и DenyAll-ребёнку.
+        var adult = await client.GetAsync("/api/projects/builtin-prompt");
+        adult.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await adult.Content.ReadAsStringAsync()).Should().Contain("child_mode");
+    }
+
+    // Настроенный ребёнок (валидный профиль) ведёт себя как прежде: /me 200 с его пространствами.
+    // Мутация «снять [ChildAllowed] с /me» краснит и этот тест, и ChildToken_OnAllowedEndpoint_Passes.
+    [Fact]
+    public async Task ValidProfile_MeUnchanged_IsChildWithOwnSpaces()
+    {
+        SetChild(); // валидный профиль: DenyAll=false
         using var client = ChildClient();
         var me = await client.GetAsync("/api/auth/me");
-        me.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        me.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = JsonDocument.Parse(await me.Content.ReadAsStringAsync());
+        doc.RootElement.GetProperty("isChild").GetBoolean().Should().BeTrue();
+        doc.RootElement.GetProperty("childSurface").ValueKind.Should().NotBe(JsonValueKind.Null);
     }
 
     [Fact]

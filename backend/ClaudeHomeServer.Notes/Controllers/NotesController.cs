@@ -150,8 +150,9 @@ public class NotesController : ControllerBase
     // Контекст ребёнка в ручке заметок: Scope — источник разрешён; Deny — отказ; ни того, ни
     // другого — вызывающий не ребёнок, обычная рельса (как до шага). Ребёнок опознаётся по
     // стору через единую точку политики (тот же приём, что у ChildChatsController): выключенный
-    // профиль = обычный пользователь. DenyAll до этой ручки не доходит — сам гейт отказывает
-    // его 403 на любом эндпоинте (ChildModeEndpointGuardTests.DenyAllProfile_Gets403).
+    // профиль = обычный пользователь. DenyAll-ребёнок доходит до этой ручки (Г14: гейт отвечает
+    // только за allow-list): без своих предметов-предметов он получает отказ здесь же —
+    // not_child_subject, а не 403 child_mode от гейта.
     private (ChildNotesScope? Scope, ObjectResult? Deny) ChildGate(string? sourceKey)
     {
         if (_childPolicy?.For(UserId) is null) return (null, null);

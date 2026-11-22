@@ -29,9 +29,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///
 /// 503 policy_unavailable (хвосты R-KM-B5e2): сбой записи журнала — настоящим store'ом, у
 /// которого путь журнала этого ребёнка занят каталогом (Heartbeat_СбойЗаписиЖурнала…);
-/// нечитаемый профиль — единственной достижимой через HTTP дорогой в эту ветку контроллера,
-/// гонкой гейта и контроллера (Status_ГонкаСГатом…): гейт читает профиль до правки,
-/// контроллер — после (ChildStatusController.cs:21).
+/// нечитаемый профиль — через гонку гейта и контроллера (Status_ГонкаСГатом…): гейт читает
+/// профиль до правки, контроллер — после (ChildStatusController.cs:21). С Г14 статичный
+/// DenyAll-ребёнок доходит до этой ветки и напрямую — гонка остаётся одной из дорог к ней.
 /// </summary>
 [Trait("Category", "Host")]
 public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTests.Hosts>
@@ -61,12 +61,12 @@ public class ChildStatusControllerTests : IClassFixture<ChildStatusControllerTes
     private const string RaceUsername = "kid-denyall-race";
 
     /// <summary>
-    /// Обёртка боевой политики, воспроизводящая гонку гейта и контроллера — единственную
-    /// HTTP-дорогу к ветке DenyAll в контроллере (ChildStatusController.cs:21): гейт не пускает
-    /// DenyAll-ребёнка ни на какой эндпоинт. Первое успешное чтение профиля RaceUsername
-    /// отдаётся как есть (гейт проходит) и сразу роняет профиль в сторе — правка «взрослого»
-    /// посреди запроса; следующее чтение (контроллера) — настоящий DenyAll боевого
-    /// ChildModePolicy, без синтетических снимков.
+    /// Обёртка боевой политики, воспроизводящая гонку гейта и контроллера — одну из дорог к
+    /// ветке DenyAll в контроллере (ChildStatusController.cs:21). С Г14 статичный DenyAll-ребёнок
+    /// доходит до неё и напрямую (гейт не отсекает), но гонка остаётся отдельной проверкой той же
+    /// ветки. Первое успешное чтение профиля RaceUsername отдаётся как есть (гейт проходит) и сразу
+    /// роняет профиль в сторе — правка «взрослого» посреди запроса; следующее чтение (контроллера)
+    /// — настоящий DenyAll боевого ChildModePolicy, без синтетических снимков.
     /// </summary>
     private sealed class RacePolicy(IUserStore users) : IChildModePolicy
     {

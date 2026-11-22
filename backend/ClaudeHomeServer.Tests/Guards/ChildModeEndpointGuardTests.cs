@@ -220,11 +220,13 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         // Явное исключение безопасности (Г14-д1, ручка №9): «Мне неприятно» доступен и DenyAll —
         // сигнал не требует читаемого профиля; поведение держит DenyAllToken_OnStopSignal_StillAccepted.
         "POST api/child/stop-signal",
-        // Остальные честно отказывают 503 policy_unavailable ДО побочного эффекта (проверено
-        // DenyAllToken_OnOpenWritingEndpoints_Gets503PolicyUnavailable и порядком в контроллерах:
-        // ChildStatusController.cs:69 до RecordMinute :78; ChildChatsController.cs:242 до провижна
-        // и создания; ChildAttachmentsController.cs:60 до поиска чата и записи; ChildRulesController.cs:62
-        // до лока и создания chats-чата) — ни записи, ни расхода.
+        // Остальные честно отказывают 503 policy_unavailable ДО побочного эффекта: каждая ручка
+        // проверена своим тестом, который наблюдает состояние ДО и ПОСЛЕ запроса (usage-файл,
+        // чаты ребёнка, папку предмета), а не только код ответа: DenyAllToken_OnHeartbeat_...,
+        // OnChatCreate_..., OnAttachmentUpload_... (real chat), OnRulesStart_...; порядок в
+        // контроллерах: ChildStatusController.cs:69 до RecordMinute :84; ChildChatsController.cs:242
+        // до провижна и создания; ChildAttachmentsController.cs:60 до поиска чата и записи;
+        // ChildRulesController.cs:62 до лока и создания chats-чата) — ни записи, ни расхода.
         "POST api/child/heartbeat",
         "POST api/child/spaces/{space}/chat",
         "POST api/child/chats/{id}/attachments",
@@ -252,6 +254,59 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
 
     private HttpClient ChildClient() =>
         factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+    // ── фикстура наблюдения эффекта (Г16-д1, ревью Р-Г16) ─────────────────────────
+    // Сторож выше судит список и код ответа; ниже — что за отказом НИЧЕГО не записано.
+    // Каждый тест берёт своего нового пользователя: чужая запись в usage-файле или чате
+    // сделала бы «не изменилось» верным без отказа. Формат фикстуры — как KidWithSubject
+    // в ChildDenyAllNoSideEffectsTests: пользователь и его проект-предмет по маркеру
+    // ChildSubjectId (сам провижер здесь не нужен).
+
+    private UserStore Users => factory.Services.GetRequiredService<UserStore>();
+    private ProjectManager Projects => factory.Services.GetRequiredService<ProjectManager>();
+    private SessionManager Sessions => factory.Services.GetRequiredService<SessionManager>();
+
+    private const string SubjectId = "russian";
+    private const string KidPassword = "g16d1-kid-pw-123456";
+
+    private (string Id, string Username, Project Subject) KidWithSubject(string tag)
+    {
+        var user = Users.Add($"g16d1-kid-{tag}", KidPassword, "user");
+        var subject = Projects.Create("Предмет-" + tag, Path.Combine(factory.TempDir, "g16d1_" + tag),
+            user.Id, user.Username, createDirectory: true, childSubjectId: SubjectId);
+        return (user.Id, user.Username, subject);
+    }
+
+    // Нечитаемый профиль (тот же DenyAll, что SetChild(valid:false) выше): ребёнок остаётся
+    // ребёнком, но всё ему закрыто. Предмет и пространство «lessons» — чтобы мутация «перенести
+    // проверку за побочный эффект» дошла до провижна/создания: в реальном коде DenyAll-проверка
+    // стоит раньше этих сверок, и ответ от этих полей не зависит.
+    private void DenyAllProfile(string childId) => Users.GetById(childId)!.ChildMode = new ChildProfile
+    {
+        Enabled = true, TutorPersonaId = "", ProviderKey = "key", Model = "sonnet",
+        Subjects = { new ChildSubject { Id = SubjectId, Label = "Русский язык", Glyph = "Аа", Color = "info" } },
+        Spaces = { ["lessons"] = new SpaceLimits() },
+    };
+
+    private HttpClient KidClient(string username) => factory.CreateAuthenticatedClient(username, KidPassword);
+
+    private static async Task<(HttpStatusCode, string)> PostJson(HttpClient client, string path)
+    {
+        using var resp = await client.PostAsync(path, new StringContent("{}", Encoding.UTF8, "application/json"));
+        return (resp.StatusCode, await resp.Content.ReadAsStringAsync());
+    }
+
+    // Все чаты ребёнка: вне проектов + в его проектах (обе формы «Уроков»).
+    private int KidChatCount(string childId) =>
+        Sessions.GetProjectlessChats(childId).Count
+        + Projects.GetByOwner(childId).Sum(p => Sessions.GetVisibleByProject(p.Id, childId).Count);
+
+    // Содержимое папки предмета (относительный путь → размер): вложение чата пишется в «Вложения/».
+    private static SortedDictionary<string, long> SubjectTree(string root) => new(
+        Directory.Exists(root)
+            ? Directory.GetFiles(root, "*", SearchOption.AllDirectories)
+                .ToDictionary(f => Path.GetRelativePath(root, f), f => new FileInfo(f).Length)
+            : new Dictionary<string, long>());
 
     // Управляющая поверхность: REST и хабы. Остальное (статика, .well-known) — не гейт.
     private static bool IsManagedSurface(string raw) =>
@@ -380,29 +435,104 @@ public class ChildModeEndpointGuardTests(TestWebApplicationFactory factory) : IC
         actualWrites.Should().Equal(FrozenDenyAllWriteExceptions.Order(StringComparer.Ordinal));
     }
 
-    // Г16: обоснование «отказывает до побочного эффекта» — не комментарий, а контракт. DenyAll-
-    // ребёнок на каждой такой ручке получает 503 policy_unavailable и не доходит до тела: ни записи,
-    // ни расхода. Мутация: перенеси проверку DenyAll в любом из этих контроллеров за побочный
-    // эффект — этот тест краснеет (ответ станет 404/400/409 или запись случится до отказа).
-    [Theory]
-    [InlineData("POST", "/api/child/heartbeat")]
-    [InlineData("POST", "/api/child/spaces/lessons/chat")]
-    [InlineData("POST", "/api/child/rules/start")]
-    public async Task DenyAllToken_OnOpenWritingEndpoints_Gets503PolicyUnavailable(string method, string path)
+    // Г16-д1 (ревью Р-Г16): обоснование «отказывает до побочного эффекта» — контракт, и каждая
+    // ручка проверяется наблюдением состояния ДО и ПОСЛЕ запроса, а не только кодом ответа.
+    // Мутация «перенести проверку DenyAll за побочный эффект» — измерено в копии дерева:
+    // • heartbeat — тест КРАСНЫЙ: usage-файл появляется (проверка — единственный страж
+    //   перед записью);
+    // • chat — тест КРАСНЫЙ: ответ становится 400 unknown_subject (отказ ушёл за проверку);
+    // • attachments «no-such» — тест КРАСНЫЙ: доходит до 404 chat_not_found;
+    // • rules и attachments с живым чатом — тест зелёный, и это честно: сам эффект недоступен
+    //   DenyAll-ребёнку и без проверки — создание детского чата отказывает детская сверка
+    //   старта (И1-бис, ChildRouteRefusedException), а лимитная сверка (тот же 503) стоит
+    //   перед записью. Наблюдение «чата нет / файла нет» держится в обоих случаях.
+    // Каждая фикстура — новый ребёнок: «не изменилось» значимо только на пустом состоянии.
+
+    [Fact]
+    public async Task DenyAllToken_OnHeartbeat_Gets503AndUsageFileAbsent()
     {
-        SetChild(valid: false);
-        using var client = ChildClient();
-        using var req = new HttpRequestMessage(new HttpMethod(method), path)
-        { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
-        var resp = await client.SendAsync(req);
-        var body = await resp.Content.ReadAsStringAsync();
-        resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable,
-            $"{method} {path}: открыто DenyAll только потому, что отказывает до побочного эффекта; тело: {body}");
+        var (id, name, _) = KidWithSubject("hb");
+        DenyAllProfile(id);
+        // Журнал присутствия ребёнка — data/child-usage/{ownerId}.json (ChildUsageStore.DirName);
+        // до первого принятого heartbeat файла нет.
+        var usagePath = Path.Combine(factory.TempDir, ChildUsageStore.DirName, id + ".json");
+
+        var (status, body) = await PostJson(KidClient(name), "/api/child/heartbeat");
+        status.Should().Be(HttpStatusCode.ServiceUnavailable);
         body.Should().Contain("policy_unavailable");
+        File.Exists(usagePath).Should().BeFalse(
+            "отказ стоит до RecordMinute (ChildStatusController.cs:84): минута не засчитана; "
+            + "мутация «перенести проверку за запись» — файл появляется, тест краснеет");
     }
 
-    // Та же граница на загрузке вложения: DenyAll-отказ — до поиска чата и любой записи в папку
-    // предмета (ChildAttachmentsController.cs:60), поэтому «no-such» здесь законен: до 404 не доходит.
+    [Fact]
+    public async Task DenyAllToken_OnChatCreate_Gets503AndNoChatCreated()
+    {
+        var (id, name, subject) = KidWithSubject("chat");
+        DenyAllProfile(id);
+
+        var (status, body) = await PostJson(KidClient(name), "/api/child/spaces/lessons/chat");
+        status.Should().Be(HttpStatusCode.ServiceUnavailable);
+        body.Should().Contain("policy_unavailable");
+        // Тело 503 policy_unavailable — именно DenyAll-отказ (CheckSpace, ChildChatsController.cs:242),
+        // а не отказ по состоянию: «нет такого предмета» и «предмет не готов» — другие тела (400/409).
+        body.Should().NotContain("unknown_subject").And.NotContain("subject_not_ready");
+        Sessions.GetVisibleByProject(subject.Id, id).Should().BeEmpty(
+            "отказ стоит до провижна и создания: урока нет");
+        KidChatCount(id).Should().Be(0,
+            "мутация «снять DenyAll-ветку с CheckSpace» краснеет: запрос доходит до проверки "
+            + "предмета и отвечает 400 unknown_subject — отказ был до неё");
+    }
+
+    [Fact]
+    public async Task DenyAllToken_OnAttachmentUpload_Gets503AndSubjectFolderUnchanged()
+    {
+        // Чат заведён, пока пользователь ещё не ребёнок: детская сверка при создании чата
+        // (И1-бис) отказывает и просто чат ребёнка-владельца предмета (тот же приём, что
+        // фикстура voice в ChildDenyAllNoSideEffectsTests).
+        var (id, name, subject) = KidWithSubject("att");
+        var chat = await Sessions.CreateAsync(subject.Id, ClaudeMode.Auto, name: "Урок", createdByUserId: id);
+        chat.ChildSpace = ChildSpaces.Lessons;
+        chat.ChildSubject = SubjectId;
+        Sessions.SaveSessions();
+        DenyAllProfile(id);
+        SubjectTree(subject.RootPath!).Should().BeEmpty("папка предмета пуста до запроса");
+
+        using var client = KidClient(name);
+        using var form = new MultipartFormDataContent { { new StringContent("Текст вложения."), "file", "заметка.txt" } };
+        var resp = await client.PostAsync($"/api/child/chats/{chat.Id}/attachments", form);
+        var body = await resp.Content.ReadAsStringAsync();
+        resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        body.Should().Contain("policy_unavailable");
+        SubjectTree(subject.RootPath!).Should().BeEmpty(
+            "отказ стоит до поиска чата и любой записи в папку предмета (ChildAttachmentsController.cs:60); "
+            + "и без этой проверки запись невозможна: лимитная сверка того же 503 стоит до писателя "
+            + "(измерено мутацией «перенести проверку за поиск» — файл не появляется)");
+    }
+
+    [Fact]
+    public async Task DenyAllToken_OnRulesStart_Gets503AndNoChatCreated()
+    {
+        var (id, name, _) = KidWithSubject("rules");
+        DenyAllProfile(id);
+
+        var (status, body) = await PostJson(KidClient(name), "/api/child/rules/start");
+        status.Should().Be(HttpStatusCode.ServiceUnavailable);
+        body.Should().Contain("policy_unavailable");
+        // Тело 503 — DenyAll-отказ (ChildRulesController.cs:62), а не «правила уже согласованы» (409).
+        body.Should().NotContain("rules_already_agreed");
+        KidChatCount(id).Should().Be(0,
+            "отказ стоит до лока и создания chats-чата; и без этой проверки чата не будет: "
+            + "создание детского чата отказывает детская сверка старта (И1-бис) — измерено "
+            + "мутацией «перенести проверку за создание»");
+        Sessions.GetProjectlessChats(id)
+            .Should().NotContain(s => s.OnboardingKind == OnboardingKinds.ChildRules);
+    }
+
+    // Та же граница на загрузке вложения, до поиска чата: «no-such» здесь законен — до 404 не
+    // доходит (ChildAttachmentsController.cs:60). Мутация «перенести проверку за поиск чата»
+    // краснит этот тест: ответ становится 404 chat_not_found. Отсутствие записи в живой папке
+    // предмета проверяет DenyAllToken_OnAttachmentUpload_Gets503AndSubjectFolderUnchanged.
     [Fact]
     public async Task DenyAllToken_OnAttachmentUpload_Gets503PolicyUnavailable()
     {

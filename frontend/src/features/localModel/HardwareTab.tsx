@@ -13,12 +13,13 @@
 import { C, FS, R, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import { AlertTriangle, Fan, WifiOff } from 'lucide-react';
 import { EmptyState } from '../../components/ui/EmptyState';
-import type { HardwareFarm, HardwareFarmNode, HardwareReport, HwLevel } from './hardwareTypes';
+import type { HardwareFarm, HardwareFarmNode, HardwareReport } from './hardwareTypes';
 import {
-  farmNodeSilent, hwFansLine, hwLevelLabel, hwNoDataCount, hwNoDataCountLabel, hwSummary,
+  farmNodeSilent, hwFansLine, hwNoDataCount, hwNoDataCountLabel, hwSummary,
   hwThrottled, hwTileView,
 } from './hardwareFormat';
 import { HwTile } from './HwTile';
+import { LevelPill } from './StandCard';
 import { TempChart } from './TempChart';
 import { GpuDetailCard } from './GpuDetailCard';
 import { FarmSummaryCard } from './FarmSummaryCard';
@@ -34,28 +35,6 @@ function formatHms(ms?: number): string {
   if (Number.isNaN(d.getTime())) return '';
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
-
-// Плашка уровня стенда: ok → muted, warn → warning, danger → danger.
-function LevelPill({ level, silent }: { level: HwLevel; silent?: boolean }) {
-  if (level === 'none') return null;
-  // Молчащий узел без опасности — «узел молчит», как в плашке карточки «Узлы», а не «всё в норме».
-  if (silent && level !== 'danger') {
-    return (
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', background: C.warningBg, color: C.warningText,
-        borderRadius: R.max, padding: `1px ${SP.sm}px`, fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
-      }}>узел молчит</span>
-    );
-  }
-  const bg = level === 'danger' ? C.dangerBg : level === 'warn' ? C.warningBg : C.bgInset;
-  const fg = level === 'danger' ? C.dangerText : level === 'warn' ? C.warningText : C.textSecondary;
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', background: bg, color: fg,
-      borderRadius: R.max, padding: `1px ${SP.sm}px`, fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
-    }}>{hwLevelLabel(level)}</span>
-  );
 }
 
 // Баннер молчащего узла: C.warningBg/C.warningText, R.lg.

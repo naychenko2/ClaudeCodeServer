@@ -266,6 +266,20 @@ public class NamedLocalEngineTests
         Assert.Contains("tgi", warnings[0].Message);
     }
 
+    [Fact]
+    public void BaseUrlOf_ExistingEngine_ReturnsBaseUrl()
+    {
+        var config = Config(new()
+        {
+            ["LocalEngines:gemma:BaseUrl"] = "http://192.168.7.107:18030/",
+            ["LocalEngines:gemma:Model"] = "m",
+            ["LocalEngines:gemma:Actions:0"] = LocalActionCatalog.ChatTitle,
+        });
+        var engines = new NamedLocalEngines(new NullHttpFactory(), config, NullLoggerFactory.Instance);
+        Assert.Equal("http://192.168.7.107:18030", engines.BaseUrlOf("gemma"));
+        Assert.Null(engines.BaseUrlOf("no-such-engine"));
+    }
+
     private sealed class RecordingLogger : ILogger
     {
         public List<(LogLevel Level, string Message)> Entries { get; } = [];

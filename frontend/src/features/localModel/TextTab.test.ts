@@ -42,7 +42,7 @@ const { act, createElement } = await import('react');
 const { createRoot } = await import('react-dom/client');
 const { TextTab } = await import('./TextTab');
 const { notReportedText, standDot, standHint, statusPill } = await import('./format');
-const { mockEngineStats, mockLocalModelStats, mockNamedMixedStats, mockNamedVllmStats } = await import('./localModel.fixtures');
+const { mockEngineStats, mockLocalModelStats, mockNamedMixedStats, mockNamedVllmStats, mockLiveMatchStats, mockLiveDriftStats, mockLiveUnavailableStats, mockInklingStats } = await import('./localModel.fixtures');
 const { dutyWhoRows } = await import('./dutyFormat');
 const ENGINES_BOTH = [
   { name: 'main' as const, title: 'Основная', configured: true },
@@ -945,5 +945,43 @@ describe('порядок вкладки v1 и закрытые точные ме
     // десктоп: правый span — последний ребёнок заголовка (образец FarmKpiCard.test.ts:161)
     const desktop = kpiHead(renderTab({ data: data(), isMobile: false }));
     expect(desktop.lastElementChild?.textContent ?? '').toBe('локально');
+  });
+});
+
+describe('LiveIdentity_PreferLiveModelAndShowDrift', () => {
+  it('LiveIdentity_PreferLiveModelAndShowDrift: live id, окно и честная подпись', () => {
+    const html = renderTab({ data: mockLiveMatchStats() });
+    expect(html).toContain('Qwen3.8-Flash-Next IQ3_XXS');
+    expect(html).toContain('окно 262 144 токенов');
+    expect(html).not.toContain('Конфиг устарел');
+    expect(html).not.toContain('по конфигу, живой ответ не получен');
+  });
+
+  it('живое отличается — заголовок берёт живое имя, блок drift с парой «заявлено → фактически»', () => {
+    const html = renderTab({ data: mockLiveDriftStats() });
+    expect(html).toContain('inkling-2-mini');
+    expect(html).toContain('Конфиг устарел');
+    expect(html).toContain('модель: Qwen3.8-Flash-Next IQ3_XXS → inkling-2-mini');
+    expect(html).toContain('окно: по конфигу → 256 000 токенов');
+    expect(html).toContain('окно 256 000 токенов');
+  });
+
+  it('живых полей нет — подпись «по конфигу, живой ответ не получен», drift нет', () => {
+    const html = renderTab({ data: mockLiveUnavailableStats() });
+    expect(html).toContain('Qwen3.8-Flash-Next IQ3_XXS');
+    expect(html).toContain('по конфигу, живой ответ не получен');
+    expect(html).not.toContain('Конфиг устарел');
+  });
+
+  it('Unsupported_InklingMissingMetrics_HidesBlocksWithoutZeros: блоки отключены, чисел 0 не отрисовано', () => {
+    const d = { ...mockInklingStats(), history: historyWithKv() };
+    const html = renderTab({ data: d });
+    expect(html).not.toContain('Кэш, %');
+    expect(html).not.toContain('Вытеснения');
+    expect(html).not.toContain('Куда уходит время агентов');
+    expect(html).toContain('Нагрузка');
+    // живые поля и drift warning на месте на месте
+    expect(html).toContain('inkling-2-mini');
+    expect(html).toContain('Конфиг устарел');
   });
 });

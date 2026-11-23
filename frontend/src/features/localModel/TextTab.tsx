@@ -102,12 +102,14 @@ const TONE_COLORS: Record<StatusTone, { bg: string; fg: string; dot: string }> =
 function StatusRow({ data }: { data: LocalModelStats }) {
   const pill = statusPill(data);
   const tone = TONE_COLORS[pill.tone];
+  // При живом имени (S2) заголовок показывает живое — конфиг показывается в drift-блоке
+  const display = data.modelLive || data.model;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0 }}>
-      <span title={data.model} style={{
+      <span title={display ?? undefined} style={{
         flex: 1, minWidth: 0, fontFamily: FONT.mono, fontSize: FS.base, fontWeight: 700,
         color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>{data.model ?? '—'}</span>
+      }}>{display ?? '—'}</span>
       <span style={{
         flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5,
         background: tone.bg, color: tone.fg, borderRadius: R.max,
@@ -148,9 +150,61 @@ function StatusSubline({ data, named }: { data: LocalModelStats; named?: boolean
     const updated = formatUpdatedAt(data.history);
     if (updated) parts.push(updated);
   }
+  // Живая идентичность (S2): окно показываем числом токенов; нет живых полей —
+  // подписываем, что это конфиг, а не измеренный ответ
+  if (data.contextWindowLive != null) {
+    parts.push(`окно ${data.contextWindowLive.toLocaleString('ru-RU').replace(/\u00A0/g, ' ')} токенов`);
+  }
+  if (data.modelLive == null && data.contextWindowLive == null && data.engineLive == null) {
+    parts.push('по конфигу, живой ответ не получен');
+  }
   return (
-    <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: -SP.xs }}>
+    <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: -SP.xs, lineHeight: 1.5 }}>
       {parts.join(' · ')}
+    </div>
+  );
+}
+
+// === Drift: конфиг расходился с живым стендом (S2) ===
+// Показываем только те поля, по которым бэк сделал замер (drift.model/contextWindow):
+// пары «заявлено → фактически», переносятся по ширине, nowrap не ставим.
+function DriftWarning({ data }: { data: LocalModelStats }) {
+  const drift = data.drift;
+  if (!drift || (!drift.model && !drift.contextWindow)) return null;
+  const rows: { label: string; from: string; to: string }[] = [];
+  if (drift.model) {
+    rows.push({
+      label: 'модель',
+      from: data.model || 'не задана',
+      to: data.modelLive || 'не измерено',
+    });
+  }
+  if (drift.contextWindow) {
+    rows.push({
+      label: 'окно',
+      from: 'по конфигу',
+      to: data.contextWindowLive != null ? `${data.contextWindowLive.toLocaleString('ru-RU').replace(/\u00A0/g, ' ')} токенов` : 'не измерено',
+    });
+  }
+  return (
+    <div role="alert" style={{
+      display: 'flex', gap: SP.sm, alignItems: 'flex-start',
+      background: C.warningBg, color: C.warningText,
+      borderRadius: R.lg, padding: `${SP.sm}px ${SP.md}px`, fontSize: FS.sm, lineHeight: 1.45,
+    }}>
+      <span style={{ flexShrink: 0, marginTop: 1 }}>
+        <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <b style={{ fontWeight: 700 }}>Конфиг устарел</b> — стенд отдал другие значения:
+        <div style={{ marginTop: SP.xxs }}>
+          {rows.map(r => (
+            <div key={r.label} style={{ fontFamily: FONT.mono, fontSize: FS.xs, overflowWrap: 'anywhere' }}>
+              {r.label}: {r.from} → {r.to}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -933,6 +987,7 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
       {yielded && <YieldBanner data={data} />}
       <StatusRow data={data} />
       <StatusSubline data={data} named={named} />
+      <DriftWarning data={data} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         {/* v1: первый экран отвечает на один вопрос — жива ли модель, есть ли очередь
             и насколько быстро она отвечает (макет .html:169–176) */}

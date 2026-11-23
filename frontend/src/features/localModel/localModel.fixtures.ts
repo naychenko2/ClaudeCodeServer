@@ -90,6 +90,57 @@ export function mockLocalModelStats(state: LocalModelMockState = 'working'): Loc
   };
 }
 
+// === Живая идентичность (S2, живой замер S1) ===
+// Боевой конфиг подписан «Strata 0.2.7» / «Qwen3.8-Flash-Next IQ3_XXS» / «разрез слоёв 26/22»,
+// а живой Inkling (vLLM на узле ai, порт 8000) отдаёт inkling-2-mini, max_model_len 256000.
+const LIVE_CONFIG: Partial<LocalModelStats> = {
+  model: 'Qwen3.8-Flash-Next IQ3_XXS',
+  engineLabel: 'Strata 0.2.7',
+  topology: 'разрез слоёв 26/22',
+};
+
+// Живое совпадает с конфигом: проба дала id/окно, бэк не нашёл расхождения.
+export function mockLiveMatchStats(): LocalModelStats {
+  return {
+    ...mockLocalModelStats('working'),
+    ...LIVE_CONFIG,
+    modelLive: 'Qwen3.8-Flash-Next IQ3_XXS',
+    contextWindowLive: 262144,
+    engineLive: 'vllm',
+    drift: { model: false, contextWindow: false },
+  };
+}
+
+// Живое отличается от конфига (боевой случай S1): drift по модели и окну.
+export function mockLiveDriftStats(): LocalModelStats {
+  return {
+    ...mockLocalModelStats('working'),
+    ...LIVE_CONFIG,
+    modelLive: 'inkling-2-mini',
+    contextWindowLive: 256000,
+    engineLive: null, // Inkling не отдаёт движок целиком — движок не измерен
+    drift: { model: true, contextWindow: true },
+  };
+}
+
+// Проба не дала живых полей (старый бэкенд или не ответил): подписи конфига, но
+// подпись должна говорить, что живой ответ не получен.
+export function mockLiveUnavailableStats(): LocalModelStats {
+  return { ...mockLocalModelStats('working'), ...LIVE_CONFIG };
+}
+
+// Inkling (живой замер S1): живые id/окно, но часть метрик не сообщает —
+// unsupported — по каноническим именам (KvUsagePerc, Preemptions, QueueTimeSum
+// — скрывают блоки графика; RamTierPerc/RamTierHits/RamTierQueries — из замера S1).
+export function mockInklingStats(): LocalModelStats {
+  return {
+    ...mockLiveDriftStats(),
+    status: 'working',
+    kv: { prefixHitPerc: 0.87 },
+    unsupported: ['KvUsagePerc', 'Preemptions', 'QueueTimeSum', 'RamTierPerc', 'RamTierHits', 'RamTierQueries'],
+  };
+}
+
 // === Вкладка «Медиа» (ComfyUI) ===
 // Состояния для тестов и витрины (USE_MOCK=false — в рантайм не участвуют).
 // run — работает, идёт своя задача, очередь 2; heavy — занят: 4 из 4, тяжёлая;

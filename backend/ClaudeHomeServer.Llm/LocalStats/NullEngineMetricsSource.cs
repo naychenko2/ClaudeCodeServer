@@ -12,10 +12,10 @@ public sealed class NullEngineMetricsSource : IEngineMetricsSource
     public Task<EngineSnapshot?> ReadAsync(CancellationToken ct = default)
     {
         // Все блоки vLLM-адаптера: для заглушки они все «неподдержаны».
-        // Список — единый источник правды (VllmMetricsSource.AllMetrics).
+        // Имена полей (канонические) — единый источник правды (VllmMetricsSource.CanonicalFields).
         var snapshot = new EngineSnapshot
         {
-            Unsupported = VllmMetricsSource.AllMetrics,
+            Unsupported = VllmMetricsSource.CanonicalFields,
         };
         return Task.FromResult<EngineSnapshot?>(snapshot);
     }

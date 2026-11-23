@@ -111,6 +111,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         private readonly SwapDirectory _directory = new();
         private readonly SwapArbiter _arbiter = new();
         private readonly SwapAnswerSpeed _answer = new();
+        private readonly SwapIdentity _identity = new();
 
         // Журнал вызовов мест: у каждого теста свой (Use* заводит новый), сервис — transient
         private EngineCallLedger _ledger = new();
@@ -138,6 +139,8 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
                 // Сборщик скорости ответа: боковая регистрация поверх боевой (тот же приём, что
                 // у reader/meter) — тест задаёт снимок агрегатов и смотрит, каким он пришёл на wire.
                 services.AddSingleton<ILocalModelAnswerSpeed>(_answer);
+                // Живая идентичность (S2): боковая регистрация поверх боевой — как у reader/meter.
+                services.AddSingleton<ILocalEngineIdentityProbe>(_identity);
                 if (noComfy) services.RemoveAll(typeof(IComfyStats));
             };
         }
@@ -152,7 +155,16 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             _directory.Target = new FakeDirectory();
             _arbiter.Target = new FakeArbiterReader();
             _answer.Target = new FakeAnswerSpeed();
+            _identity.Target = new FakeIdentityProbe(EngineIdentity.Empty);
             _ledger = new EngineCallLedger();
+            return this;
+        }
+
+        // Живая идентичность (S2): только выставляет цель прокси — не трогает дорожки/читателей,
+        // уже заданные UseEngine. Empty — поля modelLive/contextWindowLive/engineLive/drift нет.
+        public StatsHost UseIdentity(EngineIdentity identity)
+        {
+            _identity.Target = new FakeIdentityProbe(identity);
             return this;
         }
 
@@ -247,6 +259,13 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             public void OnRequestCompleted(string requestId, long? outputTokens, DateTimeOffset completedAt) =>
                 Target.OnRequestCompleted(requestId, outputTokens, completedAt);
             public AnswerSpeedSnapshot SnapshotOf(string track) => Target.SnapshotOf(track);
+        }
+
+        private sealed class SwapIdentity : ILocalEngineIdentityProbe
+        {
+            public ILocalEngineIdentityProbe Target { get; set; } = new FakeIdentityProbe(EngineIdentity.Empty);
+            public Task<EngineIdentity> ProbeAsync(string? baseUrl, CancellationToken ct = default) =>
+                Target.ProbeAsync(baseUrl, ct);
         }
     }
 
@@ -713,6 +732,109 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         body.GetProperty("model").GetString().Should().Be("qwen3.8-27b");
         body.TryGetProperty("engineLabel", out _).Should().BeFalse();
         body.TryGetProperty("topology", out _).Should().BeFalse();
+    }
+
+    // ─── Живая идентичность (S2): modelLive/contextWindowLive/drift ──────────────
+
+    // Живой id не совпадает с id каталога (qwen3.8-27b/qwen3.8-flash-500k), окно — иное → drift.model=true, contextWindow=true.
+    // Мутация: не переключать modelLive на ответ — тест краснеет.
+    [Fact]
+    public async Task Stats_ЖиваяИдентичность_DriftПриРасхождении()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Engine = "vllm", Model = "qwen3.8-27b" },
+        };
+        var factory = _hosts.LabelsSet.Use(reader)
+            .UseIdentity(new EngineIdentity("inkling-2-mini", 256000, null));
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("modelLive").GetString().Should().Be("inkling-2-mini");
+        body.GetProperty("contextWindowLive").GetInt32().Should().Be(256000);
+        body.TryGetProperty("engineLive", out _).Should().BeFalse();
+        var drift = body.GetProperty("drift");
+        drift.GetProperty("model").GetBoolean().Should().BeTrue("живой id не совпал ни с одним id каталога");
+        drift.GetProperty("contextWindow").GetBoolean().Should().BeTrue("живое окно 256000 ≠ конфигурационному 262144");
+        // Заявленные подписи остаются заявленной конфигурацией, а не подменяются живым:
+        body.GetProperty("model").GetString().Should().Be("Qwen3.8-Flash-Next IQ3_XXS");
+    }
+
+    // Живой id совпадает с id каталога и окно — то же → drift не срабатывает.
+    [Fact]
+    public async Task Stats_ЖиваяИдентичность_Совпадение_DriftFalse()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Engine = "vllm", Model = "qwen3.8-27b" },
+        };
+        var factory = _hosts.Plain.Use(reader)
+            .UseIdentity(new EngineIdentity("qwen3.8-27b", 262144, null));
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("modelLive").GetString().Should().Be("qwen3.8-27b");
+        body.GetProperty("contextWindowLive").GetInt32().Should().Be(262144);
+        var drift = body.GetProperty("drift");
+        drift.GetProperty("model").GetBoolean().Should().BeFalse();
+        drift.GetProperty("contextWindow").GetBoolean().Should().BeFalse();
+    }
+
+    // Стенд не опрошен / ответ неоднозначный (Empty) → полей живой идентичности нет вовсе.
+    [Fact]
+    public async Task Stats_ЖиваяИдентичность_Пустая_ПолейНет()
+    {
+        var reader = new FakeReader
+        {
+            Current = new LocalModelStatsCurrent { Configured = true, Status = "working", Engine = "vllm", Model = "qwen3.8-27b" },
+        };
+        var factory = _hosts.Plain.Use(reader);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.TryGetProperty("modelLive", out _).Should().BeFalse();
+        body.TryGetProperty("contextWindowLive", out _).Should().BeFalse();
+        body.TryGetProperty("engineLive", out _).Should().BeFalse();
+        body.TryGetProperty("drift", out _).Should().BeFalse();
+    }
+
+    // Именованный стенд: live id не совпадает с id каталога движка → drift.model.
+    [Fact]
+    public async Task Named_ЖиваяИдентичность_DriftModel()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Status = "working", Model = "gemma-4-26b-a4b" };
+        var factory = _hosts.Engine.UseEngine(dir)
+            .UseIdentity(new EngineIdentity("inkling-2-mini", 256000, null));
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats?engine=gemma");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("modelLive").GetString().Should().Be("inkling-2-mini");
+        body.GetProperty("contextWindowLive").GetInt32().Should().Be(256000);
+        var drift = body.GetProperty("drift");
+        drift.GetProperty("model").GetBoolean().Should().BeTrue("живой id не совпал с id каталога gemma-4-26b-a4b");
+        drift.GetProperty("contextWindow").GetBoolean().Should().BeFalse("у движка NumCtx не задан — нельзя сравнивать окно");
+    }
+
+    // Именованный стенд: пустые identity — полей нет и drift нет.
+    [Fact]
+    public async Task Named_ЖиваяИдентичность_Пустая_ПолейНет()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Status = "working", Model = "gemma-4-26b-a4b" };
+        var factory = _hosts.Engine.UseEngine(dir);
+        using var admin = factory.CreateAuthenticatedClient();
+
+        var resp = await admin.GetAsync("/api/local-model/stats?engine=gemma");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.TryGetProperty("modelLive", out _).Should().BeFalse();
+        body.TryGetProperty("drift", out _).Should().BeFalse();
     }
 
     // ─── Медиа: GET /api/local-model/stats/media ─────────────────────────────────
@@ -1676,6 +1798,16 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
 
     // Фейковый ILocalModelStatsReader: тест задаёт Current и Points;
     // GetHistory фильтрует по since.
+    // Фейковый ILocalEngineIdentityProbe: заданный снимок живой идентичности (S2); Empty —
+    // «стенд не опрошен/неизвестно». Сервис ставится боковой регистрацией через UseIdentity.
+    public sealed class FakeIdentityProbe : ILocalEngineIdentityProbe
+    {
+        private readonly EngineIdentity _identity;
+        public FakeIdentityProbe(EngineIdentity identity) => _identity = identity;
+        public Task<EngineIdentity> ProbeAsync(string? baseUrl, CancellationToken ct = default) =>
+            Task.FromResult(_identity);
+    }
+
     public sealed class FakeReader : ILocalModelStatsReader
     {
         public LocalModelStatsCurrent Current { get; init; } = new() { Status = "notConnected", Configured = false };

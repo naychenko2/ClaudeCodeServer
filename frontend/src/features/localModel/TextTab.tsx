@@ -165,7 +165,7 @@ function StatusSubline({ data, named }: { data: LocalModelStats; named?: boolean
   );
 }
 
-// === Drift: конфиг расошёлся с живым стендом (S2) ===
+// === Drift: конфиг расходился с живым стендом (S2) ===
 // Показываем только те поля, по которым бэк сделал замер (drift.model/contextWindow):
 // пары «заявлено → фактически», переносятся по ширине, nowrap не ставим.
 function DriftWarning({ data }: { data: LocalModelStats }) {

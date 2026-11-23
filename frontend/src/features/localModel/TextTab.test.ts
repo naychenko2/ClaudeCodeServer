@@ -948,8 +948,8 @@ describe('порядок вкладки v1 и закрытые точные ме
   });
 });
 
-describe('живая идентичность (S2)', () => {
-  it('живое совпадает с конфигом — заголовок берёт живое имя, окна в подстроке, «Конфиг устарел» нет', () => {
+describe('LiveIdentity_PreferLiveModelAndShowDrift', () => {
+  it('LiveIdentity_PreferLiveModelAndShowDrift: live id, окно и честная подпись', () => {
     const html = renderTab({ data: mockLiveMatchStats() });
     expect(html).toContain('Qwen3.8-Flash-Next IQ3_XXS');
     expect(html).toContain('окно 262 144 токенов');
@@ -973,7 +973,7 @@ describe('живая идентичность (S2)', () => {
     expect(html).not.toContain('Конфиг устарел');
   });
 
-  it('Inkling с отсутствующими метриками — блоки кэша/вытеснений/времени агентов скрыты, живые поля на месте', () => {
+  it('Unsupported_InklingMissingMetrics_HidesBlocksWithoutZeros: блоки отключены, чисел 0 не отрисовано', () => {
     const d = { ...mockInklingStats(), history: historyWithKv() };
     const html = renderTab({ data: d });
     expect(html).not.toContain('Кэш, %');

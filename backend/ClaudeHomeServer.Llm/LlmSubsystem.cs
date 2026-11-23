@@ -318,6 +318,13 @@ public sealed class LlmSubsystem : IAppSubsystem
             new LocalEndpointProbe(sp.GetRequiredService<IHttpClientFactory>(),
                 logger: sp.GetService<ILoggerFactory>()?.CreateLogger<LocalEndpointProbe>()));
 
+        // Живая идентичность движка для панели (S2): отдельная проба панели, не переиспользуя
+        // CheckAsync (тот ищет только id из каталога и при смене served-model-name вернёт Down,
+        // а панели нужен сам факт расхождения). Синглтон с кэшем и single-flight по BaseUrl —
+        // иначе панельный опрос раз в секунды дал бы скрытую конкуренцию по сети.
+        services.AddSingleton<ILocalEngineIdentityProbe>(sp =>
+            new LocalEngineIdentityProbe(sp.GetRequiredService<IHttpClientFactory>()));
+
         // Реестр провайдеров: цены, профили CLI, projects-каталоги.
         // Зависит от ILocalEndpointProbe: подставляет живое max_model_len в
         // CLAUDE_CODE_MAX_CONTEXT_TOKENS для локального провайдера. Цикла нет: проба

@@ -55,6 +55,10 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     private readonly ILocalModelAnswerSpeed? _answerSpeed = services.GetService<ILocalModelAnswerSpeed>();
     // Подписи основного стенда (Stats:Model/EngineLabel/Topology локального провайдера) — только показ.
     private readonly LlmProviderRegistry? _providers = services.GetService<LlmProviderRegistry>();
+    // Живая идентичность движка (S2, feat/local-model-live-identity): что стенд отдаёт в
+    // /v1/models, не сравнивая с каталогом. `?` — тот же остаток эпохи отключаемой llm: на текущем
+    // графе DI зарегистрирована безусловно (LlmSubsystem).
+    private readonly ILocalEngineIdentityProbe? _identity = services.GetService<ILocalEngineIdentityProbe>();
     // Рубильник «медиа для обычных пользователей» (ADR-030, 2026-10-18): единственная точка
     // чтения секции LocalModelStats (связывание в Program.cs).
     private readonly IOptions<LocalModelStatsMediaOptions> _mediaOptions = mediaOptions;
@@ -124,7 +128,13 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // только ходы, прошедшие через шлюз): max(0, running + waiting − живых чатов).
         var othersCount = Math.Max(0, (current.Running ?? 0) + (current.Waiting ?? 0) - active.Count);
 
-        var labels = MainLocalProvider()?.Stats;
+        var provider = MainLocalProvider();
+        var labels = provider?.Stats;
+
+        // Живая идентичность (S2): /v1/models без сравнения с каталогом. null — без пробы
+        // (сервис нет или провайдер без AnthropicBaseUrl). drift — только при измеренном живом id.
+        var (identity, drift) = await ProbeIdentityAsync(provider?.AnthropicBaseUrl,
+            (provider?.Models.Select(m => (m.Id, (int?)m.ContextWindow)).ToList()) ?? [], ct);
 
         return Ok(new LocalModelStatsResponse
         {
@@ -135,6 +145,10 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
             TensorParallel = current.TensorParallel,
             Topology = Label(labels?.Topology),
             Status = current.Status,
+            ModelLive = identity?.ModelLive,
+            ContextWindowLive = identity?.ContextWindowLive,
+            EngineLive = identity?.EngineLive,
+            Drift = drift,
             DownSince = current.DownSince?.ToUnixTimeMilliseconds(),
             Running = current.Running,
             Waiting = current.Waiting,
@@ -234,6 +248,28 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     private static string? Label(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    // Живая идентичность движка (S2): проба по базе стенда (не по экземпляру контроллера),
+    // drift вычисляется по факту расхождения живого id со включёнными id каталога и живого
+    // окна с ContextWindow каталога — НЕ с человекочитаемым Stats:Model/EngineLabel.
+    // catalog — (id, contextWindow) или пустой список. Drift отдаётся только при измеренном id.
+    private async Task<(EngineIdentity? Identity, DriftDto? Drift)> ProbeIdentityAsync(
+        string? baseUrl, IReadOnlyList<(string Id, int? Context)> catalog, CancellationToken ct)
+    {
+        if (_identity is null || string.IsNullOrWhiteSpace(baseUrl))
+            return (null, null);
+        var live = await _identity.ProbeAsync(baseUrl, ct);
+        if (live.ModelLive is null)
+            return (live, null);
+        var matched = catalog.FirstOrDefault(c =>
+            !string.IsNullOrWhiteSpace(c.Id) && string.Equals(c.Id, live.ModelLive, StringComparison.OrdinalIgnoreCase));
+        var modelDrift = catalog.Count == 0
+            || !catalog.Any(c => !string.IsNullOrWhiteSpace(c.Id) && string.Equals(c.Id, live.ModelLive, StringComparison.OrdinalIgnoreCase));
+        int? catalogWindow = matched.Context ?? catalog.FirstOrDefault(c => c.Context is > 0).Context;
+        var windowDrift = live.ContextWindowLive is { } w
+            && catalogWindow is { } cw && w != cw;
+        return (live, new DriftDto { Model = modelDrift, ContextWindow = windowDrift });
+    }
+
     // Блок «Скорость ответа» (фича «Скорость ответа», контракт — docs/features/llm-answer-speed-spec.md):
     // агрегаты сборщика по ДОРОЖКЕ этого стенда (main — основной, именованный — своё имя).
     // Нет сборщика в DI — null, и поля нет в ответе (WhenWritingNull). Нет запросов в окне —
@@ -294,6 +330,16 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         var active = _meter?.ActiveChats(name) ?? [];
         var duty = await BuildDutyAsync(name, comfy, ct);
         var spec = _namedEngines?.Get(name)?.Spec;
+        var engine = _namedEngines?.Get(name);
+
+        // Живая идентичность (S2) для дорожки именованного движка: база — Client.BaseUrl
+        // (у spec нет поля BaseUrl — его не выдумываем). Каталог — id/окно из конфига движка.
+        var (namedIdentity, namedDrift) = await ProbeIdentityAsync(
+            engine?.Client.BaseUrl,
+            (spec?.Model is { } liveModelName && liveModelName.Length > 0)
+                ? [(liveModelName, spec?.NumCtx)]
+                : [],
+            ct);
 
         return Ok(new LocalModelStatsResponse
         {
@@ -302,9 +348,11 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
             EngineLabel = Label(spec?.EngineLabel),
             Model = Label(spec?.ModelLabel) ?? current.Model,
             TensorParallel = current.TensorParallel,
-            // Статус дорожки, включая "yielded" (Б3b): выгруженная под арбитром модель — не авария,
-            // DownSince при этом не ставится (снимок дорожки уже несёт null).
             Status = current.Status,
+            ModelLive = namedIdentity?.ModelLive,
+            ContextWindowLive = namedIdentity?.ContextWindowLive,
+            EngineLive = namedIdentity?.EngineLive,
+            Drift = namedDrift,
             DownSince = current.DownSince?.ToUnixTimeMilliseconds(),
             Running = current.Running,
             Waiting = current.Waiting,
@@ -751,6 +799,25 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // Тип движка ("vllm" | "llama-server" | "ollama"); null — не задан.
         public string? Engine { get; init; }
 
+        // Живая идентичность (S2): что стенд реально отдаёт в /v1/models — НЕ заявленный конфиг.
+        // Null — стенд не опрошен/неоднозначно/битый ответ; поля не сериализуются.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? ModelLive { get; init; }
+
+        // Живое окно (max_model_len / engine.max_context); null — не измерено.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? ContextWindowLive { get; init; }
+
+        // Живая версия/формат движка — только из явно измеренного S1 поля; у замеренного Inkling
+        // такого поля нет, поэтому на текущих фикстурах всегда null.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? EngineLive { get; init; }
+
+        // Расхождение конфига и живого: Model/ContextWindow — true, если живое отличается от
+        // id/окна каталога. drift отдаётся только при измеренном live-id; otherwise поля нет.
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public DriftDto? Drift { get; init; }
+
         // Подпись движка: Stats:EngineLabel основного стенда или LocalEngines:{имя}:EngineLabel именованного; нет — поля нет
         // в ответе (WhenWritingNull: без подписей ответ побайтно прежний), фронт покажет Engine.
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -820,6 +887,14 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // нет вовсе (ответ побайтно прежний): WhenWritingNull, как у Hardware.
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public DutyDto? Duty { get; init; }
+    }
+
+    // drift: расхождение живого с заявленным конфигом (S2). Model — живой id не совпал ни с
+    // одним id каталога; ContextWindow — живое окно не равно окну каталога модели.
+    public sealed record DriftDto
+    {
+        public bool Model { get; init; }
+        public bool ContextWindow { get; init; }
     }
 
     // Скорость на поток: ток/с, Δсчётчика/Δсуммы времени. GenPerStream/PrefillPerStream —

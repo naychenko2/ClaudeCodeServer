@@ -239,5 +239,8 @@ public sealed class NamedLocalEngines
     public LocalEngine? Get(string? name) =>
         name is not null && _engines.TryGetValue(name, out var e) ? e : null;
 
+    // BaseUrl движка без утечки ILocalLlmClient через границу: обращение .Client остаётся здесь.
+    public string? BaseUrlOf(string name) => Get(name)?.Client.BaseUrl;
+
     public bool Enabled(string? name) => Get(name)?.Enabled == true;
 }

@@ -330,12 +330,11 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         var active = _meter?.ActiveChats(name) ?? [];
         var duty = await BuildDutyAsync(name, comfy, ct);
         var spec = _namedEngines?.Get(name)?.Spec;
-        var engine = _namedEngines?.Get(name);
 
-        // Живая идентичность (S2) для дорожки именованного движка: база — Client.BaseUrl
-        // (у spec нет поля BaseUrl — его не выдумываем). Каталог — id/окно из конфига движка.
+        // Живая идентичность (S2) для дорожки именованного движка: база — BaseUrlOf (у spec нет поля
+        // BaseUrl — его не выдумываем). Каталог — id/окно из конфига движка.
         var (namedIdentity, namedDrift) = await ProbeIdentityAsync(
-            engine?.Client.BaseUrl,
+            _namedEngines?.BaseUrlOf(name),
             (spec?.Model is { } liveModelName && liveModelName.Length > 0)
                 ? [(liveModelName, spec?.NumCtx)]
                 : [],

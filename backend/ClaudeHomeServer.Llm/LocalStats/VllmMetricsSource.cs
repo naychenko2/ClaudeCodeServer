@@ -71,57 +71,88 @@ public sealed class VllmMetricsSource : IEngineMetricsSource
         "vllm:request_queue_time_seconds_sum",
     ];
 
+    // Маппинг HTTP-имя метрики → каноническое имя поля EngineSnapshot. Во front
+    // приходит именно каноническое имя (Unsupported скрывает блоки по нему, а не
+    // по сырому «vllm:*» — см. ThroughputChart.hiddenField). Все поля перечислены
+    // в том же порядке, что AllMetrics.
+    public static readonly (string Metric, string Field)[] MetricFields =
+    [
+        (AllMetrics[0], nameof(EngineSnapshot.Running)),
+        (AllMetrics[1], nameof(EngineSnapshot.Waiting)),
+        (AllMetrics[2], nameof(EngineSnapshot.KvUsagePerc)),
+        (AllMetrics[3], nameof(EngineSnapshot.RamTierPerc)),
+        (AllMetrics[4], nameof(EngineSnapshot.PrefixCacheHits)),
+        (AllMetrics[5], nameof(EngineSnapshot.PrefixCacheQueries)),
+        (AllMetrics[6], nameof(EngineSnapshot.Preemptions)),
+        (AllMetrics[7], nameof(EngineSnapshot.GenerationTokens)),
+        (AllMetrics[8], nameof(EngineSnapshot.PromptTokens)),
+        (AllMetrics[9], nameof(EngineSnapshot.DecodeTimeSum)),
+        (AllMetrics[10], nameof(EngineSnapshot.PrefillTimeSum)),
+        (AllMetrics[11], nameof(EngineSnapshot.PrefillKvComputedTokens)),
+        (AllMetrics[12], nameof(EngineSnapshot.RamTierHits)),
+        (AllMetrics[13], nameof(EngineSnapshot.RamTierQueries)),
+        (AllMetrics[14], nameof(EngineSnapshot.InterTokenLatencySum)),
+        (AllMetrics[15], nameof(EngineSnapshot.InterTokenLatencyCount)),
+        (AllMetrics[16], nameof(EngineSnapshot.QueueTimeSum)),
+    ];
+
+    // Канонические имена всех полей vLLM-адаптера (в порядке MetricFields).
+    public static readonly string[] CanonicalFields =
+        Array.ConvertAll(MetricFields, m => m.Field);
+
     private static EngineSnapshot BuildSnapshot(PrometheusSeries series)
     {
         var unsupported = new List<string>();
 
-        // Одиночная метрика (одна серия): значение или null + имя в Unsupported.
-        double? Single(string name)
+        string Field(int i) => MetricFields[i].Field;
+
+        // Одиночная метрика (одна серия): значение или null + каноническое имя в Unsupported.
+        double? Single(int i)
         {
-            var v = series.GetValue(name);
+            var v = series.GetValue(AllMetrics[i]);
             if (v is null)
-                unsupported.Add(name);
+                unsupported.Add(Field(i));
             return v;
         }
 
         // Метрика с несколькими сериями (метки tier/engine/model_name): сумма по всем.
-        double? Multi(string name)
+        double? Multi(int i)
         {
-            var v = series.Sum(name);
+            var v = series.Sum(AllMetrics[i]);
             if (v is null)
-                unsupported.Add(name);
+                unsupported.Add(Field(i));
             return v;
         }
 
         // Gauge с процентом (kv_cache_usage_perc, kv_offload_cpu_cache_usage_perc):
         // при нескольких сериях берём МАКСИМУМ (худшая загрузка), а не первую серию.
-        double? GaugeMax(string name)
+        double? GaugeMax(int i)
         {
-            var v = series.Max(name);
+            var v = series.Max(AllMetrics[i]);
             if (v is null)
-                unsupported.Add(name);
+                unsupported.Add(Field(i));
             return v;
         }
 
         return new EngineSnapshot
         {
-            Running = ToInt(Single(AllMetrics[0])),
-            Waiting = ToInt(Single(AllMetrics[1])),
-            KvUsagePerc = GaugeMax(AllMetrics[2]),
-            RamTierPerc = GaugeMax(AllMetrics[3]),
-            PrefixCacheHits = ToLong(Single(AllMetrics[4])),
-            PrefixCacheQueries = ToLong(Single(AllMetrics[5])),
-            Preemptions = ToLong(Single(AllMetrics[6])),
-            GenerationTokens = ToLong(Single(AllMetrics[7])),
-            PromptTokens = ToLong(Single(AllMetrics[8])),
-            DecodeTimeSum = Single(AllMetrics[9]),
-            PrefillTimeSum = Single(AllMetrics[10]),
-            PrefillKvComputedTokens = Single(AllMetrics[11]),
-            RamTierHits = ToLong(Multi(AllMetrics[12])),
-            RamTierQueries = ToLong(Multi(AllMetrics[13])),
-            InterTokenLatencySum = Single(AllMetrics[14]),
-            InterTokenLatencyCount = ToLong(Single(AllMetrics[15])),
-            QueueTimeSum = Single(AllMetrics[16]),
+            Running = ToInt(Single(0)),
+            Waiting = ToInt(Single(1)),
+            KvUsagePerc = GaugeMax(2),
+            RamTierPerc = GaugeMax(3),
+            PrefixCacheHits = ToLong(Single(4)),
+            PrefixCacheQueries = ToLong(Single(5)),
+            Preemptions = ToLong(Single(6)),
+            GenerationTokens = ToLong(Single(7)),
+            PromptTokens = ToLong(Single(8)),
+            DecodeTimeSum = Single(9),
+            PrefillTimeSum = Single(10),
+            PrefillKvComputedTokens = Single(11),
+            RamTierHits = ToLong(Multi(12)),
+            RamTierQueries = ToLong(Multi(13)),
+            InterTokenLatencySum = Single(14),
+            InterTokenLatencyCount = ToLong(Single(15)),
+            QueueTimeSum = Single(16),
             Unsupported = unsupported,
         };
     }

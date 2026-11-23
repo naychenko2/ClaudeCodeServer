@@ -131,8 +131,9 @@ public class VllmMetricsSourceTests
         snapshot.InterTokenLatencySum.Should().BeNull();
         snapshot.InterTokenLatencyCount.Should().BeNull();
         snapshot.QueueTimeSum.Should().BeNull();
-        // Все блоки маппинга отсутствуют → Unsupported = все имена из AllMetrics.
-        snapshot.Unsupported.Should().HaveCount(VllmMetricsSource.AllMetrics.Length);
+        // Все блоки маппинга отсутствуют → Unsupported = канонические имена полей.
+        snapshot.Unsupported.Should().HaveCount(VllmMetricsSource.CanonicalFields.Length);
+        snapshot.Unsupported.Should().Equal(VllmMetricsSource.CanonicalFields);
     }
 
     [Fact]
@@ -194,6 +195,43 @@ public class VllmMetricsSourceTests
         snapshot.InterTokenLatencySum.Should().BeNull();
         snapshot.InterTokenLatencyCount.Should().BeNull();
         snapshot.QueueTimeSum.Should().BeNull();
-        snapshot.Unsupported.Should().HaveCount(VllmMetricsSource.AllMetrics.Length);
+        snapshot.Unsupported.Should().HaveCount(VllmMetricsSource.CanonicalFields.Length);
+        snapshot.Unsupported.Should().Equal(VllmMetricsSource.CanonicalFields);
+    }
+
+    // Живая фикстура Inkling-2-Mini (vllm serve, измерена 23.11 на ai,
+    // docs/research/local-model-panel-live-identity.md): 14 из 17 метрик есть,
+    // отсутствуют только Strata-специфичные RAM/tiering. Значения — как в фикстуре.
+    [Fact]
+    public async Task ReadAsync_InklingFixture_MapsFieldsAndCanonicalUnsupported()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "LocalStats", "inkling-metrics.txt");
+        File.Exists(path).Should().BeTrue($"фикстура не скопирована в {path}");
+        var http = new HttpClient(new FakeHandler(File.ReadAllText(path)));
+        var source = new VllmMetricsSource(http, "http://localhost:8000/metrics");
+
+        var snapshot = await source.ReadAsync();
+        snapshot.Should().NotBeNull();
+
+        snapshot!.Running.Should().Be(0);
+        snapshot.Waiting.Should().Be(0);
+        snapshot.KvUsagePerc.Should().Be(0.0);
+        snapshot.PrefixCacheQueries.Should().Be(14833014);
+        snapshot.PrefixCacheHits.Should().Be(14431360);
+        snapshot.Preemptions.Should().Be(0);
+        snapshot.PromptTokens.Should().Be(14833014);
+        snapshot.GenerationTokens.Should().Be(56178);
+        snapshot.InterTokenLatencySum.Should().Be(254.96143503198982);
+        snapshot.InterTokenLatencyCount.Should().Be(15661);
+        snapshot.QueueTimeSum.Should().Be(1.3537959870009217);
+        snapshot.PrefillTimeSum.Should().Be(62.18167002101836);
+        snapshot.DecodeTimeSum.Should().Be(254.96143503198982);
+        snapshot.PrefillKvComputedTokens.Should().Be(401654.0);
+
+        // Strata-специфичных RAM/tiering метрик нет — только канонические имена, не «vllm:*».
+        snapshot.Unsupported.Should().BeEquivalentTo(
+            new[] { "RamTierPerc", "RamTierHits", "RamTierQueries" },
+            options => options.WithStrictOrdering());
+        snapshot.Unsupported.Should().NotContain(s => s.StartsWith("vllm:"));
     }
 }

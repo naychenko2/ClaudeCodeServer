@@ -225,7 +225,16 @@ public class LocalEngineIdentityProbeTests
         handler.Responder = _ => Json("""{"data":[{"id":"m","max_model_len":1000}]}""");
         var probe = new LocalEngineIdentityProbe(new StubFactory(handler), cacheFor: TimeSpan.FromMinutes(5));
 
-        var results = await Task.WhenAll(probe.ProbeAsync(BaseUrl), probe.ProbeAsync(BaseUrl));
+        // Много читателей из разных потоков с Barrier — все доходят до ProbeAsync до старта HTTP.
+        var readers = 64;
+        var barrier = new Barrier(readers);
+        var tasks = Enumerable.Range(0, readers).Select(_ => Task.Run(async () =>
+        {
+            barrier.SignalAndWait();
+            return await probe.ProbeAsync(BaseUrl);
+        })).ToArray();
+
+        var results = await Task.WhenAll(tasks);
 
         handler.ModelsCalls.Should().Be(1);
         results[0].ModelLive.Should().Be("m");

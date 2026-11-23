@@ -42,7 +42,7 @@ public sealed class LocalEngineIdentityProbe : ILocalEngineIdentityProbe
     private sealed record CacheEntry(DateTime Until, EngineIdentity Identity);
 
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
-    private readonly ConcurrentDictionary<string, Task<EngineIdentity>> _inflight = new();
+    private readonly ConcurrentDictionary<string, Lazy<Task<EngineIdentity>>> _inflight = new();
 
     public LocalEngineIdentityProbe(IHttpClientFactory httpFactory,
         TimeSpan? timeout = null,
@@ -62,20 +62,19 @@ public sealed class LocalEngineIdentityProbe : ILocalEngineIdentityProbe
         if (_cache.TryGetValue(key, out var cached) && cached.Until > DateTime.UtcNow)
             return cached.Identity;
 
-        var task = _inflight.GetOrAdd(key, k => ProbeInternalAsync(k));
+        // Lazy: задача стартует только при первом обращении, ConcurrentDictionary.GetOrAdd
+        // не гарантирует однократный вызов фабрики — без Lazy N читателей запустят N проб.
+        var lazy = _inflight.GetOrAdd(key, k => new Lazy<Task<EngineIdentity>>(
+            () => ProbeInternalAsync(k), LazyThreadSafetyMode.ExecutionAndPublication));
         EngineIdentity result;
         try
         {
-            result = await task;
+            result = await lazy.Value;
         }
         catch (Exception)
         {
             // Внутренняя проба исключений наружу не отдаёт; страховка от отмены caller'а.
             result = EngineIdentity.Empty;
-        }
-        finally
-        {
-            _inflight.TryRemove(key, out _);
         }
 
         // Неудача не записывается в кэш и снимает вчерашний свежий ответ: live-имя не должно
@@ -84,6 +83,9 @@ public sealed class LocalEngineIdentityProbe : ILocalEngineIdentityProbe
             _cache.TryRemove(key, out _);
         else
             _cache[key] = new CacheEntry(DateTime.UtcNow.Add(_cacheFor), result);
+        // Inflight снимаем ПОСЛЕ записи кэша: читатель, пришедший между await и записью кэша,
+        // ещё найдёт Lazy и присоединится к той же задаче.
+        _inflight.TryRemove(key, out _);
         return result;
     }
 

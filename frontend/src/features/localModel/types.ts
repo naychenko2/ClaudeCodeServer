@@ -103,6 +103,17 @@ export interface LocalModelStats {
   // по картам вместо «TP=N». Нет поля — прежние подписи.
   engineLabel?: string;
   topology?: string;
+  // Живая идентичность (S2): что стенд отдаёт в /v1/models — НЕ конфиг. modelLive — id
+  // обслуживаемой модели (served-model-name), contextWindowLive — живое окно (max_model_len),
+  // engineLive — движок, если его умеет измерять стенд (обычно не отдаёт). Drift — расхождение
+  // конфига с живым по полям, по которым бэк сделал замер: { model: true } — живой id не
+  // совпал ни с одним id каталога; { contextWindow: true } — живое окно не равно окну каталога.
+  // Нет полей — старый бэкенд или проба не дала ответа: конфиг остаётся подписью, но
+  // подпись должна говорить, что живой ответ не получен.
+  modelLive?: string | null;
+  contextWindowLive?: number | null;
+  engineLive?: string | null;
+  drift?: { model?: boolean; contextWindow?: boolean } | null;
   // chats: «кто сейчас на модели». own — чат текущего пользователя (клик открывает его);
   // чужие — строка «Чат другого пользователя» без названия и перехода. Бэк отдаёт
   // только projectId (и только для своих чатов) — имя проекта резолвит фронт из
